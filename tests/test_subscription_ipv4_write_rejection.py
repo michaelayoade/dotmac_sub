@@ -109,6 +109,7 @@ def test_initial_projection_refuses_foreign_address_or_set_column(
             ip_version=IPVersion.ipv4,
             ipv4_address_id=address.id,
             is_active=True,
+            is_primary=True,
         )
     )
     db_session.flush()
@@ -125,3 +126,68 @@ def test_initial_projection_refuses_foreign_address_or_set_column(
         project_initial_served_ipv4(
             db_session, subscription=subscription, address="192.0.2.50"
         )
+
+
+def _assign(db_session, subscription, value, *, primary):
+    from app.models.network import IPAssignment, IPv4Address, IPVersion
+
+    address = IPv4Address(address=value)
+    db_session.add(address)
+    db_session.flush()
+    db_session.add(
+        IPAssignment(
+            subscriber_id=subscription.subscriber_id,
+            subscription_id=subscription.id,
+            ip_version=IPVersion.ipv4,
+            ipv4_address_id=address.id,
+            is_active=True,
+            is_primary=primary,
+        )
+    )
+    db_session.flush()
+
+
+def test_initial_projection_with_two_blocks_uses_the_primary(db_session, subscription):
+    from app.services.ip_assignment_lifecycle import (
+        IPv4AssignmentLifecycleError,
+        project_initial_served_ipv4,
+    )
+
+    _assign(db_session, subscription, "192.0.2.60", primary=True)
+    _assign(db_session, subscription, "192.0.2.61", primary=False)
+
+    with pytest.raises(IPv4AssignmentLifecycleError):
+        project_initial_served_ipv4(
+            db_session, subscription=subscription, address="192.0.2.61"
+        )
+    project_initial_served_ipv4(
+        db_session, subscription=subscription, address="192.0.2.60"
+    )
+    assert subscription.ipv4_address == "192.0.2.60"
+
+
+def test_initial_projection_refuses_address_held_by_another_service(
+    db_session, subscription
+):
+    from app.models.catalog import Subscription, SubscriptionStatus
+    from app.services.ip_assignment_lifecycle import (
+        IPv4AssignmentLifecycleError,
+        project_initial_served_ipv4,
+    )
+
+    _assign(db_session, subscription, "192.0.2.70", primary=True)
+    other = Subscription(
+        subscriber_id=subscription.subscriber_id,
+        offer_id=subscription.offer_id,
+        status=SubscriptionStatus.stopped,
+        ipv4_address="192.0.2.70/32",
+    )
+    db_session.add(other)
+    db_session.flush()
+
+    with pytest.raises(IPv4AssignmentLifecycleError) as excinfo:
+        project_initial_served_ipv4(
+            db_session, subscription=subscription, address="192.0.2.70"
+        )
+    assert "served_ipv4_held_elsewhere" in str(excinfo.value.code)
+    assert not subscription.ipv4_address

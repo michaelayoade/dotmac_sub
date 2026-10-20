@@ -594,8 +594,8 @@ def project_initial_served_ipv4(
     db: Session, *, subscription: Subscription, address: str
 ) -> Subscription:
     """Owner write for a just-created service: set the served column from its
-    own active IPAM assignment. Refuses unless the column is empty and the
-    address is that subscription's single active IPv4 assignment, so it can
+    own active primary IPAM assignment. Refuses unless the column is empty and the
+    address is that subscription's active primary IPv4 assignment, so it can
     never move a served customer."""
 
     bare = str(address).strip().split("/", 1)[0]
@@ -605,9 +605,9 @@ def project_initial_served_ipv4(
             "The service already has a served IPv4; use Replace IPv4.",
         )
     held = [
-        str(value).split("/", 1)[0]
-        for value in db.scalars(
-            select(IPv4Address.address)
+        (str(value).split("/", 1)[0], bool(primary))
+        for value, primary in db.execute(
+            select(IPv4Address.address, IPAssignment.is_primary)
             .join(IPAssignment, IPAssignment.ipv4_address_id == IPv4Address.id)
             .where(
                 IPAssignment.subscription_id == subscription.id,
@@ -616,10 +616,20 @@ def project_initial_served_ipv4(
             )
         ).all()
     ]
-    if held != [bare]:
+    if (bare, True) not in held:
         _lifecycle_error(
             "address_not_own_assignment",
-            "The address is not this service's single active IPv4 assignment.",
+            "The address is not this service's active primary IPv4 assignment.",
+        )
+    if find_ipv4_live_use(
+        db,
+        subscription_id=subscription.id,
+        addresses={bare},
+        exclude_own_sessions=True,
+    ).in_use:
+        _lifecycle_error(
+            "served_ipv4_held_elsewhere",
+            "The address is held by another live service; not projecting it.",
         )
     _project_served_ipv4(subscription, bare)
     db.flush()
