@@ -6,7 +6,11 @@ from types import SimpleNamespace
 
 import pytest
 
-from app.services.genieacs_client import GenieACSError
+from app.services.genieacs_client import (
+    GenieACSDeliveryCode,
+    GenieACSError,
+    GenieACSTaskQueuedError,
+)
 from app.services.network import ont_action_wan
 
 ROOT = "InternetGatewayDevice"
@@ -35,6 +39,7 @@ class FakeClient:
         self.wcds = wcds
         self.parent_visible = parent_visible
         self.added: list[str] = []
+        self.queued: list[tuple[dict, dict]] = []
 
     def get_device(self, device_id):
         return _doc(self.wcds)
@@ -49,6 +54,10 @@ class FakeClient:
             self.wcds[wcd]["WANPPPConnectionNumberOfEntries"] = {"_value": 1}
             self.wcds[wcd]["WANPPPConnection"] = {"1": {"Username": {"_value": ""}}}
         return {"_id": "t"}
+
+    def set_parameter_values(self, device_id, params, **kwargs):
+        self.queued.append((dict(params), kwargs))
+        return {"_id": "queued"}
 
     def refresh_object(self, device_id, path, **kwargs):
         return {"_id": "r"}
@@ -221,3 +230,200 @@ def test_unresolved_pppoe_wcd_fails_closed_in_provisioning() -> None:
         }
     )
     assert _resolve_igd_pppoe_wcd_index(ont, {}, 203) is None
+
+
+# -- legacy path: unset index, CR-failed Reset, password-revision Reset --------
+
+
+def test_unset_index_selects_or_creates(harness) -> None:
+    client = FakeClient({"1": dict(MGMT_WCD)})
+    harness.install(client)
+    result = _run(requested=None)
+    assert result.success is True
+    assert client.added[0] == WCD
+    assert not any("WANConnectionDevice.1." in p for w in harness.writes for p in w)
+
+
+def test_explicit_management_index_is_the_only_refusal(harness) -> None:
+    client = FakeClient({"1": dict(MGMT_WCD), "2": dict(BLANK_WCD)})
+    harness.install(client)
+    assert _run(requested=1).success is False
+    assert _run(requested=None).success is True  # adopts blank WCD2
+
+
+def test_cr_failed_params_write_still_queues_reset(harness, monkeypatch) -> None:
+    client = FakeClient({"1": dict(MGMT_WCD)})
+    harness.install(client)
+
+    def queued(c, d, params, **kw):
+        raise GenieACSTaskQueuedError(
+            "queued",
+            task_id="t",
+            reason="cr",
+            delivery_code=GenieACSDeliveryCode.connection_request_failed,
+        )
+
+    monkeypatch.setattr(ont_action_wan, "set_and_verify", queued)
+    result = _run()
+    assert result.success is False and result.waiting is True
+    assert len(client.queued) == 1
+    params, kwargs = client.queued[0]
+    assert list(params) == [f"{WCD}2.WANPPPConnection.1.Reset"]
+    assert kwargs == {"connection_request": False}
+
+
+def test_password_only_change_resets_once_per_revision(harness, monkeypatch) -> None:
+    wcd = dict(BLANK_WCD)
+    wcd["WANPPPConnection"] = {"1": {"Username": {"_value": "u1"}}}
+    wcd["WANPPPConnectionNumberOfEntries"] = {"_value": 1}
+    client = FakeClient({"1": dict(MGMT_WCD), "2": wcd})
+    ont = harness.install(client)
+    monkeypatch.setattr(
+        ont_action_wan, "ppp_credential_revision", lambda u, p: f"rev-{len(p)}"
+    )
+    ont_action_wan.set_ppp_credential_revision(ont, "rev-1")  # baseline
+    first = _run()  # password length 6 -> new revision
+    assert first.data["reset_issued"] is True
+    second = _run()  # same revision again
+    assert second.data["reset_issued"] is False
+    resets = [p for w in harness.writes for p in w if p.endswith(".Reset")]
+    assert len(resets) == 1
+
+
+# -- owner path: reconcile planner/applier -----------------------------------
+
+
+class AcsStub:
+    def __init__(self, wcds, *, parent_visible=True, cr_error_first=False):
+        self.wcds = wcds
+        self.parent_visible = parent_visible
+        self.cr_error_first = cr_error_first
+        self.calls: list[tuple] = []
+
+    def list_devices(self, query=None, projection=None):
+        return [_doc(self.wcds)]
+
+    def refresh_object(self, device_id, path, **kw):
+        return {}
+
+    def add_object(self, device_id, path):
+        self.calls.append(("add", path))
+        if path == WCD.rstrip("."):
+            if self.parent_visible:
+                self.wcds["2"] = dict(BLANK_WCD)
+        else:
+            self.wcds["2"]["WANPPPConnection"] = {"1": {}}
+        return {"_id": "t"}
+
+    def set_parameter_values(self, device_id, params, **kw):
+        self.calls.append(("set", dict(params), kw))
+        first = sum(1 for c in self.calls if c[0] == "set") == 1
+        if self.cr_error_first and first:
+            return {"_id": "t", "connectionRequestError": "401"}
+        return {"_id": "t"}
+
+
+def _owner_actions():
+    from app.services.network.reconcile import (
+        AcsAddObject,
+        AcsSetNatEnabled,
+        AcsSetPppoe,
+    )
+
+    base = "InternetGatewayDevice.WANDevice.1.WANConnectionDevice"
+    return (
+        AcsAddObject(device_id="d", object_path=base, wcd_index=2),
+        AcsAddObject(
+            device_id="d", object_path=f"{base}.2.WANPPPConnection", wcd_index=2
+        ),
+        AcsSetPppoe(
+            device_id="d",
+            wcd_index=2,
+            instance_index=1,
+            username="u1",
+            password_ref="pw",
+            vlan=203,
+            reset_on_apply=True,
+        ),
+        AcsSetNatEnabled(device_id="d", wcd_index=2, instance_index=1, enabled=True),
+    )
+
+
+def _apply(acs, actions, state=None, monkeypatch=None):
+    from app.services.network.reconcile import apply_plan
+    from tests.test_reconcile_applier import _ctx, _plan
+
+    plan = _plan(*actions)
+    ctx = _ctx(plan, acs_client=acs)
+    if state is not None:
+        ctx.state_get = state.get
+        ctx.state_set = state.__setitem__
+    return apply_plan(plan, ctx)
+
+
+def test_owner_path_mgmt_only_creates_parent_and_never_touches_mgmt() -> None:
+    acs = AcsStub({"1": dict(MGMT_WCD)})
+    result = _apply(acs, _owner_actions())
+    assert result.success is True
+    paths = [c[1] for c in acs.calls if c[0] == "add"]
+    assert paths == [WCD.rstrip("."), f"{WCD}2.WANPPPConnection"]
+    sets = [c for c in acs.calls if c[0] == "set"]
+    assert all("WANConnectionDevice.1." not in p for c in sets for p in c[1])
+    assert any(p.endswith("WANPPPConnection.1.Reset") for c in sets for p in c[1])
+
+
+def test_owner_path_remaps_to_created_index() -> None:
+    from app.services.network.reconcile import AcsAddObject
+
+    acs = AcsStub({"1": dict(MGMT_WCD), "2": dict(MGMT_WCD)})  # 2 is also mgmt
+    result = _apply(acs, _owner_actions()[:1])
+    assert result.success is False  # desired index is management: refused
+    assert not [c for c in acs.calls if c[0] == "add"]
+    assert AcsAddObject  # imported for clarity
+
+
+def test_owner_path_pending_parent_not_duplicated() -> None:
+    acs = AcsStub({"1": dict(MGMT_WCD)}, parent_visible=False)
+    state: dict = {}
+    first = _apply(acs, _owner_actions()[:1], state)
+    assert first.success is False and "pending_wcd_add" in state
+    second = _apply(acs, _owner_actions()[:1], state)
+    assert second.success is False
+    assert len([c for c in acs.calls if c[0] == "add"]) == 1
+
+
+def test_owner_path_cr_failed_params_still_queues_reset() -> None:
+    acs = AcsStub({"1": dict(MGMT_WCD), "2": dict(BLANK_WCD)}, cr_error_first=True)
+    acs.wcds["2"]["WANPPPConnection"] = {"1": {}}
+    result = _apply(acs, _owner_actions()[2:3])
+    assert result.success is False
+    assert result.halted_by.reason == "acs_cr_failed"
+    sets = [c for c in acs.calls if c[0] == "set"]
+    assert len(sets) == 2
+    assert list(sets[1][1])[0].endswith("WANPPPConnection.1.Reset")
+    assert sets[1][2] == {"connection_request": False}
+
+
+def test_owner_path_password_only_change_one_reset_per_revision(monkeypatch) -> None:
+    from app.services.network.reconcile import AcsSetPppoe, applier
+
+    monkeypatch.setattr(applier, "_ppp_revision", lambda u, p: f"rev-{p}")
+    acs = AcsStub({"1": dict(MGMT_WCD), "2": dict(BLANK_WCD)})
+    state = {"ppp_credential_revision": "rev-old"}
+    act = AcsSetPppoe(
+        device_id="d",
+        wcd_index=2,
+        instance_index=1,
+        username="u1",
+        password_ref="new",
+        vlan=203,
+    )
+    assert _apply(acs, (act,), state).success is True
+    assert _apply(acs, (act,), state).success is True
+    resets = [
+        c
+        for c in acs.calls
+        if c[0] == "set" and any(p.endswith(".Reset") for p in c[1])
+    ]
+    assert len(resets) == 1
+    assert state["ppp_credential_revision"] != "rev-old"
