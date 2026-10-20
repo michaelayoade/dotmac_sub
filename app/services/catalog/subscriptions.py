@@ -1357,6 +1357,20 @@ class Subscriptions(ListResponseMixin):
                     f"updates ({fields}); use the subscription lifecycle command."
                 ),
             )
+        if "ipv4_address" in data:
+            requested_ip = str(data["ipv4_address"] or "").strip()
+            if requested_ip != str(subscription.ipv4_address or "").strip():
+                # Tactical stopgap (pre-Starter dotmac-ipam): the served column
+                # is a projection of the IPAM assignment; only the IPv4
+                # lifecycle owner may write it.
+                raise HTTPException(
+                    status_code=409,
+                    detail=(
+                        "ipv4_address cannot be changed by a subscription "
+                        "update; use Replace IPv4 on the subscription "
+                        "(POST /admin/catalog/subscriptions/{id}/ipv4/replace)."
+                    ),
+                )
         _refuse_unreviewed_renewal_term(db, subscription, data)
         requested_offer_id = data.get("offer_id")
         if (

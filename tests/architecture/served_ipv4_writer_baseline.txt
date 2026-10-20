@@ -12,29 +12,30 @@
 # requires an accepted deviation recorded in the lifecycle design. Removing a
 # writer means deleting its line, never raising the count.
 #
-# Known blind spot: ``provisioning_helpers`` sets the column through
-# ``setattr(subscription, f"{version_key}_address", ...)`` (lines ~529, ~628),
-# which no attribute-name scan can see. It is the allocator inside the
-# owner's own path, so it is not new debt.
+# Dict-driven writes (tactical stopgap, pre-Starter dotmac-ipam cut):
+# ``scripts/architecture/sot_debt.py`` now also counts ``setattr(subscription,
+# key|f"..._address", ...)`` loops, ``Subscription(**data)`` construction and
+# ``.values(ipv4_address=...)``. Those are seeded below as current offenders:
+# ``catalog/subscriptions.py`` (create ``Subscription(**data)`` and the two
+# update ``setattr(subscription, key, value)`` loops) and
+# ``provisioning_helpers.py`` (the allocator's ``setattr(subscription,
+# f"{version_key}_address", ...)``, inside the owner's own path). The generic
+# update loop is also closed at its input: ``SubscriptionUpdate`` rejects an
+# ``ipv4_address`` change (see tests/test_subscription_ipv4_write_rejection.py).
 #
-# A second, uncounted path: the operator/admin form in
-# ``app/services/web_catalog_subscriptions.py`` reads the raw form field
-# (~568) and validates it through ``_valid_assigned_ipv4`` (~719-720) before
-# it reaches the payload. That dict flows into ``app/schemas/catalog.py``'s
-# ``SubscriptionCreate``/``SubscriptionUpdate``/``SubscriptionTechnicalUpdate``
-# (~505/~544/~585), and from there into
-# ``app/services/catalog/subscriptions.py``'s ``Subscription(**data)``
-# (~1033) and ``setattr(subscription, key, value)`` (~1538) — both dict-driven
-# writes the attribute-name scan cannot see either.
-#
+# Remaining blind spot: the operator/admin form in
+# ``app/services/web_catalog_subscriptions.py`` builds a payload dict whose
+# ``ipv4_address`` key is only an input to the schemas above.
 # Do not read a clean run as proof that this file lists every writer.
 #
 # Format: count repository-relative-path.
+3 app/services/catalog/subscriptions.py
 1 app/services/connectivity_backup.py
 1 app/services/connectivity_reconciler.py
 1 app/services/enforcement.py
 1 app/services/ip_assignment_lifecycle.py
 1 app/services/ip_lifecycle.py
 3 app/services/network/ip.py
+2 app/services/provisioning_helpers.py
 2 app/services/radius_reject.py
 1 app/services/web_network_ip.py
