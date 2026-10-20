@@ -433,6 +433,25 @@ exit 0
             ("DATABASE_URL", "DB_BACKUP", "DB_CONTAINER")
         ) and key not in (extra_env or {}):
             env.pop(key)
+    if deployment_target == "production":
+        # Production migrates as the dedicated dotmac_sub_migrator, whose
+        # credential is held only in a root-only 0400 pgpass file.
+        migrator_pgpass = tmp_path / "migrator.pgpass"
+        migrator_pgpass.write_text(
+            "db.example.test:5432:dotmac_sub:dotmac_sub_migrator:synthetic-test-value\n"
+        )
+        migrator_pgpass.chmod(0o400)
+        env.setdefault("MIGRATOR_PGPASS", str(migrator_pgpass))
+        env.setdefault(
+            "MIGRATOR_URL",
+            "postgresql://dotmac_sub_migrator@db.example.test:5432/dotmac_sub",
+        )
+        env.setdefault(
+            "MIGRATOR_PGPASS_OWNER",
+            subprocess.run(
+                ["id", "-un"], capture_output=True, text=True, check=True
+            ).stdout.strip(),
+        )
     result = subprocess.run(
         ["bash", str(repo_root / "scripts/deploy.sh"), image_selector],
         cwd=repo_root,
@@ -524,6 +543,33 @@ def test_production_release_modules_run_from_the_authorized_checkout(
     )
     assert f"cwd={repo_root}" in backup_gate
     assert f"cwd={env_file.parent}" not in backup_gate
+
+
+def test_production_migrates_as_the_dedicated_migrator_on_alembic_only(
+    tmp_path: Path,
+) -> None:
+    """The migrator credential reaches the Alembic container and nothing else."""
+
+    result, _env_file, docker_log = _run_deploy(
+        tmp_path,
+        image_selector=IMAGE_DIGEST,
+        deployment_target="production",
+    )
+
+    assert result.returncode == 0, result.stderr
+    commands = docker_log.read_text().splitlines()
+    migration = [c for c in commands if "alembic upgrade heads" in c]
+    assert len(migration) == 1
+    assert "PGPASSFILE=/run/secrets/migrator.pgpass" in migration[0]
+    assert "MIGRATION_PRODUCTION_MODE=1" in migration[0]
+    assert "MIGRATION_SCHEMA_OWNER=dotmac_app" in migration[0]
+    assert "synthetic-test-value" not in " ".join(commands)
+    others = [c for c in commands if "alembic upgrade heads" not in c]
+    assert not any(
+        marker in command
+        for command in others
+        for marker in ("migrator.pgpass", "MIGRATION_PRODUCTION_MODE")
+    )
 
 
 def test_deploy_rejects_digest_not_reported_by_pulled_image(tmp_path: Path) -> None:

@@ -451,6 +451,22 @@ def test_the_legacy_path_asserts_and_reassigns_nothing(
 # --- Provisioning: the bootstrap brings the migrator to contract -------------
 
 
+def _render(query: Any) -> str:
+    """Render a psycopg ``sql`` composition without a live connection."""
+    from psycopg import sql
+
+    if isinstance(query, str):
+        return query
+    if isinstance(query, sql.Composed):
+        return "".join(_render(part) for part in query)
+    if isinstance(query, sql.Identifier):
+        parts = getattr(query, "strings", None) or query._obj  # noqa: SLF001
+        return ".".join(f'"{part}"' for part in parts)
+    if isinstance(query, sql.SQL):
+        return query.as_string()
+    raise TypeError(type(query))
+
+
 class FakeProvisioningConnection:
     """Serves ``observe_migrator`` and records every mutation."""
 
@@ -467,7 +483,7 @@ class FakeProvisioningConnection:
         self.mutations: list[str] = []
 
     def execute(self, query: Any, params: Any = None) -> MagicMock:
-        text_query = query if isinstance(query, str) else query.as_string(None)
+        text_query = _render(query)
         result = MagicMock()
         if "FROM pg_roles WHERE rolname = %s" in text_query:
             result.fetchone.return_value = (False, self._createrole, False, True, True)
@@ -517,6 +533,13 @@ def test_provisioning_repairs_a_drifted_migrator_without_setting_a_password() ->
 def test_provisioning_dry_run_mutates_nothing() -> None:
     from scripts.bootstrap_commercial_module_prereqs import _repair_migrator
 
-    conn = FakeProvisioningConnection(memberships={}, members=[])
+    class Absent(FakeProvisioningConnection):
+        def execute(self, query: Any, params: Any = None) -> MagicMock:
+            result = super().execute(query, params)
+            if "FROM pg_roles WHERE rolname = %s" in _render(query):
+                result.fetchone.return_value = None  # role not created yet
+            return result
+
+    conn = Absent(memberships={}, members=[])
     _repair_migrator(conn, dry_run=True)  # type: ignore[arg-type]
     assert conn.mutations == []

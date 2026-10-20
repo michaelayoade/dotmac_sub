@@ -273,7 +273,7 @@ def _repair_migrator(conn: psycopg.Connection, *, dry_run: bool) -> None:
         )
     for statement in statements:
         if dry_run:
-            print(f"would run: {statement.as_string(None)}")
+            print(f"would run: {statement.as_string(conn)}")
         else:
             conn.execute(statement)
     if not dry_run:
