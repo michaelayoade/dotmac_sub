@@ -96,6 +96,7 @@ from app.services.credential_crypto import decrypt_credential
 from app.services.ip_assignment_lifecycle import (
     IPv4ServedProjectionDecision,
     RepairServiceIPv4AssignmentCommand,
+    ipv4_held_by_other_service_ipam,
     preview_service_ipv4_assignment_repair,
     preview_service_ipv4_projection_repair,
     replace_service_ipv4,
@@ -2117,23 +2118,8 @@ def replace_subscription_ipv4_with_owner(
         # If another non-terminal service's IPAM already holds the served IP,
         # this is a collision, not an IPAM-only repair: do not trap staff in
         # a "repair IPAM" message that cannot be carried out.
-        served_held_elsewhere = (
-            db.scalar(
-                select(IPAssignment.id)
-                .join(IPv4Address, IPAssignment.ipv4_address_id == IPv4Address.id)
-                .join(Subscription, IPAssignment.subscription_id == Subscription.id)
-                .where(
-                    IPAssignment.is_active.is_(True),
-                    IPAssignment.ip_version == IPVersion.ipv4,
-                    IPAssignment.subscription_id != subscription_uuid,
-                    Subscription.status.not_in(
-                        (SubscriptionStatus.canceled, SubscriptionStatus.expired)
-                    ),
-                    func.replace(IPv4Address.address, "/32", "") == served_ip,
-                )
-                .limit(1)
-            )
-            is not None
+        served_held_elsewhere = ipv4_held_by_other_service_ipam(
+            db, subscription_id=subscription_uuid, address=served_ip
         )
         if (
             not served_held_elsewhere

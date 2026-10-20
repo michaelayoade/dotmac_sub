@@ -590,6 +590,33 @@ def find_ipv4_live_use(
     return IPv4LiveUseEvidence(live_session, siblings)
 
 
+def ipv4_held_by_other_service_ipam(
+    db: Session, *, subscription_id: UUID, address: str
+) -> bool:
+    """Read-only: does another non-terminal service hold ``address`` as an
+    active IPAM assignment? ``x/32`` stored forms match."""
+
+    bare = str(address).strip().split("/", 1)[0]
+    if not bare:
+        return False
+    return (
+        db.scalar(
+            select(IPAssignment.id)
+            .join(IPv4Address, IPAssignment.ipv4_address_id == IPv4Address.id)
+            .join(Subscription, IPAssignment.subscription_id == Subscription.id)
+            .where(
+                IPAssignment.is_active.is_(True),
+                IPAssignment.ip_version == IPVersion.ipv4,
+                IPAssignment.subscription_id != subscription_id,
+                Subscription.status.not_in(_TERMINAL_STATUSES),
+                IPv4Address.address.in_(_address_candidates({bare})),
+            )
+            .limit(1)
+        )
+        is not None
+    )
+
+
 def _retention_release_decision(
     db: Session,
     *,
