@@ -434,6 +434,54 @@ jobs:
           python3 scripts/architecture/migration_sequence_gate.py \
             --base "origin/$BASE" $MODE
 
+  # Production migrates as a dedicated BYPASSRLS, non-superuser role
+  # (dotmac_sub_migrator), never as the NOBYPASSRLS runtime role dotmac_app.
+  # Every other lane migrates as the `postgres` superuser, which hid that
+  # mismatch until the 2026-10-20 production deploy failed at bi_0006. This job
+  # builds the production-shaped roles, upgrades as the migrator with one
+  # confirmed settlement seeded, and proves by a sensitivity run that the same
+  # chain as dotmac_app fails at bi_0006 (so it cannot silently drift back to a
+  # superuser). See scripts/ci/production_roles_migration.py.
+  #
+  # Reports on every run (including docs-only), exactly like docker-build: a
+  # required context that never reports deadlocks the merge queue.
+  migrations-production-roles:
+    name: Migrations (production roles)
+    needs: [changes, python-environment]
+    if: always() && needs.changes.result == 'success'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    services:
+      postgres:
+        image: postgis/postgis:16-3.4
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres # pragma: allowlist secret
+          POSTGRES_DB: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -h 127.0.0.1 -U postgres -d postgres"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    steps:
+      - name: Production-role migrations not required
+        if: needs.changes.outputs.docs-only == 'true'
+        run: echo "Documentation-only change; the production-role migration rehearsal is not needed."
+
+      - uses: actions/checkout@v4
+        if: needs.changes.outputs.docs-only != 'true'
+
+      - uses: ./.github/actions/setup-ci-python
+        if: needs.changes.outputs.docs-only != 'true'
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Rehearse the production migration identity
+        if: needs.changes.outputs.docs-only != 'true'
+        run: poetry run python -m scripts.ci.production_roles_migration
+
   architecture:
     name: Architecture Tests
     needs: [changes, python-environment]

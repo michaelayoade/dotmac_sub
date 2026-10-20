@@ -30,6 +30,11 @@ rollback boundary in one operation.
   `blocked` and stops. An elevated `BOOTSTRAP_DATABASE_URL` is injected only
   for one-off operator provisioning; neither is an application connection
   string and neither is ever logged.
+- The Alembic step has the dedicated `dotmac_sub_migrator` credential available
+  as a root-owned `0400` pgpass file (default
+  `/etc/dotmac/sub/migrator.pgpass`) with the passwordless `MIGRATOR_URL`
+  configured. Without it the deploy REFUSES before any database work. The
+  credential is never in `.env`. See "Migration role" below.
 - Host-side release-control modules execute from the exact authorized Actions
   checkout through `scripts/run_repo_module.sh`. `PYTHONPATH` alone is not an
   admissible checkout boundary because Python searches the current deploy
@@ -197,7 +202,8 @@ ERP, then Sub executor sequence and the existing artifact release lifecycle.
 7. Back up the database.
 8. Run candidate-image pre-migration state checks against the target database.
 9. Pin the immutable image and revision.
-10. Apply `alembic upgrade heads`, retrying bounded PostgreSQL lock timeouts.
+10. Apply `alembic upgrade heads` as `dotmac_sub_migrator` (see "Migration
+   role"), retrying bounded PostgreSQL lock timeouts.
 11. Verify registered schema contracts and reject every invalid or unready
    user-schema index.
 12. Verify every enabled integration installation pin resolves to a current or
@@ -486,6 +492,121 @@ GRANT USAGE, CREATE ON SCHEMA public TO app_admin;
 Do not apply these manually as hidden deploy state. They belong to
 `scripts/bootstrap_outbox_dispatcher_roles.py --repair`, and the deploy
 preflight verifies them before backup.
+
+## Migration role
+
+Production runs Alembic as a dedicated, migration-only role,
+`dotmac_sub_migrator`, and never as the runtime role `dotmac_app`.
+
+Why: the Starter `dotmac-billing` migrations `bi_0006`, `bi_0007` and `bi_0008`
+run `SET LOCAL row_security = off` before full-population backfills. They are
+fail-closed by design: a role that cannot bypass RLS errors instead of
+silently backfilling a subset. `dotmac_app` is NOBYPASSRLS and owns FORCE-RLS
+tables, so it cannot run them. The `module_database_roles.v1` contract names a
+BYPASSRLS, non-superuser migrator; CI and staging migrated as a superuser,
+which hid the mismatch until the 2026-10-20 production deploy.
+
+Role contract (`app/commercial_module_prereqs.py`, `MIGRATOR_ROLE`):
+
+- `LOGIN BYPASSRLS NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION INHERIT`;
+- `CONNECT` on the Sub database;
+- member of `dotmac_app` (`INHERIT TRUE, SET TRUE`, no admin) so it can run
+  owner DDL;
+- member of `app_admin` (`INHERIT TRUE, SET TRUE`, no admin) for
+  `ALTER FUNCTION ... OWNER TO app_admin` (migration 557) and the `bi_0009`
+  opening-window provisioning;
+- no other memberships, and no role is a member of it;
+- never given to any running container. Only the Alembic one-off container of
+  `scripts/deploy.sh` receives its credential.
+
+Because BYPASSRLS is lost on `SET ROLE dotmac_app`, the migrator creates
+objects as itself. `alembic/env.py` therefore runs
+`REASSIGN OWNED BY CURRENT_USER TO dotmac_app` in the same transaction after
+the upgrade and refuses (rolling the upgrade back) if any relation, function,
+type or schema is still owned by the migrator. Objects migrations hand to
+`app_admin` deliberately stay with it.
+
+### How the credential reaches only Alembic
+
+1. The password lives in one root-owned `0400` pgpass file on the deploy host,
+   `MIGRATOR_PGPASS` (default `/etc/dotmac/sub/migrator.pgpass`), with explicit
+   host lines as for `schema-bootstrap.pgpass` (container host and operator
+   host; never `*`). Never write the value into a runbook, command or log.
+2. `scripts/deploy.sh` (production target only) mounts that file read-only into
+   the `compose run` Alembic container and passes `PGPASSFILE`, the passwordless
+   `MIGRATION_DATABASE_URL` (built from `MIGRATOR_URL`),
+   `MIGRATION_SCHEMA_OWNER=dotmac_app` and `MIGRATION_PRODUCTION_MODE=1`. These
+   flags exist on that one invocation only; no compose service, `.env` or
+   `.env.example` declares them.
+3. Before any database work `require_migrator_identity` REFUSES the deploy if:
+   `.env` contains `MIGRATION_DATABASE_URL`, a `PGPASSFILE`, a
+   `dotmac_sub_migrator:<password>@` URL, or the pgpass password itself (compose
+   loads `.env` into every runtime container); `MIGRATION_DATABASE_URL` is
+   exported in the deploy environment; `MIGRATOR_URL` is unset, carries a
+   password or names another user; or the pgpass file is missing, a symlink,
+   not a regular file, empty, not mode `400`, not owned by
+   `MIGRATOR_PGPASS_OWNER` (default `root`) or has no `dotmac_sub_migrator`
+   line. No credential value is printed.
+4. In production mode `alembic/env.py` refuses (it does not fall back to
+   `DATABASE_URL`) if `MIGRATION_DATABASE_URL` is absent, if the owner is not
+   `dotmac_app`, if the connected role is not `dotmac_sub_migrator`, or if that
+   role is a superuser or lacks BYPASSRLS. Outside production mode the legacy
+   path is unchanged (staging, CI, developer machines).
+
+### Preflight
+
+The deploy preflight (`--verify-only`, before backup) keeps the check that
+`dotmac_app` has NO `BYPASSRLS`, and now also verifies that
+`dotmac_sub_migrator` exists with the exact attributes and memberships above,
+that no runtime role is a member of it, and that it is not in `app_user` or
+`platform_api`. A missing or drifted migrator is `blocked` (the managed repair
+credential is NOCREATEROLE and cannot create it).
+
+### Host provisioning (a governed step for the operator; not done by this change)
+
+1. Create or repair the role with the elevated one-off path (SQL equivalent
+   below; `--repair` produces the same result and sets no password):
+
+   ```bash
+   BOOTSTRAP_DATABASE_URL=postgresql://postgres@.../dotmac_sub \
+     python scripts/bootstrap_commercial_module_prereqs.py --dry-run
+   BOOTSTRAP_DATABASE_URL=postgresql://postgres@.../dotmac_sub \
+     python scripts/bootstrap_commercial_module_prereqs.py --repair
+   ```
+
+   ```sql
+   CREATE ROLE dotmac_sub_migrator LOGIN BYPASSRLS NOSUPERUSER NOCREATEDB
+     NOCREATEROLE NOREPLICATION INHERIT;
+   GRANT CONNECT ON DATABASE dotmac_sub TO dotmac_sub_migrator;
+   GRANT dotmac_app TO dotmac_sub_migrator WITH INHERIT TRUE, SET TRUE, ADMIN FALSE;
+   GRANT app_admin  TO dotmac_sub_migrator WITH INHERIT TRUE, SET TRUE, ADMIN FALSE;
+   ```
+2. Set the password out of band (for example `\password dotmac_sub_migrator` in
+   `psql`, so it is never in shell history), store it in OpenBao, and
+   materialise it as the root-owned `0400` pgpass file.
+3. Set the passwordless `MIGRATOR_URL` in the deploy environment (not a secret;
+   it may be in `.env`), for example
+   `postgresql://dotmac_sub_migrator@<db-host>:<port>/dotmac_sub`.
+4. Read back, read-only: `rolbypassrls` true, `rolsuper` false for the
+   migrator; `dotmac_app` still NOBYPASSRLS; `--verify-only` passes.
+5. Remove any interim `ALTER ROLE dotmac_app BYPASSRLS` window if one is still
+   open (`dotmac_app` must be NOBYPASSRLS or the preflight refuses).
+
+### Follow-up (not part of this change): tighten `dotmac_app`'s `app_admin` access
+
+Today `dotmac_app` is a member of `app_admin` with `SET`, so runtime SQL can
+`SET ROLE app_admin` and bypass every RLS policy. Once the first production
+deploy has run as the migrator (so `OWNER TO app_admin` no longer depends on
+`dotmac_app`), an operator can re-grant it without `SET`:
+
+```sql
+GRANT app_admin TO dotmac_app WITH INHERIT TRUE, SET FALSE;
+```
+
+Before doing so, confirm `scripts/bootstrap_outbox_dispatcher_roles.py` still
+verifies the membership it needs (it checks `pg_has_role(..., 'MEMBER')`, which
+remains true) and that its `--repair` path would not re-grant with `SET`.
+Rollback is `GRANT app_admin TO dotmac_app WITH INHERIT TRUE, SET TRUE`.
 
 ## Post-migration resume
 

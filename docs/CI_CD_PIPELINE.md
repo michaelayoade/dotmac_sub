@@ -28,7 +28,15 @@ Application changes retain all release gates:
 - Alembic and integration tests against PostgreSQL before merge and again on
   the resulting `main` push whenever the change can affect backend or
   deployed-schema behavior; and
-- one production Docker build followed by migration and health checks.
+- one production Docker build followed by migration and health checks; and
+- `Migrations (production roles)` (`migrations-production-roles`), which
+  rehearses the production migration identity on production-shaped roles:
+  `dotmac_app` (NOBYPASSRLS, schema owner, FORCE RLS) and the BYPASSRLS,
+  non-superuser `dotmac_sub_migrator`. It seeds one confirmed settlement, runs
+  `alembic upgrade heads` as the migrator with the production flags, and, as a
+  sensitivity check, requires the same chain run as `dotmac_app` to fail at
+  `bi_0006`. Every other lane migrates as a superuser and cannot see this
+  class of failure.
 
 Pull requests receive the Docker migration and health gate. Branch pushes do
 not repeat that build in CI. Application images are published only by the

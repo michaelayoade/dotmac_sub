@@ -5,6 +5,11 @@ from dotmac_kernel.prerequisites import install_prerequisite_bindings
 from sqlalchemy import Column, MetaData, String, Table, engine_from_config, pool, text
 
 from alembic import context
+from app.commercial_module_prereqs import (
+    MIGRATOR_RESIDUE_QUERIES,
+    RUNTIME_OWNER_ROLE,
+    migration_identity_violations,
+)
 from app.config import settings
 from app.db import (
     Base,
@@ -178,6 +183,72 @@ def _set_migration_idle_transaction_timeout(connection) -> None:
     apply_migration_idle_transaction_timeout(connection)
 
 
+class MigrationIdentityError(RuntimeError):
+    """The connected migration role does not satisfy the migrator contract."""
+
+
+def assert_migration_identity(connection) -> str | None:
+    """Prove the connected role is the contract migrator; return the owner.
+
+    Returns the role that must own everything the upgrade creates, or ``None``
+    when the legacy single-role path applies (no owner configured, not
+    production mode). In production mode the legacy path does not exist: the
+    deploy must supply the dedicated migrator, so a silent fallback to the
+    runtime ``DATABASE_URL`` is refused rather than attempted.
+    """
+    owner = (settings.migration_schema_owner or "").strip() or None
+    production = settings.migration_production_mode
+    if connection.dialect.name != "postgresql":
+        if production:
+            raise MigrationIdentityError(
+                "production migration mode requires PostgreSQL"
+            )
+        return None
+    if owner is None and not production:
+        return None
+    if production and owner != RUNTIME_OWNER_ROLE:
+        raise MigrationIdentityError(
+            f"production migration mode requires MIGRATION_SCHEMA_OWNER="
+            f"{RUNTIME_OWNER_ROLE}"
+        )
+    row = connection.exec_driver_sql(
+        "SELECT current_user, r.rolsuper, r.rolbypassrls "
+        "FROM pg_catalog.pg_roles AS r WHERE r.rolname = current_user"
+    ).one()
+    current_user, superuser, bypass_rls = str(row[0]), bool(row[1]), bool(row[2])
+    if owner is not None and current_user == owner and not production:
+        # Developer/CI path: the owner migrates its own objects.
+        return None
+    violations = migration_identity_violations(
+        current_user=current_user,
+        superuser=superuser,
+        bypass_rls=bypass_rls,
+        production_mode=production,
+    )
+    if violations:
+        raise MigrationIdentityError(
+            "migration identity refused: " + "; ".join(violations)
+        )
+    return owner
+
+
+def reassign_to_schema_owner(connection, owner: str) -> None:
+    """Hand everything the migrator created to ``owner``, then prove it."""
+    quoted = connection.dialect.identifier_preparer.quote(owner)
+    connection.exec_driver_sql(f"REASSIGN OWNED BY CURRENT_USER TO {quoted}")
+    me = "(SELECT oid FROM pg_catalog.pg_roles WHERE rolname = current_user)"
+    residue = {}
+    for label, query in MIGRATOR_RESIDUE_QUERIES:
+        count = connection.exec_driver_sql(query.format(oid=me)).scalar_one()
+        if count:
+            residue[label] = int(count)
+    if residue:
+        raise MigrationIdentityError(
+            "objects are still owned by the migration role after REASSIGN OWNED: "
+            + ", ".join(f"{label}={count}" for label, count in sorted(residue.items()))
+        )
+
+
 def run_migrations_online() -> None:
     connectable = engine_from_config(
         config.get_section(config.config_ini_section, {}),
@@ -186,6 +257,7 @@ def run_migrations_online() -> None:
     )
 
     with connectable.connect() as connection:
+        schema_owner = assert_migration_identity(connection)
         ensure_alembic_version_table(connection)
         _set_migration_lock_timeout(connection)
         _set_migration_idle_transaction_timeout(connection)
@@ -201,6 +273,11 @@ def run_migrations_online() -> None:
 
         with context.begin_transaction():
             context.run_migrations()
+            if schema_owner is not None:
+                # Same transaction: a failed handback rolls the upgrade back
+                # instead of committing migrator-owned objects the runtime
+                # role cannot manage.
+                reassign_to_schema_owner(connection, schema_owner)
 
 
 if context.is_offline_mode():

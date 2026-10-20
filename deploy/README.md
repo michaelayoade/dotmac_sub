@@ -87,6 +87,14 @@ as migration material, even when settings inherit a different owner URL. Hosted
 CI's one-shot migration container explicitly receives its synthetic PostgreSQL
 owner URL; ordinary application startup receives only its runtime material.
 
+Production mode: `scripts/deploy.sh` sets `MIGRATION_PRODUCTION_MODE=1` and
+`MIGRATION_SCHEMA_OWNER=dotmac_app` on the Alembic one-off container only. In
+that mode Alembic refuses to fall back to `DATABASE_URL`, requires the
+connected role to be the dedicated `dotmac_sub_migrator` (BYPASSRLS, not a
+superuser), and reassigns everything it created to the owner in the same
+transaction. The owner material stays out of `.env`; see
+`docs/runbooks/PRODUCTION_DEPLOYMENT.md`, "Migration role".
+
 This closes the descriptor's migration-owner consumption blocker in source.
 It does not provision owner credentials, activate a Foundation container,
 change live deployment wiring, or demonstrate deployed migration acceptance.

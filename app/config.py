@@ -41,6 +41,16 @@ class Settings:
     migration_database_url: str | None = field(
         default=os.getenv("MIGRATION_DATABASE_URL"), repr=False
     )
+    # Role that must own every object a migration leaves behind. When set and
+    # the migration role differs, ``alembic/env.py`` asserts the migrator
+    # posture (BYPASSRLS, not superuser) and reassigns ownership to this role in
+    # the same transaction. Blank is refused, like MIGRATION_DATABASE_URL.
+    migration_schema_owner: str | None = field(
+        default=os.getenv("MIGRATION_SCHEMA_OWNER")
+    )
+    # Set only by the production deploy's Alembic step. It forbids the silent
+    # fallback to the runtime DATABASE_URL and requires the dedicated migrator.
+    migration_production_mode: bool = _env_bool("MIGRATION_PRODUCTION_MODE", False)
     # Legacy/developer fallback for stable, non-reversible marketing subject
     # identifiers. Deployed environments hold this value from OpenBao at boot.
     # The raw key and customer identity must never enter an event payload or log.
@@ -384,10 +394,23 @@ class Settings:
     @property
     def alembic_database_url(self) -> str:
         """Select migration material without changing runtime database authority."""
+        if self.migration_schema_owner is not None and not (
+            self.migration_schema_owner.strip()
+        ):
+            raise ValueError("MIGRATION_SCHEMA_OWNER must not be blank when supplied")
         if self.migration_database_url is None:
+            if self.migration_production_mode:
+                raise ValueError(
+                    "MIGRATION_PRODUCTION_MODE requires MIGRATION_DATABASE_URL; "
+                    "refusing to migrate with the runtime DATABASE_URL"
+                )
             return self.database_url
         if not self.migration_database_url.strip():
             raise ValueError("MIGRATION_DATABASE_URL must not be blank when supplied")
+        if self.migration_production_mode and not self.migration_schema_owner:
+            raise ValueError(
+                "MIGRATION_PRODUCTION_MODE requires MIGRATION_SCHEMA_OWNER"
+            )
         return self.migration_database_url
 
 

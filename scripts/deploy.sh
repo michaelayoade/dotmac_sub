@@ -500,14 +500,179 @@ stop_candidate_gracefully() {
   CANDIDATE_STARTED=0
 }
 
+# --- Migration identity (dotmac_sub_migrator) --------------------------------
+# Alembic must not run as the runtime role dotmac_app: Starter dotmac-billing
+# migrations set row_security=off by design and need a migrator that bypasses
+# RLS (module_database_roles.v1). Production therefore migrates as the
+# dedicated, migration-only role dotmac_sub_migrator (LOGIN BYPASSRLS
+# NOSUPERUSER), whose password lives ONLY in a root-owned 0400 pgpass file that
+# is mounted into the one-off Alembic container. It must never be in .env,
+# because compose loads .env into every runtime container.
+MIGRATOR_ROLE="dotmac_sub_migrator"
+MIGRATOR_PGPASS="${MIGRATOR_PGPASS:-$(env_value MIGRATOR_PGPASS)}"
+MIGRATOR_PGPASS="${MIGRATOR_PGPASS:-/etc/dotmac/sub/migrator.pgpass}"
+MIGRATOR_PGPASS_MOUNT="${MIGRATOR_PGPASS_MOUNT:-/run/secrets/migrator.pgpass}"
+# Passwordless URL (host/port/db only); the password is read by libpq from the
+# pgpass file. Unlike MIGRATION_DATABASE_URL this carries no credential.
+MIGRATOR_URL="${MIGRATOR_URL:-$(env_value MIGRATOR_URL)}"
+MIGRATOR_PGPASS_OWNER="${MIGRATOR_PGPASS_OWNER:-root}"
+MIGRATOR_SCHEMA_OWNER="dotmac_app"
+
+# Mode and owner without assuming GNU stat (the production host is Linux).
+migrator_stat() {
+  local format_gnu="$1" format_bsd="$2" path="$3"
+  stat -c "${format_gnu}" "${path}" 2>/dev/null \
+    || stat -f "${format_bsd}" "${path}" 2>/dev/null \
+    || echo '?'
+}
+
+# True when any migrator password from the pgpass file is present in .env.
+# Prints nothing: the value is never echoed. Passwords shorter than 8
+# characters are not searched (a short needle would match unrelated text).
+migrator_secret_in_env_file() {
+  local line user pw
+  [[ -r "${MIGRATOR_PGPASS}" && -f .env ]] || return 1
+  while IFS= read -r line || [[ -n "${line}" ]]; do
+    [[ -z "${line}" || "${line}" == \#* ]] && continue
+    user="${line#*:*:*:}"
+    [[ "${user}" != "${line}" ]] || continue
+    user="${user%%:*}"
+    [[ "${user}" == "${MIGRATOR_ROLE}" ]] || continue
+    pw="${line#*:*:*:*:}"
+    [[ "${pw}" != "${line}" && "${#pw}" -ge 8 ]] || continue
+    if grep -qF -e "${pw}" .env 2>/dev/null; then
+      return 0
+    fi
+  done <"${MIGRATOR_PGPASS}"
+  return 1
+}
+
+# Refuse (exit 1) unless the production Alembic step can run as the migrator
+# with a credential that is held ONLY in the root-only pgpass file. Every
+# refusal names the exact check that failed and never prints a credential.
+require_migrator_identity() {
+  [[ "${DEPLOYMENT_TARGET:-}" == "production" ]] || return 0
+  local ok=0 authority userinfo mode owner
+
+  if grep -qE "^[[:space:]]*(export[[:space:]]+)?MIGRATION_DATABASE_URL[[:space:]]*=" .env 2>/dev/null; then
+    echo "MIGRATOR PREFLIGHT: MIGRATION_DATABASE_URL is set in the deploy directory's .env; compose loads .env into every runtime container." >&2
+    ok=1
+  fi
+  if [[ -n "${MIGRATION_DATABASE_URL+x}" ]]; then
+    echo "MIGRATOR PREFLIGHT: MIGRATION_DATABASE_URL is exported in the deploy environment; the migrator URL is supplied by deploy.sh to the Alembic step only." >&2
+    ok=1
+  fi
+  if grep -qE "${MIGRATOR_ROLE}:[^@/[:space:]]+@" .env 2>/dev/null; then
+    echo "MIGRATOR PREFLIGHT: .env contains a URL with an inline ${MIGRATOR_ROLE} password." >&2
+    ok=1
+  fi
+  if grep -qE "^[[:space:]]*(export[[:space:]]+)?PGPASSFILE[[:space:]]*=" .env 2>/dev/null; then
+    echo "MIGRATOR PREFLIGHT: PGPASSFILE is set in .env; the pgpass path is supplied to the Alembic step only." >&2
+    ok=1
+  fi
+
+  if [[ -z "${MIGRATOR_URL}" ]]; then
+    echo "MIGRATOR PREFLIGHT: MIGRATOR_URL is not set (expected a passwordless postgresql:// URL for ${MIGRATOR_ROLE})." >&2
+    ok=1
+  else
+    authority="${MIGRATOR_URL#*://}"
+    if [[ "${authority}" != *@* ]]; then
+      echo "MIGRATOR PREFLIGHT: MIGRATOR_URL carries no user; expected ${MIGRATOR_ROLE}@host:port/db." >&2
+      ok=1
+    else
+      userinfo="${authority%%@*}"
+      if [[ "${userinfo}" == *:* ]]; then
+        echo "MIGRATOR PREFLIGHT: MIGRATOR_URL carries an inline password; the credential must come from the pgpass file instead." >&2
+        ok=1
+      elif [[ "${userinfo}" != "${MIGRATOR_ROLE}" ]]; then
+        echo "MIGRATOR PREFLIGHT: MIGRATOR_URL user is not ${MIGRATOR_ROLE}." >&2
+        ok=1
+      fi
+    fi
+  fi
+
+  if [[ -L "${MIGRATOR_PGPASS}" ]]; then
+    echo "MIGRATOR PREFLIGHT: ${MIGRATOR_PGPASS} is a symlink; refusing to follow it." >&2
+    ok=1
+  elif [[ ! -e "${MIGRATOR_PGPASS}" ]]; then
+    echo "MIGRATOR PREFLIGHT: credential file ${MIGRATOR_PGPASS} does not exist." >&2
+    ok=1
+  elif [[ ! -f "${MIGRATOR_PGPASS}" ]]; then
+    echo "MIGRATOR PREFLIGHT: ${MIGRATOR_PGPASS} is not a regular file." >&2
+    ok=1
+  else
+    mode="$(migrator_stat '%a' '%Lp' "${MIGRATOR_PGPASS}")"
+    owner="$(migrator_stat '%U' '%Su' "${MIGRATOR_PGPASS}")"
+    if [[ "${mode}" != "400" ]]; then
+      echo "MIGRATOR PREFLIGHT: ${MIGRATOR_PGPASS} has mode ${mode}; expected 400." >&2
+      ok=1
+    fi
+    if [[ "${owner}" != "${MIGRATOR_PGPASS_OWNER}" ]]; then
+      echo "MIGRATOR PREFLIGHT: ${MIGRATOR_PGPASS} is owned by ${owner}; expected ${MIGRATOR_PGPASS_OWNER}." >&2
+      ok=1
+    fi
+    if [[ ! -s "${MIGRATOR_PGPASS}" ]]; then
+      echo "MIGRATOR PREFLIGHT: ${MIGRATOR_PGPASS} is empty." >&2
+      ok=1
+    elif [[ -r "${MIGRATOR_PGPASS}" ]]; then
+      if ! grep -qE "^[^#][^:]*:[^:]*:[^:]*:${MIGRATOR_ROLE}:" "${MIGRATOR_PGPASS}"; then
+        echo "MIGRATOR PREFLIGHT: ${MIGRATOR_PGPASS} has no entry for ${MIGRATOR_ROLE}." >&2
+        ok=1
+      fi
+      if migrator_secret_in_env_file; then
+        echo "MIGRATOR PREFLIGHT: the ${MIGRATOR_ROLE} password also appears in .env; compose would hand it to every runtime container." >&2
+        ok=1
+      fi
+    fi
+  fi
+
+  if ((ok != 0)); then
+    log "MIGRATOR OUTCOME: refused"
+    cat >&2 <<'REFUSAL'
+DEPLOY REFUSED: the production migration identity is not safely provisioned
+(see the MIGRATOR PREFLIGHT lines above for exactly which check failed).
+
+Production migrations run as the dedicated role dotmac_sub_migrator (LOGIN
+BYPASSRLS NOSUPERUSER; member of dotmac_app and app_admin), never as the
+runtime role. Its credential must live only in a root-owned 0400 pgpass file;
+it must not appear in .env, which compose loads into every runtime container.
+See docs/runbooks/PRODUCTION_DEPLOYMENT.md, "Migration role".
+REFUSAL
+    exit 1
+  fi
+}
+
+# Fill MIGRATION_IDENTITY_ARGS with the `compose run` flags that give the
+# Alembic one-off container (and only it) the migrator identity. Staging keeps
+# its existing superuser migration path (empty array).
+MIGRATION_IDENTITY_ARGS=()
+migration_identity_args() {
+  MIGRATION_IDENTITY_ARGS=()
+  [[ "${DEPLOYMENT_TARGET:-}" == "production" ]] || return 0
+  MIGRATION_IDENTITY_ARGS=(
+    --user 0:0
+    -v "${MIGRATOR_PGPASS}:${MIGRATOR_PGPASS_MOUNT}:ro"
+    -e "PGPASSFILE=${MIGRATOR_PGPASS_MOUNT}"
+    -e "MIGRATION_DATABASE_URL=${MIGRATOR_URL}"
+    -e "MIGRATION_SCHEMA_OWNER=${MIGRATOR_SCHEMA_OWNER}"
+    -e "MIGRATION_PRODUCTION_MODE=1"
+  )
+}
+# --- End migration identity ---------------------------------------------------
+
 MIGRATION_RUN_PREFIX=""
 run_migrations() {
   local attempt=1
   MIGRATION_RUN_PREFIX="dotmac_sub_migrate_${DEPLOY_RUN_ID:-$$}_"
   local output
   local rc
+  # The dedicated migrator credential reaches THIS one-off container and no
+  # other: it is attached to the `compose run` argv below and nowhere else.
+  # See migration_identity_args and require_migrator_identity.
+  migration_identity_args
   while ((attempt <= MIGRATION_MAX_ATTEMPTS)); do
     if output="$("${COMPOSE[@]}" run --rm --no-deps \
+      ${MIGRATION_IDENTITY_ARGS[@]+"${MIGRATION_IDENTITY_ARGS[@]}"} \
       --name "${MIGRATION_RUN_PREFIX}${attempt}" app alembic upgrade heads 2>&1)"; then
       printf '%s\n' "${output}"
       return 0
@@ -1544,6 +1709,10 @@ if ! preflight_deployment_secrets; then
   echo "DEPLOY REFUSED before database bootstrap, backup, migrations or service replacement." >&2
   exit 1
 fi
+
+# Before ANY database work: the production Alembic step needs the dedicated
+# migrator credential held only in a root-only pgpass file.
+require_migrator_identity
 
 run_database_prerequisite_bootstrap
 verify_database_prerequisites

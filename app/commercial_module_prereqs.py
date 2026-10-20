@@ -48,6 +48,27 @@ PUBLIC_PROBE_ROLE: Final[str] = "dotmac_public_probe"
 #: else — see ``scripts/bootstrap_commercial_module_prereqs.py --repair-schemas``.
 SCHEMA_BOOTSTRAP_ROLE: Final[str] = "dotmac_schema_bootstrap"
 
+#: The runtime owner of every Sub table, schema and function. It is the role
+#: the migrator hands objects back to, and the only role a migration may leave
+#: owning anything (apart from ``app_admin``, which migration 557 deliberately
+#: gives definer-function ownership).
+RUNTIME_OWNER_ROLE: Final[str] = "dotmac_app"
+
+#: The dedicated, migration-only identity (ADR-0011, ``module_database_roles.v1``).
+#: LOGIN + BYPASSRLS + NOSUPERUSER, because the Starter ``dotmac-billing``
+#: migrations (bi_0006/0007/0008) run ``SET LOCAL row_security = off`` and are
+#: deliberately fail-closed for any role that cannot bypass RLS. It is a member
+#: of ``dotmac_app`` (owner DDL) and ``app_admin`` (``OWNER TO app_admin`` and
+#: opening-window provisioning), and it is NEVER handed to a running container:
+#: only the Alembic step of ``scripts/deploy.sh`` holds its credential.
+MIGRATOR_ROLE: Final[str] = "dotmac_sub_migrator"
+
+#: Roles the migrator must belong to, as ``(inherit, set, admin)`` options.
+MIGRATOR_MEMBERSHIPS: Final[dict[str, tuple[bool, bool, bool]]] = {
+    RUNTIME_OWNER_ROLE: (True, True, False),
+    "app_admin": (True, True, False),
+}
+
 #: Schema privileges the probe must NOT hold.  ``CREATE`` matters as much as
 #: ``USAGE``: a PUBLIC ``CREATE`` grant lets any role plant objects in a module
 #: schema even when it cannot read the ones already there.
@@ -131,6 +152,12 @@ COMMERCIAL_BOOTSTRAP_ROLE_CONTRACT: Final[dict[str, DatabaseRoleContract]] = {
         superuser=False,
     ),
     **MODULE_DATABASE_ROLE_CONTRACT,
+    MIGRATOR_ROLE: DatabaseRoleContract(
+        name=MIGRATOR_ROLE,
+        can_login=True,
+        bypass_rls=True,
+        superuser=False,
+    ),
     # NOLOGIN on purpose: this role is a measuring instrument, never an
     # identity anything authenticates as.  A probe that could log in would be
     # one more credential to protect for no gain.
@@ -141,6 +168,108 @@ COMMERCIAL_BOOTSTRAP_ROLE_CONTRACT: Final[dict[str, DatabaseRoleContract]] = {
         superuser=False,
     ),
 }
+
+
+@dataclass(frozen=True)
+class MigratorObservation:
+    """Read-only catalog observation of the migrator beyond its three flags."""
+
+    createdb: bool
+    createrole: bool
+    replication: bool
+    inherit: bool
+    can_connect: bool
+    #: ``role -> (inherit, set, admin)`` for every role the migrator belongs to.
+    memberships: Mapping[str, tuple[bool, bool, bool]]
+    #: Every role that is a member of the migrator. Must be empty.
+    members: tuple[str, ...]
+
+
+def migrator_violations(observed: MigratorObservation | None) -> tuple[str, ...]:
+    """Describe migrator drift beyond LOGIN/BYPASSRLS/NOSUPERUSER.
+
+    ``None`` means the role does not exist; that is reported by
+    :func:`commercial_bootstrap_role_violations`, so it adds nothing here.
+    """
+
+    if observed is None:
+        return ()
+    violations: list[str] = []
+    for flag, value in (
+        ("CREATEDB", observed.createdb),
+        ("CREATEROLE", observed.createrole),
+        ("REPLICATION", observed.replication),
+    ):
+        if value:
+            violations.append(f"{MIGRATOR_ROLE} must be NO{flag}")
+    if not observed.inherit:
+        violations.append(f"{MIGRATOR_ROLE} must be INHERIT")
+    if not observed.can_connect:
+        violations.append(f"{MIGRATOR_ROLE} lacks CONNECT on this database")
+    for role, expected in MIGRATOR_MEMBERSHIPS.items():
+        actual = observed.memberships.get(role)
+        if actual is None:
+            violations.append(f"{MIGRATOR_ROLE} is not a member of {role}")
+        elif actual != expected:
+            violations.append(
+                f"{MIGRATOR_ROLE} membership in {role} has "
+                f"(inherit, set, admin)={actual!r}; expected {expected!r}"
+            )
+    for role in sorted(set(observed.memberships) - set(MIGRATOR_MEMBERSHIPS)):
+        violations.append(
+            f"{MIGRATOR_ROLE} is a member of {role}, which is outside the contract"
+        )
+    for member in observed.members:
+        violations.append(
+            f"role {member!r} is a member of {MIGRATOR_ROLE}; no runtime role "
+            "may be able to become the migrator"
+        )
+    return tuple(violations)
+
+
+#: Posture the connected migration identity must have at runtime. Used by
+#: ``alembic/env.py``; kept here so the contract has one owner.
+def migration_identity_violations(
+    *,
+    current_user: str,
+    superuser: bool,
+    bypass_rls: bool,
+    production_mode: bool,
+) -> tuple[str, ...]:
+    violations: list[str] = []
+    if superuser:
+        violations.append(
+            f"migration role {current_user!r} is a superuser; "
+            "module_database_roles.v1 refuses a superuser migrator"
+        )
+    if not bypass_rls:
+        violations.append(
+            f"migration role {current_user!r} lacks BYPASSRLS; the Starter "
+            "billing migrations run with row_security=off and fail closed"
+        )
+    if production_mode and current_user != MIGRATOR_ROLE:
+        violations.append(
+            f"production migrations must connect as {MIGRATOR_ROLE!r}, "
+            f"not {current_user!r}"
+        )
+    return tuple(violations)
+
+
+#: Tables whose ``*owner`` column must not name the migrator after an upgrade.
+#: Each entry is ``(label, owner column expression, relation)``.
+MIGRATOR_RESIDUE_QUERIES: Final[tuple[tuple[str, str], ...]] = (
+    ("relations", "SELECT count(*) FROM pg_catalog.pg_class WHERE relowner = {oid}"),
+    ("functions", "SELECT count(*) FROM pg_catalog.pg_proc WHERE proowner = {oid}"),
+    (
+        "types",
+        "SELECT count(*) FROM pg_catalog.pg_type AS t WHERE t.typowner = {oid} "
+        "AND t.typrelid = 0 AND t.typelem = 0",
+    ),
+    (
+        "schemas",
+        "SELECT count(*) FROM pg_catalog.pg_namespace WHERE nspowner = {oid}",
+    ),
+)
 
 
 def composed_lineage_import_names() -> tuple[str, ...]:
@@ -292,6 +421,13 @@ def commercial_schema_violations(
 
 __all__ = [
     "ALEMBIC_INI",
+    "MIGRATOR_MEMBERSHIPS",
+    "MIGRATOR_RESIDUE_QUERIES",
+    "MIGRATOR_ROLE",
+    "RUNTIME_OWNER_ROLE",
+    "MigratorObservation",
+    "migration_identity_violations",
+    "migrator_violations",
     "COMMERCIAL_BOOTSTRAP_ROLE_CONTRACT",
     "MODULE_DATABASE_ROLE_CONTRACT",
     "PROBED_SCHEMA_PRIVILEGES",

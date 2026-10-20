@@ -62,14 +62,18 @@ from psycopg import sql
 
 from app.commercial_module_prereqs import (
     COMMERCIAL_BOOTSTRAP_ROLE_CONTRACT,
+    MIGRATOR_MEMBERSHIPS,
+    MIGRATOR_ROLE,
     PROBED_SCHEMA_PRIVILEGES,
     PUBLIC_PROBE_ROLE,
     SCHEMA_BOOTSTRAP_ROLE,
     DatabaseRoleContract,
+    MigratorObservation,
     ModuleSchemaObservation,
     RolePosture,
     commercial_bootstrap_role_violations,
     commercial_schema_violations,
+    migrator_violations,
     module_schema_contract,
 )
 
@@ -171,6 +175,118 @@ def observe_roles(conn: psycopg.Connection) -> dict[str, RolePosture]:
     return {str(row[0]): (bool(row[1]), bool(row[2]), bool(row[3])) for row in rows}
 
 
+def observe_migrator(conn: psycopg.Connection) -> MigratorObservation | None:
+    """Read the migrator's non-posture attributes and role memberships.
+
+    Reads ``pg_roles`` and ``pg_auth_members`` only, which any role may read, so
+    the restricted ``--verify-only`` connection can prove the contract. The
+    ``inherit_option``/``set_option`` columns need PostgreSQL 16.
+    """
+
+    row = conn.execute(
+        "SELECT rolcreatedb, rolcreaterole, rolreplication, rolinherit, "
+        "has_database_privilege(rolname, current_database(), 'CONNECT') "
+        "FROM pg_roles WHERE rolname = %s",
+        (MIGRATOR_ROLE,),
+    ).fetchone()
+    if row is None:
+        return None
+    memberships = {
+        str(granted): (bool(inherit), bool(set_option), bool(admin))
+        for granted, inherit, set_option, admin in conn.execute(
+            "SELECT g.rolname, m.inherit_option, m.set_option, m.admin_option "
+            "FROM pg_auth_members AS m "
+            "JOIN pg_roles AS g ON g.oid = m.roleid "
+            "JOIN pg_roles AS r ON r.oid = m.member "
+            "WHERE r.rolname = %s",
+            (MIGRATOR_ROLE,),
+        ).fetchall()
+    }
+    members = tuple(
+        sorted(
+            str(name)
+            for (name,) in conn.execute(
+                "SELECT r.rolname FROM pg_auth_members AS m "
+                "JOIN pg_roles AS g ON g.oid = m.roleid "
+                "JOIN pg_roles AS r ON r.oid = m.member "
+                "WHERE g.rolname = %s",
+                (MIGRATOR_ROLE,),
+            ).fetchall()
+        )
+    )
+    return MigratorObservation(
+        createdb=bool(row[0]),
+        createrole=bool(row[1]),
+        replication=bool(row[2]),
+        inherit=bool(row[3]),
+        can_connect=bool(row[4]),
+        memberships=memberships,
+        members=members,
+    )
+
+
+def _repair_migrator(conn: psycopg.Connection, *, dry_run: bool) -> None:
+    """Bring the migrator's attributes and memberships to contract.
+
+    Creates no password: the credential is set out of band by an operator and
+    held only in the deploy host's root-owned pgpass file.
+    """
+
+    observed = observe_migrator(conn)
+    if observed is None:
+        if dry_run:
+            print(f"would configure migrator memberships: {MIGRATOR_ROLE}")
+        return
+    role = sql.Identifier(MIGRATOR_ROLE)
+    statements = [
+        sql.SQL("ALTER ROLE {} NOCREATEDB NOCREATEROLE NOREPLICATION INHERIT").format(
+            role
+        ),
+        sql.SQL("GRANT CONNECT ON DATABASE {} TO {}").format(
+            sql.Identifier(_current_database(conn)), role
+        ),
+    ]
+    for granted, (inherit, set_option, admin) in MIGRATOR_MEMBERSHIPS.items():
+        actual = observed.memberships.get(granted)
+        if actual == (inherit, set_option, admin):
+            continue
+        if actual is not None:
+            statements.append(
+                sql.SQL("REVOKE {} FROM {}").format(sql.Identifier(granted), role)
+            )
+        statements.append(
+            sql.SQL("GRANT {} TO {} WITH INHERIT {}, SET {}, ADMIN {}").format(
+                sql.Identifier(granted),
+                role,
+                sql.SQL("TRUE" if inherit else "FALSE"),
+                sql.SQL("TRUE" if set_option else "FALSE"),
+                sql.SQL("TRUE" if admin else "FALSE"),
+            )
+        )
+    for extra in sorted(set(observed.memberships) - set(MIGRATOR_MEMBERSHIPS)):
+        statements.append(
+            sql.SQL("REVOKE {} FROM {}").format(sql.Identifier(extra), role)
+        )
+    for member in observed.members:
+        statements.append(
+            sql.SQL("REVOKE {} FROM {}").format(role, sql.Identifier(member))
+        )
+    for statement in statements:
+        if dry_run:
+            print(f"would run: {statement.as_string(None)}")
+        else:
+            conn.execute(statement)
+    if not dry_run:
+        print(f"configured migrator attributes and memberships: {MIGRATOR_ROLE}")
+
+
+def _current_database(conn: psycopg.Connection) -> str:
+    row = conn.execute("SELECT current_database()").fetchone()
+    if row is None:
+        raise RuntimeError("current_database() returned no row")
+    return str(row[0])
+
+
 def _role_exists(conn: psycopg.Connection, role: str) -> bool:
     row = conn.execute("SELECT 1 FROM pg_roles WHERE rolname = %s", (role,)).fetchone()
     return row is not None
@@ -269,8 +385,13 @@ def _bootstrap_roles(
     result: BootstrapResult,
 ) -> int:
     observed = observe_roles(conn)
-    violations = commercial_bootstrap_role_violations(observed)
-    result.roles_verified = len(COMMERCIAL_BOOTSTRAP_ROLE_CONTRACT) - len(violations)
+    violations = (
+        *commercial_bootstrap_role_violations(observed),
+        *migrator_violations(observe_migrator(conn)),
+    )
+    result.roles_verified = max(
+        len(COMMERCIAL_BOOTSTRAP_ROLE_CONTRACT) - len(violations), 0
+    )
 
     if violations and not allow_role_creation:
         # The deployment credential is NOCREATEROLE by design. Say so, name the
@@ -322,6 +443,7 @@ def _bootstrap_roles(
                 sql.SQL("ALTER ROLE {} {}").format(identifier, sql.SQL(wanted))
             )
             print(f"repaired role: {role} {have} -> {wanted}")
+    _repair_migrator(conn, dry_run=dry_run)
     return EXIT_OK
 
 
@@ -412,6 +534,7 @@ def _bootstrap_schemas(
 def _all_violations(conn: psycopg.Connection) -> tuple[str, ...]:
     return (
         *commercial_bootstrap_role_violations(observe_roles(conn)),
+        *migrator_violations(observe_migrator(conn)),
         *commercial_schema_violations(observe_schemas(conn)),
     )
 
