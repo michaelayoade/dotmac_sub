@@ -1,0 +1,18 @@
+# IPv4 retention sweep alerts. A release that is followed by the freed address
+# showing up in live use means a served-column writer raced the (unlocked)
+# release; investigate before enabling or continuing apply mode.
+groups:
+  - name: ipv4_retention
+    rules:
+      - alert: Ipv4RetentionPostCommitConflict
+        expr: ipv4_retention_release{class="post_commit_conflict"} > 0
+        for: 5m
+        labels:
+          severity: critical
+          area: ipam
+        annotations:
+          summary: "A released IPv4 address is in live use after retention release"
+          description: >
+            The daily IPv4 retention sweep released an address that a live
+            session or another non-terminal subscription column now uses.
+            Check the sweep log for the subscription ids and re-bind.

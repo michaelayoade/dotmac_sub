@@ -943,6 +943,17 @@ def build_beat_schedule() -> dict:
             enabled=ip_consistency_audit_enabled,
             interval_seconds=ip_consistency_audit_interval_seconds,
         )
+        # IPv4 retention sweep (daily). Shadow mode reports only; `apply` mode
+        # releases through network.ip_assignment_lifecycle.
+        _sync_scheduled_task(
+            session,
+            name="network_ipv4_retention_release",
+            task_name="app.tasks.radius.ipv4_retention_release",
+            enabled=_scheduler_setting_enabled(
+                session, SettingDomain.network, "ipv4_retention_release_enabled"
+            ),
+            interval_seconds=86400,
+        )
         # Connectivity shadow audit (read-only full-base sweep; quantifies
         # desired-vs-actual drift per dimension — the cutover-readiness gauge for
         # the connectivity reconciler). Shares the audit cadence defaults.
