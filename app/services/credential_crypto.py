@@ -306,8 +306,8 @@ def is_secret_reference_value(value: object) -> bool:
     that is stripped and lower-cased, so a padded or differently-cased spelling
     is refused too. Never raises, never resolves.
 
-    NOTE: duplicates ``access_credential_secret.is_secret_reference_value``
-    introduced by the PPPoE credential bridge; consolidate once that lands.
+    This is the single stored-secret-reference predicate; the PPPoE access
+    credential module re-exports it and ``is_reference_text`` delegates to it.
     """
     if not isinstance(value, str):
         return False
@@ -388,9 +388,7 @@ class CredentialReferenceRefused(ValueError):
 
 def is_reference_text(value: object) -> bool:
     """True for text the resolver might dereference (case/space-insensitive)."""
-    if not isinstance(value, str):
-        return False
-    return value.strip().lower().startswith(_REFERENCE_SCHEMES)
+    return is_secret_reference_value(value)
 
 
 def _scheme(value: str) -> str:
