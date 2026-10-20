@@ -4233,4 +4233,142 @@ SERVICES: tuple[SOTService, ...] = (
             ),
         ),
     ),
+    SOTService(
+        name="financial.starter_positions",
+        module="app.services.billing.starter_positions",
+        owns=(
+            "Starter document fact and receivable position reads",
+            "Fact overlay for Starter invoice document rendering",
+        ),
+        depends_on=(
+            "control.settings_spec",
+            "financial.invoices",
+            "financial.starter_issuance",
+        ),
+        notes=(
+            "Readers lane (ADR 0031): read-only. For Starter-linked "
+            "invoices the frozen Starter document fact is the document "
+            "truth (PDF renders from a transient overlay; the mirror "
+            "row is untouched) and the Starter receivable position is "
+            "the account balance truth. Legacy invoices and Starter "
+            "documents without an exact fact version (multi-line "
+            "receipts) render from mirror rows written at issuance. "
+            "Aggregate reporting keeps reading mirror balances "
+            "maintained by the settlement and credit owners. Reads "
+            "are not gated by the D1 issuance switch."
+        ),
+        contract=ServiceContract(
+            concerns=(
+                ConcernContract(
+                    name="Starter document fact and receivable position reads",
+                    role=OwnerRole.OBSERVATION_COLLECTOR,
+                    input_names=(
+                        "Starter-issued invoice and structural link",
+                        "canonical Starter billing policies",
+                    ),
+                    canonical_writer="financial.starter_positions",
+                ),
+                ConcernContract(
+                    name="Fact overlay for Starter invoice document rendering",
+                    role=OwnerRole.OBSERVATION_COLLECTOR,
+                    input_names=(
+                        "Starter-issued invoice and structural link",
+                        "canonical Starter document fact",
+                    ),
+                    canonical_writer="financial.starter_positions",
+                ),
+            ),
+            authoritative_inputs=(
+                AuthorityInput(
+                    name="Starter-issued invoice and structural link",
+                    owner="financial.starter_issuance",
+                    kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                    source=(
+                        "StarterInvoiceLink binding the Sub invoice to "
+                        "the Starter billing account, document, and "
+                        "exact issued fact version identities"
+                    ),
+                ),
+                AuthorityInput(
+                    name="canonical Starter billing policies",
+                    owner="control.settings_spec",
+                    kind=AuthorityKind.CONTROL_INPUT,
+                    source=(
+                        "starter_* settings resolved through "
+                        "starter_policies (ADR 0031): currency minor "
+                        "units for position reads"
+                    ),
+                ),
+                AuthorityInput(
+                    name="canonical Starter document fact",
+                    owner="external:dotmac_billing",
+                    kind=AuthorityKind.EXTERNAL_OBSERVATION,
+                    source=(
+                        "exact frozen InvoiceDocumentFactV1 read by "
+                        "document identity and issued fact version; "
+                        "no implicit latest-version selection"
+                    ),
+                ),
+            ),
+            transaction=TransactionContract(
+                mode=TransactionMode.READ_ONLY,
+                boundary=(
+                    "Reads run inside the caller's transaction and "
+                    "write nothing; the PDF overlay is a transient "
+                    "copy discarded after rendering."
+                ),
+                locking="No locks taken; Starter reads are account-fenced observations.",
+                idempotency=(
+                    "Reads are naturally idempotent; the exact fact "
+                    "version pins the document bytes observed."
+                ),
+                retries=(
+                    "Callers may retry reads freely; a Starter "
+                    "refusal propagates and never falls back to "
+                    "legacy numbers for a fact-versioned document."
+                ),
+            ),
+            errors=ErrorContract(
+                domain_codes=(
+                    "financial.starter_positions.fact_unavailable",
+                    "financial.starter_positions.position_unavailable",
+                ),
+                mapping_owner="billing document readers",
+                retryable_codes=(),
+                fail_closed_on=(
+                    "Starter billing refusal for a fact-versioned document",
+                ),
+            ),
+            migration=MigrationContract(
+                state=AuthorityMigrationState.CUTOVER_READY,
+                old_owner="financial.invoices legacy document projections",
+                new_owner="financial.starter_positions",
+                verification=(
+                    "Unit overlay/eligibility tests and the "
+                    "migrated-PostgreSQL proof: a Starter-issued "
+                    "invoice renders its PDF from the frozen Starter "
+                    "fact number and totals."
+                ),
+                cutover_gate=(
+                    "Only Starter-linked invoices with an exact "
+                    "issued fact version take this lane; every other "
+                    "document keeps the mirror reader until cutover."
+                ),
+                fallback_retirement=(
+                    "Mirror-based rendering retires with the legacy "
+                    "Invoice writer at the money-pack cutover."
+                ),
+            ),
+            steward="billing operations",
+            design_refs=(
+                "docs/adr/0031-composable-starter-billing-policies.md",
+                "docs/SOT_RELATIONSHIP_MAP.md",
+            ),
+            test_refs=(
+                "tests/test_starter_positions_overlay.py",
+                "tests/integration/test_starter_positions_pg.py",
+                "tests/architecture/test_sot_manifest_contracts.py",
+            ),
+        ),
+    ),
 )
