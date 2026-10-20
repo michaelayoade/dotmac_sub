@@ -59,4 +59,6 @@ def test_retired_engine_routes_are_not_mounted() -> None:
     from app.web.admin import router
 
     paths = {getattr(route, "path", "") for route in router.routes}
-    assert not any(path.startswith("/support/automation") for path in paths)
+    assert "/admin/support/automation" not in paths
+    assert not any("/support/automation" in path for path in paths)
+    assert any(path.startswith("/admin/support/assignment-rules") for path in paths)
