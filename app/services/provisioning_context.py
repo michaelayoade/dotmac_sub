@@ -166,5 +166,9 @@ def _merge_acs_context(db: Session, context: dict) -> None:
         context["acs_server"] = {
             "cwmp_url": acs_server.cwmp_url,
             "cwmp_username": acs_server.cwmp_username,
-            "cwmp_password": decrypt_credential(acs_server.cwmp_password),
+            "cwmp_password": decrypt_credential(
+                acs_server.cwmp_password,
+                model="Tr069AcsServer",
+                field="cwmp_password",
+            ),
         }

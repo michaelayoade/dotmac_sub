@@ -42,7 +42,7 @@ from app.models.radius import RadiusClient
 from app.models.usage import AccountingStatus, RadiusAccountingSession
 from app.services import control_registry, settings_spec
 from app.services.common import coerce_uuid
-from app.services.credential_crypto import decrypt_credential
+from app.services.credential_crypto import decrypt_credential, non_reference_or_none
 from app.services.domain_errors import DomainError
 from app.services.enforcement_evidence import (
     EnforcementOutcome,
@@ -54,7 +54,6 @@ from app.services.nas import DeviceProvisioner
 from app.services.radius_address_lists import suspended_address_list
 from app.services.router_health import coa_evidence as _coa_evidence
 from app.services.router_health.contracts import CoaKind
-from app.services.secrets import resolve_secret
 
 logger = logging.getLogger(__name__)
 
@@ -389,7 +388,7 @@ def _resolve_coa_secret(db: Session, nas_device: NasDevice) -> str | None:
         try:
             decrypted = decrypt_credential(nas_device.shared_secret)
             if decrypted:
-                resolved = resolve_secret(decrypted)
+                resolved = non_reference_or_none(decrypted, label="NAS shared secret")
                 if resolved:
                     return resolved
         except Exception as exc:
