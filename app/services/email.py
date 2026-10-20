@@ -28,6 +28,10 @@ from app.schemas.settings import DomainSettingUpdate
 from app.services.branding_config import get_brand
 from app.services.communication_intents import MAX_EMAIL_ATTACHMENT_BYTES
 from app.services.domain_settings import notification_settings
+from app.services.notification import (
+    CREDENTIAL_EVENT_TYPE,
+    mark_credential_send_terminal,
+)
 from app.services.notification import notifications as notification_records
 from app.services.settings_spec import resolve_value
 from app.services.validation_api import validate_email_format
@@ -1116,6 +1120,7 @@ def send_email(
     bcc_addresses: list[str] | tuple[str, ...] | None = None,
     attachments: tuple[EmailAttachment, ...] = (),
     stored_body: str | None = None,
+    subscriber_id: str | None = None,
 ) -> bool:
     """
     Send an email via SMTP.
@@ -1143,6 +1148,10 @@ def send_email(
 
         tracked_body = html_to_text(body_html)
 
+    if stored_body is not None:
+        # A redacted-copy send carries a credential: never log or persist
+        # exception text from the transport.
+        sensitive_content = True
     persisted_body = (
         stored_body
         if stored_body is not None
@@ -1202,9 +1211,13 @@ def send_email(
                 subject=subject,
                 body=persisted_body,
                 commit=True,
+                event_type=CREDENTIAL_EVENT_TYPE if stored_body is not None else None,
+                subscriber_id=subscriber_id if stored_body is not None else None,
             )
             undeliverable.status = NotificationStatus.failed
             undeliverable.last_error = NO_DELIVERABLE_RECIPIENT
+            if stored_body is not None:
+                mark_credential_send_terminal(undeliverable)
             db.add(
                 NotificationDelivery(
                     notification_id=undeliverable.id,
@@ -1251,6 +1264,8 @@ def send_email(
             # transport state, recipient, and the non-secret subject.
             body=persisted_body,
             commit=True,
+            event_type=CREDENTIAL_EVENT_TYPE if stored_body is not None else None,
+            subscriber_id=subscriber_id if stored_body is not None else None,
         )
         if _is_zeptomail_config(config):
             client_reference = str(notification.id)
@@ -1330,6 +1345,8 @@ def send_email(
         if notification and db is not None:
             notification.status = NotificationStatus.failed
             notification.last_error = "SMTP authentication failed"
+            if stored_body is not None:
+                mark_credential_send_terminal(notification)
             db.add(
                 NotificationDelivery(
                     notification_id=notification.id,
@@ -1361,6 +1378,8 @@ def send_email(
             notification.last_error = (
                 "Sensitive email transport failed" if sensitive_content else str(e)
             )
+            if stored_body is not None:
+                mark_credential_send_terminal(notification)
             db.add(
                 NotificationDelivery(
                     notification_id=notification.id,
