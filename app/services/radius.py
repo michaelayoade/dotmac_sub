@@ -59,6 +59,7 @@ from app.services.credential_crypto import (
     decrypt_credential,
     encrypt_credential,
     is_secret_reference_value,
+    non_reference_or_none,
 )
 from app.services.external_radius_targets import (
     active_external_radius_targets,
@@ -76,7 +77,6 @@ from app.services.radius_access_state import (
     TERMINATED_STATUSES,
 )
 from app.services.response import ListResponseMixin
-from app.services.secrets import resolve_secret
 
 logger = logging.getLogger(__name__)
 
@@ -897,7 +897,7 @@ def ensure_radius_clients_for_nas(db: Session, nas_device: NasDevice) -> int:
     )
     if decrypted_secret is None:
         return 0
-    raw_secret = resolve_secret(decrypted_secret)
+    raw_secret = non_reference_or_none(decrypted_secret, label="NAS shared secret")
     if not raw_secret:
         return 0
 
@@ -1223,7 +1223,7 @@ def _external_sync_nas(
             )
             if decrypted_secret is None:
                 continue
-            secret = resolve_secret(decrypted_secret)
+            secret = non_reference_or_none(decrypted_secret, label="NAS shared secret")
             if not secret:
                 logger.warning(
                     "Skipping RADIUS NAS sync for %s (%s): configured secret "
@@ -1627,7 +1627,9 @@ class RadiusSyncJobs(ListResponseMixin):
                     )
                     if decrypted_secret is None:
                         continue
-                    raw_secret = resolve_secret(decrypted_secret)
+                    raw_secret = non_reference_or_none(
+                        decrypted_secret, label="NAS shared secret"
+                    )
                     if not raw_secret:
                         continue
                     existing_client = db.scalars(

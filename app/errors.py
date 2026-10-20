@@ -16,6 +16,7 @@ from app.schemas.error import ErrorResponse as WebErrorResponse
 from app.services.application_exception_observability import (
     record_unhandled_http_exception,
 )
+from app.services.credential_crypto import CredentialReferenceRefused
 from app.services.domain_errors import DomainError
 from app.services.ticket_work_order_handoff import TicketWorkOrderHandoffError
 from app.services.unit_of_work import ConcurrencyConflict
@@ -270,6 +271,22 @@ def register_error_handlers(app) -> None:
                 None,
                 _request_id(request),
             ),
+        )
+
+    @app.exception_handler(CredentialReferenceRefused)
+    async def credential_reference_refused_handler(
+        request: Request, exc: CredentialReferenceRefused
+    ):
+        """A refused secret-reference write is a client error with fixed text."""
+
+        message = "Secret references are not accepted in this credential field."
+        status_code = 400 if _is_html_request(request) else 422
+        return await _handle_http_exception(
+            request,
+            status_code,
+            message
+            if _is_html_request(request)
+            else {"code": "credential_reference_refused", "message": message},
         )
 
     @app.exception_handler(VendorPortalOperationError)

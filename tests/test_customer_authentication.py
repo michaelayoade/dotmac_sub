@@ -147,6 +147,35 @@ def test_native_preserves_portal_access_fallback_and_password_bytes(
         assert prepared.verified.src == pa.SRC_ACCESS_CREDENTIAL
 
 
+@pytest.mark.parametrize("ref", ["env://F3_FAKE_VAR", "bao://secret/x#y"])
+def test_portal_access_fallback_stored_reference_is_invalid_login_not_500(
+    db_session: Session,
+    customer_subscriber: Subscriber,
+    monkeypatch: pytest.MonkeyPatch,
+    ref: str,
+) -> None:
+    """F3: a stored reference is refused and surfaces as an invalid login."""
+    monkeypatch.setenv("F3_FAKE_VAR", "planted")
+    db_session.add(
+        AccessCredential(
+            subscriber_id=customer_subscriber.id,
+            username="pppoe-ref",
+            secret_hash=ref,
+            is_active=True,
+        )
+    )
+    db_session.commit()
+    monkeypatch.setattr(
+        owner.radius_auth, "observe_authentication", radius_not_accepted
+    )
+    with pytest.raises(owner.CustomerLoginError) as refusal:
+        owner.prepare_customer_login(
+            db_session,
+            _query("pppoe-ref", "planted", owner.CustomerLoginAudience.BROWSER),
+        )
+    assert refusal.value.kind is owner.CustomerLoginFailure.INVALID_CREDENTIALS
+
+
 def test_wrong_customer_email_password_never_tries_radius(
     db_session: Session,
     customer_subscriber: Subscriber,
