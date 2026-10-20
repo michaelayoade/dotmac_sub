@@ -17,7 +17,6 @@ from app.models.party import PartyContactPointType, PartyType
 from app.models.sales import LeadCaptureMethod, LeadSourcePlatform
 from app.models.subscriber import Reseller, ResellerUser, Subscriber
 from app.models.team_inbox import (
-    InboxAutomationTrigger,
     InboxChannelType,
     InboxConversation,
     InboxConversationStatus,
@@ -34,7 +33,6 @@ from app.schemas.sales import (
 from app.services import auth_flow as auth_flow_service
 from app.services import (
     conversation_lead_relationships,
-    team_inbox_automation,
     team_inbox_channel_receive,
     team_inbox_customer_completion_policy,
     team_inbox_media,
@@ -939,16 +937,6 @@ def broker_fiber_visitor_session(
                 reason="Prospect created from fiber website live chat",
             ),
         )
-    team_inbox_automation.execute_matching_rules(
-        db,
-        conversation=conversation,
-        trigger=InboxAutomationTrigger.conversation_created,
-    )
-    team_inbox_automation.execute_matching_rules(
-        db,
-        conversation=conversation,
-        trigger=InboxAutomationTrigger.inbound_message_received,
-    )
     payload = team_inbox_realtime.message_event_payload(
         conversation_id=str(conversation.id),
         message_id=str(message.id),

@@ -19,7 +19,6 @@ def test_support_communications_catalog_explains_center_readiness() -> None:
 
     assert rows["support.ticket.center_rules"].state == "available"
     assert rows["support.ticket.assignment_rules"].state == "managed_elsewhere"
-    assert rows["communications.inbox_automation_rules"].state == "unavailable"
     assert rows["communications.retired_stale_auto_resolution"].state == "retired"
     assert all(row.explanation for row in rows.values())
     assert rows["support.ticket.center_rules"].item.state is (

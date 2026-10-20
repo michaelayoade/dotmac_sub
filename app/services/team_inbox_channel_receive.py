@@ -15,7 +15,6 @@ from sqlalchemy.orm import Session
 from app.models.audit import AuditActorType
 from app.models.subscriber import Reseller, Subscriber, SubscriberStatus
 from app.models.team_inbox import (
-    InboxAutomationTrigger,
     InboxChannelType,
     InboxContactLink,
     InboxConversation,
@@ -40,7 +39,6 @@ from app.services import (
     ai_conversation_intake,
     ai_intake,
     team_inbox_assignment,
-    team_inbox_automation,
     team_inbox_customer_completion_policy,
     team_inbox_media,
     team_inbox_operations,
@@ -1497,17 +1495,6 @@ def receive_inbound_channel(
     # A conversation snoozed "until the customer replies" wakes here — this is
     # the reply.
     team_inbox_operations.wake_on_inbound(db, conversation=conversation)
-    if created_conversation:
-        team_inbox_automation.execute_matching_rules(
-            db,
-            conversation=conversation,
-            trigger=InboxAutomationTrigger.conversation_created,
-        )
-    team_inbox_automation.execute_matching_rules(
-        db,
-        conversation=conversation,
-        trigger=InboxAutomationTrigger.inbound_message_received,
-    )
     team_inbox_realtime.publish_conversation_event(
         db,
         str(conversation.id),
