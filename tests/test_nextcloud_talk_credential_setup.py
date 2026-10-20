@@ -240,7 +240,9 @@ def test_generic_secret_mutations_cannot_change_managed_credentials(monkeypatch,
     )
     assert not secrets.write_secret(path, {"app_password": PASSWORD})
     assert not secrets.delete_secret(path)
-    assert "status=error" in web_system_secrets.delete_secret_path(path)
+    assert "status=error" in web_system_secrets.delete_secret_path(
+        path, audit=lambda *_: pytest.fail("managed paths are refused before audit")
+    )
 
 
 def _store(
@@ -600,11 +602,13 @@ def test_managed_generic_editor_rejects_before_reading_password(monkeypatch):
     path = f"{secrets.IMMUTABLE_TALK_PREFIX}/unit-test"
     assert (
         "managed by its integration"
-        in web_system_secrets.save_secret(path, {})["error"]
+        in web_system_secrets.save_secret(path, {}, audit=lambda *_: None)["error"]
     )
     assert (
         "managed by its integration"
-        in web_system_secrets.create_secret({"path": path})["error"]
+        in web_system_secrets.create_secret({"path": path}, audit=lambda *_: None)[
+            "error"
+        ]
     )
 
 

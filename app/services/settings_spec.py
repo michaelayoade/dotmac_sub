@@ -5618,21 +5618,14 @@ SETTINGS_SPECS: list[SettingSpec] = [
         default=True,
         label="Cross-application drift detection",
     ),
-    # The request-audit middleware's five controls. They were writable through
+    # The request-audit middleware's four controls (the former `enabled` switch
+    # was removed: request auditing cannot be turned off by configuration). They were writable through
     # `settings_api_custom` with NO spec at all — the custom handler validates
     # against its own `_AUDIT_SETTING_*` sets, so nothing required a
     # declaration. Declared here at their EXACT current shape (seed:
     # `seed_audit_settings`; runtime defaults: `app.main._default_audit_settings`)
     # so the two agree before the handler is routed through the spec.
     # `tests/architecture/test_audit_setting_defaults.py` pins that agreement.
-    SettingSpec(
-        domain=SettingDomain.audit,
-        key="enabled",
-        env_var=None,
-        value_type=SettingValueType.boolean,
-        default=True,
-        label="Request audit logging",
-    ),
     SettingSpec(
         domain=SettingDomain.audit,
         key="methods",

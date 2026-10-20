@@ -793,7 +793,6 @@ async def grafana_webhook_sink(request: Request) -> Response:
 
 def _default_audit_settings() -> dict:
     return {
-        "enabled": True,
         "methods": {"POST", "PUT", "PATCH", "DELETE"},
         "skip_paths": ["/static", "/web", "/health"],
         "read_trigger_header": "x-audit-read",
@@ -875,8 +874,6 @@ async def audit_middleware(request: Request, call_next):
                 audit_settings = _default_audit_settings()
             finally:
                 db.close()
-    if not audit_settings["enabled"]:
-        return await call_next(request)
     track_read = request.method == "GET" and (
         request.headers.get(audit_settings["read_trigger_header"], "").lower() == "true"
         or request.query_params.get(audit_settings["read_trigger_query"]) == "true"
@@ -1843,8 +1840,6 @@ def _load_audit_settings(db: Session):
         .all()
     )
     values = {row.key: row for row in rows}
-    if "enabled" in values:
-        defaults["enabled"] = _to_bool(values["enabled"])
     if "methods" in values:
         defaults["methods"] = _to_list(values["methods"], upper=True)
     if "skip_paths" in values:
@@ -1857,15 +1852,6 @@ def _load_audit_settings(db: Session):
         _AUDIT_SETTINGS_CACHE = defaults
         _AUDIT_SETTINGS_CACHE_AT = now
     return defaults
-
-
-def _to_bool(setting: DomainSetting) -> bool:
-    value = setting.value_json if setting.value_json is not None else setting.value_text
-    if isinstance(value, bool):
-        return value
-    if isinstance(value, str):
-        return value.strip().lower() in {"1", "true", "yes", "on"}
-    return False
 
 
 def _to_str(setting: DomainSetting) -> str:
@@ -1890,7 +1876,14 @@ def _to_list(setting: DomainSetting, upper: bool) -> set[str] | list[str]:
 
 
 def _is_audit_path_skipped(path: str, skip_paths: list[str]) -> bool:
-    return any(path.startswith(prefix) for prefix in skip_paths)
+    """Match whole path segments so ``/web`` skips ``/web/x`` but not ``/webhooks/x``."""
+    for prefix in skip_paths:
+        base = prefix.rstrip("/")
+        if not base:
+            continue
+        if path == base or path.startswith(base + "/"):
+            return True
+    return False
 
 
 def _include_api_router(router, dependencies=None):

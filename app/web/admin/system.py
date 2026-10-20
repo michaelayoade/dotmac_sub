@@ -6268,7 +6268,11 @@ def secrets_edit(request: Request, path: str, db: Session = Depends(get_db)):
 def secrets_save(request: Request, path: str, db: Session = Depends(get_db)):
     """Save updated secret fields."""
     form = parse_form_data_sync(request)
-    result = web_system_secrets_service.save_secret(path, form)
+    result = web_system_secrets_service.save_secret(
+        path,
+        form,
+        audit=web_system_secrets_service.secret_write_auditor(db, request),
+    )
     if result.get("ok"):
         return RedirectResponse(str(result["redirect_url"]), status_code=303)
     ctx = _system_page_context(request, db, "Secrets", "secrets")
@@ -6296,7 +6300,10 @@ def secrets_new(request: Request, db: Session = Depends(get_db)):
 def secrets_create(request: Request, db: Session = Depends(get_db)):
     """Create a new secret path with fields."""
     form = parse_form_data_sync(request)
-    result = web_system_secrets_service.create_secret(form)
+    result = web_system_secrets_service.create_secret(
+        form,
+        audit=web_system_secrets_service.secret_write_auditor(db, request),
+    )
     if result.get("ok"):
         return RedirectResponse(str(result["redirect_url"]), status_code=303)
     if result.get("error"):
@@ -6316,7 +6323,10 @@ def secrets_create(request: Request, db: Session = Depends(get_db)):
 def secrets_delete(request: Request, path: str, db: Session = Depends(get_db)):
     """Delete a secret."""
     return RedirectResponse(
-        web_system_secrets_service.delete_secret_path(path),
+        web_system_secrets_service.delete_secret_path(
+            path,
+            audit=web_system_secrets_service.secret_write_auditor(db, request),
+        ),
         status_code=303,
     )
 
