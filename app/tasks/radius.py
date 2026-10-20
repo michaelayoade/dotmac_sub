@@ -146,18 +146,20 @@ def ipv4_retention_release() -> dict:
 
     session = SessionLocal()
     try:
-        mode = resolve_string(session, SettingDomain.network, "ipv4_retention_release_mode")
+        mode = resolve_string(
+            session, SettingDomain.network, "ipv4_retention_release_mode"
+        )
         if mode not in ("shadow", "apply"):
             mode = "shadow"  # fail closed on an unexpected value
+        retention_days = resolve_integer(
+            session, SettingDomain.network, "ipv4_retention_days_after_disable"
+        )
+        limit = resolve_integer(
+            session, SettingDomain.network, "ipv4_retention_max_per_run"
+        )
+        db_session_adapter.release_read_transaction(session)
         result = run_ipv4_retention_release(
-            session,
-            mode=mode,
-            retention_days=resolve_integer(
-                session, SettingDomain.network, "ipv4_retention_days_after_disable"
-            ),
-            limit=resolve_integer(
-                session, SettingDomain.network, "ipv4_retention_max_per_run"
-            ),
+            session, mode=mode, retention_days=retention_days, limit=limit
         )
         logger.info("ipv4 retention sweep: %s", result["counts"])
         client = _get_redis()
