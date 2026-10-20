@@ -227,10 +227,14 @@ def test_send_credentials_does_not_log_secret(
 
     sent: list[str] = []
     monkeypatch.setattr(
-        core.email_service, "send_email", lambda **kw: sent.append(kw["body_text"])
+        core.email_service,
+        "send_email",
+        lambda **kw: sent.append(kw["body_text"]) or True,
     )
     monkeypatch.setattr(
-        core.sms_service, "send_sms", lambda db, phone, body, **kw: sent.append(body)
+        core.sms_service,
+        "send_sms",
+        lambda db, phone, body, **kw: sent.append(body) or True,
     )
     subscriber.email = "subscriber@example.test"
     subscriber.phone = "+15550100"
@@ -490,3 +494,225 @@ def test_edit_page_marks_unbound_password_unavailable(
     response = client.post(_reveal_url(subscription), headers=_headers())
     assert response.status_code == 404
     assert SECRET not in response.text
+
+
+# --- 6. D9: stored notification copy is masked, delivered copy is not ------
+
+
+def test_stored_notifications_mask_password_but_delivery_carries_it(
+    db_session, subscription, subscriber, credential, monkeypatch
+):
+    from app.models.notification import Notification, NotificationDelivery
+    from app.services import email as email_service
+    from app.services import settings_spec
+    from app.services import sms as sms_service
+    from app.services import web_catalog_subscriptions as core
+
+    smtp_wire: list[str] = []
+    sms_wire: list[str] = []
+
+    class _Smtp:
+        def starttls(self):
+            pass
+
+        def login(self, *_a):
+            pass
+
+        def sendmail(self, _from, _to, message):
+            smtp_wire.append(message)
+
+        def quit(self):
+            pass
+
+    monkeypatch.setattr(
+        email_service,
+        "_get_smtp_config",
+        lambda *a, **k: {
+            "host": "smtp.example.test",
+            "port": 587,
+            "use_ssl": False,
+            "use_tls": False,
+            "username": None,
+            "password": None,
+            "from_email": "noreply@example.test",
+            "from_name": "Test",
+            "sender_key": "default",
+        },
+    )
+    monkeypatch.setattr(email_service, "_create_smtp_client", lambda *a, **k: _Smtp())
+    monkeypatch.setattr(settings_spec, "resolve_boolean", lambda *a, **k: True)
+    monkeypatch.setattr(
+        settings_spec,
+        "resolve_string",
+        lambda db, domain, key: {
+            "sms_provider": "webhook",
+            "sms_webhook_url": "https://sms.example.test/hook",
+        }.get(key, ""),
+    )
+    monkeypatch.setattr(settings_spec, "resolve_integer", lambda *a, **k: 0)
+    monkeypatch.setattr(sms_service, "_sms_credentials", lambda: ("k", "s"))
+
+    def _fake_webhook(_url, _key, _phone, body, timeout=None):
+        sms_wire.append(body)
+        return True, "ext-1", None
+
+    monkeypatch.setattr(sms_service, "_send_via_webhook", _fake_webhook)
+    subscriber.email = "subscriber@example.test"
+    subscriber.phone = "+15550100"
+    db_session.commit()
+
+    result = core.send_subscription_credentials(
+        db_session, subscription_id=str(subscription.id)
+    )
+    assert result["email_sent"] == 1 and result["sms_sent"] == 1
+
+    # Delivered messages still carry the password.
+    assert any(SECRET in m for m in smtp_wire)
+    assert any(SECRET in b for b in sms_wire)
+
+    # Nothing persisted carries it, and the masked copy is recorded.
+    rows = db_session.query(Notification).all()
+    for row in rows:
+        assert SECRET not in (row.body or "")
+        assert SECRET not in json.dumps(row.metadata_ or {}, default=str)
+    mine = [r for r in rows if r.recipient in {"subscriber@example.test", "+15550100"}]
+    assert len(mine) == 2
+    for row in mine:
+        assert "********" in (row.body or "")
+    for delivery in db_session.query(NotificationDelivery).all():
+        assert SECRET not in (delivery.response_body or "")
+
+
+# --- 7. D9 review: terminal rows, classification, single flight, audit ------
+
+
+def _wire_fakes(monkeypatch, *, smtp_fail=False, sms_ok=True):
+    from app.services import email as email_service
+    from app.services import settings_spec
+    from app.services import sms as sms_service
+
+    class _Smtp:
+        def starttls(self):
+            pass
+
+        def login(self, *_a):
+            pass
+
+        def sendmail(self, *_a):
+            if smtp_fail:
+                raise RuntimeError("boom contains " + SECRET)
+
+        def quit(self):
+            pass
+
+    monkeypatch.setattr(
+        email_service,
+        "_get_smtp_config",
+        lambda *a, **k: {
+            "host": "smtp.example.test",
+            "port": 587,
+            "use_ssl": False,
+            "use_tls": False,
+            "username": None,
+            "password": None,
+            "from_email": "noreply@example.test",
+            "from_name": "Test",
+            "sender_key": "default",
+        },
+    )
+    monkeypatch.setattr(email_service, "_create_smtp_client", lambda *a, **k: _Smtp())
+    monkeypatch.setattr(settings_spec, "resolve_boolean", lambda *a, **k: True)
+    monkeypatch.setattr(
+        settings_spec,
+        "resolve_string",
+        lambda db, domain, key: {
+            "sms_provider": "webhook",
+            "sms_webhook_url": "https://sms.example.test/hook",
+        }.get(key, ""),
+    )
+    monkeypatch.setattr(settings_spec, "resolve_integer", lambda *a, **k: 0)
+    monkeypatch.setattr(sms_service, "_sms_credentials", lambda: ("k", "s"))
+    monkeypatch.setattr(
+        sms_service,
+        "_send_via_webhook",
+        lambda *a, **k: (
+            sms_ok,
+            "ext-1" if sms_ok else None,
+            None if sms_ok else "provider down",
+        ),
+    )
+
+
+def test_failed_credential_rows_are_terminal_and_never_worker_eligible(
+    db_session, subscription, subscriber, credential, monkeypatch, caplog
+):
+    from datetime import UTC, datetime, timedelta
+
+    from app.models.notification import Notification, NotificationStatus
+    from app.services import web_catalog_subscriptions as core
+    from app.services.notification import CREDENTIAL_NOT_RETRYABLE
+    from app.tasks.notifications import _eligible_notification_query
+
+    _wire_fakes(monkeypatch, smtp_fail=True, sms_ok=False)
+    subscriber.email = "subscriber@example.test"
+    subscriber.phone = "+15550100"
+    db_session.commit()
+    with caplog.at_level(logging.DEBUG):
+        result = core.send_subscription_credentials(
+            db_session, subscription_id=str(subscription.id)
+        )
+    assert result["email_sent"] == 0 and result["sms_sent"] == 0
+    assert SECRET not in caplog.text  # no exception text logged
+
+    rows = (
+        db_session.query(Notification)
+        .filter(Notification.event_type == "subscription.credentials")
+        .all()
+    )
+    assert len(rows) == 2
+    for row in rows:
+        assert row.subscriber_id == subscriber.id
+        assert row.status == NotificationStatus.failed
+        assert row.last_error == CREDENTIAL_NOT_RETRYABLE
+        assert SECRET not in (row.body or "") + (row.last_error or "")
+        # Even a stuck "sending" row must not be reclaimed.
+        row.status = NotificationStatus.sending
+        row.retry_count = 0
+        row.updated_at = datetime.now(UTC) - timedelta(days=1)
+    db_session.commit()
+    eligible = _eligible_notification_query(
+        db_session,
+        now=datetime.now(UTC),
+        max_retries=5,
+        stuck_threshold=datetime.now(UTC) - timedelta(minutes=5),
+    ).all()
+    assert not {r.id for r in rows} & {r.id for r in eligible}
+
+
+def test_credential_resend_within_window_refused_and_success_audited(
+    db_session, subscription, subscriber, credential, monkeypatch
+):
+    from app.models.audit import AuditEvent
+    from app.services import web_catalog_subscriptions as core
+
+    _wire_fakes(monkeypatch)
+    subscriber.email = "subscriber@example.test"
+    subscriber.phone = "+15550100"
+    db_session.commit()
+    first = core.send_subscription_credentials(
+        db_session, subscription_id=str(subscription.id)
+    )
+    assert first["email_sent"] == 1 and first["sms_sent"] == 1
+    with pytest.raises(ValueError, match="moments ago"):
+        core.send_subscription_credentials(
+            db_session, subscription_id=str(subscription.id)
+        )
+    events = (
+        db_session.query(AuditEvent)
+        .filter(AuditEvent.action == "subscription.credentials_sent")
+        .all()
+    )
+    assert len(events) == 1
+    assert SECRET not in json.dumps(
+        {"m": events[0].metadata_, "e": str(events[0].entity_id)}, default=str
+    )

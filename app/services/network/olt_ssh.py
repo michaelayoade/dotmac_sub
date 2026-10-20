@@ -121,7 +121,11 @@ def _load_linked_acs_payload(olt: OLTDevice) -> dict[str, object] | None:
                 if server is None:
                     return None
                 password = (
-                    decrypt_credential(server.cwmp_password)
+                    decrypt_credential(
+                        server.cwmp_password,
+                        model="Tr069AcsServer",
+                        field="cwmp_password",
+                    )
                     if server.cwmp_password
                     else ""
                 )
@@ -140,7 +144,11 @@ def _load_linked_acs_payload(olt: OLTDevice) -> dict[str, object] | None:
     if server is None or not getattr(server, "cwmp_url", None):
         return None
     password = (
-        decrypt_credential(server.cwmp_password)
+        decrypt_credential(
+            server.cwmp_password,
+            model="Tr069AcsServer",
+            field="cwmp_password",
+        )
         if getattr(server, "cwmp_password", None)
         else ""
     )
@@ -440,7 +448,9 @@ def _open_shell(olt: OLTDevice) -> tuple[Transport, Channel, OltSshPolicy]:
         raise ValueError("SSH password is required")
 
     policy = resolve_policy(olt)
-    password = decrypt_credential(olt.ssh_password)
+    password = decrypt_credential(
+        olt.ssh_password, model="OLTDevice", field="ssh_password"
+    )
     if not password:
         raise ValueError("SSH password could not be decrypted")
 

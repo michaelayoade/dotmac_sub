@@ -49,6 +49,7 @@ from app.models.catalog import (
     Subscription,
     SubscriptionStatus,
 )
+from app.services.access_credential_secret import is_secret_reference_value
 from app.services.credential_crypto import (
     decrypt_credential_with_key,
     get_encryption_key,
@@ -1092,6 +1093,8 @@ def populate(
                     preserve_usernames.add(login)
                 continue
             try:
+                if is_secret_reference_value(cred.secret_hash):
+                    raise ValueError("stored service secret is a reference")
                 cleartext = decrypt_credential_with_key(cred.secret_hash, enc_key)
             except Exception as exc:  # noqa: BLE001
                 logger.warning("decrypt failed for %s: %s", login, exc)

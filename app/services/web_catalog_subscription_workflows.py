@@ -1278,6 +1278,7 @@ def handle_subscription_update_form(
     form: FormData,
     request: object,
     actor_id: str | None,
+    credential_update_allowed: bool = False,
 ) -> dict[str, object]:
     """Validate and update a subscription from the admin form."""
     subscription = core.parse_subscription_form(form, subscription_id=subscription_id)
@@ -1335,6 +1336,7 @@ def handle_subscription_update_form(
                 f"/admin/catalog/subscriptions/{subscription_id}/edit"
             )
             return {"form_context": context}
+        feedback: list[str] = []
         updated = core.update_subscription_with_audit(
             db,
             subscription_id,
@@ -1349,7 +1351,19 @@ def handle_subscription_update_form(
             ip_addon_id=str(form.get("ip_addon_id") or ""),
             ip_addon_quantity=str(form.get("ip_addon_quantity") or "1"),
             ipv4_assignment_submitted=False,
+            credential_update_allowed=credential_update_allowed,
+            feedback=feedback,
+            adopt_legacy_credential_id=str(form.get("adopt_legacy_credential_id") or "")
+            or None,
         )
+        if feedback:
+            # Never silent success: stay on the edit page with a visible warning.
+            return {
+                "redirect_url": (
+                    f"/admin/catalog/subscriptions/{subscription_id}/edit"
+                    f"?warning={quote_plus(' '.join(feedback))}"
+                )
+            }
         subscriber_id = getattr(updated, "subscriber_id", None)
         redirect_url = (
             customer_detail_url_for_subscriber_id(db, str(subscriber_id))

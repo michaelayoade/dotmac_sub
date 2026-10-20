@@ -16,6 +16,7 @@ from app.models.enforcement_lock import EnforcementLock, EnforcementReason
 from app.models.system_user import SystemUser
 from app.models.test_connection import TestConnectionGrant
 from app.schemas.test_connection import TestConnectionCreated, TestConnectionReference
+from app.services.access_credential_secret import is_secret_reference_value
 from app.services.audit_adapter import AuditActor, stage_audit_event
 from app.services.domain_errors import DomainError
 from app.services.events.dispatcher import emit_event
@@ -378,6 +379,10 @@ def _validate_network_identity(db: Session, subscription: Subscription) -> None:
                 "ambiguous_login",
                 "This login is shared by multiple live subscriptions. Select the subscription with its own network credential before testing.",
             )
+    if is_secret_reference_value(credential.secret_hash):
+        raise _error(
+            "network_not_ready", "The service network credential cannot be recovered."
+        )
     try:
         password = decrypt_credential(credential.secret_hash)
     except Exception as exc:

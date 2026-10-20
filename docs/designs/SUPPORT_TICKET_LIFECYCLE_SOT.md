@@ -135,17 +135,12 @@ seed data and cleaned from deployed grant tables by migration. Historical
 migrations may still mention it because they preserve the already-applied
 schema history, but current code no longer creates, grants, checks, or depends
 on that permission.
-Automation has the same separation:
+The legacy ticket automation-rule engine (`support_ticket_automation_rules`)
+was retired; the table and ORM model remain until a later migration drops them.
+Automation now lives only in the Automation Center.
 
-- `support.ticket_automation_rule_configuration` owns typed automation rules;
-- `support.ticket_automation_evaluation` returns immutable
-  `TicketAutomationProposal` values and never writes a Ticket or rule firing
-  timestamp;
-- the Ticket owner validates and applies accepted consequences.
-
-Manual-review identity evidence fails closed for sensitive assignment and
-automation. A policy never becomes a lifecycle writer merely because its
-proposal is accepted.
+Manual-review identity evidence fails closed for sensitive assignment. A policy
+never becomes a lifecycle writer merely because its proposal is accepted.
 
 Customer-portal creation uses a distinct, typed configuration resolution.
 `support.ticket_configuration` resolves the first active Service Team whose

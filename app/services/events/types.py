@@ -154,8 +154,6 @@ class EventType(enum.Enum):
     oauth_token_refreshed = "oauth_token.refreshed"
     oauth_token_refresh_failed = "oauth_token.refresh_failed"
     account_credit_deposited = "account_credit.deposited"
-    backdated_service_invoice_created = "backdated_service_invoice.created"
-    backdated_service_invoice_reconstructed = "backdated_service_invoice.reconstructed"
     prepaid_service_renewed = "prepaid_service.renewed"
     prepaid_service_renewal_document_corrected = (
         "prepaid_service.renewal_document_corrected"
@@ -243,8 +241,7 @@ class EventType(enum.Enum):
     service_extension_anchor_repaired = "billing.service_extension_anchor_repaired"
     service_extended = "billing.service_extended"
 
-    # Usage events (5)
-    usage_recorded = "usage.recorded"
+    # Usage events
     usage_warning = "usage.warning"
     usage_exhausted = "usage.exhausted"
     usage_topped_up = "usage.topped_up"
@@ -324,9 +321,8 @@ class EventType(enum.Enum):
     vendor_as_built_accepted = "vendor_as_built.accepted"
     vendor_as_built_rejected = "vendor_as_built.rejected"
 
-    # Operations - Appointment events (2)
+    # Operations - Appointment events
     appointment_scheduled = "appointment.scheduled"
-    appointment_missed = "appointment.missed"
 
     # Native sales vertical events. Future agent/inbox
     # lead/quote lifecycle was webhook-silent in the CRM's event system;
@@ -362,13 +358,9 @@ class EventType(enum.Enum):
     customer_experience_needs_attention = "customer_experience.needs_attention"
 
     # Network events
-    device_offline = "device.offline"
-    device_online = "device.online"
     network_device_archived = "network_device.archived"
     network_device_restored = "network_device.restored"
     device_projection_reconciled = "device_projection.reconciled"
-    session_started = "session.started"
-    session_ended = "session.ended"
     network_map_asset_change_proposed = "network_map_asset_change.proposed"
     network_map_asset_change_applied = "network_map_asset_change.applied"
     network_map_asset_change_rejected = "network_map_asset_change.rejected"
@@ -388,23 +380,18 @@ class EventType(enum.Enum):
     ont_online = "ont.online"
     ont_offline = "ont.offline"
     ont_signal_degraded = "ont.signal_degraded"
-    ont_signal_delta = "ont.signal_delta"
     ont_config_updated = "ont.config_updated"
     ont_service_configuration_queued = "ont.service_configuration.queued"
     ont_service_configuration_phase_changed = "ont.service_configuration.phase_changed"
     ont_service_configuration_retired = "ont.service_configuration.retired"
     ont_moved = "ont.moved"
     ont_feature_toggled = "ont.feature_toggled"
-    ont_ddm_alert = "ont.ddm_alert"
 
     # ONT destructive operations (audit events)
-    ont_authorized = "ont.authorized"
     ont_deauthorized = "ont.deauthorized"
     ont_factory_reset = "ont.factory_reset"
     ont_rebooted = "ont.rebooted"
-    ont_service_port_created = "ont.service_port_created"
     ont_service_port_deleted = "ont.service_port_deleted"
-    ont_tr069_bound = "ont.tr069_bound"
     ont_commissioning_requested = "ont.commissioning_requested"
     ont_commissioning_state_changed = "ont.commissioning_state_changed"
 
@@ -433,10 +420,6 @@ class EventType(enum.Enum):
     # every is_active-filtered plant and map read.
     fiber_segment_activated = "fiber_segment.activated"
 
-    # OLT circuit breaker events
-    olt_circuit_opened = "olt.circuit_opened"
-    olt_circuit_closed = "olt.circuit_closed"
-
     # Collections - Dunning events (4)
     dunning_started = "dunning.started"
     dunning_action_executed = "dunning.action_executed"
@@ -456,9 +439,7 @@ class EventType(enum.Enum):
     # Network alert (legacy, kept for compatibility)
     network_alert = "network.alert"
 
-    # Customer portal events (4)
-    customer_login = "customer.login"
-    customer_logout = "customer.logout"
+    # Customer portal events
     customer_ticket_created = "customer.ticket_created"
 
     # Identity / onboarding invitation lifecycle
@@ -474,11 +455,9 @@ class EventType(enum.Enum):
     ticket_resolution_requested = "ticket.resolution_requested"
     ticket_resolution_confirmed = "ticket.resolution_confirmed"
     ticket_resolution_disputed = "ticket.resolution_disputed"
-    ticket_merged = "ticket.merged"
     ticket_work_order_issued = "ticket.work_order_issued"
     outage_infrastructure_work_order_issued = "outage.infrastructure_work_order_issued"
     work_order_field_outcome_recorded = "work_order.field_outcome_recorded"
-    customer_password_changed = "customer.password_changed"  # noqa: S105
 
     # Reseller events (6)
     reseller_created = "reseller.created"
@@ -549,7 +528,6 @@ class EventType(enum.Enum):
     nas_device_updated = "nas_device.updated"
     nas_device_deleted = "nas_device.deleted"
     nas_backup_completed = "nas_backup.completed"
-    nas_backup_failed = "nas_backup.failed"
     nas_provisioning_completed = "nas_provisioning.completed"
     nas_provisioning_failed = "nas_provisioning.failed"
 

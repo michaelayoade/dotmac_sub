@@ -97,7 +97,6 @@ _WRITE_TIER_VERBS = frozenset(
         "create",
         "create_backdated_service",  # Creates a reviewed historical service document.
         "create_subscription_service",  # Issues a reviewed next-period document.
-        "db_admin",
         "delete",
         "dispatch",
         "distribute",

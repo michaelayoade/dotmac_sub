@@ -18,8 +18,6 @@ from app.models.stored_file import StoredFile
 from app.models.subscriber import Subscriber, SubscriberContact
 from app.models.subscription_engine import SettingValueType
 from app.models.support import (
-    AutomationActionType,
-    AutomationTrigger,
     Ticket,
     TicketAccessToken,
     TicketAssignee,
@@ -38,7 +36,6 @@ from app.schemas.support import (
     TicketUpdate,
 )
 from app.services import support as support_service
-from app.services import support_automation_rules
 from app.services import support_ticket_settings as support_ticket_settings_service
 from app.services import web_support_tickets as web_support_tickets_service
 from app.services.customer_identity_resolution import (
@@ -273,11 +270,7 @@ def test_ticket_create_preserves_requested_team_or_unassigned_routing(
         name="Assignment Rule Team",
         team_type=ServiceTeamType.support.value,
     )
-    automation_team = ServiceTeam(
-        name="Automation Team",
-        team_type=ServiceTeamType.support.value,
-    )
-    db_session.add_all([requested_team, rule_team, automation_team])
+    db_session.add_all([requested_team, rule_team])
     db_session.flush()
     db_session.add(
         TicketAssignmentRule(
@@ -290,24 +283,6 @@ def test_ticket_create_preserves_requested_team_or_unassigned_routing(
         )
     )
     db_session.commit()
-    support_automation_rules.create_rule(
-        db_session,
-        name="Replace created ticket team",
-        trigger=AutomationTrigger.ticket_created,
-        action_type=AutomationActionType.assign_team,
-        action_value=support_automation_rules.TicketAutomationAction(
-            service_team_id=automation_team.id
-        ),
-    )
-    support_automation_rules.create_rule(
-        db_session,
-        name="Tag portal-created tickets",
-        trigger=AutomationTrigger.ticket_created,
-        action_type=AutomationActionType.add_tag,
-        action_value=support_automation_rules.TicketAutomationAction(
-            tag="creation_automation_ran"
-        ),
-    )
 
     explicitly_routed = support_service.tickets.create(
         db_session,
@@ -332,8 +307,6 @@ def test_ticket_create_preserves_requested_team_or_unassigned_routing(
 
     assert explicitly_routed.service_team_id == requested_team.id
     assert intentionally_unassigned.service_team_id is None
-    assert "creation_automation_ran" in explicitly_routed.tags
-    assert "creation_automation_ran" in intentionally_unassigned.tags
 
 
 def test_ticket_auto_assignment_respects_configured_open_limit(db_session, subscriber):
@@ -508,46 +481,6 @@ def test_ticket_update_preserves_explicit_service_team_when_auto_assignment_runs
         TicketUpdate(service_team_id=requested_team.id),
     )
 
-    assert updated.service_team_id == requested_team.id
-
-
-def test_ticket_update_preserves_explicit_service_team_from_status_automation(
-    db_session, monkeypatch
-):
-    requested_team = ServiceTeam(
-        name="Requested escalation", team_type=ServiceTeamType.support.value
-    )
-    automation_team = ServiceTeam(
-        name="Automation escalation", team_type=ServiceTeamType.support.value
-    )
-    ticket = Ticket(title="Status automation", status=TicketStatus.open.value)
-    db_session.add_all([requested_team, automation_team, ticket])
-    db_session.commit()
-    support_automation_rules.create_rule(
-        db_session,
-        name="Status-driven team assignment",
-        trigger=AutomationTrigger.status_changed,
-        action_type=AutomationActionType.assign_team,
-        action_value=support_automation_rules.TicketAutomationAction(
-            service_team_id=automation_team.id
-        ),
-    )
-    monkeypatch.setattr(
-        support_service.Tickets,
-        "_auto_assignment_enabled",
-        staticmethod(lambda _db: False),
-    )
-
-    updated = support_service.tickets.update(
-        db_session,
-        str(ticket.id),
-        TicketUpdate(
-            service_team_id=requested_team.id,
-            status=TicketStatus.closed.value,
-        ),
-    )
-
-    assert updated.status == TicketStatus.closed.value
     assert updated.service_team_id == requested_team.id
 
 
@@ -1018,40 +951,6 @@ def test_ticket_staff_and_team_tags_create_staff_inbox_notifications(
         actor_id=str(subscriber.id),
     )
     assert db_session.query(AdminNotification).count() == 2
-
-
-def test_automation_added_field_visit_tag_does_not_issue_work(db_session, subscriber):
-    """Automation may tag triage; explicit assigned-team issuance is separate."""
-    from app.models.support import AutomationActionType, AutomationTrigger
-    from app.models.work_order import WorkOrder
-
-    support_automation_rules.create_rule(
-        db_session,
-        name="Site visits get a work order",
-        trigger=AutomationTrigger.ticket_created,
-        conditions=support_automation_rules.TicketAutomationConditions(
-            ticket_type="site_visit"
-        ),
-        action_type=AutomationActionType.add_tag,
-        action_value=support_automation_rules.TicketAutomationAction(tag="field_visit"),
-    )
-
-    ticket = support_service.tickets.create(
-        db_session,
-        TicketCreate(
-            title="Router down at site",
-            description="Needs onsite check",
-            subscriber_id=subscriber.id,
-            customer_account_id=subscriber.id,
-            ticket_type="site_visit",
-        ),
-        actor_id=str(subscriber.id),
-    )
-
-    db_session.refresh(ticket)
-    assert "field_visit" in (ticket.tags or [])
-    assert "work_order_id" not in (ticket.metadata_ or {})
-    assert db_session.query(WorkOrder).count() == 0
 
 
 def test_merge_moves_comments_assignees_and_blocks_source_mutations(
@@ -1604,14 +1503,6 @@ def test_ticket_automation_is_suppressed_for_ambiguous_identity(db_session, subs
     rebuild_identity_index_for_subscriber(db_session, subscriber.id)
     rebuild_identity_index_for_subscriber(db_session, other.id)
     db_session.commit()
-    support_automation_rules.create_rule(
-        db_session,
-        name="Auto high priority",
-        trigger=AutomationTrigger.ticket_created,
-        action_type=AutomationActionType.set_priority,
-        action_value=support_automation_rules.TicketAutomationAction(priority="high"),
-    )
-    db_session.commit()
 
     ticket = support_service.tickets.create(
         db_session,
@@ -1648,16 +1539,6 @@ def test_ticket_automation_is_suppressed_for_low_confidence_identity(
         )
     )
     db_session.flush()
-    db_session.commit()
-    support_automation_rules.create_rule(
-        db_session,
-        name="Auto open status",
-        trigger=AutomationTrigger.ticket_created,
-        action_type=AutomationActionType.set_status,
-        action_value=support_automation_rules.TicketAutomationAction(
-            status=TicketStatus.pending
-        ),
-    )
     db_session.commit()
 
     ticket = support_service.tickets.create(

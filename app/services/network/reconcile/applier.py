@@ -53,6 +53,7 @@ the adapter/client themselves, but neither this module nor the action
 
 from __future__ import annotations
 
+import inspect
 import logging
 import re
 import time
@@ -914,7 +915,11 @@ def _execute(action: Action, ctx: ApplyContext) -> AppliedAction:
             _acs_set(action, ctx, connection_params)
             if action.acs_url:
                 acs_password = _resolve_or_fail(
-                    ctx, action, action.acs_password_ref or ""
+                    ctx,
+                    action,
+                    action.acs_password_ref or "",
+                    model="Tr069AcsServer",
+                    field="cwmp_password",
                 )
                 endpoint_params = {
                     f"{root}.URL": action.acs_url,
@@ -1004,8 +1009,27 @@ def _require_add_object_layout(action: AcsAddObject) -> int | None:
     return rendered_wcd
 
 
+def _accepts_credential_context(resolver: Callable[..., object]) -> bool:
+    """True when the resolver takes the optional ``model``/``field`` keywords."""
+    try:
+        params = inspect.signature(resolver).parameters
+    except (TypeError, ValueError):
+        return False
+    return (
+        "model" in params
+        and "field" in params
+        or any(p.kind is inspect.Parameter.VAR_KEYWORD for p in params.values())
+    )
+
+
 def _resolve_or_fail(
-    ctx: ApplyContext, action: Action, ref: str, *, refuse_reference: bool = False
+    ctx: ApplyContext,
+    action: Action,
+    ref: str,
+    *,
+    refuse_reference: bool = False,
+    model: str | None = None,
+    field: str | None = None,
 ) -> str:
     """Resolve a secret ref to plaintext via the context resolver.
 
@@ -1028,7 +1052,12 @@ def _resolve_or_fail(
             "stored password is a secret reference and is not used",
         )
     try:
-        value = ctx.resolve_secret(ref)
+        if model and field and _accepts_credential_context(ctx.resolve_secret):
+            # Allowlisted DB-column source (F3): the resolver may resolve a
+            # reference only for this (model, field).
+            value = ctx.resolve_secret(ref, model=model, field=field)  # type: ignore[call-arg]
+        else:
+            value = ctx.resolve_secret(ref)
     except Exception as exc:  # noqa: BLE001 — translate to typed apply failure
         raise ApplyError(
             action,
