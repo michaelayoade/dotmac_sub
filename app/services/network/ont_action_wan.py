@@ -840,10 +840,15 @@ def set_pppoe_credentials(
                     requested_index=instance_index,
                     wan_vlan=wan_vlan,
                 )
-                if create_error is not None:
-                    return create_error
+                if create_error is not None or selected is None:
+                    return create_error or ActionResult(
+                        success=False,
+                        message="No WANConnectionDevice available for PPPoE.",
+                    )
             instance_index = selected
             device = client.get_device(device_id)
+        if instance_index is None:
+            instance_index = 1
         existing_ppp = (
             _get_existing_igd_ppp_instance_index(device, root, instance_index)
             if device is not None
@@ -904,6 +909,7 @@ def set_pppoe_credentials(
             reset_path = f"{ppp_base}.Reset"
     else:
         # Build TR-181 parameter paths
+        instance_index = instance_index or 1
         username_path = _resolve_wan_path(root, "ppp.username", instance_index)
         password_path = _resolve_wan_path(root, "ppp.password", instance_index)
         enable_path = _resolve_wan_path(root, "ppp.enable", instance_index)
