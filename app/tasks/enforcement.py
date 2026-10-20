@@ -23,7 +23,8 @@ def cleanup_subscription_block_sessions(
 
 @celery_app.task(name="app.tasks.enforcement.reconcile_billing_approval_drift")
 def reconcile_billing_approval_drift() -> dict[str, int]:
-    return enforcement_scheduled.reconcile_billing_approval_drift()
+    """Retired no-op, kept for one release so queued beat messages resolve."""
+    return {"retired": 1}
 
 
 @celery_app.task(name="app.tasks.enforcement.detect_stale_overdue_locks")

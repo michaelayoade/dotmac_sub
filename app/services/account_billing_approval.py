@@ -322,32 +322,6 @@ def change_account_billing_approval(
     )
 
 
-def find_billing_approval_drift_account_ids(
-    db: Session, *, limit: int = 200
-) -> tuple[UUID, ...]:
-    """Return current-service accounts excluded by the approval fact.
-
-    Disabled rows remain in scope because a legacy approval decision may have
-    disabled a genuinely free catalog service.  The command owner decides
-    whether that billing-owned disable is safe to restore; this query only
-    discovers the bounded repair cohort.
-    """
-    from app.services.customer_chargeability import CHARGEABILITY_SERVICE_STATUSES
-
-    rows = db.scalars(
-        select(Subscriber.id)
-        .join(Subscription, Subscription.subscriber_id == Subscriber.id)
-        .where(
-            Subscriber.billing_enabled.is_(False),
-            Subscription.status.in_(CHARGEABILITY_SERVICE_STATUSES),
-        )
-        .distinct()
-        .order_by(Subscriber.id)
-        .limit(max(1, min(limit, 1000)))
-    ).all()
-    return tuple(rows)
-
-
 def reconcile_account_billing_approval(
     db: Session, command: ReconcileAccountBillingApprovalCommand
 ) -> BillingApprovalOutcome:

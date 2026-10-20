@@ -6,7 +6,6 @@
 # This is migration debt, not permission. Names must only be removed; a new
 # scheduled financial sweep requires an accepted deviation recorded in the ADR.
 # Format: one scheduled task name per line.
-billing_approval_reconcile
 billing_health_snapshot
 billing_notifications_runner
 billing_runner

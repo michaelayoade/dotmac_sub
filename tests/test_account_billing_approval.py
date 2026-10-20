@@ -293,19 +293,6 @@ def test_reconciler_repairs_redundant_false_when_all_active_service_is_treated(
     )
 
 
-def test_drift_query_returns_active_unapproved_accounts(
-    db_session, subscriber, subscription
-):
-    account_id = subscriber.id
-    subscriber.billing_enabled = False
-    subscription.status = SubscriptionStatus.active
-    db_session.commit()
-
-    assert account_id in approval_service.find_billing_approval_drift_account_ids(
-        db_session
-    )
-
-
 def test_reconciler_restores_billing_owned_disable_for_genuinely_free_product(
     db_session, subscriber, subscription
 ):
@@ -328,9 +315,6 @@ def test_reconciler_restores_billing_owned_disable_for_genuinely_free_product(
     _change(db_session, account_id, False)
     db_session.commit()
 
-    assert account_id in approval_service.find_billing_approval_drift_account_ids(
-        db_session
-    )
     db_session.commit()
     outcome = approval_service.reconcile_account_billing_approval(
         db_session,
