@@ -144,6 +144,9 @@ def test_prepaid_purchase_earmarks_and_settles_first_period(
     subscriber.billing_city = "Abuja"
     subscription.status = SubscriptionStatus.active
     subscription.billing_mode = BillingMode.prepaid
+    # ck_subscriptions_active_billing_anchor: an active row needs both anchors.
+    subscription.start_at = _NOW
+    subscription.next_billing_at = _NOW + timedelta(days=30)
     db_session.commit()
 
     purchase_ref = f"purchase-{uuid4().hex[:8]}"
