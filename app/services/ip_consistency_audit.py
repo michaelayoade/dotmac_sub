@@ -32,6 +32,19 @@ Drift classes (counts exact; sample lists capped):
   - ``radreply_orphan``     — radreply pins a Framed-IP the system no longer
     tracks (column empty).
 
+Collision classes (tactical stopgap, pre-Starter dotmac-ipam cut; these are
+cross-service, not per-subscription, so they sit outside the population):
+
+  - ``ip_on_multiple_subscriptions`` — one ``ipv4_address`` on more than one
+    non-terminal subscription.
+  - ``assignment_on_terminal_subscription`` — an active IPv4 IPAssignment whose
+    subscription is canceled/expired (the address is held but not served).
+  - ``session_ip_ipam_mismatch`` — an online subscription whose live framed IP
+    differs from its active IPAM assignment.
+  - ``session_ip_duplicate`` — one framed IP on more than one live session.
+  - ``session_ip_pool_not_linked`` — a live framed IP whose IPAM pool is not
+    linked to the session's NAS (``radius_pool:`` tag or legacy FK).
+
 Read-only: never mutates app DB or RADIUS state.
 """
 
@@ -44,12 +57,14 @@ import os
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
-from sqlalchemy import Column, String, select
+from sqlalchemy import Column, String, func, select
 from sqlalchemy.orm import Session, joinedload
 
-from app.models.catalog import Subscription, SubscriptionStatus
-from app.models.network import IPAssignment, IPv4Address, IPVersion
+from app.models.catalog import NasDevice, Subscription, SubscriptionStatus
+from app.models.network import IPAssignment, IpPool, IPv4Address, IPVersion
+from app.models.radius_active_session import RadiusActiveSession
 from app.models.subscriber import Subscriber
+from app.services.nas._helpers import radius_pool_ids_from_tags
 from app.services.radius import (
     _active_external_sync_configs,
     _external_radius_table,
@@ -68,6 +83,17 @@ _DRIFT_KINDS = (
     "radreply_mismatch",
     "radreply_orphan",
 )
+# Cross-service collision classes; the first four are hard collisions, the
+# pool/NAS link check is configuration-dependent (see the alert rules).
+_COLLISION_KINDS = (
+    "ip_on_multiple_subscriptions",
+    "assignment_on_terminal_subscription",
+    "session_ip_ipam_mismatch",
+    "session_ip_duplicate",
+    "session_ip_pool_not_linked",
+)
+_ALL_KINDS = _DRIFT_KINDS + _COLLISION_KINDS
+_TERMINAL_STATUSES = (SubscriptionStatus.canceled, SubscriptionStatus.expired)
 
 
 def _norm(ip: str | None) -> str:
@@ -174,6 +200,84 @@ def _external_ip_state(
     return framed, provisioned, errors
 
 
+def _collision_findings(
+    db: Session, by_subscription_assign: dict[str, str]
+) -> dict[str, set[str]]:
+    """Cross-service IPv4 collisions (read-only). Samples are IPs or ids."""
+    found: dict[str, set[str]] = {kind: set() for kind in _COLLISION_KINDS}
+
+    # Same IPv4 on >1 non-terminal subscription.
+    shared = db.execute(
+        select(Subscription.ipv4_address)
+        .where(Subscription.ipv4_address.is_not(None))
+        .where(Subscription.ipv4_address != "")
+        .where(Subscription.status.notin_(_TERMINAL_STATUSES))
+        .group_by(Subscription.ipv4_address)
+        .having(func.count(Subscription.id) > 1)
+    ).scalars()
+    found["ip_on_multiple_subscriptions"] = {_norm(v) for v in shared if _norm(v)}
+
+    # Active IPAM assignment on a terminal subscription.
+    for address, in_sub in db.execute(
+        select(IPv4Address.address, Subscription.id)
+        .join(IPAssignment, IPAssignment.ipv4_address_id == IPv4Address.id)
+        .join(Subscription, IPAssignment.subscription_id == Subscription.id)
+        .where(IPAssignment.is_active.is_(True))
+        .where(IPAssignment.ip_version == IPVersion.ipv4)
+        .where(Subscription.status.in_(_TERMINAL_STATUSES))
+    ).all():
+        found["assignment_on_terminal_subscription"].add(_norm(address) or str(in_sub))
+
+    sessions = db.execute(
+        select(
+            RadiusActiveSession.subscription_id,
+            RadiusActiveSession.framed_ip_address,
+            RadiusActiveSession.nas_device_id,
+        ).where(RadiusActiveSession.framed_ip_address.is_not(None))
+    ).all()
+    ip_counts: dict[str, int] = {}
+    session_ips: list[tuple[str | None, str, Any]] = []
+    for sub_id, framed, nas_id in sessions:
+        ip = _norm(framed)
+        if not ip:
+            continue
+        ip_counts[ip] = ip_counts.get(ip, 0) + 1
+        session_ips.append((str(sub_id) if sub_id else None, ip, nas_id))
+    found["session_ip_duplicate"] = {ip for ip, n in ip_counts.items() if n > 1}
+
+    # Live framed IP vs the subscription's active IPAM assignment.
+    for sub_id, ip, _nas in session_ips:
+        assigned = by_subscription_assign.get(sub_id or "", "")
+        if assigned and assigned != ip:
+            found["session_ip_ipam_mismatch"].add(ip)
+
+    # Framed IP whose pool is not linked to the session's NAS.
+    if session_ips:
+        pool_by_ip = {
+            _norm(address): (pool_id, pool_nas_id)
+            for address, pool_id, pool_nas_id in db.execute(
+                select(IPv4Address.address, IpPool.id, IpPool.nas_device_id)
+                .join(IpPool, IPv4Address.pool_id == IpPool.id)
+                .where(IPv4Address.address.in_({ip for _, ip, _ in session_ips}))
+            ).all()
+        }
+        nas_ids = {n for _, _, n in session_ips if n is not None}
+        linked_by_nas = {
+            nas.id: set(radius_pool_ids_from_tags(nas.tags))
+            for nas in db.scalars(
+                select(NasDevice).where(NasDevice.id.in_(nas_ids))
+            ).all()
+        }
+        for _sub, ip, nas_id in session_ips:
+            pool = pool_by_ip.get(ip)
+            if pool is None or nas_id not in linked_by_nas:
+                continue  # IP outside IPAM pools / unknown NAS: not judgeable
+            pool_id, pool_nas_id = pool
+            if str(pool_id) not in linked_by_nas[nas_id] and pool_nas_id != nas_id:
+                found["session_ip_pool_not_linked"].add(ip)
+    return found
+
+
 def audit_ip_consistency(db: Session) -> dict[str, Any]:
     """Compare the three IPv4 sources for every active subscription that is
     supposed to carry a pinned IPv4. Returns a result dict with exact counts
@@ -183,7 +287,7 @@ def audit_ip_consistency(db: Session) -> dict[str, Any]:
         "population": 0,
         "errors": 0,
     }
-    for kind in _DRIFT_KINDS:
+    for kind in _ALL_KINDS:
         result[kind] = []
 
     by_subscription_assign = _active_assignment_ips(db)
@@ -265,16 +369,17 @@ def audit_ip_consistency(db: Session) -> dict[str, Any]:
                 drift["radreply_orphan"].add(tag)
 
     result["population"] = population
-    for kind in _DRIFT_KINDS:
+    drift.update(_collision_findings(db, by_subscription_assign))
+    for kind in _ALL_KINDS:
         result[kind] = sorted(drift[kind])
     return _finalize(result)
 
 
 def _finalize(result: dict[str, Any]) -> dict[str, Any]:
-    counts = {kind: len(result[kind]) for kind in _DRIFT_KINDS}
+    counts = {kind: len(result[kind]) for kind in _ALL_KINDS}
     result["counts"] = counts
     result["ok"] = result["errors"] == 0 and not any(counts.values())
-    for kind in _DRIFT_KINDS:
+    for kind in _ALL_KINDS:
         result[kind] = result[kind][:SAMPLE_LIMIT]
 
     if not result["ok"]:
@@ -284,7 +389,7 @@ def _finalize(result: dict[str, Any]) -> dict[str, Any]:
             result["population"],
             result["errors"],
             counts,
-            {k: result[k] for k in _DRIFT_KINDS if result[k]},
+            {k: result[k] for k in _ALL_KINDS if result[k]},
         )
     else:
         logger.info(

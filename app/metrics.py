@@ -605,6 +605,47 @@ class _IpConsistencyAuditCollector(Collector):
 REGISTRY.register(_IpConsistencyAuditCollector())
 
 
+class _Ipv4RetentionCollector(Collector):
+    """Latest daily IPv4 retention sweep counts by class (shadow or apply)."""
+
+    def describe(self):  # noqa: ANN201 - prometheus collector protocol
+        yield _gauge_description(
+            "ipv4_retention_release",
+            "IPv4 retention sweep count by class in the last daily run",
+            labels=["class", "mode"],
+        )
+
+    def collect(self):  # noqa: ANN201 - prometheus collector protocol
+        import json
+
+        from prometheus_client.core import GaugeMetricFamily
+
+        try:
+            from app.services.ip_consistency_audit import _get_redis
+
+            client = _get_redis()
+            raw = (
+                client.get("network:ipv4_retention_release:latest") if client else None
+            )
+            data = json.loads(raw) if raw else None
+        except Exception:
+            return
+        if not data:
+            return
+        gauge = GaugeMetricFamily(
+            "ipv4_retention_release",
+            "IPv4 retention sweep count by class in the last daily run",
+            labels=["class", "mode"],
+        )
+        mode = str(data.get("mode") or "shadow")
+        for klass, count in (data.get("counts") or {}).items():
+            gauge.add_metric([klass, mode], float(count or 0))
+        yield gauge
+
+
+REGISTRY.register(_Ipv4RetentionCollector())
+
+
 class _BillingHealthCollector(Collector):
     """Exports the latest worker-produced billing-health snapshot.
 
