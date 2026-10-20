@@ -52,3 +52,37 @@ def test_update_allows_unchanged_ipv4_and_other_fields(db_session, subscription)
 
     assert updated.ipv4_address == "192.0.2.10"
     assert updated.service_description == "ok"
+
+
+def test_update_allows_ipv4_equal_to_own_single_active_assignment(
+    db_session, subscription
+):
+    from app.models.network import IPAssignment, IPv4Address, IPVersion
+
+    address = IPv4Address(address="192.0.2.40")
+    db_session.add(address)
+    db_session.flush()
+    db_session.add(
+        IPAssignment(
+            subscriber_id=subscription.subscriber_id,
+            subscription_id=subscription.id,
+            ip_version=IPVersion.ipv4,
+            ipv4_address_id=address.id,
+            is_active=True,
+        )
+    )
+    db_session.commit()
+
+    updated = catalog_service.subscriptions.update(
+        db_session,
+        str(subscription.id),
+        SubscriptionUpdate(ipv4_address="192.0.2.40"),
+    )
+    assert updated.ipv4_address == "192.0.2.40"
+
+    with pytest.raises(HTTPException):
+        catalog_service.subscriptions.update(
+            db_session,
+            str(subscription.id),
+            SubscriptionUpdate(ipv4_address="192.0.2.41"),
+        )

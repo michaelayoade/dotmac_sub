@@ -171,3 +171,100 @@ def test_exact_subscription_assignment_is_picked_among_siblings(
         db_session, subscription, IPVersion.ipv4, {}
     )
     assert address is not None and address.address == "10.94.0.2"
+
+
+def test_stored_slash32_served_column_blocks_pool_scan(db_session, subscription):
+    pool = _pool(db_session)
+    _rows(db_session, pool, 1, 2)
+    other = _second_subscription(db_session, subscription)
+    other.status = SubscriptionStatus.active
+    other.ipv4_address = "10.94.0.1/32"
+    db_session.flush()
+
+    addr = _find_available_address(
+        db_session, IPVersion.ipv4, str(pool.id), subscription_id=subscription.id
+    )
+    assert addr is not None and addr.address == "10.94.0.2"
+
+
+def test_requested_ip_held_by_other_live_service_is_refused(db_session, subscription):
+    import pytest
+    from fastapi import HTTPException
+
+    pool = _pool(db_session)
+    _rows(db_session, pool, 1, 2)
+    other = _second_subscription(db_session, subscription)
+    other.status = SubscriptionStatus.active
+    other.ipv4_address = "10.94.0.1/32"
+    db_session.flush()
+
+    with pytest.raises(HTTPException) as excinfo:
+        _ensure_ip_assignment_for_version(
+            db_session, subscription, IPVersion.ipv4, {"ipv4_address": "10.94.0.1"}
+        )
+    assert excinfo.value.status_code == 409
+
+
+def test_stored_ip_held_by_live_session_of_other_service_is_refused(
+    db_session, subscription
+):
+    import pytest
+    from fastapi import HTTPException
+
+    pool = _pool(db_session)
+    _rows(db_session, pool, 1)
+    other = _second_subscription(db_session, subscription)
+    other.status = SubscriptionStatus.active
+    _session(db_session, other, "10.94.0.1")
+    subscription.ipv4_address = "10.94.0.1"
+    db_session.flush()
+
+    with pytest.raises(HTTPException):
+        _ensure_ip_assignment_for_version(db_session, subscription, IPVersion.ipv4, {})
+
+
+def test_reactivation_skips_address_held_by_other_live_service(
+    db_session, subscription
+):
+    pool = _pool(db_session)
+    old, fresh = _rows(db_session, pool, 1, 2)
+    db_session.add(
+        IPAssignment(
+            subscriber_id=subscription.subscriber_id,
+            subscription_id=subscription.id,
+            ip_version=IPVersion.ipv4,
+            ipv4_address_id=old.id,
+            is_active=False,
+        )
+    )
+    other = _second_subscription(db_session, subscription)
+    other.status = SubscriptionStatus.active
+    other.ipv4_address = "10.94.0.1/32"
+    db_session.flush()
+
+    _, address = _ensure_ip_assignment_for_version(
+        db_session, subscription, IPVersion.ipv4, {}
+    )
+    assert address is not None and address.address == "10.94.0.2"
+
+
+def test_reactivation_keeps_own_address_when_only_own_session_uses_it(
+    db_session, subscription
+):
+    pool = _pool(db_session)
+    (old,) = _rows(db_session, pool, 1)
+    db_session.add(
+        IPAssignment(
+            subscriber_id=subscription.subscriber_id,
+            subscription_id=subscription.id,
+            ip_version=IPVersion.ipv4,
+            ipv4_address_id=old.id,
+            is_active=False,
+        )
+    )
+    _session(db_session, subscription, "10.94.0.1")
+
+    _, address = _ensure_ip_assignment_for_version(
+        db_session, subscription, IPVersion.ipv4, {}
+    )
+    assert address is not None and address.address == "10.94.0.1"

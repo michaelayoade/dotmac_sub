@@ -170,3 +170,54 @@ def test_guard_refuses_when_customer_is_served_correctly_and_only_ipam_differs(
     db_session.refresh(subscription)
     assert subscription.ipv4_address == "10.93.0.4"
     assert _active_ips(db_session, subscription) == [("10.93.0.6",)]
+
+
+def test_guard_is_skipped_when_served_ip_is_held_by_another_services_ipam(
+    db_session, subscription
+):
+    from app.models.catalog import Subscription
+
+    block, _ = _setup(db_session, subscription, served="10.93.0.4", ipam="10.93.0.6")
+    db_session.add(
+        RadiusActiveSession(
+            subscription_id=subscription.id,
+            subscriber_id=subscription.subscriber_id,
+            username=LOGIN,
+            acct_session_id="s1",
+            framed_ip_address="10.93.0.4",
+            session_start=datetime.now(UTC),
+        )
+    )
+    other = Subscription(
+        subscriber_id=subscription.subscriber_id,
+        offer_id=subscription.offer_id,
+        status=SubscriptionStatus.stopped,
+    )
+    db_session.add(other)
+    db_session.flush()
+    served_row = (
+        db_session.query(IPv4Address).filter(IPv4Address.address == "10.93.0.4").one()
+    )
+    db_session.add(
+        IPAssignment(
+            subscriber_id=subscription.subscriber_id,
+            subscription_id=other.id,
+            ip_version=IPVersion.ipv4,
+            ipv4_address_id=served_row.id,
+            is_active=True,
+        )
+    )
+    db_session.commit()
+    p1, p2, p3 = _patches(subscription, "10.93.0.4")
+    with p1, p2, p3:
+        try:
+            web_service.replace_subscription_ipv4_with_owner(
+                db_session,
+                subscription_id=str(subscription.id),
+                selector=str(block.id),
+                requested_ip="10.93.0.5",
+                actor_id="admin-test",
+            )
+        except ValueError as exc:
+            # Any later refusal is fine; the stuck "repair IPAM" guard is not.
+            assert "repair the IPAM record instead" not in str(exc)

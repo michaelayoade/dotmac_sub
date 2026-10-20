@@ -546,22 +546,36 @@ class IPv4LiveUseEvidence:
 
 
 def find_ipv4_live_use(
-    db: Session, *, subscription_id: UUID, addresses: set[str]
+    db: Session,
+    *,
+    subscription_id: UUID,
+    addresses: set[str],
+    exclude_own_sessions: bool = False,
 ) -> IPv4LiveUseEvidence:
     """Read-only: is any of these addresses in use by a live session or by the
-    served column of another non-terminal subscription?"""
+    served column of another non-terminal subscription?
 
-    candidates = _address_candidates(addresses)
+    ``exclude_own_sessions`` ignores sessions attributed to ``subscription_id``
+    itself (an allocator re-checking its own service's address); sessions with
+    no subscription attribution still count.
+    """
+
+    candidates = _address_candidates(
+        {str(value).strip().split("/", 1)[0] for value in addresses if value}
+    )
     if not candidates:
         return IPv4LiveUseEvidence(False, ())
-    live_session = (
-        db.scalar(
-            select(RadiusActiveSession.id)
-            .where(RadiusActiveSession.framed_ip_address.in_(candidates))
-            .limit(1)
-        )
-        is not None
+    session_query = select(RadiusActiveSession.id).where(
+        RadiusActiveSession.framed_ip_address.in_(candidates)
     )
+    if exclude_own_sessions:
+        session_query = session_query.where(
+            or_(
+                RadiusActiveSession.subscription_id.is_(None),
+                RadiusActiveSession.subscription_id != subscription_id,
+            )
+        )
+    live_session = db.scalar(session_query.limit(1)) is not None
     siblings = tuple(
         db.scalars(
             select(Subscription.id)

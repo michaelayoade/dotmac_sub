@@ -2114,12 +2114,38 @@ def replace_subscription_ipv4_with_owner(
             assignment_id=current_assignment.id,
         )
         live_sessions = evidence.active_session_count
-        if live_sessions > 0 and evidence.old_address_session_count == live_sessions:
+        # If another non-terminal service's IPAM already holds the served IP,
+        # this is a collision, not an IPAM-only repair: do not trap staff in
+        # a "repair IPAM" message that cannot be carried out.
+        served_held_elsewhere = (
+            db.scalar(
+                select(IPAssignment.id)
+                .join(IPv4Address, IPAssignment.ipv4_address_id == IPv4Address.id)
+                .join(Subscription, IPAssignment.subscription_id == Subscription.id)
+                .where(
+                    IPAssignment.is_active.is_(True),
+                    IPAssignment.ip_version == IPVersion.ipv4,
+                    IPAssignment.subscription_id != subscription_uuid,
+                    Subscription.status.not_in(
+                        (SubscriptionStatus.canceled, SubscriptionStatus.expired)
+                    ),
+                    func.replace(IPv4Address.address, "/32", "") == served_ip,
+                )
+                .limit(1)
+            )
+            is not None
+        )
+        if (
+            not served_held_elsewhere
+            and live_sessions > 0
+            and evidence.old_address_session_count == live_sessions
+        ):
             raise ValueError(
                 f"Customer is served correctly on {served_ip} (live session and "
                 f"served IP agree) but IPAM records {current_address}; repair "
                 f"the IPAM record instead. Replacing with {served_ip} re-points "
-                "IPAM without moving the customer."
+                "IPAM without moving the customer. If another service's IPAM "
+                f"holds {served_ip}, escalate this as an IP collision instead."
             )
     if current_address == normalized_ip:
         if current_assignment is None:

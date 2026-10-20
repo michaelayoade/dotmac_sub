@@ -6,7 +6,7 @@ from typing import cast
 from urllib.parse import urlparse
 
 from fastapi import HTTPException
-from sqlalchemy import and_, case, or_, select
+from sqlalchemy import and_, case, func, or_, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -33,6 +33,7 @@ from app.services.common import (
     coerce_uuid,
     validate_enum,
 )
+from app.services.ip_assignment_lifecycle import find_ipv4_live_use
 from app.services.provisioning_context import extend_provisioning_context
 from app.services.secrets import resolve_secret
 
@@ -216,11 +217,12 @@ def _ipv4_in_use_elsewhere_clauses(subscription_id):
     Returns (taken_by_subscription, taken_by_session) subqueries of address
     strings, excluding ``subscription_id`` itself.
     """
-    subs = select(Subscription.ipv4_address).where(
+    # ``x/32`` is stored by some writers; strip it so it matches bare addresses.
+    subs = select(func.replace(Subscription.ipv4_address, "/32", "")).where(
         Subscription.ipv4_address.is_not(None),
         Subscription.status.notin_(_TERMINAL_SUBSCRIPTION_STATUSES),
     )
-    sessions = select(RadiusActiveSession.framed_ip_address).where(
+    sessions = select(func.replace(RadiusActiveSession.framed_ip_address, "/32", "")).where(
         RadiusActiveSession.framed_ip_address.is_not(None)
     )
     if subscription_id is not None:
@@ -232,6 +234,21 @@ def _ipv4_in_use_elsewhere_clauses(subscription_id):
             )
         )
     return subs, sessions
+
+
+def _ipv4_held_by_other_live_service(
+    db: Session, subscription_id, address_value: str | None
+) -> bool:
+    """True if another live service (non-terminal subscription's served column
+    or a live RADIUS session) holds this IPv4; ``x/32`` forms are matched."""
+    if not address_value:
+        return False
+    return find_ipv4_live_use(
+        db,
+        subscription_id=subscription_id,
+        addresses={str(address_value)},
+        exclude_own_sessions=True,
+    ).in_use
 
 
 def _find_available_address(
@@ -551,8 +568,11 @@ def _ensure_ip_assignment_for_version(
                 if ip_version == IPVersion.ipv4
                 else inactive_assignment.ipv6_address
             )
-            if ip_version == IPVersion.ipv4 and not _reactivation_address_is_valid(
-                db, candidate_addr
+            if ip_version == IPVersion.ipv4 and (
+                not _reactivation_address_is_valid(db, candidate_addr)
+                or _ipv4_held_by_other_live_service(
+                    db, subscription.id, candidate_addr.address
+                )
             ):
                 # Address changed role since release — don't resurrect onto it;
                 # fall through to a fresh allocation below.
@@ -632,10 +652,32 @@ def _ensure_ip_assignment_for_version(
                 status_code=400,
                 detail=f"{version_key} address override does not match address_id.",
             )
+        if ip_version == IPVersion.ipv4 and _ipv4_held_by_other_live_service(
+            db, subscription.id, manual_value
+        ):
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    f"{version_key} address is held by another live service "
+                    "(served address or live session)."
+                ),
+            )
         if not address:
             address = _get_or_create_address_by_value(
                 db, ip_version, manual_value, pool
             )
+    elif (
+        address is not None
+        and ip_version == IPVersion.ipv4
+        and _ipv4_held_by_other_live_service(db, subscription.id, address.address)
+    ):
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                f"{version_key} address is held by another live service "
+                "(served address or live session)."
+            ),
+        )
 
     if not address:
         if not pool:

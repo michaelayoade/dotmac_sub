@@ -33,6 +33,7 @@ from app.models.catalog import (
     SubscriptionStatus,
 )
 from app.models.domain_settings import SettingDomain
+from app.models.network import IPAssignment, IPv4Address, IPVersion
 from app.schemas.catalog import (
     SubscriptionAddOnCreate,
     SubscriptionAddOnUpdate,
@@ -1359,7 +1360,26 @@ class Subscriptions(ListResponseMixin):
             )
         if "ipv4_address" in data:
             requested_ip = str(data["ipv4_address"] or "").strip()
-            if requested_ip != str(subscription.ipv4_address or "").strip():
+            own_active = [
+                str(address).strip()
+                for address in db.scalars(
+                    select(IPv4Address.address)
+                    .join(IPAssignment, IPAssignment.ipv4_address_id == IPv4Address.id)
+                    .where(
+                        IPAssignment.subscription_id == subscription.id,
+                        IPAssignment.ip_version == IPVersion.ipv4,
+                        IPAssignment.is_active.is_(True),
+                    )
+                ).all()
+            ]
+            own_active = [a.split("/", 1)[0] for a in own_active]
+            matches_own_assignment = len(own_active) == 1 and requested_ip == (
+                own_active[0]
+            )
+            if (
+                requested_ip != str(subscription.ipv4_address or "").strip()
+                and not matches_own_assignment
+            ):
                 # Tactical stopgap (pre-Starter dotmac-ipam): the served column
                 # is a projection of the IPAM assignment; only the IPv4
                 # lifecycle owner may write it.
