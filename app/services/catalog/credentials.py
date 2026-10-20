@@ -148,6 +148,9 @@ class AccessCredentials(CRUDManager[AccessCredential]):
                 raise HTTPException(status_code=404, detail="RADIUS profile not found")
         for key, value in data.items():
             setattr(credential, key, value)
+        if "is_active" in data:
+            # An explicit REST/admin change: record why, or clear on reactivation.
+            credential.deactivation_reason = None if data["is_active"] else "manual"
         db.commit()
         db.refresh(credential)
 
@@ -158,4 +161,7 @@ class AccessCredentials(CRUDManager[AccessCredential]):
 
     @classmethod
     def delete(cls, db: Session, credential_id: str):
+        credential = db.get(AccessCredential, credential_id)
+        if credential is not None:
+            credential.deactivation_reason = "manual"
         return super().delete(db, credential_id)

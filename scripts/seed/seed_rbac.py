@@ -217,6 +217,10 @@ DEFAULT_PERMISSIONS = [
     ("subscription:create", "Create subscriptions"),
     ("subscription:update", "Update subscriptions"),
     (
+        "subscription:credential:update",
+        "Change a subscription's PPPoE service login and password",
+    ),
+    (
         "subscription:credential:reveal",
         "Reveal a stored PPPoE service password (audited)",
     ),

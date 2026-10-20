@@ -71,6 +71,24 @@ from app.services.subscription_lifecycle import (
 )
 
 
+@pytest.fixture(autouse=True)
+def _credential_editor_by_default(monkeypatch):
+    """Legacy tests here exercise non-credential behaviour as a credential editor.
+
+    The permission gate itself is covered in tests/test_pppoe_credential_bridge.py
+    against the real default (``credential_update_allowed=False``).
+    """
+    real = web_catalog_subscriptions_service.update_subscription_with_audit
+
+    def editor(*args, **kwargs):
+        kwargs.setdefault("credential_update_allowed", True)
+        return real(*args, **kwargs)
+
+    monkeypatch.setattr(
+        web_catalog_subscriptions_service, "update_subscription_with_audit", editor
+    )
+
+
 def _public_ip_addon(
     db_session,
     *,
@@ -205,6 +223,7 @@ def test_upsert_access_credential_does_not_clear_password_when_blank_on_edit(
         username="10004167",
         plain_password="InitialPass123",
         radius_profile_id=None,
+        subscription_id=subscription.id,
     )
 
     credential = (
@@ -397,6 +416,7 @@ def test_subscription_form_context_never_exposes_current_service_password(
         username="10004167",
         plain_password="VisiblePass123",
         radius_profile_id=None,
+        subscription_id=subscription.id,
     )
 
     from app.models.catalog import AccessCredential
@@ -946,6 +966,7 @@ def test_subscription_detail_context_exposes_events_notifications_and_radius_syn
         username="105000111",
         plain_password="VisiblePass123",
         radius_profile_id=None,
+        subscription_id=subscription.id,
     )
     credential = (
         db_session.query(AccessCredential)
@@ -1108,6 +1129,7 @@ def test_subscription_detail_context_reads_live_external_radius_rows(
         username="105000222",
         plain_password="SecretPass123",
         radius_profile_id=None,
+        subscription_id=subscription.id,
     )
 
     db_path = tmp_path / "radius_external.sqlite"
@@ -1606,7 +1628,7 @@ def test_update_subscription_preserves_ipv4_when_assignment_omitted(
     updated = web_catalog_subscriptions_service.update_subscription_with_audit(
         db_session,
         str(subscription.id),
-        {"login": "10004167"},
+        {},
         "",
         [],
         [],

@@ -2012,6 +2012,40 @@ SETTINGS_SPECS: list[SettingSpec] = [
         label="PPPoE Auto-Generated Password Length",
     ),
     SettingSpec(
+        domain=SettingDomain.radius,
+        key="pppoe_credential_on_new_service",
+        env_var=None,
+        value_type=SettingValueType.string,
+        default="new",
+        # "ask" is reserved for the Starter access-credentials owner and is
+        # deliberately not accepted here.
+        allowed={"new", "inherit"},
+        string_normalization=SettingStringNormalization.LOWERCASE,
+        label="PPPoE credential on a replacement service (new | inherit)",
+    ),
+    SettingSpec(
+        domain=SettingDomain.radius,
+        key="pppoe_credential_inherit_from_statuses",
+        env_var=None,
+        value_type=SettingValueType.string,
+        default="disabled,canceled,expired",
+        string_normalization=SettingStringNormalization.LOWERCASE,
+        label=(
+            "Ended service statuses whose PPPoE credential a replacement may "
+            "inherit (comma-separated subset of disabled, canceled, expired)"
+        ),
+    ),
+    SettingSpec(
+        domain=SettingDomain.radius,
+        key="pppoe_credential_change_disconnect",
+        env_var=None,
+        value_type=SettingValueType.string,
+        default="immediate_after_projection",
+        allowed={"immediate_after_projection", "none"},
+        string_normalization=SettingStringNormalization.LOWERCASE,
+        label="Disconnect live session after a PPPoE credential edit",
+    ),
+    SettingSpec(
         domain=SettingDomain.billing,
         key="default_currency",
         env_var="BILLING_DEFAULT_CURRENCY",
