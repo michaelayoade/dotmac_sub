@@ -99,7 +99,6 @@ class TestEventType:
         assert EventType.prepaid_service_renewed.value == "prepaid_service.renewed"
 
     def test_usage_events_exist(self):
-        assert EventType.usage_recorded.value == "usage.recorded"
         assert EventType.usage_warning.value == "usage.warning"
         assert EventType.usage_exhausted.value == "usage.exhausted"
         assert EventType.usage_topped_up.value == "usage.topped_up"
@@ -108,10 +107,6 @@ class TestEventType:
         assert EventType.provisioning_started.value == "provisioning.started"
         assert EventType.provisioning_completed.value == "provisioning.completed"
         assert EventType.provisioning_failed.value == "provisioning.failed"
-
-    def test_network_events_exist(self):
-        assert EventType.device_offline.value == "device.offline"
-        assert EventType.device_online.value == "device.online"
 
     def test_custom_event_type(self):
         assert EventType.custom.value == "custom"
@@ -1316,7 +1311,7 @@ class TestNotificationHandler:
     def test_notification_handler_ignores_unmapped_events(self, db_session):
         handler = NotificationHandler()
         event = Event(
-            event_type=EventType.device_offline,
+            event_type=EventType.custom,
             payload={},
         )
         # Should not raise
