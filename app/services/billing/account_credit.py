@@ -558,6 +558,28 @@ def _invoice_funding_fingerprint(payload: dict[str, object]) -> str:
     return hashlib.sha256(encoded).hexdigest()
 
 
+def _refuse_starter_linked_invoice(db: Session, invoice: Invoice) -> None:
+    """Close legacy credit application to Starter receivables (ADR 0031).
+
+    A Starter-issued invoice's receivable lives in dotmac-billing;
+    legacy account-credit allocation against it would write legacy
+    ledger state the Starter position never sees. Settlement happens
+    through the Starter settlement lanes only.
+    """
+    linked = db.execute(
+        select(StarterInvoiceLink.id).where(StarterInvoiceLink.invoice_id == invoice.id)
+    ).first()
+    if linked is not None:
+        raise AccountCreditApplicationError(
+            code="financial.account_credit_applications.starter_invoice",
+            message=(
+                "Account credit cannot be applied to a Starter-issued "
+                "invoice through the legacy lane."
+            ),
+            details={"invoice_id": str(invoice.id)},
+        )
+
+
 class AccountCreditApplications:
     """Single orchestration owner for payment-backed account-credit use."""
 
@@ -629,6 +651,7 @@ class AccountCreditApplications:
     ) -> AccountCreditApplicationResult:
         """Apply the exact credit reserved before this invoice posted its debit."""
 
+        _refuse_starter_linked_invoice(db, invoice)
         lock_account(db, str(invoice.account_id))
         db.refresh(invoice)
         current_remaining = round_money(to_decimal(invoice.balance_due))
@@ -880,6 +903,7 @@ class AccountCreditApplications:
     ) -> AccountCreditApplicationResult:
         """Shared selected-payment application with an explicit evidence mode."""
 
+        _refuse_starter_linked_invoice(db, invoice)
         lock_account(db, str(invoice.account_id))
         db.refresh(invoice)
         invoice_remaining = round_money(to_decimal(invoice.balance_due))
@@ -1054,6 +1078,7 @@ class AccountCreditApplications:
         require_full_funding: bool,
         funding_position_at: datetime | None,
     ) -> AccountCreditApplicationResult:
+        _refuse_starter_linked_invoice(db, invoice)
         lock_account(db, str(invoice.account_id))
         db.refresh(invoice)
         preview = AccountCreditApplications.preview_invoice_funding(

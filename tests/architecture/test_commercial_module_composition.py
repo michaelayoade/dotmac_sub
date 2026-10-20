@@ -106,6 +106,16 @@ _SHADOW_IMPORTS = {
         ("dotmac_billing.errors", "BillingError"),
         ("dotmac_billing.service", "issue_credit_note"),
     },
+    # Thin-client manual settlement (ADR 0031): staff-recorded payments
+    # against Starter-issued invoices open a bound dotmac-payments
+    # intent and discharge through the shared settlement owner.
+    "app/services/billing/starter_manual_settlement.py": {
+        ("dotmac_payments", "ConfirmationSource"),
+        ("dotmac_payments", "OpenPaymentIntent"),
+        ("dotmac_payments", "PaymentError"),
+        ("dotmac_payments", "PaymentPurpose"),
+        ("dotmac_payments", "open_payment_intent"),
+    },
     # Thin-client readers (ADR 0031): Starter-linked invoices read their
     # frozen document fact and account collectible position from
     # dotmac-billing; no writes.
