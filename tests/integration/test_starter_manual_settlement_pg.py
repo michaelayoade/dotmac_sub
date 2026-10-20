@@ -174,7 +174,9 @@ def test_manual_payment_settles_starter_invoice_without_legacy_payment(
     assert issued.balance_due == Decimal("0.00")
     assert first.settlement.collectible_after == Decimal("0.00")
     legacy_payments = db_session.execute(
-        select(func.count()).select_from(Payment)
+        select(func.count())
+        .select_from(Payment)
+        .where(Payment.account_id == subscriber.id)
     ).scalar_one()
     assert legacy_payments == 0
 
