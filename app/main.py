@@ -73,6 +73,10 @@ _AUDIT_ALWAYS_SKIP_PATH_PREFIXES = (
     "/api/v1/webhooks/",
     "/api/v1/alerts/",
 )
+# Configuration can widen request-audit coverage but never narrow it: the
+# mutating methods are always audited and only these path prefixes may be skipped.
+_AUDIT_FIXED_METHODS = frozenset({"POST", "PUT", "PATCH", "DELETE"})
+_AUDIT_ALLOWED_SKIP_PATHS = frozenset({"/static", "/web", "/health"})
 _DEFERRED_ROUTER_TASK = None
 _DEFERRED_STARTUP_TASK = None
 
@@ -1841,9 +1845,15 @@ def _load_audit_settings(db: Session):
     )
     values = {row.key: row for row in rows}
     if "methods" in values:
-        defaults["methods"] = _to_list(values["methods"], upper=True)
+        defaults["methods"] = set(_AUDIT_FIXED_METHODS) | set(
+            _to_list(values["methods"], upper=True)
+        )
     if "skip_paths" in values:
-        defaults["skip_paths"] = _to_list(values["skip_paths"], upper=False)
+        defaults["skip_paths"] = [
+            path
+            for path in _to_list(values["skip_paths"], upper=False)
+            if path.rstrip("/") in _AUDIT_ALLOWED_SKIP_PATHS
+        ]
     if "read_trigger_header" in values:
         defaults["read_trigger_header"] = _to_str(values["read_trigger_header"])
     if "read_trigger_query" in values:

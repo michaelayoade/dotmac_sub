@@ -286,7 +286,7 @@ def test_audit_skip_paths_match_whole_path_segments():
     assert main._is_audit_path_skipped("/web", skip)
     assert main._is_audit_path_skipped("/web/assets/app.js", skip)
     assert main._is_audit_path_skipped("/static/css/app.css", skip)
-    # The "/web" prefix must not swallow the inbound webhook receivers.
+    # The "/web" prefix must not swallow unrelated "/web*" paths.
     assert not main._is_audit_path_skipped("/webhooks/crm", skip)
     assert not main._is_audit_path_skipped("/webhooks/zeptomail", skip)
     assert not main._is_audit_path_skipped("/website", skip)
@@ -370,3 +370,46 @@ def test_settings_api_rejects_an_audit_off_switch(db_session):
             DomainSettingUpdate(value_text="false"),
         )
     assert refusal.value.status_code == 400
+
+
+def _load_with_rows(db_session, monkeypatch, **rows):
+    from app.models.domain_settings import DomainSetting, SettingDomain
+    from app.models.subscription_engine import SettingValueType
+
+    monkeypatch.setattr(main, "_AUDIT_SETTINGS_CACHE", None)
+    monkeypatch.setattr(main, "_AUDIT_SETTINGS_CACHE_AT", None)
+    for key, value in rows.items():
+        db_session.add(
+            DomainSetting(
+                domain=SettingDomain.audit,
+                key=key,
+                value_type=SettingValueType.json,
+                value_json=value,
+                is_active=True,
+            )
+        )
+    db_session.commit()
+    return main._load_audit_settings(db_session)
+
+
+def test_configured_methods_can_only_widen_audit_coverage(db_session, monkeypatch):
+    for configured in ([], ["GET"]):
+        settings = _load_with_rows(db_session, monkeypatch, methods=configured)
+        assert {"POST", "PUT", "PATCH", "DELETE"} <= settings["methods"]
+        from app.models.domain_settings import DomainSetting
+
+        db_session.query(DomainSetting).delete()
+        db_session.commit()
+
+    widened = _load_with_rows(db_session, monkeypatch, methods=["get"])
+    assert "GET" in widened["methods"]
+
+
+def test_configured_skip_paths_cannot_exempt_application_areas(db_session, monkeypatch):
+    settings = _load_with_rows(
+        db_session, monkeypatch, skip_paths=["/admin", "/api", "/static", "/web/"]
+    )
+
+    assert settings["skip_paths"] == ["/static", "/web/"]
+    assert not main._is_audit_path_skipped("/admin/x", settings["skip_paths"])
+    assert not main._is_audit_path_skipped("/api/v1/x", settings["skip_paths"])

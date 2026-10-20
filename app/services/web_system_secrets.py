@@ -187,7 +187,7 @@ def save_secret(
             "error": str(exc),
         }
     try:
-        audit("secret_updated", path, updated)
+        audit("secret_update_requested", path, updated)
     except SecretAuditUnavailable as exc:
         return {
             "ok": False,
@@ -244,7 +244,7 @@ def create_secret(
     if not data:
         return {"ok": False, "error": "At least one field is required"}
     try:
-        audit("secret_created", path, data)
+        audit("secret_create_requested", path, data)
     except SecretAuditUnavailable as exc:
         return {"ok": False, "error": str(exc)}
     if write_secret(path, data):
@@ -260,7 +260,7 @@ def delete_secret_path(path: str, *, audit: SecretAuditor = _no_auditor) -> str:
 
     if not is_managed_secret_path(path):
         try:
-            audit("secret_deleted", path, ())
+            audit("secret_delete_requested", path, ())
         except SecretAuditUnavailable:
             return "/admin/system/secrets?status=error&message=Audit+unavailable%2C+secret+not+deleted"
     if not delete_secret(path):

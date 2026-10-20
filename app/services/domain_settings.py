@@ -121,6 +121,24 @@ class ApplyAdminSettingsFormOutcome:
     updated_keys: tuple[str, ...]
 
 
+# Operational state rows (cursors, counters, job logs) that are rewritten by
+# background work, not configuration. Exact (domain, key) pairs pinned in code;
+# never selected by a caller flag or by configuration.
+_UNAUDITED_OPERATIONAL_KEYS = frozenset(
+    {
+        ("usage", "radius_accounting_last_radacctid"),
+        ("billing", "invoice_pdf_cache_metrics"),
+        ("gis", "last_sync_run"),
+        ("geocoding", "batch_geocode_jobs_log"),
+        ("network", "vpn_control_jobs_log"),
+        ("imports", "import_jobs_log"),
+        ("imports", "import_history_log"),
+        ("provisioning", "service_migration_jobs_log"),
+        ("provisioning", "bulk_activation_jobs_log"),
+    }
+)
+
+
 def _stage_setting_write_audit(
     db: Session,
     *,
@@ -137,6 +155,8 @@ def _stage_setting_write_audit(
     with it (S12 - settings writes fail atomically).
     """
 
+    if (str(getattr(domain, "value", domain)), key) in _UNAUDITED_OPERATIONAL_KEYS:
+        return
     stage_audit_event(
         db,
         actor=AuditActor.system("domain_settings"),

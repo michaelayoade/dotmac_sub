@@ -65,7 +65,7 @@ def test_secret_auditor_records_names_only_and_fails_closed(db_session, monkeypa
     from app.models.audit import AuditEvent
 
     audit = web_system_secrets.secret_write_auditor(db_session, None)
-    audit("secret_updated", "integrations/example", ["b_key", "a_key"])
+    audit("secret_update_requested", "integrations/example", ["b_key", "a_key"])
 
     event = db_session.query(AuditEvent).filter_by(entity_type="secret").one()
     assert event.entity_id == "integrations/example"
@@ -74,7 +74,7 @@ def test_secret_auditor_records_names_only_and_fails_closed(db_session, monkeypa
 
     monkeypatch.setattr("app.services.audit_helpers.persist_audit_event", _boom)
     with pytest.raises(web_system_secrets.SecretAuditUnavailable):
-        audit("secret_updated", "integrations/example", ["a_key"])
+        audit("secret_update_requested", "integrations/example", ["a_key"])
 
 
 def test_setting_write_rolls_back_when_its_audit_row_cannot_be_staged(
@@ -213,3 +213,33 @@ def test_secret_write_without_an_auditor_never_reaches_openbao(monkeypatch):
     assert created["ok"] is False
     assert "status=error" in deleted
     assert written == []
+
+
+def test_operational_state_keys_are_never_configuration():
+    from app.services.settings_spec import get_spec
+
+    for domain, key in domain_settings._UNAUDITED_OPERATIONAL_KEYS:
+        spec = get_spec(SettingDomain(domain), key)
+        # Operator-facing configuration has a label (and usually an env var).
+        # The two log specs are registry stubs for state the app writes itself.
+        assert spec is None or (spec.label is None and spec.env_var is None), (
+            domain,
+            key,
+        )
+
+
+def test_operational_state_write_is_not_audited(db_session):
+    from app.models.audit import AuditEvent
+
+    domain_settings.DomainSettings(SettingDomain.gis).upsert_by_key(
+        db_session,
+        "last_sync_run",
+        DomainSettingUpdate(value_type=SettingValueType.json, value_json={"a": 1}),
+    )
+
+    assert (
+        db_session.query(AuditEvent)
+        .filter(AuditEvent.action == "control.setting_written")
+        .count()
+        == 0
+    )
