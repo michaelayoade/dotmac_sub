@@ -2226,6 +2226,58 @@ class StarterCreditNoteLink(Base):
     credit_note = relationship("CreditNote")
 
 
+class StarterPrepaidFundingLink(Base):
+    """Structural identity link from a prepaid period to its Starter earmark.
+
+    Prepaid renewals (ADR 0031) record which Starter settlement
+    earmarked funding for one subscription period, keyed by the
+    renewal ``billing_line_key`` the draft line already carries.
+    Identity only (ADR 0007); funding availability and balances are
+    read from Starter. Retires with the legacy prepaid writers at
+    the cutover seal.
+    """
+
+    __tablename__ = "starter_prepaid_funding_links"
+    __table_args__ = (
+        UniqueConstraint(
+            "tenant_id",
+            "billing_line_key",
+            name="uq_starter_prepaid_funding_link_period",
+        ),
+        UniqueConstraint(
+            "tenant_id", "id", name="uq_starter_prepaid_funding_link_scope"
+        ),
+        Index(
+            "ix_starter_prepaid_funding_links_billing_account",
+            "billing_account_id",
+        ),
+        Index("ix_starter_prepaid_funding_links_settlement", "settlement_id"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    tenant_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
+    subscription_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("subscriptions.id", ondelete="RESTRICT"),
+        nullable=False,
+    )
+    billing_line_key: Mapped[str] = mapped_column(String(255), nullable=False)
+    source_fact_id: Mapped[str] = mapped_column(String(255), nullable=False)
+    billing_account_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), nullable=False
+    )
+    settlement_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
+    confirmation_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), nullable=False
+    )
+    purchase_ref: Mapped[str] = mapped_column(String(255), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(UTC)
+    )
+
+
 class PaymentAllocation(Base):
     __tablename__ = "payment_allocations"
     __table_args__ = (
