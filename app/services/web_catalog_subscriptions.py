@@ -60,7 +60,6 @@ from app.models.radius import (
     RadiusSyncRun,
     RadiusUser,
 )
-from app.models.radius_active_session import RadiusActiveSession
 from app.models.radius_error import RadiusAuthError
 from app.models.subscriber import Address, ChannelType, Subscriber
 from app.schemas.catalog import (
@@ -2103,20 +2102,19 @@ def replace_subscription_ipv4_with_owner(
     # working service; the IPAM record is what needs repairing.
     served_ip = str(subscription.ipv4_address or "").strip()
     if (
-        current_address is not None
+        current_assignment is not None
+        and current_address is not None
         and served_ip
         and current_address != served_ip
         and normalized_ip != served_ip
     ):
-        live_ips = {
-            str(value or "").strip()
-            for value in db.scalars(
-                select(RadiusActiveSession.framed_ip_address).where(
-                    RadiusActiveSession.subscription_id == subscription_uuid
-                )
-            ).all()
-        }
-        if live_ips == {served_ip}:
+        evidence = preview_service_ipv4_projection_repair(
+            db,
+            subscription_id=subscription_uuid,
+            assignment_id=current_assignment.id,
+        )
+        live_sessions = evidence.active_session_count
+        if live_sessions > 0 and evidence.old_address_session_count == live_sessions:
             raise ValueError(
                 f"Customer is served correctly on {served_ip} (live session and "
                 f"served IP agree) but IPAM records {current_address}; repair "
