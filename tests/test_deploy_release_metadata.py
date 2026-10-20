@@ -361,6 +361,10 @@ printf 'host-python cwd=%s args=%s\\n' "$PWD" "$*" >> "$DOCKER_LOG"
 if [[ "$*" == *"-m scripts.deploy_config_freshness"* || "$*" == *"-m scripts.deployment_secret_readiness"* || "$*" == *"-m scripts.deploy_app_image_services"* ]]; then
   exec "{sys.executable}" "$@"
 fi
+# The migrator URL derivation reads DATABASE_URL on stdin; run it for real.
+if [[ "${{1:-}} ${{2:-}}" == "-I -c" ]]; then
+  exec "{sys.executable}" "$@"
+fi
 if [[ "$*" == *"-m scripts.release_candidate_evidence verify-production"* ]]; then
   printf '%s\\n' "{revision}"
   exit 0
