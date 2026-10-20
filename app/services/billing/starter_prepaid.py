@@ -383,7 +383,7 @@ def settle_prepaid_period_invoice(
         billing_line_key=link.billing_line_key,
     )
     try:
-        allocation_policies = resolve_starter_settlement_policies(db)
+        funding_policies = resolve_starter_prepaid_funding_policies(db)
         allocate_settlement(
             db,
             scope=_SCOPE,
@@ -392,8 +392,8 @@ def settle_prepaid_period_invoice(
                 document_id=starter_link.document_id,
                 amount=Money(invoice.total, currency),
                 occurred_at=issued_at,
-                source_ref=allocation_policies.settlement_source_ref(
-                    link.confirmation_id
+                source_ref=funding_policies.prepaid_allocation_source_ref(
+                    link.source_fact_id
                 ),
             ),
         )

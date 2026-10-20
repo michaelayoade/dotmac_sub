@@ -668,6 +668,7 @@ class StarterPrepaidFundingPolicies:
     prepaid_confirmation_source: str
     prepaid_funding_lane: str
     prepaid_earmark_source_ref_template: str
+    prepaid_allocation_source_ref_template: str
 
     def prepaid_earmark_source_ref(self, confirmation_id: UUID) -> str:
         return _render_template(
@@ -675,6 +676,16 @@ class StarterPrepaidFundingPolicies:
             "confirmation_id",
             confirmation_id,
             setting="starter_billing_prepaid_earmark_source_ref_template",
+        )
+
+    def prepaid_allocation_source_ref(self, source_fact_id: str) -> str:
+        # One confirmation funds many earmarked periods, so the allocation
+        # idempotency identity is the period target, never the confirmation.
+        return _render_template(
+            self.prepaid_allocation_source_ref_template,
+            "source_fact_id",
+            source_fact_id,
+            setting="starter_billing_prepaid_allocation_source_ref_template",
         )
 
 
@@ -688,5 +699,8 @@ def resolve_starter_prepaid_funding_policies(
         prepaid_funding_lane=_text(db, "starter_billing_prepaid_funding_lane"),
         prepaid_earmark_source_ref_template=_text(
             db, "starter_billing_prepaid_earmark_source_ref_template"
+        ),
+        prepaid_allocation_source_ref_template=_text(
+            db, "starter_billing_prepaid_allocation_source_ref_template"
         ),
     )

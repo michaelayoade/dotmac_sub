@@ -2387,6 +2387,14 @@ SETTINGS_SPECS: list[SettingSpec] = [
     ),
     SettingSpec(
         domain=SettingDomain.billing,
+        key="starter_billing_prepaid_allocation_source_ref_template",
+        env_var=("BILLING_STARTER_BILLING_PREPAID_ALLOCATION_SOURCE_REF_TEMPLATE"),
+        value_type=SettingValueType.string,
+        default="prepaid-allocation:{source_fact_id}",
+        label="Starter Billing Prepaid Allocation Source Reference Template",
+    ),
+    SettingSpec(
+        domain=SettingDomain.billing,
         key="starter_billing_system_actor_ref",
         env_var="BILLING_STARTER_BILLING_SYSTEM_ACTOR_REF",
         value_type=SettingValueType.string,
