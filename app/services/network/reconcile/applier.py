@@ -1069,7 +1069,7 @@ def _remember_revision(ctx: ApplyContext, revision: str | None) -> None:
 
 
 def _queue_ppp_reset(
-    action: Action, ctx: ApplyContext, reset_path: str, *, cr: bool
+    action: AcsSetPppoe, ctx: ApplyContext, reset_path: str, *, cr: bool
 ) -> None:
     """Queue ``WANPPPConnection.N.Reset=true`` (redials the PPP session).
 
