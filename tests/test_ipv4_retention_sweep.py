@@ -413,3 +413,79 @@ def test_report_has_uncapped_total_legacy_count_and_cursor_advances(
     )
     assert second["examined"] == 1 and second["next_cursor"] is None
     assert set(first["samples"]["would_release"]).isdisjoint(second["samples"]["would_release"])
+
+
+def test_post_commit_conflict_counted_without_failing_the_release(
+    db_session, catalog_offer, monkeypatch
+) -> None:
+    from app.services import ip_assignment_lifecycle as owner
+
+    _, _, assignment, _ = _held(db_session, catalog_offer, S.disabled, "10.30.11.1")
+    real = owner.find_ipv4_live_use
+
+    def after_release_in_use(db, *, subscription_id, addresses):
+        if not _active(db, assignment):
+            return owner.IPv4LiveUseEvidence(True, ())
+        return real(db, subscription_id=subscription_id, addresses=addresses)
+
+    monkeypatch.setattr(owner, "find_ipv4_live_use", after_release_in_use)
+    result = _sweep(db_session, "apply")
+    assert result["counts"]["post_commit_conflict"] == 1
+    assert result["counts"]["released"] == 1
+    assert result["counts"]["apply_failed"] == 0
+
+
+def test_raising_post_commit_recheck_is_not_apply_failed(
+    db_session, catalog_offer, monkeypatch
+) -> None:
+    from app.services import ip_assignment_lifecycle as owner
+
+    _, _, assignment, _ = _held(db_session, catalog_offer, S.disabled, "10.30.11.2")
+    real = owner.find_ipv4_live_use
+
+    def boom(db, *, subscription_id, addresses):
+        if not _active(db, assignment):
+            raise RuntimeError("redis/db hiccup")
+        return real(db, subscription_id=subscription_id, addresses=addresses)
+
+    monkeypatch.setattr(owner, "find_ipv4_live_use", boom)
+    result = _sweep(db_session, "apply")
+    assert result["counts"]["released"] == 1
+    assert result["counts"]["apply_failed"] == 0
+
+
+def test_address_lock_unavailable_is_skipped_locked(
+    db_session, catalog_offer, monkeypatch
+) -> None:
+    from app.services import ip_assignment_lifecycle as owner
+
+    _, _, assignment, _ = _held(db_session, catalog_offer, S.disabled, "10.30.11.3")
+
+    def locked(db, command):
+        raise IPv4AssignmentLifecycleError(
+            code="network.ip_assignment_lifecycle.address_lock_unavailable",
+            message="locked",
+        )
+
+    monkeypatch.setattr(owner, "repair_service_ipv4_assignment", locked)
+    result = _sweep(db_session, "apply")
+    assert result["counts"]["skipped_locked"] == 1
+    assert result["counts"]["apply_failed"] == 0
+    assert _active(db_session, assignment)
+
+
+@pytest.mark.parametrize("raw", ['["x"]', "{}", "not json", '["2026-01-01T00:00:00+00:00","nope"]', None])
+def test_malformed_cursor_resets(raw) -> None:
+    assert ip_lifecycle.parse_retention_cursor(raw) is None
+
+
+def test_valid_cursor_round_trips() -> None:
+    uid = str(uuid4())
+    assert ip_lifecycle.parse_retention_cursor(
+        f'["2026-01-01T00:00:00+00:00","{uid}"]'
+    ) == ("2026-01-01T00:00:00+00:00", uid)
+
+
+def test_post_commit_conflict_alert_rule_exists() -> None:
+    text = (ROOT / "deploy/observability/ipv4_retention.rules.yml").read_text()
+    assert 'ipv4_retention_release{class="post_commit_conflict"} > 0' in text

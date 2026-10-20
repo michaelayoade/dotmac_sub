@@ -31,6 +31,7 @@ from typing import NoReturn
 from uuid import UUID
 
 from sqlalchemy import or_, select, text
+from sqlalchemy.exc import OperationalError
 from sqlalchemy.orm import Session, joinedload
 
 from app.models.audit import AuditActorType, AuditEvent
@@ -1510,12 +1511,22 @@ def _repair_service_ipv4_assignment(
             and row.ipv4_address_id is not None
         ]
         if released_address_ids:
-            db.scalars(
-                select(IPv4Address)
-                .where(IPv4Address.id.in_(released_address_ids))
-                .order_by(IPv4Address.id)
-                .with_for_update()
-            ).all()
+            try:
+                db.scalars(
+                    select(IPv4Address)
+                    .where(IPv4Address.id.in_(released_address_ids))
+                    .order_by(IPv4Address.id)
+                    .with_for_update(nowait=True)
+                ).all()
+            except OperationalError as exc:
+                if "55P03" not in str(getattr(exc.orig, "sqlstate", "")) and (
+                    "could not obtain lock" not in str(exc.orig).lower()
+                ):
+                    raise
+                _lifecycle_error(
+                    "address_lock_unavailable",
+                    "A released address is locked by another writer; retry later.",
+                )
 
     prior = _prior_lifecycle_outcome(
         db,

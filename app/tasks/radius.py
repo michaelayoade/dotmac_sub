@@ -143,7 +143,10 @@ def ipv4_retention_release() -> dict:
 
     from app.models.domain_settings import SettingDomain
     from app.services.ip_consistency_audit import _get_redis
-    from app.services.ip_lifecycle import run_ipv4_retention_release
+    from app.services.ip_lifecycle import (
+        parse_retention_cursor,
+        run_ipv4_retention_release,
+    )
     from app.services.settings_spec import resolve_integer, resolve_string
 
     session = SessionLocal()
@@ -166,8 +169,9 @@ def ipv4_retention_release() -> dict:
         try:
             raw_cursor = client.get(cursor_key) if client is not None else None
             if raw_cursor:
-                after = tuple(json.loads(raw_cursor))
+                after = parse_retention_cursor(raw_cursor)
         except Exception:
+            logger.warning("ipv4 retention sweep: cursor reset", exc_info=True)
             after = None
         result = run_ipv4_retention_release(
             session,

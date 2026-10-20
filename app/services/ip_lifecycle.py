@@ -16,6 +16,7 @@ docs/POST_CUTOVER_HARDENING.md.
 
 from __future__ import annotations
 
+import json
 import logging
 import uuid
 from collections import defaultdict
@@ -345,6 +346,20 @@ RETENTION_CLASSES = (
 )
 
 
+def parse_retention_cursor(raw: Any) -> tuple[str, str] | None:
+    """Validate a stored keyset cursor; ``None`` (restart) if malformed."""
+    try:
+        value = json.loads(raw)
+        if isinstance(value, list) and len(value) == 2:
+            datetime.fromisoformat(value[0])
+            uuid.UUID(str(value[1]))
+            return (str(value[0]), str(value[1]))
+    except (TypeError, ValueError):
+        pass
+    logger.warning("ipv4 retention: malformed stored cursor reset")
+    return None
+
+
 def _eligible_filter(cutoff: datetime):
     """Retention statuses past cutoff on ``updated_at`` with an exact active v4.
 
@@ -397,7 +412,9 @@ def run_ipv4_retention_release(
     now = now or datetime.now(UTC)
     cutoff = now - timedelta(days=retention_days)
     counts = dict.fromkeys(RETENTION_CLASSES, 0)
-    counts.update(released=0, apply_failed=0, post_commit_conflict=0)
+    counts.update(
+        released=0, apply_failed=0, post_commit_conflict=0, skipped_locked=0
+    )
     samples: dict[str, list[str]] = {c: [] for c in RETENTION_CLASSES}
     skipped_other: dict[str, int] = {}
 
@@ -462,6 +479,7 @@ def run_ipv4_retention_release(
         if decision is owner.IPv4AssignmentRepairDecision.ready_release_retention_expired:
             _note("would_release", sub_id)
             if mode == "apply":
+                released_ok = False
                 try:
                     db.rollback()
                     outcome = owner.repair_service_ipv4_assignment(
@@ -487,26 +505,40 @@ def run_ipv4_retention_release(
                         ),
                     )
                     counts["released"] += outcome.deactivated_count
-                    # Residual: some column writers do not lock the address.
-                    # Re-check after commit and alert (metric class) on conflict.
-                    db.rollback()
-                    if owner.find_ipv4_live_use(
-                        db, subscription_id=sub_id, addresses=addresses
-                    ).in_use:
-                        counts["post_commit_conflict"] += 1
-                        logger.error(
-                            "ipv4 retention: released address now in live use "
-                            "(subscription %s)",
-                            sub_id,
-                        )
+                    released_ok = True
                 except Exception as exc:  # noqa: BLE001 - one failure must not stop the sweep
                     db.rollback()
-                    counts["apply_failed"] += 1
+                    if str(getattr(exc, "code", "")).endswith("address_lock_unavailable"):
+                        counts["skipped_locked"] += 1
+                    else:
+                        counts["apply_failed"] += 1
                     logger.warning(
                         "ipv4 retention release refused for %s: %s",
                         sub_id,
                         getattr(exc, "code", type(exc).__name__),
                     )
+                if released_ok:
+                    # Residual: some column writers do not lock the address.
+                    # Re-check after commit and alert (metric class) on
+                    # conflict; a failure here never undoes the release.
+                    try:
+                        db.rollback()
+                        if owner.find_ipv4_live_use(
+                            db, subscription_id=sub_id, addresses=addresses
+                        ).in_use:
+                            counts["post_commit_conflict"] += 1
+                            logger.error(
+                                "ipv4 retention: released address now in live use "
+                                "(subscription %s)",
+                                sub_id,
+                            )
+                    except Exception:  # noqa: BLE001
+                        db.rollback()
+                        logger.warning(
+                            "ipv4 retention post-commit re-check failed for %s",
+                            sub_id,
+                            exc_info=True,
+                        )
         elif decision is owner.IPv4AssignmentRepairDecision.address_in_live_use:
             sibling_live = False
             if live is not None and live.sibling_subscription_ids:
