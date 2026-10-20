@@ -227,10 +227,14 @@ def test_send_credentials_does_not_log_secret(
 
     sent: list[str] = []
     monkeypatch.setattr(
-        core.email_service, "send_email", lambda **kw: sent.append(kw["body_text"])
+        core.email_service,
+        "send_email",
+        lambda **kw: sent.append(kw["body_text"]) or True,
     )
     monkeypatch.setattr(
-        core.sms_service, "send_sms", lambda db, phone, body, **kw: sent.append(body)
+        core.sms_service,
+        "send_sms",
+        lambda db, phone, body, **kw: sent.append(body) or True,
     )
     subscriber.email = "subscriber@example.test"
     subscriber.phone = "+15550100"

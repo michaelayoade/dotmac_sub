@@ -961,6 +961,21 @@ class Notifications(ListResponseMixin):
         return notification
 
     @staticmethod
+    def recent_credential_send_exists(
+        db: Session, subscriber_id: str | UUID, within_seconds: int
+    ) -> bool:
+        """Whether a credential message row exists for the subscriber recently."""
+        cutoff = datetime.now(UTC) - timedelta(seconds=within_seconds)
+        return (
+            db.query(Notification.id)
+            .filter(Notification.event_type == CREDENTIAL_EVENT_TYPE)
+            .filter(Notification.subscriber_id == subscriber_id)
+            .filter(Notification.created_at > cutoff)
+            .first()
+            is not None
+        )
+
+    @staticmethod
     def record_transport_attempt(
         db: Session,
         *,

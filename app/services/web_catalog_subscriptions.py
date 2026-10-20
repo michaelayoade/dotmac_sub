@@ -1523,22 +1523,12 @@ def send_subscription_credentials(
     # Sends are synchronous (one SMTP/SMS timeout per target, which can exceed
     # the proxy read timeout with many targets); refuse a repeat so a retried
     # click cannot deliver the password twice.
-    from datetime import UTC, datetime, timedelta
+    from app.services.notification import notifications as notification_records
 
-    from app.models.notification import Notification
-    from app.services.notification import CREDENTIAL_EVENT_TYPE
-
-    recent = (
-        db.query(Notification.id)
-        .filter(Notification.event_type == CREDENTIAL_EVENT_TYPE)
-        .filter(Notification.subscriber_id == subscriber.id)
-        .filter(
-            Notification.created_at
-            > datetime.now(UTC) - timedelta(seconds=CREDENTIAL_RESEND_WINDOW_SECONDS)
-        )
-        .first()
+    recent = notification_records.recent_credential_send_exists(
+        db, subscriber.id, CREDENTIAL_RESEND_WINDOW_SECONDS
     )
-    if recent is not None:
+    if recent:
         raise ValueError(
             "Credentials were already sent to this subscriber moments ago. "
             "Wait two minutes before sending again."
