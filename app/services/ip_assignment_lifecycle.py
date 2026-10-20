@@ -590,6 +590,42 @@ def find_ipv4_live_use(
     return IPv4LiveUseEvidence(live_session, siblings)
 
 
+def project_initial_served_ipv4(
+    db: Session, *, subscription: Subscription, address: str
+) -> Subscription:
+    """Owner write for a just-created service: set the served column from its
+    own active IPAM assignment. Refuses unless the column is empty and the
+    address is that subscription's single active IPv4 assignment, so it can
+    never move a served customer."""
+
+    bare = str(address).strip().split("/", 1)[0]
+    if str(subscription.ipv4_address or "").strip():
+        _lifecycle_error(
+            "served_ipv4_already_set",
+            "The service already has a served IPv4; use Replace IPv4.",
+        )
+    held = [
+        str(value).split("/", 1)[0]
+        for value in db.scalars(
+            select(IPv4Address.address)
+            .join(IPAssignment, IPAssignment.ipv4_address_id == IPv4Address.id)
+            .where(
+                IPAssignment.subscription_id == subscription.id,
+                IPAssignment.ip_version == IPVersion.ipv4,
+                IPAssignment.is_active.is_(True),
+            )
+        ).all()
+    ]
+    if held != [bare]:
+        _lifecycle_error(
+            "address_not_own_assignment",
+            "The address is not this service's single active IPv4 assignment.",
+        )
+    _project_served_ipv4(subscription, bare)
+    db.flush()
+    return subscription
+
+
 def ipv4_held_by_other_service_ipam(
     db: Session, *, subscription_id: UUID, address: str
 ) -> bool:

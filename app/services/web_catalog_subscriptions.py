@@ -99,6 +99,7 @@ from app.services.ip_assignment_lifecycle import (
     ipv4_held_by_other_service_ipam,
     preview_service_ipv4_assignment_repair,
     preview_service_ipv4_projection_repair,
+    project_initial_served_ipv4,
     replace_service_ipv4,
 )
 from app.services.network.radius_sessions import (
@@ -4735,13 +4736,11 @@ def create_subscription_with_audit(
         selected_ips=selected_ips,
     )
     if allocated_ips:
-        created = update_subscription(
-            db,
-            str(created.id),
-            {
-                "ipv4_address": allocated_ips[0],
-            },
+        created = project_initial_served_ipv4(
+            db, subscription=created, address=allocated_ips[0]
         )
+        db.commit()
+        db.refresh(created)
     additional_routes = sync_additional_routes_for_subscription(
         db,
         subscription_obj=created,

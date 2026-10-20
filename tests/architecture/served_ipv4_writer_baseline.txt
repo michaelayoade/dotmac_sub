@@ -17,11 +17,15 @@
 # key|f"..._address", ...)`` loops, ``Subscription(**data)`` construction and
 # ``.values(ipv4_address=...)``. Those are seeded below as current offenders:
 # ``catalog/subscriptions.py`` (create ``Subscription(**data)`` and the two
-# update ``setattr(subscription, key, value)`` loops) and
+# update ``setattr(subscription, key, value)`` loops; one of the three counted
+# sites is the known false positive ``setattr(subscription_add_on, key, value)``,
+# which has no served IP and is kept counted pending review) and
 # ``provisioning_helpers.py`` (the allocator's ``setattr(subscription,
 # f"{version_key}_address", ...)``, inside the owner's own path). The generic
 # update loop is also closed at its input: ``SubscriptionUpdate`` rejects an
-# ``ipv4_address`` change (see tests/test_subscription_ipv4_write_rejection.py).
+# ``ipv4_address`` change, and an IPAM-equal value is dropped, never written
+# (see tests/test_subscription_ipv4_write_rejection.py). New services get their
+# column from ``ip_assignment_lifecycle.project_initial_served_ipv4``.
 #
 # Remaining blind spot: the operator/admin form in
 # ``app/services/web_catalog_subscriptions.py`` builds a payload dict whose

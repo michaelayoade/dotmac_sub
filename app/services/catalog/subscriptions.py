@@ -1376,21 +1376,25 @@ class Subscriptions(ListResponseMixin):
             matches_own_assignment = (
                 len(own_active) == 1 and requested_ip == (own_active[0])
             )
-            if (
-                requested_ip != str(subscription.ipv4_address or "").strip()
-                and not matches_own_assignment
-            ):
-                # Tactical stopgap (pre-Starter dotmac-ipam): the served column
-                # is a projection of the IPAM assignment; only the IPv4
-                # lifecycle owner may write it.
-                raise HTTPException(
-                    status_code=409,
-                    detail=(
-                        "ipv4_address cannot be changed by a subscription "
-                        "update; use Replace IPv4 on the subscription "
-                        "(POST /admin/catalog/subscriptions/{id}/ipv4/replace)."
-                    ),
-                )
+            if requested_ip != str(subscription.ipv4_address or "").strip():
+                if matches_own_assignment:
+                    # Never write the served column from a generic update: it
+                    # would bypass the live-session/collision guards and could
+                    # move a customer served on a different address. The
+                    # projection owner reconciles it.
+                    data.pop("ipv4_address")
+                else:
+                    # Tactical stopgap (pre-Starter dotmac-ipam): the served
+                    # column is a projection of the IPAM assignment; only the
+                    # IPv4 lifecycle owner may write it.
+                    raise HTTPException(
+                        status_code=409,
+                        detail=(
+                            "ipv4_address cannot be changed by a subscription "
+                            "update; use Replace IPv4 on the subscription "
+                            "(POST /admin/catalog/subscriptions/{id}/ipv4/replace)."
+                        ),
+                    )
         _refuse_unreviewed_renewal_term(db, subscription, data)
         requested_offer_id = data.get("offer_id")
         if (

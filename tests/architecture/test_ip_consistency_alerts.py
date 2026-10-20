@@ -36,4 +36,11 @@ def test_stale_audit_threshold_is_at_least_twice_the_default_interval() -> None:
     rules = RULES.read_text(encoding="utf-8")
     match = re.search(r"radius_ip_consistency_audit_age_seconds > (\d+)", rules)
     assert match is not None
-    assert int(match.group(1)) >= 2 * 21600
+    from app.services.settings_spec import SETTINGS_SPECS
+
+    default = next(
+        spec.default
+        for spec in SETTINGS_SPECS
+        if spec.key == "ip_consistency_audit_interval_seconds"
+    )
+    assert int(match.group(1)) >= 2 * int(default)
