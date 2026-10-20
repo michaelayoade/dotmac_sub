@@ -847,6 +847,7 @@ WORKFLOW_GUIDANCE: tuple[AdminWorkflowGuidance, ...] = (
         "After reviewing field outcomes, open Customer confirmation on the ticket and request resolution against the current accepted evidence. Record the customer response through the support workflow; a dispute requires follow-up, and visit feedback remains separate from ticket confirmation.",
         notes=(
             "Tickets track communication and follow-up; they do not own billing or service state changes.",
+            "Automatic ticket actions are configured as Automation Center rules. The separate legacy ticket automation page was retired and no longer changes tickets.",
             "Execution completion is followed by the configured supervisor review, then a separate customer confirmation request. Confirmation and grace closure recheck the current evidence; changed scope or acceptance requires a fresh request. Customer feedback does not replace these decisions or restore service.",
             "Ticket assignment uses the same ticket-update authority as the rest of the edit workflow. In Field Work Orders, an active member of the assigned service team with support and dispatch permissions explicitly uses Create Work Order with a reason and reviewed scope. One ticket may need zero, one, or many visits; ticket assignment does not assign the attending technician.",
         ),
