@@ -1371,9 +1371,9 @@ Rotate non-customer-facing secrets first, then payment, then authentication or n
 | Subscription | created, activated, suspended, resumed, canceled, upgraded, downgraded, expiring |
 | Invoice | created, sent, paid, overdue |
 | Payment | received, failed, refunded |
-| Usage | recorded, warning, exhausted, topped_up |
+| Usage | warning, exhausted, topped_up |
 | Provisioning | started, completed, failed |
-| Network | device.offline, device.online, session.started, session.ended, network.alert |
+| Network | network.alert |
 
 ### Webhook Security
 
