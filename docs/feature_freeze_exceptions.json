@@ -425,7 +425,7 @@
       "id": "PPPOE-CREDENTIAL-PERMISSION-SCHEMA",
       "kind": "schema",
       "paths": [
-        "alembic/versions/696_subscription_credential_permission.py"
+        "alembic/versions/697_subscription_credential_permission.py"
       ],
       "reason": "Permission-only migration registering subscription:credential:update (Michael decision D6, 2026-10-19): the credential edit path currently has no dedicated permission, so any actor holding subscription:update can rename or re-password a PPPoE credential. No tables, no role grants; additive and reversible unless operators have assigned it. Exact path; it is updated if the migration is renumbered on merge order.",
       "approved_by": "michaelayoade"
@@ -508,7 +508,7 @@
       "id": "PPPOE-DEACTIVATION-REASON-SCHEMA",
       "kind": "schema",
       "paths": [
-        "alembic/versions/697_credential_deactivation_reason.py"
+        "alembic/versions/698_credential_deactivation_reason.py"
       ],
       "reason": "Records why an access credential was deactivated (M1) so password retention on restore can be gated; part of the PPPoE credential bridge (#3727), landed through the integration branch (Michael, 2026-10-20). Additive column only.",
       "approved_by": "michaelayoade"
