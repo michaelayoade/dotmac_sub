@@ -203,9 +203,6 @@ def _is_dynamic_projection_write(node: ast.AST, attribute: str) -> bool:
         owner = _expr_name(node.args[0]).lower()
         if "subscription" not in owner and owner != "sub":
             return False
-        if "add_on" in owner or "addon" in owner:
-            # SubscriptionAddOn rows are a different model with no served IP.
-            return False
         key = node.args[1]
         if isinstance(key, ast.Constant):
             return key.value == attribute
