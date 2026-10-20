@@ -24,10 +24,10 @@ synchronously — GenieACS doesn't care how long the response takes (it
 fire-and-forgets), so the operator-visible outcome lives on the
 ``OntUnit.sync_status`` field rather than in the webhook response.
 
-Auth: the GenieACS instance lives inside the same WireGuard tunnel as the
-DotMac app, and the webhook URL is configured per-preset on the
-GenieACS side. The route accepts unauthenticated POSTs in the same way
-``tr069_inform`` does — the network boundary is the security model.
+Auth: the router carries the shared GenieACS token guard
+(``app.api.deps.require_genieacs_token``, header ``X-Dotmac-Genieacs-Token``,
+mode ``tr069_webhook_auth_mode``). The GenieACS preset that calls this URL is
+configured outside the repo and must send the same header.
 """
 
 from __future__ import annotations
@@ -39,6 +39,7 @@ from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from app.api.deps import require_genieacs_token
 from app.db import get_db
 from app.models.network import OntUnit
 from app.services.network.reconcile import (
@@ -48,7 +49,11 @@ from app.services.network.reconcile import (
 
 logger = logging.getLogger(__name__)
 
-router = APIRouter(prefix="/reconcile/webhooks", tags=["reconcile-webhooks"])
+router = APIRouter(
+    prefix="/reconcile/webhooks",
+    tags=["reconcile-webhooks"],
+    dependencies=[Depends(require_genieacs_token)],
+)
 
 
 class GenieACSBootstrapPayload(BaseModel):

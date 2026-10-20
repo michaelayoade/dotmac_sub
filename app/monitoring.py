@@ -103,6 +103,32 @@ def _setup_loki(
         return False
 
 
+_SECRET_REQUEST_HEADERS = frozenset({"x-dotmac-genieacs-token", "x-dotmac-tr069-auth"})
+
+
+def _scrub_secret_request_headers(event: Any) -> None:
+    """Drop shared-secret request headers from an event (case-insensitive)."""
+    try:
+        request = event.get("request") if isinstance(event, dict) else None
+        headers = request.get("headers") if isinstance(request, dict) else None
+        if isinstance(headers, dict):
+            for name in [
+                k for k in headers if str(k).lower() in _SECRET_REQUEST_HEADERS
+            ]:
+                headers[name] = "[Filtered]"
+        elif isinstance(headers, list):
+            request["headers"] = [
+                [h[0], "[Filtered]"]
+                if isinstance(h, (list, tuple))
+                and h
+                and str(h[0]).lower() in _SECRET_REQUEST_HEADERS
+                else h
+                for h in headers
+            ]
+    except Exception:  # noqa: BLE001 - scrubbing must never block reporting
+        logger.warning("Request header scrub failed; sending event as-is")
+
+
 def _scrub_event_credentials(event: Any, _hint: Any) -> Any:
     """Redact RouterOS API credentials from a Sentry/GlitchTip event.
 
@@ -114,6 +140,7 @@ def _scrub_event_credentials(event: Any, _hint: Any) -> Any:
     """
     # Credential setup exceptions must not retain captured request bodies,
     # breadcrumbs, exception messages, or SDK context containing transient input.
+    _scrub_secret_request_headers(event)
     request = event.get("request") if isinstance(event, dict) else None
     if isinstance(request, dict) and "/admin/integrations/nextcloud-talk/" in str(
         request.get("url", "")

@@ -6,8 +6,6 @@ Receives callbacks from GenieACS:
 - Device config: WiFi/service config for provision scripts
 """
 
-import hmac
-import ipaddress
 import logging
 from typing import Any
 
@@ -15,12 +13,8 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy.orm import Session
 
-from app.config import settings
+from app.api.deps import require_genieacs_token
 from app.db import get_db
-from app.metrics import TR069_WEBHOOK_AUTH
-from app.models.domain_settings import SettingDomain
-from app.services import secrets as secrets_service
-from app.services import settings_spec
 from app.services.adapters.ont_types import ont_type_registry
 from app.services.credential_crypto import decrypt_stored_secret_or_none
 from app.services.genieacs_service import genieacs_service
@@ -28,88 +22,6 @@ from app.services.network.effective_ont_config import resolve_effective_ont_conf
 from app.services.network.ont_serials import find_unique_active_ont_by_serial
 
 logger = logging.getLogger(__name__)
-
-TOKEN_HEADER = "X-Dotmac-Genieacs-Token"
-_AUTH_MODES = {"off", "log_only", "enforce"}
-
-
-def _expected_token() -> str:
-    """Load the shared secret: env value / secret ref, then OpenBao path."""
-    try:
-        value = secrets_service.resolve_secret(settings.tr069_webhook_token)
-    except Exception:
-        logger.warning("TR-069 webhook token reference could not be resolved")
-        value = None
-    if value:
-        return value
-    return secrets_service.get_secret("tr069", "webhook_token")
-
-
-def _source_allowed(allowlist: str | None, remote: str | None) -> bool:
-    entries = [e.strip() for e in (allowlist or "").split(",") if e.strip()]
-    if not entries:
-        return True
-    try:
-        addr = ipaddress.ip_address(remote or "")
-    except ValueError:
-        return False
-    for entry in entries:
-        try:
-            if addr in ipaddress.ip_network(entry, strict=False):
-                return True
-        except ValueError:
-            logger.warning("Ignoring invalid TR-069 webhook allowlist entry")
-    return False
-
-
-def require_genieacs_token(request: Request, db: Session = Depends(get_db)) -> None:
-    """Guard for GenieACS-facing routes (shared token + optional source list).
-
-    ``tr069_webhook_auth_mode``: ``off`` skips the check, ``log_only`` (default)
-    logs and counts failures but allows, ``enforce`` refuses with 403.
-    The secret and the presented token are never logged.
-    """
-    mode = str(
-        settings_spec.resolve_value(db, SettingDomain.tr069, "tr069_webhook_auth_mode")
-        or "log_only"
-    ).lower()
-    if mode not in _AUTH_MODES:
-        mode = "enforce"  # unknown value fails closed
-    if mode == "off":
-        return
-
-    presented = request.headers.get(TOKEN_HEADER)
-    expected = _expected_token()
-    remote = request.client.host if request.client else None
-    reason: str | None = None
-    if not presented:
-        reason = "missing_token"
-    elif not expected:
-        reason = "secret_not_configured"
-    elif not hmac.compare_digest(presented.encode(), expected.encode()):
-        reason = "bad_token"
-    elif not _source_allowed(
-        settings_spec.resolve_value(
-            db, SettingDomain.tr069, "tr069_webhook_allowed_sources"
-        ),
-        remote,
-    ):
-        reason = "source_not_allowed"
-    if reason is None:
-        TR069_WEBHOOK_AUTH.labels(mode=mode, outcome="ok").inc()
-        return
-    outcome = "refused" if mode == "enforce" else "allowed_log_only"
-    TR069_WEBHOOK_AUTH.labels(mode=mode, outcome=outcome).inc()
-    logger.warning(
-        "TR-069 webhook auth failure reason=%s mode=%s path=%s remote=%s",
-        reason,
-        mode,
-        request.url.path,
-        remote,
-    )
-    if mode == "enforce":
-        raise HTTPException(status_code=403, detail="Forbidden")
-
 
 router = APIRouter(
     prefix="/tr069",

@@ -5002,8 +5002,10 @@ SETTINGS_SPECS: list[SettingSpec] = [
         env_var=None,
         value_type=SettingValueType.string,
         default="log_only",
-        allowed={"off", "log_only", "enforce"},
-        label="GenieACS webhook token check (off | log_only | enforce)",
+        allowed={"log_only", "enforce"},
+        label="GenieACS webhook token check (log_only | enforce)",
+        inherits=False,
+        owner_command_only=True,
     ),
     SettingSpec(
         domain=SettingDomain.tr069,
@@ -5011,7 +5013,14 @@ SETTINGS_SPECS: list[SettingSpec] = [
         env_var=None,
         value_type=SettingValueType.string,
         default=None,
-        label="GenieACS webhook allowed source addresses (comma-separated IPs/CIDRs; empty = token only)",
+        label=(
+            "GenieACS webhook allowed source addresses (comma-separated IPs/CIDRs; "
+            "empty = token only). nginx and GenieACS can share a source address "
+            "(the bridge gateway), so this only keeps out sibling containers; "
+            "the token is the real control"
+        ),
+        inherits=False,
+        owner_command_only=True,
     ),
     SettingSpec(
         domain=SettingDomain.network,

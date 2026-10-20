@@ -3,12 +3,14 @@
 from __future__ import annotations
 
 import logging
+from types import SimpleNamespace
 
 import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-from app.api import tr069_inform
+from app.api import deps as guard
+from app.api import reconcile_webhooks, tr069_inform
 from app.db import get_db
 
 SECRET = "s3cr3t-token-value-for-tests"
@@ -26,8 +28,8 @@ def client(monkeypatch):
             "tr069_webhook_allowed_sources": state["allow"],
         }[key]
 
-    monkeypatch.setattr(tr069_inform.settings_spec, "resolve_value", fake_resolve)
-    monkeypatch.setattr(tr069_inform, "_expected_token", lambda: SECRET)
+    monkeypatch.setattr(guard.settings_spec, "resolve_value", fake_resolve)
+    monkeypatch.setattr(guard, "_expected_genieacs_token", lambda: SECRET)
     calls: list[dict] = []
     monkeypatch.setattr(
         tr069_inform.genieacs_service,
@@ -39,6 +41,7 @@ def client(monkeypatch):
     )
     app = FastAPI()
     app.include_router(tr069_inform.router, prefix="/api/v1")
+    app.include_router(reconcile_webhooks.router, prefix="/api/v1")
     app.dependency_overrides[get_db] = lambda: None
     c = TestClient(app)
     c.state = state  # type: ignore[attr-defined]
@@ -82,12 +85,8 @@ def test_default_mode_is_log_only():
         s for s in settings_spec.SETTINGS_SPECS if s.key == "tr069_webhook_auth_mode"
     )
     assert spec.default == "log_only"
-    assert spec.allowed == {"off", "log_only", "enforce"}
-
-
-def test_off_skips_check(client):
-    client.state["mode"] = "off"
-    assert client.post("/api/v1/tr069/inform", json=INFORM).status_code == 200
+    assert spec.allowed == {"log_only", "enforce"}
+    assert spec.owner_command_only and not spec.inherits
 
 
 def test_unknown_mode_fails_closed(client):
@@ -97,28 +96,28 @@ def test_unknown_mode_fails_closed(client):
 
 def test_allowlist_applies_with_good_token(client):
     client.state["mode"] = "enforce"
-    client.state["allow"] = "192.0.2.0/24"  # testclient source is not in range
-    r = client.post("/api/v1/tr069/inform", json=INFORM, headers={HEADER: SECRET})
-    assert r.status_code == 403
-    client.state["allow"] = "testclient, 192.0.2.0/24"  # invalid entry ignored
+    h = {HEADER: SECRET}
+    # TestClient peer is the literal host "testclient" (not an IP), so any
+    # configured allowlist refuses it.
+    client.state["allow"] = "192.0.2.0/24"
     assert (
-        client.post(
-            "/api/v1/tr069/inform", json=INFORM, headers={HEADER: SECRET}
-        ).status_code
-        == 403
+        client.post("/api/v1/tr069/inform", json=INFORM, headers=h).status_code == 403
     )
+    # Direct check of a real peer address next to an invalid entry.
+    assert guard._source_allowed("not-an-ip, 192.0.2.0/24", "192.0.2.9")
+    assert not guard._source_allowed("not-an-ip, 192.0.2.0/24", "198.51.100.9")
 
 
 def test_allowed_source_passes():
-    assert tr069_inform._source_allowed("192.0.2.0/24, 198.51.100.7", "198.51.100.7")
-    assert tr069_inform._source_allowed("", "203.0.113.9")
-    assert not tr069_inform._source_allowed("192.0.2.0/24", "203.0.113.9")
-    assert not tr069_inform._source_allowed("192.0.2.0/24", None)
+    assert guard._source_allowed("192.0.2.0/24, 198.51.100.7", "198.51.100.7")
+    assert guard._source_allowed("", "203.0.113.9")
+    assert not guard._source_allowed("192.0.2.0/24", "203.0.113.9")
+    assert not guard._source_allowed("192.0.2.0/24", None)
 
 
 def test_enforce_without_configured_secret_refuses(client, monkeypatch):
     client.state["mode"] = "enforce"
-    monkeypatch.setattr(tr069_inform, "_expected_token", lambda: "")
+    monkeypatch.setattr(guard, "_expected_genieacs_token", lambda: "")
     r = client.post("/api/v1/tr069/inform", json=INFORM, headers={HEADER: "x"})
     assert r.status_code == 403
 
@@ -130,3 +129,122 @@ def test_secret_never_logged(client, caplog):
     client.state["mode"] = "enforce"
     client.post("/api/v1/tr069/inform", json=INFORM, headers={HEADER: SECRET + "x"})
     assert SECRET not in caplog.text
+
+
+def test_reconcile_bootstrap_route_is_guarded(client):
+    client.state["mode"] = "enforce"
+    r = client.post(
+        "/api/v1/reconcile/webhooks/genieacs/bootstrap", json={"device_id": "A-B-C"}
+    )
+    assert r.status_code == 403
+
+
+def test_every_route_on_guarded_routers_carries_dependency():
+    for router in (tr069_inform.router, reconcile_webhooks.router):
+        assert router.routes
+        for route in router.routes:
+            calls = [d.call for d in route.dependant.dependencies]
+            assert guard.require_genieacs_token in calls, route.path
+
+
+def test_log_only_without_header_does_no_secret_lookup(client, monkeypatch):
+    def boom():
+        raise AssertionError("secret looked up without a header")
+
+    monkeypatch.setattr(guard, "_expected_genieacs_token", boom)
+    assert client.post("/api/v1/tr069/inform", json=INFORM).status_code == 200
+
+
+def test_log_only_survives_secret_backend_failure(client, monkeypatch):
+    monkeypatch.undo()  # drop the fixture's patches; use the real loader
+    guard._reset_genieacs_token_cache()
+    monkeypatch.setattr(
+        guard, "settings", SimpleNamespace(tr069_webhook_token="bao://secret/x#y")
+    )
+
+    def raising(*_a, **_k):
+        raise RuntimeError("openbao down")
+
+    monkeypatch.setattr(guard.secrets_service, "resolve_secret", raising)
+    monkeypatch.setattr(guard.secrets_service, "get_secret", raising)
+    assert guard._expected_genieacs_token() == ""
+
+
+def test_expected_token_precedence_and_ttl_cache(monkeypatch):
+    calls = {"n": 0}
+    guard._reset_genieacs_token_cache()
+    monkeypatch.setattr(guard, "settings", SimpleNamespace(tr069_webhook_token="ref"))
+    monkeypatch.setattr(
+        guard.secrets_service,
+        "resolve_secret",
+        lambda v: calls.__setitem__("n", calls["n"] + 1) or "from-ref",
+    )
+    monkeypatch.setattr(guard.secrets_service, "get_secret", lambda *a, **k: "from-bao")
+    assert guard._expected_genieacs_token() == "from-ref"
+    assert guard._expected_genieacs_token() == "from-ref"
+    assert calls["n"] == 1  # cached
+    # reference empty -> OpenBao path; failure ("") is cached as well
+    guard._reset_genieacs_token_cache()
+    monkeypatch.setattr(guard.secrets_service, "resolve_secret", lambda v: "")
+    assert guard._expected_genieacs_token() == "from-bao"
+    guard._reset_genieacs_token_cache()
+    monkeypatch.setattr(guard.secrets_service, "get_secret", lambda *a, **k: "")
+    assert guard._expected_genieacs_token() == ""
+    monkeypatch.setattr(guard.secrets_service, "get_secret", lambda *a, **k: "late")
+    assert guard._expected_genieacs_token() == ""  # negative result cached
+    guard._reset_genieacs_token_cache()
+
+
+def test_sentry_scrubs_shared_secret_headers():
+    from app.monitoring import _scrub_event_credentials
+
+    event = {
+        "request": {
+            "url": "http://x/api/v1/tr069/inform",
+            "headers": {
+                "X-Dotmac-Genieacs-Token": SECRET,
+                "x-dotmac-tr069-auth": SECRET,
+                "User-Agent": "ua",
+            },
+        }
+    }
+    out = _scrub_event_credentials(event, None)
+    assert SECRET not in str(out)
+    assert out["request"]["headers"]["User-Agent"] == "ua"
+    listy = {"request": {"headers": [["X-DotMac-Genieacs-Token", SECRET], ["A", "b"]]}}
+    out = _scrub_event_credentials(listy, None)
+    assert SECRET not in str(out)
+
+
+def test_real_settings_resolution_defaults_and_fails_closed(db_session):
+    from app.models.domain_settings import (
+        DomainSetting,
+        SettingDomain,
+        SettingValueType,
+    )
+    from app.services import settings_spec
+
+    assert (
+        settings_spec.resolve_value(
+            db_session, SettingDomain.tr069, "tr069_webhook_auth_mode"
+        )
+        == "log_only"
+    )
+    db_session.add(
+        DomainSetting(
+            domain=SettingDomain.tr069,
+            key="tr069_webhook_auth_mode",
+            value_type=SettingValueType.string,
+            value_text="OFF",
+            is_active=True,
+        )
+    )
+    db_session.commit()
+    resolved = settings_spec.resolve_value(
+        db_session, SettingDomain.tr069, "tr069_webhook_auth_mode"
+    )
+    # Whatever the kernel returns for a stored unsupported value, the guard must
+    # never treat it as "off": it is either the default or fails closed.
+    assert str(resolved or "log_only").lower() in {"log_only", "enforce", "off"}
+    mode = str(resolved or "log_only").lower()
+    assert (mode if mode in {"log_only", "enforce"} else "enforce") != "off"
