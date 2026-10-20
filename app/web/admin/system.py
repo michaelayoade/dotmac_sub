@@ -149,18 +149,6 @@ def _system_page_context(request: Request, db: Session, title: str, active_page:
     }
 
 
-def _dbi_principal_id(request: Request) -> str:
-    from app.web.admin import get_current_user
-
-    current_user = get_current_user(request) or {}
-    principal = str(
-        current_user.get("subscriber_id") or current_user.get("id") or ""
-    ).strip()
-    if not principal:
-        raise HTTPException(status_code=401, detail="Unable to resolve current user")
-    return principal
-
-
 def _require_system_user_principal(request: Request) -> dict:
     """Require that the current principal is a system user, not a subscriber."""
     auth = getattr(request.state, "auth", None) or {}
