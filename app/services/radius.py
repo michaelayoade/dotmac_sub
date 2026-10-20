@@ -682,6 +682,7 @@ def import_access_credentials_from_external_radius(
                 changed = True
             if credential.is_active is not True:
                 credential.is_active = True
+                credential.deactivation_reason = None
                 reactivated += 1
                 changed = True
             if imported_secret and credential.secret_hash != imported_secret:

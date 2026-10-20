@@ -2215,6 +2215,7 @@ def cleanup_subscription_on_cancel(db: Session, subscription_id: str) -> dict[st
     if not other_active:
         for cred in credentials:
             cred.is_active = False
+            cred.deactivation_reason = "service_ended"
             stats["credentials_deactivated"] += 1
         # 3. Remove from external RADIUS DB
         _remove_credentials_from_external_radius(db, credentials)

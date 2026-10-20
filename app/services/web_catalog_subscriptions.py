@@ -1303,6 +1303,7 @@ def _upsert_access_credential(
         if secret_hash:
             credential.secret_hash = secret_hash
         credential.is_active = True
+        credential.deactivation_reason = None
         if radius_profile_uuid:
             credential.radius_profile_id = radius_profile_uuid
         try:

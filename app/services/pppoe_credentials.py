@@ -250,6 +250,15 @@ def legacy_unbound_candidate(
     return unbound[0]
 
 
+_SERVICE_ENDED = "service_ended"
+_MANUAL = "manual"
+_MANUAL_MESSAGE = (
+    "This service's PPPoE credential was deactivated manually, so its password "
+    "is not reused. Set the credential setting to 'new' to issue a new "
+    "credential, or issue this service its own login manually."
+)
+
+
 def _inherit_enabled(db: Session) -> bool:
     return _resolve_radius_setting(db, "pppoe_credential_on_new_service") == "inherit"
 
@@ -465,6 +474,13 @@ def ensure_pppoe_credential(
                 .with_for_update()
                 .first()
             )
+            if staged is not None and staged.deactivation_reason == _MANUAL:
+                # Deactivated by an explicit administrative action: never bring
+                # its password back. `new` issues a new credential below;
+                # `inherit` has nothing it may reuse, so it refuses.
+                if _inherit_enabled(db):
+                    raise _error("credential_manually_deactivated", _MANUAL_MESSAGE)
+                staged = None
             if staged is not None:
                 if is_secret_reference_value(staged.secret_hash):
                     raise _error(
@@ -478,6 +494,7 @@ def ensure_pppoe_credential(
                         _generate_random_password(_default_password_length(db))
                     )
                 staged.is_active = True
+                staged.deactivation_reason = None
                 staged.connection_type = ConnectionType.pppoe
                 staged.radius_profile_id = command.radius_profile_id
                 if subscription is not None:
@@ -588,6 +605,10 @@ def ensure_pppoe_credential(
                     ]
                     if len(candidates) == 1 and not live:
                         inherited = candidates[0]
+                        if inherited.deactivation_reason == _MANUAL:
+                            raise _error(
+                                "credential_manually_deactivated", _MANUAL_MESSAGE
+                            )
                         if is_secret_reference_value(inherited.secret_hash):
                             raise _error(
                                 "secret_reference_refused",
@@ -597,6 +618,7 @@ def ensure_pppoe_credential(
                         inherited.radius_profile_id = command.radius_profile_id
                         inherited.connection_type = ConnectionType.pppoe
                         inherited.is_active = True
+                        inherited.deactivation_reason = None
                         if subscription is not None:
                             subscription.login = inherited.username
                         db.flush()
@@ -696,16 +718,26 @@ def ensure_pppoe_credential(
         db.add(credential)
         disposition = PppoeCredentialDisposition.created
 
-    if disposition is PppoeCredentialDisposition.reactivated and (
-        _inherit_enabled(db) and _has_usable_secret(credential)
+    reactivating = disposition is PppoeCredentialDisposition.reactivated
+    reason = credential.deactivation_reason if reactivating else None
+    if reactivating and reason == _MANUAL and _inherit_enabled(db):
+        raise _error("credential_manually_deactivated", _MANUAL_MESSAGE)
+    if (
+        reactivating
+        and _has_usable_secret(credential)
+        and (
+            # Keep the password when the credential was deactivated together with
+            # its service; inherit mode keeps it for history (NULL) too. A manual
+            # deactivation never keeps it (a new password is issued below).
+            reason == _SERVICE_ENDED or (_inherit_enabled(db) and reason != _MANUAL)
+        )
     ):
-        # Reactivation keeps the customer's existing password so the CPE
-        # keeps authenticating; only the "new" mode overwrites (legacy).
         pass
     else:
         credential.secret_hash = encrypted_password
     credential.subscription_id = command.subscription_id
     credential.is_active = True
+    credential.deactivation_reason = None
     credential.connection_type = ConnectionType.pppoe
     credential.radius_profile_id = command.radius_profile_id
     if subscription is not None:
