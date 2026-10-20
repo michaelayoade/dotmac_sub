@@ -621,13 +621,13 @@
                             </div>
                             <div
                                 class="min-w-0 rounded-xl border border-slate-200/80 bg-slate-50/60 px-3 py-2 dark:border-slate-700 dark:bg-slate-900/30"
-                                x-data="{ shown: false, loading: false, error: false, password: '', async reveal() { if (this.shown) { this.shown = false; return; } if (!this.password) { this.loading = true; this.error = false; try { const response = await fetch('/admin/customers/person/{{ customer.id }}/pppoe-password?credential_id={{ pppoe_access.credential_id or '' }}', { headers: { 'Accept': 'application/json' } }); if (!response.ok) throw new Error('Password unavailable'); const data = await response.json(); this.password = data.password || ''; } catch (e) { this.error = true; } finally { this.loading = false; } } if (this.password) this.shown = true; } }">
+                                x-data="{ shown: false, loading: false, error: false, errorText: '', password: '', async reveal() { if (this.shown) { this.shown = false; this.password = ''; return; } if (!this.password) { this.loading = true; this.error = false; try { const response = await fetch('/admin/customers/person/{{ customer.id }}/pppoe-password?credential_id={{ pppoe_access.credential_id or '' }}', { method: 'POST', cache: 'no-store', credentials: 'same-origin', headers: { 'Accept': 'application/json', 'X-CSRF-Token': decodeURIComponent((document.cookie.match(/(?:^|;\s*)csrf_token=([^;]+)/) || [])[1] || '') } }); if (!response.ok) { let detail = 'Password unavailable'; try { detail = (await response.json()).detail || detail; } catch (_) {} this.errorText = detail; throw new Error(detail); } const data = await response.json(); this.password = data.password || ''; } catch (e) { this.error = true; } finally { this.loading = false; } } if (this.password) this.shown = true; } }">
                                 <div class="flex items-start justify-between gap-3">
                                     <div class="min-w-0">
                                         <p class="text-xs font-medium text-slate-500 dark:text-slate-400">PPPoE Password</p>
-                                        <p class="mt-1 truncate font-mono text-sm font-semibold text-slate-900 dark:text-white" x-text="error ? 'Unavailable' : (shown ? password : '{{ '••••••••' if pppoe_access.has_password else 'Not available' }}')"></p>
+                                        <p class="mt-1 truncate font-mono text-sm font-semibold text-slate-900 dark:text-white" x-text="error ? (errorText || 'Unavailable') : (shown ? password : '{{ '••••••••' if pppoe_access.has_password else 'Not available' }}')"></p>
                                     </div>
-                                    {% if pppoe_access.has_password %}
+                                    {% if pppoe_access.has_password and can(request, 'subscription:credential:reveal') %}
                                     <button
                                         type="button"
                                         @click="reveal()"

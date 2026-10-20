@@ -23,7 +23,10 @@ from app.services import network as network_service
 from app.services import provisioning as provisioning_service
 from app.services import web_network_onts as web_network_onts_service
 from app.services.common import coerce_uuid
-from app.services.credential_crypto import encrypt_credential
+from app.services.credential_crypto import (
+    encrypt_credential,
+    reject_reserved_service_password,
+)
 from app.services.network.effective_ont_config import resolve_effective_ont_config
 from app.services.network.ont_desired_config import set_desired_config_values
 from app.services.network.ont_management_ipam import (
@@ -508,6 +511,13 @@ def save_provision_settings(
     wifi_ssid_value = (wifi_ssid or "").strip() or None
     wifi_password_value = (wifi_password or "").strip() or None
     wifi_security_mode_value = (wifi_security_mode or "").strip() or None
+    try:
+        reject_reserved_service_password(pppoe_password_value)
+        reject_reserved_service_password(wifi_password_value)
+    except ValueError as exc:
+        return JsonActionResult(
+            status_code=422, content={"success": False, "message": str(exc)}
+        )
     wifi_channel_value = (wifi_channel or "").strip() or None
 
     effective = resolve_effective_ont_config(db, ont)

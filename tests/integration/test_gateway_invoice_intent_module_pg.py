@@ -36,6 +36,8 @@ pytestmark = pytest.mark.integration
 def test_invoice_checkout_opens_matching_module_intent(
     monkeypatch, db_session, subscriber
 ) -> None:
+    # D1 hold: the module intent opens only with the Starter live switch ON.
+    monkeypatch.setattr(svc, "starter_ledger_live_enabled", lambda _db: True)
     monkeypatch.setattr(
         svc,
         "resolve_value",

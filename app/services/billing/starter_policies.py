@@ -32,6 +32,7 @@ __all__ = [
     "percent_to_fraction",
     "resolve_starter_billing_policies",
     "resolve_starter_settlement_policies",
+    "has_starter_invoice_link",
     "starter_ledger_live_enabled",
 ]
 
@@ -40,6 +41,28 @@ def starter_ledger_live_enabled(db: Session) -> bool:
     """D1 hold switch, fail closed: only a boolean ``True`` is ON."""
     value = resolve_value(db, SettingDomain.billing, "starter_ledger_live_enabled")
     return value is True
+
+
+def has_starter_invoice_link(db: Session, invoice_id: UUID | None) -> bool:
+    """Structural identity: the invoice was issued through Starter.
+
+    Routes by the invoice's own link row (as settlement does), never by the
+    switch, so an already Starter-issued invoice keeps its module intent.
+    """
+    if invoice_id is None:
+        return False
+    from sqlalchemy import select
+
+    from app.models.billing import StarterInvoiceLink
+
+    return (
+        db.scalar(
+            select(StarterInvoiceLink.id).where(
+                StarterInvoiceLink.invoice_id == invoice_id
+            )
+        )
+        is not None
+    )
 
 
 class StarterBillingPolicyError(DomainError, ValueError):
@@ -66,7 +89,7 @@ def _text(db: Session, key: str) -> str:
 
 
 def _render_template(
-    template: str, placeholder: str, value: UUID, *, setting: str
+    template: str, placeholder: str, value: UUID | str, *, setting: str
 ) -> str:
     rendered = template.replace("{" + placeholder + "}", str(value))
     if rendered == template or "{" in rendered:
@@ -503,4 +526,39 @@ def resolve_starter_settlement_policies(db: Session) -> StarterSettlementPolicie
         ),
         confirmation_evidence=presented,
         accepted_confirmation_evidence=accepted,
+    )
+
+
+@dataclass(frozen=True, slots=True)
+class StarterCreditPolicies:
+    """Resolved Starter credit-note policy surface (ADR 0031)."""
+
+    credit_source_fact_template: str
+    credit_correlation_template: str
+
+    def credit_source_fact_id(self, credit_note_id: UUID) -> str:
+        return _render_template(
+            self.credit_source_fact_template,
+            "credit_note_id",
+            credit_note_id,
+            setting="starter_billing_credit_source_fact_template",
+        )
+
+    def credit_correlation_id(self, idempotency_key: str) -> str:
+        return _render_template(
+            self.credit_correlation_template,
+            "idempotency_key",
+            idempotency_key,
+            setting="starter_billing_credit_correlation_template",
+        )
+
+
+def resolve_starter_credit_policies(db: Session) -> StarterCreditPolicies:
+    return StarterCreditPolicies(
+        credit_source_fact_template=_text(
+            db, "starter_billing_credit_source_fact_template"
+        ),
+        credit_correlation_template=_text(
+            db, "starter_billing_credit_correlation_template"
+        ),
     )

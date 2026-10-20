@@ -143,6 +143,10 @@ APPROVED_INVOICE_LIFECYCLE_WRITERS = {
     # and balance from the Starter collectible position after a Starter
     # allocation; writes no Sub ledger state.
     Path("app/services/billing/starter_settlement.py"),
+    # Credits lane (ADR 0031): mirrors paid status and balance from the
+    # Starter collectible position after a Starter credit issuance;
+    # writes no Sub ledger state.
+    Path("app/services/billing/starter_credit_notes.py"),
 }
 
 

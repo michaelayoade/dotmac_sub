@@ -29,7 +29,10 @@ from app.schemas.network import OntUnitCreate, OntUnitUpdate
 from app.services import network as network_service
 from app.services import web_network_onts as web_onts_service
 from app.services.audit_helpers import diff_dicts, log_audit_event, model_to_dict
-from app.services.credential_crypto import encrypt_credential
+from app.services.credential_crypto import (
+    encrypt_credential,
+    reject_reserved_service_password,
+)
 from app.services.network.effective_ont_config import resolve_effective_ont_config
 from app.services.network.ont_desired_config import (
     get_access_flag,
@@ -286,6 +289,7 @@ def create_ont_from_form(
 
 
 def build_onu_mode_payload(form: FormData) -> OntUnitUpdate:
+    reject_reserved_service_password(form_str(form, "pppoe_password"))
     return OntUnitUpdate(
         onu_mode=form_str(form, "onu_mode").strip() or None,
         wan_mode=form_str(form, "wan_mode").strip() or None,
@@ -305,6 +309,10 @@ def update_onu_mode_from_form(
         ont = network_service.ont_units.get_including_inactive(db=db, entity_id=ont_id)
     except HTTPException:
         return OntFormResult(not_found=True)
+    try:
+        reject_reserved_service_password(form_str(form, "pppoe_password"))
+    except ValueError as exc:
+        return OntFormResult(ont=ont, error=str(exc))
     before_snapshot = model_to_dict(ont)
     previous_wan_remote_access = get_access_flag(ont, "wan_remote")
     onu_mode = form_str(form, "onu_mode").strip() or None

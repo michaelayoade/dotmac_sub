@@ -95,6 +95,17 @@ _SHADOW_IMPORTS = {
         ("dotmac_payments", "get_payment_intent_v1"),
         ("dotmac_payments", "record_confirmation"),
     },
+    # Thin-client credit notes (ADR 0031): fully-applied credits against
+    # Starter-issued invoices are issued by dotmac-billing as sole ledger
+    # writer; Sub mirrors the credit document and invoice balance.
+    "app/services/billing/starter_credit_notes.py": {
+        ("dotmac_billing", "AppliedTaxSnapshotV1"),
+        ("dotmac_billing", "GetCurrentReceivablePositionV1"),
+        ("dotmac_billing", "get_current_receivable_position"),
+        ("dotmac_billing.commands", "IssueCreditNote"),
+        ("dotmac_billing.errors", "BillingError"),
+        ("dotmac_billing.service", "issue_credit_note"),
+    },
     "app/services/dotmac_erp/billing_adapter.py": {
         ("dotmac_billing", "AccountingFactV1"),
     },

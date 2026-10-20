@@ -125,6 +125,10 @@ DEFAULT_PERMISSIONS = [
     ("reseller:read", "View resellers"),
     ("reseller:write", "Manage resellers"),
     # Billing - Invoices
+    (
+        "billing:starter_ledger_live:write",
+        "Change the Starter ledger live (D1) switch; granted to no role by default",
+    ),
     ("billing:invoice:read", "View invoices"),
     ("billing:invoice:create", "Create invoices"),
     ("billing:invoice:update", "Update invoices"),
@@ -217,6 +221,10 @@ DEFAULT_PERMISSIONS = [
     (
         "subscription:credential:update",
         "Change a subscription's PPPoE service login and password",
+    ),
+    (
+        "subscription:credential:reveal",
+        "Reveal a stored PPPoE service password (audited)",
     ),
     (
         "subscription:additional_ip:write",
@@ -477,8 +485,16 @@ DEFAULT_ROLES = [
     ("customer_experience_manager", "Customer experience manager access"),
 ]
 
+# Dedicated permissions granted to NO role by default (even admin): the owner
+# grants them explicitly to named users.
+NO_DEFAULT_ROLE_PERMISSION_KEYS = {"billing:starter_ledger_live:write"}
+
 ROLE_PERMISSIONS = {
-    "admin": [perm for perm, _ in DEFAULT_PERMISSIONS],
+    "admin": [
+        perm
+        for perm, _ in DEFAULT_PERMISSIONS
+        if perm not in NO_DEFAULT_ROLE_PERMISSION_KEYS
+    ],
     "auditor": [
         "audit:read",
         "billing:invoice:read",

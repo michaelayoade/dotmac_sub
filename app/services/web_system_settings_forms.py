@@ -61,11 +61,18 @@ def _prepare_settings_from_specs(
     *,
     form: Mapping[str, object],
     specs: Sequence[settings_spec.SettingSpec],
+    include_permission_gated: bool = False,
 ) -> tuple[tuple[domain_settings.AdminSettingWrite, ...], tuple[str, ...]]:
     updates: list[domain_settings.AdminSettingWrite] = []
     errors: list[str] = []
 
     for spec in specs:
+        # A setting that declares ``required_permission`` is never part of a
+        # generic tab save: a missing checkbox would otherwise write False and
+        # either be refused for everyone or silently rewrite the switch. It is
+        # changed only through its dedicated form (``include_permission_gated``).
+        if spec.required_permission and not include_permission_gated:
+            continue
         raw = form.get(spec.key)
         blank = _is_blank(raw)
         if spec.is_secret and blank:
@@ -226,3 +233,32 @@ def process_settings_update(
         settings_context=settings_context,
         errors=tuple(errors),
     )
+
+
+_STARTER_LEDGER_LIVE_KEY = "starter_ledger_live_enabled"
+
+
+def set_starter_ledger_live_switch(
+    *,
+    db: Session,
+    enabled: bool,
+    context: CommandContext,
+) -> tuple[str, ...]:
+    """Dedicated write of the D1 switch; returns error messages (empty on success).
+
+    The owner command enforces ``billing:starter_ledger_live:write`` (strict
+    grant, refusals audited) before and inside its transaction.
+    """
+    spec = settings_spec.get_spec(
+        settings_spec.SettingDomain.billing, _STARTER_LEDGER_LIVE_KEY
+    )
+    if spec is None:
+        return ("Setting is not registered.",)
+    updates, errors = _prepare_settings_from_specs(
+        form={spec.key: "true" if enabled else ""},
+        specs=[spec],
+        include_permission_gated=True,
+    )
+    if errors:
+        return errors
+    return _apply_prepared_settings(db=db, context=context, updates=updates)

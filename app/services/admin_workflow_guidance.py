@@ -386,7 +386,8 @@ WORKFLOW_GUIDANCE: tuple[AdminWorkflowGuidance, ...] = (
             "Each lifecycle action needs its own permission: cancel and expire need subscription:cancel; suspend, pause, disable and vacation hold need subscription:suspend; activate, restore, resume and vacation resume need subscription:activate; renew and change plan need subscription:update.",
             "Subscription correction cancels the mistaken subscription and restores the prior one, so it needs subscription:update, subscription:cancel and subscription:activate together.",
             "Bulk actions need the matching key (activate and restore: subscription:activate; suspend: subscription:suspend; cancel: subscription:cancel; change plan: subscription:update). Bulk tariff change execute stays admin-only because it re-prices a whole offer's subscriber base.",
-            "The edit page shows the service password, Send Credentials and Replace IPv4 only to users with subscription:update; users with only the additional-IP permission do not see them.",
+            "The edit page shows Send Credentials and Replace IPv4 only to users with subscription:update; users with only the additional-IP permission do not see them.",
+            "The edit page never shows the stored service password. Leave the Service Password field blank to keep it, or enter a new one to replace it. Use Reveal only when you need the current password: it requires subscription:credential:reveal, and every reveal is recorded in the audit log.",
         ),
     ),
     _guide(
@@ -1314,6 +1315,9 @@ HELP_ONLY_GUIDANCE: tuple[AdminWorkflowGuidance, ...] = (
         "Change only the intended setting and read its validation or operational warning.",
         "Save the change, then reopen the page to confirm the effective value.",
         "Use audit and health evidence when a saved setting does not produce the expected behavior.",
+        notes=(
+            "The Starter ledger live (D1) switch on the Billing tab is read-only in the general form. Change it only with its own Save switch button; turning it on needs the separate billing:starter_ledger_live:write permission, turning it off needs only system settings write, and every attempt is audited.",
+        ),
     ),
     _guide(
         "walled-garden",

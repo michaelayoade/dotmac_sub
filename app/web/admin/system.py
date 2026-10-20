@@ -3902,6 +3902,46 @@ def settings_update(
 
 
 @router.post(
+    "/settings/starter-ledger-live",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("system:settings:write"))],
+)
+def settings_starter_ledger_live_update(
+    request: Request,
+    enabled: str | None = Form(None),
+    db: Session = Depends(get_db),
+):
+    """Dedicated D1 switch form. The owner command enforces and audits the
+    dedicated ``billing:starter_ledger_live:write`` grant (strict: no admin
+    bypass, no wildcard) before and inside its transaction."""
+    errors = web_system_settings_forms_service.set_starter_ledger_live_switch(
+        db=db,
+        enabled=web_system_settings_forms_service.form_bool(enabled),
+        context=_system_command_context(
+            request,
+            reason="Change the Starter ledger live (D1) switch",
+            idempotency_key=f"starter-ledger-live:{uuid4()}",
+            scope=domain_settings_service.ADMIN_SETTINGS_FORM_WRITE_SCOPE,
+        ),
+    )
+    if not errors:
+        return RedirectResponse(
+            url="/admin/system/settings?domain=billing", status_code=303
+        )
+    context = web_system_settings_views_service.build_settings_page_context(
+        request,
+        db,
+        settings_context=web_system_settings_views_service.build_settings_context(
+            db, "billing"
+        ),
+        extra={"errors": list(errors), "saved": False},
+    )
+    return templates.TemplateResponse(
+        "admin/system/settings.html", context, status_code=403
+    )
+
+
+@router.post(
     "/settings/branding",
     response_class=HTMLResponse,
     dependencies=[Depends(require_permission("system:settings:write"))],

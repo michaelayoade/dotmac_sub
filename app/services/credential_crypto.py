@@ -281,6 +281,68 @@ def _is_secret_reference(value: str | None) -> bool:
         return False
 
 
+_RESERVED_SERVICE_PASSWORD_PREFIXES = ("enc:", "plain:", "cleartext:")
+RESERVED_SERVICE_PASSWORD_MESSAGE = (
+    "A service password cannot be a secret reference (env://, bao://, "
+    "openbao://, vault://) or start with enc:, plain: or cleartext:."
+)
+UNUSABLE_STORED_SECRET_MESSAGE = (
+    "The stored service password is a secret reference and is not used. "
+    "Set a new service password."
+)
+
+
+def is_secret_reference_value(value: object) -> bool:
+    """True for a stored/typed value the secret resolver would dereference.
+
+    Uses the resolver's own predicate (``secrets.is_secret_ref``) on a value
+    that is stripped and lower-cased, so a padded or differently-cased spelling
+    is refused too. Never raises, never resolves.
+
+    This is the single predicate: ``access_credential_secret`` re-exports it.
+    """
+    if not isinstance(value, str):
+        return False
+    from app.services.secrets import is_secret_ref
+
+    return is_secret_ref(value.strip().lower())
+
+
+def reject_reserved_service_password(value: str | None) -> None:
+    """Refuse a typed service password that would be stored as a secret
+    reference or as an at-rest wrapper. Raises ``ValueError`` with a
+    staff-safe message that never echoes the value."""
+    text = str(value or "").strip().lower()
+    if is_secret_reference_value(text) or text.startswith(
+        _RESERVED_SERVICE_PASSWORD_PREFIXES
+    ):
+        raise ValueError(RESERVED_SERVICE_PASSWORD_MESSAGE)
+
+
+def decrypt_stored_secret_or_none(value: object) -> str | None:
+    """Decrypt a stored device credential for pushing; fail closed.
+
+    Never resolves a stored secret reference, never returns one that decrypts
+    out of a wrapper, and returns ``None`` (not the stored text) when
+    decryption fails, so ciphertext is never pushed as a password. Callers
+    treat ``None`` as "not configured". Logs only that a refusal happened.
+    """
+    if value in (None, ""):
+        return None
+    if is_secret_reference_value(value):
+        _logger.warning("Refusing to resolve a stored secret reference")
+        return None
+    try:
+        decrypted = decrypt_credential(str(value))
+    except Exception:
+        _logger.warning("Stored credential could not be decrypted; not pushing it")
+        return None
+    if is_secret_reference_value(decrypted):
+        _logger.warning("Refusing to push a decrypted secret reference")
+        return None
+    return decrypted or None
+
+
 def encrypt_credential(value: str | None) -> str | None:
     """Encrypt a credential for storage at rest.
 

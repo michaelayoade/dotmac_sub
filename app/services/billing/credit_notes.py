@@ -227,7 +227,9 @@ class CreditIssuePreview:
 @dataclass(frozen=True)
 class CreditIssueResult:
     credit_note: CreditNote
-    funding_ledger_entry: LedgerEntry
+    # None for Starter-issued credits: Starter is the funding ledger and
+    # no legacy funding entry exists for those notes.
+    funding_ledger_entry: LedgerEntry | None
     preview: CreditIssuePreview | None
     idempotent_replay: bool = False
     # The application staged in the same transaction when the note names an
@@ -239,7 +241,11 @@ class CreditIssueResult:
     def audit_metadata(self) -> dict[str, object]:
         metadata: dict[str, object] = {
             "credit_note_id": str(self.credit_note.id),
-            "funding_ledger_entry_id": str(self.funding_ledger_entry.id),
+            "funding_ledger_entry_id": (
+                str(self.funding_ledger_entry.id)
+                if self.funding_ledger_entry is not None
+                else None
+            ),
             "amount": str(self.credit_note.total),
             "currency": self.credit_note.currency,
             "preview_fingerprint": self.credit_note.issue_preview_fingerprint,
@@ -683,11 +689,159 @@ def _stage_application_with_evidence(
     )
 
 
+def _require_not_starter_credit(db: Session, credit_note_id: UUID) -> None:
+    """Refuse legacy money mutations against a Starter-issued credit.
+
+    Starter owns the credit document and its collectible effect; legacy
+    void/apply writers must never post against it. Those lanes arrive
+    as their own thin-client slices.
+    """
+
+    from app.models.billing import StarterCreditNoteLink
+
+    linked = db.execute(
+        select(StarterCreditNoteLink.id).where(
+            StarterCreditNoteLink.credit_note_id == credit_note_id
+        )
+    ).first()
+    if linked is not None:
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                "Starter-issued credit notes are settled in Starter; "
+                "legacy credit mutations are refused"
+            ),
+        )
+
+
 def _issue_preview_request(
     payload: CreditNoteIssueRequest,
 ) -> CreditNoteIssuePreviewRequest:
     return CreditNoteIssuePreviewRequest.model_validate(
         payload.model_dump(exclude={"preview_fingerprint", "idempotency_key"})
+    )
+
+
+def _issue_via_starter_lane(
+    db: Session,
+    *,
+    credit_note: CreditNote,
+    invoice: Invoice,
+    preview: CreditIssuePreview,
+    subtotal: Decimal,
+    tax_total: Decimal,
+    tax_rate_id: UUID | None,
+    reason: str,
+    actor_ref: str,
+    idempotency_key: str,
+    stage_audit: bool,
+) -> CreditIssueResult:
+    """Issue one eligible credit through Starter and mirror it locally.
+
+    Runs inside the caller's transaction after preview confirmation and
+    idempotency reservation. Starter is the funding ledger: no legacy
+    funding or application ledger entries are written, the invoice
+    balance mirrors the Starter collectible position, and settlement
+    hands the access consequence to the access owner exactly as the
+    legacy application path does.
+    """
+
+    from app.models.billing import StarterCreditNoteLink
+    from app.services.billing import starter_credit_notes
+    from app.services.billing.invoices import (
+        reconcile_service_after_invoice_settlement,
+    )
+    from app.services.billing.starter_policies import resolve_starter_credit_policies
+    from app.services.operator_tenant import OPERATOR_TENANT_ID
+
+    link = starter_credit_notes.starter_invoice_link(db, invoice.id)
+    assert link is not None  # eligibility proved Starter issuance
+    credit_policies = resolve_starter_credit_policies(db)
+    issued_at = datetime.now(UTC)
+    issued = starter_credit_notes.issue_credit_note_via_starter(
+        db,
+        invoice=invoice,
+        link=link,
+        subtotal=subtotal,
+        tax_total=tax_total,
+        total=preview.credit_total,
+        tax_rate_id=tax_rate_id,
+        reason=reason,
+        actor_ref=actor_ref,
+        idempotency_key=idempotency_key,
+        issued_at=issued_at,
+    )
+    credit_note.credit_number = issued.document_number
+    credit_note.status = CreditNoteStatus.issued
+    credit_note.issued_at = issued_at
+    credit_note.funding_ledger_entry_id = None
+    credit_note.issue_preview_fingerprint = preview.fingerprint
+    credit_note.applied_total = preview.application_amount
+    db.add(
+        StarterCreditNoteLink(
+            tenant_id=OPERATOR_TENANT_ID,
+            credit_note_id=credit_note.id,
+            billing_account_id=issued.billing_account_id,
+            document_id=issued.document_id,
+            original_document_id=link.document_id,
+            source_fact_id=credit_policies.credit_source_fact_id(credit_note.id),
+        )
+    )
+    starter_credit_notes.mirror_invoice_after_starter_credit(
+        invoice, issued, settles_invoice=preview.settles_invoice, issued_at=issued_at
+    )
+    db.flush()
+    if preview.settles_invoice:
+        reconcile_service_after_invoice_settlement(db, invoice.account_id, invoice.id)
+    result = CreditIssueResult(
+        credit_note=credit_note,
+        funding_ledger_entry=None,
+        preview=preview,
+        application=None,
+    )
+    if stage_audit:
+        _stage_credit_audit(
+            db,
+            action="issue",
+            credit_note_id=credit_note.id,
+            metadata={
+                **result.audit_metadata(),
+                "settlement_lane": "starter",
+                "starter_document_id": str(issued.document_id),
+                "starter_billing_account_id": str(issued.billing_account_id),
+                "collectible_after": str(issued.collectible_after),
+            },
+        )
+    return result
+
+
+def _starter_lane_reason(
+    db: Session,
+    *,
+    invoice: Invoice | None,
+    preview: CreditIssuePreview | None,
+    credit_number: str | None,
+    tax_total: Decimal,
+    tax_rate_id: UUID | None,
+    apply_on_issue: bool,
+) -> str | None:
+    if invoice is None or preview is None:
+        return "no invoice-bound preview for the Starter lane"
+    from app.services.billing import starter_credit_notes
+
+    return starter_credit_notes.credit_eligibility_reason(
+        db,
+        invoice=invoice,
+        credit_number=credit_number,
+        tax_total=tax_total,
+        tax_rate_id=tax_rate_id,
+        application_amount=preview.application_amount,
+        credit_total=preview.credit_total,
+        applies_to_invoice=(
+            apply_on_issue
+            and preview.application_disposition
+            == CreditNoteIssueApplicationDisposition.apply_to_invoice
+        ),
     )
 
 
@@ -1165,6 +1319,30 @@ class CreditNotes(ListResponseMixin):
                 status_code=409, detail="Credit note issue is being processed"
             )
         credit_note = get_by_id(db, CreditNote, reservation.ref_id)
+        if credit_note is not None and not credit_note.funding_ledger_entry_id:
+            from app.models.billing import StarterCreditNoteLink
+
+            starter_link = db.execute(
+                select(StarterCreditNoteLink).where(
+                    StarterCreditNoteLink.credit_note_id == credit_note.id
+                )
+            ).scalar_one_or_none()
+            if starter_link is not None:
+                if credit_note.issue_preview_fingerprint != preview_fingerprint:
+                    raise HTTPException(
+                        status_code=409,
+                        detail=(
+                            "Idempotency key was used with a different "
+                            "issue confirmation"
+                        ),
+                    )
+                return CreditIssueResult(
+                    credit_note=credit_note,
+                    funding_ledger_entry=None,
+                    preview=None,
+                    idempotent_replay=True,
+                    application=None,
+                )
         if not credit_note or not credit_note.funding_ledger_entry_id:
             raise HTTPException(
                 status_code=409, detail="Credit note issue evidence is incomplete"
@@ -1234,6 +1412,7 @@ class CreditNotes(ListResponseMixin):
         )
         if replay:
             return replay
+        invoice: Invoice | None = None
         if payload.invoice_id is not None:
             invoice = lock_for_update(db, Invoice, payload.invoice_id)
             if invoice is None:
@@ -1251,6 +1430,80 @@ class CreditNotes(ListResponseMixin):
         reservation = CreditNotes._reserve_issue(
             db, key=key, account_id=payload.account_id
         )
+
+        reason_text = (payload.memo or "").strip() or (
+            payload.line_description or ""
+        ).strip()
+        if invoice is not None and reason_text:
+            starter_reason = _starter_lane_reason(
+                db,
+                invoice=invoice,
+                preview=preview,
+                credit_number=payload.credit_number,
+                tax_total=round_money(payload.tax_total),
+                tax_rate_id=payload.line_tax_rate_id,
+                apply_on_issue=apply_on_issue,
+            )
+            if starter_reason is None:
+                from app.services.billing.starter_policies import (
+                    resolve_starter_billing_policies,
+                )
+
+                credit_note = CreditNote(
+                    account_id=payload.account_id,
+                    invoice_id=payload.invoice_id,
+                    credit_number=None,
+                    status=CreditNoteStatus.draft,
+                    currency=payload.currency,
+                    subtotal=round_money(payload.subtotal),
+                    tax_total=round_money(payload.tax_total),
+                    total=preview.credit_total,
+                    applied_total=Decimal("0.00"),
+                    memo=payload.memo,
+                )
+                try:
+                    db.add(credit_note)
+                    db.flush()
+                    if payload.line_description:
+                        line_amount = (
+                            preview.credit_total
+                            if payload.line_tax_application == TaxApplication.inclusive
+                            else round_money(payload.subtotal)
+                        )
+                        db.add(
+                            CreditNoteLine(
+                                credit_note_id=credit_note.id,
+                                description=payload.line_description,
+                                quantity=Decimal("1.000"),
+                                unit_price=line_amount,
+                                amount=line_amount,
+                                tax_rate_id=payload.line_tax_rate_id,
+                                tax_application=payload.line_tax_application,
+                            )
+                        )
+                        db.flush()
+                    result = _issue_via_starter_lane(
+                        db,
+                        credit_note=credit_note,
+                        invoice=invoice,
+                        preview=preview,
+                        subtotal=round_money(payload.subtotal),
+                        tax_total=round_money(payload.tax_total),
+                        tax_rate_id=payload.line_tax_rate_id,
+                        reason=reason_text,
+                        actor_ref=resolve_starter_billing_policies(db).system_actor_ref,
+                        idempotency_key=key,
+                        stage_audit=stage_audit,
+                    )
+                    reservation.ref_id = str(credit_note.id)
+                    if commit:
+                        db.commit()
+                        db.refresh(credit_note)
+                except Exception:
+                    if commit:
+                        db.rollback()
+                    raise
+                return result
 
         credit_number = payload.credit_number or numbering.generate_required_number(
             db,
@@ -1591,6 +1844,7 @@ class CreditNotes(ListResponseMixin):
             return replay
         if draft.status != CreditNoteStatus.draft:
             raise HTTPException(status_code=409, detail="Credit note is not a draft")
+        invoice: Invoice | None = None
         if draft.invoice_id is not None:
             invoice = lock_for_update(db, Invoice, draft.invoice_id)
             if invoice is None:
@@ -1610,6 +1864,61 @@ class CreditNotes(ListResponseMixin):
         reservation = CreditNotes._reserve_issue(
             db, key=key, account_id=draft.account_id
         )
+        draft_reason = (draft.memo or "").strip() or next(
+            (
+                line.description.strip()
+                for line in draft.lines
+                if line.is_active and line.description
+            ),
+            "",
+        )
+        draft_tax_rate_id = next(
+            (
+                line.tax_rate_id
+                for line in draft.lines
+                if line.is_active and line.tax_rate_id is not None
+            ),
+            None,
+        )
+        if invoice is not None and draft_reason:
+            starter_reason = _starter_lane_reason(
+                db,
+                invoice=invoice,
+                preview=preview,
+                credit_number=draft.credit_number,
+                tax_total=round_money(draft.tax_total),
+                tax_rate_id=draft_tax_rate_id,
+                apply_on_issue=apply_on_issue,
+            )
+            if starter_reason is None:
+                from app.services.billing.starter_policies import (
+                    resolve_starter_billing_policies,
+                )
+
+                try:
+                    result = _issue_via_starter_lane(
+                        db,
+                        credit_note=draft,
+                        invoice=invoice,
+                        preview=preview,
+                        subtotal=round_money(draft.subtotal),
+                        tax_total=round_money(draft.tax_total),
+                        tax_rate_id=draft_tax_rate_id,
+                        reason=draft_reason,
+                        actor_ref=resolve_starter_billing_policies(db).system_actor_ref,
+                        idempotency_key=key,
+                        stage_audit=stage_audit,
+                    )
+                    reservation.ref_id = str(draft.id)
+                    db.flush()
+                    if commit:
+                        db.commit()
+                        db.refresh(draft)
+                except Exception:
+                    if commit:
+                        db.rollback()
+                    raise
+                return result
         try:
             funding = LedgerEntries.create(
                 db,
@@ -1921,6 +2230,7 @@ class CreditNotes(ListResponseMixin):
         credit_note = lock_for_update(db, CreditNote, coerce_uuid(credit_note_id))
         if not credit_note:
             raise HTTPException(status_code=404, detail="Credit note not found")
+        _require_not_starter_credit(db, credit_note.id)
         preview = _build_void_preview(db, credit_note)
         if preview.fingerprint != payload.preview_fingerprint:
             raise HTTPException(
@@ -2676,6 +2986,7 @@ class CreditNotes(ListResponseMixin):
         credit_note = lock_for_update(db, CreditNote, coerce_uuid(credit_note_id))
         if not credit_note:
             raise HTTPException(status_code=404, detail="Credit note not found")
+        _require_not_starter_credit(db, credit_note.id)
         invoice = lock_for_update(db, Invoice, coerce_uuid(payload.invoice_id))
         if not invoice:
             raise HTTPException(status_code=404, detail="Invoice not found")

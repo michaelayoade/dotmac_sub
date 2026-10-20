@@ -12,6 +12,7 @@ from fastapi.templating import Jinja2Templates
 from sqlalchemy.orm import Session
 from starlette.datastructures import FormData
 
+from app.csrf import require_browser_csrf_header
 from app.db import get_db
 from app.services import catalog as catalog_service
 from app.services import radio_registration as radio_registration_service
@@ -36,6 +37,7 @@ from app.services.auth_dependencies import (
 from app.services.db_session_adapter import db_session_adapter
 from app.services.domain_errors import DomainError
 from app.services.owner_commands import CommandContext
+from app.services.pppoe_password_reveal import REVEAL_PERMISSION, audited_reveal
 from app.services.prepaid_activation_funding_guard import (
     OVERRIDE_PERMISSION as PREPAID_ACTIVATION_OVERRIDE_PERMISSION,
 )
@@ -146,7 +148,7 @@ def _apply_edit_form_permissions(
     )
     if not context["can_manage_subscription_catalog"]:
         # Credentials are shown only to operators who may update the service.
-        context["current_service_password"] = ""
+        context["has_current_service_password"] = False
         if isinstance(context.get("subscription"), dict):
             context["subscription"] = {
                 **context["subscription"],
@@ -1606,11 +1608,41 @@ def catalog_subscription_cancel_lifecycle_schedule_view(
 
 
 @router.post(
+    "/subscriptions/{subscription_id}/reveal-service-password",
+    dependencies=[
+        Depends(require_browser_csrf_header),
+        Depends(require_permission(REVEAL_PERMISSION)),
+    ],
+)
+def catalog_subscription_reveal_service_password(
+    request: Request,
+    subscription_id: str,
+    db: Session = Depends(get_db),
+) -> JSONResponse:
+    """Explicit, audited reveal of the stored PPPoE service password."""
+    subscriber_id = web_catalog_subscriptions_service.subscription_subscriber_id(
+        db, subscription_id
+    )
+    return audited_reveal(
+        request,
+        db,
+        subscriber_id=subscriber_id or subscription_id,
+        metadata={"subscription_id": subscription_id, "surface": "subscription_form"},
+        lookup=lambda: (
+            web_catalog_subscriptions_service.reveal_subscription_service_password(
+                db, subscription_id
+            )
+        ),
+    )
+
+
+@router.post(
     "/subscriptions/{subscription_id}/send-credentials",
     response_class=HTMLResponse,
     dependencies=[Depends(require_permission("subscription:update"))],
 )
 def catalog_subscription_send_credentials(
+    request: Request,
     subscription_id: str,
     db: Session = Depends(get_db),
 ) -> RedirectResponse:
@@ -1618,6 +1650,7 @@ def catalog_subscription_send_credentials(
         web_catalog_subscription_workflows_service.send_subscription_credentials_redirect(
             db,
             subscription_id=subscription_id,
+            actor_id=_get_actor_id(request),
         ),
         status_code=303,
     )

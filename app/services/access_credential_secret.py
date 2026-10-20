@@ -22,30 +22,26 @@ class AccessCredentialSecretFormat(StrEnum):
     secret_reference = "secret_reference"
 
 
-_REFERENCE_PREFIXES = ("bao://", "openbao://", "vault://", "env://")
-_RESERVED_PREFIXES = ("enc:", "plain:", "cleartext:")
-RESERVED_SERVICE_PASSWORD_MESSAGE = (
-    "A service password cannot be a secret reference (env://, bao://, "
-    "openbao://, vault://) or start with enc:, plain: or cleartext:."
+# One predicate and one set of messages: the canonical copies live in
+# credential_crypto (also used by the CPE and reveal guards). Re-exported here
+# so access-credential callers keep a single import.
+from app.services.credential_crypto import (  # noqa: E402
+    RESERVED_SERVICE_PASSWORD_MESSAGE,
+    UNUSABLE_STORED_SECRET_MESSAGE,
+    is_secret_reference_value,
+    reject_reserved_service_password,
 )
-UNUSABLE_STORED_SECRET_MESSAGE = (
-    "The stored service password is a secret reference and is not used. "
-    "Set a new service password."
-)
 
-
-def is_secret_reference_value(value: str | None) -> bool:
-    """True for a stored/typed value the secret resolver would dereference."""
-    text = str(value or "").strip().lower()
-    return text.startswith(_REFERENCE_PREFIXES)
-
-
-def reject_reserved_service_password(value: str | None) -> None:
-    """Refuse a typed service password that would be stored as a reference or
-    as an at-rest marker. Raises ``ValueError`` with a staff-safe message."""
-    text = str(value or "").strip().lower()
-    if text.startswith(_REFERENCE_PREFIXES + _RESERVED_PREFIXES):
-        raise ValueError(RESERVED_SERVICE_PASSWORD_MESSAGE)
+__all__ = [
+    "RESERVED_SERVICE_PASSWORD_MESSAGE",
+    "UNUSABLE_STORED_SECRET_MESSAGE",
+    "AccessCredentialSecretFormat",
+    "classify_access_credential_secret",
+    "explicit_cleartext_value",
+    "is_one_way_access_credential_secret",
+    "is_secret_reference_value",
+    "reject_reserved_service_password",
+]
 
 
 _ONE_WAY_FORMATS = frozenset(
@@ -65,7 +61,7 @@ def classify_access_credential_secret(
     if not text:
         return AccessCredentialSecretFormat.empty
     lowered = text.lower()
-    if lowered.startswith(_REFERENCE_PREFIXES):
+    if is_secret_reference_value(text):
         return AccessCredentialSecretFormat.secret_reference
     if lowered.startswith("enc:"):
         return AccessCredentialSecretFormat.encrypted
