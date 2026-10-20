@@ -203,3 +203,133 @@ def test_encryption_key_env_reference_still_resolves(monkeypatch):
     monkeypatch.setenv("F3_KEY_HOLDER", key)
     monkeypatch.setenv("CREDENTIAL_ENCRYPTION_KEY", "env://F3_KEY_HOLDER")
     assert credential_crypto.get_encryption_key() == key.encode("ascii")
+
+
+# --- review follow-ups (H1, M2, L4, L5) ---------------------------------
+
+
+@pytest.mark.parametrize(
+    "ref",
+    [
+        "bao://secret/network/olts/./x#k",
+        "bao://secret/network/olts/a\\..\\b#k",
+        "bao://SECRET/network/olts/a#k",
+        "bao://secret/network/olts//a#k",
+        "bao://secret/network/olts/a\n",
+        "bao://secret/network/olts/a/",
+        "bao://secret/network/olts/a b#k",
+        "bao://secret/network/olts/a#k-1",
+        "bao://secret/network/olt/a#k",
+        "bao://secret/network/olts#k",
+    ],
+)
+def test_prefix_edge_cases_are_refused(ref):
+    with patch("app.services.secrets.resolve_openbao_ref") as resolve:
+        with pytest.raises(ValueError):
+            decrypt_credential(ref, model="OLTDevice", field="ssh_password")
+    resolve.assert_not_called()
+
+
+def test_editing_a_db_loaded_row(db_session):
+    from sqlalchemy import update
+
+    olt = OLTDevice(name="f3-edit", ssh_password="plain:x")
+    db_session.add(olt)
+    db_session.commit()
+    # legacy reference row written by core SQL
+    db_session.execute(
+        update(OLTDevice).where(OLTDevice.id == olt.id).values(ssh_password=OLT_REF)
+    )
+    db_session.commit()
+    db_session.expire_all()
+    loaded = db_session.get(OLTDevice, olt.id)
+    loaded.ssh_password = OLT_REF  # unchanged: allowed
+    loaded.name = "f3-edit-2"
+    db_session.flush()
+    with pytest.raises(CredentialReferenceRefused):
+        loaded.ssh_password = "bao://secret/network/olts/other/ssh#password"
+    with authorize_reference_writes({"system:secrets:write"}):
+        loaded.ssh_password = "bao://secret/network/olts/other/ssh#password"
+    db_session.rollback()
+
+
+def test_tr069_auth_refuses_connection_request_reference():
+    from app.services import tr069_auth
+
+    with patch("app.services.secrets.resolve_openbao_ref") as resolve:
+        got = tr069_auth._decrypt_server_password(
+            ACS_REF, None, "connection request", field="connection_request_password"
+        )
+    assert got is None
+    resolve.assert_not_called()
+    with patch("app.services.secrets.resolve_openbao_ref", return_value="pw"):
+        assert (
+            tr069_auth._decrypt_server_password(
+                ACS_REF, None, "CWMP", field="cwmp_password"
+            )
+            == "pw"
+        )
+
+
+def test_reconcile_acs_reference_resolves_but_cr_and_env_do_not():
+    from types import SimpleNamespace
+
+    from app.services.network.reconcile.applier import (
+        ApplyError,
+        _resolve_or_fail,
+    )
+    from app.services.network.reconcile.secrets import credential_secret_resolver
+
+    ctx = SimpleNamespace(resolve_secret=credential_secret_resolver)
+    action = SimpleNamespace(kind="x")
+    with patch("app.services.secrets.resolve_openbao_ref", return_value="acs-pw"):
+        assert (
+            _resolve_or_fail(
+                ctx, action, ACS_REF, model="Tr069AcsServer", field="cwmp_password"
+            )
+            == "acs-pw"
+        )
+        # connection-request ref: no context -> refused
+        with pytest.raises(ApplyError):
+            _resolve_or_fail(ctx, action, ACS_REF)
+    with pytest.raises(ApplyError) as exc:
+        _resolve_or_fail(
+            ctx,
+            action,
+            f"env://{PLANTED_VAR}",
+            model="Tr069AcsServer",
+            field="cwmp_password",
+        )
+    assert PLANTED_VALUE not in str(exc.value)
+    assert PLANTED_VAR not in str(exc.value)
+
+
+def test_refused_write_maps_to_422_with_fixed_message():
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+
+    from app.errors import register_error_handlers
+
+    app = FastAPI()
+    register_error_handlers(app)
+
+    @app.get("/boom")
+    def boom():
+        OLTDevice(name="o", ssh_password=f"env://{PLANTED_VAR}")
+
+    resp = TestClient(app, raise_server_exceptions=False).get(
+        "/boom", headers={"Accept": "application/json"}
+    )
+    assert resp.status_code == 422
+    assert PLANTED_VAR not in resp.text
+
+
+@pytest.mark.parametrize(
+    "literal", ["BAO://secret/network/olts/a#k", " bao://secret/network/olts/a#k"]
+)
+def test_misspelled_scheme_is_a_literal_and_never_reaches_openbao(literal):
+    with patch("app.services.secrets.resolve_openbao_ref") as resolve:
+        assert decrypt_credential(literal) == literal
+    resolve.assert_not_called()
+    with pytest.raises(CredentialReferenceRefused):
+        OLTDevice(name="o", ssh_password=literal)

@@ -408,7 +408,11 @@ def prepare_customer_login(
             if credential and credential.secret_hash:
                 from app.services.credential_crypto import decrypt_credential
 
-                stored_password = decrypt_credential(credential.secret_hash)
+                try:
+                    stored_password = decrypt_credential(credential.secret_hash)
+                except ValueError:
+                    # Undecryptable, or a refused stored reference (F3).
+                    raise_invalid_login()
                 if stored_password and secrets.compare_digest(
                     stored_password, password
                 ):
