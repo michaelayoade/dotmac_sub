@@ -1,0 +1,54 @@
+# IPv4 collision alerts (tactical stopgap, pre-Starter dotmac-ipam cut).
+#
+# radius_ip_consistency_drift{kind} comes from the periodic read-only
+# app.tasks.radius.audit_ip_consistency run (app/services/ip_consistency_audit.py).
+# The first four collision kinds mean two live services can hold, or already
+# hold, the same address: page on any non-zero value. session_ip_pool_not_linked
+# depends on NAS radius_pool tagging being complete, so it only warns.
+groups:
+  - name: ip_consistency_collisions
+    rules:
+      - alert: IPv4CollisionDetected
+        expr: >
+          radius_ip_consistency_drift{kind=~"ip_on_multiple_subscriptions|assignment_on_terminal_subscription|session_ip_ipam_mismatch|session_ip_duplicate"} > 0
+        for: 15m
+        labels:
+          severity: critical
+          area: ipam
+          owner: network-operations
+        annotations:
+          summary: "IPv4 collision class {{ $labels.kind }} is non-zero"
+          description: >
+            {{ $value }} finding(s) of class {{ $labels.kind }}. The address of
+            one service is also held, reserved or in use by another. Run
+            scripts/one_off/audit_ip_consistency.py for sample logins/IPs; do
+            not reissue the address until resolved.
+          runbook: "docs/designs/IP_ASSIGNMENT_LIFECYCLE_SOT.md"
+
+      - alert: IPv4SessionPoolNotLinkedToNas
+        expr: radius_ip_consistency_drift{kind="session_ip_pool_not_linked"} > 0
+        for: 1h
+        labels:
+          severity: warning
+          area: ipam
+          owner: network-operations
+        annotations:
+          summary: "Live framed IPs come from a pool not linked to the session NAS"
+          description: >
+            {{ $value }} live session IP(s) belong to an IPAM pool that is not
+            linked to the session's NAS (radius_pool tag or legacy pool FK).
+          runbook: "docs/designs/IP_ASSIGNMENT_LIFECYCLE_SOT.md"
+
+      - alert: IPv4ConsistencyAuditStale
+        expr: radius_ip_consistency_audit_age_seconds > 7200
+        for: 15m
+        labels:
+          severity: warning
+          area: ipam
+          owner: network-operations
+        annotations:
+          summary: "IPv4 consistency audit has not completed for over two hours"
+          description: >
+            Collision alerts are only as fresh as the last audit run; check the
+            celery beat entry radius_ip_consistency_audit.
+          runbook: "docs/designs/IP_ASSIGNMENT_LIFECYCLE_SOT.md"

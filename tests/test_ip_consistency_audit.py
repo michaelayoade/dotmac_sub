@@ -369,3 +369,107 @@ class TestStorageAndCollector:
             return_value=None,
         ):
             assert list(_IpConsistencyAuditCollector().collect()) == []
+
+
+class TestCollisionClasses:
+    """Cross-service collision kinds (tactical stopgap, pre-dotmac-ipam)."""
+
+    def _empty_radius(self, tmp_path):
+        db_path = tmp_path / "radius.db"
+        _seed_radius_sqlite(db_path)
+        return db_path
+
+    def test_same_ip_on_two_live_subscriptions(
+        self, db_session, tmp_path, catalog_offer
+    ):
+        _seed_sub(db_session, login="dup-a", offer=catalog_offer, col_ip="198.51.100.5")
+        _seed_sub(db_session, login="dup-b", offer=catalog_offer, col_ip="198.51.100.5")
+        _seed_sub(
+            db_session,
+            login="gone",
+            offer=catalog_offer,
+            status=SubscriptionStatus.canceled,
+            col_ip="198.51.100.9",
+        )
+        _seed_sub(
+            db_session,
+            login="gone2",
+            offer=catalog_offer,
+            status=SubscriptionStatus.canceled,
+            col_ip="198.51.100.9",
+        )
+        result = _run(db_session, self._empty_radius(tmp_path))
+        assert result["ip_on_multiple_subscriptions"] == ["198.51.100.5"]
+        assert result["counts"]["ip_on_multiple_subscriptions"] == 1
+        assert result["ok"] is False
+
+    def test_active_assignment_on_terminal_subscription(
+        self, db_session, tmp_path, catalog_offer
+    ):
+        _seed_sub(
+            db_session,
+            login="term",
+            offer=catalog_offer,
+            status=SubscriptionStatus.expired,
+            assign_ip="198.51.100.20",
+        )
+        result = _run(db_session, self._empty_radius(tmp_path))
+        assert result["assignment_on_terminal_subscription"] == ["198.51.100.20"]
+
+    def test_session_ip_mismatch_duplicate_and_unlinked_pool(
+        self, db_session, tmp_path, catalog_offer
+    ):
+        from datetime import UTC, datetime
+
+        from app.models.catalog import NasDevice
+        from app.models.network import IpPool
+        from app.models.radius_active_session import RadiusActiveSession
+
+        nas = NasDevice(
+            name="collision-nas", is_active=True, tags=["radius_pool:other"]
+        )
+        pool = IpPool(
+            name="collision-pool",
+            ip_version=IPVersion.ipv4,
+            cidr="198.51.100.0/24",
+            is_active=True,
+        )
+        db_session.add_all([nas, pool])
+        db_session.flush()
+        sub_a = _seed_sub(
+            db_session, login="s-a", offer=catalog_offer, assign_ip="198.51.100.30"
+        )
+        sub_b = _seed_sub(db_session, login="s-b", offer=catalog_offer)
+        db_session.query(IPv4Address).filter(
+            IPv4Address.address == "198.51.100.30"
+        ).update({"pool_id": pool.id})
+        for sub, framed, sid in (
+            (sub_a, "198.51.100.31", "1"),  # online on an IP != IPAM (.30)
+            (sub_b, "198.51.100.31", "2"),  # same framed IP, second session
+        ):
+            db_session.add(
+                RadiusActiveSession(
+                    subscription_id=sub.id,
+                    subscriber_id=sub.subscriber_id,
+                    nas_device_id=nas.id,
+                    username=f"u{sid}",
+                    acct_session_id=sid,
+                    framed_ip_address=framed,
+                    session_start=datetime.now(UTC),
+                )
+            )
+        db_session.add(IPv4Address(address="198.51.100.31", pool_id=pool.id))
+        db_session.commit()
+
+        radius = self._empty_radius(tmp_path)
+        result = _run(db_session, radius)
+        assert result["session_ip_ipam_mismatch"] == ["198.51.100.31"]
+        assert result["session_ip_duplicate"] == ["198.51.100.31"]
+        assert result["session_ip_pool_not_linked"] == ["198.51.100.31"]
+
+        # Linking the pool to the NAS clears only the pool class.
+        nas.tags = [f"radius_pool:{pool.id}"]
+        db_session.commit()
+        result = _run(db_session, radius)
+        assert result["session_ip_pool_not_linked"] == []
+        assert result["session_ip_duplicate"] == ["198.51.100.31"]
