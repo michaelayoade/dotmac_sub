@@ -1498,6 +1498,13 @@ def _invoice_owner_subscriber_id(invoice: Invoice):
 
 
 def _build_pdf_bytes(db: Session, invoice: Invoice) -> bytes:
+    # Readers lane (ADR 0031): Starter-issued documents render from the
+    # frozen Starter document fact; the mirror row itself is untouched.
+    from app.services.billing import starter_positions
+
+    fact = starter_positions.starter_invoice_fact(db, invoice)
+    if fact is not None:
+        invoice = starter_positions.apply_fact_overlay(invoice, fact)
     html_content = _render_invoice_html(invoice, db)
     try:
         _ensure_weasyprint_pydyf_compat()
