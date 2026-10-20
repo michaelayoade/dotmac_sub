@@ -21,7 +21,7 @@ import sqlalchemy as sa
 from alembic import op
 
 revision: str = "696_subscription_credential_permission"
-down_revision: str | None = "695_subscription_credential_reveal"
+down_revision: str | None = "696_starter_prepaid_funding_links"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 
