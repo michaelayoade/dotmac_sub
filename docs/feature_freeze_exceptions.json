@@ -429,6 +429,28 @@
       ],
       "reason": "Permission-only migration registering subscription:credential:update (Michael decision D6, 2026-10-19): the credential edit path currently has no dedicated permission, so any actor holding subscription:update can rename or re-password a PPPoE credential. No tables, no role grants; additive and reversible unless operators have assigned it. Exact path; it is updated if the migration is renumbered on merge order.",
       "approved_by": "michaelayoade"
+    },
+    {
+      "id": "IPV4-COLLISION-STOPGAPS-20261020",
+      "kind": "approved-growth",
+      "paths": [
+        "app/metrics.py",
+        "app/services/catalog/subscriptions.py",
+        "app/services/ip_assignment_lifecycle.py",
+        "app/services/ip_consistency_audit.py",
+        "app/services/ip_lifecycle.py",
+        "app/services/provisioning_helpers.py",
+        "app/services/scheduler_config.py",
+        "app/services/settings_spec.py",
+        "app/services/task_reliability.py",
+        "app/services/web_catalog_subscriptions.py",
+        "app/tasks/radius.py",
+        "deploy/observability/ip_consistency.rules.yml",
+        "scripts/architecture/sot_debt.py"
+      ],
+      "reason": "IPv4 collision stopgaps (tactical, pre-Starter dotmac-ipam cut). Michael approved 2026-10-20 as tactical safety fixes after a real address collision: Replace IPv4 committed the IPAM move separately from the served projection, so a refused projection left IPAM on the new IP while the column, radreply and live session stayed on the old one, the old IP looked free and the allocator reissued it. PR-1 makes Replace IPv4 one owner transaction (assignment + projection participants) with a guard against moving a correctly served customer; PR-2 stops the allocator reissuing an IP that is another live service's served column or live framed IP and stops a new service inheriting a sibling's assignment; PR-3 widens the served-IPv4 writer ratchet to dict-driven writes and rejects ipv4_address changes on subscription update/PATCH; PR-4 adds collision classes to the ip_consistency_audit metric with an alert rule. All IPv4 writes stay in the canonical owner app/services/ip_assignment_lifecycle.py. No new abstraction, no new Python module under app/services or app/web, no migration, no billing code. Retention PR #3738 (about 490 app lines, above the 400-line size threshold) is covered via its named existing paths: app/metrics.py, app/services/ip_assignment_lifecycle.py, app/services/ip_lifecycle.py, app/services/scheduler_config.py, app/services/settings_spec.py, app/tasks/radius.py, app/services/task_reliability.py. approved-growth covers the size-threshold rule only; no new module, template or migration is authorised. These are tactical stopgaps, to be deleted by the Starter dotmac-ipam extraction cut.",
+      "deletion_trigger": "Delete with the Sub IPAM allocator, ip_assignment_lifecycle writers and the retention task when the Starter dotmac-ipam extraction cut lands.",
+      "approved_by": "michaelayoade"
     }
   ]
 }
