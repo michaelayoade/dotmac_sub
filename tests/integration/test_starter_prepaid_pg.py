@@ -15,9 +15,9 @@ from decimal import Decimal
 from uuid import uuid4
 
 import pytest
+from dotmac_kernel.cache import TenantScope
 from dotmac_kernel.money import Currency, Money
 from dotmac_payments import OpenPaymentIntent, PaymentPurpose, open_payment_intent
-from dotmac_kernel.cache import TenantScope
 from sqlalchemy import func, select
 
 from app.models.billing import (
