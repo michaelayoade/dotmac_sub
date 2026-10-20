@@ -299,7 +299,8 @@ def is_secret_reference_value(value: object) -> bool:
     that is stripped and lower-cased, so a padded or differently-cased spelling
     is refused too. Never raises, never resolves.
 
-    This is the single predicate: ``access_credential_secret`` re-exports it.
+    NOTE: duplicates ``access_credential_secret.is_secret_reference_value``
+    introduced by the PPPoE credential bridge; consolidate once that lands.
     """
     if not isinstance(value, str):
         return False
