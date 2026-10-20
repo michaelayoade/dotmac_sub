@@ -141,8 +141,8 @@ class TestSeedAuthSettings:
 class TestSeedAuditSettings:
     """Tests for seed_audit_settings function."""
 
-    def test_seeds_audit_enabled(self, db_session):
-        """Test audit enabled setting is seeded."""
+    def test_does_not_seed_an_audit_off_switch(self, db_session):
+        """Request auditing cannot be disabled by configuration."""
         settings_seed.seed_audit_settings(db_session)
 
         setting = (
@@ -153,8 +153,7 @@ class TestSeedAuditSettings:
             )
             .first()
         )
-        assert setting is not None
-        assert setting.value_json is True
+        assert setting is None
 
     def test_seeds_audit_methods(self, db_session):
         """Test audit methods setting is seeded."""
