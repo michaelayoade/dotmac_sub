@@ -879,7 +879,9 @@ def _provision_wan_service_instances(
         if detected_index is None:
             message = (
                 f"No safe WANConnectionDevice exists for PPPoE VLAN {wan_vlan_int}. "
-                "The ONT must expose or precreate an internet PPP WAN container before TR-069 can push credentials."
+                "No internet WANConnectionDevice index is configured (pppoe_wcd_index) and "
+                "none is exposed; the management container is never used. Set the "
+                "config pack pppoe_wcd_index so Sub can create the container."
             )
             steps.append(
                 {
