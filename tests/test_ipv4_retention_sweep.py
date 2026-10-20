@@ -10,8 +10,8 @@ from uuid import uuid4
 import pytest
 from sqlalchemy import func, select, update
 
-from app.models.catalog import Subscription, SubscriptionStatus
 from app.models.audit import AuditEvent
+from app.models.catalog import Subscription, SubscriptionStatus
 from app.models.domain_settings import SettingDomain
 from app.models.event_store import EventStore
 from app.models.network import IPAssignment
@@ -19,10 +19,12 @@ from app.models.radius_active_session import RadiusActiveSession
 from app.services import ip_lifecycle
 from app.services.ip_assignment_lifecycle import (
     IPv4AssignmentLifecycleError,
-    IPv4AssignmentRepairDecision as Decision,
     RepairServiceIPv4AssignmentCommand,
     preview_service_ipv4_assignment_repair,
     repair_service_ipv4_assignment,
+)
+from app.services.ip_assignment_lifecycle import (
+    IPv4AssignmentRepairDecision as Decision,
 )
 from app.services.owner_commands import CommandContext
 from app.services.settings_spec import get_spec
@@ -78,15 +80,19 @@ def _session(db, ip: str) -> None:
 def _active(db, assignment) -> bool:
     db.expire_all()
     return bool(
-        db.scalar(select(IPAssignment.is_active).where(IPAssignment.id == assignment.id))
+        db.scalar(
+            select(IPAssignment.is_active).where(IPAssignment.id == assignment.id)
+        )
     )
 
 
 def _cmd(preview, sub_id, ids, cutoff, key="ret-1"):
     return RepairServiceIPv4AssignmentCommand(
         context=CommandContext.system(
-            actor="test", scope="ip_assignment_lifecycle_repair",
-            reason="retention test", idempotency_key=key,
+            actor="test",
+            scope="ip_assignment_lifecycle_repair",
+            reason="retention test",
+            idempotency_key=key,
         ),
         subscription_id=sub_id,
         desired_address_id=None,
@@ -173,7 +179,9 @@ def test_owner_keeps_served_column_that_names_another_address(
 ) -> None:
     _, sub, assignment, _ = _held(db_session, catalog_offer, S.disabled, "10.30.1.21")
     db_session.execute(
-        update(Subscription).where(Subscription.id == sub.id).values(ipv4_address="10.30.1.99", updated_at=OLD)
+        update(Subscription)
+        .where(Subscription.id == sub.id)
+        .values(ipv4_address="10.30.1.99", updated_at=OLD)
     )
     sub_id, assignment_id = sub.id, assignment.id
     preview = _preview(db_session, sub, assignment)
@@ -188,7 +196,9 @@ def test_owner_refuses_recent_status(db_session, catalog_offer) -> None:
     _, sub, assignment, _ = _held(
         db_session, catalog_offer, S.disabled, "10.30.1.11", updated_at=RECENT
     )
-    assert _preview(db_session, sub, assignment).decision is Decision.retention_not_expired
+    assert (
+        _preview(db_session, sub, assignment).decision is Decision.retention_not_expired
+    )
 
 
 def test_owner_guard_unchanged_without_cutoff(db_session, catalog_offer) -> None:
@@ -199,8 +209,12 @@ def test_owner_guard_unchanged_without_cutoff(db_session, catalog_offer) -> None
     )
 
 
-@pytest.mark.parametrize("status", [S.active, S.blocked, S.suspended, S.pending, S.paused, S.stopped])
-def test_owner_never_releases_retaining_statuses(db_session, catalog_offer, status) -> None:
+@pytest.mark.parametrize(
+    "status", [S.active, S.blocked, S.suspended, S.pending, S.paused, S.stopped]
+)
+def test_owner_never_releases_retaining_statuses(
+    db_session, catalog_offer, status
+) -> None:
     _, sub, assignment, _ = _held(db_session, catalog_offer, status, "10.30.1.13")
     assert (
         _preview(db_session, sub, assignment).decision
@@ -208,13 +222,17 @@ def test_owner_never_releases_retaining_statuses(db_session, catalog_offer, stat
     )
 
 
-def test_owner_refuses_live_session_and_apply_cannot_bypass(db_session, catalog_offer) -> None:
+def test_owner_refuses_live_session_and_apply_cannot_bypass(
+    db_session, catalog_offer
+) -> None:
     _, sub, assignment, _ = _held(db_session, catalog_offer, S.disabled, "10.30.1.14")
     sub_id, assignment_id = sub.id, assignment.id
     ready = _preview(db_session, sub, assignment)
     assert ready.decision is Decision.ready_release_retention_expired
     _session(db_session, "10.30.1.14")  # session appears after the review
-    assert _preview(db_session, sub, assignment).decision is Decision.address_in_live_use
+    assert (
+        _preview(db_session, sub, assignment).decision is Decision.address_in_live_use
+    )
     db_session.rollback()
     with pytest.raises(IPv4AssignmentLifecycleError):
         repair_service_ipv4_assignment(
@@ -226,25 +244,41 @@ def test_owner_refuses_live_session_and_apply_cannot_bypass(db_session, catalog_
 def test_owner_refuses_non_terminal_sibling_column_but_not_terminal(
     db_session, catalog_offer
 ) -> None:
-    subscriber, sub, assignment, _ = _held(db_session, catalog_offer, S.disabled, "10.30.1.15")
+    subscriber, sub, assignment, _ = _held(
+        db_session, catalog_offer, S.disabled, "10.30.1.15"
+    )
     other = _subscriber(db_session, "other")
-    dead = _subscription(db_session, other, catalog_offer, status=S.canceled, served_ip="10.30.1.15")
+    dead = _subscription(
+        db_session, other, catalog_offer, status=S.canceled, served_ip="10.30.1.15"
+    )
     db_session.commit()
-    assert _preview(db_session, sub, assignment).decision is Decision.ready_release_retention_expired
-    live = _subscription(db_session, other, catalog_offer, status=S.active, served_ip="10.30.1.15")
+    assert (
+        _preview(db_session, sub, assignment).decision
+        is Decision.ready_release_retention_expired
+    )
+    live = _subscription(
+        db_session, other, catalog_offer, status=S.active, served_ip="10.30.1.15"
+    )
     db_session.commit()
-    assert _preview(db_session, sub, assignment).decision is Decision.address_in_live_use
+    assert (
+        _preview(db_session, sub, assignment).decision is Decision.address_in_live_use
+    )
     assert dead.id != live.id
 
 
 def test_owner_refuses_management_address(db_session, catalog_offer) -> None:
     subscriber = _subscriber(db_session, "mgmt")
     sub = _subscription(db_session, subscriber, catalog_offer, status=S.disabled)
-    address = _address(db_session, _pool(db_session, "mg"), "10.30.1.16", allocation_type="management")
+    address = _address(
+        db_session, _pool(db_session, "mg"), "10.30.1.16", allocation_type="management"
+    )
     assignment = _assignment(db_session, subscriber, address, subscription=sub)
     db_session.commit()
     _age(db_session, sub, updated_at=OLD)
-    assert _preview(db_session, sub, assignment).decision is Decision.address_not_releasable
+    assert (
+        _preview(db_session, sub, assignment).decision
+        is Decision.address_not_releasable
+    )
 
 
 # --- sweep -------------------------------------------------------------------
@@ -270,7 +304,9 @@ def test_shadow_writes_nothing(db_session, catalog_offer) -> None:
     assert db_session.scalar(select(func.count()).select_from(AuditEvent)) == audits
     cols = dict(
         db_session.execute(
-            select(Subscription.id, Subscription.ipv4_address).where(Subscription.id.in_(ids))
+            select(Subscription.id, Subscription.ipv4_address).where(
+                Subscription.id.in_(ids)
+            )
         ).all()
     )
     assert cols == {s1.id: "10.30.2.1", s2.id: "10.30.2.2"}
@@ -281,9 +317,16 @@ def test_apply_releases_only_past_retention_terminal(db_session, catalog_offer) 
     _, _, old_arc, _ = _held(db_session, catalog_offer, S.archived, "10.30.3.2")
     _, _, old_can, _ = _held(db_session, catalog_offer, S.canceled, "10.30.3.3")
     _, _, new_can, _ = _held(
-        db_session, catalog_offer, S.canceled, "10.30.3.4", updated_at=RECENT, canceled_at=OLD
+        db_session,
+        catalog_offer,
+        S.canceled,
+        "10.30.3.4",
+        updated_at=RECENT,
+        canceled_at=OLD,
     )
-    _, _, new_dis, _ = _held(db_session, catalog_offer, S.disabled, "10.30.3.5", updated_at=RECENT)
+    _, _, new_dis, _ = _held(
+        db_session, catalog_offer, S.disabled, "10.30.3.5", updated_at=RECENT
+    )
     result = _sweep(db_session, "apply")
     assert result["counts"]["would_release"] == 3
     assert result["counts"]["released"] == 3
@@ -292,7 +335,9 @@ def test_apply_releases_only_past_retention_terminal(db_session, catalog_offer) 
 
 
 @pytest.mark.parametrize("status", [S.active, S.blocked, S.suspended])
-def test_apply_never_releases_active_blocked_suspended(db_session, catalog_offer, status) -> None:
+def test_apply_never_releases_active_blocked_suspended(
+    db_session, catalog_offer, status
+) -> None:
     _, _, assignment, _ = _held(db_session, catalog_offer, status, "10.30.4.1")
     result = _sweep(db_session, "apply")
     assert result["examined"] == 0
@@ -300,8 +345,12 @@ def test_apply_never_releases_active_blocked_suspended(db_session, catalog_offer
 
 
 def test_sibling_rebind_is_reported_not_released(db_session, catalog_offer) -> None:
-    subscriber, sub, assignment, _ = _held(db_session, catalog_offer, S.disabled, "10.30.5.1")
-    sibling = _subscription(db_session, subscriber, catalog_offer, status=S.active, served_ip="10.30.5.1")
+    subscriber, sub, assignment, _ = _held(
+        db_session, catalog_offer, S.disabled, "10.30.5.1"
+    )
+    sibling = _subscription(
+        db_session, subscriber, catalog_offer, status=S.active, served_ip="10.30.5.1"
+    )
     db_session.commit()
     result = _sweep(db_session, "apply")
     assert result["counts"]["rebind_to_sibling"] == 1
@@ -310,7 +359,9 @@ def test_sibling_rebind_is_reported_not_released(db_session, catalog_offer) -> N
     assert sibling.id
 
 
-def test_live_session_conflict_is_skipped_for_retention_and_terminal(db_session, catalog_offer) -> None:
+def test_live_session_conflict_is_skipped_for_retention_and_terminal(
+    db_session, catalog_offer
+) -> None:
     _, _, dis, _ = _held(db_session, catalog_offer, S.disabled, "10.30.6.1")
     _, _, can, _ = _held(db_session, catalog_offer, S.canceled, "10.30.6.2")
     _session(db_session, "10.30.6.1")
@@ -321,10 +372,14 @@ def test_live_session_conflict_is_skipped_for_retention_and_terminal(db_session,
     assert _active(db_session, dis) and _active(db_session, can)
 
 
-def test_other_subscribers_live_column_is_conflict_not_rebind(db_session, catalog_offer) -> None:
+def test_other_subscribers_live_column_is_conflict_not_rebind(
+    db_session, catalog_offer
+) -> None:
     _, _, assignment, _ = _held(db_session, catalog_offer, S.disabled, "10.30.7.1")
     stranger = _subscriber(db_session, "stranger")
-    _subscription(db_session, stranger, catalog_offer, status=S.active, served_ip="10.30.7.1")
+    _subscription(
+        db_session, stranger, catalog_offer, status=S.active, served_ip="10.30.7.1"
+    )
     db_session.commit()
     result = _sweep(db_session, "shadow")
     assert result["counts"]["skipped_live_conflict"] == 1
@@ -351,12 +406,19 @@ def test_sweep_writes_only_through_the_canonical_owner() -> None:
     source = (ROOT / "app/services/ip_lifecycle.py").read_text(encoding="utf-8")
     tree = ast.parse(source)
     func = next(
-        n for n in ast.walk(tree)
+        n
+        for n in ast.walk(tree)
         if isinstance(n, ast.FunctionDef) and n.name == "run_ipv4_retention_release"
     )
     body = ast.get_source_segment(source, func) or ""
     assert "repair_service_ipv4_assignment(" in body
-    for forbidden in ("is_active =", ".ipv4_address =", "db.add(", "db.delete(", ".commit("):
+    for forbidden in (
+        "is_active =",
+        ".ipv4_address =",
+        "db.add(",
+        "db.delete(",
+        ".commit(",
+    ):
         assert forbidden not in body
     # no other module drives the retention cutoff into the owner
     users = {
@@ -381,8 +443,12 @@ def test_canceled_release_clears_served_column_and_refuses_management(
 ) -> None:
     _, sub, assignment, _ = _held(db_session, catalog_offer, S.canceled, "10.30.9.1")
     mg = _subscriber(db_session, "mgc")
-    msub = _subscription(db_session, mg, catalog_offer, status=S.canceled, served_ip="10.30.9.2")
-    maddr = _address(db_session, _pool(db_session, "mgc"), "10.30.9.2", allocation_type="management")
+    msub = _subscription(
+        db_session, mg, catalog_offer, status=S.canceled, served_ip="10.30.9.2"
+    )
+    maddr = _address(
+        db_session, _pool(db_session, "mgc"), "10.30.9.2", allocation_type="management"
+    )
     _assignment(db_session, mg, maddr, subscription=msub)
     db_session.commit()
     _age(db_session, msub, updated_at=OLD)
@@ -408,11 +474,17 @@ def test_report_has_uncapped_total_legacy_count_and_cursor_advances(
     assert first["legacy_unlinked_active_v4_assignments"] == 1
     assert first["next_cursor"] is not None
     second = ip_lifecycle.run_ipv4_retention_release(
-        db_session, mode="shadow", retention_days=30, limit=2, now=NOW,
+        db_session,
+        mode="shadow",
+        retention_days=30,
+        limit=2,
+        now=NOW,
         after=tuple(first["next_cursor"]),
     )
     assert second["examined"] == 1 and second["next_cursor"] is None
-    assert set(first["samples"]["would_release"]).isdisjoint(second["samples"]["would_release"])
+    assert set(first["samples"]["would_release"]).isdisjoint(
+        second["samples"]["would_release"]
+    )
 
 
 def test_post_commit_conflict_counted_without_failing_the_release(
@@ -474,7 +546,9 @@ def test_address_lock_unavailable_is_skipped_locked(
     assert _active(db_session, assignment)
 
 
-@pytest.mark.parametrize("raw", ['["x"]', "{}", "not json", '["2026-01-01T00:00:00+00:00","nope"]', None])
+@pytest.mark.parametrize(
+    "raw", ['["x"]', "{}", "not json", '["2026-01-01T00:00:00+00:00","nope"]', None]
+)
 def test_malformed_cursor_resets(raw) -> None:
     assert ip_lifecycle.parse_retention_cursor(raw) is None
 

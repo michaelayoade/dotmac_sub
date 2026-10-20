@@ -624,7 +624,9 @@ class _Ipv4RetentionCollector(Collector):
             from app.services.ip_consistency_audit import _get_redis
 
             client = _get_redis()
-            raw = client.get("network:ipv4_retention_release:latest") if client else None
+            raw = (
+                client.get("network:ipv4_retention_release:latest") if client else None
+            )
             data = json.loads(raw) if raw else None
         except Exception:
             return

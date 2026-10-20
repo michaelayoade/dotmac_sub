@@ -592,13 +592,14 @@ def _retention_release_decision(
     addresses = {item.address for item in exact_rows}
     for address_id in {item.address_id for item in exact_rows}:
         row = db.get(IPv4Address, address_id)
-        if row is None or row.ont_unit_id is not None or row.is_reserved or (
-            str(row.allocation_type or "").strip().lower() == "management"
+        if (
+            row is None
+            or row.ont_unit_id is not None
+            or row.is_reserved
+            or (str(row.allocation_type or "").strip().lower() == "management")
         ):
             return IPv4AssignmentRepairDecision.address_not_releasable
-    live = find_ipv4_live_use(
-        db, subscription_id=subscription.id, addresses=addresses
-    )
+    live = find_ipv4_live_use(db, subscription_id=subscription.id, addresses=addresses)
     if live.in_use:
         return IPv4AssignmentRepairDecision.address_in_live_use
     return IPv4AssignmentRepairDecision.ready_release_retention_expired
@@ -849,8 +850,7 @@ def preview_service_ipv4_assignment_repair(
             # With a cutoff, canceled/expired releases take the same gated path
             # (age, live-use, reserved/management refusal) as the others.
             retention_release = retention_cutoff is not None and (
-                subscription.status
-                in _RETENTION_RELEASE_STATUSES | _TERMINAL_STATUSES
+                subscription.status in _RETENTION_RELEASE_STATUSES | _TERMINAL_STATUSES
             )
             if subscription.status not in _TERMINAL_STATUSES and not retention_release:
                 decision = IPv4AssignmentRepairDecision.subscription_not_terminal
@@ -1573,9 +1573,7 @@ def _repair_service_ipv4_assignment(
             action="deactivated",
             fingerprint=current.fingerprint,
         )
-    if (
-        current.decision is IPv4AssignmentRepairDecision.ready_release_retention_expired
-    ):
+    if current.decision is IPv4AssignmentRepairDecision.ready_release_retention_expired:
         # A released hold must not stay served: on reactivation RADIUS would
         # re-pin the stale column and recreate the collision. Clear it only
         # when it still names a released address.

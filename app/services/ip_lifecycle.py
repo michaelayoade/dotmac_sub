@@ -23,7 +23,7 @@ from collections import defaultdict
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
-from sqlalchemy import func, select, tuple_
+from sqlalchemy import func, literal, select, tuple_
 from sqlalchemy.orm import Session
 
 from app.models.catalog import Subscription, SubscriptionStatus
@@ -412,9 +412,7 @@ def run_ipv4_retention_release(
     now = now or datetime.now(UTC)
     cutoff = now - timedelta(days=retention_days)
     counts = dict.fromkeys(RETENTION_CLASSES, 0)
-    counts.update(
-        released=0, apply_failed=0, post_commit_conflict=0, skipped_locked=0
-    )
+    counts.update(released=0, apply_failed=0, post_commit_conflict=0, skipped_locked=0)
     samples: dict[str, list[str]] = {c: [] for c in RETENTION_CLASSES}
     skipped_other: dict[str, int] = {}
 
@@ -429,14 +427,19 @@ def run_ipv4_retention_release(
     if after is not None:
         query = query.where(
             tuple_(Subscription.updated_at, Subscription.id)
-            > tuple_(datetime.fromisoformat(after[0]), coerce_uuid(after[1]))
+            > tuple_(
+                literal(datetime.fromisoformat(after[0])),
+                literal(coerce_uuid(after[1])),
+            )
         )
     rows = db.execute(
         query.add_columns(Subscription.updated_at)
         .order_by(Subscription.updated_at, Subscription.id)
         .limit(limit)
     ).all()
-    eligible_total = db.scalar(select(func.count()).select_from(Subscription).where(*eligible))
+    eligible_total = db.scalar(
+        select(func.count()).select_from(Subscription).where(*eligible)
+    )
     legacy_unlinked = db.scalar(
         select(func.count())
         .select_from(IPAssignment)
@@ -476,7 +479,10 @@ def run_ipv4_retention_release(
                 db, subscription_id=sub_id, addresses=addresses
             )
 
-        if decision is owner.IPv4AssignmentRepairDecision.ready_release_retention_expired:
+        if (
+            decision
+            is owner.IPv4AssignmentRepairDecision.ready_release_retention_expired
+        ):
             _note("would_release", sub_id)
             if mode == "apply":
                 released_ok = False
@@ -508,7 +514,9 @@ def run_ipv4_retention_release(
                     released_ok = True
                 except Exception as exc:  # noqa: BLE001 - one failure must not stop the sweep
                     db.rollback()
-                    if str(getattr(exc, "code", "")).endswith("address_lock_unavailable"):
+                    if str(getattr(exc, "code", "")).endswith(
+                        "address_lock_unavailable"
+                    ):
                         counts["skipped_locked"] += 1
                     else:
                         counts["apply_failed"] += 1
@@ -553,7 +561,9 @@ def run_ipv4_retention_release(
                         )
                     )
                 )
-            _note("rebind_to_sibling" if sibling_live else "skipped_live_conflict", sub_id)
+            _note(
+                "rebind_to_sibling" if sibling_live else "skipped_live_conflict", sub_id
+            )
         else:
             _note("skipped_other", sub_id)
             skipped_other[decision.value] = skipped_other.get(decision.value, 0) + 1
