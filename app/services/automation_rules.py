@@ -45,7 +45,7 @@ from app.services.owner_commands import (
 from app.timezone import APP_TIMEZONE_NAME
 
 if TYPE_CHECKING:
-    from app.services.support_automation import AutomationCenterLegacyRuleConflict
+    from app.services.ticket_assignment.rules import AutomationCenterLegacyRuleConflict
 
 OWNER = "automation.rule_definitions"
 RULE_READ_PERMISSION = "automation:rule:read"
@@ -935,7 +935,7 @@ def _legacy_conflicts(selected_scopes: set[str]) -> tuple[str, ...]:
 def _live_legacy_rule_conflicts(
     db: Session, *, rule: AutomationRule, version: AutomationRuleVersion
 ) -> tuple[AutomationCenterLegacyRuleConflict, ...]:
-    """Read current legacy rule evidence for the bounded Support pilot.
+    """Read current legacy assignment-rule evidence for the Support pilot.
 
     Static SOT conflict scopes cover permanent, blanket exclusions. This pilot
     instead needs a live check because the legacy rule only blocks publication
@@ -945,12 +945,9 @@ def _live_legacy_rule_conflicts(
     action_keys = frozenset(
         str(action.get("action_key") or "") for action in version.actions
     )
-    checked_keys = {
-        "support.ticket.assign_service_team",
-        "support.ticket.set_priority",
-    }
-    if rule.trigger_key != "support.ticket.created" or not action_keys.intersection(
-        checked_keys
+    if (
+        rule.trigger_key != "support.ticket.created"
+        or "support.ticket.assign_service_team" not in action_keys
     ):
         return ()
     priority = next(
@@ -962,14 +959,10 @@ def _live_legacy_rule_conflicts(
         ),
         "",
     )
-    from app.services import support_automation
+    from app.services.ticket_assignment import rules as assignment_rules
 
-    return support_automation.list_automation_center_legacy_conflicts(
-        db,
-        support_automation.AutomationCenterLegacyConflictQuery(
-            priority=priority,
-            action_keys=frozenset(action_keys.intersection(checked_keys)),
-        ),
+    return assignment_rules.list_automation_center_legacy_conflicts(
+        db, priority=priority
     )
 
 
