@@ -84,7 +84,9 @@ __all__ = [
     "StarterIssuanceError",
     "eligibility_reason",
     "issue_admin_invoice_via_starter",
+    "issue_prepaid_invoice_via_starter",
     "issue_recurring_invoice_via_starter",
+    "prepaid_eligibility_reason",
     "recurring_eligibility_reason",
 ]
 
@@ -264,7 +266,11 @@ def _customer_snapshot(
 
 
 def eligibility_reason(
-    db: Session, invoice: Invoice, *, allow_numbered: bool = False
+    db: Session,
+    invoice: Invoice,
+    *,
+    allow_numbered: bool = False,
+    require_timing: str = "arrears",
 ) -> str | None:
     """Return why this draft cannot take the Starter lane yet, else None.
 
@@ -323,7 +329,7 @@ def eligibility_reason(
         timing = collection_timing_for_billing_mode(subscriber.billing_mode)
     except StarterBillingPolicyError:
         return "billing mode has no Starter collection timing mapping"
-    if timing != "arrears":
+    if timing != require_timing:
         return "prepaid issuance stays on the legacy lane in this slice"
     if _seller_snapshot(db, policies, subscriber.id) is None:
         return "seller legal identity or address is incomplete"
@@ -823,6 +829,64 @@ def issue_recurring_invoice_via_starter(
         ),
         invoice_source_fact_id=policies.recurring_source_fact_id(invoice.id),
         fx_observation_id=policies.recurring_fx_observation_id(invoice.id),
+        due_evidence_ref=due_ref,
+        announce=False,
+    )
+
+
+def prepaid_eligibility_reason(
+    db: Session, invoice: Invoice, *, billing_line_key: str
+) -> str | None:
+    """Return why this prepaid period draft cannot take the Starter lane.
+
+    Beyond the shared draft checks with advance collection timing,
+    the prepaid lane requires exactly one active line carrying the
+    funded period's ``billing_line_key`` so the issued obligation's
+    source fact equals the earmark target funded for that period.
+    """
+
+    reason = eligibility_reason(db, invoice, require_timing="advance")
+    if reason is not None:
+        return reason
+    lines = _active_lines(invoice)
+    if len(lines) != 1:
+        return "prepaid period drafts need exactly one active line in this slice"
+    if lines[0].billing_line_key != billing_line_key:
+        return "prepaid period line does not carry the funded billing line key"
+    return None
+
+
+def issue_prepaid_invoice_via_starter(
+    db: Session, *, invoice: Invoice, issued_at: datetime, billing_line_key: str
+) -> StarterInvoiceLink:
+    """Issue one earmark-funded prepaid period draft through Starter."""
+
+    reason = prepaid_eligibility_reason(db, invoice, billing_line_key=billing_line_key)
+    if reason is not None:
+        raise _error("ineligible", reason, invoice_id=str(invoice.id))
+    policies = resolve_starter_billing_policies(db)
+    due_ref = _clean(invoice.due_date_basis_ref) or policies.due_evidence_ref(
+        invoice.id
+    )
+    return _issue_via_starter(
+        db,
+        invoice=invoice,
+        actor_ref=policies.system_actor_ref,
+        issued_at=issued_at,
+        flavor=_IssuanceFlavor(
+            source_kind=policies.prepaid_source_kind,
+            contract_version=policies.prepaid_contract_version,
+            price_version=policies.prepaid_price_version,
+            audit_reason="prepaid_period_renewal",
+        ),
+        contract_line_ref=lambda line: policies.prepaid_contract_line_ref(
+            billing_line_key
+        ),
+        line_source_fact_id=lambda line: policies.prepaid_line_source_fact_id(
+            billing_line_key
+        ),
+        invoice_source_fact_id=policies.prepaid_source_fact_id(billing_line_key),
+        fx_observation_id=policies.prepaid_fx_observation_id(invoice.id),
         due_evidence_ref=due_ref,
         announce=False,
     )

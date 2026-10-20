@@ -147,6 +147,10 @@ APPROVED_INVOICE_LIFECYCLE_WRITERS = {
     # Starter collectible position after a Starter credit issuance;
     # writes no Sub ledger state.
     Path("app/services/billing/starter_credit_notes.py"),
+    # Prepaid lane (ADR 0031): mirrors paid/partially-paid status and
+    # balance from the Starter collectible position after an earmarked
+    # Starter allocation; writes no Sub ledger state.
+    Path("app/services/billing/starter_prepaid.py"),
 }
 
 
