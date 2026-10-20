@@ -135,7 +135,51 @@ def test_owner_releases_past_retention_and_is_idempotent(
     assert first.deactivated_count == 1 and second.replayed is True
     assert not _active(db_session, assignment)
     db_session.refresh(sub)
-    assert sub.ipv4_address == "10.30.1.10"  # served column is not this path's
+    assert sub.ipv4_address is None  # served column cleared in the same command
+
+
+def test_release_then_reactivate_serves_no_stale_framed_ip(
+    db_session, catalog_offer
+) -> None:
+    from app.services.connection_type_provisioning import (
+        build_radius_reply_attributes,
+    )
+
+    _, sub, assignment, _ = _held(db_session, catalog_offer, S.disabled, "10.30.1.20")
+    sub_id, assignment_id = sub.id, assignment.id
+    preview = _preview(db_session, sub, assignment)
+    db_session.commit()
+    repair_service_ipv4_assignment(
+        db_session, _cmd(preview, sub_id, (assignment_id,), CUTOFF, key="ret-react")
+    )
+    sub = db_session.get(Subscription, sub_id)
+    sub.status = S.active  # reactivation
+    db_session.commit()
+    db_session.refresh(sub)
+    assert sub.ipv4_address is None
+    framed = [
+        a["value"]
+        for a in build_radius_reply_attributes(db_session, sub)
+        if a["attribute"] == "Framed-IP-Address"
+    ]
+    assert "10.30.1.20" not in framed
+    assert len(framed) == len(set(framed))
+
+
+def test_owner_keeps_served_column_that_names_another_address(
+    db_session, catalog_offer
+) -> None:
+    _, sub, assignment, _ = _held(db_session, catalog_offer, S.disabled, "10.30.1.21")
+    db_session.execute(
+        update(Subscription).where(Subscription.id == sub.id).values(ipv4_address="10.30.1.99", updated_at=OLD)
+    )
+    sub_id, assignment_id = sub.id, assignment.id
+    preview = _preview(db_session, sub, assignment)
+    db_session.commit()
+    repair_service_ipv4_assignment(
+        db_session, _cmd(preview, sub_id, (assignment_id,), CUTOFF, key="ret-keep")
+    )
+    assert db_session.get(Subscription, sub_id).ipv4_address == "10.30.1.99"
 
 
 def test_owner_refuses_recent_status(db_session, catalog_offer) -> None:

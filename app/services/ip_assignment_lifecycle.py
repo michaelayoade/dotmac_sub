@@ -1541,6 +1541,20 @@ def _repair_service_ipv4_assignment(
             action="deactivated",
             fingerprint=current.fingerprint,
         )
+    if (
+        current.decision is IPv4AssignmentRepairDecision.ready_release_retention_expired
+    ):
+        # A released hold must not stay served: on reactivation RADIUS would
+        # re-pin the stale column and recreate the collision. Clear it only
+        # when it still names a released address.
+        released = {
+            item.address
+            for item in current.active_assignments
+            if item.assignment_id in current.deactivate_assignment_ids
+        }
+        served = _normalized_ip(subscription.ipv4_address).removesuffix("/32")
+        if served and served in released:
+            _project_served_ipv4(subscription, None)
     if deactivated_count:
         db.flush()
 
@@ -1667,6 +1681,22 @@ def _repair_service_ipv4_assignment(
     )
 
 
+def _project_served_ipv4(subscription: Subscription, value: str | None) -> None:
+    """THE one write of the served-IPv4 column (projection and retention release)."""
+
+    from app.services.connectivity_reconciler import (
+        note_connectivity_write,
+        reconciler_write_scope,
+    )
+
+    with reconciler_write_scope():
+        subscription.ipv4_address = value
+        note_connectivity_write(
+            "subscription.ipv4_address",
+            "ip_assignment_lifecycle",
+        )
+
+
 def _repair_service_ipv4_projection(
     db: Session,
     command: RepairServiceIPv4ProjectionCommand,
@@ -1743,17 +1773,7 @@ def _repair_service_ipv4_projection(
             "The reviewed IPv4 projection evidence is incomplete.",
         )
 
-    from app.services.connectivity_reconciler import (
-        note_connectivity_write,
-        reconciler_write_scope,
-    )
-
-    with reconciler_write_scope():
-        subscription.ipv4_address = current.desired_address
-        note_connectivity_write(
-            "subscription.ipv4_address",
-            "ip_assignment_lifecycle",
-        )
+    _project_served_ipv4(subscription, current.desired_address)
 
     event = emit_event(
         db,
