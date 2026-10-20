@@ -239,6 +239,7 @@ def send_sms(
     body: str,
     track: bool = True,
     notification_id: str | None = None,
+    stored_body: str | None = None,
 ) -> bool:
     """Send an SMS message.
 
@@ -247,11 +248,15 @@ def send_sms(
         to_phone: Recipient phone number
         body: Message content
         track: Whether to create notification/delivery records
+        stored_body: Credential-bearing sends only. When given, the message is
+            delivered immediately (never queued, since a queued row must hold
+            the sendable body) and this redacted copy is what the notification
+            and delivery rows persist instead of ``body``.
 
     Returns:
         True if SMS was sent successfully
     """
-    if track and notification_id is None:
+    if track and notification_id is None and stored_body is None:
         queued = notification_records.create_customer_notification(
             db,
             NotificationCreate(
@@ -313,7 +318,7 @@ def send_sms(
             notification_id=notification_id,
             channel=NotificationChannel.sms,
             recipient=normalized_phone,
-            body=body,
+            body=body if stored_body is None else stored_body,
         )
 
     # Send based on provider
@@ -410,7 +415,11 @@ def send_sms(
             status=delivery_status,
             occurred_at=datetime.now(UTC),
             response_code="sent" if success else "error",
-            response_body=error_message if error_message else body[:2000],
+            response_body=(
+                error_message
+                if error_message
+                else (body if stored_body is None else stored_body)[:2000]
+            ),
         )
         db.add(delivery)
         db.commit()

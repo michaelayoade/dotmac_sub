@@ -1459,6 +1459,22 @@ def _credential_contact_targets(subscriber: Subscriber) -> dict[str, list[str]]:
     return {"email": emails, "sms": phones}
 
 
+CREDENTIAL_MASK = "********"
+
+
+def _credential_email_text(subscriber: Subscriber, username: str, password: str) -> str:
+    return (
+        f"Hello {subscriber.full_name},\n\n"
+        f"Your service login is: {username}\n"
+        f"Your service password is: {password}\n\n"
+        "Please keep these details secure."
+    )
+
+
+def _credential_sms_text(username: str, password: str) -> str:
+    return f"Service login: {username} | Password: {password}. Keep it secure."
+
+
 def send_subscription_credentials(
     db: Session,
     *,
@@ -1504,11 +1520,11 @@ def send_subscription_credentials(
         raise ValueError("Subscriber has no email or SMS contact targets.")
 
     subject = "Your Internet service credentials"
-    body_text = (
-        f"Hello {subscriber.full_name},\n\n"
-        f"Your service login is: {credential.username}\n"
-        f"Your service password is: {password}\n\n"
-        "Please keep these details secure."
+    # The delivered message carries the password (until D9 replaces delivery);
+    # the copy persisted in ``notifications`` / deliveries has it masked.
+    body_text = _credential_email_text(subscriber, credential.username, password)
+    stored_text = _credential_email_text(
+        subscriber, credential.username, CREDENTIAL_MASK
     )
     from html import escape
 
@@ -1536,14 +1552,16 @@ def send_subscription_credentials(
             body_html=body_html,
             body_text=body_text,
             activity="subscription_welcome",
+            stored_body=stored_text,
         )
         email_sent += 1
 
-    sms_body = (
-        f"Service login: {credential.username} | Password: {password}. Keep it secure."
-    )
+    sms_body = _credential_sms_text(credential.username, password)
+    stored_sms = _credential_sms_text(credential.username, CREDENTIAL_MASK)
     for phone in targets["sms"]:
-        if sms_service.send_sms(db, phone, sms_body, track=True):
+        if sms_service.send_sms(
+            db, phone, sms_body, track=True, stored_body=stored_sms
+        ):
             sms_sent += 1
 
     return {

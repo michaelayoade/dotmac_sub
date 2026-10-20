@@ -490,3 +490,88 @@ def test_edit_page_marks_unbound_password_unavailable(
     response = client.post(_reveal_url(subscription), headers=_headers())
     assert response.status_code == 404
     assert SECRET not in response.text
+
+
+# --- 6. D9: stored notification copy is masked, delivered copy is not ------
+
+
+def test_stored_notifications_mask_password_but_delivery_carries_it(
+    db_session, subscription, subscriber, credential, monkeypatch
+):
+    from app.models.notification import Notification, NotificationDelivery
+    from app.services import email as email_service
+    from app.services import settings_spec
+    from app.services import sms as sms_service
+    from app.services import web_catalog_subscriptions as core
+
+    smtp_wire: list[str] = []
+    sms_wire: list[str] = []
+
+    class _Smtp:
+        def starttls(self):
+            pass
+
+        def login(self, *_a):
+            pass
+
+        def sendmail(self, _from, _to, message):
+            smtp_wire.append(message)
+
+        def quit(self):
+            pass
+
+    monkeypatch.setattr(
+        email_service,
+        "_get_smtp_config",
+        lambda *a, **k: {
+            "host": "smtp.example.test",
+            "port": 587,
+            "use_ssl": False,
+            "use_tls": False,
+            "username": None,
+            "password": None,
+            "from_email": "noreply@example.test",
+            "from_name": "Test",
+            "sender_key": "default",
+        },
+    )
+    monkeypatch.setattr(email_service, "_create_smtp_client", lambda *a, **k: _Smtp())
+    monkeypatch.setattr(settings_spec, "resolve_boolean", lambda *a, **k: True)
+    monkeypatch.setattr(
+        settings_spec,
+        "resolve_string",
+        lambda db, domain, key: {
+            "sms_provider": "webhook",
+            "sms_webhook_url": "https://sms.example.test/hook",
+        }.get(key, ""),
+    )
+    monkeypatch.setattr(settings_spec, "resolve_integer", lambda *a, **k: 0)
+    monkeypatch.setattr(sms_service, "_sms_credentials", lambda: ("k", "s"))
+
+    def _fake_webhook(_url, _key, _phone, body, timeout=None):
+        sms_wire.append(body)
+        return True, "ext-1", None
+
+    monkeypatch.setattr(sms_service, "_send_via_webhook", _fake_webhook)
+    subscriber.email = "subscriber@example.test"
+    subscriber.phone = "+15550100"
+    db_session.commit()
+
+    result = core.send_subscription_credentials(
+        db_session, subscription_id=str(subscription.id)
+    )
+    assert result["email_sent"] == 1 and result["sms_sent"] == 1
+
+    # Delivered messages still carry the password.
+    assert any(SECRET in m for m in smtp_wire)
+    assert any(SECRET in b for b in sms_wire)
+
+    # Nothing persisted carries it, and the masked copy is recorded.
+    rows = db_session.query(Notification).all()
+    assert len(rows) == 2
+    for row in rows:
+        assert SECRET not in (row.body or "")
+        assert "********" in (row.body or "")
+        assert SECRET not in json.dumps(row.metadata_ or {}, default=str)
+    for delivery in db_session.query(NotificationDelivery).all():
+        assert SECRET not in (delivery.response_body or "")
