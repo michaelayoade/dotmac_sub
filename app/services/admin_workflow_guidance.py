@@ -1263,6 +1263,7 @@ HELP_ONLY_GUIDANCE: tuple[AdminWorkflowGuidance, ...] = (
         "Verify the result and audit record; use destructive tools only with an approved operational plan.",
         notes=(
             "Deactivate a staff account before deleting it. Delete removes its credentials, factors, sessions, grants and staff-bound API keys only when linked history permits it; its native identity history is retained. A failed deletion leaves the selected accounts and keys unchanged.",
+            "The ad-hoc database inspector was retired. Use the reviewed reports, exports and audit views instead of free-form queries.",
             "Bulk Delete skips active or missing users and repeated selections. Its deleted count reports distinct accounts; one linked-record blocker prevents the whole batch from being deleted. Review the blocked records before trying again.",
             "For API keys, choose a clear purpose, narrow scopes and an expiry. System-owned keys are shared with permissioned administrators; subscriber-owned keys appear alongside those shared keys for their owner.",
             "Create and Rotate show the secret once in the submitted page. Copy it securely before leaving; it is never included in a redirect URL. Rotation replaces the old secret immediately; revocation disables the key.",
