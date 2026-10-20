@@ -96,11 +96,9 @@ from app.services.credential_crypto import decrypt_credential
 from app.services.ip_assignment_lifecycle import (
     IPv4ServedProjectionDecision,
     RepairServiceIPv4AssignmentCommand,
-    RepairServiceIPv4ProjectionCommand,
     preview_service_ipv4_assignment_repair,
     preview_service_ipv4_projection_repair,
-    repair_service_ipv4_assignment,
-    repair_service_ipv4_projection,
+    replace_service_ipv4,
 )
 from app.services.network.radius_sessions import (
     latest_open_accounting_session_for_subscription,
@@ -2099,6 +2097,30 @@ def replace_subscription_ipv4_with_owner(
         if current_assignment is not None and current_assignment.ipv4_address
         else None
     )
+    # Guard: the customer is already served correctly (live sessions and the
+    # served column agree) and only IPAM differs. Moving them would break a
+    # working service; the IPAM record is what needs repairing.
+    served_ip = str(subscription.ipv4_address or "").strip()
+    if (
+        current_assignment is not None
+        and current_address is not None
+        and served_ip
+        and current_address != served_ip
+        and normalized_ip != served_ip
+    ):
+        evidence = preview_service_ipv4_projection_repair(
+            db,
+            subscription_id=subscription_uuid,
+            assignment_id=current_assignment.id,
+        )
+        live_sessions = evidence.active_session_count
+        if live_sessions > 0 and evidence.old_address_session_count == live_sessions:
+            raise ValueError(
+                f"Customer is served correctly on {served_ip} (live session and "
+                f"served IP agree) but IPAM records {current_address}; repair "
+                f"the IPAM record instead. Replacing with {served_ip} re-points "
+                "IPAM without moving the customer."
+            )
     if current_address == normalized_ip:
         if current_assignment is None:
             raise ValueError("The current IPv4 assignment could not be resolved.")
@@ -2161,15 +2183,15 @@ def replace_subscription_ipv4_with_owner(
     assignment_fingerprint = assignment_preview.fingerprint
     deactivate_assignment_ids = assignment_preview.deactivate_assignment_ids
     command_id = uuid4()
-    correlation_id = command_id
     db.commit()
 
-    assignment_outcome = repair_service_ipv4_assignment(
+    # One owner transaction: IPAM move + served projection, or neither.
+    replace_service_ipv4(
         db,
         RepairServiceIPv4AssignmentCommand(
             context=CommandContext(
                 command_id=command_id,
-                correlation_id=correlation_id,
+                correlation_id=command_id,
                 actor=actor,
                 scope="catalog:subscription:ipv4:replace",
                 reason=(
@@ -2182,49 +2204,6 @@ def replace_subscription_ipv4_with_owner(
             desired_address_id=target_id,
             deactivate_assignment_ids=deactivate_assignment_ids,
             preview_fingerprint=assignment_fingerprint,
-        ),
-    )
-    if assignment_outcome.desired_assignment_id is None:
-        raise ValueError("IPv4 assignment owner did not return a desired assignment.")
-
-    projection_preview = preview_service_ipv4_projection_repair(
-        db,
-        subscription_id=subscription_uuid,
-        assignment_id=assignment_outcome.desired_assignment_id,
-    )
-    if projection_preview.decision is IPv4ServedProjectionDecision.noop:
-        db.commit()
-        return normalized_ip
-    if not projection_preview.applicable:
-        decision = projection_preview.decision.value
-        db.rollback()
-        raise ValueError(
-            "IPAM was updated, but the served-IP projection requires operator "
-            f"review ({decision})."
-        )
-    projection_fingerprint = projection_preview.fingerprint
-    desired_assignment_id = assignment_outcome.desired_assignment_id
-    db.commit()
-
-    projection_command_id = uuid4()
-    repair_service_ipv4_projection(
-        db,
-        RepairServiceIPv4ProjectionCommand(
-            context=CommandContext(
-                command_id=projection_command_id,
-                correlation_id=correlation_id,
-                causation_id=command_id,
-                actor=actor,
-                scope="catalog:subscription:ipv4:replace",
-                reason=(
-                    f"Project the exact service IPv4 replacement to {normalized_ip}; "
-                    "commercial IP entitlement unchanged"
-                ),
-                idempotency_key=f"admin-ipv4-projection:{command_id}",
-            ),
-            subscription_id=subscription_uuid,
-            assignment_id=desired_assignment_id,
-            preview_fingerprint=projection_fingerprint,
         ),
     )
     return normalized_ip
