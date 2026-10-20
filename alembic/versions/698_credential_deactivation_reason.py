@@ -4,8 +4,8 @@ Additive and nullable: NULL means unknown or historical, with no backfill.
 Values: ``service_ended`` (deactivated together with its service) and
 ``manual`` (an explicit administrative deactivation).
 
-Revision ID: 697_credential_deactivation_reason
-Revises: 696_subscription_credential_permission
+Revision ID: 698_credential_deactivation_reason
+Revises: 697_subscription_credential_permission
 Create Date: 2026-10-20
 """
 
@@ -17,8 +17,8 @@ import sqlalchemy as sa
 
 from alembic import op
 
-revision: str = "697_credential_deactivation_reason"
-down_revision: str | None = "696_subscription_credential_permission"
+revision: str = "698_credential_deactivation_reason"
+down_revision: str | None = "697_subscription_credential_permission"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 

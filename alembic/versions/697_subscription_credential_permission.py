@@ -3,11 +3,11 @@
 The permission is UI-assignable and receives no role grants here (admin holds
 "*"); administrators attach it to the exact roles that need it.
 
-Revision ID: 696_subscription_credential_permission
-Revises: 695_subscription_credential_reveal
+Revision ID: 697_subscription_credential_permission
+Revises: 696_starter_prepaid_funding_links
 Create Date: 2026-10-19
 
-Chain: 693 -> 694 (ledger live permission) -> 695 (credential reveal) -> 696.
+Chain: 693 -> 694 (ledger live permission) -> 695 (credential reveal) -> 696 (prepaid funding links) -> 697.
 """
 
 from __future__ import annotations
@@ -20,7 +20,7 @@ import sqlalchemy as sa
 
 from alembic import op
 
-revision: str = "696_subscription_credential_permission"
+revision: str = "697_subscription_credential_permission"
 down_revision: str | None = "696_starter_prepaid_funding_links"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
