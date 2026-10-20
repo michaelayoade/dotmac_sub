@@ -58,7 +58,9 @@ def _run(
     calls.write_text("", encoding="utf-8")
     pgpass = tmp_path / "migration-admin.pgpass"
     if pgpass_mode is not None:
-        pgpass.write_text("db:5432:dotmac_sub:app_admin:s3cret-not-real\n", encoding="utf-8")
+        pgpass.write_text(
+            "db:5432:dotmac_sub:app_admin:s3cret-not-real\n", encoding="utf-8"
+        )
         pgpass.chmod(pgpass_mode)
     result = subprocess.run(
         ["bash", "-c", HARNESS.replace("@@LEG@@", _leg())],
