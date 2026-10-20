@@ -4261,21 +4261,19 @@ SERVICES: tuple[SOTService, ...] = (
             concerns=(
                 ConcernContract(
                     name="Starter document fact and receivable position reads",
-                    role=OwnerRole.OBSERVATION_COLLECTOR,
+                    role=OwnerRole.RESOLVER,
                     input_names=(
                         "Starter-issued invoice and structural link",
                         "canonical Starter billing policies",
                     ),
-                    canonical_writer="financial.starter_positions",
                 ),
                 ConcernContract(
                     name="Fact overlay for Starter invoice document rendering",
-                    role=OwnerRole.OBSERVATION_COLLECTOR,
+                    role=OwnerRole.RESOLVER,
                     input_names=(
                         "Starter-issued invoice and structural link",
                         "canonical Starter document fact",
                     ),
-                    canonical_writer="financial.starter_positions",
                 ),
             ),
             authoritative_inputs=(

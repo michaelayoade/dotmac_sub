@@ -17,8 +17,9 @@ read from Starter.
 
 from __future__ import annotations
 
-import copy
 from decimal import Decimal
+from types import SimpleNamespace
+from typing import Any, cast
 from uuid import UUID
 
 from dotmac_billing import (
@@ -34,7 +35,7 @@ from dotmac_kernel.money import Currency
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.models.billing import Invoice, InvoiceLine, StarterInvoiceLink
+from app.models.billing import Invoice, StarterInvoiceLink
 from app.services.billing.starter_policies import resolve_starter_billing_policies
 from app.services.domain_errors import DomainError
 from app.services.operator_tenant import OPERATOR_TENANT_ID
@@ -122,29 +123,39 @@ def starter_account_collectible(
     return current.position.collectible_receivable.amount
 
 
-def apply_fact_overlay(invoice: Invoice, fact: InvoiceDocumentFactV1) -> Invoice:
-    """Transient render copy carrying the frozen fact's document fields.
+class _FactInvoiceView:
+    """Read-only invoice view: fact fields win, everything else delegates.
 
-    The persistent mirror row is untouched; renderers read number,
-    totals, dates, and lines from the copy. Balance and status stay
-    mirror-owned (the fact carries neither), maintained by the
-    settlement and credit mirror owners.
+    Renderers only read attributes, so no ORM object is copied or
+    constructed: number, totals, dates, and lines come from the frozen
+    fact while identity, account, status, and balance delegate to the
+    persistent mirror row (balance/status stay mirror-owned; the fact
+    carries neither).
     """
-    overlaid = copy.copy(invoice)
-    overlaid.invoice_number = fact.document_number
-    overlaid.subtotal = fact.subtotal.amount
-    overlaid.tax_total = fact.tax_total.amount
-    overlaid.total = fact.grand_total.amount
-    overlaid.issued_at = fact.issued_at
-    overlaid.due_at = fact.due_at
-    overlaid.lines = [
-        InvoiceLine(
-            description=line.description,
-            quantity=line.quantity,
-            unit_price=line.unit_amount.amount,
-            amount=line.pre_tax_amount.amount,
-            is_active=True,
-        )
-        for line in fact.lines
-    ]
-    return overlaid
+
+    def __init__(self, base: Invoice, fact: InvoiceDocumentFactV1) -> None:
+        self._base = base
+        self.invoice_number = fact.document_number
+        self.subtotal = fact.subtotal.amount
+        self.tax_total = fact.tax_total.amount
+        self.total = fact.grand_total.amount
+        self.issued_at = fact.issued_at
+        self.due_at = fact.due_at
+        self.lines = [
+            SimpleNamespace(
+                description=line.description,
+                quantity=line.quantity,
+                unit_price=line.unit_amount.amount,
+                amount=line.pre_tax_amount.amount,
+                is_active=True,
+            )
+            for line in fact.lines
+        ]
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self._base, name)
+
+
+def apply_fact_overlay(invoice: Invoice, fact: InvoiceDocumentFactV1) -> Invoice:
+    """Transient render view carrying the frozen fact's document fields."""
+    return cast(Invoice, _FactInvoiceView(invoice, fact))
