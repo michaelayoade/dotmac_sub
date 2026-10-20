@@ -106,6 +106,17 @@ _SHADOW_IMPORTS = {
         ("dotmac_billing.errors", "BillingError"),
         ("dotmac_billing.service", "issue_credit_note"),
     },
+    # Thin-client readers (ADR 0031): Starter-linked invoices read their
+    # frozen document fact and account collectible position from
+    # dotmac-billing; no writes.
+    "app/services/billing/starter_positions.py": {
+        ("dotmac_billing", "GetCurrentReceivablePositionV1"),
+        ("dotmac_billing", "GetInvoiceDocumentFactV1"),
+        ("dotmac_billing", "InvoiceDocumentFactV1"),
+        ("dotmac_billing", "get_current_receivable_position"),
+        ("dotmac_billing", "get_invoice_document_fact"),
+        ("dotmac_billing.errors", "BillingError"),
+    },
     "app/services/dotmac_erp/billing_adapter.py": {
         ("dotmac_billing", "AccountingFactV1"),
     },
