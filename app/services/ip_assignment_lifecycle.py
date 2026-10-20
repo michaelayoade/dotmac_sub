@@ -25,6 +25,7 @@ import json
 import secrets
 from collections import Counter, defaultdict
 from dataclasses import dataclass, field
+from datetime import UTC, datetime
 from enum import StrEnum
 from typing import NoReturn
 from uuid import UUID
@@ -96,6 +97,16 @@ _RETAINING_STATUSES = frozenset(
         SubscriptionStatus.stopped,
     }
 )
+# Statuses a retention-expired release may free. Deliberately separate from
+# both sets above: active, blocked, suspended, pending, paused and stopped are
+# never released by retention.
+_RETENTION_RELEASE_STATUSES = frozenset(
+    {
+        SubscriptionStatus.archived,
+        SubscriptionStatus.disabled,
+        SubscriptionStatus.hidden,
+    }
+)
 _TERMINAL_STATUSES = frozenset(
     {
         SubscriptionStatus.canceled,
@@ -124,6 +135,10 @@ class IPv4AssignmentRepairDecision(StrEnum):
     ready_link = "ready_link"
     ready_keep = "ready_keep"
     ready_release = "ready_release"
+    ready_release_retention_expired = "ready_release_retention_expired"
+    retention_not_expired = "retention_not_expired"
+    address_in_live_use = "address_in_live_use"
+    address_not_releasable = "address_not_releasable"
     noop = "noop"
     subscription_not_found = "subscription_not_found"
     subscriber_not_found = "subscriber_not_found"
@@ -188,6 +203,7 @@ class ServiceIPv4AssignmentRepairPreview:
             IPv4AssignmentRepairDecision.ready_link,
             IPv4AssignmentRepairDecision.ready_keep,
             IPv4AssignmentRepairDecision.ready_release,
+            IPv4AssignmentRepairDecision.ready_release_retention_expired,
         }
 
 
@@ -198,6 +214,9 @@ class RepairServiceIPv4AssignmentCommand:
     desired_address_id: UUID | None
     deactivate_assignment_ids: tuple[UUID, ...]
     preview_fingerprint: str
+    #: Retention-expiry release only. Computed by the caller from the retention
+    #: setting (now - days). Required for a disabled/hidden/archived release.
+    retention_cutoff: datetime | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -456,8 +475,9 @@ def _repair_preview_payload(
     deactivate_assignment_ids: tuple[UUID, ...],
     active_assignments: tuple[ActiveIPv4AssignmentEvidence, ...],
     decision: IPv4AssignmentRepairDecision,
+    retention_cutoff: datetime | None = None,
 ) -> dict[str, object]:
-    return {
+    payload: dict[str, object] = {
         "subscription_id": str(subscription_id),
         "subscriber_id": str(subscriber_id) if subscriber_id is not None else None,
         "desired_address_id": (
@@ -485,6 +505,11 @@ def _repair_preview_payload(
         ],
         "decision": decision.value,
     }
+    if retention_cutoff is not None:
+        # Only present for a retention release, so existing fingerprints are
+        # unchanged.
+        payload["retention_cutoff"] = _aware(retention_cutoff).isoformat()
+    return payload
 
 
 def _repair_fingerprint(payload: dict[str, object]) -> str:
@@ -494,6 +519,87 @@ def _repair_fingerprint(payload: dict[str, object]) -> str:
         separators=(",", ":"),
     ).encode("utf-8")
     return hashlib.sha256(encoded).hexdigest()
+
+
+def _aware(value: datetime) -> datetime:
+    return value if value.tzinfo is not None else value.replace(tzinfo=UTC)
+
+
+def _address_candidates(addresses: set[str]) -> set[str]:
+    return addresses | {f"{value}/32" for value in addresses}
+
+
+@dataclass(frozen=True, slots=True)
+class IPv4LiveUseEvidence:
+    live_session: bool
+    sibling_subscription_ids: tuple[UUID, ...]
+
+    @property
+    def in_use(self) -> bool:
+        return self.live_session or bool(self.sibling_subscription_ids)
+
+
+def find_ipv4_live_use(
+    db: Session, *, subscription_id: UUID, addresses: set[str]
+) -> IPv4LiveUseEvidence:
+    """Read-only: is any of these addresses in use by a live session or by the
+    served column of another non-terminal subscription?"""
+
+    candidates = _address_candidates(addresses)
+    if not candidates:
+        return IPv4LiveUseEvidence(False, ())
+    live_session = (
+        db.scalar(
+            select(RadiusActiveSession.id)
+            .where(RadiusActiveSession.framed_ip_address.in_(candidates))
+            .limit(1)
+        )
+        is not None
+    )
+    siblings = tuple(
+        db.scalars(
+            select(Subscription.id)
+            .where(
+                Subscription.ipv4_address.in_(candidates),
+                Subscription.id != subscription_id,
+                Subscription.status.not_in(_TERMINAL_STATUSES),
+            )
+            .order_by(Subscription.id)
+        )
+    )
+    return IPv4LiveUseEvidence(live_session, siblings)
+
+
+def _retention_release_decision(
+    db: Session,
+    *,
+    subscription: Subscription,
+    exact_rows: list[ActiveIPv4AssignmentEvidence],
+    retention_cutoff: datetime,
+) -> IPv4AssignmentRepairDecision:
+    """Gate a disabled/hidden/archived release on age and live use.
+
+    Status-change evidence is ``Subscription.updated_at``: no status-change
+    timestamp exists for these states. Any later edit moves it forward, so it
+    can only DELAY a release, never hasten one.
+    """
+
+    changed_at = subscription.updated_at
+    if changed_at is None or _aware(changed_at) > _aware(retention_cutoff):
+        return IPv4AssignmentRepairDecision.retention_not_expired
+    addresses = {item.address for item in exact_rows}
+    for address_id in {item.address_id for item in exact_rows}:
+        row = db.get(IPv4Address, address_id)
+        if row is None or row.ont_unit_id is not None or row.is_reserved or (
+            str(row.allocation_type or "").strip().lower() == "management"
+        ):
+            return IPv4AssignmentRepairDecision.address_not_releasable
+    live = find_ipv4_live_use(
+        db, subscription_id=subscription.id, addresses=addresses
+    )
+    if live.in_use:
+        return IPv4AssignmentRepairDecision.address_in_live_use
+    return IPv4AssignmentRepairDecision.ready_release_retention_expired
 
 
 def _active_assignment_evidence(
@@ -691,6 +797,7 @@ def preview_service_ipv4_assignment_repair(
     subscription_id: UUID,
     desired_address_id: UUID | None,
     deactivate_assignment_ids: tuple[UUID, ...] = (),
+    retention_cutoff: datetime | None = None,
 ) -> ServiceIPv4AssignmentRepairPreview:
     """Read-only, exact-service plan for one reviewed IPv4 assignment repair."""
 
@@ -737,12 +844,24 @@ def preview_service_ipv4_assignment_repair(
                 for item in exact_rows
                 if item.assignment_id not in normalized_deactivate_ids
             ]
-            if subscription.status not in _TERMINAL_STATUSES:
+            retention_release = (
+                retention_cutoff is not None
+                and subscription.status in _RETENTION_RELEASE_STATUSES
+            )
+            if subscription.status not in _TERMINAL_STATUSES and not retention_release:
                 decision = IPv4AssignmentRepairDecision.subscription_not_terminal
             elif remaining_exact:
                 decision = IPv4AssignmentRepairDecision.incomplete_deactivation_set
             elif not exact_rows:
                 decision = IPv4AssignmentRepairDecision.noop
+            elif retention_release:
+                assert retention_cutoff is not None
+                decision = _retention_release_decision(
+                    db,
+                    subscription=subscription,
+                    exact_rows=exact_rows,
+                    retention_cutoff=retention_cutoff,
+                )
             else:
                 decision = IPv4AssignmentRepairDecision.ready_release
         else:
@@ -812,6 +931,7 @@ def preview_service_ipv4_assignment_repair(
         deactivate_assignment_ids=normalized_deactivate_ids,
         active_assignments=active_assignments,
         decision=decision,
+        retention_cutoff=retention_cutoff,
     )
     return ServiceIPv4AssignmentRepairPreview(
         subscription_id=subscription_id,
@@ -1389,6 +1509,7 @@ def _repair_service_ipv4_assignment(
         subscription_id=command.subscription_id,
         desired_address_id=command.desired_address_id,
         deactivate_assignment_ids=command.deactivate_assignment_ids,
+        retention_cutoff=command.retention_cutoff,
     )
     if not secrets.compare_digest(current.fingerprint, command.preview_fingerprint):
         _lifecycle_error(
@@ -1811,6 +1932,8 @@ def stage_subscriber_ip_assignment_release(
 
 
 __all__ = [
+    "IPv4LiveUseEvidence",
+    "find_ipv4_live_use",
     "ReleaseSubscriberIPAssignmentsCommand",
     "SubscriberIPAssignmentReleaseOutcome",
     "stage_subscriber_ip_assignment_release",

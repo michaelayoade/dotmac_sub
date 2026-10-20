@@ -129,6 +129,55 @@ def audit_ip_consistency() -> dict:
         session.close()
 
 
+@celery_app.task(name="app.tasks.radius.ipv4_retention_release")
+def ipv4_retention_release() -> dict:
+    """Daily per-subscription IPv4 retention sweep.
+
+    Setting-driven (network.ipv4_retention_*): ``shadow`` (default) only
+    classifies; ``apply`` releases retention-expired holds of disabled, hidden,
+    archived, canceled and expired subscriptions through the canonical owner
+    ``network.ip_assignment_lifecycle``. Active/blocked/suspended are never
+    touched. Counts are stored for the ``ipv4_retention_release`` gauge.
+    """
+    from app.models.domain_settings import SettingDomain
+    from app.services.ip_consistency_audit import _get_redis
+    from app.services.ip_lifecycle import run_ipv4_retention_release
+    from app.services.settings_spec import resolve_integer, resolve_string
+
+    session = SessionLocal()
+    try:
+        mode = resolve_string(session, SettingDomain.network, "ipv4_retention_release_mode")
+        if mode not in ("shadow", "apply"):
+            mode = "shadow"  # fail closed on an unexpected value
+        result = run_ipv4_retention_release(
+            session,
+            mode=mode,
+            retention_days=resolve_integer(
+                session, SettingDomain.network, "ipv4_retention_days_after_disable"
+            ),
+            limit=resolve_integer(
+                session, SettingDomain.network, "ipv4_retention_max_per_run"
+            ),
+        )
+        logger.info("ipv4 retention sweep: %s", result["counts"])
+        client = _get_redis()
+        if client is not None:
+            try:
+                import json
+
+                payload = {**result, "ran_at": datetime.now(UTC).isoformat()}
+                client.set(
+                    "network:ipv4_retention_release:latest",
+                    json.dumps(payload),
+                    ex=7 * 86400,
+                )
+            except Exception:
+                logger.warning("ipv4 retention sweep: result not stored", exc_info=True)
+        return result
+    finally:
+        session.close()
+
+
 @celery_app.task(name="app.tasks.radius.connectivity_shadow_audit")
 def connectivity_shadow_audit() -> dict:
     """Periodic read-only full-base connectivity shadow sweep. Aggregates

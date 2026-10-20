@@ -429,6 +429,20 @@
       ],
       "reason": "Permission-only migration registering subscription:credential:update (Michael decision D6, 2026-10-19): the credential edit path currently has no dedicated permission, so any actor holding subscription:update can rename or re-password a PPPoE credential. No tables, no role grants; additive and reversible unless operators have assigned it. Exact path; it is updated if the migration is renumbered on merge order.",
       "approved_by": "michaelayoade"
+    },
+    {
+      "id": "IPV4-RETENTION-20261020",
+      "kind": "approved-growth",
+      "paths": [
+        "app/metrics.py",
+        "app/services/ip_assignment_lifecycle.py",
+        "app/services/ip_lifecycle.py",
+        "app/services/scheduler_config.py",
+        "app/services/settings_spec.py",
+        "app/tasks/radius.py"
+      ],
+      "reason": "Michael approved the per-subscription IPv4 retention policy on 2026-10-20 to stop stale IPAM holds that caused IP collisions and drift. Corrective, not a new capability: four settings with shadow default, one daily sweep that releases only through the existing network.ip_assignment_lifecycle owner command (narrow ready_release_retention_expired decision), and one gauge beside radius_ip_consistency_drift. No new module, migration or writer; served-IPv4 writer baselines are not widened. Exact existing files only.",
+      "approved_by": "michaelayoade"
     }
   ]
 }
