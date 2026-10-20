@@ -1315,6 +1315,7 @@ class TestNotificationHandler:
             payload={},
         )
         # Should not raise
+        assert EventType.custom not in EVENT_TYPE_TO_TEMPLATE
         handler.handle(db_session, event)
 
     @patch(

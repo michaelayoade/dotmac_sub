@@ -145,4 +145,5 @@ def test_every_literal_event_name_handed_to_a_name_based_emitter_resolves() -> N
                 if literal not in pool:
                     relative = path.relative_to(ROOT).as_posix()
                     unresolved.append(f"{relative}: {literal}")
-    assert set(unresolved) <= KNOWN_UNRESOLVED_BASELINE
+    # Equality, not subset: fixing one must also shrink the baseline.
+    assert set(unresolved) == KNOWN_UNRESOLVED_BASELINE
