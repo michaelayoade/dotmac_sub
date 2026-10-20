@@ -46,9 +46,9 @@ def refuse_secret_reference(stored: str | None) -> None:
     """
     if not stored:
         return
-    from app.services.secrets import is_secret_ref
+    from app.services.credential_crypto import is_secret_reference_value
 
-    if is_secret_ref(stored):
+    if is_secret_reference_value(stored):
         raise CredentialUnusable("secret_reference")
 
 

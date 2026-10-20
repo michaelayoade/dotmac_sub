@@ -62,13 +62,20 @@ def test_reversible_compatibility_retained_until_recovery_cutover(
             assert verifier("incorrect", stored) is False
 
 
-def test_secret_reference_compatibility(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_stored_secret_reference_is_refused_not_resolved(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """F3: a stored reference is never dereferenced to verify a password."""
     from app.services import secrets
 
-    monkeypatch.setattr(secrets, "resolve_secret", lambda value: "plain:pw")
+    def forbidden(value: str) -> str:
+        pytest.fail("a stored reference was resolved")
+
+    monkeypatch.setattr(secrets, "resolve_secret", forbidden)
+    monkeypatch.setattr(secrets, "resolve_openbao_ref", forbidden)
     for verifier in (auth_flow.verify_user_password, auth_flow.verify_service_secret):
-        assert verifier("pw", "bao://secret/test#value") is True
-        assert verifier("incorrect", "bao://secret/test#value") is False
+        for stored in ("bao://secret/test#value", "env://SOME_APP_VAR"):
+            assert verifier("pw", stored) is False
 
 
 def test_decryption_failure_is_false_and_telemetry_has_no_labels(

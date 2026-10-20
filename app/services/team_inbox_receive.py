@@ -11,7 +11,6 @@ from sqlalchemy.orm import Session
 from app.models.service_team import ServiceTeam
 from app.models.subscriber import Subscriber
 from app.models.team_inbox import (
-    InboxAutomationTrigger,
     InboxChannelType,
     InboxConversation,
     InboxConversationStatus,
@@ -28,7 +27,6 @@ from app.services import (
     conversation_lead_relationships,
     inbox_sla,
     team_inbox_assignment,
-    team_inbox_automation,
     team_inbox_channel_receive,
     team_inbox_customer_completion_policy,
     team_inbox_fiber_receive,
@@ -411,16 +409,6 @@ def receive_fiber_inquiry(
                 reason="Prospect created from signed fiber website inquiry",
             ),
         )
-    team_inbox_automation.execute_matching_rules(
-        db,
-        conversation=conversation,
-        trigger=InboxAutomationTrigger.conversation_created,
-    )
-    team_inbox_automation.execute_matching_rules(
-        db,
-        conversation=conversation,
-        trigger=InboxAutomationTrigger.inbound_message_received,
-    )
     team_inbox_realtime.publish_conversation_event(
         db,
         str(conversation.id),

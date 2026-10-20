@@ -58,7 +58,14 @@ def get_device_credentials(
         encrypted_password = getattr(server, "cwmp_password", None) if server else None
         label = "CWMP"
 
-    password = _decrypt_server_password(encrypted_password, ont_unit, label)
+    password = _decrypt_server_password(
+        encrypted_password,
+        ont_unit,
+        label,
+        field="connection_request_password"
+        if credential_type == "connection_request"
+        else "cwmp_password",
+    )
     if not username or not password:
         username = None
         password = None
@@ -139,11 +146,14 @@ def _decrypt_server_password(
     encrypted_password: str | None,
     ont_unit: OntUnit | None,
     label: str,
+    field: str | None = None,
 ) -> str | None:
     if not encrypted_password:
         return None
     try:
-        return decrypt_credential(encrypted_password)
+        return decrypt_credential(
+            encrypted_password, model="Tr069AcsServer", field=field
+        )
     except Exception:
         logger.warning(
             "Failed to decrypt %s password for ONT %s",

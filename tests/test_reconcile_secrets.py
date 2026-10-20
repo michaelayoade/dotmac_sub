@@ -94,6 +94,6 @@ def test_default_resolver_always_handles_encryption_at_rest():
 def test_credential_resolver_decrypts_local_wrappers(monkeypatch):
     monkeypatch.setattr(
         "app.services.network.reconcile.secrets.decrypt_credential",
-        lambda value: "decrypted" if value == "enc:ciphertext" else value,
+        lambda value, **_kw: "decrypted" if value == "enc:ciphertext" else value,
     )
     assert credential_secret_resolver("enc:ciphertext") == "decrypted"

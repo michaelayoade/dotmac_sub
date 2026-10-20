@@ -41,7 +41,6 @@ env 2 app/services/vpn_routing.py
 env 1 app/services/web_network_core_runtime.py
 env 1 app/services/web_network_monitoring.py
 env 1 app/services/web_network_olt_profiles.py
-env 1 app/services/web_system_db_inspector.py
 env 1 app/services/web_system_export_tool.py
 env 1 app/services/wireguard.py
 env 2 app/services/wireguard_system.py
@@ -50,7 +49,7 @@ env 1 app/services/workqueue/scoring_config.py
 env 3 app/syslog/listener.py
 env 3 app/tasks/bandwidth.py
 env 2 app/tasks/tr069.py
-setting 9 app/main.py
+setting 8 app/main.py
 setting 4 app/services/auth.py
 setting 4 app/services/billing_settings.py
 setting 8 app/services/credential_key_rotation.py

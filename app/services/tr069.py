@@ -2086,7 +2086,9 @@ def push_acs_enforcement_preset(
     # Decrypt passwords if set
     cwmp_password = None
     if server.cwmp_password:
-        cwmp_password = decrypt_credential(server.cwmp_password)
+        cwmp_password = decrypt_credential(
+            server.cwmp_password, model="Tr069AcsServer", field="cwmp_password"
+        )
     connection_request_password = None
     if server.connection_request_password:
         connection_request_password = decrypt_credential(

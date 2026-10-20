@@ -66,7 +66,15 @@ def test_pppoe_owner_is_typed_flush_only_and_secret_safe() -> None:
         for node in outcome.body
         if isinstance(node, ast.AnnAssign) and isinstance(node.target, ast.Name)
     }
-    assert field_names == {"credential_id", "username", "disposition", "changed"}
+    # inherit_declined_reason is a secret-free diagnostic added by the PPPoE
+    # credential bridge; the event payload below stays unchanged.
+    assert field_names == {
+        "credential_id",
+        "username",
+        "disposition",
+        "changed",
+        "inherit_declined_reason",
+    }
     event_payload = source.split("EventType.access_credential_ensured", 1)[1].split(
         "account_id=", 1
     )[0]

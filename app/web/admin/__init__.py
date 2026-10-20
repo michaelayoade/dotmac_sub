@@ -133,7 +133,6 @@ from app.web.admin.service_teams import router as service_teams_router
 from app.web.admin.support_assignment_rules import (
     router as support_assignment_rules_router,
 )
-from app.web.admin.support_automation import router as support_automation_router
 from app.web.admin.support_resolution import router as support_resolution_router
 from app.web.admin.support_tickets import router as support_tickets_router
 from app.web.admin.surveys import router as surveys_router
@@ -504,7 +503,6 @@ router.include_router(support_resolution_router)
 router.include_router(support_tickets_router)
 router.include_router(sales_router)
 router.include_router(lead_intake_router)
-router.include_router(support_automation_router)
 router.include_router(support_assignment_rules_router)
 router.include_router(project_engineering_router)
 router.include_router(projects_router)

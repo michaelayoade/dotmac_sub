@@ -70,6 +70,7 @@ from sqlalchemy import and_, select
 from app.models.catalog import AccessCredential
 from app.models.network import OntAssignment, OntUnit
 from app.models.ont_observation import OntObservation
+from app.services.access_credential_secret import is_secret_reference_value
 from app.services.credential_crypto import (
     decrypt_credential,
     encrypt_credential,
@@ -199,6 +200,8 @@ def dialer_fingerprint(username: str | None, secret: str | None) -> str | None:
 
 def _safe_decrypt(value: str | None) -> str | None:
     if not value:
+        return None
+    if is_secret_reference_value(value):
         return None
     try:
         return decrypt_credential(value)

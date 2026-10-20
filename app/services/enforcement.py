@@ -42,7 +42,7 @@ from app.models.radius import RadiusClient
 from app.models.usage import AccountingStatus, RadiusAccountingSession
 from app.services import control_registry, settings_spec
 from app.services.common import coerce_uuid
-from app.services.credential_crypto import decrypt_credential
+from app.services.credential_crypto import decrypt_credential, non_reference_or_none
 from app.services.domain_errors import DomainError
 from app.services.enforcement_evidence import (
     EnforcementOutcome,
@@ -54,7 +54,6 @@ from app.services.nas import DeviceProvisioner
 from app.services.radius_address_lists import suspended_address_list
 from app.services.router_health import coa_evidence as _coa_evidence
 from app.services.router_health.contracts import CoaKind
-from app.services.secrets import resolve_secret
 
 logger = logging.getLogger(__name__)
 
@@ -389,7 +388,7 @@ def _resolve_coa_secret(db: Session, nas_device: NasDevice) -> str | None:
         try:
             decrypted = decrypt_credential(nas_device.shared_secret)
             if decrypted:
-                resolved = resolve_secret(decrypted)
+                resolved = non_reference_or_none(decrypted, label="NAS shared secret")
                 if resolved:
                     return resolved
         except Exception as exc:
@@ -1350,6 +1349,7 @@ def disconnect_subscription_sessions(
     require_terminal: bool = False,
     authoritative_only: bool = False,
     refresh_test_access: bool = False,
+    login: str | None = None,
 ) -> int:
     subscription = db.get(Subscription, coerce_uuid(subscription_id))
     if not subscription:
@@ -1363,7 +1363,10 @@ def disconnect_subscription_sessions(
     ):
         return 0
 
-    login = (subscription.login or "").strip()
+    # An explicit ``login`` targets sessions of that exact username (for example
+    # the name a credential edit just retired) and never the app-side rows.
+    explicit_login = (login or "").strip()
+    login = explicit_login or (subscription.login or "").strip()
     expected_framed_ip = str(framed_ip_address or "").strip()
 
     # Primary source: open radacct sessions by login. Keyed by session_id
@@ -1399,7 +1402,7 @@ def disconnect_subscription_sessions(
     # login changed after they started).
     legacy_sessions = (
         []
-        if authoritative_only
+        if authoritative_only or explicit_login
         else (
             db.query(RadiusAccountingSession)
             .filter(RadiusAccountingSession.subscription_id == subscription.id)
@@ -2211,6 +2214,7 @@ def cleanup_subscription_on_cancel(db: Session, subscription_id: str) -> dict[st
     if not other_active:
         for cred in credentials:
             cred.is_active = False
+            cred.deactivation_reason = "service_ended"
             stats["credentials_deactivated"] += 1
         # 3. Remove from external RADIUS DB
         _remove_credentials_from_external_radius(db, credentials)

@@ -187,16 +187,17 @@ def test_invalid_parameters_fail(field: str, value: int) -> None:
         owner.Argon2idParameters(**values)
 
 
-def test_compat_reference_uses_existing_resolver(
+def test_stored_env_reference_is_never_resolved_for_verification(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    """F3: a stored env:// value is refused, not read from the environment."""
     resolve = Mock(return_value="synthetic")
     monkeypatch.setattr(secret_service, "resolve_secret", resolve)
     result = auth_flow.verify_user_password_outcome(
         owner.UserPasswordVerification("synthetic", "env://SYNTHETIC")
     )
-    assert result.accepted and not result.legacy_upgrade_candidate
-    resolve.assert_called_once_with("env://SYNTHETIC")
+    assert not result.accepted
+    resolve.assert_not_called()
 
 
 def test_unknown_representation_never_reaches_compatibility() -> None:

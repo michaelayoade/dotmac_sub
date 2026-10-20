@@ -26,6 +26,7 @@ from app.models.subscriber import Subscriber, SubscriberStatus, UserType
 from app.services import auth_flow as auth_flow_service
 from app.services import customer_login_identity, radius_auth
 from app.services import password_authentication as pa
+from app.services.access_credential_secret import is_secret_reference_value
 from app.services.auth_flow import verify_user_password
 from app.services.domain_errors import DomainError
 from app.services.rate_limiter_adapter import allow_operation
@@ -405,10 +406,18 @@ def prepare_customer_login(
                 denial_target = pa.DenialTarget(
                     pa.DenialTargetKind.ACCESS, credential.id
                 )
-            if credential and credential.secret_hash:
+            if (
+                credential
+                and credential.secret_hash
+                and not is_secret_reference_value(credential.secret_hash)
+            ):
                 from app.services.credential_crypto import decrypt_credential
 
-                stored_password = decrypt_credential(credential.secret_hash)
+                try:
+                    stored_password = decrypt_credential(credential.secret_hash)
+                except ValueError:
+                    # Undecryptable, or a refused stored reference (F3).
+                    raise_invalid_login()
                 if stored_password and secrets.compare_digest(
                     stored_password, password
                 ):

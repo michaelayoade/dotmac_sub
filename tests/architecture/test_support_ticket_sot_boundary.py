@@ -6,8 +6,6 @@ ROOT = Path(__file__).resolve().parents[2]
 
 MIGRATED_MODULES = (
     "app/services/support.py",
-    "app/services/support_automation.py",
-    "app/services/support_automation_rules.py",
     "app/services/support_ticket_settings.py",
     "app/services/support_ticket_region_projection.py",
     "app/services/ticket_assignment/admin.py",
@@ -29,8 +27,6 @@ CONTRACTED_OWNERS = {
     "support.ticket_bulk_commands",
     "support.ticket_assignment_rule_configuration",
     "support.ticket_assignment_evaluation",
-    "support.ticket_automation_rule_configuration",
-    "support.ticket_automation_evaluation",
     "ui.support_ticket_list_projection",
     "ui.support_ticket_bulk_action_projection",
 }
@@ -109,7 +105,6 @@ def test_support_legacy_contract_and_writer_baselines_shrank() -> None:
     for name in CONTRACTED_OWNERS:
         assert name not in manifest
     for module in (
-        "app.services.support_automation",
         "app.services.ticket_assignment.admin",
         "app.services.ticket_assignment.engine",
         "app.services.ticket_assignment.selectors",
@@ -117,17 +112,11 @@ def test_support_legacy_contract_and_writer_baselines_shrank() -> None:
         assert module not in writers
 
 
-def test_assignment_and_automation_policies_do_not_write_ticket_lifecycle() -> None:
+def test_assignment_policy_does_not_write_ticket_lifecycle() -> None:
     assignment = _source("app/services/ticket_assignment/engine.py")
-    automation = _source("app/services/support_automation.py")
     assert "ticket.assigned_to_person_id =" not in assignment
     assert "ticket.status =" not in assignment
     assert "ticket.service_team_id =" not in assignment
-    assert "ticket.status =" not in automation
-    assert "ticket.priority =" not in automation
-    assert "ticket.service_team_id =" not in automation
-    lifecycle = _source("app/services/support.py")
-    assert "evaluate_rules(db, ticket, trigger)" in lifecycle
     assert "auto_assign_ticket(" in assignment
 
 

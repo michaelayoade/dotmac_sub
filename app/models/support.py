@@ -514,7 +514,12 @@ class AutomationActionType(enum.Enum):
 
 
 class TicketAutomationRule(Base):
-    """Declarative rule that runs against tickets on a trigger event.
+    """RETIRED: the legacy ticket rule engine was removed (cleanup M2).
+
+    The model and table are kept only until a later migration drops them; no
+    application code reads or writes these rows. Use the Automation Center.
+
+    Declarative rule that ran against tickets on a trigger event.
 
     conditions: equality dict matched against the ticket
     (e.g. {"priority": "urgent", "ticket_type": "outage"}).
