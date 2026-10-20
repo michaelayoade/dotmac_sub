@@ -136,6 +136,7 @@ def settle_starter_invoice_payment(
     confirmed_amount: Decimal,
     occurred_at: datetime,
     observed_at: datetime,
+    confirmation_source: ConfirmationSource = ConfirmationSource.PROVIDER_CALLBACK,
 ) -> StarterSettlementResult:
     """Discharge one Starter-issued invoice from confirmed provider cash.
 
@@ -183,7 +184,7 @@ def settle_starter_invoice_payment(
             scope=_SCOPE,
             command=RecordConfirmation(
                 intent_id=observed_intent.intent_id,
-                source=ConfirmationSource.PROVIDER_CALLBACK,
+                source=confirmation_source,
                 external_reference=external_reference,
                 confirmed=confirmed,
                 observed_at=observed_at,

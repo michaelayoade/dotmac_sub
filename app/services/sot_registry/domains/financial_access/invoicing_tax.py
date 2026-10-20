@@ -4369,4 +4369,161 @@ SERVICES: tuple[SOTService, ...] = (
             ),
         ),
     ),
+    SOTService(
+        name="financial.starter_manual_settlement",
+        module="app.services.billing.starter_manual_settlement",
+        owns=("Staff-recorded manual payment settlement of Starter invoices",),
+        depends_on=(
+            "control.settings_spec",
+            "financial.invoices",
+            "financial.manual_payment_recording",
+            "financial.starter_issuance",
+            "financial.starter_settlement",
+        ),
+        notes=(
+            "Manual lane (ADR 0031): one succeeded staff-recorded "
+            "payment allocated in full to one Starter-linked invoice "
+            "opens a dotmac-payments intent bound to that invoice and "
+            "discharges through the shared Starter settlement owner "
+            "with a policy-resolved confirmation source (default "
+            "TRANSFER_PROOF). No legacy Payment or ledger entry is "
+            "written; the manual recording owner presents the Starter "
+            "confirmation as its payment projection. Any other "
+            "Starter-touching manual shape is refused before legacy "
+            "writers run, and legacy account-credit application to "
+            "Starter receivables is closed at its choke points."
+        ),
+        contract=ServiceContract(
+            concerns=(
+                ConcernContract(
+                    name="Staff-recorded manual payment settlement of Starter invoices",
+                    role=OwnerRole.COMMAND_WRITER,
+                    input_names=(
+                        "confirmed manual payment recording preview",
+                        "Starter-issued invoice and structural link",
+                        "canonical Starter manual settlement policies",
+                    ),
+                    canonical_writer="financial.starter_manual_settlement",
+                ),
+            ),
+            authoritative_inputs=(
+                AuthorityInput(
+                    name="confirmed manual payment recording preview",
+                    owner="financial.manual_payment_recording",
+                    kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                    source=(
+                        "duplicate-reviewed, fingerprint-confirmed "
+                        "preview allocating one succeeded payment in "
+                        "full to the named Starter-linked invoice"
+                    ),
+                ),
+                AuthorityInput(
+                    name="Starter-issued invoice and structural link",
+                    owner="financial.starter_issuance",
+                    kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                    source=(
+                        "StarterInvoiceLink binding the Sub invoice to "
+                        "the Starter billing account and document "
+                        "identities"
+                    ),
+                ),
+                AuthorityInput(
+                    name="canonical Starter manual settlement policies",
+                    owner="control.settings_spec",
+                    kind=AuthorityKind.CONTROL_INPUT,
+                    source=(
+                        "starter_* settings resolved through "
+                        "starter_policies (ADR 0031): manual intent "
+                        "reference template, confirmation source, "
+                        "provider type, channel, expiry, minor units"
+                    ),
+                ),
+            ),
+            transaction=TransactionContract(
+                mode=TransactionMode.PARTICIPANT,
+                boundary=(
+                    "The manual recording owner owns the transaction: "
+                    "intent opening, confirmation, Starter settlement "
+                    "and allocation, invoice mirror, audit row, and "
+                    "events commit or roll back together."
+                ),
+                locking=(
+                    "The account lock is held by the manual recording "
+                    "owner and the invoice row is locked before "
+                    "settlement; Starter applies its own writer "
+                    "fences inside the same transaction."
+                ),
+                idempotency=(
+                    "The intent reference derives from the recording "
+                    "idempotency key, so an exact replay re-presents "
+                    "the same intent and confirmation identities "
+                    "without new postings or a second access signal."
+                ),
+                retries=(
+                    "The caller retries the whole confirmed recording "
+                    "after rollback with the same idempotency key."
+                ),
+            ),
+            errors=ErrorContract(
+                domain_codes=(
+                    "financial.starter_manual_settlement.amount_unrepresentable",
+                    "financial.starter_manual_settlement.configuration_invalid",
+                    "financial.starter_manual_settlement.starter_refused",
+                ),
+                mapping_owner="manual payment recording owner",
+                retryable_codes=(),
+                fail_closed_on=(
+                    "manual payment not allocated in full to one Starter-linked invoice",
+                    "prepaid funding or account-credit movement in the same recording",
+                    "Starter payments or billing refusal",
+                ),
+            ),
+            events=EventContract(
+                event_types=("payment.received",),
+                schema_version=1,
+                delivery_owner="events.dispatcher",
+                compatibility=(
+                    "Version 1 is the shared settlement access signal: "
+                    "exactly one payment.received per Starter "
+                    "confirmation, identical to the webhook lane."
+                ),
+                replay=(
+                    "Replay returns the recorded confirmation and "
+                    "settlement identities without a second signal."
+                ),
+            ),
+            migration=MigrationContract(
+                state=AuthorityMigrationState.CUTOVER_READY,
+                old_owner="financial.payments legacy manual allocation",
+                new_owner="financial.starter_manual_settlement",
+                verification=(
+                    "Migrated-PostgreSQL proof: a manual payment "
+                    "against a Starter-issued invoice reaches zero "
+                    "collectible with a paid mirror, no legacy "
+                    "Payment row, and an exact replay returning the "
+                    "same Starter identities."
+                ),
+                cutover_gate=(
+                    "Only single-invoice full-allocation succeeded "
+                    "manual payments take this lane; other shapes are "
+                    "refused until their lane migrates."
+                ),
+                fallback_retirement=(
+                    "The legacy manual allocation writer is deleted "
+                    "at the money-pack cutover; it is never used for "
+                    "a Starter-linked invoice."
+                ),
+            ),
+            steward="billing operations",
+            design_refs=(
+                "docs/adr/0031-composable-starter-billing-policies.md",
+                "docs/SOT_RELATIONSHIP_MAP.md",
+            ),
+            test_refs=(
+                "tests/test_starter_manual_eligibility.py",
+                "tests/integration/test_starter_manual_settlement_pg.py",
+                "tests/architecture/test_sot_manifest_contracts.py",
+            ),
+        ),
+    ),
 )
