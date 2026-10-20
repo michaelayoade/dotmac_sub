@@ -139,6 +139,8 @@ def ipv4_retention_release() -> dict:
     ``network.ip_assignment_lifecycle``. Active/blocked/suspended are never
     touched. Counts are stored for the ``ipv4_retention_release`` gauge.
     """
+    import json
+
     from app.models.domain_settings import SettingDomain
     from app.services.ip_consistency_audit import _get_redis
     from app.services.ip_lifecycle import run_ipv4_retention_release
@@ -158,15 +160,33 @@ def ipv4_retention_release() -> dict:
             session, SettingDomain.network, "ipv4_retention_max_per_run"
         )
         db_session_adapter.release_read_transaction(session)
-        result = run_ipv4_retention_release(
-            session, mode=mode, retention_days=retention_days, limit=limit
-        )
-        logger.info("ipv4 retention sweep: %s", result["counts"])
         client = _get_redis()
+        cursor_key = "network:ipv4_retention_release:cursor"
+        after = None
+        try:
+            raw_cursor = client.get(cursor_key) if client is not None else None
+            if raw_cursor:
+                after = tuple(json.loads(raw_cursor))
+        except Exception:
+            after = None
+        result = run_ipv4_retention_release(
+            session,
+            mode=mode,
+            retention_days=retention_days,
+            limit=limit,
+            after=after,
+        )
+        try:
+            if client is not None:
+                if result["next_cursor"]:
+                    client.set(cursor_key, json.dumps(result["next_cursor"]))
+                else:
+                    client.delete(cursor_key)  # reached the end: wrap
+        except Exception:
+            logger.warning("ipv4 retention sweep: cursor not stored", exc_info=True)
+        logger.info("ipv4 retention sweep: %s", result["counts"])
         if client is not None:
             try:
-                import json
-
                 payload = {**result, "ran_at": datetime.now(UTC).isoformat()}
                 client.set(
                     "network:ipv4_retention_release:latest",

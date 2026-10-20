@@ -8,10 +8,12 @@ from pathlib import Path
 from uuid import uuid4
 
 import pytest
-from sqlalchemy import select, update
+from sqlalchemy import func, select, update
 
 from app.models.catalog import Subscription, SubscriptionStatus
+from app.models.audit import AuditEvent
 from app.models.domain_settings import SettingDomain
+from app.models.event_store import EventStore
 from app.models.network import IPAssignment
 from app.models.radius_active_session import RadiusActiveSession
 from app.services import ip_lifecycle
@@ -255,20 +257,31 @@ def _sweep(db, mode, limit=100):
 
 
 def test_shadow_writes_nothing(db_session, catalog_offer) -> None:
-    _, _, a1, _ = _held(db_session, catalog_offer, S.disabled, "10.30.2.1")
-    _, _, a2, _ = _held(db_session, catalog_offer, S.canceled, "10.30.2.2", canceled_at=OLD)
+    _, s1, a1, _ = _held(db_session, catalog_offer, S.disabled, "10.30.2.1")
+    _, s2, a2, _ = _held(db_session, catalog_offer, S.canceled, "10.30.2.2")
+    ids = (s1.id, s2.id)
+    events = db_session.scalar(select(func.count()).select_from(EventStore))
+    audits = db_session.scalar(select(func.count()).select_from(AuditEvent))
     result = _sweep(db_session, "shadow")
     assert result["counts"]["would_release"] == 2
     assert result["counts"]["released"] == 0
     assert _active(db_session, a1) and _active(db_session, a2)
+    assert db_session.scalar(select(func.count()).select_from(EventStore)) == events
+    assert db_session.scalar(select(func.count()).select_from(AuditEvent)) == audits
+    cols = dict(
+        db_session.execute(
+            select(Subscription.id, Subscription.ipv4_address).where(Subscription.id.in_(ids))
+        ).all()
+    )
+    assert cols == {s1.id: "10.30.2.1", s2.id: "10.30.2.2"}
 
 
 def test_apply_releases_only_past_retention_terminal(db_session, catalog_offer) -> None:
     _, _, old_dis, _ = _held(db_session, catalog_offer, S.disabled, "10.30.3.1")
     _, _, old_arc, _ = _held(db_session, catalog_offer, S.archived, "10.30.3.2")
-    _, _, old_can, _ = _held(db_session, catalog_offer, S.canceled, "10.30.3.3", canceled_at=OLD)
+    _, _, old_can, _ = _held(db_session, catalog_offer, S.canceled, "10.30.3.3")
     _, _, new_can, _ = _held(
-        db_session, catalog_offer, S.canceled, "10.30.3.4", updated_at=OLD, canceled_at=RECENT
+        db_session, catalog_offer, S.canceled, "10.30.3.4", updated_at=RECENT, canceled_at=OLD
     )
     _, _, new_dis, _ = _held(db_session, catalog_offer, S.disabled, "10.30.3.5", updated_at=RECENT)
     result = _sweep(db_session, "apply")
@@ -299,7 +312,7 @@ def test_sibling_rebind_is_reported_not_released(db_session, catalog_offer) -> N
 
 def test_live_session_conflict_is_skipped_for_retention_and_terminal(db_session, catalog_offer) -> None:
     _, _, dis, _ = _held(db_session, catalog_offer, S.disabled, "10.30.6.1")
-    _, _, can, _ = _held(db_session, catalog_offer, S.canceled, "10.30.6.2", canceled_at=OLD)
+    _, _, can, _ = _held(db_session, catalog_offer, S.canceled, "10.30.6.2")
     _session(db_session, "10.30.6.1")
     _session(db_session, "10.30.6.2")
     result = _sweep(db_session, "apply")
@@ -361,3 +374,42 @@ def test_task_only_calls_the_sweep_runner() -> None:
     source = (ROOT / "app/tasks/radius.py").read_text(encoding="utf-8")
     assert "run_ipv4_retention_release" in source
     assert "is_active" not in source
+
+
+def test_canceled_release_clears_served_column_and_refuses_management(
+    db_session, catalog_offer
+) -> None:
+    _, sub, assignment, _ = _held(db_session, catalog_offer, S.canceled, "10.30.9.1")
+    mg = _subscriber(db_session, "mgc")
+    msub = _subscription(db_session, mg, catalog_offer, status=S.canceled, served_ip="10.30.9.2")
+    maddr = _address(db_session, _pool(db_session, "mgc"), "10.30.9.2", allocation_type="management")
+    _assignment(db_session, mg, maddr, subscription=msub)
+    db_session.commit()
+    _age(db_session, msub, updated_at=OLD)
+    sub_id = sub.id
+    result = _sweep(db_session, "apply")
+    assert result["counts"]["released"] == 1
+    assert result["counts"]["skipped_other"] == 1
+    assert not _active(db_session, assignment)
+    assert db_session.get(Subscription, sub_id).ipv4_address is None
+
+
+def test_report_has_uncapped_total_legacy_count_and_cursor_advances(
+    db_session, catalog_offer
+) -> None:
+    for i in range(3):
+        _held(db_session, catalog_offer, S.disabled, f"10.30.10.{i + 1}")
+    legacy = _subscriber(db_session, "legacy")
+    laddr = _address(db_session, _pool(db_session, "lg"), "10.30.10.50")
+    _assignment(db_session, legacy, laddr)
+    db_session.commit()
+    first = _sweep(db_session, "shadow", limit=2)
+    assert first["eligible_total"] == 3 and first["examined"] == 2
+    assert first["legacy_unlinked_active_v4_assignments"] == 1
+    assert first["next_cursor"] is not None
+    second = ip_lifecycle.run_ipv4_retention_release(
+        db_session, mode="shadow", retention_days=30, limit=2, now=NOW,
+        after=tuple(first["next_cursor"]),
+    )
+    assert second["examined"] == 1 and second["next_cursor"] is None
+    assert set(first["samples"]["would_release"]).isdisjoint(second["samples"]["would_release"])

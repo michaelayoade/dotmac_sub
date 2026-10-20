@@ -577,11 +577,12 @@ def _retention_release_decision(
     exact_rows: list[ActiveIPv4AssignmentEvidence],
     retention_cutoff: datetime,
 ) -> IPv4AssignmentRepairDecision:
-    """Gate a disabled/hidden/archived release on age and live use.
+    """Gate a retention release on age, live use and address class.
 
-    Status-change evidence is ``Subscription.updated_at``: no status-change
-    timestamp exists for these states. Any later edit moves it forward, so it
-    can only DELAY a release, never hasten one.
+    Status-change evidence is ``Subscription.updated_at`` for every status:
+    ``canceled_at``/``end_at`` can predate the status change, and no
+    timestamp exists for disabled/hidden/archived. Any later edit moves
+    ``updated_at`` forward, so it can only DELAY a release, never hasten one.
     """
 
     changed_at = subscription.updated_at
@@ -844,9 +845,11 @@ def preview_service_ipv4_assignment_repair(
                 for item in exact_rows
                 if item.assignment_id not in normalized_deactivate_ids
             ]
-            retention_release = (
-                retention_cutoff is not None
-                and subscription.status in _RETENTION_RELEASE_STATUSES
+            # With a cutoff, canceled/expired releases take the same gated path
+            # (age, live-use, reserved/management refusal) as the others.
+            retention_release = retention_cutoff is not None and (
+                subscription.status
+                in _RETENTION_RELEASE_STATUSES | _TERMINAL_STATUSES
             )
             if subscription.status not in _TERMINAL_STATUSES and not retention_release:
                 decision = IPv4AssignmentRepairDecision.subscription_not_terminal
@@ -1495,6 +1498,24 @@ def _repair_service_ipv4_assignment(
             .with_for_update()
         ).all()
     )
+
+    if command.desired_address_id is None:
+        # Release: lock the freed address rows too, so the allocator
+        # (skip_locked) waits and the re-preview below sees a stable address.
+        released_address_ids = [
+            row.ipv4_address_id
+            for row in locked_assignments
+            if row.is_active
+            and row.ip_version == IPVersion.ipv4
+            and row.ipv4_address_id is not None
+        ]
+        if released_address_ids:
+            db.scalars(
+                select(IPv4Address)
+                .where(IPv4Address.id.in_(released_address_ids))
+                .order_by(IPv4Address.id)
+                .with_for_update()
+            ).all()
 
     prior = _prior_lifecycle_outcome(
         db,
