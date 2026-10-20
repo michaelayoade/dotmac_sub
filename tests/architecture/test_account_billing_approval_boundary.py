@@ -3,9 +3,7 @@
 from pathlib import Path
 
 from app.services.scheduler import PERMANENT_LIFECYCLE_TASKS
-from app.services.task_reliability import (
-    TASK_RELIABILITY_CONTRACTS,
-)
+from app.services.task_reliability import TASK_RELIABILITY_CONTRACTS, Idempotency
 
 ROOT = Path(__file__).resolve().parents[2]
 
@@ -35,7 +33,10 @@ def test_active_transitions_require_billing_approval() -> None:
 def test_drift_reconciler_is_retired_and_not_scheduled() -> None:
     task_name = "app.tasks.enforcement.reconcile_billing_approval_drift"
     assert task_name not in PERMANENT_LIFECYCLE_TASKS
-    assert task_name not in TASK_RELIABILITY_CONTRACTS
+    # Only the idempotent no-op stub may keep a contract (queued beat messages).
+    contract = TASK_RELIABILITY_CONTRACTS[task_name]
+    assert contract.idempotency is Idempotency.IDEMPOTENT
+    assert "no-op" in contract.notes
     scheduler = _source("app/services/scheduler_config.py")
     assert 'name="billing_approval_reconcile"' not in scheduler
     # The only remaining reference retires (disables) any leftover row.

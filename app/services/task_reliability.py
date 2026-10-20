@@ -309,6 +309,14 @@ TASK_RELIABILITY_CONTRACTS: dict[str, TaskReliabilityContract] = {
     "app.tasks.enforcement.cleanup_subscription_block_sessions": _c(
         "enforcement", SWEEP, IDEMP, HEALTH
     ),
+    "app.tasks.enforcement.reconcile_billing_approval_drift": _c(
+        "enforcement",
+        SWEEP,
+        IDEMP,
+        LOG,
+        "Retired no-op kept for one release so queued beat messages resolve; "
+        "writes nothing.",
+    ),
     "app.tasks.enforcement.detect_stale_overdue_locks": _c(
         "enforcement", SWEEP, IDEMP, STATUS, "Dry-run detector; writes nothing."
     ),
