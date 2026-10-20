@@ -461,6 +461,19 @@
       ],
       "reason": "Structural identity storage for the prepaid renewals lane (ADR 0007: no metadata as financial identity): starter_prepaid_funding_links binds one prepaid period (subscription + renewal billing_line_key) to the Starter billing account, settlement, and confirmation that earmarked its funding, so the renewal cycle can discover its earmarked settlement. Identity only, never financial state; balances and funding availability are read from Starter.",
       "approved_by": "michaelayoade"
+    },
+    {
+      "id": "ONT-WAN-WCD-PARENT-20261020",
+      "kind": "approved-growth",
+      "paths": [
+        "app/services/network/ont_action_wan.py",
+        "app/services/network/ont_provision_steps.py",
+        "tests/test_ont_wan_wcd_parent.py",
+        "tests/test_genieacs_service_actions.py"
+      ],
+      "reason": "Defect fix, not a feature. Michael approved in principle 2026-10-20. On Huawei HG8546M-class TR-098 ONTs that expose only the management WANConnectionDevice (VLAN 201), Sub's PPPoE configuration called addObject only on WANConnectionDevice.{i}.WANPPPConnection. for a WCD that did not exist, so no PPP connection was ever created and the config ended failed with no device fault (prod ONTs 00259E-HG8546M-485754431DC8A3D1 and ...1D8EACD1). The fix stays in the existing owner path (ont_action_wan.set_pppoe_credentials, no new writer): create the WANConnectionDevice parent first, read back the new index, never select or modify the management WCD, then create the PPP child, set credentials pinned to that index (NAT as a separate small write), and trigger WANPPPConnection.Reset after readback so the PPP dials. Existing pending-addObject tracking is extended to the parent step so a queued task is not duplicated. approved-growth covers the size-threshold rule only; no new module, template, migration or capability is authorised.",
+      "deletion_trigger": "Remove when ONT/ACS provisioning is superseded or this entry is no longer needed after the fix merges and the PR size baseline is reconciled.",
+      "approved_by": "michaelayoade"
     }
   ]
 }
