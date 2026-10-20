@@ -171,9 +171,12 @@ def test_admin_ipv4_replacement_is_owner_backed_and_billing_isolated() -> None:
     )
     replacement_source = ast.unparse(replacement)
     assert "preview_service_ipv4_assignment_repair(" in replacement_source
-    assert "repair_service_ipv4_assignment(" in replacement_source
     assert "preview_service_ipv4_projection_repair(" in replacement_source
-    assert "repair_service_ipv4_projection(" in replacement_source
+    # One owner transaction (assignment + projection participants) so a
+    # projection refusal cannot leave IPAM moved; no separate commits.
+    assert "replace_service_ipv4(" in replacement_source
+    assert "repair_service_ipv4_assignment(" not in replacement_source
+    assert "repair_service_ipv4_projection(" not in replacement_source
     assert "sync_public_ip_addon_for_subscription(" not in replacement_source
     assert "update_subscription(" not in replacement_source
 

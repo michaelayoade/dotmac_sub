@@ -78,6 +78,11 @@ _PROJECTION_COMMAND = OwnerCommandDefinition(
     concern=_PROJECTION_CONCERN,
     name="repair_service_ipv4_projection",
 )
+_REPLACE_COMMAND = OwnerCommandDefinition(
+    owner=_OWNER,
+    concern=_LIFECYCLE_CONCERN,
+    name="replace_service_ipv4",
+)
 _ITEM_AUDIT_ACTION = "network.ip_assignment.service_ownership_linked"
 _BATCH_AUDIT_ACTION = "network.ip_assignment.service_ownership_reconciled"
 _LIFECYCLE_ITEM_AUDIT_ACTION = "network.ip_assignment.lifecycle_item_changed"
@@ -1723,6 +1728,73 @@ def apply_service_ipv4_assignment_participant(
     """
 
     return _repair_service_ipv4_assignment(db, command)
+
+
+def _replace_service_ipv4(
+    db: Session,
+    command: RepairServiceIPv4AssignmentCommand,
+) -> ServiceIPv4AssignmentRepairOutcome:
+    assignment_outcome = apply_service_ipv4_assignment_participant(db, command)
+    if assignment_outcome.desired_assignment_id is None:
+        _lifecycle_error(
+            "incomplete_outcome",
+            "IPv4 assignment owner did not return a desired assignment.",
+        )
+    # The assignment change is flushed, so this preview sees the new IPAM
+    # state. Any refusal raises and rolls back the assignment change too.
+    projection_preview = preview_service_ipv4_projection_repair(
+        db,
+        subscription_id=command.subscription_id,
+        assignment_id=assignment_outcome.desired_assignment_id,
+    )
+    if projection_preview.decision is IPv4ServedProjectionDecision.noop:
+        return assignment_outcome
+    if not projection_preview.applicable:
+        _lifecycle_error(
+            "unsafe_projection_repair",
+            "The served IPv4 projection cannot be completed in this "
+            "replacement; IPAM was not changed.",
+            decision=projection_preview.decision.value,
+        )
+    base_key = str(command.context.idempotency_key or "").strip()
+    apply_service_ipv4_projection_participant(
+        db,
+        RepairServiceIPv4ProjectionCommand(
+            context=CommandContext(
+                command_id=command.context.command_id,
+                correlation_id=command.context.correlation_id,
+                causation_id=command.context.causation_id,
+                actor=command.context.actor,
+                scope=command.context.scope,
+                reason=command.context.reason,
+                idempotency_key=f"{base_key}:ipv4-projection",
+            ),
+            subscription_id=command.subscription_id,
+            assignment_id=assignment_outcome.desired_assignment_id,
+            preview_fingerprint=projection_preview.fingerprint,
+        ),
+    )
+    return assignment_outcome
+
+
+def replace_service_ipv4(
+    db: Session,
+    command: RepairServiceIPv4AssignmentCommand,
+) -> ServiceIPv4AssignmentRepairOutcome:
+    """Move IPAM and the served projection in ONE transaction, or neither.
+
+    Tactical stopgap (pre-Starter dotmac-ipam): the assignment participant and
+    the projection participant run in a single owner command, so a projection
+    refusal rolls the IPAM move back instead of leaving the old address looking
+    free while the customer is still served on it.
+    """
+
+    return execute_owner_command(
+        db,
+        definition=_REPLACE_COMMAND,
+        context=command.context,
+        operation=lambda: _replace_service_ipv4(db, command),
+    )
 
 
 def repair_service_ipv4_projection(
