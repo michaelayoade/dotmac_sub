@@ -4,7 +4,7 @@
 # migration must retire every one. The inventory is exact and
 # the total is two-directional — shrink the code and lower this
 # baseline in the same change; a new or growing writer requires
-# Michael's explicit exception in docs/feature_freeze_exceptions.json.
+# Michael's explicit approval.
 # Regenerate with tests.architecture.billing_thin_client_inventory
 # .render_money_writer_baseline(<repo root>).
 TOTAL 24075

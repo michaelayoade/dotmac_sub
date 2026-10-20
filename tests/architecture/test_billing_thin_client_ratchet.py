@@ -13,9 +13,6 @@ makes both directions deliberate:
 - transitional cutover tools (opening census, numbering proofs) may exist
   only while registered in ``billing_transitional_tools.json`` with a
   deletion trigger, and may not grow past their registered size.
-
-See ``docs/FEATURE_FREEZE.md`` for the correction/feature rules this
-enforces together with ``scripts/ci/check_feature_freeze.py``.
 """
 
 from __future__ import annotations
@@ -53,9 +50,8 @@ def test_billing_surface_inventory_and_total_match_baseline() -> None:
     removed_files = sorted(set(pinned_files) - set(current_files))
     assert not new_files, (
         "New billing modules appeared in Sub. Billing semantics belong in "
-        "Starter dotmac-billing (thin-client gate, docs/FEATURE_FREEZE.md); "
-        "adding surface here requires Michael's exception in "
-        "docs/feature_freeze_exceptions.json and a reviewed baseline edit:\n  "
+        "Starter dotmac-billing (thin-client gate); "
+        "adding surface here requires Michael's approval and a reviewed baseline edit:\n  "
         + "\n  ".join(new_files)
     )
     assert not removed_files, (
@@ -66,8 +62,7 @@ def test_billing_surface_inventory_and_total_match_baseline() -> None:
     assert current_total == pinned_total, (
         f"Billing surface is {current_total} lines, baseline pins "
         f"{pinned_total}. Shrinkage must lower the baseline in the same "
-        "change; net growth requires Michael's explicit exception (see "
-        "docs/FEATURE_FREEZE.md)."
+        "change; net growth requires Michael's explicit approval."
     )
 
 
@@ -90,8 +85,8 @@ def test_money_writer_surface_outside_billing_paths_matches_baseline() -> None:
     assert not new_files, (
         "New money-writer modules appeared outside the billing surface. "
         "Money-state writes belong in Starter dotmac-billing/payments "
-        "(thin-client gate, docs/FEATURE_FREEZE.md); a new writer requires "
-        "Michael's exception in docs/feature_freeze_exceptions.json and a "
+        "(thin-client gate); a new writer requires "
+        "Michael's approval and a "
         "reviewed baseline edit:\n  " + "\n  ".join(new_files)
     )
     assert not removed_files, (
@@ -102,8 +97,7 @@ def test_money_writer_surface_outside_billing_paths_matches_baseline() -> None:
     assert current_total == pinned_total, (
         f"Money-writer surface is {current_total} lines, baseline pins "
         f"{pinned_total}. Shrinkage must lower the baseline in the same "
-        "change; net growth requires Michael's explicit exception (see "
-        "docs/FEATURE_FREEZE.md)."
+        "change; net growth requires Michael's explicit approval."
     )
 
 

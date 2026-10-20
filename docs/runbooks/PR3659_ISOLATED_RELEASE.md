@@ -56,7 +56,6 @@ or authorization.json and must never be admitted as one of those documents.
    dotmac-sub-prod. Refuse baseline drift or any broader source scope.
 
 Protected-branch review of this preflight remains required. This file records
-the request and scope; it is not a self-approved feature-freeze exception or a
-standing alternative release branch. No entry is added to feature_freeze_exceptions.
-The later exception support must be one-use/exact-source and retired after this
+the request and scope; it is not a standing alternative release branch. Any later
+exception support must be one-use/exact-source and retired after this
 release or explicit abandonment. Existing normal release behavior remains intact.
