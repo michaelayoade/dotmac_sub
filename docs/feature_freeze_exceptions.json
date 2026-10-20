@@ -466,12 +466,16 @@
       "id": "ONT-WAN-WCD-PARENT-20261020",
       "kind": "approved-growth",
       "paths": [
+        "app/services/network/ont_action_common.py",
         "app/services/network/ont_action_wan.py",
         "app/services/network/ont_provision_steps.py",
-        "tests/test_ont_wan_wcd_parent.py",
-        "tests/test_genieacs_service_actions.py"
+        "app/services/network/ppp_delivery_authorization.py",
+        "app/services/network/reconcile/actions.py",
+        "app/services/network/reconcile/applier.py",
+        "app/services/network/reconcile/core.py",
+        "app/services/network/reconcile/planner.py"
       ],
-      "reason": "Defect fix, not a feature. Michael approved in principle 2026-10-20. On Huawei HG8546M-class TR-098 ONTs that expose only the management WANConnectionDevice (VLAN 201), Sub's PPPoE configuration called addObject only on WANConnectionDevice.{i}.WANPPPConnection. for a WCD that did not exist, so no PPP connection was ever created and the config ended failed with no device fault (prod ONTs 00259E-HG8546M-485754431DC8A3D1 and ...1D8EACD1). The fix stays in the existing owner path (ont_action_wan.set_pppoe_credentials, no new writer): create the WANConnectionDevice parent first, read back the new index, never select or modify the management WCD, then create the PPP child, set credentials pinned to that index (NAT as a separate small write), and trigger WANPPPConnection.Reset after readback so the PPP dials. Existing pending-addObject tracking is extended to the parent step so a queued task is not duplicated. approved-growth covers the size-threshold rule only; no new module, template, migration or capability is authorised.",
+      "reason": "Defect fix in the existing owner path (ont_service_configuration -> reconcile_ont -> planner/applier, plus the ont_action_wan helper that must stay consistent with it); no new capability or writer. Michael approved the fix in principle 2026-10-20. On Huawei HG8546M-class TR-098 ONTs that expose only the management WANConnectionDevice (VLAN 201), PPPoE config called addObject on a WCD that did not exist, so no PPP connection was created and the config ended failed with no device fault (prod ONTs 00259E-HG8546M-485754431DC8A3D1 and ...1D8EACD1). The fix creates the WCD parent with index readback (never the management WCD), then the PPP child, pins params to the created index, writes NAT separately, and queues WANPPPConnection.Reset after the write (durably, also behind a Connection Request failure). approved-growth covers the size-threshold rule only (PR adds about 627 gross app lines, limit 400); no new module, template or migration is authorised.",
       "deletion_trigger": "Remove when ONT/ACS provisioning is superseded or this entry is no longer needed after the fix merges and the PR size baseline is reconciled.",
       "approved_by": "michaelayoade"
     }
