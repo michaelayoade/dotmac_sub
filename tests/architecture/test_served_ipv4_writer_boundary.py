@@ -98,3 +98,29 @@ def test_served_ipv4_writer_baseline_only_shrinks() -> None:
         "served-IPv4 write sites were removed; lower these baseline counts so "
         "the ratchet cannot be spent twice:\n  " + "\n  ".join(shrunk)
     )
+
+
+# Dict-driven writes the plain attribute scan cannot see (setattr loops,
+# Subscription(**data), Core .values(...)). One planted file, exact count.
+def test_scanner_counts_dict_driven_ipv4_writes(tmp_path: Path) -> None:
+    planted = tmp_path / "dict_writer.py"
+    planted.write_text(
+        """
+def touch(subscription, data, version_key):
+    setattr(subscription, "ipv4_address", "x")  # 1: literal key
+    setattr(subscription, f"{version_key}_address", "x")  # 2: f-string key
+    for key, value in data.items():
+        setattr(subscription, key, value)  # 3: opaque key
+    Subscription(**data)  # 4: splat construction
+    Subscription(ipv4_address="x")  # 5: keyword construction
+    update(Subscription).values(ipv4_address="x")  # 6: Core update
+    setattr(subscription, "login", "near-miss")
+    setattr(other_model, key, value)  # near-miss: not subscription-named
+    Subscription(login="near-miss")
+""",
+        encoding="utf-8",
+    )
+
+    counts = served_ipv4_projection_writes(app_dir=tmp_path, project_root=tmp_path)
+
+    assert counts == {"dict_writer.py": 6}

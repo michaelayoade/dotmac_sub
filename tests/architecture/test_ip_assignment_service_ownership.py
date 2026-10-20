@@ -49,9 +49,11 @@ _IP_ASSIGNMENT_WRITERS = {
 # retire an address without ever creating one. Pinning constructors alone would
 # have left retirement -- reclaiming a live customer address -- unguarded.
 _IP_ASSIGNMENT_DEACTIVATORS = {
+    "app/services/connectivity_backup.py",  # debt: snapshot restore (assign.is_active)
     "app/services/ip_assignment_lifecycle.py",  # the owner
     "app/services/ip_lifecycle.py",  # debt: terminal lifecycle release
     "app/services/network/ip.py",  # debt: provisioning allocation/reactivation
+    "app/services/network/ont_inventory.py",  # debt: ONT inventory WAN release
     "app/services/network/subscriber_wan_ipam.py",  # debt: ONT WAN claims
     "app/services/provisioning_helpers.py",  # debt: provisioning reclaim
     "app/services/web_system_restore_tool.py",  # debt: restore tooling
@@ -269,6 +271,19 @@ def test_ip_assignment_writers_are_pinned_during_shadowing() -> None:
     assert writers == _IP_ASSIGNMENT_WRITERS
 
 
+def _is_assignment_like(node: ast.AST) -> bool:
+    """`assignment`, `assign`, `record.assignment`: anything named like one.
+
+    The earlier exact-word match missed ``assign.is_active = ...`` in
+    ``connectivity_backup`` (snapshot restore).
+    """
+    if isinstance(node, ast.Name):
+        return "assign" in node.id.lower()
+    if isinstance(node, ast.Attribute):
+        return "assign" in node.attr.lower()
+    return False
+
+
 def test_ip_assignment_deactivators_are_pinned_during_shadowing() -> None:
     """`is_active = False` retires an allocation, so pin it separately.
 
@@ -285,19 +300,33 @@ def test_ip_assignment_deactivators_are_pinned_during_shadowing() -> None:
             continue
         source = path.read_text(encoding="utf-8")
         # Name-based AST matching cannot tell an IPAssignment from a team-inbox
-        # assignment, so require the module to reference the model at all.
-        if "IPAssignment" not in source:
+        # assignment, so require the module to reference the IPAM models at all.
+        # ``IPv4Address`` counts too: ``ont_inventory`` retires allocations via
+        # ``IPv4Address.assignment`` without ever naming ``IPAssignment``.
+        if "IPAssignment" not in source and "IPv4Address" not in source:
             continue
         tree = ast.parse(source, filename=str(path))
         for node in ast.walk(tree):
+            if isinstance(node, ast.Call):
+                # setattr(assignment, "is_active", ...) / {"is_active": ...}
+                # dict-driven retirement of an allocation.
+                if (
+                    isinstance(node.func, ast.Name)
+                    and node.func.id == "setattr"
+                    and len(node.args) >= 2
+                    and _is_assignment_like(node.args[0])
+                    and isinstance(node.args[1], ast.Constant)
+                    and node.args[1].value == "is_active"
+                ):
+                    deactivators.add(relative)
+                continue
             if not isinstance(node, ast.Assign):
                 continue
             for target in node.targets:
                 if (
                     isinstance(target, ast.Attribute)
                     and target.attr == "is_active"
-                    and isinstance(target.value, ast.Name)
-                    and "assignment" in target.value.id.lower()
+                    and _is_assignment_like(target.value)
                 ):
                     deactivators.add(relative)
 
