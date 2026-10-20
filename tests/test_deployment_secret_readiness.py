@@ -121,6 +121,7 @@ compose() {
   fi
   printf '%s: ready\n' "$6"
 }
+require_migrator_identity() { :; }
 run_database_prerequisite_bootstrap() { echo bootstrap >> "$TEST_CALLS"; }
 verify_database_prerequisites() { echo prerequisites >> "$TEST_CALLS"; }
 """

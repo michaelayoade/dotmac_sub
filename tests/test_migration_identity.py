@@ -463,7 +463,8 @@ def _render(query: Any) -> str:
         parts = getattr(query, "strings", None) or query._obj  # noqa: SLF001
         return ".".join(f'"{part}"' for part in parts)
     if isinstance(query, sql.SQL):
-        return query.as_string()
+        raw = getattr(query, "string", None)
+        return raw if isinstance(raw, str) else query._obj  # noqa: SLF001
     raise TypeError(type(query))
 
 
