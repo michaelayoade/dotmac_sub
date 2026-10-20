@@ -23,8 +23,14 @@ class SecretAuditUnavailable(RuntimeError):
 
 
 #: ``(action, path, field_names)``; persists the audit record or raises
-#: :class:`SecretAuditUnavailable`. Required by every secret write (S12).
+#: :class:`SecretAuditUnavailable`. Every secret write needs one (S12).
 SecretAuditor = Callable[[str, str, Iterable[str]], None]
+
+
+def _no_auditor(_action: str, _path: str, _field_names: Iterable[str]) -> None:
+    """Fail closed: a write attempted without an auditor never reaches OpenBao."""
+
+    raise SecretAuditUnavailable(AUDIT_UNAVAILABLE_MESSAGE)
 
 
 def secret_write_auditor(db: Session, request: object) -> SecretAuditor:
@@ -152,7 +158,9 @@ def _updated_secret_fields(path: str, form: Mapping[str, object]) -> dict[str, s
     return updated
 
 
-def save_secret(path: str, form: Mapping[str, object], *, audit: SecretAuditor) -> dict:
+def save_secret(
+    path: str, form: Mapping[str, object], *, audit: SecretAuditor = _no_auditor
+) -> dict:
     from app.services.secrets import (
         is_managed_secret_path,
         list_secret_field_names,
@@ -219,7 +227,9 @@ def _new_secret_fields(form: Mapping[str, object]) -> dict[str, str]:
     return data
 
 
-def create_secret(form: Mapping[str, object], *, audit: SecretAuditor) -> dict:
+def create_secret(
+    form: Mapping[str, object], *, audit: SecretAuditor = _no_auditor
+) -> dict:
     from app.services.secrets import is_managed_secret_path, write_secret
 
     path = str(form.get("path") or "").strip()
@@ -245,7 +255,7 @@ def create_secret(form: Mapping[str, object], *, audit: SecretAuditor) -> dict:
     return {"ok": False, "error": "Failed to create secret in OpenBao"}
 
 
-def delete_secret_path(path: str, *, audit: SecretAuditor) -> str:
+def delete_secret_path(path: str, *, audit: SecretAuditor = _no_auditor) -> str:
     from app.services.secrets import delete_secret, is_managed_secret_path
 
     if not is_managed_secret_path(path):

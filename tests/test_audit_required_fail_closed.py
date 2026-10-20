@@ -193,3 +193,23 @@ def test_applied_suspension_audit_is_staged_with_the_change(
     assert len(events) == 1
     assert events[0].metadata_["status"] == "applied"
     assert events[0].metadata_["current_head"] == outcome.current_head
+
+
+def test_secret_write_without_an_auditor_never_reaches_openbao(monkeypatch):
+    written = []
+    monkeypatch.setattr(
+        "app.services.secrets.write_secret",
+        lambda path, fields: written.append((path, fields)) or True,
+    )
+    monkeypatch.setattr(
+        "app.services.secrets.delete_secret", lambda _p: written.append(1)
+    )
+
+    created = web_system_secrets.create_secret(
+        {"path": "integrations/example", "key_0": "k", "val_0": "v"}
+    )
+    deleted = web_system_secrets.delete_secret_path("integrations/example")
+
+    assert created["ok"] is False
+    assert "status=error" in deleted
+    assert written == []
