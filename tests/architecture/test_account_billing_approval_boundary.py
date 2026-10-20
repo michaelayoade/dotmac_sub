@@ -5,9 +5,6 @@ from pathlib import Path
 from app.services.scheduler import PERMANENT_LIFECYCLE_TASKS
 from app.services.task_reliability import (
     TASK_RELIABILITY_CONTRACTS,
-    FailureVisibility,
-    Idempotency,
-    RetryPolicy,
 )
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -35,23 +32,31 @@ def test_active_transitions_require_billing_approval() -> None:
     assert source.count("_require_billing_approval(") >= 5
 
 
-def test_drift_reconciler_is_permanent_and_not_flag_gated() -> None:
+def test_drift_reconciler_is_retired_and_not_scheduled() -> None:
     task_name = "app.tasks.enforcement.reconcile_billing_approval_drift"
-    assert task_name in PERMANENT_LIFECYCLE_TASKS
+    assert task_name not in PERMANENT_LIFECYCLE_TASKS
+    assert task_name not in TASK_RELIABILITY_CONTRACTS
     scheduler = _source("app/services/scheduler_config.py")
-    task_index = scheduler.index(f'task_name="{task_name}"')
-    block = scheduler[task_index - 200 : task_index + 200]
-    assert "enabled=True" in block
+    assert 'name="billing_approval_reconcile"' not in scheduler
+    # The only remaining reference retires (disables) any leftover row.
+    assert f'"{task_name}"' in scheduler
+    idx = scheduler.index(f'"{task_name}"')
+    assert "_retire_scheduled_task(" in scheduler[idx - 80 : idx]
+    assert "billing_approval_reconcile" not in _source(
+        "tests/architecture/billing_scheduled_sweep_baseline.txt"
+    )
 
 
-def test_drift_reconciler_retries_by_guarded_per_item_beat_pass() -> None:
-    contract = TASK_RELIABILITY_CONTRACTS[
-        "app.tasks.enforcement.reconcile_billing_approval_drift"
-    ]
-
-    assert contract.retry_policy is RetryPolicy.BEAT_RERUN
-    assert contract.idempotency is Idempotency.PER_ITEM_GUARDED
-    assert contract.failure_visibility is FailureVisibility.LOG_ONLY
+def test_drift_reconciler_runner_and_discovery_query_are_gone() -> None:
+    assert "def reconcile_billing_approval_drift" not in _source(
+        "app/services/enforcement_scheduled.py"
+    )
+    assert "find_billing_approval_drift_account_ids" not in _source(
+        "app/services/account_billing_approval.py"
+    )
+    task = _source("app/tasks/enforcement.py")
+    assert '{"retired": 1}' in task
+    assert "enforcement_scheduled.reconcile_billing_approval_drift" not in task
 
 
 def test_billing_approval_owner_is_the_only_explicit_runtime_field_writer() -> None:

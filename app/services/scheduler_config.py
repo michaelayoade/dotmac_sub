@@ -651,15 +651,12 @@ def build_beat_schedule() -> dict:
         _retire_scheduled_task(
             session, "app.tasks.enforcement.reconcile_account_status_drift"
         )
-        # Billing approval is an admission fact, not a runtime bypass. This
-        # permanent owner pass repairs the impossible active + unapproved split
-        # state through the account lifecycle coordinator.
-        _sync_scheduled_task(
-            session,
-            name="billing_approval_reconcile",
-            task_name="app.tasks.enforcement.reconcile_billing_approval_drift",
-            enabled=True,
-            interval_seconds=900,
+        # Retired: the billing-approval drift sweep was an automatic repair
+        # loop over money and access state (ADR 0007). Residual active +
+        # unapproved accounts go to the manual exceptions review. Disabling
+        # the row here is idempotent and sticks, because nothing re-syncs it.
+        _retire_scheduled_task(
+            session, "app.tasks.enforcement.reconcile_billing_approval_drift"
         )
         # The full RADIUS projection writer remains an event-driven transport.
         # This permanent reconciler compares desired-versus-observed state and
