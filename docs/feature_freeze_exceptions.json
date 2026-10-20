@@ -512,6 +512,18 @@
       ],
       "reason": "Records why an access credential was deactivated (M1) so password retention on restore can be gated; part of the PPPoE credential bridge (#3727), landed through the integration branch (Michael, 2026-10-20). Additive column only.",
       "approved_by": "michaelayoade"
+    },
+    {
+      "id": "THIN-STARTER-PREPAID-GATEWAY",
+      "kind": "feature-exception",
+      "paths": [
+        "app/services/gateway_topup_intents.py",
+        "app/services/payment_webhook_commands.py",
+        "app/services/prepaid_period_purchases.py"
+      ],
+      "reason": "Step 4 caller migration (gateway slice of THIN-STARTER-PREPAID-RENEWALS): prepaid period-purchase checkouts open a Starter payments PURCHASE_FUNDING intent bound to the purchase identity, and only the authenticated provider confirmation for that intent funds the purchase through dotmac-billing earmarks (pay-then-record; the browser return records nothing). Sub builds no billing logic: it opens the bound intent and hands the confirmed cash to the approved starter_prepaid owner; ineligible purchases stay on the legacy path and Starter refusal never falls back.",
+      "approved_by": "michaelayoade",
+      "starter_contract": "Published dotmac-payments 0.1.0a3 open_payment_intent (PaymentPurpose.PURCHASE_FUNDING) + intent-bound confirmation/qualification, and dotmac-billing 0.1.0a8 accept-on-prepaid-funding-lane + earmark_settlement, consumed through the already-excepted app/services/billing/starter_prepaid.py owner."
     }
   ]
 }
