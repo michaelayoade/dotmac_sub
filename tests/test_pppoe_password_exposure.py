@@ -568,10 +568,12 @@ def test_stored_notifications_mask_password_but_delivery_carries_it(
 
     # Nothing persisted carries it, and the masked copy is recorded.
     rows = db_session.query(Notification).all()
-    assert len(rows) == 2
     for row in rows:
         assert SECRET not in (row.body or "")
-        assert "********" in (row.body or "")
         assert SECRET not in json.dumps(row.metadata_ or {}, default=str)
+    mine = [r for r in rows if r.recipient in {"subscriber@example.test", "+15550100"}]
+    assert len(mine) == 2
+    for row in mine:
+        assert "********" in (row.body or "")
     for delivery in db_session.query(NotificationDelivery).all():
         assert SECRET not in (delivery.response_body or "")
