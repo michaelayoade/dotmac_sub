@@ -71,7 +71,6 @@ from app.services import web_system_billing_forms as web_system_billing_forms_se
 from app.services import web_system_common as web_system_common_service
 from app.services import web_system_company_info as web_system_company_info_service
 from app.services import web_system_config as web_system_config_service
-from app.services import web_system_db_inspector as web_system_db_inspector_service
 from app.services import web_system_export_tool as web_system_export_tool_service
 from app.services import web_system_form_views as web_system_form_views_service
 from app.services import web_system_geocode_tool as web_system_geocode_tool_service
@@ -131,7 +130,6 @@ from app.web.request_parsing import (
 
 templates = Jinja2Templates(directory="templates")
 router = APIRouter(prefix="/system", tags=["web-admin-system"])
-DB_INSPECTOR_COOKIE = "dbi_confirm"
 
 
 def _system_page_context(request: Request, db: Session, title: str, active_page: str):
@@ -149,18 +147,6 @@ def _system_page_context(request: Request, db: Session, title: str, active_page:
         "empty_title": f"No {title.lower()} yet",
         "empty_message": "No records are available for this section.",
     }
-
-
-def _dbi_principal_id(request: Request) -> str:
-    from app.web.admin import get_current_user
-
-    current_user = get_current_user(request) or {}
-    principal = str(
-        current_user.get("subscriber_id") or current_user.get("id") or ""
-    ).strip()
-    if not principal:
-        raise HTTPException(status_code=401, detail="Unable to resolve current user")
-    return principal
 
 
 def _require_system_user_principal(request: Request) -> dict:
@@ -555,7 +541,6 @@ def system_import_wizard(request: Request, db: Session = Depends(get_db)):
 def system_import_template_csv(
     module: str = Query(...),
 ):
-    from fastapi.responses import StreamingResponse
 
     content = web_system_import_wizard_service.csv_template(module)
     return StreamingResponse(
@@ -1063,7 +1048,6 @@ def system_export_tool(
     dependencies=[Depends(require_permission("system:settings:read"))],
 )
 def system_export_download(request: Request, db: Session = Depends(get_db)):
-    from fastapi.responses import StreamingResponse
 
     from app.web.admin import get_current_user
 
@@ -4666,244 +4650,6 @@ def restore_tool_settings(
     return RedirectResponse(
         url=f"/admin/system/tools/restore?q={quote_plus(request.query_params.get('q', ''))}&selected_id={quote_plus(request.query_params.get('selected_id', ''))}&retention={value}",
         status_code=303,
-    )
-
-
-@router.get(
-    "/tools/db-inspector",
-    response_class=HTMLResponse,
-    dependencies=[Depends(require_permission("system:db_admin"))],
-)
-def db_inspector_page(
-    request: Request,
-    table: str | None = Query(default=None),
-    db: Session = Depends(get_db),
-):
-    from app.web.admin import get_current_user, get_sidebar_stats
-
-    principal_id = _dbi_principal_id(request)
-    confirmed = web_system_db_inspector_service.validate_confirmation_token(
-        principal_id=principal_id,
-        token=request.cookies.get(DB_INSPECTOR_COOKIE),
-    )
-    overview = (
-        web_system_db_inspector_service.build_overview(db, selected_table=table)
-        if confirmed
-        else {
-            "dialect": db.bind.dialect.name if db.bind is not None else "unknown",
-            "table_stats": [],
-            "index_usage": [],
-            "slow_queries": [],
-            "slow_query_note": None,
-            "table_schema": [],
-            "selected_table": (table or "").strip(),
-        }
-    )
-    return templates.TemplateResponse(
-        "admin/system/db_inspector.html",
-        {
-            "request": request,
-            "active_page": "system-db-inspector",
-            "active_menu": "system",
-            "current_user": get_current_user(request),
-            "sidebar_stats": get_sidebar_stats(db),
-            "confirmed": confirmed,
-            "query_result": None,
-            "query_text": "",
-            "row_limit": web_system_db_inspector_service.DEFAULT_ROWS,
-            "error": request.query_params.get("error"),
-            "notice": request.query_params.get("notice"),
-            **overview,
-        },
-    )
-
-
-@router.post(
-    "/tools/db-inspector/confirm",
-    dependencies=[Depends(require_permission("system:db_admin"))],
-)
-def db_inspector_confirm(
-    request: Request,
-    db: Session = Depends(get_db),
-):
-    form = parse_form_data_sync(request)
-    password = str(form.get("password") or "")
-    table = str(form.get("table") or "").strip()
-    try:
-        token = web_system_db_inspector_service.confirm_access(
-            db,
-            principal_id=_dbi_principal_id(request),
-            password=password,
-        )
-    except HTTPException as exc:
-        return RedirectResponse(
-            url=f"/admin/system/tools/db-inspector?table={quote_plus(table)}&error={quote_plus(str(exc.detail))}",
-            status_code=303,
-        )
-
-    response = RedirectResponse(
-        url=f"/admin/system/tools/db-inspector?table={quote_plus(table)}&notice={quote_plus('Password confirmed. DB inspector unlocked for 3 minutes.')}",
-        status_code=303,
-    )
-    response.set_cookie(
-        DB_INSPECTOR_COOKIE,
-        token,
-        max_age=web_system_db_inspector_service.CONFIRM_TTL_SECONDS,
-        httponly=True,
-        samesite="strict",
-        secure=True,
-        path="/admin/system/tools/db-inspector",
-    )
-    return response
-
-
-@router.post(
-    "/tools/db-inspector/revoke",
-    dependencies=[Depends(require_permission("system:db_admin"))],
-)
-def db_inspector_revoke():
-    response = RedirectResponse(
-        url="/admin/system/tools/db-inspector?notice=Access%20revoked",
-        status_code=303,
-    )
-    response.delete_cookie(DB_INSPECTOR_COOKIE, path="/admin/system/tools/db-inspector")
-    return response
-
-
-@router.post(
-    "/tools/db-inspector/query",
-    response_class=HTMLResponse,
-    dependencies=[Depends(require_permission("system:db_admin"))],
-)
-def db_inspector_query(
-    request: Request,
-    db: Session = Depends(get_db),
-):
-    from app.web.admin import get_current_user, get_sidebar_stats
-
-    principal_id = _dbi_principal_id(request)
-    confirmed = web_system_db_inspector_service.validate_confirmation_token(
-        principal_id=principal_id,
-        token=request.cookies.get(DB_INSPECTOR_COOKIE),
-    )
-    if not confirmed:
-        return RedirectResponse(
-            url="/admin/system/tools/db-inspector?error=Confirm%20password%20to%20unlock%20DB%20Inspector",
-            status_code=303,
-        )
-
-    form = parse_form_data_sync(request)
-    query_text = str(form.get("query_text") or "")
-    table = str(form.get("table") or "").strip()
-    row_limit_raw = str(form.get("row_limit") or "").strip()
-    try:
-        row_limit = (
-            int(row_limit_raw)
-            if row_limit_raw
-            else web_system_db_inspector_service.DEFAULT_ROWS
-        )
-    except ValueError:
-        row_limit = web_system_db_inspector_service.DEFAULT_ROWS
-
-    query_result = None
-    error = None
-    try:
-        query_result = web_system_db_inspector_service.run_select_query(
-            db,
-            query_text,
-            row_limit=row_limit,
-        )
-        log_audit_event(
-            db=db,
-            request=request,
-            action="db_inspector_query",
-            entity_type="db_inspector",
-            entity_id=None,
-            actor_id=principal_id,
-            metadata={
-                "query": query_result["query"],
-                "row_count": query_result["row_count"],
-                "row_limit": query_result["row_limit"],
-            },
-        )
-    except Exception as exc:
-        error = str(exc.detail) if isinstance(exc, HTTPException) else str(exc)
-
-    overview = web_system_db_inspector_service.build_overview(db, selected_table=table)
-    return templates.TemplateResponse(
-        "admin/system/db_inspector.html",
-        {
-            "request": request,
-            "active_page": "system-db-inspector",
-            "active_menu": "system",
-            "current_user": get_current_user(request),
-            "sidebar_stats": get_sidebar_stats(db),
-            "confirmed": True,
-            "query_result": query_result,
-            "query_text": query_text,
-            "row_limit": row_limit,
-            "error": error,
-            "notice": None,
-            **overview,
-        },
-    )
-
-
-@router.post(
-    "/tools/db-inspector/export.csv",
-    dependencies=[Depends(require_permission("system:db_admin"))],
-)
-def db_inspector_export_csv(
-    request: Request,
-    db: Session = Depends(get_db),
-):
-    principal_id = _dbi_principal_id(request)
-    confirmed = web_system_db_inspector_service.validate_confirmation_token(
-        principal_id=principal_id,
-        token=request.cookies.get(DB_INSPECTOR_COOKIE),
-    )
-    if not confirmed:
-        return RedirectResponse(
-            url="/admin/system/tools/db-inspector?error=Confirm%20password%20to%20unlock%20DB%20Inspector",
-            status_code=303,
-        )
-
-    form = parse_form_data_sync(request)
-    query_text = str(form.get("query_text") or "")
-    row_limit_raw = str(form.get("row_limit") or "").strip()
-    try:
-        row_limit = (
-            int(row_limit_raw)
-            if row_limit_raw
-            else web_system_db_inspector_service.DEFAULT_ROWS
-        )
-    except ValueError:
-        row_limit = web_system_db_inspector_service.DEFAULT_ROWS
-    result_payload = web_system_db_inspector_service.run_select_query(
-        db,
-        query_text,
-        row_limit=row_limit,
-    )
-    csv_content = web_system_db_inspector_service.query_result_to_csv(result_payload)
-    log_audit_event(
-        db=db,
-        request=request,
-        action="db_inspector_export_csv",
-        entity_type="db_inspector",
-        entity_id=None,
-        actor_id=principal_id,
-        metadata={
-            "query": result_payload["query"],
-            "row_count": result_payload["row_count"],
-            "row_limit": result_payload["row_limit"],
-        },
-    )
-    return StreamingResponse(
-        iter([csv_content]),
-        media_type="text/csv",
-        headers={
-            "Content-Disposition": 'attachment; filename="db_inspector_query.csv"'
-        },
     )
 
 

@@ -74,7 +74,6 @@ app/services/web_system_about.py 1
 app/services/web_system_api_keys.py 2
 app/services/web_system_company_info.py 2
 app/services/web_system_config.py 5
-app/services/web_system_db_inspector.py 11
 app/services/web_system_export_tool.py 9
 app/services/web_system_geocode_tool.py 1
 app/services/web_system_health.py 3

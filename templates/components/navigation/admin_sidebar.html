@@ -57,7 +57,7 @@
     'users': 'system', 'roles': 'system', 'permissions': 'system', 'api-keys': 'system',
     'audit-log': 'system', 'system-health': 'system', 'logs': 'system', 'scheduler': 'system',
     'system-import': 'system', 'system-export': 'system',
-    'system-restore-tool': 'system', 'system-db-inspector': 'system',
+    'system-restore-tool': 'system',
     'legal': 'system', 'design-system': 'system'
 } %}
 {% set active_item = parent_for_page.get(active_page, active_page or '') %}
@@ -318,7 +318,6 @@
             "system-import",
             "system-export",
             "system-restore-tool",
-            "system-db-inspector",
             "legal",
             "design-system"
         ], permission="system:settings:read") }}

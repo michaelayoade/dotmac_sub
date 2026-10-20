@@ -11,7 +11,6 @@ USER_MODULES = (
     "auth_flow",
     "customer_authentication",
     "web_system_profiles",
-    "web_system_db_inspector",
 )
 
 
@@ -46,7 +45,6 @@ def test_real_user_authentication_modules_use_user_verifier() -> None:
         calls = [node for node in ast.walk(tree) if isinstance(node, ast.Call)]
         expected_calls = {
             "auth_flow": 3,  # Login, password change, and typed policy delegation.
-            "web_system_db_inspector": 2,
             "customer_authentication": 1,
             "web_system_profiles": 1,
         }[module]
