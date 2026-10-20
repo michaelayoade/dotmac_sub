@@ -1003,7 +1003,7 @@ class Notifications(ListResponseMixin):
             if event_type is not None:
                 notification.event_type = event_type
             if subscriber_id is not None:
-                notification.subscriber_id = subscriber_id
+                notification.subscriber_id = UUID(str(subscriber_id))
             db.add(notification)
         else:
             notification.channel = channel
