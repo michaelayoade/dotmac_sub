@@ -116,7 +116,7 @@ def _scrub_secret_request_headers(event: Any) -> None:
                 k for k in headers if str(k).lower() in _SECRET_REQUEST_HEADERS
             ]:
                 headers[name] = "[Filtered]"
-        elif isinstance(headers, list):
+        elif isinstance(headers, list) and isinstance(request, dict):
             request["headers"] = [
                 [h[0], "[Filtered]"]
                 if isinstance(h, (list, tuple))
