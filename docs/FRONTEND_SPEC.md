@@ -1878,7 +1878,7 @@ Tabs: Network, Revenue, Subscribers, Churn, Technician
 
 ### System / Admin
 
-System has 20+ web services covering: Users, Roles, Permissions, API Keys, Settings, Audit Logs, Health, Logs, Company Info, Scheduler, Webhooks, Import/Export, DB Inspector.
+System has 20+ web services covering: Users, Roles, Permissions, API Keys, Settings, Audit Logs, Health, Logs, Company Info, Scheduler, Webhooks, Import/Export.
 
 Each follows the same pattern — context dict with list data, form helpers, and enum options. Key entry points:
 

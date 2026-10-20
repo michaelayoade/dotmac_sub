@@ -27,7 +27,6 @@ ADMIN_ONLY_PERMISSION_KEYS = {
     # not a permission an admin attaches to a human role.
     "integration:accounting_sync:read",
     "reseller:impersonate",
-    "system:db_admin",
     "system:read",
     "system:write",
     "billing:read",
@@ -99,7 +98,6 @@ DEFAULT_PERMISSIONS = [
         "communications:nextcloud_talk_staff:manage",
         "Manage ERP staff-to-Nextcloud Talk identity mappings",
     ),
-    ("system:db_admin", "Perform restricted database administration"),
     ("system:settings:read", "View system settings"),
     ("system:settings:write", "Modify system settings"),
     # Secret management (OpenBao) — admin-only; intentionally NOT granted to any
