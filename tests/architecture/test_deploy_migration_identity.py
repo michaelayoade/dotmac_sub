@@ -179,3 +179,30 @@ def test_the_rehearsal_never_migrates_as_a_superuser_and_keeps_its_sensitivity()
     assert not re.search(r"postgresql[^\n\"']*://[^\n\"']*:[^\n\"'@/]+@", code)
     # Seeds one confirmed settlement and checks the backfill.
     assert "confirmed_settlements" in code and "cash_source_claims" in code
+
+
+def test_the_relay_ownership_contract_names_the_migrator_not_the_runtime_role() -> None:
+    from app.outbox_dispatcher_roles import OUTBOX_RELAY_OWNERSHIP_CONTRACT
+
+    assert OUTBOX_RELAY_OWNERSHIP_CONTRACT.migration_role == MIGRATOR_ROLE
+    bootstrap = (ROOT / "scripts" / "bootstrap_outbox_dispatcher_roles.py").read_text(
+        encoding="utf-8"
+    )
+    # No bootstrap path may name the runtime role as a grantee of the definer.
+    assert "dotmac_app" not in _code(bootstrap)
+    assert "WITH INHERIT TRUE, SET TRUE, ADMIN FALSE" in bootstrap
+
+
+def test_legacy_migrate_targets_refuse_on_production() -> None:
+    makefile = ROOT / "Makefile"
+    text = makefile.read_text(encoding="utf-8")
+    for target in ("prod-migrate:", "docker-migrate:", "prod-deploy:"):
+        recipe = text[text.index(target) :].split("\n\n")[0]
+        assert "$(refuse-in-production)" in recipe, target
+
+
+def test_the_password_comparison_is_pure_bash() -> None:
+    deploy = _code(DEPLOY.read_text(encoding="utf-8"))
+    body = _function(deploy, "migrator_secret_in_env_file")
+    assert "grep" not in body and "$(cat" not in body
+    assert "$(<.env)" in body

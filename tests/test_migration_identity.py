@@ -120,6 +120,7 @@ def _good() -> MigratorObservation:
         can_connect=True,
         memberships=dict(MIGRATOR_MEMBERSHIPS),
         members=(),
+        membership_rows=dict.fromkeys(MIGRATOR_MEMBERSHIPS, 1),
     )
 
 
@@ -159,6 +160,10 @@ def test_a_contract_migrator_has_no_violations() -> None:
             "membership in dotmac_app",
         ),
         ({"members": (RUNTIME_OWNER_ROLE,)}, "is a member of dotmac_sub_migrator"),
+        # LOW-1: a second grantor row is drift even when the aggregate looks right.
+        ({"membership_rows": {"app_admin": 2, "dotmac_app": 1}}, "2 membership rows"),
+        # LOW-3: committed objects left behind by an interrupted run.
+        ({"owned_objects": 3}, "owns 3 object(s)"),
     ],
 )
 def test_migrator_drift_is_refused(change: dict[str, Any], fragment: str) -> None:
@@ -219,15 +224,17 @@ class ScriptedConnection:
         current_user: str,
         superuser: bool = False,
         bypass_rls: bool = True,
-        residue: dict[str, int] | None = None,
+        residue: int = 0,
+        leaked_set_role: str | None = None,
         dialect: str = "postgresql",
     ) -> None:
         self.dialect = SimpleNamespace(
             name=dialect,
             identifier_preparer=sqlalchemy.dialects.postgresql.dialect().identifier_preparer,
         )
-        self._row = (current_user, superuser, bypass_rls)
-        self._residue = residue or {}
+        self._row = (current_user, superuser, bypass_rls, current_user)
+        self._session = (leaked_set_role or current_user, current_user)
+        self._residue = residue
         self.statements: list[str] = []
 
     def exec_driver_sql(self, statement: str, *args: Any, **kwargs: Any) -> Any:
@@ -235,16 +242,10 @@ class ScriptedConnection:
         result = MagicMock()
         if "FROM pg_catalog.pg_roles AS r" in statement:
             result.one.return_value = self._row
-        elif statement.startswith("SELECT count(*)"):
-            label = {
-                "pg_class": "relations",
-                "pg_proc": "functions",
-                "pg_type": "types",
-                "pg_namespace": "schemas",
-            }
-            for catalog, name in label.items():
-                if catalog in statement:
-                    result.scalar_one.return_value = self._residue.get(name, 0)
+        elif statement == "SELECT current_user, session_user":
+            result.one.return_value = self._session
+        elif "pg_shdepend" in statement:
+            result.scalar_one.return_value = self._residue
         return result
 
     def execute(self, *args: Any, **kwargs: Any) -> MagicMock:
@@ -317,24 +318,49 @@ def test_the_migrator_upgrades_then_hands_everything_back(
 
     context.run_migrations.assert_called_once_with()
     assert any(
-        statement == "REASSIGN OWNED BY CURRENT_USER TO dotmac_app"
+        statement == "REASSIGN OWNED BY SESSION_USER TO dotmac_app"
         for statement in connection.statements
     ), connection.statements
-    # The residual-ownership proof ran for relations, functions, types, schemas.
-    probes = [s for s in connection.statements if s.startswith("SELECT count(*)")]
-    assert len(probes) == 4
+    # The residual-ownership proof reads pg_shdepend (every owned object class).
+    probes = [s for s in connection.statements if "pg_shdepend" in s]
+    assert len(probes) == 1
+    assert "session_user" in probes[0]
+    assert "CURRENT_USER" not in " ".join(connection.statements)
 
 
 def test_leftover_migrator_objects_refuse_the_upgrade(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    connection = ScriptedConnection(
-        current_user=MIGRATOR_ROLE, residue={"functions": 2}
-    )
+    connection = ScriptedConnection(current_user=MIGRATOR_ROLE, residue=2)
     with pytest.raises(
-        RuntimeError, match="still owned by the migration role.*functions=2"
+        RuntimeError, match="still owned by the migration role.*2 remaining"
     ):
         _run(monkeypatch, connection, **PROD)
+
+
+def test_a_leaked_set_role_refuses_the_handback(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """MED-2: a SET ROLE left in effect must not make REASSIGN hand away
+    another role's objects."""
+    connection = ScriptedConnection(
+        current_user=MIGRATOR_ROLE, leaked_set_role="app_admin"
+    )
+    with pytest.raises(RuntimeError, match="left a SET ROLE in effect"):
+        _run(monkeypatch, connection, **PROD)
+    assert not any("REASSIGN" in s for s in connection.statements)
+
+
+def test_a_session_role_switch_is_refused_at_connect(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    assert migration_identity_violations(
+        current_user=MIGRATOR_ROLE,
+        superuser=False,
+        bypass_rls=True,
+        production_mode=True,
+        session_user="app_admin",
+    )
 
 
 @pytest.mark.parametrize(
@@ -477,7 +503,11 @@ class FakeProvisioningConnection:
         memberships: dict[str, tuple[bool, bool, bool]],
         members: list[str],
         createrole: bool = False,
+        owned: int = 0,
+        rows: dict[str, int] | None = None,
     ) -> None:
+        self._owned = owned
+        self._rows = rows or {}
         self._memberships = memberships
         self._members = members
         self._createrole = createrole
@@ -488,9 +518,12 @@ class FakeProvisioningConnection:
         result = MagicMock()
         if "FROM pg_roles WHERE rolname = %s" in text_query:
             result.fetchone.return_value = (False, self._createrole, False, True, True)
-        elif "WHERE r.rolname = %s" in text_query:
+        elif "pg_shdepend" in text_query:
+            result.fetchone.return_value = (self._owned,)
+        elif "GROUP BY g.rolname" in text_query:
             result.fetchall.return_value = [
-                (role, *options) for role, options in self._memberships.items()
+                (role, *options, self._rows.get(role, 1))
+                for role, options in self._memberships.items()
             ]
         elif "WHERE g.rolname = %s" in text_query:
             result.fetchall.return_value = [(member,) for member in self._members]
@@ -544,3 +577,27 @@ def test_provisioning_dry_run_mutates_nothing() -> None:
     conn = Absent(memberships={}, members=[])
     _repair_migrator(conn, dry_run=True)  # type: ignore[arg-type]
     assert conn.mutations == []
+
+
+def test_provisioning_replaces_a_membership_that_has_a_hidden_second_row() -> None:
+    from scripts.bootstrap_commercial_module_prereqs import (
+        _repair_migrator,
+        observe_migrator,
+    )
+
+    conn = FakeProvisioningConnection(
+        memberships=dict(MIGRATOR_MEMBERSHIPS),
+        members=[],
+        rows={"app_admin": 2},
+        owned=1,
+    )
+    observed = observe_migrator(conn)  # type: ignore[arg-type]
+    assert observed is not None
+    assert observed.membership_rows["app_admin"] == 2
+    assert observed.owned_objects == 1
+    assert any("membership rows" in v for v in migrator_violations(observed))
+
+    _repair_migrator(conn, dry_run=False)  # type: ignore[arg-type]
+    joined = "\n".join(conn.mutations)
+    assert 'REVOKE "app_admin" FROM "dotmac_sub_migrator"' in joined
+    assert 'REVOKE "dotmac_app" FROM' not in joined

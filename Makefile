@@ -185,7 +185,22 @@ docker-shell: ## Open shell in app container
 	docker exec -it dotmac_sub_app bash
 
 docker-migrate: ## Run migrations inside Docker
+	@set -eu; $(refuse-in-production)
 	docker exec dotmac_sub_app alembic upgrade heads
+
+# ─── Production migration guard ────────────────────────────────────────────
+#
+# Production migrates as the dedicated dotmac_sub_migrator, whose credential
+# only scripts/deploy.sh delivers (to the Alembic one-off container alone).
+# These legacy targets would migrate as the runtime role, which cannot run the
+# Starter billing migrations and must never be widened to do so.
+define refuse-in-production
+	if grep -qsE '^APP_ENV=production' .env; then \
+		echo "REFUSING TO MIGRATE FROM make ON PRODUCTION: production migrates as dotmac_sub_migrator, delivered only by scripts/deploy.sh." >&2; \
+		echo "Supported path:  make deploy TAG=sha-<shortsha>" >&2; \
+		exit 1; \
+	fi
+endef
 
 # ─── Host-build fallback guard ─────────────────────────────────────────────
 #
@@ -222,6 +237,7 @@ prod-build: ## [FALLBACK] Build the prod image on this host. Requires ALLOW_HOST
 
 prod-deploy: ## [FALLBACK] Host-build deploy. Requires ALLOW_HOST_BUILD=1 — prefer `make deploy TAG=sha-<shortsha>`
 	@set -eu; $(require-host-build)
+	@set -eu; $(refuse-in-production)
 	$(MAKE) prod-build
 	$(MAKE) prod-pin
 	$(MAKE) prod-migrate
@@ -257,6 +273,7 @@ prod-smtp-inbound-probe: ## Prove SMTP intake creates a marked team-inbox messag
 	$(PROD_COMPOSE) --profile smtp-inbound exec -T team-inbox-smtp python -m app.team_inbox_smtp e2e-probe
 
 prod-migrate: ## Apply migrations, retry lock timeouts, then verify schema contracts
+	@set -eu; $(refuse-in-production)
 	@n=0; until [ $$n -ge 4 ]; do \
 	  out=$$($(PROD_COMPOSE) run --rm --no-deps app alembic upgrade heads 2>&1); rc=$$?; \
 	  echo "$$out"; \

@@ -6,7 +6,8 @@ from sqlalchemy import Column, MetaData, String, Table, engine_from_config, pool
 
 from alembic import context
 from app.commercial_module_prereqs import (
-    MIGRATOR_RESIDUE_QUERIES,
+    MIGRATOR_RESIDUE_QUERY,
+    MIGRATOR_ROLE,
     RUNTIME_OWNER_ROLE,
     migration_identity_violations,
 )
@@ -212,10 +213,11 @@ def assert_migration_identity(connection) -> str | None:
             f"{RUNTIME_OWNER_ROLE}"
         )
     row = connection.exec_driver_sql(
-        "SELECT current_user, r.rolsuper, r.rolbypassrls "
+        "SELECT current_user, r.rolsuper, r.rolbypassrls, session_user "
         "FROM pg_catalog.pg_roles AS r WHERE r.rolname = current_user"
     ).one()
     current_user, superuser, bypass_rls = str(row[0]), bool(row[1]), bool(row[2])
+    session_user = str(row[3])
     if owner is not None and current_user == owner and not production:
         # Developer/CI path: the owner migrates its own objects.
         return None
@@ -224,6 +226,7 @@ def assert_migration_identity(connection) -> str | None:
         superuser=superuser,
         bypass_rls=bypass_rls,
         production_mode=production,
+        session_user=session_user,
     )
     if violations:
         raise MigrationIdentityError(
@@ -233,19 +236,34 @@ def assert_migration_identity(connection) -> str | None:
 
 
 def reassign_to_schema_owner(connection, owner: str) -> None:
-    """Hand everything the migrator created to ``owner``, then prove it."""
+    """Hand everything the migrator created to ``owner``, then prove it.
+
+    Keyed on ``session_user`` and preceded by a ``current_user = session_user``
+    assertion: a ``SET ROLE`` left in effect by a migration would otherwise make
+    ``CURRENT_USER`` name a different role (for example ``app_admin``) and hand
+    that role's objects away. The residue is read from ``pg_shdepend`` so every
+    owned object class is covered, not a fixed list of catalogs.
+    """
+    row = connection.exec_driver_sql("SELECT current_user, session_user").one()
+    if str(row[0]) != str(row[1]):
+        raise MigrationIdentityError(
+            f"refusing to reassign ownership: current user {row[0]!r} differs "
+            f"from session user {row[1]!r}; a migration left a SET ROLE in effect"
+        )
+    if str(row[1]) != MIGRATOR_ROLE and settings.migration_production_mode:
+        raise MigrationIdentityError(
+            f"refusing to reassign ownership from {row[1]!r}; expected {MIGRATOR_ROLE!r}"
+        )
     quoted = connection.dialect.identifier_preparer.quote(owner)
-    connection.exec_driver_sql(f"REASSIGN OWNED BY CURRENT_USER TO {quoted}")
-    me = "(SELECT oid FROM pg_catalog.pg_roles WHERE rolname = current_user)"
-    residue = {}
-    for label, query in MIGRATOR_RESIDUE_QUERIES:
-        count = connection.exec_driver_sql(query.format(oid=me)).scalar_one()
-        if count:
-            residue[label] = int(count)
-    if residue:
+    connection.exec_driver_sql(f"REASSIGN OWNED BY SESSION_USER TO {quoted}")
+    me = "(SELECT oid FROM pg_catalog.pg_roles WHERE rolname = session_user)"
+    remaining = connection.exec_driver_sql(
+        MIGRATOR_RESIDUE_QUERY.format(role=me)
+    ).scalar_one()
+    if remaining:
         raise MigrationIdentityError(
             "objects are still owned by the migration role after REASSIGN OWNED: "
-            + ", ".join(f"{label}={count}" for label, count in sorted(residue.items()))
+            f"{int(remaining)} remaining"
         )
 
 

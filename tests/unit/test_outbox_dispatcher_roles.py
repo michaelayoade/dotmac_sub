@@ -35,7 +35,7 @@ def test_absent_non_login_bypass_and_superuser_postures_are_refused() -> None:
 
 
 def test_relay_function_ownership_prerequisites_are_typed() -> None:
-    assert OUTBOX_RELAY_OWNERSHIP_CONTRACT.migration_role == "dotmac_app"
+    assert OUTBOX_RELAY_OWNERSHIP_CONTRACT.migration_role == "dotmac_sub_migrator"
     assert OUTBOX_RELAY_OWNERSHIP_CONTRACT.definer_role == "app_admin"
     assert OUTBOX_RELAY_OWNERSHIP_CONTRACT.schema == "public"
     assert OUTBOX_RELAY_OWNERSHIP_CONTRACT.schema_privileges == ("USAGE", "CREATE")
@@ -57,6 +57,6 @@ def test_relay_function_ownership_refuses_missing_membership_and_schema_privileg
     )
 
     assert violations == (
-        "dotmac_app is not a member of app_admin",
+        "dotmac_sub_migrator is not a member of app_admin",
         "app_admin lacks CREATE on schema public",
     )

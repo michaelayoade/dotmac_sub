@@ -145,8 +145,22 @@ def bootstrap(conn: psycopg.Connection, *, dry_run: bool, repair: bool) -> int:
 
     contract = OUTBOX_RELAY_OWNERSHIP_CONTRACT
     member, privileges = observe_ownership(conn)
-    if not member:
-        statement = sql.SQL("GRANT {} TO {}").format(
+    migrator_exists = conn.execute(
+        "SELECT 1 FROM pg_roles WHERE rolname = %s", (contract.migration_role,)
+    ).fetchone()
+    if not member and not migrator_exists:
+        # The migrator is created by bootstrap_commercial_module_prereqs.py; this
+        # script never creates it and never falls back to granting the definer
+        # to any other role (in particular not to the runtime role).
+        print(
+            f"skipped role membership: {contract.migration_role} does not exist yet; "
+            "run scripts/bootstrap_commercial_module_prereqs.py --repair first",
+            file=sys.stderr,
+        )
+    elif not member:
+        statement = sql.SQL(
+            "GRANT {} TO {} WITH INHERIT TRUE, SET TRUE, ADMIN FALSE"
+        ).format(
             sql.Identifier(contract.definer_role),
             sql.Identifier(contract.migration_role),
         )

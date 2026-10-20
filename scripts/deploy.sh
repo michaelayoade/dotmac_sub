@@ -509,14 +509,50 @@ stop_candidate_gracefully() {
 # is mounted into the one-off Alembic container. It must never be in .env,
 # because compose loads .env into every runtime container.
 MIGRATOR_ROLE="dotmac_sub_migrator"
-MIGRATOR_PGPASS="${MIGRATOR_PGPASS:-$(env_value MIGRATOR_PGPASS)}"
+# Path, owner and mount come from the deploy PROCESS environment or the
+# defaults only, never from .env (a writable .env must not redirect the
+# credential). As root the owner is pinned to root regardless of the override.
 MIGRATOR_PGPASS="${MIGRATOR_PGPASS:-/etc/dotmac/sub/migrator.pgpass}"
-MIGRATOR_PGPASS_MOUNT="${MIGRATOR_PGPASS_MOUNT:-/run/secrets/migrator.pgpass}"
-# Passwordless URL (host/port/db only); the password is read by libpq from the
-# pgpass file. Unlike MIGRATION_DATABASE_URL this carries no credential.
-MIGRATOR_URL="${MIGRATOR_URL:-$(env_value MIGRATOR_URL)}"
+MIGRATOR_PGPASS_MOUNT="/run/secrets/migrator.pgpass"
 MIGRATOR_PGPASS_OWNER="${MIGRATOR_PGPASS_OWNER:-root}"
+if [[ "${EUID:-$(id -u)}" == "0" ]]; then
+  MIGRATOR_PGPASS_OWNER="root"
+fi
+# Derived from DATABASE_URL by derive_migrator_url (driver, host, port and
+# database only; the user is replaced and any password dropped). An operator
+# supplied MIGRATOR_URL is accepted only if it equals the derived value.
+MIGRATOR_URL="${MIGRATOR_URL:-}"
 MIGRATOR_SCHEMA_OWNER="dotmac_app"
+
+# Print the migrator URL derived from the .env DATABASE_URL, or fail printing
+# nothing secret. The URL (which carries the application password) reaches
+# python on stdin from a shell builtin, never argv.
+derive_migrator_url() {
+  local url
+  url="$(env_value DATABASE_URL)"
+  [[ -n "${url}" ]] || return 1
+  printf '%s' "${url}" | python3 -I -c '
+import sys
+from urllib.parse import urlsplit
+
+raw = sys.stdin.read().strip()
+try:
+    parts = urlsplit(raw)
+    host, port = parts.hostname, parts.port
+except ValueError:
+    sys.exit(1)
+db = parts.path[1:] if parts.path.startswith("/") else ""
+if parts.scheme not in ("postgresql", "postgresql+psycopg", "postgres"):
+    sys.exit(1)
+if parts.query or parts.fragment or not host or not db or "/" in db:
+    sys.exit(1)
+if not all(c.isalnum() or c in "_.-" for c in db):
+    sys.exit(1)
+host = "[" + host + "]" if ":" in host else host
+netloc = host + (":" + str(port) if port else "")
+print("postgresql+psycopg://dotmac_sub_migrator@" + netloc + "/" + db)
+' 2>/dev/null
+}
 
 # Mode and owner without assuming GNU stat (the production host is Linux).
 migrator_stat() {
@@ -527,11 +563,14 @@ migrator_stat() {
 }
 
 # True when any migrator password from the pgpass file is present in .env.
-# Prints nothing: the value is never echoed. Passwords shorter than 8
-# characters are not searched (a short needle would match unrelated text).
+# Pure bash on purpose: the password must never reach an external process's
+# argv (visible in /proc to every host user). Prints nothing. Passwords shorter
+# than 8 characters are not searched (a short needle matches unrelated text).
+# Returns 2 when the file cannot be read, so the caller fails closed.
 migrator_secret_in_env_file() {
-  local line user pw
-  [[ -r "${MIGRATOR_PGPASS}" && -f .env ]] || return 1
+  local line user pw env_text=""
+  [[ -r "${MIGRATOR_PGPASS}" ]] || return 2
+  [[ -f .env ]] && env_text="$(<.env)"
   while IFS= read -r line || [[ -n "${line}" ]]; do
     [[ -z "${line}" || "${line}" == \#* ]] && continue
     user="${line#*:*:*:}"
@@ -540,7 +579,7 @@ migrator_secret_in_env_file() {
     [[ "${user}" == "${MIGRATOR_ROLE}" ]] || continue
     pw="${line#*:*:*:*:}"
     [[ "${pw}" != "${line}" && "${#pw}" -ge 8 ]] || continue
-    if grep -qF -e "${pw}" .env 2>/dev/null; then
+    if [[ "${env_text}" == *"${pw}"* ]]; then
       return 0
     fi
   done <"${MIGRATOR_PGPASS}"
@@ -552,7 +591,7 @@ migrator_secret_in_env_file() {
 # refusal names the exact check that failed and never prints a credential.
 require_migrator_identity() {
   [[ "${DEPLOYMENT_TARGET:-}" == "production" ]] || return 0
-  local ok=0 authority userinfo mode owner
+  local ok=0 mode owner derived_url dirmode rc
 
   if grep -qE "^[[:space:]]*(export[[:space:]]+)?MIGRATION_DATABASE_URL[[:space:]]*=" .env 2>/dev/null; then
     echo "MIGRATOR PREFLIGHT: MIGRATION_DATABASE_URL is set in the deploy directory's .env; compose loads .env into every runtime container." >&2
@@ -571,24 +610,15 @@ require_migrator_identity() {
     ok=1
   fi
 
-  if [[ -z "${MIGRATOR_URL}" ]]; then
-    echo "MIGRATOR PREFLIGHT: MIGRATOR_URL is not set (expected a passwordless postgresql:// URL for ${MIGRATOR_ROLE})." >&2
+  derived_url="$(derive_migrator_url)" || derived_url=""
+  if [[ -z "${derived_url}" ]]; then
+    echo "MIGRATOR PREFLIGHT: cannot derive the migrator URL: DATABASE_URL in .env is missing, not a postgresql URL, or carries a query string, fragment or unusable database name." >&2
+    ok=1
+  elif [[ -n "${MIGRATOR_URL}" && "${MIGRATOR_URL}" != "${derived_url}" ]]; then
+    echo "MIGRATOR PREFLIGHT: MIGRATOR_URL differs from the URL derived from DATABASE_URL (same driver, host, port and database, user ${MIGRATOR_ROLE}, no password); unset it to use the derived value." >&2
     ok=1
   else
-    authority="${MIGRATOR_URL#*://}"
-    if [[ "${authority}" != *@* ]]; then
-      echo "MIGRATOR PREFLIGHT: MIGRATOR_URL carries no user; expected ${MIGRATOR_ROLE}@host:port/db." >&2
-      ok=1
-    else
-      userinfo="${authority%%@*}"
-      if [[ "${userinfo}" == *:* ]]; then
-        echo "MIGRATOR PREFLIGHT: MIGRATOR_URL carries an inline password; the credential must come from the pgpass file instead." >&2
-        ok=1
-      elif [[ "${userinfo}" != "${MIGRATOR_ROLE}" ]]; then
-        echo "MIGRATOR PREFLIGHT: MIGRATOR_URL user is not ${MIGRATOR_ROLE}." >&2
-        ok=1
-      fi
-    fi
+    MIGRATOR_URL="${derived_url}"
   fi
 
   if [[ -L "${MIGRATOR_PGPASS}" ]]; then
@@ -614,15 +644,28 @@ require_migrator_identity() {
     if [[ ! -s "${MIGRATOR_PGPASS}" ]]; then
       echo "MIGRATOR PREFLIGHT: ${MIGRATOR_PGPASS} is empty." >&2
       ok=1
-    elif [[ -r "${MIGRATOR_PGPASS}" ]]; then
+    elif [[ ! -r "${MIGRATOR_PGPASS}" ]]; then
+      echo "MIGRATOR PREFLIGHT: ${MIGRATOR_PGPASS} is not readable by the deploy user; its contents cannot be checked." >&2
+      ok=1
+    else
       if ! grep -qE "^[^#][^:]*:[^:]*:[^:]*:${MIGRATOR_ROLE}:" "${MIGRATOR_PGPASS}"; then
         echo "MIGRATOR PREFLIGHT: ${MIGRATOR_PGPASS} has no entry for ${MIGRATOR_ROLE}." >&2
         ok=1
       fi
-      if migrator_secret_in_env_file; then
+      rc=0
+      migrator_secret_in_env_file || rc=$?
+      if ((rc == 0)); then
         echo "MIGRATOR PREFLIGHT: the ${MIGRATOR_ROLE} password also appears in .env; compose would hand it to every runtime container." >&2
         ok=1
+      elif ((rc == 2)); then
+        echo "MIGRATOR PREFLIGHT: ${MIGRATOR_PGPASS} could not be read for the .env comparison." >&2
+        ok=1
       fi
+    fi
+    dirmode="$(migrator_stat '%a' '%Lp' "$(dirname -- "${MIGRATOR_PGPASS}")")"
+    if [[ ! "${dirmode}" =~ ^[0-7]{3,4}$ ]] || (( (8#${dirmode} & 8#022) != 0 )); then
+      echo "MIGRATOR PREFLIGHT: the directory holding ${MIGRATOR_PGPASS} is group- or world-writable (mode ${dirmode})." >&2
+      ok=1
     fi
   fi
 

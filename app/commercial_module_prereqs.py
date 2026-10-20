@@ -27,7 +27,7 @@ from __future__ import annotations
 import configparser
 import importlib
 from collections.abc import Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from functools import cache
 from pathlib import Path
 from typing import Final
@@ -58,9 +58,11 @@ RUNTIME_OWNER_ROLE: Final[str] = "dotmac_app"
 #: LOGIN + BYPASSRLS + NOSUPERUSER, because the Starter ``dotmac-billing``
 #: migrations (bi_0006/0007/0008) run ``SET LOCAL row_security = off`` and are
 #: deliberately fail-closed for any role that cannot bypass RLS. It is a member
-#: of ``dotmac_app`` (owner DDL) and ``app_admin`` (``OWNER TO app_admin`` and
-#: opening-window provisioning), and it is NEVER handed to a running container:
-#: only the Alembic step of ``scripts/deploy.sh`` holds its credential.
+#: of ``dotmac_app`` (owner DDL) and ``app_admin`` (``ALTER FUNCTION ... OWNER
+#: TO app_admin`` in migration 557 and the Kernel relay migrations on a fresh
+#: chain). Its credential is NEVER used for operational provisioning (for
+#: example opening windows) and is NEVER handed to a running container: only
+#: the Alembic step of ``scripts/deploy.sh`` receives it.
 MIGRATOR_ROLE: Final[str] = "dotmac_sub_migrator"
 
 #: Roles the migrator must belong to, as ``(inherit, set, admin)`` options.
@@ -179,10 +181,17 @@ class MigratorObservation:
     replication: bool
     inherit: bool
     can_connect: bool
-    #: ``role -> (inherit, set, admin)`` for every role the migrator belongs to.
+    #: ``role -> (inherit, set, admin)`` for every role the migrator belongs to,
+    #: aggregated with ``bool_or`` over every grantor row (PostgreSQL 16 allows
+    #: several rows per pair), so a second row carrying ADMIN cannot hide.
     memberships: Mapping[str, tuple[bool, bool, bool]]
     #: Every role that is a member of the migrator. Must be empty.
     members: tuple[str, ...]
+    #: Number of grantor rows per granted role. Exactly one is expected.
+    membership_rows: Mapping[str, int] = field(default_factory=dict)
+    #: Objects the migrator owns. A run that failed after an ``autocommit_block``
+    #: can leave committed migrator-owned objects; that is drift.
+    owned_objects: int = 0
 
 
 def migrator_violations(observed: MigratorObservation | None) -> tuple[str, ...]:
@@ -215,6 +224,17 @@ def migrator_violations(observed: MigratorObservation | None) -> tuple[str, ...]
                 f"{MIGRATOR_ROLE} membership in {role} has "
                 f"(inherit, set, admin)={actual!r}; expected {expected!r}"
             )
+    for role, rows in sorted(observed.membership_rows.items()):
+        if rows != 1:
+            violations.append(
+                f"{MIGRATOR_ROLE} has {rows} membership rows in {role}; expected one"
+            )
+    if observed.owned_objects:
+        violations.append(
+            f"{MIGRATOR_ROLE} owns {observed.owned_objects} object(s); an "
+            "interrupted run left them behind and they must be reassigned to "
+            f"{RUNTIME_OWNER_ROLE}"
+        )
     for role in sorted(set(observed.memberships) - set(MIGRATOR_MEMBERSHIPS)):
         violations.append(
             f"{MIGRATOR_ROLE} is a member of {role}, which is outside the contract"
@@ -235,8 +255,14 @@ def migration_identity_violations(
     superuser: bool,
     bypass_rls: bool,
     production_mode: bool,
+    session_user: str | None = None,
 ) -> tuple[str, ...]:
     violations: list[str] = []
+    if session_user is not None and session_user != current_user:
+        violations.append(
+            f"session user {session_user!r} differs from current user "
+            f"{current_user!r}; a SET ROLE is in effect"
+        )
     if superuser:
         violations.append(
             f"migration role {current_user!r} is a superuser; "
@@ -255,20 +281,16 @@ def migration_identity_violations(
     return tuple(violations)
 
 
-#: Tables whose ``*owner`` column must not name the migrator after an upgrade.
-#: Each entry is ``(label, owner column expression, relation)``.
-MIGRATOR_RESIDUE_QUERIES: Final[tuple[tuple[str, str], ...]] = (
-    ("relations", "SELECT count(*) FROM pg_catalog.pg_class WHERE relowner = {oid}"),
-    ("functions", "SELECT count(*) FROM pg_catalog.pg_proc WHERE proowner = {oid}"),
-    (
-        "types",
-        "SELECT count(*) FROM pg_catalog.pg_type AS t WHERE t.typowner = {oid} "
-        "AND t.typrelid = 0 AND t.typelem = 0",
-    ),
-    (
-        "schemas",
-        "SELECT count(*) FROM pg_catalog.pg_namespace WHERE nspowner = {oid}",
-    ),
+#: Count of objects owned by the session user in this database or shared across
+#: the cluster, read from ``pg_shdepend`` so it covers every owned object class
+#: (extensions, operators, publications, ...) rather than a fixed list of
+#: catalogs. ``{role}`` is a role-oid subquery.
+MIGRATOR_RESIDUE_QUERY: Final[str] = (
+    "SELECT count(*) FROM pg_catalog.pg_shdepend "
+    "WHERE refclassid = 'pg_catalog.pg_authid'::pg_catalog.regclass "
+    "AND refobjid = {role} AND deptype = 'o' "
+    "AND dbid IN (0, (SELECT oid FROM pg_catalog.pg_database "
+    "WHERE datname = pg_catalog.current_database()))"
 )
 
 
@@ -422,7 +444,7 @@ def commercial_schema_violations(
 __all__ = [
     "ALEMBIC_INI",
     "MIGRATOR_MEMBERSHIPS",
-    "MIGRATOR_RESIDUE_QUERIES",
+    "MIGRATOR_RESIDUE_QUERY",
     "MIGRATOR_ROLE",
     "RUNTIME_OWNER_ROLE",
     "MigratorObservation",

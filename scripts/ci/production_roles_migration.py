@@ -254,7 +254,40 @@ def provision(directory: Path) -> Path:
         posture.get(MIGRATOR_ROLE) == (True, False),
         "dotmac_sub_migrator is BYPASSRLS and not a superuser",
     )
+    require(
+        not runtime_is_definer_member(),
+        "the repairs did not grant dotmac_app membership of the definer role",
+    )
     return pgpass
+
+
+def runtime_is_definer_member() -> bool:
+    with connect(MAIN_DB, ADMIN_USER) as conn:
+        row = conn.execute(
+            "SELECT pg_has_role(%s, 'app_admin', 'MEMBER')", (RUNTIME_OWNER_ROLE,)
+        ).fetchone()
+    return bool(row and row[0])
+
+
+def repair_again(pgpass: Path) -> None:
+    """The elevated repairs must be idempotent and must not re-grant the runtime
+    role any membership of the definer role."""
+    bootstrap_env = {
+        **child_env(pgpass, MAIN_DB),
+        "BOOTSTRAP_DATABASE_URL": (
+            f"postgresql://{ADMIN_USER}@{HOST}:{PORT}/{MAIN_DB}"
+        ),
+    }
+    for script in (
+        "scripts/bootstrap_commercial_module_prereqs.py",
+        "scripts/bootstrap_outbox_dispatcher_roles.py",
+    ):
+        run(
+            [sys.executable, script, "--repair"],
+            bootstrap_env,
+            expect_ok=True,
+            label=f"{script} --repair (second run)",
+        )
 
 
 def preflight(pgpass: Path) -> None:
@@ -419,6 +452,12 @@ def main() -> int:
         # (ii) The deploy's Alembic step: migrator, production mode.
         alembic(pgpass, MAIN_DB, MIGRATOR_ROLE, "heads", expect_ok=True)
         assert_upgraded_state(MAIN_DB, tenant, settlement)
+        repair_again(pgpass)
+        require(
+            not runtime_is_definer_member(),
+            "a second --repair still leaves dotmac_app outside the definer role",
+        )
+        preflight(pgpass)
 
         # (iii) Sensitivity: the same chain as restricted dotmac_app (the
         # legacy identity, no production flags) must fail at bi_0006.

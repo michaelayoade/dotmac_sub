@@ -63,6 +63,7 @@ from psycopg import sql
 from app.commercial_module_prereqs import (
     COMMERCIAL_BOOTSTRAP_ROLE_CONTRACT,
     MIGRATOR_MEMBERSHIPS,
+    MIGRATOR_RESIDUE_QUERY,
     MIGRATOR_ROLE,
     PROBED_SCHEMA_PRIVILEGES,
     PUBLIC_PROBE_ROLE,
@@ -191,17 +192,26 @@ def observe_migrator(conn: psycopg.Connection) -> MigratorObservation | None:
     ).fetchone()
     if row is None:
         return None
+    membership_rows = conn.execute(
+        "SELECT g.rolname, bool_or(m.inherit_option), bool_or(m.set_option), "
+        "bool_or(m.admin_option), count(*) "
+        "FROM pg_auth_members AS m "
+        "JOIN pg_roles AS g ON g.oid = m.roleid "
+        "JOIN pg_roles AS r ON r.oid = m.member "
+        "WHERE r.rolname = %s GROUP BY g.rolname",
+        (MIGRATOR_ROLE,),
+    ).fetchall()
     memberships = {
         str(granted): (bool(inherit), bool(set_option), bool(admin))
-        for granted, inherit, set_option, admin in conn.execute(
-            "SELECT g.rolname, m.inherit_option, m.set_option, m.admin_option "
-            "FROM pg_auth_members AS m "
-            "JOIN pg_roles AS g ON g.oid = m.roleid "
-            "JOIN pg_roles AS r ON r.oid = m.member "
-            "WHERE r.rolname = %s",
-            (MIGRATOR_ROLE,),
-        ).fetchall()
+        for granted, inherit, set_option, admin, _rows in membership_rows
     }
+    row_counts = {str(granted): int(rows) for granted, *_rest, rows in membership_rows}
+    owned = conn.execute(
+        MIGRATOR_RESIDUE_QUERY.format(
+            role="(SELECT oid FROM pg_catalog.pg_roles WHERE rolname = %s)"
+        ),
+        (MIGRATOR_ROLE,),
+    ).fetchone()
     members = tuple(
         sorted(
             str(name)
@@ -222,6 +232,8 @@ def observe_migrator(conn: psycopg.Connection) -> MigratorObservation | None:
         can_connect=bool(row[4]),
         memberships=memberships,
         members=members,
+        membership_rows=row_counts,
+        owned_objects=int(owned[0]) if owned else 0,
     )
 
 
@@ -248,7 +260,10 @@ def _repair_migrator(conn: psycopg.Connection, *, dry_run: bool) -> None:
     ]
     for granted, (inherit, set_option, admin) in MIGRATOR_MEMBERSHIPS.items():
         actual = observed.memberships.get(granted)
-        if actual == (inherit, set_option, admin):
+        if (
+            actual == (inherit, set_option, admin)
+            and observed.membership_rows.get(granted, 1) == 1
+        ):
             continue
         if actual is not None:
             statements.append(

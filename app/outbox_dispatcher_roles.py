@@ -33,7 +33,10 @@ class RelayOwnershipContract:
 
 
 OUTBOX_RELAY_OWNERSHIP_CONTRACT: Final[RelayOwnershipContract] = RelayOwnershipContract(
-    migration_role="dotmac_app",
+    # The dedicated migrator (see app.commercial_module_prereqs.MIGRATOR_ROLE),
+    # not the runtime role: the runtime role must not need, hold or be re-granted
+    # membership of the definer.
+    migration_role="dotmac_sub_migrator",
     definer_role="app_admin",
     schema="public",
     schema_privileges=("USAGE", "CREATE"),

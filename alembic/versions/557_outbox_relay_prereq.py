@@ -77,7 +77,7 @@ DISPATCHER_CONTRACT: dict[str, tuple[bool, bool, bool]] = {
     TENANT_DISPATCHER: (True, False, False),
     PLATFORM_DISPATCHER: (True, False, False),
 }
-MIGRATION_ROLE = "dotmac_app"
+MIGRATION_ROLE = "dotmac_sub_migrator"
 DEFINER_ROLE = "app_admin"
 RELAY_SCHEMA = "public"
 DEFINER_SCHEMA_PRIVILEGES = ("USAGE", "CREATE")

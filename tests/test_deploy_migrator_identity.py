@@ -21,12 +21,16 @@ START = "# --- Migration identity (dotmac_sub_migrator)"
 END = 'PREREQUISITE_OUTCOME="unknown"'
 
 SYNTHETIC_PASSWORD = "synthetic-Passw0rd-for-tests-only"  # pragma: allowlist secret
-MIGRATOR_URL = "postgresql://dotmac_sub_migrator@db.example.test:5432/sub"
+DATABASE_URL = "postgresql+psycopg://dotmac:app-password-not-real@db.example.test:5432/sub"  # pragma: allowlist secret
+MIGRATOR_URL = "postgresql+psycopg://dotmac_sub_migrator@db.example.test:5432/sub"
 
 HARNESS = """
 set -uo pipefail
 log() { printf '\\n==> %s\\n' "$*"; }
-env_value() { printf '%s\\n' "${FAKE_ENV_VALUE_MIGRATOR_PGPASS:-}"; }
+env_value() {
+  [[ -f .env ]] || return 0
+  grep -E "^$1=" .env | tail -n 1 | cut -d= -f2- || true
+}
 compose_stub() { printf '%s\\n' "$*" >>"$COMPOSE_CALLS"; }
 
 @@REGION@@
@@ -36,8 +40,8 @@ MIGRATION_MAX_ATTEMPTS=1
 MIGRATION_RETRY_SECONDS=0
 case "$ENTRY" in
   require) require_migrator_identity; echo "REQUIRE_RC=$?" ;;
-  args) migration_identity_args; echo "ARGC=${#MIGRATION_IDENTITY_ARGS[@]}" ;;
-  migrate) run_migrations; echo "MIGRATE_RC=$?" ;;
+  args) require_migrator_identity; migration_identity_args; echo "ARGC=${#MIGRATION_IDENTITY_ARGS[@]}" ;;
+  migrate) require_migrator_identity; run_migrations; echo "MIGRATE_RC=$?" ;;
 esac
 """
 
@@ -61,13 +65,14 @@ class Env:
         self.pgpass = tmp_path / "migrator.pgpass"
         self.write_pgpass()
         self.env_file = tmp_path / ".env"
-        self.env_file.write_text("APP_ENV=production\n", encoding="utf-8")
+        self.env_file.write_text(
+            f"APP_ENV=production\nDATABASE_URL={DATABASE_URL}\n", encoding="utf-8"
+        )
         self.calls = tmp_path / "compose-calls"
         self.calls.write_text("", encoding="utf-8")
         self.vars: dict[str, str] = {
             "DEPLOYMENT_TARGET": "production",
             "MIGRATOR_PGPASS": str(self.pgpass),
-            "MIGRATOR_URL": MIGRATOR_URL,
             "MIGRATOR_PGPASS_OWNER": _me(),
         }
 
@@ -172,23 +177,54 @@ def test_the_pgpass_password_appearing_in_env_is_refused(env: Env) -> None:
 
 
 @pytest.mark.parametrize(
-    ("url", "needle"),
+    "database_url",
     [
-        ("", "MIGRATOR_URL is not set"),
-        (
-            "postgresql://dotmac_sub_migrator:pw@db.example.test/sub",
-            "inline password",
-        ),
-        (
-            "postgresql://dotmac_app@db.example.test/sub",
-            "user is not dotmac_sub_migrator",
-        ),
-        ("postgresql://db.example.test/sub", "carries no user"),
+        "",
+        "mysql://u:p@db.example.test/sub",
+        "postgresql+psycopg://u:p@db.example.test/sub?password=leak",
+        "postgresql+psycopg://u:p@db.example.test/sub#frag",
+        "postgresql+psycopg://u:p@db.example.test/",
+        "postgresql+psycopg://u:p@/sub",
+        "postgresql+psycopg://u:p@db.example.test/su b",
     ],
 )
-def test_a_bad_migrator_url_is_refused(env: Env, url: str, needle: str) -> None:
-    code, output = env.run("require", MIGRATOR_URL=url)
-    _refused(code, output, needle)
+def test_an_unusable_database_url_refuses_instead_of_deriving(
+    env: Env, database_url: str
+) -> None:
+    env.env_file.write_text(
+        f"APP_ENV=production\nDATABASE_URL={database_url}\n", encoding="utf-8"
+    )
+    code, output = env.run("require")
+    _refused(code, output, "cannot derive the migrator URL")
+    assert "leak" not in output
+
+
+def test_the_url_is_derived_from_database_url_without_its_password(env: Env) -> None:
+    env.env_file.write_text(
+        "APP_ENV=production\n"
+        "DATABASE_URL=postgresql://dotmac:app-password-not-real@db.example.test:6432/sub\n",  # pragma: allowlist secret
+        encoding="utf-8",
+    )
+    code, output = env.run("migrate")
+    assert code == 0, output
+    (call,) = env.compose_calls()
+    # The plain scheme is normalised to the only installed driver; only the
+    # user changes and the password is dropped.
+    assert (
+        "-e MIGRATION_DATABASE_URL="
+        "postgresql+psycopg://dotmac_sub_migrator@db.example.test:6432/sub"
+    ) in call
+    assert "app-password-not-real" not in call + output
+
+
+def test_a_supplied_migrator_url_must_equal_the_derived_one(env: Env) -> None:
+    code, output = env.run("require", MIGRATOR_URL=MIGRATOR_URL)
+    assert code == 0, output
+    code, output = env.run(
+        "require",
+        MIGRATOR_URL="postgresql+psycopg://dotmac_sub_migrator@other.example.test/sub",
+    )
+    _refused(code, output, "MIGRATOR_URL differs from the URL derived")
 
 
 def test_missing_credential_file_is_refused(env: Env) -> None:
@@ -242,9 +278,9 @@ def test_directory_in_place_of_credential_file_is_refused(env: Env) -> None:
 def test_every_failed_check_is_reported_not_just_the_first(env: Env) -> None:
     env.append_env("MIGRATION_DATABASE_URL=postgresql://x@h/db")
     env.write_pgpass(mode=0o644)
-    code, output = env.run("require", MIGRATOR_URL="")
+    code, output = env.run("require", MIGRATOR_URL="postgresql://x@h/db")
     _refused(code, output, "MIGRATION_DATABASE_URL is set")
-    assert "MIGRATOR_URL is not set" in output
+    assert "MIGRATOR_URL differs" in output
     assert "has mode 644" in output
 
 
@@ -274,3 +310,48 @@ def test_staging_migration_receives_no_migrator_flags(env: Env) -> None:
     (call,) = env.compose_calls()
     for flag in ("PGPASSFILE", "MIGRATION_DATABASE_URL", "MIGRATION_PRODUCTION_MODE"):
         assert flag not in call
+
+
+def test_the_password_comparison_never_puts_it_on_an_argv(
+    env: Env, tmp_path: Path
+) -> None:
+    """MED-1: no external process may receive the password as an argument."""
+    shim = tmp_path / "shim"
+    shim.mkdir()
+    log = tmp_path / "argv.log"
+    for name in ("grep", "cat", "python3", "stat", "id", "dirname"):
+        real = subprocess.run(
+            ["bash", "-c", f"command -v {name}"], capture_output=True, text=True
+        ).stdout.strip()
+        (shim / name).write_text(
+            f'#!/bin/bash\nprintf \'%s\\n\' "$*" >> "{log}"\nexec {real} "$@"\n',
+            encoding="utf-8",
+        )
+        (shim / name).chmod(0o755)
+    code, output = env.run("require", PATH=f"{shim}:{os.environ['PATH']}")
+    assert code == 0, output
+    logged = log.read_text(encoding="utf-8")
+    assert logged, "the shims saw no commands, so this test proved nothing"
+    assert SYNTHETIC_PASSWORD not in logged
+    assert "app-password-not-real" not in logged
+
+
+def test_an_unreadable_credential_file_fails_closed(env: Env) -> None:
+    if os.geteuid() == 0:
+        pytest.skip("root can read any file")
+    env.pgpass.chmod(0o000)
+    try:
+        code, output = env.run("require")
+    finally:
+        env.pgpass.chmod(0o400)
+    # Mode is also wrong, but the readability refusal must be reported.
+    _refused(code, output, "is not readable by the deploy user")
+
+
+def test_a_group_writable_parent_directory_is_refused(env: Env) -> None:
+    env.dir.chmod(0o775)
+    try:
+        code, output = env.run("require")
+    finally:
+        env.dir.chmod(0o755)
+    _refused(code, output, "group- or world-writable")

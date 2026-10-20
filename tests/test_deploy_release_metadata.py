@@ -443,10 +443,6 @@ exit 0
         migrator_pgpass.chmod(0o400)
         env.setdefault("MIGRATOR_PGPASS", str(migrator_pgpass))
         env.setdefault(
-            "MIGRATOR_URL",
-            "postgresql://dotmac_sub_migrator@db.example.test:5432/dotmac_sub",
-        )
-        env.setdefault(
             "MIGRATOR_PGPASS_OWNER",
             subprocess.run(
                 ["id", "-un"], capture_output=True, text=True, check=True
@@ -562,6 +558,11 @@ def test_production_migrates_as_the_dedicated_migrator_on_alembic_only(
     assert len(migration) == 1
     assert "PGPASSFILE=/run/secrets/migrator.pgpass" in migration[0]
     assert "MIGRATION_PRODUCTION_MODE=1" in migration[0]
+    assert (
+        "MIGRATION_DATABASE_URL="
+        "postgresql+psycopg://dotmac_sub_migrator@db.example.test:5432/dotmac_sub"
+    ) in migration[0]
+    assert "not-a-real-pw" not in " ".join(commands)
     assert "MIGRATION_SCHEMA_OWNER=dotmac_app" in migration[0]
     assert "synthetic-test-value" not in " ".join(commands)
     others = [c for c in commands if "alembic upgrade heads" not in c]
