@@ -1207,46 +1207,35 @@ def subscription_command_fingerprint(command: SubscriptionLifecycleCommand) -> s
     return hashlib.sha256(encoded.encode("utf-8")).hexdigest()
 
 
-def _outcome_audit_fields(
-    outcome: SubscriptionCommandOutcome,
-    *,
-    actor_id: str | None,
-    actor_type: AuditActorType,
-) -> dict[str, object]:
-    succeeded = outcome.status in {
+def _outcome_succeeded(outcome: SubscriptionCommandOutcome) -> bool:
+    return outcome.status in {
         SubscriptionCommandOutcomeStatus.applied,
         SubscriptionCommandOutcomeStatus.scheduled,
         SubscriptionCommandOutcomeStatus.skipped,
     }
+
+
+def _outcome_status_code(outcome: SubscriptionCommandOutcome) -> int:
+    if _outcome_succeeded(outcome):
+        return 200
+    if outcome.status in {
+        SubscriptionCommandOutcomeStatus.rejected,
+        SubscriptionCommandOutcomeStatus.superseded,
+    }:
+        return 409
+    return 500
+
+
+def _outcome_metadata(outcome: SubscriptionCommandOutcome) -> dict[str, object]:
     return {
-        "action": f"subscription_{outcome.command.kind.value}",
-        "entity_type": "subscription_lifecycle_command",
-        "entity_id": outcome.command.subscription_id,
-        "actor_type": actor_type,
-        "actor_id": actor_id,
-        "request_id": _audit_request_id(outcome.command.idempotency_key),
-        "is_success": succeeded,
-        "status_code": (
-            200
-            if succeeded
-            else 409
-            if outcome.status
-            in {
-                SubscriptionCommandOutcomeStatus.rejected,
-                SubscriptionCommandOutcomeStatus.superseded,
-            }
-            else 500
-        ),
-        "metadata": {
-            "kind": outcome.command.kind.value,
-            "source": outcome.command.source,
-            "status": outcome.status.value,
-            "previous_head": outcome.previous_head,
-            "current_head": outcome.current_head,
-            "artifact_ids": list(outcome.artifact_ids),
-            "error_code": outcome.error_code,
-            "replayed": outcome.replayed,
-        },
+        "kind": outcome.command.kind.value,
+        "source": outcome.command.source,
+        "status": outcome.status.value,
+        "previous_head": outcome.previous_head,
+        "current_head": outcome.current_head,
+        "artifact_ids": list(outcome.artifact_ids),
+        "error_code": outcome.error_code,
+        "replayed": outcome.replayed,
     }
 
 
@@ -1265,10 +1254,17 @@ def _stage_outcome_audit(
     actor_type: AuditActorType,
 ) -> None:
     """Stage the outcome audit row in the caller's transaction; never swallow."""
-    fields = _outcome_audit_fields(outcome, actor_id=actor_id, actor_type=actor_type)
-    fields.pop("actor_type")
-    fields.pop("actor_id")
-    stage_audit_event(db, actor=_typed_actor(actor_type, actor_id), **fields)
+    stage_audit_event(
+        db,
+        action=f"subscription_{outcome.command.kind.value}",
+        entity_type="subscription_lifecycle_command",
+        entity_id=outcome.command.subscription_id,
+        actor=_typed_actor(actor_type, actor_id),
+        request_id=_audit_request_id(outcome.command.idempotency_key),
+        is_success=_outcome_succeeded(outcome),
+        status_code=_outcome_status_code(outcome),
+        metadata=_outcome_metadata(outcome),
+    )
 
 
 def _record_outcome(
@@ -1281,7 +1277,15 @@ def _record_outcome(
     try:
         record_audit_event(
             db,
-            **_outcome_audit_fields(outcome, actor_id=actor_id, actor_type=actor_type),
+            action=f"subscription_{outcome.command.kind.value}",
+            entity_type="subscription_lifecycle_command",
+            entity_id=outcome.command.subscription_id,
+            actor_type=actor_type,
+            actor_id=actor_id,
+            request_id=_audit_request_id(outcome.command.idempotency_key),
+            is_success=_outcome_succeeded(outcome),
+            status_code=_outcome_status_code(outcome),
+            metadata=_outcome_metadata(outcome),
         )
     except Exception:
         db.rollback()
