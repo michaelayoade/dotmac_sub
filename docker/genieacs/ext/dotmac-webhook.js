@@ -25,6 +25,15 @@ function parseUrl(url) {
 }
 
 /**
+ * Shared-secret header for Sub's /api/v1/tr069 routes. The token comes from
+ * the GenieACS process environment (never from this file or compose).
+ */
+function authHeaders() {
+  const token = process.env.DOTMAC_GENIEACS_TOKEN;
+  return token ? { "X-Dotmac-Genieacs-Token": token } : {};
+}
+
+/**
  * Send HTTP POST request with JSON payload
  */
 function postJson(url, data, callback) {
@@ -40,6 +49,7 @@ function postJson(url, data, callback) {
       "Content-Type": "application/json",
       "Content-Length": Buffer.byteLength(jsonData),
       "User-Agent": "GenieACS-DotMac-Extension/1.0",
+      ...authHeaders(),
     },
     timeout: 10000,
   };
@@ -155,6 +165,7 @@ exports.getServiceConfig = function (args, callback) {
       headers: {
         "User-Agent": "GenieACS-DotMac-Extension/1.0",
         "Accept": "application/json",
+        ...authHeaders(),
       },
       timeout: 10000,
     },

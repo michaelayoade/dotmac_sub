@@ -225,6 +225,7 @@ def _apply_soft_delete_cascade(
     for credential in credentials:
         if credential.is_active:
             credential.is_active = False
+            credential.deactivation_reason = "manual"
             touched["radius_accounts"] += 1
 
     radius_users = db.scalars(
@@ -470,6 +471,7 @@ def restore_subscriber(
     for credential in credentials:
         if not credential.is_active:
             credential.is_active = True
+            credential.deactivation_reason = None
             touched["radius_accounts"] += 1
 
     radius_users = db.scalars(

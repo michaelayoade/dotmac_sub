@@ -13,6 +13,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy.orm import Session
 
+from app.api.deps import require_genieacs_token
 from app.db import get_db
 from app.services.adapters.ont_types import ont_type_registry
 from app.services.credential_crypto import decrypt_stored_secret_or_none
@@ -22,7 +23,11 @@ from app.services.network.ont_serials import find_unique_active_ont_by_serial
 
 logger = logging.getLogger(__name__)
 
-router = APIRouter(prefix="/tr069", tags=["tr069-webhooks"])
+router = APIRouter(
+    prefix="/tr069",
+    tags=["tr069-webhooks"],
+    dependencies=[Depends(require_genieacs_token)],
+)
 
 
 class InformPayload(BaseModel):

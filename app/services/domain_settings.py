@@ -121,6 +121,56 @@ class ApplyAdminSettingsFormOutcome:
     updated_keys: tuple[str, ...]
 
 
+# Operational state rows (cursors, counters, job logs) that are rewritten by
+# background work, not configuration. Exact (domain, key) pairs pinned in code;
+# never selected by a caller flag or by configuration.
+_UNAUDITED_OPERATIONAL_KEYS = frozenset(
+    {
+        ("usage", "radius_accounting_last_radacctid"),
+        ("billing", "invoice_pdf_cache_metrics"),
+        ("gis", "last_sync_run"),
+        ("geocoding", "batch_geocode_jobs_log"),
+        ("network", "vpn_control_jobs_log"),
+        ("imports", "import_jobs_log"),
+        ("imports", "import_history_log"),
+        ("provisioning", "service_migration_jobs_log"),
+        ("provisioning", "bulk_activation_jobs_log"),
+    }
+)
+
+
+def _stage_setting_write_audit(
+    db: Session,
+    *,
+    domain: object,
+    key: str,
+    operation: str,
+    is_secret: bool,
+    changed_fields: builtins.list[str],
+) -> None:
+    """Stage required audit evidence in the SAME transaction as a setting write.
+
+    Names only: never the value, so a secret setting cannot leak through audit.
+    Not swallowed: if the row cannot be staged or flushed the write rolls back
+    with it (S12 - settings writes fail atomically).
+    """
+
+    if (str(getattr(domain, "value", domain)), key) in _UNAUDITED_OPERATIONAL_KEYS:
+        return
+    stage_audit_event(
+        db,
+        actor=AuditActor.system("domain_settings"),
+        action="control.setting_written",
+        entity_type="domain_setting",
+        entity_id=f"{getattr(domain, 'value', domain)}.{key}",
+        metadata={
+            "operation": operation,
+            "is_secret": bool(is_secret),
+            "changed_fields": sorted(changed_fields),
+        },
+    )
+
+
 class DomainSettings(ListResponseMixin):
     def __init__(self, domain: SettingDomain | None = None) -> None:
         self.domain = domain
@@ -283,7 +333,7 @@ class DomainSettings(ListResponseMixin):
         refuse_owner_command_only_key(self.domain or payload.domain, payload.key)
         return self._create(db, payload)
 
-    def _create(self, db: Session, payload: DomainSettingCreate):
+    def _create(self, db: Session, payload: DomainSettingCreate, *, audit: bool = True):
         payload = self._prepare_create_payload(db, payload.key, payload)
         data = payload.model_dump()
         data["domain"] = self._resolve_domain(payload.domain)
@@ -297,6 +347,15 @@ class DomainSettings(ListResponseMixin):
         )
         setting = DomainSetting(**data)
         db.add(setting)
+        if audit:
+            _stage_setting_write_audit(
+                db,
+                domain=data["domain"],
+                key=payload.key,
+                operation="create",
+                is_secret=bool(data.get("is_secret")),
+                changed_fields=["value"],
+            )
         db.commit()
         db.refresh(setting)
         # Invalidate cache for this setting
@@ -357,6 +416,14 @@ class DomainSettings(ListResponseMixin):
         )
         for key, value in data.items():
             setattr(setting, key, value)
+        _stage_setting_write_audit(
+            db,
+            domain=setting.domain,
+            key=setting.key,
+            operation="update",
+            is_secret=setting.is_secret,
+            changed_fields=builtins.list(data),
+        )
         db.commit()
         db.refresh(setting)
         # Invalidate cache for this setting
@@ -415,6 +482,14 @@ class DomainSettings(ListResponseMixin):
             self._validate_relationship_change(db, self.domain, key, pending_value)
             for field, value in data.items():
                 setattr(setting, field, value)
+            _stage_setting_write_audit(
+                db,
+                domain=setting.domain,
+                key=key,
+                operation="update",
+                is_secret=setting.is_secret,
+                changed_fields=builtins.list(data),
+            )
             db.commit()
             db.refresh(setting)
             # Invalidate cache for this setting
@@ -542,7 +617,7 @@ class DomainSettings(ListResponseMixin):
             is_active=True,
         )
         try:
-            return self._create(db, payload)
+            return self._create(db, payload, audit=False)
         except IntegrityError:
             db.rollback()
             raced = (
@@ -561,6 +636,14 @@ class DomainSettings(ListResponseMixin):
             raise HTTPException(status_code=404, detail="Setting not found")
         refuse_owner_command_only_key(setting.domain, setting.key)
         setting.is_active = False
+        _stage_setting_write_audit(
+            db,
+            domain=setting.domain,
+            key=setting.key,
+            operation="deactivate",
+            is_secret=setting.is_secret,
+            changed_fields=["is_active"],
+        )
         db.commit()
         # Invalidate cache for this setting
 

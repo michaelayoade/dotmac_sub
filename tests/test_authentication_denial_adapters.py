@@ -188,13 +188,13 @@ def test_untyped_internal_audit_failure_is_not_a_denial_command(
     assert db_session.scalars(select(AuthSession)).all() == []
 
 
-@pytest.mark.parametrize("surface", ["profile", "inspector", "password_change"])
+@pytest.mark.parametrize("surface", ["profile", "password_change"])
 def test_current_password_step_up_audits_without_new_lockout_policy(
     db_session,
     monkeypatch,
     surface,
 ):
-    from app.services import web_system_db_inspector, web_system_profiles
+    from app.services import web_system_profiles
     from tests.test_auth_flow import _system_user_with_credential
 
     user, credential = _system_user_with_credential(db_session, "step-up@example.test")
@@ -209,13 +209,6 @@ def test_current_password_step_up_audits_without_new_lockout_policy(
             )
             is False
         )
-    elif surface == "inspector":
-        assert (
-            web_system_db_inspector._verify_local_password(
-                db_session, principal_id=user_id, password="synthetic-wrong"
-            )
-            is False
-        )  # noqa: SLF001
     else:
         with pytest.raises(HTTPException) as refusal:
             af.change_password(

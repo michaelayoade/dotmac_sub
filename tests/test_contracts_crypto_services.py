@@ -131,8 +131,18 @@ class TestCredentialCrypto:
 
     def test_decrypt_resolves_secret_ref(self):
         ref = "bao://secret/network/olts/olt-1/ssh#password"
-        with patch("app.services.secrets.resolve_secret", return_value="resolved"):
-            assert decrypt_credential(ref) == "resolved"
+        with patch("app.services.secrets.resolve_openbao_ref", return_value="resolved"):
+            assert (
+                decrypt_credential(ref, model="OLTDevice", field="ssh_password")
+                == "resolved"
+            )
+
+    def test_decrypt_refuses_secret_ref_without_allowlisted_context(self):
+        ref = "bao://secret/network/olts/olt-1/ssh#password"
+        with patch("app.services.secrets.resolve_openbao_ref") as resolve:
+            with pytest.raises(ValueError):
+                decrypt_credential(ref)
+        resolve.assert_not_called()
 
     def test_encrypt_plain_prefix_reencrypts_when_enforced(self):
         key = Fernet.generate_key()

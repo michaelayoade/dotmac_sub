@@ -285,146 +285,6 @@ DOMAIN = DomainSOT(
             ),
         ),
         SOTService(
-            name="support.ticket_automation_rule_configuration",
-            module="app.services.support_automation_rules",
-            owns=("ticket automation-rule configuration",),
-            contract=ServiceContract(
-                concerns=(
-                    ConcernContract(
-                        name="ticket automation-rule configuration",
-                        role=OwnerRole.AUTHORITATIVE_RECORD,
-                        input_names=(
-                            "typed automation-rule command",
-                            "automation rules",
-                        ),
-                        canonical_writer=(
-                            "support.ticket_automation_rule_configuration"
-                        ),
-                    ),
-                ),
-                authoritative_inputs=(
-                    AuthorityInput(
-                        name="typed automation-rule command",
-                        owner="support.ticket_automation_rule_configuration",
-                        kind=AuthorityKind.CONTROL_INPUT,
-                        source=(
-                            "typed create/update/delete/activation command with validated "
-                            "trigger, conditions, action, actor, and idempotency evidence"
-                        ),
-                    ),
-                    AuthorityInput(
-                        name="automation rules",
-                        owner="support.ticket_automation_rule_configuration",
-                        kind=AuthorityKind.AUTHORITATIVE_RECORD,
-                        source="TicketAutomationRule rows and active priority order",
-                    ),
-                ),
-                transaction=TransactionContract(
-                    mode=TransactionMode.OWNER_MANAGED,
-                    boundary="each rule mutation enters execute_owner_command once",
-                    locking="rule row is locked for update/delete/activation",
-                    idempotency="command key and stable rule identity bound replay",
-                    retries="retry the complete rule command after rollback",
-                ),
-                errors=ErrorContract(
-                    domain_codes=(
-                        "automation_rule_not_found",
-                        "automation_rule_invalid",
-                        *owner_command_boundary_error_codes(
-                            "support.ticket_automation_rule_configuration"
-                        ),
-                    ),
-                    mapping_owner="support automation web adapters",
-                    fail_closed_on=("invalid trigger", "invalid action target"),
-                ),
-                events=EventContract(
-                    event_types=("ticket.automation_rule_changed",),
-                    schema_version=1,
-                    delivery_owner="observability.audit_log",
-                    compatibility="Version 1 records rule identity and change type only.",
-                    replay="TicketAutomationRule rows and audit evidence reconstruct changes.",
-                ),
-                migration=MigrationContract(
-                    state=AuthorityMigrationState.COMPLETE,
-                    old_owner="automation route and direct-commit service helpers",
-                    new_owner="support.ticket_automation_rule_configuration",
-                    verification="automation configuration and architecture tests",
-                    cutover_gate="all rule writes use typed owner commands",
-                    fallback_retirement="HTTP and direct transaction behavior are absent",
-                ),
-                steward="support operations",
-                design_refs=(
-                    "docs/designs/SUPPORT_TICKET_LIFECYCLE_SOT.md",
-                    "docs/SOT_RELATIONSHIP_MAP.md",
-                ),
-                test_refs=(
-                    "tests/test_support_automation.py",
-                    "tests/architecture/test_support_ticket_sot_boundary.py",
-                ),
-            ),
-        ),
-        SOTService(
-            name="support.ticket_automation_evaluation",
-            module="app.services.support_automation",
-            owns=("ticket automation-rule evaluation",),
-            depends_on=("support.ticket_automation_rule_configuration",),
-            contract=ServiceContract(
-                concerns=(
-                    ConcernContract(
-                        name="ticket automation-rule evaluation",
-                        role=OwnerRole.POLICY,
-                        input_names=(
-                            "canonical automation rules",
-                            "ticket automation facts",
-                        ),
-                    ),
-                ),
-                authoritative_inputs=(
-                    AuthorityInput(
-                        name="canonical automation rules",
-                        owner="support.ticket_automation_rule_configuration",
-                        kind=AuthorityKind.CONTROL_INPUT,
-                        source="active TicketAutomationRule rows for the trigger",
-                    ),
-                    AuthorityInput(
-                        name="ticket automation facts",
-                        owner="support.ticket_lifecycle",
-                        kind=AuthorityKind.AUTHORITATIVE_RECORD,
-                        source="current typed Ticket fields and identity-review evidence",
-                    ),
-                ),
-                transaction=TransactionContract(
-                    mode=TransactionMode.READ_ONLY,
-                    boundary="evaluation is side-effect-free and returns typed proposals",
-                    locking="not applicable; lifecycle owner rechecks state before application",
-                    idempotency="same rules and Ticket facts produce the same ordered proposals",
-                    retries="re-evaluate from canonical inputs",
-                ),
-                errors=ErrorContract(
-                    domain_codes=("automation_evaluation_invalid_rule",),
-                    mapping_owner="support.ticket_lifecycle",
-                    fail_closed_on=("identity manual review", "unknown action"),
-                ),
-                migration=MigrationContract(
-                    state=AuthorityMigrationState.COMPLETE,
-                    old_owner="automation engine direct Ticket writer",
-                    new_owner="support.ticket_automation_evaluation",
-                    verification="proposal-only automation and lifecycle application tests",
-                    cutover_gate="policy returns TicketAutomationProposal values only",
-                    fallback_retirement="automation policy cannot mutate or flush Ticket rows",
-                ),
-                steward="support operations",
-                design_refs=(
-                    "docs/designs/SUPPORT_TICKET_LIFECYCLE_SOT.md",
-                    "docs/SOT_RELATIONSHIP_MAP.md",
-                ),
-                test_refs=(
-                    "tests/test_support_automation.py",
-                    "tests/architecture/test_support_ticket_sot_boundary.py",
-                ),
-            ),
-        ),
-        SOTService(
             name="support.ticket_vocabulary",
             module="app.models.support",
             owns=("ticket status vocabulary",),
@@ -521,7 +381,6 @@ DOMAIN = DomainSOT(
                 "support.ticket_configuration",
                 "support.ticket_vocabulary",
                 "support.ticket_assignment_evaluation",
-                "support.ticket_automation_evaluation",
                 "customer.identity_scope",
                 "auth.staff_provisioning",
                 "auth.staff_permission_admission",
@@ -581,7 +440,6 @@ DOMAIN = DomainSOT(
                                 "portal team-routing resolution",
                                 "customer identity evidence",
                                 "assignment policy proposal",
-                                "automation policy proposal",
                                 *(
                                     (
                                         "active assigned staff contact identity",
@@ -729,15 +587,6 @@ DOMAIN = DomainSOT(
                         kind=AuthorityKind.DERIVED_PROJECTION,
                         source=(
                             "typed proposal containing team/person/scope and rule evidence; "
-                            "never a Ticket mutation"
-                        ),
-                    ),
-                    AuthorityInput(
-                        name="automation policy proposal",
-                        owner="support.ticket_automation_evaluation",
-                        kind=AuthorityKind.DERIVED_PROJECTION,
-                        source=(
-                            "typed action proposal derived from a matching active rule; "
                             "never a Ticket mutation"
                         ),
                     ),
@@ -948,7 +797,6 @@ DOMAIN = DomainSOT(
                     "tests/architecture/test_support_completion_gate_boundary.py",
                     "tests/test_support_services.py",
                     "tests/test_ticket_status_transition.py",
-                    "tests/test_support_automation.py",
                     "tests/test_ticket_assignment_engine.py",
                     "tests/test_ticket_assignment_authorization.py",
                     "tests/test_ticket_assignment_role_grant_migration.py",
@@ -2175,14 +2023,6 @@ DOMAIN = DomainSOT(
                 management_path="/admin/support/assignment-rules",
             ),
             AutomationCatalogItem(
-                key="support.ticket.legacy_automation",
-                label="Legacy ticket automation rules",
-                group="Support",
-                state=AutomationCatalogState.managed_elsewhere,
-                explanation="Existing ticket rules remain on their current page and are checked for conflicts.",
-                management_path="/admin/support/automation",
-            ),
-            AutomationCatalogItem(
                 key="support.ticket.center_rules",
                 label="Automation Center ticket rules",
                 group="Support",
@@ -2557,13 +2397,6 @@ DOMAIN = DomainSOT(
                 label="Ticket assignment rules",
                 owner_service="support.ticket_assignment_evaluation",
                 management_path="/admin/support/assignment-rules",
-                conflict_scopes=(),
-            ),
-            LegacyAutomationSurface(
-                key="support.ticket_creation_automation",
-                label="Ticket creation automation",
-                owner_service="support.ticket_automation_rule_configuration",
-                management_path="/admin/support/automation",
                 conflict_scopes=(),
             ),
         ),

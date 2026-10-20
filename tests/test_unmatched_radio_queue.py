@@ -101,9 +101,6 @@ class TestQueueSemantics:
             support.Tickets, "_apply_sla_policy", _unexpected_consequence
         )
         monkeypatch.setattr(
-            support.Tickets, "_apply_automation_rules", _unexpected_consequence
-        )
-        monkeypatch.setattr(
             support.Tickets,
             "_queue_notifications_for_assignments",
             _unexpected_consequence,

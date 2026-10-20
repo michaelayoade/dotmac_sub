@@ -347,6 +347,7 @@ WORKFLOW_GUIDANCE: tuple[AdminWorkflowGuidance, ...] = (
         notes=(
             "A subscription is the service record, not an invoice or an access move.",
             "Creating a subscription requires the subscription:create permission.",
+            "A service login and password typed here are kept for this service and used at activation. Changing them later needs the subscription:credential:update permission, updates RADIUS, and disconnects the live session only after RADIUS accepts the change.",
         ),
         route_templates=("/admin/catalog/subscriptions/new",),
     ),
@@ -847,6 +848,7 @@ WORKFLOW_GUIDANCE: tuple[AdminWorkflowGuidance, ...] = (
         "After reviewing field outcomes, open Customer confirmation on the ticket and request resolution against the current accepted evidence. Record the customer response through the support workflow; a dispute requires follow-up, and visit feedback remains separate from ticket confirmation.",
         notes=(
             "Tickets track communication and follow-up; they do not own billing or service state changes.",
+            "Automatic ticket actions are configured as Automation Center rules. The separate legacy ticket automation page was retired and no longer changes tickets.",
             "Execution completion is followed by the configured supervisor review, then a separate customer confirmation request. Confirmation and grace closure recheck the current evidence; changed scope or acceptance requires a fresh request. Customer feedback does not replace these decisions or restore service.",
             "Ticket assignment uses the same ticket-update authority as the rest of the edit workflow. In Field Work Orders, an active member of the assigned service team with support and dispatch permissions explicitly uses Create Work Order with a reason and reviewed scope. One ticket may need zero, one, or many visits; ticket assignment does not assign the attending technician.",
         ),
@@ -1263,6 +1265,8 @@ HELP_ONLY_GUIDANCE: tuple[AdminWorkflowGuidance, ...] = (
         "Verify the result and audit record; use destructive tools only with an approved operational plan.",
         notes=(
             "Deactivate a staff account before deleting it. Delete removes its credentials, factors, sessions, grants and staff-bound API keys only when linked history permits it; its native identity history is retained. A failed deletion leaves the selected accounts and keys unchanged.",
+            "The ad-hoc database inspector was retired. Use the reviewed reports, exports and audit views instead of free-form queries.",
+            "Saving or deleting a secret records an audit entry first; if the entry cannot be written the secret is left unchanged. Request auditing can no longer be switched off in settings.",
             "Bulk Delete skips active or missing users and repeated selections. Its deleted count reports distinct accounts; one linked-record blocker prevents the whole batch from being deleted. Review the blocked records before trying again.",
             "For API keys, choose a clear purpose, narrow scopes and an expiry. System-owned keys are shared with permissioned administrators; subscriber-owned keys appear alongside those shared keys for their owner.",
             "Create and Rotate show the secret once in the submitted page. Copy it securely before leaving; it is never included in a redirect URL. Rotation replaces the old secret immediately; revocation disables the key.",

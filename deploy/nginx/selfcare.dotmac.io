@@ -46,6 +46,16 @@ server {
         proxy_read_timeout 86400;
     }
 
+    # GenieACS-only callbacks (device-config returns decrypted credentials).
+    # GenieACS reaches the app on 127.0.0.1:8001 directly; never via the proxy.
+    location ^~ /api/v1/tr069/ {
+        return 404;
+    }
+
+    location ^~ /api/v1/reconcile/webhooks/genieacs/ {
+        return 404;
+    }
+
     # Exact avatar endpoint: cap chunked multipart bodies before app parsing.
     location = /api/v1/auth/me/avatar {
         client_max_body_size 3m;

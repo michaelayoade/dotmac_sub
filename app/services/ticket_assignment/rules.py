@@ -7,7 +7,9 @@ match key and contexts carry ``entity_type ∈ {ticket, project}``.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from uuid import UUID
 
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.models.project import Project
@@ -25,6 +27,69 @@ class TicketAssignmentContext:
     service_team_id: str | None
     tags: set[str]
     project_type: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class AutomationCenterLegacyRuleConflict:
+    """One active assignment rule that could also set a Ticket service team."""
+
+    surface_key: str
+    rule_id: UUID
+    rule_name: str
+
+
+def _normalized_values(value: object) -> frozenset[str]:
+    values = value if isinstance(value, list | tuple | set) else (value,)
+    return frozenset(
+        str(item).strip().casefold() for item in values if str(item).strip()
+    )
+
+
+def _allows_value(value: object, expected: str) -> bool:
+    values = _normalized_values(value)
+    return not values or expected.casefold() in values
+
+
+def _assignment_rule_can_overlap_urgent_ticket(rule: TicketAssignmentRule) -> bool:
+    """Conservatively identify active rules that can set a Ticket team."""
+
+    config = rule.match_config if isinstance(rule.match_config, dict) else {}
+    if rule.team_id is None or config.get("assignee_person_id"):
+        return False
+    return _allows_value(config.get("entity_types"), "ticket") and _allows_value(
+        config.get("priorities"), "urgent"
+    )
+
+
+def list_automation_center_legacy_conflicts(
+    db: Session, *, priority: str
+) -> tuple[AutomationCenterLegacyRuleConflict, ...]:
+    """Return live assignment-rule overlap for an Automation Center team action.
+
+    Region, type, channel, customer, and tag filters are treated as possibly
+    overlapping when the contracts cannot prove them disjoint.
+    """
+
+    from app.services import support_ticket_settings as settings_service
+
+    if priority.casefold() not in {"", "urgent"}:
+        return ()
+    if not settings_service.auto_assign_enabled(db):
+        return ()
+    rules = db.scalars(
+        select(TicketAssignmentRule)
+        .where(TicketAssignmentRule.is_active.is_(True))
+        .order_by(TicketAssignmentRule.created_at, TicketAssignmentRule.id)
+    )
+    return tuple(
+        AutomationCenterLegacyRuleConflict(
+            surface_key="support.ticket_assignment_rules",
+            rule_id=rule.id,
+            rule_name=rule.name,
+        )
+        for rule in rules
+        if _assignment_rule_can_overlap_urgent_ticket(rule)
+    )
 
 
 def list_active_rules(db: Session) -> list[TicketAssignmentRule]:

@@ -1,6 +1,6 @@
 """The audit middleware's defaults and its specs must state the same thing.
 
-The five request-audit controls (`enabled`, `methods`, `skip_paths`,
+The four request-audit controls (`methods`, `skip_paths`,
 `read_trigger_header`, `read_trigger_query`) were writable through
 `settings_api_custom` with no `SettingSpec` at all: the custom handler validates
 against its own `_AUDIT_SETTING_*` sets, so nothing ever required a declaration.
@@ -22,7 +22,6 @@ from app.models.domain_settings import SettingDomain
 from app.services.settings_spec import get_spec
 
 AUDIT_CONTROL_KEYS = (
-    "enabled",
     "methods",
     "skip_paths",
     "read_trigger_header",

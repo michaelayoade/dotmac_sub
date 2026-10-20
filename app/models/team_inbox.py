@@ -274,6 +274,8 @@ class TeamInboxAiRoute(Base):
 
 
 class InboxAutomationRule(Base):
+    """RETIRED: the inbox rule engine was removed (cleanup M2); table kept until dropped."""
+
     __tablename__ = "inbox_automation_rules"
     __table_args__ = (
         Index("ix_inbox_automation_trigger_active", "trigger", "is_active"),
