@@ -94,6 +94,7 @@ from app.services.billing_tax_resolution import (
 )
 from app.services.credential_crypto import (
     decrypt_credential,
+    is_secret_reference_value,
     reject_reserved_service_password,
 )
 from app.services.ip_assignment_lifecycle import (
@@ -1500,6 +1501,8 @@ def _own_service_credential_view(
         return "", False, UNUSABLE_MESSAGE
     if credential is None:
         return "", False, ""
+    if is_secret_reference_value(getattr(credential, "secret_hash", None)):
+        return credential.username or "", False, UNUSABLE_MESSAGE
     return (
         credential.username or "",
         bool(getattr(credential, "secret_hash", None)),

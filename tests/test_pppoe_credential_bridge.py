@@ -522,7 +522,8 @@ def test_t11_edit_context_shows_this_services_credential(db_session, two_service
     )
 
     assert context["current_service_login"] == "login-b"
-    assert context["current_service_password"] == "secret-b"
+    assert context["has_current_service_password"] is True
+    assert "current_service_password" not in context
 
 
 def test_t12_actor_without_credential_permission_changes_nothing(

@@ -25,6 +25,7 @@ from app.services.pppoe_credentials import (
     PppoeCredentialError,
     stage_pending_credential,
 )
+from app.services.pppoe_password_reveal import CredentialUnusable
 from tests.test_pppoe_credential_bridge import (  # noqa: F401  (fixtures)
     SECRET_PLAIN,
     _cred,
@@ -221,10 +222,8 @@ def test_h1_current_password_is_never_resolved_or_shown(
     sub = _sub(db_session, numbered, catalog_offer, SubscriptionStatus.active)
     _raw_cred(db_session, numbered, sub, "u1", "env://X")
 
-    assert (
+    with pytest.raises(CredentialUnusable):
         web._current_service_password(db_session, numbered.id, subscription_id=sub.id)
-        is None
-    )
     context = web.subscription_form_context(
         db_session,
         {
@@ -236,7 +235,7 @@ def test_h1_current_password_is_never_resolved_or_shown(
         },
     )
     assert context["credential_unusable"] is True
-    assert context["current_service_password"] == ""
+    assert "current_service_password" not in context
     assert not [
         c
         for c in no_resolution.call_args_list
@@ -250,7 +249,7 @@ def test_h1_send_credentials_refuses_reference(
     sub = _sub(db_session, numbered, catalog_offer, SubscriptionStatus.active)
     _raw_cred(db_session, numbered, sub, "u1", "env://X")
 
-    with pytest.raises(ValueError, match="secret reference"):
+    with pytest.raises(ValueError, match="Credential unusable"):
         web.send_subscription_credentials(db_session, subscription_id=str(sub.id))
     assert not [
         c
@@ -270,7 +269,8 @@ def test_h1_reveal_refuses_reference(
     sub = _sub(db_session, numbered, catalog_offer, SubscriptionStatus.active)
     _raw_cred(db_session, numbered, sub, "u1", "env://X")
 
-    assert reveal_customer_pppoe_password(db_session, str(numbered.id)) == ("", False)
+    with pytest.raises(CredentialUnusable):
+        reveal_customer_pppoe_password(db_session, str(numbered.id))
     assert not [
         c
         for c in no_resolution.call_args_list
