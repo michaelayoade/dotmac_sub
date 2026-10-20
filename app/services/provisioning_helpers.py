@@ -222,9 +222,9 @@ def _ipv4_in_use_elsewhere_clauses(subscription_id):
         Subscription.ipv4_address.is_not(None),
         Subscription.status.notin_(_TERMINAL_SUBSCRIPTION_STATUSES),
     )
-    sessions = select(func.replace(RadiusActiveSession.framed_ip_address, "/32", "")).where(
-        RadiusActiveSession.framed_ip_address.is_not(None)
-    )
+    sessions = select(
+        func.replace(RadiusActiveSession.framed_ip_address, "/32", "")
+    ).where(RadiusActiveSession.framed_ip_address.is_not(None))
     if subscription_id is not None:
         subs = subs.where(Subscription.id != subscription_id)
         sessions = sessions.where(

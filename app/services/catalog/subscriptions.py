@@ -1373,8 +1373,8 @@ class Subscriptions(ListResponseMixin):
                 ).all()
             ]
             own_active = [a.split("/", 1)[0] for a in own_active]
-            matches_own_assignment = len(own_active) == 1 and requested_ip == (
-                own_active[0]
+            matches_own_assignment = (
+                len(own_active) == 1 and requested_ip == (own_active[0])
             )
             if (
                 requested_ip != str(subscription.ipv4_address or "").strip()
