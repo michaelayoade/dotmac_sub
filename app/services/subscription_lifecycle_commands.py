@@ -24,7 +24,11 @@ from app.models.audit import AuditActorType
 from app.models.catalog import Subscription, SubscriptionStatus
 from app.models.enforcement_lock import EnforcementReason
 from app.models.idempotency import IdempotencyKey
-from app.services.audit_adapter import record_audit_event, stage_audit_event
+from app.services.audit_adapter import (
+    AuditActor,
+    record_audit_event,
+    stage_audit_event,
+)
 from app.services.common import coerce_uuid
 from app.services.owner_commands import CommandContext
 from app.services.subscription_lifecycle import (
@@ -1246,6 +1250,13 @@ def _outcome_audit_fields(
     }
 
 
+def _typed_actor(actor_type: AuditActorType, actor_id: str | None) -> AuditActor:
+    """Typed principal for staged evidence; an anonymous caller is the system."""
+    if actor_type is AuditActorType.system or not actor_id:
+        return AuditActor.system(actor_id)
+    return AuditActor(actor_type=actor_type, actor_id=actor_id)
+
+
 def _stage_outcome_audit(
     db: Session,
     outcome: SubscriptionCommandOutcome,
@@ -1254,10 +1265,10 @@ def _stage_outcome_audit(
     actor_type: AuditActorType,
 ) -> None:
     """Stage the outcome audit row in the caller's transaction; never swallow."""
-    stage_audit_event(
-        db,
-        **_outcome_audit_fields(outcome, actor_id=actor_id, actor_type=actor_type),
-    )
+    fields = _outcome_audit_fields(outcome, actor_id=actor_id, actor_type=actor_type)
+    fields.pop("actor_type")
+    fields.pop("actor_id")
+    stage_audit_event(db, actor=_typed_actor(actor_type, actor_id), **fields)
 
 
 def _record_outcome(

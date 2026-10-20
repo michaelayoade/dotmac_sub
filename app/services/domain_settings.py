@@ -139,6 +139,7 @@ def _stage_setting_write_audit(
 
     stage_audit_event(
         db,
+        actor=AuditActor.system("domain_settings"),
         action="control.setting_written",
         entity_type="domain_setting",
         entity_id=f"{getattr(domain, 'value', domain)}.{key}",
