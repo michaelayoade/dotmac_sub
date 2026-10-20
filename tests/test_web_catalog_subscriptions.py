@@ -1217,7 +1217,7 @@ def test_send_subscription_credentials_uses_email_and_sms_targets(
         sent_emails.append(kwargs["to_email"])
         return True
 
-    def _fake_send_sms(_db, phone, body, track=True):
+    def _fake_send_sms(_db, phone, body, track=True, **_kw):
         sent_sms.append((phone, body, track))
         return True
 

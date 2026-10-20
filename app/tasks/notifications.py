@@ -44,6 +44,7 @@ from app.services.ephemeral_communication_actions import (
 )
 from app.services.integrations import whatsapp_capability as whatsapp_service
 from app.services.nextcloud_talk_staff import deliver_due_staff_talk_notifications
+from app.services.notification import CREDENTIAL_EVENT_TYPE
 from app.services.observability import record_notification_queue_result
 from app.services.operational_logging import (
     OperationalEventName,
@@ -483,6 +484,14 @@ def _eligible_notification_query(
         db.query(Notification)
         .filter(Notification.is_active.is_(True))
         .filter(Notification.channel.in_(_DELIVERABLE_CHANNELS))
+        # Credential rows persist only a masked copy; resending it would
+        # deliver the mask. They are never worker-eligible.
+        .filter(
+            or_(
+                Notification.event_type.is_(None),
+                Notification.event_type != CREDENTIAL_EVENT_TYPE,
+            )
+        )
         .filter(
             or_(
                 Notification.status == NotificationStatus.queued,

@@ -1459,6 +1459,23 @@ def _credential_contact_targets(subscriber: Subscriber) -> dict[str, list[str]]:
     return {"email": emails, "sms": phones}
 
 
+CREDENTIAL_MASK = "********"
+CREDENTIAL_RESEND_WINDOW_SECONDS = 120
+
+
+def _credential_email_text(subscriber: Subscriber, username: str, password: str) -> str:
+    return (
+        f"Hello {subscriber.full_name},\n\n"
+        f"Your service login is: {username}\n"
+        f"Your service password is: {password}\n\n"
+        "Please keep these details secure."
+    )
+
+
+def _credential_sms_text(username: str, password: str) -> str:
+    return f"Service login: {username} | Password: {password}. Keep it secure."
+
+
 def send_subscription_credentials(
     db: Session,
     *,
@@ -1503,12 +1520,26 @@ def send_subscription_credentials(
     if not targets["email"] and not targets["sms"]:
         raise ValueError("Subscriber has no email or SMS contact targets.")
 
+    # Sends are synchronous (one SMTP/SMS timeout per target, which can exceed
+    # the proxy read timeout with many targets); refuse a repeat so a retried
+    # click cannot deliver the password twice.
+    from app.services.notification import notifications as notification_records
+
+    recent = notification_records.recent_credential_send_exists(
+        db, subscriber.id, CREDENTIAL_RESEND_WINDOW_SECONDS
+    )
+    if recent:
+        raise ValueError(
+            "Credentials were already sent to this subscriber moments ago. "
+            "Wait two minutes before sending again."
+        )
+
     subject = "Your Internet service credentials"
-    body_text = (
-        f"Hello {subscriber.full_name},\n\n"
-        f"Your service login is: {credential.username}\n"
-        f"Your service password is: {password}\n\n"
-        "Please keep these details secure."
+    # The delivered message carries the password (until D9 replaces delivery);
+    # the copy persisted in ``notifications`` / deliveries has it masked.
+    body_text = _credential_email_text(subscriber, credential.username, password)
+    stored_text = _credential_email_text(
+        subscriber, credential.username, CREDENTIAL_MASK
     )
     from html import escape
 
@@ -1529,22 +1560,54 @@ def send_subscription_credentials(
     email_sent = 0
     sms_sent = 0
     for email in targets["email"]:
-        email_service.send_email(
+        if email_service.send_email(
             db=db,
             to_email=email,
             subject=subject,
             body_html=body_html,
             body_text=body_text,
             activity="subscription_welcome",
-        )
-        email_sent += 1
+            stored_body=stored_text,
+            subscriber_id=str(subscriber.id),
+        ):
+            email_sent += 1
 
-    sms_body = (
-        f"Service login: {credential.username} | Password: {password}. Keep it secure."
-    )
+    sms_body = _credential_sms_text(credential.username, password)
+    stored_sms = _credential_sms_text(credential.username, CREDENTIAL_MASK)
     for phone in targets["sms"]:
-        if sms_service.send_sms(db, phone, sms_body, track=True):
+        if sms_service.send_sms(
+            db,
+            phone,
+            sms_body,
+            track=True,
+            stored_body=stored_sms,
+            subscriber_id=str(subscriber.id),
+        ):
             sms_sent += 1
+
+    from app.services.audit_adapter import AuditActor, record_audit_event
+
+    record_audit_event(
+        db,
+        action="subscription.credentials_sent",
+        entity_type="subscriber",
+        entity_id=str(subscription.subscriber_id),
+        actor=(
+            AuditActor.user(actor_id)
+            if actor_id
+            else AuditActor.system("send_subscription_credentials")
+        ),
+        # Counts only; never the credential or the contact addresses.
+        metadata={
+            "subscription_id": str(subscription_id),
+            "email_sent": email_sent,
+            "sms_sent": sms_sent,
+            "email_targets": len(targets["email"]),
+            "sms_targets": len(targets["sms"]),
+        },
+        status_code=200 if (email_sent or sms_sent) else 502,
+        is_success=bool(email_sent or sms_sent),
+    )
 
     return {
         "email_sent": email_sent,
