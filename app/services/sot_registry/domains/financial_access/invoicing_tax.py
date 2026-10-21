@@ -4526,4 +4526,177 @@ SERVICES: tuple[SOTService, ...] = (
             ),
         ),
     ),
+    SOTService(
+        name="financial.starter_prepaid",
+        module="app.services.billing.starter_prepaid",
+        owns=(
+            "Prepaid purchase funding acceptance and period earmarks",
+            "Earmark-funded prepaid period invoice settlement",
+        ),
+        depends_on=(
+            "control.settings_spec",
+            "financial.invoices",
+            "financial.prepaid_service_renewals",
+            "financial.starter_issuance",
+        ),
+        notes=(
+            "Prepaid lane (ADR 0031): a confirmed purchase-funding "
+            "intent is accepted on the prepaid funding lane and "
+            "earmarked in full to named subscription periods; "
+            "StarterPrepaidFundingLink rows record the settlement "
+            "identity per period. At renewal, a period draft whose "
+            "line carries a funded billing_line_key issues through "
+            "the prepaid issuance flavor (obligation source fact "
+            "equals the earmark target) and allocates from that "
+            "earmark, mirroring the Starter collectible position. "
+            "Periods without a Starter earmark keep the legacy "
+            "renewal path. Intent opening stays with the payment "
+            "caller; no legacy money state is written."
+        ),
+        contract=ServiceContract(
+            concerns=(
+                ConcernContract(
+                    name="Prepaid purchase funding acceptance and period earmarks",
+                    role=OwnerRole.COMMAND_WRITER,
+                    input_names=(
+                        "confirmed purchase-funding intent",
+                        "canonical Starter prepaid policies",
+                    ),
+                    canonical_writer="financial.starter_prepaid",
+                ),
+                ConcernContract(
+                    name="Earmark-funded prepaid period invoice settlement",
+                    role=OwnerRole.COMMAND_WRITER,
+                    input_names=(
+                        "prepaid period draft and funding link",
+                        "canonical Starter prepaid policies",
+                    ),
+                    canonical_writer="financial.starter_prepaid",
+                ),
+            ),
+            authoritative_inputs=(
+                AuthorityInput(
+                    name="confirmed purchase-funding intent",
+                    owner="external:dotmac_payments",
+                    kind=AuthorityKind.EXTERNAL_OBSERVATION,
+                    source=(
+                        "PURCHASE_FUNDING intent bound to the purchase "
+                        "reference and payer, confirmed through the "
+                        "policy-resolved confirmation source"
+                    ),
+                ),
+                AuthorityInput(
+                    name="prepaid period draft and funding link",
+                    owner="financial.prepaid_service_renewals",
+                    kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                    source=(
+                        "renewal-owned period draft whose single line "
+                        "carries the funded billing_line_key, resolved "
+                        "through StarterPrepaidFundingLink"
+                    ),
+                ),
+                AuthorityInput(
+                    name="canonical Starter prepaid policies",
+                    owner="control.settings_spec",
+                    kind=AuthorityKind.CONTROL_INPUT,
+                    source=(
+                        "starter_* settings resolved through "
+                        "starter_policies (ADR 0031): prepaid flavor "
+                        "identity, source-fact templates, funding "
+                        "lane, confirmation source, minor units"
+                    ),
+                ),
+            ),
+            transaction=TransactionContract(
+                mode=TransactionMode.PARTICIPANT,
+                boundary=(
+                    "Funding acceptance, earmarking, and link rows "
+                    "commit together; period issuance, allocation, "
+                    "mirror, audit, and the access signal commit "
+                    "together inside the renewal owner's transaction."
+                ),
+                locking=(
+                    "Renewal cycle locks the subscription and draft; "
+                    "Starter applies its own writer fences inside "
+                    "the same transaction."
+                ),
+                idempotency=(
+                    "A funding replay returns the recorded links for "
+                    "its purchase reference; period settlement is "
+                    "keyed by the renewal's deterministic period "
+                    "identity and emits at most one access signal "
+                    "per funding confirmation for the invoice."
+                ),
+                retries=(
+                    "Callers retry the whole funding or renewal step "
+                    "after rollback with the same references."
+                ),
+            ),
+            errors=ErrorContract(
+                domain_codes=(
+                    "financial.starter_prepaid.configuration_invalid",
+                    "financial.starter_prepaid.confirmed_cash_mismatch",
+                    "financial.starter_prepaid.intent_binding_mismatch",
+                    "financial.starter_prepaid.no_targets",
+                    "financial.starter_prepaid.starter_refused",
+                    "financial.starter_prepaid.targets_do_not_cover_purchase",
+                ),
+                mapping_owner="prepaid funding and renewal owners",
+                retryable_codes=(),
+                fail_closed_on=(
+                    "intent not bound to the named purchase and payer",
+                    "period targets not covering the confirmed amount in full",
+                    "Starter payments or billing refusal",
+                ),
+            ),
+            events=EventContract(
+                event_types=("payment.received",),
+                schema_version=1,
+                delivery_owner="events.dispatcher",
+                compatibility=(
+                    "Version 1 is the shared settlement access "
+                    "signal: exactly one payment.received per funding "
+                    "confirmation for the settled period invoice."
+                ),
+                replay=(
+                    "Replay returns the recorded Starter identities "
+                    "without a second signal."
+                ),
+            ),
+            migration=MigrationContract(
+                state=AuthorityMigrationState.CUTOVER_READY,
+                old_owner="financial.prepaid_service_renewals legacy funding",
+                new_owner="financial.starter_prepaid",
+                verification=(
+                    "Migrated-PostgreSQL proof: a funded purchase "
+                    "earmarks two periods, the first period invoice "
+                    "issues and settles to zero collectible from its "
+                    "earmark with no legacy ledger entry, and the "
+                    "second period's earmark cannot fund the first."
+                ),
+                cutover_gate=(
+                    "Only periods with a StarterPrepaidFundingLink "
+                    "take this lane; unfunded periods keep the "
+                    "legacy renewal path until their funding enters "
+                    "Starter."
+                ),
+                fallback_retirement=(
+                    "Legacy prepaid funding writers are deleted at "
+                    "the money-pack cutover; they are never used for "
+                    "an earmark-funded period."
+                ),
+            ),
+            steward="billing operations",
+            design_refs=(
+                "docs/adr/0031-composable-starter-billing-policies.md",
+                "docs/adr/0032-lifecycle-workflows-money-access.md",
+                "docs/SOT_RELATIONSHIP_MAP.md",
+            ),
+            test_refs=(
+                "tests/test_starter_prepaid_eligibility.py",
+                "tests/integration/test_starter_prepaid_pg.py",
+                "tests/architecture/test_sot_manifest_contracts.py",
+            ),
+        ),
+    ),
 )
