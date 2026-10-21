@@ -113,18 +113,24 @@ def _seller_and_bank(db_session):
 def _checkout_purchase(db_session, monkeypatch, purchase, *, reference):
     _patch_policy(monkeypatch)
     binding = _checkout_binding(db_session)
+    binding_id = binding.id
+    account_id = purchase.account_id
+    purchase_id = purchase.id
+    fingerprint = purchase.preview_fingerprint
+    db_session.commit()
+    db_session_adapter.release_read_transaction(db_session)
     return svc.create_customer_gateway_topup_intent(
         db_session,
         svc.CreateCustomerGatewayTopupIntentCommand(
             flow=svc.CustomerGatewayTopupFlow.prepaid_period_purchase,
-            account_id=purchase.account_id,
-            purchase_id=purchase.id,
+            account_id=account_id,
+            purchase_id=purchase_id,
             reference=reference,
             provider_type="paystack",
             provider_id=None,
             created_by="pytest",
-            expected_preview_fingerprint=purchase.preview_fingerprint,
-            capability_binding_id=binding.id,
+            expected_preview_fingerprint=fingerprint,
+            capability_binding_id=binding_id,
         ),
         context=_context(svc.CREATE_CUSTOMER_SCOPE, idempotency_key=f"gw-{uuid4()}"),
     )
@@ -166,7 +172,6 @@ def test_eligible_checkout_opens_bound_funding_intent(
     purchase_id = purchase.id
     reference = f"gw-funding-{uuid4()}"
 
-    db_session_adapter.release_read_transaction(db_session)
     _checkout_purchase(db_session, monkeypatch, purchase, reference=reference)
 
     observed = get_payment_intent_v1(
@@ -187,7 +192,6 @@ def test_checkout_without_live_switch_opens_no_module_intent(
     purchase = _bare_purchase(db_session, subscriber, subscription)
     reference = f"gw-legacy-{uuid4()}"
 
-    db_session_adapter.release_read_transaction(db_session)
     _checkout_purchase(db_session, monkeypatch, purchase, reference=reference)
 
     observed = get_payment_intent_v1(
@@ -255,9 +259,24 @@ def test_verified_purchase_settles_through_starter_funding(
             db_session, settle, context=purchase_context()
         )
     except Exception as exc:
+        chain: list[str] = []
+        seen: set[int] = set()
+        current: BaseException | None = exc
+        while current is not None and id(current) not in seen:
+            seen.add(id(current))
+            chain.append(
+                f"{type(current).__name__} code={getattr(current, 'code', None)}"
+                f" msg={current}"
+            )
+            current = current.__cause__ or current.__context__
+        purchase_after = db_session.get(PrepaidPeriodPurchase, purchase_id)
         raise AssertionError(
-            f"{type(exc).__name__}: {exc}\nSOFT-ROLLBACK STACKS:\n"
-            + "\n---\n".join(_stacks[-4:])
+            "CHAIN:\n"
+            + "\n".join(chain)
+            + f"\nPURCHASE: status={purchase_after.status if purchase_after else None}"
+            f" failure={purchase_after.failure_code if purchase_after else None}"
+            + "\nSOFT-ROLLBACK STACKS:\n"
+            + "\n---\n".join(_stacks[-2:])
         ) from exc
     finally:
         event.remove(_Session, "after_soft_rollback", _probe)
