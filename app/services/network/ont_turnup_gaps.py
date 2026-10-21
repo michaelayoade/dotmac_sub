@@ -222,10 +222,28 @@ def canonical_ppp_credential(
     return candidates[0], "ok"
 
 
-def _mac_family(value: str | None) -> str | None:
-    """First five octets of a MAC (the ONT's WAN MACs differ in the last)."""
+MAX_MAC_OFFSET = 8
+
+
+def _mac_int(value: str | None) -> int | None:
     digits = "".join(ch for ch in str(value or "").lower() if ch in "0123456789abcdef")
-    return digits[:10] if len(digits) >= 12 else None
+    return int(digits, 16) if len(digits) == 12 else None
+
+
+def mac_matches(
+    session_mac: str | None, observed_wan_mac: str | None, ont_mac: str | None
+) -> bool:
+    """Exact match on the observed WAN PPP MAC when known; otherwise within a
+    small offset (<= 8) of the ONT MAC. Neighbouring ONTs share the first five
+    octets, so a prefix match is NOT enough. No known MAC means no match."""
+    got = _mac_int(session_mac)
+    if got is None:
+        return False
+    exact = _mac_int(observed_wan_mac)
+    if exact is not None:
+        return got == exact
+    base = _mac_int(ont_mac)
+    return base is not None and abs(got - base) <= MAX_MAC_OFFSET
 
 
 def radius_session_live(
@@ -234,13 +252,14 @@ def radius_session_live(
     *,
     ppp_write_issued_at: datetime | None,
     ont_mac: str | None,
+    observed_wan_mac: str | None = None,
 ) -> bool:
     """A live session for the canonical credential that can prove this revision.
 
     If this revision issued a PPP write/Reset, the session must have started
     after it. Otherwise (no-op re-apply) an existing session is accepted, but
-    when the ONT's WAN MAC is known its calling-station MAC must be in the
-    same family, so an old CPE cannot prove a no-op apply.
+    its calling-station MAC must match the observed WAN MAC exactly, or lie
+    within a small offset of the ONT MAC; with no known MAC it keeps waiting.
     """
     from sqlalchemy import and_, or_
 
@@ -258,10 +277,9 @@ def radius_session_live(
     sessions = list(db.scalars(stmt.limit(20)))
     if ppp_write_issued_at is not None:
         return bool(sessions)
-    family = _mac_family(ont_mac)
-    if family is None:
-        return bool(sessions)
-    return any(_mac_family(s.calling_station_id) == family for s in sessions)
+    return any(
+        mac_matches(x.calling_station_id, observed_wan_mac, ont_mac) for x in sessions
+    )
 
 
 def radius_gate(
@@ -272,6 +290,7 @@ def radius_gate(
     subscription_id: UUID | None,
     ppp_write_issued_at: datetime | None,
     ont_mac: str | None,
+    observed_wan_mac: str | None = None,
     waiting_since: datetime | None,
     attempt: int,
     now: datetime | None = None,
@@ -294,6 +313,7 @@ def radius_gate(
         credential,
         ppp_write_issued_at=ppp_write_issued_at,
         ont_mac=ont_mac,
+        observed_wan_mac=observed_wan_mac,
     ):
         return "ok"
     now = now or datetime.now(UTC)

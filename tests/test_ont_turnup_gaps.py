@@ -690,13 +690,16 @@ def _patch_pppoe(monkeypatch, reconcile, login="100000001"):
     )
 
 
-def _clean(applied=()):
+def _clean(applied=(), wan_mac=None):
     return lambda *_a, **_k: SimpleNamespace(
         success=True,
         sync_status="synced",
         drift_after=(),
         failure=None,
         actions_applied=applied,
+        observed_after=SimpleNamespace(
+            acs=SimpleNamespace(acs_observed_wan_ppp_mac=wan_mac)
+        ),
     )
 
 
@@ -708,10 +711,11 @@ def _radius(
     *,
     attempt=1,
     login="100000001",
+    wan_mac=None,
     **seed,
 ):
     head, op, ids = _seed(db_session, subscriber, subscription, **seed)
-    _patch_pppoe(monkeypatch, _clean(), login=login)
+    _patch_pppoe(monkeypatch, _clean(wan_mac=wan_mac), login=login)
     return head, op, _execute(db_session, ids, attempt=attempt)
 
 
@@ -946,3 +950,99 @@ def test_wan_allocation_marked_provisioned_only_after_applied_create_and_readbac
     assert get_allocations_for_ont(db_session, ont.id)[0].provisioned_at is None
     ont_turnup_gaps.mark_wan_service_port_provisioned(db_session, ont, result())
     assert get_allocations_for_ont(db_session, ont.id)[0].provisioned_at is not None
+
+
+def test_mac_exact_match_on_observed_wan_mac(
+    db_session, monkeypatch, subscriber, subscription
+):
+    # ONT MAC is far from the session MAC, but the observed WAN MAC is exact.
+    head, _op, outcome = _radius(
+        db_session,
+        monkeypatch,
+        subscriber,
+        subscription,
+        session=(600, "11:22:33:44:55:66"),
+        ont_mac="AA:BB:CC:DD:EE:01",
+        wan_mac="11-22-33-44-55-66",
+    )
+    assert outcome.phase is OntServiceConfigurationPhase.verified
+
+
+def test_known_exact_mac_rejects_a_near_but_different_session(
+    db_session, monkeypatch, subscriber, subscription
+):
+    head, _op, outcome = _radius(
+        db_session,
+        monkeypatch,
+        subscriber,
+        subscription,
+        session=(600, "AA:BB:CC:DD:EE:02"),
+        wan_mac="AA:BB:CC:DD:EE:30",
+    )
+    assert outcome.phase is OntServiceConfigurationPhase.readback_pending
+
+
+def test_neighbour_ont_with_far_offset_is_rejected(
+    db_session, monkeypatch, subscriber, subscription
+):
+    head, _op, outcome = _radius(
+        db_session,
+        monkeypatch,
+        subscriber,
+        subscription,
+        session=(600, "AA:BB:CC:DD:EE:A1"),
+    )
+    assert outcome.phase is OntServiceConfigurationPhase.readback_pending
+
+
+def test_unknown_mac_keeps_waiting(db_session, monkeypatch, subscriber, subscription):
+    head, _op, outcome = _radius(
+        db_session,
+        monkeypatch,
+        subscriber,
+        subscription,
+        session=(600, "AA:BB:CC:DD:EE:01"),
+        ont_mac=None,
+    )
+    assert outcome.phase is OntServiceConfigurationPhase.readback_pending
+
+
+def test_cr_failed_pass_with_queued_reset_anchors_proof_at_queue_time(
+    db_session, monkeypatch, subscriber, subscription
+):
+    head, op, ids = _seed(db_session, subscriber, subscription)
+    _patch_pppoe(
+        monkeypatch,
+        lambda *_a, **_k: SimpleNamespace(
+            success=False,
+            sync_status="out_of_sync",
+            drift_after=("wan.mode",),
+            failure=SimpleNamespace(
+                reason="acs_cr_failed",
+                message="queued",
+                evidence={"ppp_write_queued": True, "ppp_reset_queued": True},
+            ),
+            actions_applied=(),
+        ),
+    )
+    monkeypatch.setattr(ont_turnup_gaps, "acs_queued_task_count", lambda *_a, **_k: 2)
+    waiting = _execute(db_session, ids, attempt=3)
+    assert waiting.phase is OntServiceConfigurationPhase.readback_pending
+    anchor = op.input_payload["ppp_write_issued_at"]
+    assert anchor
+    # The drain/Reset redials PPP between queue time and the resumed pass.
+    db_session.add(
+        RadiusActiveSession(
+            subscription_id=subscription.id,
+            username="100000001",
+            acct_session_id=uuid.uuid4().hex,
+            calling_station_id=MAC,
+            session_start=datetime.now(UTC),
+        )
+    )
+    db_session.commit()
+    db_session_adapter.release_read_transaction(db_session)
+    _patch_pppoe(monkeypatch, _clean())
+    verified = _execute(db_session, ids, attempt=1)
+    assert verified.phase is OntServiceConfigurationPhase.verified
+    assert op.input_payload["ppp_write_issued_at"] == anchor

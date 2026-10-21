@@ -1760,6 +1760,7 @@ def _radius_proof_state(
     *,
     clean: bool,
     attempt: int,
+    observed_wan_mac: str | None = None,
 ) -> str:
     """G9: a WAN revision is verified only with a live RADIUS session.
 
@@ -1785,6 +1786,7 @@ def _radius_proof_state(
         subscription_id=assignment.subscription_id,
         ppp_write_issued_at=_parse_ts(payload.get("ppp_write_issued_at")),
         ont_mac=ont.mac_address,
+        observed_wan_mac=observed_wan_mac,
         waiting_since=_parse_ts(payload["first_clean_readback_at"]),
         attempt=attempt,
     )
@@ -1921,7 +1923,14 @@ def _execution_locked(
         and wifi_scope is not None
         and "wifi_password_ref" in wifi_scope.changed_fields
     )
-    if _turnup.ppp_write_applied(result):
+    failure_evidence = getattr(getattr(result, "failure", None), "evidence", None)
+    if _turnup.ppp_write_applied(result) or (
+        isinstance(failure_evidence, dict)
+        and (
+            failure_evidence.get("ppp_write_queued")
+            or failure_evidence.get("ppp_reset_queued")
+        )
+    ):
         # Recorded ONCE per revision (never overwritten, carried across
         # retries/resumes): the Reset may run during a later queue drain.
         issued = dict(operation.input_payload or {})
@@ -1941,6 +1950,11 @@ def _execution_locked(
         and not delivered_without_readback
         and not wifi_password_unverifiable_on_readback,
         attempt=command.verification_attempt,
+        observed_wan_mac=getattr(
+            getattr(getattr(result, "observed_after", None), "acs", None),
+            "acs_observed_wan_ppp_mac",
+            None,
+        ),
     )
     if radius_state == "waiting":
         next_attempt = command.verification_attempt + 1

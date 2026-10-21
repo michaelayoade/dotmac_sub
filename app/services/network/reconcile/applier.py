@@ -731,6 +731,15 @@ def _execute(action: Action, ctx: ApplyContext) -> AppliedAction:
                     # already matches and nothing else would redial.
                     _queue_ppp_reset(action, ctx, f"{base}.Reset", cr=False)
                     _remember_revision(ctx, revision)
+                if exc.reason == ReconcileFailureReason.ACS_CR_FAILED:
+                    # The PPP params (and Reset, if needed) ARE queued in ACS
+                    # even though this pass ends in CR failure: expose that so
+                    # the lifecycle anchors the RADIUS proof at queue time.
+                    exc.evidence = {
+                        **(exc.evidence or {}),
+                        "ppp_write_queued": True,
+                        "ppp_reset_queued": bool(reset_needed),
+                    }
                 raise
             if reset_needed:
                 _queue_ppp_reset(action, ctx, f"{base}.Reset", cr=True)
