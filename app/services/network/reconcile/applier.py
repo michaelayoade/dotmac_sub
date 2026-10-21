@@ -514,6 +514,15 @@ def _execute(action: Action, ctx: ApplyContext) -> AppliedAction:
                 vlan_id=action.vlan,
                 user_vlan=action.vlan,
                 port_index=action.service_port_index,
+                **(
+                    {
+                        "traffic_table_inbound": action.traffic_table_inbound,
+                        "traffic_table_outbound": action.traffic_table_outbound,
+                    }
+                    if action.traffic_table_inbound is not None
+                    and action.traffic_table_outbound is not None
+                    else {}
+                ),
             )
             evidence = _olt_check(action, result)
             return _ok(
@@ -723,6 +732,15 @@ def _execute(action: Action, ctx: ApplyContext) -> AppliedAction:
                     # already matches and nothing else would redial.
                     _queue_ppp_reset(action, ctx, f"{base}.Reset", cr=False)
                     _remember_revision(ctx, revision)
+                if exc.reason == ReconcileFailureReason.ACS_CR_FAILED:
+                    # The PPP params (and Reset, if needed) ARE queued in ACS
+                    # even though this pass ends in CR failure: expose that so
+                    # the lifecycle anchors the RADIUS proof at queue time.
+                    exc.evidence = {
+                        **(exc.evidence or {}),
+                        "ppp_write_queued": True,
+                        "ppp_reset_queued": bool(reset_needed),
+                    }
                 raise
             if reset_needed:
                 _queue_ppp_reset(action, ctx, f"{base}.Reset", cr=True)
@@ -1176,6 +1194,7 @@ def _apply_wcd_parent(action: AcsAddObject, ctx: ApplyContext, started: float):
                 f"WANConnectionDevice {desired} is the TR-069 management WAN",
             )
         ctx.wan_wcd_indexes[desired] = desired
+        _clear_pending_wcd_add(ctx)
         return _ok(action, "wcd_parent_present", None, str(desired), started)
     # An index created by an earlier pass whose child/params did not finish:
     # adopt it rather than creating another WCD.
@@ -1186,6 +1205,7 @@ def _apply_wcd_parent(action: AcsAddObject, ctx: ApplyContext, started: float):
         and not _igd_wcd_is_management(before[remembered])
     ):
         ctx.wan_wcd_indexes[desired] = remembered
+        _clear_pending_wcd_add(ctx)
         return _ok(action, "wcd_parent_adopted", None, str(remembered), started)
     blank = [
         i
@@ -1196,6 +1216,7 @@ def _apply_wcd_parent(action: AcsAddObject, ctx: ApplyContext, started: float):
     ]
     if blank:
         ctx.wan_wcd_indexes[desired] = blank[0]
+        _clear_pending_wcd_add(ctx)
         return _ok(action, "wcd_parent_adopted", None, str(blank[0]), started)
 
     if ctx.state_get is not None:
@@ -1239,6 +1260,13 @@ def _apply_wcd_parent(action: AcsAddObject, ctx: ApplyContext, started: float):
         ctx.state_set("created_wcd_index", created[0])
     ctx.wan_wcd_indexes[desired] = created[0]
     return _ok(action, "wcd_parent_created", None, str(created[0]), started)
+
+
+def _clear_pending_wcd_add(ctx: ApplyContext) -> None:
+    """The WCD exists (present or adopted): the pending-create marker is spent."""
+    if ctx.state_set is not None and ctx.state_get is not None:
+        if ctx.state_get("pending_wcd_add"):
+            ctx.state_set("pending_wcd_add", None)
 
 
 def _parse_pending_ts(value: Any) -> datetime | None:

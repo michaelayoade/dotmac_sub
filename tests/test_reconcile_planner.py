@@ -850,7 +850,10 @@ def test_wan_only_change_preserves_service_ports_and_excludes_unrelated_drift():
     assert OltIpconfig not in _types(plan)
     assert AcsSetDhcpServer not in _types(plan)
     assert AcsSetWifiConfig not in _types(plan)
-    assert AcsSetManagementServer not in _types(plan)
+    # CR-setting drift may be repaired on a WAN pass, but never the ACS endpoint.
+    for action in plan.actions:
+        if isinstance(action, AcsSetManagementServer):
+            assert action.acs_url is None and action.acs_password_ref is None
 
 
 def test_wan_only_change_creates_only_the_missing_wan_service_port():

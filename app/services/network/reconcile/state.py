@@ -297,6 +297,10 @@ class OntDesiredState:
     # actions at all — see ``planner.resolve_acs_device_id``.
     acs_device_id: str | None = None
 
+    # Internet (WAN) service-port traffic tables from the OLT config pack.
+    wan_traffic_table_inbound: int | None = None
+    wan_traffic_table_outbound: int | None = None
+
 
 # ── Observed state ──────────────────────────────────────────────────────────
 
@@ -427,6 +431,8 @@ class AcsObservedFields:
     # device has not informed; ``>1`` means the identity is ambiguous and no
     # write may be targeted at any of them.
     acs_observed_device_match_count: int = 0
+    # WANPPPConnection.MACAddress as the CPE reports it (RADIUS proof).
+    acs_observed_wan_ppp_mac: str | None = None
 
 
 @dataclass(frozen=True)

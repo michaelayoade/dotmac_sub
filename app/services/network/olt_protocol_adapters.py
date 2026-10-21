@@ -188,6 +188,8 @@ class OltProtocolAdapterContract(Protocol):
         user_vlan: int | str | None = None,
         tag_transform: str = "translate",
         port_index: int | None = None,
+        traffic_table_inbound: int | None = None,
+        traffic_table_outbound: int | None = None,
     ) -> OltOperationResult: ...
 
     def delete_service_port(self, port_index: int) -> OltOperationResult: ...
@@ -650,6 +652,8 @@ class OltProtocolAdapter:
         user_vlan: int | str | None = None,
         tag_transform: str = "translate",
         port_index: int | None = None,
+        traffic_table_inbound: int | None = None,
+        traffic_table_outbound: int | None = None,
     ) -> OltOperationResult:
         """Create service port via SSH CLI."""
         from app.services.network.olt_ssh_service_ports import (
@@ -666,6 +670,8 @@ class OltProtocolAdapter:
                 user_vlan=user_vlan,
                 tag_transform=tag_transform,
                 port_index=port_index,
+                traffic_table_inbound=traffic_table_inbound,
+                traffic_table_outbound=traffic_table_outbound,
             )
             return OltOperationResult(
                 success=ok,

@@ -401,6 +401,7 @@ def _parse_device(
             _value(dev_info, "SoftwareVersion"),
         ),
         acs_observed_pppoe_username=_value(wan_ppp, "Username"),
+        acs_observed_wan_ppp_mac=_value(wan_ppp, "MACAddress"),
         acs_observed_pppoe_enable=_value_bool(wan_ppp, "Enable"),
         acs_observed_wan_vlan=(
             _path_value_int(device, tr181_paths.vlan_id)

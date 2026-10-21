@@ -54,6 +54,7 @@ from app.services.credential_crypto import (
 from app.services.domain_errors import DomainError
 from app.services.events import emit_event
 from app.services.events.types import EventType
+from app.services.network import ont_turnup_gaps as _turnup
 from app.services.network.effective_ont_config import resolve_effective_ont_config
 from app.services.network.ont_desired_config import set_desired_config_values
 from app.services.network.ont_lan_block_choices import OPERATOR_LAN_BLOCK_PREFIXES
@@ -133,6 +134,11 @@ _VERIFY = OwnerCommandDefinition(
     owner=OWNER,
     concern=_COORDINATION_CONCERN,
     name="verify_ont_service_configuration_readback",
+)
+_RESUME = OwnerCommandDefinition(
+    owner=OWNER,
+    concern=_COORDINATION_CONCERN,
+    name="resume_ont_service_configuration_after_inform",
 )
 _REPAIR = OwnerCommandDefinition(
     owner=OWNER,
@@ -283,6 +289,25 @@ class RetryOntServiceConfigurationCommand:
     ont_unit_id: uuid.UUID
     expected_head_id: uuid.UUID
     expected_revision: int
+    # Inform-driven resumes carry their running count onto the new operation.
+    resume_count: int = 0
+
+
+@dataclass(frozen=True, slots=True)
+class ResumeOntServiceConfigurationCommand:
+    """Resume a head parked waiting on a Connection Request / pending create.
+
+    Staged by the Inform handler only. Re-plans from live observation, so the
+    pending markers keep the resumed write pass from duplicating tasks.
+    """
+
+    context: CommandContext
+    ont_unit_id: uuid.UUID
+    expected_head_id: uuid.UUID
+    expected_revision: int
+    # Read by the caller from GenieACS BEFORE any lock is taken; the owner
+    # never calls the NBI while holding ONT/head row locks.
+    acs_queue_empty: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -1706,6 +1731,77 @@ def _lan_exact_readback_available(
     return True
 
 
+def _ensure_wan_service_port(db: Session, ont: OntUnit) -> None:
+    """G1: allocate and persist the WAN service-port index when none is recorded.
+
+    The OLT write itself is planned/applied by the reconciler; this only
+    records the DB-allocated index so the planner can see the missing port.
+    """
+    from app.services.network.reconcile.adapters import desired_from_ont_unit
+
+    desired = desired_from_ont_unit(db, ont)
+    if (
+        desired.wan_mode != "pppoe"
+        or desired.wan_vlan is None
+        or desired.wan_service_port_index is not None
+    ):
+        return
+    _turnup.ensure_wan_service_port_index(
+        db, ont, wan_vlan=desired.wan_vlan, gem_index=desired.wan_gem_index or 1
+    )
+
+
+def _radius_proof_state(
+    db: Session,
+    ont: OntUnit,
+    assignment: OntAssignment,
+    operation: NetworkOperation,
+    revision: OntServiceConfigurationRevision,
+    *,
+    clean: bool,
+    attempt: int,
+    observed_wan_mac: str | None = None,
+) -> str:
+    """G9: a WAN revision is verified only with a live RADIUS session.
+
+    The session must belong to the assignment subscription's canonical
+    credential and have started after this operation's apply time.
+    ``first_clean_readback_at`` (set once, on the first clean readback)
+    anchors the bounded wait.
+    """
+    if not clean or revision.section != OntConfigurationSection.wan.value:
+        return "ok"
+    from app.services.network.reconcile.adapters import desired_from_ont_unit
+
+    desired = desired_from_ont_unit(db, ont)
+    payload = dict(operation.input_payload or {})
+    now = datetime.now(UTC)
+    if "first_clean_readback_at" not in payload:
+        payload["first_clean_readback_at"] = now.isoformat()
+        operation.input_payload = payload
+    return _turnup.radius_gate(
+        db,
+        desired_mode=desired.wan_mode,
+        desired_login=desired.wan_pppoe_username,
+        subscription_id=assignment.subscription_id,
+        ppp_write_issued_at=_parse_ts(payload.get("ppp_write_issued_at")),
+        ont_mac=ont.mac_address,
+        observed_wan_mac=observed_wan_mac,
+        waiting_since=_parse_ts(payload["first_clean_readback_at"]),
+        attempt=attempt,
+    )
+
+
+def _parse_ts(value: object) -> datetime | None:
+    try:
+        parsed = datetime.fromisoformat(str(value)) if value else None
+    except ValueError:
+        return None
+    if parsed is not None and parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=UTC)
+    return parsed
+
+
 def _execution_locked(
     db: Session, command: ExecuteOntServiceConfigurationCommand
 ) -> ExecuteOntServiceConfigurationOutcome:
@@ -1785,6 +1881,9 @@ def _execution_locked(
     # task and ``_ont_service_config_verify_invocation`` for why no caller
     # input can flip this back to a write.
     readback_only = command.verification_attempt > 0 or command.force_readback_only
+    if not readback_only and revision.section == OntConfigurationSection.wan.value:
+        _ensure_wan_service_port(db, ont)
+    pass_started_at = datetime.now(UTC)
     result = reconcile_ont(
         db,
         ont.id,
@@ -1824,7 +1923,115 @@ def _execution_locked(
         and wifi_scope is not None
         and "wifi_password_ref" in wifi_scope.changed_fields
     )
-    if delivered_without_readback:
+    failure_evidence = getattr(getattr(result, "failure", None), "evidence", None)
+    if _turnup.ppp_write_applied(result) or (
+        isinstance(failure_evidence, dict)
+        and (
+            failure_evidence.get("ppp_write_queued")
+            or failure_evidence.get("ppp_reset_queued")
+        )
+    ):
+        # Recorded ONCE per revision (never overwritten, carried across
+        # retries/resumes): the Reset may run during a later queue drain.
+        issued = dict(operation.input_payload or {})
+        if "ppp_write_issued_at" not in issued:
+            issued["ppp_write_issued_at"] = pass_started_at.isoformat()
+            operation.input_payload = issued
+    _turnup.mark_wan_service_port_provisioned(db, ont, result)
+    radius_state = _radius_proof_state(
+        db,
+        ont,
+        assignment,
+        operation,
+        revision,
+        clean=result.success
+        and result.sync_status == "synced"
+        and not result.drift_after
+        and not delivered_without_readback
+        and not wifi_password_unverifiable_on_readback,
+        attempt=command.verification_attempt,
+        observed_wan_mac=getattr(
+            getattr(getattr(result, "observed_after", None), "acs", None),
+            "acs_observed_wan_ppp_mac",
+            None,
+        ),
+    )
+    if radius_state == "waiting":
+        next_attempt = command.verification_attempt + 1
+        head.phase = OntServiceConfigurationPhase.readback_pending
+        revision.phase = OntServiceConfigurationPhase.readback_pending
+        head.waiting_reason = _turnup.WAITING_RADIUS_SESSION
+        head.failure_code = None
+        head.failure_message = None
+        network_operations.mark_waiting(db, str(operation.id), head.waiting_reason)
+        stage_dispatch(
+            db,
+            operation,
+            NetworkOperationCommand.ont_service_config_verify_v1,
+            dispatch_key=f"verify:{next_attempt}",
+            not_before=datetime.now(UTC)
+            + timedelta(seconds=_turnup.RADIUS_SESSION_RECHECK_SECONDS),
+        )
+        _record_execution_event(
+            db,
+            ont=ont,
+            assignment=assignment,
+            head=head,
+            revision=revision,
+            operation_id=operation.id,
+            phase=OntServiceConfigurationPhase.readback_pending,
+            message=(
+                "Configuration read back correctly; waiting for a live RADIUS "
+                "session for the PPPoE login before marking it verified."
+            ),
+            success=False,
+            waiting=True,
+        )
+        phase = OntServiceConfigurationPhase.readback_pending
+        message = "Configuration applied; awaiting a live RADIUS session."
+    elif radius_state in {"timeout", "login_mismatch", "credential_ambiguous"}:
+        radius_code = {
+            "login_mismatch": "pppoe_login_mismatch",
+            "credential_ambiguous": "canonical_credential_ambiguous",
+        }.get(radius_state, "radius_session_not_observed")
+        head.phase = OntServiceConfigurationPhase.delivered_unverified
+        revision.phase = OntServiceConfigurationPhase.delivered_unverified
+        head.waiting_reason = None
+        head.failure_code = radius_code
+        head.failure_message = (
+            "The ONT PPPoE username is not the subscription's canonical "
+            "access-credential login, so no RADIUS session can prove it."
+            if radius_state == "login_mismatch"
+            else "The subscription has several active PPPoE credentials; the "
+            "canonical login cannot be determined."
+            if radius_state == "credential_ambiguous"
+            else "The WAN configuration read back correctly but no live RADIUS "
+            "session appeared for the PPPoE login within the allowed time."
+        )
+        network_operations.mark_succeeded(
+            db,
+            str(operation.id),
+            output_payload={
+                "configuration_head_id": str(head.id),
+                "configuration_revision": revision.revision,
+                "phase": OntServiceConfigurationPhase.delivered_unverified.value,
+                "verification": radius_code,
+            },
+        )
+        _record_execution_event(
+            db,
+            ont=ont,
+            assignment=assignment,
+            head=head,
+            revision=revision,
+            operation_id=operation.id,
+            phase=OntServiceConfigurationPhase.delivered_unverified,
+            message=head.failure_message,
+            success=True,
+        )
+        phase = OntServiceConfigurationPhase.delivered_unverified
+        message = "Configuration delivered; no RADIUS session observed in time."
+    elif delivered_without_readback:
         head.phase = OntServiceConfigurationPhase.delivered_unverified
         revision.phase = OntServiceConfigurationPhase.delivered_unverified
         head.waiting_reason = None
@@ -2069,6 +2276,45 @@ def _execution_locked(
             )
             phase = OntServiceConfigurationPhase.readback_pending
             message = pending_message
+        elif (
+            connection_request_queued_pending
+            and int((operation.input_payload or {}).get("resume_count") or 0)
+            < _turnup.MAX_RESUMES_PER_REVISION
+            and (_turnup.acs_queued_task_count(db, ont) or 0) > 0
+        ):
+            # GenieACS still holds the queued task(s): this is a wait for the
+            # device's next Inform, not a terminal failure. The Inform handler
+            # resumes the apply through ``resume_ont_service_configuration_
+            # after_inform``; nothing is re-queued meanwhile.
+            waiting_message = (
+                f"The {revision.section} configuration is queued in ACS; "
+                "waiting for the device's next Inform to drain it."
+            )
+            head.phase = OntServiceConfigurationPhase.readback_pending
+            revision.phase = OntServiceConfigurationPhase.readback_pending
+            head.waiting_reason = _turnup.WAITING_INFORM_CR_FAILED
+            head.failure_code = None
+            head.failure_message = None
+            network_operations.mark_waiting(db, str(operation.id), head.waiting_reason)
+            _record_execution_event(
+                db,
+                ont=ont,
+                assignment=assignment,
+                head=head,
+                revision=revision,
+                operation_id=operation.id,
+                phase=OntServiceConfigurationPhase.readback_pending,
+                message=waiting_message,
+                success=False,
+                waiting=True,
+                extra_data={
+                    "acs_task_queued_despite_cr_failure": True,
+                    "section": revision.section,
+                    "confirmation_path": "apply_resumed_on_next_inform",
+                },
+            )
+            phase = OntServiceConfigurationPhase.readback_pending
+            message = waiting_message
         else:
             if connection_request_queued_pending:
                 failure_code = "acs_cr_failed"
@@ -2250,6 +2496,18 @@ def _retry_locked(
             retry_fingerprint=retry_fingerprint,
         ),
     )
+    carried = (
+        (latest_configuration_operation.input_payload or {}).get("ppp_write_issued_at")
+        if latest_configuration_operation is not None
+        else None
+    )
+    if command.resume_count or carried:
+        retry_payload = dict(operation.input_payload or {})
+        if command.resume_count:
+            retry_payload["resume_count"] = command.resume_count
+        if carried:
+            retry_payload["ppp_write_issued_at"] = carried
+        operation.input_payload = retry_payload
     revision.operation_id = operation.id
     revision.phase = OntServiceConfigurationPhase.queued
     revision.failure_code = None
@@ -2283,6 +2541,139 @@ def retry_ont_service_configuration(
         definition=_RETRY,
         context=command.context,
         operation=lambda: _retry_locked(db, command),
+    )
+
+
+def _resume_locked(
+    db: Session, command: ResumeOntServiceConfigurationCommand
+) -> ConfigureOntServiceOutcome:
+    ont = db.scalar(
+        select(OntUnit).where(OntUnit.id == command.ont_unit_id).with_for_update()
+    )
+    head = db.scalar(
+        select(OntServiceConfigurationHead)
+        .where(OntServiceConfigurationHead.id == command.expected_head_id)
+        .with_for_update()
+    )
+    if ont is None or head is None or head.ont_unit_id != ont.id:
+        raise _error(
+            "configuration_head_not_found",
+            "Current configuration lifecycle was not found.",
+        )
+    revision = db.scalar(
+        select(OntServiceConfigurationRevision)
+        .where(
+            OntServiceConfigurationRevision.head_id == head.id,
+            OntServiceConfigurationRevision.revision == command.expected_revision,
+        )
+        .with_for_update()
+    )
+    operation = (
+        db.scalar(
+            select(NetworkOperation)
+            .where(NetworkOperation.id == head.latest_operation_id)
+            .with_for_update()
+        )
+        if head.latest_operation_id is not None
+        else None
+    )
+    if (
+        revision is None
+        or operation is None
+        or head.current_revision != command.expected_revision
+        or revision.operation_id != operation.id
+    ):
+        raise _error(
+            "stale_configuration",
+            "Configuration lifecycle changed; refresh before resuming.",
+        )
+
+    def _outcome(message: str, *, replayed: bool = False) -> ConfigureOntServiceOutcome:
+        return ConfigureOntServiceOutcome(
+            ont_unit_id=ont.id,
+            assignment_id=head.assignment_id,
+            configuration_head_id=head.id,
+            revision=head.current_revision,
+            operation_id=operation.id,
+            phase=head.phase,
+            replayed=replayed,
+            message=message,
+        )
+
+    waiting_since = operation.updated_at
+    informed = ont.acs_last_inform_at
+    if (
+        head.phase is not OntServiceConfigurationPhase.readback_pending
+        or operation.status is not NetworkOperationStatus.waiting
+        or head.waiting_reason not in _turnup.RESUMABLE_WAITING_REASONS
+        or (
+            head.waiting_reason != _turnup.WAITING_INFORM_CR_FAILED
+            and not _turnup.has_pending_create_marker(ont)
+        )
+    ):
+        return _outcome("not_waiting: nothing to resume.")
+    if waiting_since is not None and waiting_since.tzinfo is None:
+        waiting_since = waiting_since.replace(tzinfo=UTC)
+    if informed is not None and informed.tzinfo is None:
+        informed = informed.replace(tzinfo=UTC)
+    if informed is None or (waiting_since is not None and informed <= waiting_since):
+        return _outcome("still_waiting: no Inform since the wait began.")
+    if not command.acs_queue_empty:
+        # Tasks still queued (or unknown): a resumed write would duplicate.
+        return _outcome("still_waiting: ACS queue is not confirmed empty.")
+
+    payload = dict(operation.input_payload or {})
+    resumes = int(payload.get("resume_count") or 0)
+    if resumes >= _turnup.MAX_RESUMES_PER_REVISION:
+        message = (
+            f"The {revision.section} configuration was resumed "
+            f"{resumes} times after Inform and the ONT still rejects the "
+            "Connection Request. Fix the ONT connection request credentials or "
+            "force an OLT ONT reset, then retry."
+        )
+        head.phase = OntServiceConfigurationPhase.failed
+        revision.phase = OntServiceConfigurationPhase.failed
+        head.failure_code = "acs_cr_failed"
+        head.failure_message = message
+        head.waiting_reason = None
+        network_operations.mark_failed(
+            db,
+            str(operation.id),
+            message,
+            output_payload={
+                "configuration_head_id": str(head.id),
+                "configuration_revision": revision.revision,
+                "phase": OntServiceConfigurationPhase.failed.value,
+                "failure_code": "acs_cr_failed",
+            },
+        )
+        db.flush()
+        return _outcome("resume_cap_reached: " + message)
+    payload["resume_count"] = resumes + 1
+    payload["explicit_repair"] = True
+    payload["resumed_after_inform"] = True
+    operation.input_payload = payload
+    head.phase = OntServiceConfigurationPhase.queued
+    revision.phase = OntServiceConfigurationPhase.queued
+    head.waiting_reason = "awaiting_dispatch"
+    stage_dispatch(
+        db,
+        operation,
+        NetworkOperationCommand.ont_service_config_apply_v1,
+        dispatch_key=f"resume:{int(informed.timestamp())}",
+    )
+    db.flush()
+    return _outcome("Apply resumed after Inform.")
+
+
+def resume_ont_service_configuration_after_inform(
+    db: Session, command: ResumeOntServiceConfigurationCommand
+) -> ConfigureOntServiceOutcome:
+    return execute_owner_command(
+        db,
+        definition=_RESUME,
+        context=command.context,
+        operation=lambda: _resume_locked(db, command),
     )
 
 
@@ -2399,6 +2790,13 @@ def _verify_locked(
         ),
     )
     if not replayed:
+        carried_issue = (failed_operation.input_payload or {}).get(
+            "ppp_write_issued_at"
+        )
+        if carried_issue:
+            verify_payload = dict(operation.input_payload or {})
+            verify_payload["ppp_write_issued_at"] = carried_issue
+            operation.input_payload = verify_payload
         # Preserve the original failed operation exactly as it is: only the
         # pointers (head.latest_operation_id / revision.operation_id) move to
         # the new redrive-linked attempt, mirroring ``_retry_locked``. The
