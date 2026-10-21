@@ -1,0 +1,172 @@
+name: Gate 0 proof 1 (OIDC to OpenBao)
+
+# Design §3.4 rows 1-9 as dispatched jobs; row 10 (JWT replay, D5) is
+# documented in deploy/openbao/README.md and never asserted. Row 4 (wrong
+# ref) can only be exercised by dispatching this workflow from a non-main
+# ref: on main dispatches that job is skipped and the aggregator says so.
+# Requires vars.OPENBAO_ADDR and vars.GATE0_CANARY_SHA256 (from apply.sh).
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  positive:
+    name: "Rows 1+8+9: staging login, canary OK, prod/sys/role 403"
+    runs-on: ubuntu-latest
+    environment: staging
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@v4
+      - env:
+          OPENBAO_ADDR: ${{ vars.OPENBAO_ADDR }}
+          EXPECTED_CANARY_SHA256: ${{ vars.GATE0_CANARY_SHA256 }}
+          PROOF_MODE: positive
+          PROOF_ROLE: gate0-proof
+          PROOF_AUDIENCE: dotmac-openbao
+        run: |
+          set -euo pipefail
+          sh deploy/gate0/proof1_oidc_openbao.sh
+          echo "GATE0 PROOF 1a: PASS"
+
+  row2-production-env:
+    name: "Row 2: production env token to sub-staging-ci refused"
+    runs-on: ubuntu-latest
+    environment: production
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@v4
+      - env:
+          OPENBAO_ADDR: ${{ vars.OPENBAO_ADDR }}
+          PROOF_MODE: negative
+          PROOF_ROLE: sub-staging-ci
+          PROOF_AUDIENCE: dotmac-openbao
+        run: |
+          set -euo pipefail
+          sh deploy/gate0/proof1_oidc_openbao.sh
+          echo "GATE0 PROOF 1b: PASS"
+
+  row3-no-environment:
+    name: "Row 3: no environment claim refused"
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@v4
+      - env:
+          OPENBAO_ADDR: ${{ vars.OPENBAO_ADDR }}
+          PROOF_MODE: negative
+          PROOF_ROLE: gate0-proof
+          PROOF_AUDIENCE: dotmac-openbao
+        run: |
+          set -euo pipefail
+          sh deploy/gate0/proof1_oidc_openbao.sh
+          echo "GATE0 PROOF 1b: PASS"
+
+  row4-wrong-ref:
+    name: "Row 4: non-main ref refused (branch dispatches only)"
+    if: github.ref != 'refs/heads/main'
+    runs-on: ubuntu-latest
+    environment: staging
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@v4
+      - env:
+          OPENBAO_ADDR: ${{ vars.OPENBAO_ADDR }}
+          PROOF_MODE: negative
+          PROOF_ROLE: gate0-proof
+          PROOF_AUDIENCE: dotmac-openbao
+        run: |
+          set -euo pipefail
+          sh deploy/gate0/proof1_oidc_openbao.sh
+          echo "GATE0 PROOF 1b: PASS"
+
+  row5-wrong-workflow:
+    name: "Row 5: proof-workflow token to sub-staging-ci refused"
+    runs-on: ubuntu-latest
+    environment: staging
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@v4
+      - env:
+          OPENBAO_ADDR: ${{ vars.OPENBAO_ADDR }}
+          PROOF_MODE: negative
+          PROOF_ROLE: sub-staging-ci
+          PROOF_AUDIENCE: dotmac-openbao
+        run: |
+          set -euo pipefail
+          sh deploy/gate0/proof1_oidc_openbao.sh
+          echo "GATE0 PROOF 1b: PASS"
+
+  row6-expired-jwt:
+    name: "Row 6: expired GitHub JWT refused"
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    environment: staging
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@v4
+      - env:
+          OPENBAO_ADDR: ${{ vars.OPENBAO_ADDR }}
+          PROOF_MODE: negative
+          PROOF_ROLE: gate0-proof
+          PROOF_AUDIENCE: dotmac-openbao
+          PROOF_SLEEP_SECONDS: "660"
+        run: |
+          set -euo pipefail
+          sh deploy/gate0/proof1_oidc_openbao.sh
+          echo "GATE0 PROOF 1b: PASS"
+
+  row7-wrong-audience:
+    name: "Row 7: wrong audience refused"
+    runs-on: ubuntu-latest
+    environment: staging
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@v4
+      - env:
+          OPENBAO_ADDR: ${{ vars.OPENBAO_ADDR }}
+          PROOF_MODE: negative
+          PROOF_ROLE: gate0-proof
+          PROOF_AUDIENCE: not-dotmac-openbao
+        run: |
+          set -euo pipefail
+          sh deploy/gate0/proof1_oidc_openbao.sh
+          echo "GATE0 PROOF 1b: PASS"
+
+  verdict:
+    name: "Gate 0 proof 1 verdict"
+    runs-on: ubuntu-latest
+    if: always()
+    needs:
+      [positive, row2-production-env, row3-no-environment, row4-wrong-ref,
+       row5-wrong-workflow, row6-expired-jwt, row7-wrong-audience]
+    steps:
+      - env:
+          RESULTS: ${{ toJSON(needs) }}
+        run: |
+          set -euo pipefail
+          echo "$RESULTS" | jq -r 'to_entries[] | "\(.key): \(.value.result)"'
+          ok=$(echo "$RESULTS" | jq '[to_entries[] | select(.key != "row4-wrong-ref") | .value.result == "success"] | all')
+          row4=$(echo "$RESULTS" | jq -r '.["row4-wrong-ref"].result')
+          if [ "$ok" = "true" ] && { [ "$row4" = "success" ] || [ "$row4" = "skipped" ]; }; then
+            [ "$row4" = "skipped" ] && echo "row 4 not exercised on a main dispatch; dispatch from a feature branch to exercise it"
+            echo "GATE0 PROOF 1: PASS"
+          else
+            echo "GATE0 PROOF 1: FAIL" >&2
+            exit 1
+          fi

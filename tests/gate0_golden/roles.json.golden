@@ -1,0 +1,59 @@
+{
+  "auth_mount": "jwt",
+  "oidc_discovery_url": "https://token.actions.githubusercontent.com",
+  "bound_issuer": "https://token.actions.githubusercontent.com",
+  "default_role": "",
+  "roles": {
+    "sub-staging-ci": {
+      "role_type": "jwt",
+      "user_claim": "sub",
+      "bound_audiences": ["dotmac-openbao"],
+      "bound_subject": "repo:michaelayoade/dotmac_sub:environment:staging",
+      "bound_claims_type": "glob",
+      "bound_claims": {
+        "repository": ["michaelayoade/dotmac_sub"],
+        "repository_owner": ["michaelayoade"],
+        "ref": ["refs/heads/main"],
+        "environment": ["staging"],
+        "job_workflow_ref": ["michaelayoade/dotmac_sub/.github/workflows/staging-deploy.yml@refs/heads/main"]
+      },
+      "token_policies": ["sub-staging-ci"],
+      "token_ttl": "20m",
+      "token_max_ttl": "60m"
+    },
+    "sub-production-ci": {
+      "role_type": "jwt",
+      "user_claim": "sub",
+      "bound_audiences": ["dotmac-openbao"],
+      "bound_subject": "repo:michaelayoade/dotmac_sub:environment:production",
+      "bound_claims_type": "glob",
+      "bound_claims": {
+        "repository": ["michaelayoade/dotmac_sub"],
+        "repository_owner": ["michaelayoade"],
+        "ref": ["refs/heads/main"],
+        "environment": ["production"],
+        "job_workflow_ref": ["michaelayoade/dotmac_sub/.github/workflows/production-deploy.yml@refs/heads/main"]
+      },
+      "token_policies": ["sub-production-ci"],
+      "token_ttl": "20m",
+      "token_max_ttl": "60m"
+    },
+    "gate0-proof": {
+      "role_type": "jwt",
+      "user_claim": "sub",
+      "bound_audiences": ["dotmac-openbao"],
+      "bound_subject": "repo:michaelayoade/dotmac_sub:environment:staging",
+      "bound_claims_type": "glob",
+      "bound_claims": {
+        "repository": ["michaelayoade/dotmac_sub"],
+        "repository_owner": ["michaelayoade"],
+        "ref": ["refs/heads/main"],
+        "environment": ["staging"],
+        "job_workflow_ref": ["michaelayoade/dotmac_sub/.github/workflows/openbao-jwt-proof.yml@refs/heads/main"]
+      },
+      "token_policies": ["gate0-proof"],
+      "token_ttl": "10m",
+      "token_max_ttl": "10m"
+    }
+  }
+}
