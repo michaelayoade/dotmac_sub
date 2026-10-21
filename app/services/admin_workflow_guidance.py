@@ -1214,6 +1214,7 @@ HELP_ONLY_GUIDANCE: tuple[AdminWorkflowGuidance, ...] = (
         "For an installed Nextcloud Talk integration, open Manage, confirm its approved server, and enter the existing notifier username and app password. Saving credentials requires both settings and secrets write access.",
         "Choose Save and validate credentials to check the notifier connection without sending a notification. A failed connection check keeps this Talk integration disabled; correct the credentials and save again.",
         notes=(
+            "The WhatsApp marketplace Install and installed Manage actions both open the WhatsApp configuration screen. Existing bookmarks to the older WhatsApp integration route are redirected to that same screen.",
             "Nextcloud Talk credential setup keeps the approved server, notification policy, and global notification setting unchanged. It does not create a Nextcloud account.",
             "Configured means a credential reference is stored, not that its current connection is healthy. If storage is unavailable, contact your administrator and retry the same request.",
         ),
