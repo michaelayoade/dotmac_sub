@@ -21,4 +21,4 @@ env -i PATH="$PATH" LANG=C.UTF-8 /usr/local/bin/cosign verify-blob --bundle agen
   --certificate-identity 'https://github.com/michaelayoade/dotmac_sub/.github/workflows/deploy-agent-release.yml@refs/heads/main' \
   --certificate-oidc-issuer 'https://token.actions.githubusercontent.com' \
   agent.pyz >/dev/null
-exec env -i PATH="$PATH" LANG=C.UTF-8 /opt/dotmac-deploy-agent/venv/bin/python agent.pyz --config /etc/dotmac-deploy-agent/config.toml
+exec env -i PATH="$PATH" LANG=C.UTF-8 /opt/dotmac-deploy-agent/venv/bin/python agent.pyz --config /etc/dotmac-deploy-agent/config.toml "$@"
