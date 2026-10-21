@@ -4527,6 +4527,170 @@ SERVICES: tuple[SOTService, ...] = (
         ),
     ),
     SOTService(
+        name="financial.starter_reseller_settlement",
+        module="app.services.billing.starter_reseller_settlement",
+        owns=("Reseller consolidated settlement of Starter invoices",),
+        depends_on=(
+            "control.settings_spec",
+            "financial.consolidated_payments",
+            "financial.invoices",
+            "financial.starter_issuance",
+        ),
+        notes=(
+            "Reseller lane (ADR 0031): one reseller party pays for many "
+            "subscriber accounts. The fingerprint-confirmed consolidated "
+            "payment binds one dotmac-payments intent (payer = the "
+            "reseller party reference); only its authenticated "
+            "confirmation settles, as exact per-subscriber slices "
+            "accepted and allocated on each subscriber's own Starter "
+            "billing account with a distinct policy-rendered source "
+            "key per slice. Slice 1 admits only exact full-document "
+            "allocations whose account collectible equals the sliced "
+            "total, so every invoice mirror stays Starter-owned; the "
+            "legacy Payment remains unallocated provider evidence. "
+            "Starter-touched ineligible shapes are refused, never "
+            "legacy-fallback."
+        ),
+        contract=ServiceContract(
+            concerns=(
+                ConcernContract(
+                    name="Reseller consolidated settlement of Starter invoices",
+                    role=OwnerRole.COMMAND_WRITER,
+                    input_names=(
+                        "fingerprint-confirmed consolidated payment preview",
+                        "Starter-issued invoices and structural links",
+                        "canonical Starter reseller settlement policies",
+                    ),
+                    canonical_writer="financial.starter_reseller_settlement",
+                ),
+            ),
+            authoritative_inputs=(
+                AuthorityInput(
+                    name="fingerprint-confirmed consolidated payment preview",
+                    owner="financial.consolidated_payments",
+                    kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                    source=(
+                        "preview fingerprint binding the billing "
+                        "account, exact allocation slices, and the "
+                        "provider-evidenced confirmed total"
+                    ),
+                ),
+                AuthorityInput(
+                    name="Starter-issued invoices and structural links",
+                    owner="financial.starter_issuance",
+                    kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                    source=(
+                        "StarterInvoiceLink rows binding each sliced "
+                        "Sub invoice to its subscriber Starter billing "
+                        "account and document identities"
+                    ),
+                ),
+                AuthorityInput(
+                    name="canonical Starter reseller settlement policies",
+                    owner="control.settings_spec",
+                    kind=AuthorityKind.CONTROL_INPUT,
+                    source=(
+                        "starter_* settings resolved through "
+                        "starter_policies (ADR 0031): intent reference "
+                        "and target templates, confirmation source, "
+                        "provider type, channel, expiry, per-slice "
+                        "source key and allocation source ref templates"
+                    ),
+                ),
+            ),
+            transaction=TransactionContract(
+                mode=TransactionMode.PARTICIPANT,
+                boundary=(
+                    "The consolidated payments owner owns the "
+                    "transaction: intent opening, confirmation, "
+                    "per-subscriber Starter acceptance and allocation, "
+                    "invoice mirrors, audit rows, and events commit "
+                    "or roll back together."
+                ),
+                locking=(
+                    "The billing account lock is held by the "
+                    "consolidated payments owner; Starter applies "
+                    "its own writer fences inside the same "
+                    "transaction."
+                ),
+                idempotency=(
+                    "The intent reference derives from the recorded "
+                    "payment identity and each slice source key from "
+                    "the confirmation and subscriber identities, so "
+                    "an exact replay re-presents the same Starter "
+                    "identities without new postings or signals."
+                ),
+                retries=(
+                    "The caller retries the whole confirmed "
+                    "consolidated payment after rollback with the "
+                    "same idempotency key."
+                ),
+            ),
+            errors=ErrorContract(
+                domain_codes=(
+                    "financial.starter_reseller_settlement.configuration_invalid",
+                    "financial.starter_reseller_settlement.confirmed_cash_mismatch",
+                    "financial.starter_reseller_settlement.intent_binding_mismatch",
+                    "financial.starter_reseller_settlement.starter_refused",
+                ),
+                mapping_owner="consolidated payments owner",
+                retryable_codes=(),
+                fail_closed_on=(
+                    "consolidated payment touching Starter invoices outside exact full-document slices",
+                    "subscriber account collectible differing from the sliced total",
+                    "Starter payments or billing refusal",
+                ),
+            ),
+            events=EventContract(
+                event_types=("payment.received",),
+                schema_version=1,
+                delivery_owner="events.dispatcher",
+                compatibility=(
+                    "Version 1 is the shared settlement access "
+                    "signal: exactly one payment.received per "
+                    "discharged invoice under the one confirmation."
+                ),
+                replay=(
+                    "Replay returns the recorded confirmation and "
+                    "settlement identities without second signals."
+                ),
+            ),
+            migration=MigrationContract(
+                state=AuthorityMigrationState.CUTOVER_READY,
+                old_owner="financial.consolidated_payments legacy allocation",
+                new_owner="financial.starter_reseller_settlement",
+                verification=(
+                    "Migrated-PostgreSQL proof: one confirmed "
+                    "reseller payment settles two subscribers' "
+                    "Starter-issued invoices to zero collectible "
+                    "with paid mirrors, no legacy allocation rows, "
+                    "and one access signal per invoice."
+                ),
+                cutover_gate=(
+                    "Only exact full-document consolidated slices "
+                    "take this lane; partial, surplus, and mixed "
+                    "shapes stay legacy or are refused until their "
+                    "slice migrates."
+                ),
+                fallback_retirement=(
+                    "The legacy consolidated allocation writer is "
+                    "deleted at the money-pack cutover; it is never "
+                    "used for a Starter-linked invoice."
+                ),
+            ),
+            steward="billing operations",
+            design_refs=(
+                "docs/adr/0031-composable-starter-billing-policies.md",
+                "docs/SOT_RELATIONSHIP_MAP.md",
+            ),
+            test_refs=(
+                "tests/test_starter_reseller_eligibility.py",
+                "tests/integration/test_starter_reseller_settlement_pg.py",
+                "tests/architecture/test_sot_manifest_contracts.py",
+            ),
+        ),
+    ),
+    SOTService(
         name="financial.starter_prepaid",
         module="app.services.billing.starter_prepaid",
         owns=(

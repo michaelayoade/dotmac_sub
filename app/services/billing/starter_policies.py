@@ -32,9 +32,11 @@ __all__ = [
     "percent_to_fraction",
     "StarterManualSettlementPolicies",
     "StarterPrepaidFundingPolicies",
+    "StarterResellerSettlementPolicies",
     "resolve_starter_billing_policies",
     "resolve_starter_manual_settlement_policies",
     "resolve_starter_prepaid_funding_policies",
+    "resolve_starter_reseller_settlement_policies",
     "resolve_starter_settlement_policies",
     "has_starter_invoice_link",
     "starter_ledger_live_enabled",
@@ -657,6 +659,87 @@ def resolve_starter_manual_settlement_policies(
         manual_intent_channel=_text(db, "starter_payments_manual_intent_channel"),
         manual_intent_expiry_hours=_positive_int(
             db, "starter_payments_manual_intent_expiry_hours"
+        ),
+    )
+
+
+@dataclass(frozen=True, slots=True)
+class StarterResellerSettlementPolicies:
+    """Resolved Starter reseller consolidated-settlement policies (ADR 0031)."""
+
+    reseller_intent_reference_template: str
+    reseller_target_ref_template: str
+    reseller_confirmation_source: str
+    reseller_intent_provider_type: str
+    reseller_intent_channel: str
+    reseller_intent_expiry_hours: int
+    reseller_slice_source_key_template: str
+    reseller_allocation_source_ref_template: str
+
+    def reseller_intent_reference(self, payment_id: UUID) -> str:
+        return _render_template(
+            self.reseller_intent_reference_template,
+            "payment_id",
+            payment_id,
+            setting="starter_payments_reseller_intent_reference_template",
+        )
+
+    def reseller_target_ref(self, billing_account_id: UUID) -> str:
+        return _render_template(
+            self.reseller_target_ref_template,
+            "billing_account_id",
+            billing_account_id,
+            setting="starter_payments_reseller_target_ref_template",
+        )
+
+    def reseller_slice_source_key(
+        self, *, confirmation_id: UUID, subscriber_id: UUID
+    ) -> str:
+        rendered = self.reseller_slice_source_key_template.replace(
+            "{confirmation_id}", str(confirmation_id)
+        ).replace("{subscriber_id}", str(subscriber_id))
+        if rendered == self.reseller_slice_source_key_template or "{" in rendered:
+            raise _error(
+                "configuration_invalid",
+                "Template must contain {confirmation_id} and {subscriber_id}",
+                setting="starter_billing_reseller_slice_source_key_template",
+            )
+        return rendered
+
+    def reseller_allocation_source_ref(self, slice_source_key: str) -> str:
+        return _render_template(
+            self.reseller_allocation_source_ref_template,
+            "slice_source_key",
+            slice_source_key,
+            setting="starter_billing_reseller_allocation_source_ref_template",
+        )
+
+
+def resolve_starter_reseller_settlement_policies(
+    db: Session,
+) -> StarterResellerSettlementPolicies:
+    return StarterResellerSettlementPolicies(
+        reseller_intent_reference_template=_text(
+            db, "starter_payments_reseller_intent_reference_template"
+        ),
+        reseller_target_ref_template=_text(
+            db, "starter_payments_reseller_target_ref_template"
+        ),
+        reseller_confirmation_source=_text(
+            db, "starter_payments_reseller_confirmation_source"
+        ),
+        reseller_intent_provider_type=_text(
+            db, "starter_payments_reseller_intent_provider_type"
+        ),
+        reseller_intent_channel=_text(db, "starter_payments_reseller_intent_channel"),
+        reseller_intent_expiry_hours=_positive_int(
+            db, "starter_payments_reseller_intent_expiry_hours"
+        ),
+        reseller_slice_source_key_template=_text(
+            db, "starter_billing_reseller_slice_source_key_template"
+        ),
+        reseller_allocation_source_ref_template=_text(
+            db, "starter_billing_reseller_allocation_source_ref_template"
         ),
     )
 
