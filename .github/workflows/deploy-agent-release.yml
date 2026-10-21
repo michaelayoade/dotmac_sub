@@ -1,0 +1,33 @@
+name: Staging pull agent release
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  release:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4
+        with:
+          persist-credentials: false
+      - uses: sigstore/cosign-installer@398d4b0eeef1380460a10c8013a76f728fb906ac # v3
+      - name: Build and sign immutable source package
+        run: |
+          set -euo pipefail
+          mkdir agent-release
+          python3 deploy/agent/build.py agent-release/agent.pyz
+          cosign sign-blob --yes --bundle agent-release/agent.bundle.json agent-release/agent.pyz
+          cd agent-release
+          sha256sum agent.pyz > agent.sha256
+          cosign verify-blob --bundle agent.bundle.json \
+            --certificate-identity "https://github.com/${GITHUB_REPOSITORY}/.github/workflows/deploy-agent-release.yml@refs/heads/main" \
+            --certificate-oidc-issuer https://token.actions.githubusercontent.com agent.pyz
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: staging-pull-agent-${{ github.sha }}
+          path: agent-release/
+          if-no-files-found: error

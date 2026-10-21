@@ -40,6 +40,11 @@ import uuid
 from pathlib import Path
 from typing import Any
 
+if __package__:
+    from .restore_inventory import Inventory, collect_inventory, first_divergence
+else:
+    from restore_inventory import Inventory, collect_inventory, first_divergence
+
 EXIT_OK = 0
 EXIT_ASSERTION = 1
 EXIT_USAGE = 2
@@ -187,11 +192,19 @@ class ScratchPostgres:
     def __init__(self, image: str) -> None:
         self.image = image
         self.name = scratch_container_name()
+        self._ownership_label = uuid.uuid4().hex
         refusal = refuse_target(self.name, what="container")
         if refusal:  # generated name must always pass; guard anyway
             raise RuntimeError(refusal)
 
     def __enter__(self) -> ScratchPostgres:
+        try:
+            return self._start()
+        except BaseException:
+            self._cleanup()
+            raise
+
+    def _start(self) -> ScratchPostgres:
         result = run(
             [
                 "docker",
@@ -199,6 +212,8 @@ class ScratchPostgres:
                 "-d",
                 "--name",
                 self.name,
+                "--label",
+                f"dotmac.restore-drill.run={self._ownership_label}",
                 "--network",
                 "none",
                 "--tmpfs",
@@ -212,9 +227,7 @@ class ScratchPostgres:
             timeout=120,
         )
         if result.returncode != 0:
-            raise RuntimeError(
-                f"docker run failed: {result.stderr.decode(errors='replace')[:500]}"
-            )
+            raise RuntimeError("scratch container startup failed")
         deadline = time.time() + 90
         while time.time() < deadline:
             probe = self.psql("SELECT 1", db=SCRATCH_DB, tuples_only=True)
@@ -224,7 +237,51 @@ class ScratchPostgres:
         raise RuntimeError("scratch postgres did not become ready")
 
     def __exit__(self, *exc: object) -> None:
-        run(["docker", "rm", "-f", self.name], timeout=60)
+        self._cleanup()
+
+    def _container_record(self) -> str:
+        try:
+            result = run(
+                [
+                    "docker",
+                    "container",
+                    "ls",
+                    "--all",
+                    "--no-trunc",
+                    "--filter",
+                    f"name=^/{self.name}$",
+                    "--format",
+                    '{{.ID}}|{{.Label "dotmac.restore-drill.run"}}',
+                ],
+                timeout=60,
+            )
+        except (OSError, subprocess.SubprocessError):
+            raise RuntimeError("scratch presence query failed") from None
+        if result.returncode != 0:
+            raise RuntimeError("scratch presence query failed")
+        return result.stdout.decode().strip()
+
+    def _cleanup(self) -> None:
+        record = self._container_record()
+        if not record:
+            return
+        container_id, separator, label = record.partition("|")
+        if (
+            not separator
+            or not re.fullmatch(r"[0-9a-f]{64}", container_id)
+            or label != self._ownership_label
+        ):
+            raise RuntimeError("scratch ownership unproved; removal refused")
+        removed = False
+        try:
+            removed = (
+                run(["docker", "rm", "-f", container_id], timeout=60).returncode == 0
+            )
+        except (OSError, subprocess.SubprocessError):
+            pass
+        absent = not self._container_record()
+        if not removed or not absent:
+            raise RuntimeError("scratch cleanup failed")
 
     def psql(
         self,
@@ -423,7 +480,9 @@ def assert_isolation_model(
     return checks
 
 
-def drill_bundle(manifest_path: Path, image: str) -> dict[str, Any]:
+def drill_bundle(
+    manifest_path: Path, image: str, *, expected_inventory: Inventory | None = None
+) -> dict[str, Any]:
     """Restore one bundle into scratch postgres and assert the model."""
 
     manifest, artifacts = load_bundle(manifest_path)
@@ -467,11 +526,21 @@ def drill_bundle(manifest_path: Path, image: str) -> dict[str, Any]:
             restored.returncode == 0,
             "dump applied with ON_ERROR_STOP=1"
             if restored.returncode == 0
-            else f"dump failed: {restored.stderr.decode(errors='replace')[:500]}",
+            else "dump failed with ON_ERROR_STOP=1",
             checks,
         )
         if restored.returncode == 0:
             checks.extend(assert_isolation_model(pg, globals_roles=globals_roles))
+            if expected_inventory is not None:
+                try:
+                    divergence = first_divergence(
+                        expected_inventory, collect_inventory(pg)
+                    )
+                    detail = divergence or "all inventoried metadata matches source"
+                    matched = divergence is None
+                except (RuntimeError, ValueError):
+                    matched, detail = False, "metadata collection failed"
+                _check("source_metadata_parity", matched, detail, checks)
     passed = all(c["passed"] for c in checks)
     return {
         "verdict": "PASS" if passed else "FAIL",
