@@ -333,6 +333,28 @@ result. Backup cleanup failure stops before migrations. Image cleanup runs only
 after the application and workers pass their health gates; a failure marks the
 deployment run failed without rolling back the already healthy release.
 
+Each deployment backup is a **recovery bundle**: the database dump plus a
+`.globals.sql.gz` (roles/memberships/tablespaces via
+`pg_dumpall --globals-only --no-role-passwords`) and a `.manifest.json`
+(sha256 per artifact), sharing the dump's filename stem. The manifest's
+presence marks a complete bundle; bundle sidecars are pruned with their dump.
+A globals failure aborts with exit 3 and a `.FAILED` marker and leaves no
+dump behind. To prove a bundle restorable without touching production, run
+the restore drill (globals → dump → verify); the drill restores into a
+disposable scratch container only and never restores production:
+
+```bash
+python scripts/restore_drill.py --manifest /var/backups/dotmac_sub/deployments/<stem>.manifest.json
+```
+
+Bundle format, restore order, and the drill's isolation assertions are in
+`docs/RECOVERY_BUNDLE.md`. **Never apply a globals file to a cluster whose
+roles already exist** (an old file would re-apply stale role attributes and
+memberships, for example re-granting `app_admin` to `dotmac_app`), and note
+that `--globals-only` does not capture database-level grants or settings on
+PostgreSQL >= 11. Login passwords are never in a bundle; install
+them from the approved secret source after applying globals.
+
 ## Module database prerequisites
 
 Composed modules own one immutable `mod_*` schema each, and those schemas and

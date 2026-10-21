@@ -132,8 +132,14 @@ def test_database_backup_retains_five_across_current_and_legacy_directories(
     )
 
     assert result.returncode == 0, result.stderr
-    retained = sorted(backup_root.glob("dotmac_sub_run_*.sql.gz"))
-    retained += sorted(deployment_dir.glob("dotmac_sub_run_*.sql.gz"))
+    # Count standalone dumps only: recovery-bundle *.globals.sql.gz sidecars
+    # ride with their dump and are not separate backups.
+    retained = [
+        path
+        for directory in (backup_root, deployment_dir)
+        for path in sorted(directory.glob("dotmac_sub_run_*.sql.gz"))
+        if not path.name.endswith(".globals.sql.gz")
+    ]
     assert len(retained) == 5
     assert all(not path.exists() for path in old_files[:3])
     assert all(path.exists() for path in old_files[3:])
