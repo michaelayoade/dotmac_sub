@@ -1180,6 +1180,7 @@ def _apply_wcd_parent(action: AcsAddObject, ctx: ApplyContext, started: float):
                 f"WANConnectionDevice {desired} is the TR-069 management WAN",
             )
         ctx.wan_wcd_indexes[desired] = desired
+        _clear_pending_wcd_add(ctx)
         return _ok(action, "wcd_parent_present", None, str(desired), started)
     # An index created by an earlier pass whose child/params did not finish:
     # adopt it rather than creating another WCD.
@@ -1190,6 +1191,7 @@ def _apply_wcd_parent(action: AcsAddObject, ctx: ApplyContext, started: float):
         and not _igd_wcd_is_management(before[remembered])
     ):
         ctx.wan_wcd_indexes[desired] = remembered
+        _clear_pending_wcd_add(ctx)
         return _ok(action, "wcd_parent_adopted", None, str(remembered), started)
     blank = [
         i
@@ -1200,6 +1202,7 @@ def _apply_wcd_parent(action: AcsAddObject, ctx: ApplyContext, started: float):
     ]
     if blank:
         ctx.wan_wcd_indexes[desired] = blank[0]
+        _clear_pending_wcd_add(ctx)
         return _ok(action, "wcd_parent_adopted", None, str(blank[0]), started)
 
     if ctx.state_get is not None:
@@ -1243,6 +1246,13 @@ def _apply_wcd_parent(action: AcsAddObject, ctx: ApplyContext, started: float):
         ctx.state_set("created_wcd_index", created[0])
     ctx.wan_wcd_indexes[desired] = created[0]
     return _ok(action, "wcd_parent_created", None, str(created[0]), started)
+
+
+def _clear_pending_wcd_add(ctx: ApplyContext) -> None:
+    """The WCD exists (present or adopted): the pending-create marker is spent."""
+    if ctx.state_set is not None and ctx.state_get is not None:
+        if ctx.state_get("pending_wcd_add"):
+            ctx.state_set("pending_wcd_add", None)
 
 
 def _parse_pending_ts(value: Any) -> datetime | None:

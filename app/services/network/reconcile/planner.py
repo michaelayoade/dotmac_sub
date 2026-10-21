@@ -1238,7 +1238,7 @@ def _plan_acs_side(
     wan_only_change = _is_wan_only_change(mode, proposed_fields)
 
     # CR-credential repair is planned before every other ACS write (G3).
-    if not (wifi_only_change or remote_only_change or wan_only_change):
+    if not (wifi_only_change or remote_only_change):
         _plan_acs_management_server(
             desired,
             observed,
@@ -1247,6 +1247,9 @@ def _plan_acs_side(
             drifts,
             proposed_fields=proposed_fields,
             force_proposed_writes=force_proposed_writes,
+            # A WAN-only pass may repair the CR settings but never the ACS
+            # URL or ACS credentials.
+            cr_only=wan_only_change,
         )
 
     # TR-069 WAN PPP — skipped when OMCI owns the WAN.
@@ -1529,6 +1532,7 @@ def _plan_acs_management_server(
     *,
     proposed_fields: frozenset[str],
     force_proposed_writes: bool,
+    cr_only: bool = False,
 ) -> None:
     """Plan the ManagementServer (CR credentials + inform interval) write.
 
@@ -1537,8 +1541,10 @@ def _plan_acs_management_server(
     the repair must precede every other write or those writes queue behind
     a CR that can never succeed. Credentials come from the config pack.
     """
-    force_endpoint_write = bool(proposed_fields & _ACS_ENDPOINT_FIELDS) and (
-        force_proposed_writes
+    force_endpoint_write = (
+        not cr_only
+        and bool(proposed_fields & _ACS_ENDPOINT_FIELDS)
+        and force_proposed_writes
     )
     cr_username = desired.cr_username
     cr_password_ref = desired.cr_password_ref
@@ -1549,7 +1555,9 @@ def _plan_acs_management_server(
         and is_deliverable("cr_password_ref", cr_password_ref)
     )
     if cr_credentials_ready and (
-        force_endpoint_write or _management_server_differs(desired, observed)
+        force_endpoint_write
+        or (cr_only and _cr_settings_differ(desired, observed))
+        or (not cr_only and _management_server_differs(desired, observed))
     ):
         assert isinstance(cr_username, str)
         assert isinstance(cr_password_ref, str)
@@ -1564,9 +1572,9 @@ def _plan_acs_management_server(
                     or desired.tr069_data_model_root
                     or "InternetGatewayDevice"
                 ),
-                acs_url=desired.acs_url,
-                acs_username=desired.acs_username,
-                acs_password_ref=desired.acs_password_ref,
+                acs_url=None if cr_only else desired.acs_url,
+                acs_username=None if cr_only else desired.acs_username,
+                acs_password_ref=None if cr_only else desired.acs_password_ref,
             )
         )
         drifts.append(
@@ -2140,6 +2148,17 @@ def _dhcp_differs(desired: OntDesiredState, observed: OntObservedState) -> bool:
     ):
         return True
     return not observed.olt.olt_present
+
+
+def _cr_settings_differ(desired: OntDesiredState, observed: OntObservedState) -> bool:
+    """ConnectionRequest username/password and inform interval only."""
+    acs = observed.acs
+    return (
+        acs.acs_observed_periodic_inform_interval_sec
+        != desired.periodic_inform_interval_sec
+        or acs.acs_observed_cr_username != desired.cr_username
+        or not acs.acs_observed_cr_password_set
+    )
 
 
 def _management_server_differs(

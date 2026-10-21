@@ -149,53 +149,108 @@ def acs_queued_task_count(db: Session, ont: OntUnit) -> int | None:
         return None
 
 
-def has_pending_create_marker(ont: OntUnit) -> bool:
-    """Whether a WCD/PPP-child creation is still pending (#3758 markers)."""
+PENDING_CREATE_TTL_SECONDS = 10 * 60
+MAX_RESUMES_PER_REVISION = 3
+
+
+def _fresh(value: Any, now: datetime) -> bool:
+    try:
+        ts = datetime.fromisoformat(str(value)) if value else None
+    except ValueError:
+        return False
+    if ts is None:
+        return False
+    if ts.tzinfo is None:
+        ts = ts.replace(tzinfo=UTC)
+    return (now - ts).total_seconds() < PENDING_CREATE_TTL_SECONDS
+
+
+def has_pending_create_marker(ont: OntUnit, now: datetime | None = None) -> bool:
+    """Whether a WCD/PPP-child creation is still pending (#3758 markers).
+
+    Markers older than the TTL are ignored: the applier no longer treats them
+    as pending either, so an expired marker must not keep resuming a head.
+    """
+    now = now or datetime.now(UTC)
     snapshot = getattr(ont, "tr069_last_snapshot", None)
     caps = snapshot.get("capabilities") if isinstance(snapshot, dict) else None
     if not isinstance(caps, dict):
         return False
-    if caps.get("pending_wcd_add"):
+    if _fresh(caps.get("pending_wcd_add"), now):
         return True
     pending = caps.get("pending_actions")
     if isinstance(pending, dict):
         return any(
-            isinstance(v, dict) and v.get("state") == "pending_verification"
+            isinstance(v, dict)
+            and v.get("state") == "pending_verification"
+            and _fresh(v.get("requested_at"), now)
             for k, v in pending.items()
             if str(k).startswith("add_")
         )
     return False
 
 
-def radius_session_live(db: Session, login: str) -> bool:
-    """A live RADIUS session exists for the PPPoE login."""
-    return (
+def canonical_ppp_credential(db: Session, subscription_id: UUID | None) -> Any:
+    """Exactly one active access credential for the subscription, else None."""
+    if subscription_id is None:
+        return None
+    from app.models.catalog import AccessCredential
+
+    rows = list(
         db.scalars(
-            select(RadiusActiveSession.id)
-            .where(RadiusActiveSession.username == login)
-            .limit(1)
-        ).first()
-        is not None
+            select(AccessCredential).where(
+                AccessCredential.subscription_id == subscription_id,
+                AccessCredential.is_active.is_(True),
+            )
+        )
     )
+    return rows[0] if len(rows) == 1 else None
+
+
+def radius_session_live(
+    db: Session, credential: Any, *, started_after: datetime | None
+) -> bool:
+    """A live session for the canonical credential that started after the apply."""
+    from sqlalchemy import and_, or_
+
+    stmt = select(RadiusActiveSession.id).where(
+        or_(
+            RadiusActiveSession.access_credential_id == credential.id,
+            and_(
+                RadiusActiveSession.subscription_id == credential.subscription_id,
+                RadiusActiveSession.username == credential.username,
+            ),
+        )
+    )
+    if started_after is not None:
+        stmt = stmt.where(RadiusActiveSession.session_start >= started_after)
+    return db.scalars(stmt.limit(1)).first() is not None
 
 
 def radius_gate(
     db: Session,
     *,
     desired_mode: str | None,
-    login: str | None,
+    desired_login: str | None,
+    subscription_id: UUID | None,
+    applied_at: datetime | None,
     waiting_since: datetime | None,
     attempt: int,
     now: datetime | None = None,
 ) -> str:
-    """``ok`` | ``waiting`` | ``timeout`` for the WAN RADIUS proof.
+    """``ok`` | ``waiting`` | ``timeout`` | ``login_mismatch`` for the WAN proof.
 
+    The session must belong to the subscription's canonical credential and
+    have started after the apply, so an old CPE's session cannot verify it.
     ACS ConnectionStatus is a known false negative on HG8546M and is not
-    consulted. Non-PPPoE or login-less configurations have no RADIUS proof.
+    consulted.
     """
-    if desired_mode != "pppoe" or not login:
+    if desired_mode != "pppoe":
         return "ok"
-    if radius_session_live(db, login):
+    credential = canonical_ppp_credential(db, subscription_id)
+    if credential is None or not desired_login or desired_login != credential.username:
+        return "login_mismatch"
+    if radius_session_live(db, credential, started_after=applied_at):
         return "ok"
     now = now or datetime.now(UTC)
     if waiting_since is not None:
@@ -206,3 +261,30 @@ def radius_gate(
     if attempt >= RADIUS_SESSION_MAX_ATTEMPTS:
         return "timeout"
     return "waiting"
+
+
+def mark_wan_service_port_provisioned(db: Session, ont: OntUnit, result: Any) -> None:
+    """Mark the WAN allocation provisioned once the create applied and read back.
+
+    Called by the owner lifecycle only for a clean pass whose applied actions
+    include the WAN service-port create; the applier stays device-only.
+    """
+    from app.services.network.service_port_allocator import (
+        get_allocations_for_ont,
+        mark_provisioned,
+    )
+
+    applied = any(
+        str(getattr(a, "field", "")) == "service_port[wan]"
+        for a in getattr(result, "actions_applied", ()) or ()
+    )
+    if not (
+        applied
+        and result.success
+        and result.sync_status == "synced"
+        and not result.drift_after
+    ):
+        return
+    for allocation in get_allocations_for_ont(db, ont.id):
+        if allocation.service_type == "internet" and allocation.provisioned_at is None:
+            mark_provisioned(db, allocation.id)

@@ -10,6 +10,7 @@ from types import SimpleNamespace
 
 from sqlalchemy import select
 
+from app.models.catalog import AccessCredential
 from app.models.network import OLTDevice, OntAssignment, OntUnit
 from app.models.network_operation import (
     NetworkOperationDispatch,
@@ -420,15 +421,200 @@ def test_failed_mismatch_with_pending_create_is_retried_as_write_pass(
     assert head.latest_operation_id != ids[1]  # a fresh explicit-repair operation
 
 
-# ── G9 ──────────────────────────────────────────────────────────────────────
+# ── B1: resume loop / storm guards ─────────────────────────────────────────
 
 
-def _radius_exec(db_session, monkeypatch, *, session, attempt=0, age_min=0):
+def test_pending_wcd_marker_is_cleared_when_wcd_is_adopted():
+    from app.services.network.reconcile import AcsAddObject
+
+    state = {"pending_wcd_add": datetime.now(UTC).isoformat()}
+    wcd_path = "InternetGatewayDevice.WANDevice.1.WANConnectionDevice."
+
+    class Acs:
+        def list_devices(self, query=None, projection=None):
+            blank = {
+                "WANIPConnectionNumberOfEntries": {"_value": 0},
+                "WANPPPConnectionNumberOfEntries": {"_value": 0},
+            }
+            return [
+                {
+                    "InternetGatewayDevice": {
+                        "WANDevice": {"1": {"WANConnectionDevice": {"2": blank}}}
+                    }
+                }
+            ]
+
+        def refresh_object(self, *a, **k):
+            return {}
+
+        def extract_parameter_value(self, device, path):
+            return None
+
+        def add_object(self, *a, **k):
+            raise AssertionError("must adopt the existing WCD, not add another")
+
+    from app.services.network.reconcile.applier import SELECT_OR_CREATE_WCD
+
+    ctx = _ctx(acs_client=Acs())
+    ctx.state_get = state.get
+    ctx.state_set = state.__setitem__
+    action = AcsAddObject(
+        device_id="dev", object_path=wcd_path, wcd_index=SELECT_OR_CREATE_WCD
+    )
+    assert apply_plan(_plan(action), ctx).success is True
+    assert not state["pending_wcd_add"]
+
+
+def test_pending_create_marker_honours_ttl():
+    fresh = SimpleNamespace(
+        tr069_last_snapshot={
+            "capabilities": {"pending_wcd_add": datetime.now(UTC).isoformat()}
+        }
+    )
+    old = SimpleNamespace(
+        tr069_last_snapshot={
+            "capabilities": {
+                "pending_wcd_add": (
+                    datetime.now(UTC) - timedelta(minutes=11)
+                ).isoformat()
+            }
+        }
+    )
+    assert ont_turnup_gaps.has_pending_create_marker(fresh) is True
+    assert ont_turnup_gaps.has_pending_create_marker(old) is False
+
+
+def test_resume_is_capped_per_revision_then_ends_as_acs_cr_failed(
+    db_session, monkeypatch
+):
+    head, operation, ids = _park(db_session, monkeypatch, queued=0)
+    monkeypatch.setattr(ont_turnup_gaps, "acs_queued_task_count", lambda *_a, **_k: 0)
+    for n in range(ont_turnup_gaps.MAX_RESUMES_PER_REVISION):
+        now = datetime.now(UTC) + timedelta(minutes=n)
+        assert _resume_apply_after_inform(db_session, ont_id=ids[0], inform_at=now)
+        # The resumed apply again parks on a CR failure (3 prior attempts).
+        db_session.refresh(operation)
+        head.phase = OntServiceConfigurationPhase.readback_pending
+        head.waiting_reason = ont_turnup_gaps.WAITING_INFORM_CR_FAILED
+        operation.status = NetworkOperationStatus.waiting
+        operation.updated_at = now
+        ont = db_session.get(OntUnit, ids[0])
+        ont.acs_last_inform_at = now + timedelta(seconds=30)
+        db_session.commit()
+    assert operation.input_payload["resume_count"] == 3
+    later = datetime.now(UTC) + timedelta(hours=1)
+    ont.acs_last_inform_at = later
+    db_session.commit()
+    assert (
+        _resume_apply_after_inform(db_session, ont_id=ids[0], inform_at=later) is False
+    )
+    db_session.refresh(head)
+    assert head.phase is OntServiceConfigurationPhase.failed
+    assert head.failure_code == "acs_cr_failed"
+
+
+def test_non_wan_failed_head_is_not_resumed(db_session, monkeypatch):
+    head, operation, ids = _park(db_session, monkeypatch, queued=0)
+    from app.models.ont_service_configuration import OntServiceConfigurationRevision
+
+    rev = db_session.scalar(
+        select(OntServiceConfigurationRevision).where(
+            OntServiceConfigurationRevision.head_id == head.id
+        )
+    )
+    rev.section = "lan"
+    ont = db_session.get(OntUnit, ids[0])
+    ont.tr069_last_snapshot = {
+        "capabilities": {"pending_wcd_add": datetime.now(UTC).isoformat()}
+    }
+    head.phase = OntServiceConfigurationPhase.failed
+    head.failure_code = "verification_mismatch"
+    operation.status = NetworkOperationStatus.failed
+    operation.completed_at = datetime.now(UTC) - timedelta(minutes=5)
+    db_session.commit()
+    assert not _resume_apply_after_inform(
+        db_session, ont_id=ids[0], inform_at=datetime.now(UTC)
+    )
+    db_session.refresh(head)
+    assert head.phase is OntServiceConfigurationPhase.failed
+
+
+# ── B2: inform hot path ─────────────────────────────────────────────────────
+
+
+def test_inform_hook_enqueues_delayed_task_and_never_calls_acs(db_session, monkeypatch):
+    from app.services.tr069 import _queue_resume_apply_after_inform
+
+    head, operation, ids = _park(db_session, monkeypatch, queued=0)
+
+    def boom(*_a, **_k):
+        raise AssertionError("NBI must not be called on the inform hot path")
+
+    monkeypatch.setattr(ont_turnup_gaps, "acs_queued_task_count", boom)
+    sent = []
+    monkeypatch.setattr(
+        "app.services.queue_adapter.enqueue_task",
+        lambda name, **kw: sent.append((name, kw)) or SimpleNamespace(queued=True),
+    )
+    assert _queue_resume_apply_after_inform(
+        db_session, ont_id=ids[0], inform_at=datetime.now(UTC)
+    )
+    assert sent[0][0] == "app.tasks.tr069.resume_ont_service_apply_after_inform"
+    assert sent[0][1]["countdown"] == 60
+
+
+def test_wan_only_pass_repairs_cr_settings_but_never_acs_endpoint():
+    desired = _desired(
+        acs_url="https://acs.example.invalid", acs_username="u", acs_password_ref="r"
+    )
+    base = _synced_observed(desired)
+    observed = dataclasses.replace(
+        base,
+        acs=dataclasses.replace(
+            base.acs, acs_observed_cr_username="wrong", acs_observed_url="other"
+        ),
+    )
+    plan = compute_plan(
+        desired, observed, "sync", proposed_fields=frozenset({"wan_mode"})
+    )
+    mgmt = [a for a in plan.actions if isinstance(a, AcsSetManagementServer)]
+    assert len(mgmt) == 1
+    assert mgmt[0].acs_url is None and mgmt[0].acs_password_ref is None
+
+
+# ── G9 / B3 ─────────────────────────────────────────────────────────────────
+
+
+def _radius_exec(
+    db_session,
+    monkeypatch,
+    subscriber,
+    subscription,
+    *,
+    session_age_min=None,
+    attempt=0,
+    first_clean_min=None,
+    onu_login="100000001",
+    applied_min=10,
+):
     ont = OntUnit(serial_number=f"RAD-{uuid.uuid4().hex[:8]}", is_active=True)
     db_session.add(ont)
     db_session.flush()
-    assignment = OntAssignment(ont_unit_id=ont.id, active=True)
+    assignment = OntAssignment(
+        ont_unit_id=ont.id,
+        subscriber_id=subscriber.id,
+        subscription_id=subscription.id,
+        active=True,
+    )
     db_session.add(assignment)
+    db_session.flush()
+    cred = AccessCredential(
+        subscriber_id=subscriber.id,
+        subscription_id=subscription.id,
+        username="100000001",
+        is_active=True,
+    )
+    db_session.add(cred)
     db_session.flush()
     head, revision, operation = _lifecycle(
         db_session,
@@ -438,32 +624,44 @@ def _radius_exec(db_session, monkeypatch, *, session, attempt=0, age_min=0):
         suffix="radius",
         desired_change_evidence={"wan.mode": "pppoe"},
     )
-    operation.input_payload = {
+    now = datetime.now(UTC)
+    payload = {
         "ont_id": str(ont.id),
         "configuration_head_id": str(head.id),
         "configuration_revision": revision.revision,
+        "applied_at": (now - timedelta(minutes=applied_min)).isoformat(),
     }
-    operation.created_at = datetime.now(UTC) - timedelta(minutes=age_min)
-    if session:
+    if first_clean_min is not None:
+        payload["first_clean_readback_at"] = (
+            now - timedelta(minutes=first_clean_min)
+        ).isoformat()
+    operation.input_payload = payload
+    if session_age_min is not None:
         db_session.add(
             RadiusActiveSession(
+                access_credential_id=cred.id,
+                subscription_id=subscription.id,
                 username="100000001",
-                acct_session_id="s1",
-                session_start=datetime.now(UTC),
+                acct_session_id=uuid.uuid4().hex,
+                session_start=now - timedelta(minutes=session_age_min),
             )
         )
     db_session.commit()
     monkeypatch.setattr(
         "app.services.network.reconcile.core.reconcile_ont",
         lambda *_a, **_k: SimpleNamespace(
-            success=True, sync_status="synced", drift_after=(), failure=None
+            success=True,
+            sync_status="synced",
+            drift_after=(),
+            failure=None,
+            actions_applied=(),
         ),
     )
     monkeypatch.setattr(
         "app.services.network.reconcile.adapters.desired_from_ont_unit",
         lambda *_a, **_k: SimpleNamespace(
             wan_mode="pppoe",
-            wan_pppoe_username="100000001",
+            wan_pppoe_username=onu_login,
             wan_service_port_index=7,
             wan_vlan=203,
             wan_gem_index=1,
@@ -471,21 +669,92 @@ def _radius_exec(db_session, monkeypatch, *, session, attempt=0, age_min=0):
     )
     ids = (ont.id, operation.id, head.id, revision.revision)
     db_session_adapter.release_read_transaction(db_session)
-    return head, _execute(db_session, ids, attempt=attempt)
+    return head, operation, _execute(db_session, ids, attempt=attempt)
 
 
-def test_wan_verified_only_with_live_radius_session(db_session, monkeypatch):
-    head, outcome = _radius_exec(db_session, monkeypatch, session=True)
+def test_wan_verified_only_with_live_radius_session(
+    db_session, monkeypatch, subscriber, subscription
+):
+    # attempt>0 = readback-only pass, so the seeded applied_at stays in force.
+    head, _op, outcome = _radius_exec(
+        db_session, monkeypatch, subscriber, subscription, session_age_min=1, attempt=1
+    )
     assert outcome.phase is OntServiceConfigurationPhase.verified
 
 
-def test_wan_awaits_radius_session_then_times_out(db_session, monkeypatch):
-    head, outcome = _radius_exec(db_session, monkeypatch, session=False)
+def test_radius_session_older_than_the_apply_cannot_verify(
+    db_session, monkeypatch, subscriber, subscription
+):
+    head, op, outcome = _radius_exec(
+        db_session, monkeypatch, subscriber, subscription, session_age_min=60, attempt=1
+    )
     assert outcome.phase is OntServiceConfigurationPhase.readback_pending
     assert head.waiting_reason == "awaiting_radius_session"
+    staged = db_session.scalar(
+        select(NetworkOperationDispatch).where(
+            NetworkOperationDispatch.operation_id == op.id,
+            NetworkOperationDispatch.dispatch_key == "verify:2",
+        )
+    )
+    assert staged.command_name == "ont_service_config_verify.v1"
 
-    head, outcome = _radius_exec(
-        db_session, monkeypatch, session=False, attempt=1, age_min=30
+
+def test_onu_username_not_canonical_login_holds_with_explicit_code(
+    db_session, monkeypatch, subscriber, subscription
+):
+    head, _op, outcome = _radius_exec(
+        db_session,
+        monkeypatch,
+        subscriber,
+        subscription,
+        session_age_min=1,
+        attempt=1,
+        onu_login="someone-else",
+    )
+    assert outcome.phase is OntServiceConfigurationPhase.delivered_unverified
+    assert head.failure_code == "pppoe_login_mismatch"
+
+
+def test_radius_wait_is_anchored_on_first_clean_readback(
+    db_session, monkeypatch, subscriber, subscription
+):
+    # The operation is old, but the first clean readback was only 1 minute ago.
+    head, _op, outcome = _radius_exec(
+        db_session, monkeypatch, subscriber, subscription, attempt=1, first_clean_min=1
+    )
+    assert outcome.phase is OntServiceConfigurationPhase.readback_pending
+
+
+def test_radius_wait_times_out_after_first_clean_readback_window(
+    db_session, monkeypatch, subscriber, subscription
+):
+    head, _op, outcome = _radius_exec(
+        db_session, monkeypatch, subscriber, subscription, attempt=1, first_clean_min=30
     )
     assert outcome.phase is OntServiceConfigurationPhase.delivered_unverified
     assert head.failure_code == "radius_session_not_observed"
+
+
+def test_wan_allocation_marked_provisioned_only_after_applied_create_and_readback(
+    db_session,
+):
+    from app.services.network.service_port_allocator import get_allocations_for_ont
+
+    _olt, ont = _olt_and_ont(db_session)
+    ont_turnup_gaps.ensure_wan_service_port_index(
+        db_session, ont, wan_vlan=203, gem_index=1
+    )
+    applied = (SimpleNamespace(field="service_port[wan]"),)
+
+    def result(**kw):
+        base = dict(
+            success=True, sync_status="synced", drift_after=(), actions_applied=applied
+        )
+        return SimpleNamespace(**{**base, **kw})
+
+    ont_turnup_gaps.mark_wan_service_port_provisioned(
+        db_session, ont, result(drift_after=("olt_service_ports[wan]",))
+    )
+    assert get_allocations_for_ont(db_session, ont.id)[0].provisioned_at is None
+    ont_turnup_gaps.mark_wan_service_port_provisioned(db_session, ont, result())
+    assert get_allocations_for_ont(db_session, ont.id)[0].provisioned_at is not None

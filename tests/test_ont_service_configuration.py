@@ -2198,6 +2198,17 @@ def test_readback_pending_is_not_verified_until_exact_revision_readback_succeeds
     monkeypatch.setattr(
         "app.services.network.reconcile.core.reconcile_ont", verified_reconcile
     )
+    # This revision is not PPPoE, so no RADIUS session is required for proof.
+    monkeypatch.setattr(
+        "app.services.network.reconcile.adapters.desired_from_ont_unit",
+        lambda *_a, **_k: SimpleNamespace(
+            wan_mode="bridge",
+            wan_pppoe_username=None,
+            wan_service_port_index=None,
+            wan_vlan=None,
+            wan_gem_index=None,
+        ),
+    )
     verify_command_id = uuid.uuid4()
     verified = execute_ont_service_configuration(
         db_session,
