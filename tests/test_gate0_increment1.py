@@ -357,7 +357,9 @@ def test_release_candidate_provenance_uses_gh_attestation_not_cosign() -> None:
     # cosign signature check stays, identity + issuer pinned.
     assert "cosign verify --certificate-identity-regexp" in run
     assert IDENTITY_PIN in run
-    assert "--certificate-oidc-issuer https://token.actions.githubusercontent.com" in run
+    assert (
+        "--certificate-oidc-issuer https://token.actions.githubusercontent.com" in run
+    )
     assert step["env"]["GH_TOKEN"] == "${{ github.token }}"
     # gh is the runner's preinstalled CLI, not installed here.
     assert "gh/install" not in source and "setup-gh" not in source
@@ -388,15 +390,17 @@ def test_release_candidate_reuse_mode_runs_the_same_verification() -> None:
 def test_release_candidate_attest_step_pinned_and_push_to_registry() -> None:
     steps = {s.get("name"): s for s in _rc_steps()}
     attest = steps["Attest build provenance"]
-    assert re.fullmatch(
-        r"actions/attest-build-provenance@[0-9a-f]{40}", attest["uses"]
-    )
+    assert re.fullmatch(r"actions/attest-build-provenance@[0-9a-f]{40}", attest["uses"])
     assert attest["with"]["push-to-registry"] is True
     for name in ("Install cosign",):
-        assert re.fullmatch(r"sigstore/cosign-installer@[0-9a-f]{40}", steps[name]["uses"])
+        assert re.fullmatch(
+            r"sigstore/cosign-installer@[0-9a-f]{40}", steps[name]["uses"]
+        )
 
 
-def _run_proof_negative(tmp_path: Path, http_code: str, body: str) -> subprocess.CompletedProcess[str]:
+def _run_proof_negative(
+    tmp_path: Path, http_code: str, body: str
+) -> subprocess.CompletedProcess[str]:
     """Run the negative proof with stubbed curl/jq-free network (no real I/O)."""
     import shutil
 
@@ -411,17 +415,17 @@ def _run_proof_negative(tmp_path: Path, http_code: str, body: str) -> subprocess
         "#!/bin/sh\n"
         "out=''\n"
         "while [ $# -gt 0 ]; do\n"
-        "  case \"$1\" in -o) out=$2; shift ;; esac\n"
+        '  case "$1" in -o) out=$2; shift ;; esac\n'
         "  shift\n"
         "done\n"
         "cat >/dev/null\n"
-        "if [ -n \"$out\" ]; then\n"
-        f"  cat {tmp_path}/body.json > \"$out\"\n"
+        'if [ -n "$out" ]; then\n'
+        f'  cat {tmp_path}/body.json > "$out"\n'
         f"  printf '%s' '{http_code}'\n"
         "  [ '" + http_code + "' = 000 ] && exit 7\n"
         "  exit 0\n"
         "fi\n"
-        "printf '{\"value\":\"x\"}'\n",
+        'printf \'{"value":"x"}\'\n',
         encoding="utf-8",
     )
     stub.chmod(0o755)
@@ -435,18 +439,26 @@ def _run_proof_negative(tmp_path: Path, http_code: str, body: str) -> subprocess
     }
     return subprocess.run(
         ["sh", str(ROOT / "deploy/gate0/proof1_oidc_openbao.sh")],
-        capture_output=True, text=True, env=env, check=False,
+        capture_output=True,
+        text=True,
+        env=env,
+        check=False,
     )
 
 
 @pytest.mark.parametrize(
     ("code", "body"),
     [
-        ("400", '{"errors":["error validating claims: claim \\"ref\\" does not match"]}'),
+        (
+            "400",
+            '{"errors":["error validating claims: claim \\"ref\\" does not match"]}',
+        ),
         ("403", '{"errors":["permission denied"]}'),
     ],
 )
-def test_proof_negative_passes_only_on_definite_login_refusal(tmp_path, code, body) -> None:
+def test_proof_negative_passes_only_on_definite_login_refusal(
+    tmp_path, code, body
+) -> None:
     result = _run_proof_negative(tmp_path, code, body)
     assert result.returncode == 0, result.stderr
     assert "negative OK" in result.stdout
@@ -465,7 +477,9 @@ def test_proof_negative_passes_only_on_definite_login_refusal(tmp_path, code, bo
         ("200", '{"auth":{"client_token":"s.x"}}'),
     ],
 )
-def test_proof_negative_is_not_a_pass_for_unrelated_errors(tmp_path, code, body) -> None:
+def test_proof_negative_is_not_a_pass_for_unrelated_errors(
+    tmp_path, code, body
+) -> None:
     result = _run_proof_negative(tmp_path, code, body)
     assert result.returncode == 1, (code, body, result.stdout)
     assert "negative OK" not in result.stdout
