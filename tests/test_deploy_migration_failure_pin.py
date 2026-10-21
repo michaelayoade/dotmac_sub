@@ -68,6 +68,7 @@ database_heads() {
     printf '%s\\n' ${HEADS_AFTER}
   fi
 }
+migration_admin_credential_available() { [[ "${FAKE_ADMIN_OK-1}" == "1" ]]; }
 run_migrations() {
   MIGRATION_RUN_PREFIX=dotmac_sub_migrate_test_
   echo "migrate image=$(env_value APP_IMAGE)" >>"$CALLS"
@@ -212,6 +213,21 @@ def test_failed_migration_restores_the_running_pin(tmp_path: Path) -> None:
     assert "heads measured unchanged (670_a)" in err
     assert "no rollback path was used" in err
     assert "s3cret-not-real" not in out + err
+
+
+def test_missing_migration_admin_credential_refuses_before_pinning(
+    tmp_path: Path,
+) -> None:
+    out, err, calls, env = _run(
+        tmp_path, migrate_rc=0, extra_env={"FAKE_ADMIN_OK": "0"}
+    )
+    assert "RC=1" in out
+    assert "DEPLOY REFUSED before pinning" in err
+    # Nothing was pinned and the migration never ran.
+    assert env["APP_IMAGE"] == OLD_IMAGE
+    assert env["GIT_SHA"] == OLD_SHA
+    assert not any(call.startswith("migrate ") for call in calls)
+    assert "trap_restored" in calls
 
 
 def test_trap_is_restored_after_the_migration_window(tmp_path: Path) -> None:
