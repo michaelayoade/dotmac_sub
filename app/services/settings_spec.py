@@ -2869,7 +2869,7 @@ SETTINGS_SPECS: list[SettingSpec] = [
         key="starter_billing_reseller_slice_source_key_template",
         env_var="BILLING_STARTER_BILLING_RESELLER_SLICE_SOURCE_KEY_TEMPLATE",
         value_type=SettingValueType.string,
-        default="{confirmation_id}:subscriber:{subscriber_id}",
+        default="{confirmation_id}:subscriber:{subscriber_id}:invoice:{invoice_id}",
         label="Starter Reseller Slice Settlement Source Key Template",
     ),
     SettingSpec(

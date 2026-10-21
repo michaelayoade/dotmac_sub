@@ -192,12 +192,21 @@ def test_one_confirmation_settles_two_subscribers_exactly_once(
     first = _member(db_session, account.reseller_id)
     second = _member(db_session, account.reseller_id)
     invoice_a = _issued_invoice(db_session, first)
+    # A second invoice for the same subscriber: distinct per-invoice
+    # settlement identity under the one confirmation.
+    invoice_a2 = _issued_invoice(db_session, first)
     invoice_b = _issued_invoice(db_session, second)
     payment_id = uuid4()
     external_reference = f"reseller-bank-{uuid4().hex[:8]}"
+    occurred_at = datetime.now(UTC)
     slices = (
         ResellerSettlementSlice(
             invoice_id=invoice_a.id,
+            subscriber_id=first.id,
+            amount=Decimal("107.50"),
+        ),
+        ResellerSettlementSlice(
+            invoice_id=invoice_a2.id,
             subscriber_id=first.id,
             amount=Decimal("107.50"),
         ),
@@ -212,7 +221,7 @@ def test_one_confirmation_settles_two_subscribers_exactly_once(
         db_session,
         account=account,
         slices=slices,
-        total=Decimal("215.00"),
+        total=Decimal("322.50"),
         external_reference=external_reference,
     )
     assert reason is None
@@ -224,8 +233,8 @@ def test_one_confirmation_settles_two_subscribers_exactly_once(
             payment_id=payment_id,
             slices=slices,
             external_reference=external_reference,
-            confirmed_amount=Decimal("215.00"),
-            occurred_at=datetime.now(UTC),
+            confirmed_amount=Decimal("322.50"),
+            occurred_at=occurred_at,
         )
 
     result = _settle()
@@ -233,9 +242,13 @@ def test_one_confirmation_settles_two_subscribers_exactly_once(
     replay = _settle()
     db_session.commit()
     assert replay.confirmation_id == result.confirmation_id
-    assert set(result.settled_invoice_ids) == {invoice_a.id, invoice_b.id}
+    assert set(result.settled_invoice_ids) == {
+        invoice_a.id,
+        invoice_a2.id,
+        invoice_b.id,
+    }
 
-    for invoice in (invoice_a, invoice_b):
+    for invoice in (invoice_a, invoice_a2, invoice_b):
         db_session.refresh(invoice)
         assert invoice.status is InvoiceStatus.paid
         assert invoice.balance_due == Decimal("0.00")

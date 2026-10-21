@@ -318,104 +318,124 @@ def settle_reseller_consolidated(
             reference=reference,
         )
     settled: list[UUID] = []
+    # Mirrors read the Starter account collectible, so a subscriber's
+    # invoices mirror only after every slice for that account has
+    # allocated; eligibility proved the sliced total is the whole
+    # account collectible, so the group ends at zero.
+    by_subscriber: dict[UUID, list[ResellerSettlementSlice]] = {}
+    for slice_ in slices:
+        by_subscriber.setdefault(slice_.subscriber_id, []).append(slice_)
     try:
-        for slice_ in slices:
-            invoice = db.get(Invoice, slice_.invoice_id)
-            assert invoice is not None  # eligibility proved it
-            link = db.execute(
-                select(StarterInvoiceLink).where(
-                    StarterInvoiceLink.invoice_id == invoice.id
-                )
-            ).scalar_one()
+        for subscriber_id, group in by_subscriber.items():
             billing_account = create_billing_account(
                 db,
                 scope=_SCOPE,
-                external_account_ref=billing_policies.account_ref(slice_.subscriber_id),
+                external_account_ref=billing_policies.account_ref(subscriber_id),
                 currency=currency.code,
                 minor_units=currency.minor_units,
             )
-            slice_key = policies.reseller_slice_source_key(
-                confirmation_id=confirmation.id,
-                subscriber_id=slice_.subscriber_id,
-            )
-            settlement = billing_accept_settlement(
-                db,
-                scope=_SCOPE,
-                command=AcceptSettlementV1(
+            discharged: list[tuple[Invoice, StarterInvoiceLink, UUID, Decimal]] = []
+            for slice_ in group:
+                invoice = db.get(Invoice, slice_.invoice_id)
+                assert invoice is not None  # eligibility proved it
+                link = db.execute(
+                    select(StarterInvoiceLink).where(
+                        StarterInvoiceLink.invoice_id == invoice.id
+                    )
+                ).scalar_one()
+                slice_key = policies.reseller_slice_source_key(
+                    confirmation_id=confirmation.id,
+                    subscriber_id=subscriber_id,
+                    invoice_id=slice_.invoice_id,
+                )
+                settlement = billing_accept_settlement(
+                    db,
                     scope=_SCOPE,
-                    billing_account_id=billing_account.id,
-                    source_system=settlement_policies.settlement_source_system,
-                    source_settlement_key=slice_key,
-                    source_version=settlement_policies.settlement_source_version,
-                    amount=Money(slice_.amount, currency),
-                    occurred_at=occurred_at,
-                    observed_at=cash.observed_at,
-                    confirmation_evidence=settlement_policies.confirmation_evidence,
-                    funding_lane=_funding_lane(settlement_policies.funding_lane),
-                ),
-                accepted_confirmation_evidence=(
-                    settlement_policies.accepted_confirmation_evidence
-                ),
-            )
-            allocate_settlement(
-                db,
-                scope=_SCOPE,
-                command=AllocationCommand(
-                    settlement_id=settlement.id,
-                    document_id=link.document_id,
-                    amount=Money(slice_.amount, currency),
-                    occurred_at=occurred_at,
-                    source_ref=policies.reseller_allocation_source_ref(slice_key),
-                ),
-            )
+                    command=AcceptSettlementV1(
+                        scope=_SCOPE,
+                        billing_account_id=billing_account.id,
+                        source_system=settlement_policies.settlement_source_system,
+                        source_settlement_key=slice_key,
+                        source_version=settlement_policies.settlement_source_version,
+                        amount=Money(slice_.amount, currency),
+                        occurred_at=occurred_at,
+                        observed_at=cash.observed_at,
+                        confirmation_evidence=settlement_policies.confirmation_evidence,
+                        funding_lane=_funding_lane(settlement_policies.funding_lane),
+                    ),
+                    accepted_confirmation_evidence=(
+                        settlement_policies.accepted_confirmation_evidence
+                    ),
+                )
+                allocate_settlement(
+                    db,
+                    scope=_SCOPE,
+                    command=AllocationCommand(
+                        settlement_id=settlement.id,
+                        document_id=link.document_id,
+                        amount=Money(slice_.amount, currency),
+                        occurred_at=occurred_at,
+                        source_ref=policies.reseller_allocation_source_ref(slice_key),
+                    ),
+                )
+                discharged.append((invoice, link, settlement.id, slice_.amount))
             collectible = starter_account_collectible(
                 db,
                 billing_account_id=billing_account.id,
                 currency_code=currency.code,
             )
-            invoice.balance_due = collectible
-            if collectible <= 0:
+            if collectible != 0:
+                raise _error(
+                    "starter_refused",
+                    "Starter collectible remains after exact reseller slices",
+                    reference=reference,
+                    subscriber_id=str(subscriber_id),
+                )
+            for invoice, link, settlement_id, amount in discharged:
+                invoice.balance_due = collectible
                 invoice.status = InvoiceStatus.paid
                 if invoice.paid_at is None:
                     invoice.paid_at = occurred_at
-            if not _access_signal_already_emitted(db, invoice.id, confirmation.id):
-                emit_event(
-                    db,
-                    EventType.payment_received,
-                    {
-                        "amount": str(slice_.amount),
-                        "currency": invoice.currency,
-                        "invoice_id": str(invoice.id),
-                        "status": "succeeded",
-                        "settlement_lane": "starter",
-                        "settlement_kind": "reseller_consolidated",
-                        "starter_confirmation_id": str(confirmation.id),
-                        "starter_settlement_id": str(settlement.id),
-                    },
-                    account_id=invoice.account_id,
-                    invoice_id=invoice.id,
-                )
-                AuditEvents.stage(
-                    db,
-                    AuditEventCreate(
-                        action="starter_reseller_consolidated_settlement",
-                        entity_type="invoice",
-                        entity_id=str(invoice.id),
-                        metadata_={
-                            "settlement_lane": "starter",
-                            "intent_reference": reference,
-                            "external_reference": external_reference,
-                            "starter_confirmation_id": str(confirmation.id),
-                            "starter_settlement_id": str(settlement.id),
-                            "starter_document_id": str(link.document_id),
-                            "allocated": str(slice_.amount),
-                            "collectible_after": str(collectible),
+                if not _access_signal_already_emitted(
+                    db, invoice.id, confirmation.id
+                ):
+                    emit_event(
+                        db,
+                        EventType.payment_received,
+                        {
+                            "amount": str(amount),
                             "currency": invoice.currency,
-                            "billing_account_id": str(account.id),
+                            "invoice_id": str(invoice.id),
+                            "status": "succeeded",
+                            "settlement_lane": "starter",
+                            "settlement_kind": "reseller_consolidated",
+                            "starter_confirmation_id": str(confirmation.id),
+                            "starter_settlement_id": str(settlement_id),
                         },
-                    ),
-                )
-            settled.append(invoice.id)
+                        account_id=invoice.account_id,
+                        invoice_id=invoice.id,
+                    )
+                    AuditEvents.stage(
+                        db,
+                        AuditEventCreate(
+                            action="starter_reseller_consolidated_settlement",
+                            entity_type="invoice",
+                            entity_id=str(invoice.id),
+                            metadata_={
+                                "settlement_lane": "starter",
+                                "intent_reference": reference,
+                                "external_reference": external_reference,
+                                "starter_confirmation_id": str(confirmation.id),
+                                "starter_settlement_id": str(settlement_id),
+                                "starter_document_id": str(link.document_id),
+                                "allocated": str(amount),
+                                "collectible_after": str(collectible),
+                                "currency": invoice.currency,
+                                "billing_account_id": str(account.id),
+                            },
+                        ),
+                    )
+                settled.append(invoice.id)
     except BillingError as exc:
         raise _error(
             "starter_refused",

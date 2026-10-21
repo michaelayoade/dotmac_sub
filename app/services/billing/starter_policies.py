@@ -693,15 +693,27 @@ class StarterResellerSettlementPolicies:
         )
 
     def reseller_slice_source_key(
-        self, *, confirmation_id: UUID, subscriber_id: UUID
+        self, *, confirmation_id: UUID, subscriber_id: UUID, invoice_id: UUID
     ) -> str:
-        rendered = self.reseller_slice_source_key_template.replace(
-            "{confirmation_id}", str(confirmation_id)
-        ).replace("{subscriber_id}", str(subscriber_id))
-        if rendered == self.reseller_slice_source_key_template or "{" in rendered:
+        # Per-invoice identity: one confirmation may slice several
+        # invoices for the same subscriber, and Starter keys both the
+        # settlement and its allocation on this source identity.
+        rendered = (
+            self.reseller_slice_source_key_template.replace(
+                "{confirmation_id}", str(confirmation_id)
+            )
+            .replace("{subscriber_id}", str(subscriber_id))
+            .replace("{invoice_id}", str(invoice_id))
+        )
+        if (
+            rendered == self.reseller_slice_source_key_template
+            or "{" in rendered
+            or "{invoice_id}" not in self.reseller_slice_source_key_template
+        ):
             raise _error(
                 "configuration_invalid",
-                "Template must contain {confirmation_id} and {subscriber_id}",
+                "Template must contain {confirmation_id}, {subscriber_id} "
+                "and {invoice_id}",
                 setting="starter_billing_reseller_slice_source_key_template",
             )
         return rendered
