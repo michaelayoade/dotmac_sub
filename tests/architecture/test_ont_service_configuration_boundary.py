@@ -35,14 +35,17 @@ def test_worker_claims_dispatch_and_never_creates_an_operation():
     assert "NetworkOperation(" not in source
 
 
-def test_wifi_delivery_scope_crosses_owner_to_reconciler_without_secret_values():
+def test_section_delivery_scopes_cross_owner_to_reconciler_without_secret_values():
     owner_source = _source("app/services/network/ont_service_configuration.py")
     state_source = _source("app/services/network/reconcile/state.py")
 
     assert "OntWifiDeliveryScope" in state_source
+    assert "OntWanProposedChange" in state_source
     assert "changed_fields: frozenset[OntWifiDeliveryField]" in state_source
     assert "wifi_scope = _wifi_delivery_scope(revision)" in owner_source
+    assert "wan_scope = _wan_delivery_scope(db, ont, revision)" in owner_source
     assert "wifi_delivery_scope=wifi_scope," in owner_source
+    assert "proposed_change=wan_scope," in owner_source
     scope_slice = owner_source.split("def _wifi_delivery_scope(", 1)[1].split(
         "def _execution_locked(", 1
     )[0]
@@ -71,8 +74,9 @@ def test_verification_never_sets_sync_status_directly():
 
 def test_verification_dispatch_is_structurally_readback_only():
     """The dispatched ``ont_service_config_verify.v1`` invocation carries no
-    field that could select a write path, and the worker task fixes
-    ``force_readback_only=True`` unconditionally — not from any argument.
+    field that could select a write path. It may carry only the bounded attempt
+    count, while the worker task fixes ``force_readback_only=True`` and repair
+    mode unconditionally — not from any operation payload argument.
     """
     dispatch_source = _source("app/services/network_operation_dispatch.py")
     task_source = _source("app/tasks/ont_service_configuration.py")
@@ -80,7 +84,7 @@ def test_verification_dispatch_is_structurally_readback_only():
     verify_invocation_slice = dispatch_source.split(
         "def _ont_service_config_verify_invocation(", 1
     )[1].split("def _cpe_tr069_invocation(", 1)[0]
-    assert "verification_attempt" not in verify_invocation_slice
+    assert "verification_attempt" in verify_invocation_slice
     assert "explicit_repair" not in verify_invocation_slice
 
     verify_task_slice = task_source.split("def verify_readback(", 1)[1]
@@ -92,9 +96,25 @@ def test_verification_dispatch_is_structurally_readback_only():
         ") -> dict[str, Any]:", 1
     )[0]
     assert "force_readback_only" not in task_signature
+    assert "verification_attempt" in task_signature
     assert "force_readback_only=True" in verify_task_slice
+    assert "explicit_repair=True" in verify_task_slice
     non_docstring_slice = verify_task_slice.split('"""', 2)[-1]
     assert non_docstring_slice.count("force_readback_only") == 1
+
+
+def test_pending_readback_never_reenters_the_apply_command():
+    owner_source = _source("app/services/network/ont_service_configuration.py")
+    execution_slice = owner_source.split("def _execution_locked(", 1)[1].split(
+        "def execute_ont_service_configuration(", 1
+    )[0]
+    retry_slice = execution_slice.split("readback_pending = bool(", 1)[1]
+
+    assert "NetworkOperationCommand.ont_service_config_apply_v1" not in retry_slice
+    assert (
+        retry_slice.count("NetworkOperationCommand.ont_service_config_verify_v1") == 2
+    )
+    assert 'mode="sweep" if readback_only or command.explicit_repair' in execution_slice
 
 
 def test_template_uses_owner_projection_for_retry_and_hides_ppp_secret_inputs():

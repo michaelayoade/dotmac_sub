@@ -2,7 +2,9 @@ from __future__ import annotations
 
 from contextlib import contextmanager
 from datetime import UTC, datetime, timedelta
+from types import SimpleNamespace
 from unittest.mock import Mock
+from uuid import uuid4
 
 import pytest
 
@@ -84,6 +86,32 @@ def test_stage_dispatch_rejects_arbitrary_or_mismatched_commands(db_session):
 
     assert arbitrary.value.code == "unsupported_command"
     assert mismatch.value.code == "operation_command_mismatch"
+
+
+def test_service_configuration_verify_invocation_carries_only_attempt_counter():
+    ont_id = uuid4()
+    operation_id = uuid4()
+    head_id = uuid4()
+    operation = SimpleNamespace(
+        id=operation_id,
+        target_id=ont_id,
+        input_payload={
+            "ont_id": str(ont_id),
+            "configuration_head_id": str(head_id),
+            "configuration_revision": 4,
+            "explicit_repair": False,
+        },
+    )
+
+    invocation = dispatch_owner._ont_service_config_verify_invocation(
+        operation, "verify:2"
+    )
+
+    assert invocation.args == [str(ont_id), str(operation_id), str(head_id), 4]
+    assert invocation.kwargs == {"verification_attempt": 2}
+
+    primary = dispatch_owner._ont_service_config_verify_invocation(operation, "primary")
+    assert primary.kwargs == {}
 
 
 @pytest.mark.parametrize(

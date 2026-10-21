@@ -837,20 +837,21 @@ def test_wan_only_change_preserves_service_ports_and_excludes_unrelated_drift():
         ),
     )
 
-    plan = compute_plan(
-        desired,
-        observed,
-        "sync",
-        proposed_fields=frozenset({"wan_pppoe_username"}),
-    )
+    for mode in ("sync", "sweep"):
+        plan = compute_plan(
+            desired,
+            observed,
+            mode,
+            proposed_fields=frozenset({"wan_pppoe_username"}),
+        )
 
-    assert AcsSetPppoe in _types(plan)
-    assert OltDeleteServicePort not in _types(plan)
-    assert OltModifyDescription not in _types(plan)
-    assert OltIpconfig not in _types(plan)
-    assert AcsSetDhcpServer not in _types(plan)
-    assert AcsSetWifiConfig not in _types(plan)
-    assert AcsSetManagementServer not in _types(plan)
+        assert AcsSetPppoe in _types(plan)
+        assert OltDeleteServicePort not in _types(plan)
+        assert OltModifyDescription not in _types(plan)
+        assert OltIpconfig not in _types(plan)
+        assert AcsSetDhcpServer not in _types(plan)
+        assert AcsSetWifiConfig not in _types(plan)
+        assert AcsSetManagementServer not in _types(plan)
 
 
 def test_wan_only_change_creates_only_the_missing_wan_service_port():

@@ -280,8 +280,13 @@ def _is_remote_access_only_change(
 
 
 def _is_wan_only_change(mode: ReconcileMode, proposed_fields: frozenset[str]) -> bool:
+    # The configuration lifecycle retains the exact WAN field scope while its
+    # delayed readback worker uses sweep mode to observe an out-of-sync ONT.
+    # Periodic sweeps carry no proposed fields and therefore remain full-device.
     return (
-        mode == "sync" and bool(proposed_fields) and proposed_fields <= _WAN_ONLY_FIELDS
+        mode in ("sync", "sweep")
+        and bool(proposed_fields)
+        and proposed_fields <= _WAN_ONLY_FIELDS
     )
 
 

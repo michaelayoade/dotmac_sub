@@ -1108,6 +1108,102 @@ def test_wifi_worker_passes_typed_redacted_delivery_scope(db_session, monkeypatc
     assert "Subscriber WiFi" not in str(scope)
 
 
+def test_wan_worker_restores_typed_revision_delivery_scope(db_session, monkeypatch):
+    ont = OntUnit(serial_number=f"WAN-{uuid.uuid4().hex[:10]}", is_active=True)
+    db_session.add(ont)
+    db_session.flush()
+    assignment = OntAssignment(ont_unit_id=ont.id, active=True)
+    db_session.add(assignment)
+    db_session.flush()
+    head, revision, operation = _lifecycle(
+        db_session,
+        ont,
+        assignment,
+        phase=OntServiceConfigurationPhase.queued,
+        suffix="wan-scope",
+        section=OntConfigurationSection.wan,
+        desired_change_evidence={
+            "wan.mode": "pppoe",
+            "wan.ip_protocol": "ipv4",
+            "wan.static_ip": None,
+            "wan.static_subnet": None,
+            "wan.static_gateway": None,
+            "wan.static_dns": None,
+            "wan.pppoe_wcd_index": 2,
+            "olt.wan_service_port_index": 101,
+        },
+    )
+    ont_id = ont.id
+    operation_id = operation.id
+    head_id = head.id
+    revision_number = revision.revision
+    db_session.commit()
+
+    desired = SimpleNamespace(
+        wan_mode="pppoe",
+        wan_pppoe_username="subscriber@example.test",
+        wan_pppoe_password_ref="enc:v1:test-reference",
+        wan_pppoe_wcd_index=2,
+        wan_static_ip=None,
+        wan_static_subnet=None,
+        wan_static_gateway=None,
+        wan_static_dns=None,
+        wan_static_ip_is_public=None,
+        ipv6_enabled=False,
+    )
+    monkeypatch.setattr(
+        "app.services.network.reconcile.adapters.desired_from_ont_unit",
+        lambda *_args, **_kwargs: desired,
+    )
+    calls: list[dict[str, object]] = []
+
+    def reconciled(*_args, **kwargs):
+        calls.append(kwargs)
+        return SimpleNamespace(
+            success=True,
+            sync_status="synced",
+            drift_after=(),
+            failure=None,
+        )
+
+    monkeypatch.setattr("app.services.network.reconcile.core.reconcile_ont", reconciled)
+    outcome = execute_ont_service_configuration(
+        db_session,
+        ExecuteOntServiceConfigurationCommand(
+            context=CommandContext.system(
+                actor="test:worker",
+                scope="network:ont:execute",
+                reason="test WAN delivery scope",
+                command_id=uuid.uuid4(),
+                correlation_id=operation_id,
+                idempotency_key="wan-delivery-scope",
+            ),
+            ont_unit_id=ont_id,
+            operation_id=operation_id,
+            configuration_head_id=head_id,
+            revision=revision_number,
+        ),
+    )
+
+    assert outcome.phase is OntServiceConfigurationPhase.verified
+    scope = calls[-1]["proposed_change"]
+    assert scope is not None
+    assert scope.changed_fields == frozenset(
+        {
+            "wan_mode",
+            "ipv6_enabled",
+            "wan_static_ip",
+            "wan_static_ip_is_public",
+            "wan_static_subnet",
+            "wan_static_gateway",
+            "wan_static_dns",
+            "wan_pppoe_wcd_index",
+        }
+    )
+    assert scope.wan_pppoe_username == "subscriber@example.test"
+    assert scope.wan_pppoe_password_ref == "enc:v1:test-reference"
+
+
 def test_lan_worker_forces_write_and_reports_exact_readback_unavailable(
     db_session, monkeypatch
 ):
@@ -1576,6 +1672,8 @@ def _assert_cr_failure_absorbed_as_pending_drain(
         )
     )
     assert dispatch is not None
+    assert dispatch.command_name == "ont_service_config_verify.v1"
+    assert dispatch.kwargs_payload == {"verification_attempt": 1}
 
     event = db_session.scalar(
         select(OntProvisioningEvent)
@@ -1711,6 +1809,7 @@ def test_acs_cr_failure_retry_dispatch_is_readback_only_never_a_second_write(
 
     assert len(reconcile_calls) == 1
     assert reconcile_calls[0]["readback_only"] is True
+    assert reconcile_calls[0]["mode"] == "sweep"
     assert outcome.phase is OntServiceConfigurationPhase.verified
 
 
@@ -2608,15 +2707,11 @@ def test_verify_residual_drift_reports_failed_not_verified(db_session, monkeypat
     assert execute_outcome.phase is OntServiceConfigurationPhase.failed
 
 
-def test_verify_readback_pending_reports_failed_without_apply_redispatch(
+def test_verify_readback_pending_schedules_bounded_structural_verification(
     db_session, monkeypatch
 ):
-    """Required-fix regression test: a readback-only verification that gets
-    ``readback_pending`` evidence must NOT auto re-dispatch
-    ``ont_service_config_apply_v1`` (the shared dispatch key parsing that
-    only keeps that hop readback-only is exactly the "flag deep in shared
-    code" shape this feature was built to avoid depending on) and must not
-    let a later ``BLOCKED_OUT_OF_SYNC`` refusal overwrite this diagnosis.
+    """A pending readback remains on the same operation and schedules the
+    dedicated verification command, never the apply command.
     """
     ont, assignment, head, revision, operation = _verify_setup(
         db_session,
@@ -2675,18 +2770,19 @@ def test_verify_readback_pending_reports_failed_without_apply_redispatch(
         ),
     )
 
-    assert execute_outcome.phase is OntServiceConfigurationPhase.failed
-    assert "still_unverified" in execute_outcome.message
+    assert execute_outcome.phase is OntServiceConfigurationPhase.readback_pending
+    assert "fresh readback is pending" in execute_outcome.message
     refreshed_head = db_session.get(OntServiceConfigurationHead, head_id)
-    assert refreshed_head.failure_code == "verification_mismatch"
-    # No new dispatch was staged for this operation — no ``verify:1`` hop
-    # onto ``ont_service_config_apply_v1``.
-    dispatch_keys = db_session.scalars(
-        select(NetworkOperationDispatch.dispatch_key).where(
-            NetworkOperationDispatch.operation_id == new_operation_id
+    assert refreshed_head.failure_code is None
+    dispatch = db_session.scalar(
+        select(NetworkOperationDispatch).where(
+            NetworkOperationDispatch.operation_id == new_operation_id,
+            NetworkOperationDispatch.dispatch_key == "verify:1",
         )
-    ).all()
-    assert all(not key.startswith("verify:") for key in dispatch_keys)
+    )
+    assert dispatch is not None
+    assert dispatch.command_name == "ont_service_config_verify.v1"
+    assert dispatch.kwargs_payload == {"verification_attempt": 1}
 
 
 def test_verify_write_only_password_reports_delivered_unverified(

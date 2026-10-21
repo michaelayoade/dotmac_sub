@@ -404,14 +404,13 @@ def _ont_service_config_invocation(
 
 def _ont_service_config_verify_invocation(
     operation: NetworkOperation,
-    _dispatch_key: str,
+    dispatch_key: str,
 ) -> DispatchInvocation:
     """Build the readback-only verification invocation.
 
-    Deliberately forwards no attempt-count or repair-mode payload field at
-    all: nothing in the dispatched command can select a write path. The
-    worker task fixes its own readback flag unconditionally, independent of
-    anything staged here.
+    The attempt count bounds delayed observations; it cannot select a write
+    path. The worker task fixes repair/readback-only mode unconditionally,
+    independent of anything staged here.
     """
     ont_id = _payload_matches_target(operation, "ont_id")
     head_id = _required_payload_id(operation, "configuration_head_id")
@@ -428,9 +427,30 @@ def _ont_service_config_verify_invocation(
             "invalid_operation_payload",
             "ONT service configuration verification revision must be positive.",
         )
+    verification_attempt = 0
+    if dispatch_key.startswith("verify:"):
+        try:
+            verification_attempt = int(dispatch_key.partition(":")[2])
+        except ValueError as exc:
+            raise NetworkOperationDispatchError(
+                "invalid_dispatch_key",
+                "ONT service configuration verification key is invalid.",
+            ) from exc
+        if verification_attempt < 1:
+            raise NetworkOperationDispatchError(
+                "invalid_dispatch_key",
+                "ONT service configuration verification attempt must be positive.",
+            )
     return DispatchInvocation(
         args=[ont_id, str(operation.id), head_id, parsed_revision],
-        kwargs={},
+        # Keep the primary invocation byte-for-byte compatible with
+        # verification dispatches staged before this attempt counter existed.
+        # The task default is zero; delayed verify:N hops carry the counter.
+        kwargs=(
+            {"verification_attempt": verification_attempt}
+            if verification_attempt
+            else {}
+        ),
     )
 
 
