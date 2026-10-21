@@ -427,3 +427,121 @@ def test_owner_path_password_only_change_one_reset_per_revision(monkeypatch) -> 
     ]
     assert len(resets) == 1
     assert state["ppp_credential_revision"] != "rev-old"
+
+
+# -- review fixes: None index, waiting reason, marker survival, form default --
+
+
+def test_planner_none_index_plans_select_or_create() -> None:
+    import dataclasses
+
+    from app.services.network.reconcile import (
+        AcsSetPppoe,
+        compute_plan,
+    )
+    from app.services.network.reconcile.actions import SELECT_OR_CREATE_WCD
+    from tests.test_reconcile_planner import _desired, _informed_acs_observed, _observed
+
+    desired = dataclasses.replace(
+        _desired(wan_pppoe_instance_index=1), wan_pppoe_wcd_index=None
+    )
+    plan = compute_plan(desired, _observed(acs=_informed_acs_observed()), "sync")
+    from app.services.network.reconcile import AcsAddObject
+
+    adds = [a for a in plan.actions if isinstance(a, AcsAddObject)]
+    assert adds and adds[0].object_path.endswith("WANDevice.1.WANConnectionDevice")
+    assert adds[0].wcd_index == SELECT_OR_CREATE_WCD
+    assert next(a for a in plan.actions if isinstance(a, AcsSetPppoe)).wcd_index == 0
+
+
+def test_owner_path_select_or_create_then_adopts_persisted_index() -> None:
+    from app.services.network.reconcile.actions import SELECT_OR_CREATE_WCD
+
+    actions = tuple(
+        a.__class__(**{**a.__dict__, "wcd_index": SELECT_OR_CREATE_WCD})
+        for a in _owner_actions()
+    )
+    actions = tuple(
+        a.__class__(
+            **{
+                **a.__dict__,
+                "object_path": a.object_path.replace(".2.", ".0."),
+            }
+        )
+        if hasattr(a, "object_path")
+        else a
+        for a in actions
+    )
+    acs = AcsStub({"1": dict(MGMT_WCD)})
+    state: dict = {}
+    result = _apply(acs, actions, state)
+    assert result.success is True
+    assert state["created_wcd_index"] == 2  # persisted (C1)
+    assert not any("WANConnectionDevice.1." in str(c) for c in acs.calls)
+
+    # Next pass: WCD2 now holds the child; it is adopted, nothing re-created.
+    before_adds = len([c for c in acs.calls if c[0] == "add"])
+    again = _apply(acs, actions, state)
+    assert again.success is True
+    assert len([c for c in acs.calls if c[0] == "add"]) == before_adds
+
+
+def test_unresolved_select_marker_is_refused_downstream() -> None:
+    from app.services.network.reconcile.actions import SELECT_OR_CREATE_WCD
+
+    pppoe = _owner_actions()[2]
+    pppoe = pppoe.__class__(**{**pppoe.__dict__, "wcd_index": SELECT_OR_CREATE_WCD})
+    acs = AcsStub({"1": dict(MGMT_WCD)})
+    result = _apply(acs, (pppoe,))
+    assert result.success is False
+    assert result.halted_by.reason == "invalid_change"
+    assert not acs.calls
+
+
+def test_pending_wcd_returns_waiting_reason_not_terminal() -> None:
+    acs = AcsStub({"1": dict(MGMT_WCD)}, parent_visible=False)
+    state: dict = {}
+    first = _apply(acs, _owner_actions()[:1], state)
+    second = _apply(acs, _owner_actions()[:1], state)
+    for r in (first, second):
+        assert r.halted_by.reason == "acs_cr_failed"  # waiting, resumes on inform
+
+
+def test_markers_survive_runtime_snapshot_rebuild() -> None:
+    from app.services.network.ont_tr069 import _carried_capabilities
+
+    previous = {
+        "capabilities": {
+            "pending_wcd_add": "2026-10-21T00:00:00+00:00",
+            "ppp_credential_revision": "abc",
+            "created_wcd_index": 2,
+            "wan": {"stale": True},
+        }
+    }
+    kept = _carried_capabilities(previous)
+    assert kept == {
+        "pending_wcd_add": "2026-10-21T00:00:00+00:00",
+        "ppp_credential_revision": "abc",
+        "created_wcd_index": 2,
+    }
+    assert _carried_capabilities(None) == {}
+
+
+def test_blank_admin_form_index_is_none_not_management_default(monkeypatch) -> None:
+    from app.web.admin import network_onts_actions as mod
+
+    seen: dict = {}
+    form = {"pppoe_username": "u", "pppoe_password": "p", "instance_index": ""}
+    monkeypatch.setattr(mod, "parse_form_data_sync", lambda request: form)
+    monkeypatch.setattr(mod, "_ensure_ont_write_scope", lambda *a, **k: None)
+    monkeypatch.setattr(mod, "_action_result_response", lambda **k: "ok")
+
+    def fake(db, ont_id, **kw):
+        seen.update(kw)
+        return SimpleNamespace(success=True)
+
+    monkeypatch.setattr(
+        mod.web_network_ont_actions_service, "set_pppoe_credentials", fake
+    )
+    mod.ont_set_pppoe_credentials(object(), "ont-1", db=object())
+    assert seen["instance_index"] is None

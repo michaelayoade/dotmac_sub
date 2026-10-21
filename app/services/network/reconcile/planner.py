@@ -76,7 +76,7 @@ What the planner doesn't do
 from __future__ import annotations
 
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
 from app.services.control_plane_intent import (
     DesiredValueProvenance,
@@ -84,6 +84,7 @@ from app.services.control_plane_intent import (
 )
 
 from .actions import (
+    SELECT_OR_CREATE_WCD,
     AcsAddObject,
     AcsDeleteObject,
     AcsSetDhcpServer,
@@ -1194,6 +1195,22 @@ def _plan_acs_side(
 
     # TR-069 WAN PPP — skipped when OMCI owns the WAN.
     narrow_feature_change = wifi_only_change or remote_only_change
+    if desired.wan_mode == "pppoe" and desired.wan_pppoe_wcd_index is None:
+        # No pppoe_wcd_index configured: reuse the WCD that already holds the
+        # PPP child, else ask the applier to select or create one. The
+        # management/TR-069 WCD is never chosen (applier enforces it).
+        existing = _primary_observed_wan_ppp_location(observed)
+        locations = _observed_wan_ppp_locations(observed)
+        desired = replace(
+            desired,
+            wan_pppoe_wcd_index=(
+                existing[0]
+                if existing
+                else min(w for w, _ in locations)
+                if locations
+                else SELECT_OR_CREATE_WCD
+            ),
+        )
     if (
         not narrow_feature_change
         and desired.wan_mode == "pppoe"
