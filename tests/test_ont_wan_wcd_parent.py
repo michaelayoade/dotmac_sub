@@ -515,6 +515,7 @@ def test_markers_survive_runtime_snapshot_rebuild() -> None:
             "pending_wcd_add": "2026-10-21T00:00:00+00:00",
             "ppp_credential_revision": "abc",
             "created_wcd_index": 2,
+            "pending_actions": {"add_wcd_wan": {"state": "pending_verification"}},
             "wan": {"stale": True},
         }
     }
@@ -523,6 +524,7 @@ def test_markers_survive_runtime_snapshot_rebuild() -> None:
         "pending_wcd_add": "2026-10-21T00:00:00+00:00",
         "ppp_credential_revision": "abc",
         "created_wcd_index": 2,
+        "pending_actions": {"add_wcd_wan": {"state": "pending_verification"}},
     }
     assert _carried_capabilities(None) == {}
 

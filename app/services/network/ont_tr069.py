@@ -51,6 +51,8 @@ _CARRIED_CAPABILITY_KEYS = (
     "pending_wcd_add",
     "ppp_credential_revision",
     "created_wcd_index",
+    # ont_action_wan path: pending addObject markers (WCD parent / PPP child).
+    "pending_actions",
 )
 
 

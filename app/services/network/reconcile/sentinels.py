@@ -399,8 +399,13 @@ RULES: tuple[SentinelRule, ...] = (
             "AcsSetNatEnabled.wcd_index, AcsSetWanIp.wcd_index"
         ),
         impact=(
-            "Missing layout evidence now remains None. Explicit WCD 1 is still "
-            "valid; only absence is refused before any ACS write."
+            "Missing layout evidence remains None and is never written as an "
+            "index. With a deliverable wan_vlan the planner reuses the WCD "
+            "that already holds the PPP child, else emits a typed "
+            "select-or-create WANConnectionDevice addObject that the applier "
+            "resolves with index readback (never the TR-069 management WCD); "
+            "every later write is refused until the index is resolved. An "
+            "explicit WCD 1 is still valid unless it is the management WCD."
         ),
     ),
     SentinelRule(
