@@ -4,14 +4,15 @@ name: Gate 0 proof 1 (OIDC to OpenBao)
 # documented in deploy/openbao/README.md and never asserted. Row 4 (wrong
 # ref) can only be exercised by dispatching this workflow from a non-main
 # ref: on main dispatches that job is skipped and the aggregator says so.
-# Requires vars.OPENBAO_ADDR and vars.GATE0_CANARY_SHA256 (from apply.sh).
+# Requires the repository secret OPENBAO_ADDR and the repository variable
+# GATE0_CANARY_SHA256 (a sha256 digest of a random canary, not a secret;
+# printed by apply.sh).
 # D3 amendment (2026-10-21): every job that contacts OpenBao runs on the
-# staging self-hosted runner, which reaches OpenBao over the existing app
-# path. The OpenBao listener is currently plaintext HTTP with unknown
-# internet reachability, so GitHub-hosted runners must never send the
-# OIDC JWT or issued token to it. Move these jobs back to hosted runners
-# only after a TLS endpoint exists. Jobs queue serially on the single
-# staging runner (row 6 sleeps ~11 min); expect ~15 min wall time.
+# staging self-hosted runner; OpenBao is reached from the self-hosted
+# staging runner over the private app path. GitHub-hosted runners must
+# never send the OIDC JWT or issued token to it. Jobs queue serially on
+# the single staging runner (row 6 sleeps ~11 min); expect ~15 min wall
+# time.
 # Row 2 uses environment: production on the staging runner on purpose --
 # the production claim is what OpenBao must refuse for sub-staging-ci.
 on:
@@ -31,7 +32,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - env:
-          OPENBAO_ADDR: ${{ vars.OPENBAO_ADDR }}
+          OPENBAO_ADDR: ${{ secrets.OPENBAO_ADDR }}
           EXPECTED_CANARY_SHA256: ${{ vars.GATE0_CANARY_SHA256 }}
           PROOF_MODE: positive
           PROOF_ROLE: gate0-proof
@@ -51,7 +52,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - env:
-          OPENBAO_ADDR: ${{ vars.OPENBAO_ADDR }}
+          OPENBAO_ADDR: ${{ secrets.OPENBAO_ADDR }}
           PROOF_MODE: negative
           PROOF_ROLE: sub-staging-ci
           PROOF_AUDIENCE: dotmac-openbao
@@ -69,7 +70,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - env:
-          OPENBAO_ADDR: ${{ vars.OPENBAO_ADDR }}
+          OPENBAO_ADDR: ${{ secrets.OPENBAO_ADDR }}
           PROOF_MODE: negative
           PROOF_ROLE: gate0-proof
           PROOF_AUDIENCE: dotmac-openbao
@@ -89,7 +90,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - env:
-          OPENBAO_ADDR: ${{ vars.OPENBAO_ADDR }}
+          OPENBAO_ADDR: ${{ secrets.OPENBAO_ADDR }}
           PROOF_MODE: negative
           PROOF_ROLE: gate0-proof
           PROOF_AUDIENCE: dotmac-openbao
@@ -108,7 +109,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - env:
-          OPENBAO_ADDR: ${{ vars.OPENBAO_ADDR }}
+          OPENBAO_ADDR: ${{ secrets.OPENBAO_ADDR }}
           PROOF_MODE: negative
           PROOF_ROLE: sub-staging-ci
           PROOF_AUDIENCE: dotmac-openbao
@@ -128,7 +129,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - env:
-          OPENBAO_ADDR: ${{ vars.OPENBAO_ADDR }}
+          OPENBAO_ADDR: ${{ secrets.OPENBAO_ADDR }}
           PROOF_MODE: negative
           PROOF_ROLE: gate0-proof
           PROOF_AUDIENCE: dotmac-openbao
@@ -148,7 +149,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - env:
-          OPENBAO_ADDR: ${{ vars.OPENBAO_ADDR }}
+          OPENBAO_ADDR: ${{ secrets.OPENBAO_ADDR }}
           PROOF_MODE: negative
           PROOF_ROLE: gate0-proof
           PROOF_AUDIENCE: not-dotmac-openbao

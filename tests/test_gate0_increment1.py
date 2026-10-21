@@ -89,8 +89,8 @@ def test_proof_workflow_id_token_only_on_minting_jobs() -> None:
 
 
 def test_proof_openbao_jobs_run_on_staging_self_hosted_runner() -> None:
-    # D3: OpenBao is plaintext HTTP, not internet-reachable for hosted
-    # runners; only the verdict job (no OpenBao contact) stays hosted.
+    # D3: OpenBao is reached from the self-hosted staging runner over the
+    # private app path; only the verdict job (no OpenBao contact) stays hosted.
     doc = _load(PROOF)
     for name, job in doc["jobs"].items():
         if name == "verdict":
@@ -132,9 +132,13 @@ def test_roles_json_matches_golden_and_never_binds_network() -> None:
         assert "token_num_uses" not in role
         assert "token_bound_cidrs" not in role
         assert NETWORK_CLAIMS.isdisjoint(role["bound_claims"])
+        assert role["bound_claims"]["repository_id"] == ["1163746040"]
+        assert role["bound_claims"]["repository_owner_id"] == ["32591929"]
         assert set(role["bound_claims"]) == {
             "repository",
             "repository_owner",
+            "repository_id",
+            "repository_owner_id",
             "ref",
             "environment",
             "job_workflow_ref",
@@ -213,3 +217,72 @@ def test_gate0_scripts_are_posix_and_value_free() -> None:
     verify = (ROOT / "deploy/gate0/verify_artifact.sh").read_text(encoding="utf-8")
     assert "--insecure-ignore-tlog" not in verify
     assert "verify-attestation --type slsaprovenance" in verify
+
+
+def test_proof_workflow_uses_secret_for_openbao_addr_never_a_variable() -> None:
+    source = PROOF.read_text(encoding="utf-8")
+    assert "vars.OPENBAO_ADDR" not in source
+    assert source.count("secrets.OPENBAO_ADDR") == 7
+    readme = (OPENBAO / "README.md").read_text(encoding="utf-8")
+    assert "repository variable `OPENBAO_ADDR`" not in readme
+    assert "repository secret" in readme
+
+
+def test_public_docs_do_not_describe_openbao_listener_posture() -> None:
+    for path in (PROOF, OPENBAO / "README.md"):
+        text = path.read_text(encoding="utf-8").lower()
+        for phrase in ("plaintext", "probe timed", "internet reachab", "not reachable from"):
+            assert phrase not in text, (path.name, phrase)
+
+
+def _proof_guard(address: str) -> subprocess.CompletedProcess[str]:
+    env = {
+        "PATH": os.environ.get("PATH", "/usr/bin:/bin"),
+        "OPENBAO_ADDR": address,
+        "PROOF_MODE": "negative",
+        "PROOF_ROLE": "gate0-proof",
+    }
+    return subprocess.run(
+        ["sh", str(ROOT / "deploy/gate0/proof1_oidc_openbao.sh")],
+        capture_output=True,
+        text=True,
+        env=env,
+        check=False,
+    )
+
+
+@pytest.mark.parametrize(
+    "address",
+    [
+        "http://localhost.evil.tld",
+        "http://localhost.evil.tld:8200",
+        "http://127.0.0.1.evil.tld",
+        "http://127.0.0.1:80@evil.example.com",
+        "http://localhost@evil.example.com",
+        "http://10.0.0.5:8200",
+        "http://localhost:abc",
+    ],
+)
+def test_proof_script_localhost_check_is_exact(address: str) -> None:
+    result = _proof_guard(address)
+    assert result.returncode == 2
+    assert "refusing" in result.stderr
+
+
+@pytest.mark.parametrize(
+    "address",
+    ["http://localhost:8200", "http://127.0.0.1:8200/", "http://[::1]:8200", "https://openbao.example.com"],
+)
+def test_proof_script_accepts_exact_loopback_and_https(address: str) -> None:
+    result = _proof_guard(address)
+    # Passes the address guard; stops at the OIDC env check (exit 2, no network).
+    assert "refusing" not in result.stderr
+    assert "OIDC request env absent" in result.stderr
+
+
+def test_proof_script_keeps_secrets_off_curl_argv() -> None:
+    text = (ROOT / "deploy/gate0/proof1_oidc_openbao.sh").read_text(encoding="utf-8")
+    assert "X-Vault-Token: $TOKEN" not in text
+    assert "bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" not in text
+    assert 'jwt\\":\\"$JWT' not in text
+    assert "curl -K -" in text and "--data @-" in text

@@ -13,6 +13,8 @@
       "bound_claims": {
         "repository": ["michaelayoade/dotmac_sub"],
         "repository_owner": ["michaelayoade"],
+        "repository_id": ["1163746040"],
+        "repository_owner_id": ["32591929"],
         "ref": ["refs/heads/main"],
         "environment": ["staging"],
         "job_workflow_ref": ["michaelayoade/dotmac_sub/.github/workflows/staging-deploy.yml@refs/heads/main"]
@@ -30,6 +32,8 @@
       "bound_claims": {
         "repository": ["michaelayoade/dotmac_sub"],
         "repository_owner": ["michaelayoade"],
+        "repository_id": ["1163746040"],
+        "repository_owner_id": ["32591929"],
         "ref": ["refs/heads/main"],
         "environment": ["production"],
         "job_workflow_ref": ["michaelayoade/dotmac_sub/.github/workflows/production-deploy.yml@refs/heads/main"]
@@ -47,6 +51,8 @@
       "bound_claims": {
         "repository": ["michaelayoade/dotmac_sub"],
         "repository_owner": ["michaelayoade"],
+        "repository_id": ["1163746040"],
+        "repository_owner_id": ["32591929"],
         "ref": ["refs/heads/main"],
         "environment": ["staging"],
         "job_workflow_ref": ["michaelayoade/dotmac_sub/.github/workflows/openbao-jwt-proof.yml@refs/heads/main"]

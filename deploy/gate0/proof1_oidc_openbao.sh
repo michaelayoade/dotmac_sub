@@ -12,19 +12,42 @@ set -eu
 [ -n "${OPENBAO_ADDR:-}" ] && [ -n "${PROOF_MODE:-}" ] && [ -n "${PROOF_ROLE:-}" ] || {
   echo "missing required env (OPENBAO_ADDR/PROOF_MODE/PROOF_ROLE)" >&2; exit 2; }
 AUD="${PROOF_AUDIENCE:-dotmac-openbao}"
+# Exact host match for plain HTTP: loopback names only, optional numeric
+# port and path. A prefix glob would accept http://localhost.evil.tld.
+loopback_http() {
+  rest=${1#http://}
+  hostport=${rest%%/*}
+  case "$hostport" in *@*|"") return 1 ;; esac
+  case "$hostport" in
+    "[::1]") return 0 ;;
+    "[::1]":*) port=${hostport#"[::1]":} ;;
+    127.0.0.1) return 0 ;;
+    127.0.0.1:*) port=${hostport#127.0.0.1:} ;;
+    localhost) return 0 ;;
+    localhost:*) port=${hostport#localhost:} ;;
+    *) return 1 ;;
+  esac
+  case "$port" in ""|*[!0-9]*) return 1 ;; esac
+  return 0
+}
 case "$OPENBAO_ADDR" in
-  http://127.0.0.1*|http://localhost*|http://\[::1\]*|https://*) ;;
+  https://*) ;;
+  http://*) loopback_http "$OPENBAO_ADDR" || {
+    echo "refusing non-loopback plain-HTTP OPENBAO_ADDR" >&2; exit 2; } ;;
   *) echo "refusing non-loopback plain-HTTP OPENBAO_ADDR" >&2; exit 2 ;;
 esac
 [ -n "${ACTIONS_ID_TOKEN_REQUEST_URL:-}" ] && [ -n "${ACTIONS_ID_TOKEN_REQUEST_TOKEN:-}" ] || {
   echo "OIDC request env absent (job lacks id-token: write?)" >&2; exit 2; }
 # Direct-curl login per design §3.2 (no vault-action).
-JWT=$(curl -fsS -H "Authorization: bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" \
-  "${ACTIONS_ID_TOKEN_REQUEST_URL}&audience=${AUD}" | jq -er '.value')
+# Secrets travel on stdin (curl -K -, --data @-), never on argv, so they are
+# not visible in /proc/<pid>/cmdline on the shared runner host. printf is a
+# shell builtin and does not exec.
+JWT=$(printf 'header = "Authorization: bearer %s"\n' "$ACTIONS_ID_TOKEN_REQUEST_TOKEN" \
+  | curl -fsS -K - "${ACTIONS_ID_TOKEN_REQUEST_URL}&audience=${AUD}" | jq -er '.value')
 [ "${PROOF_SLEEP_SECONDS:-0}" != "0" ] && { echo "row 6: waiting ${PROOF_SLEEP_SECONDS}s for JWT expiry"; sleep "$PROOF_SLEEP_SECONDS"; }
-LOGIN_JSON=$(curl -sS -X POST -H 'Content-Type: application/json' \
-  -d "{\"role\":\"$PROOF_ROLE\",\"jwt\":\"$JWT\"}" \
-  "$OPENBAO_ADDR/v1/auth/jwt/login" || true)
+LOGIN_JSON=$(jq -nc --arg role "$PROOF_ROLE" --arg jwt "$JWT" '{role:$role,jwt:$jwt}' \
+  | curl -sS -X POST -H 'Content-Type: application/json' --data @- \
+    "$OPENBAO_ADDR/v1/auth/jwt/login" || true)
 TOKEN=$(printf '%s' "$LOGIN_JSON" | jq -r '.auth.client_token // empty')
 if [ "$PROOF_MODE" = "negative" ]; then
   [ -z "$TOKEN" ] && { echo "negative OK: login refused role=$PROOF_ROLE aud=$AUD"; exit 0; }
@@ -33,12 +56,12 @@ fi
 [ "$PROOF_MODE" = "positive" ] || { echo "unknown PROOF_MODE=$PROOF_MODE" >&2; exit 2; }
 [ -n "$TOKEN" ] || { echo "positive FAILED: login refused" >&2; exit 1; }
 echo "::add-mask::$TOKEN"
-VALUE=$(curl -fsS -H "X-Vault-Token: $TOKEN" \
+VALUE=$(printf 'header = "X-Vault-Token: %s"\n' "$TOKEN" | curl -fsS -K - \
   "$OPENBAO_ADDR/v1/secret/data/dotmac/sub/staging/gate0-canary" | jq -er '.data.data.value')
 ACTUAL_SHA=$(printf '%s' "$VALUE" | sha256sum | awk '{print $1}')
 [ -n "${EXPECTED_CANARY_SHA256:-}" ] || { echo "EXPECTED_CANARY_SHA256 required (vars.GATE0_CANARY_SHA256)" >&2; exit 2; }
 [ "$ACTUAL_SHA" = "$EXPECTED_CANARY_SHA256" ] || { echo "positive FAILED: canary sha256 mismatch" >&2; exit 1; }
-status() { curl -sS -o /dev/null -w '%{http_code}' -H "X-Vault-Token: $TOKEN" "$OPENBAO_ADDR/v1/$1"; }
+status() { printf 'header = "X-Vault-Token: %s"\n' "$TOKEN" | curl -sS -K - -o /dev/null -w '%{http_code}' "$OPENBAO_ADDR/v1/$1"; }
 PROD=$(status "secret/data/dotmac/sub/production/gate0-negative")
 SYS=$(status "sys/policies/acl/gate0-proof")
 ROLE=$(status "auth/jwt/role/gate0-proof")
