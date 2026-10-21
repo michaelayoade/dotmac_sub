@@ -360,7 +360,7 @@ def build_marketplace_data(db) -> dict[str, object]:
                 if installed
                 else None,
                 "install_url": (
-                    "/admin/integrations/whatsapp"
+                    "/admin/integrations/whatsapp/config"
                     if entry.key == "whatsapp"
                     else (
                         "/admin/crm/meta"
@@ -392,7 +392,7 @@ def _installation_manage_url(installation: IntegrationInstallation) -> str:
     if installation.connector_key == "webhook.http":
         return f"/admin/integrations/webhooks/{installation.id}"
     if installation.connector_key == "whatsapp":
-        return "/admin/integrations/whatsapp"
+        return "/admin/integrations/whatsapp/config"
     if installation.connector_key == "nextcloud.talk":
         return f"/admin/integrations/nextcloud-talk/{installation.id}"
     if installation.connector_key == "meta.social":

@@ -1328,6 +1328,13 @@ def payment_gateway_disable(
     )
 
 
+@router.get("/whatsapp", include_in_schema=False)
+def whatsapp_config_legacy_redirect() -> RedirectResponse:
+    return RedirectResponse(
+        url="/admin/integrations/whatsapp/config", status_code=307
+    )
+
+
 @router.get("/whatsapp/config", response_class=HTMLResponse)
 def whatsapp_config_page(request: Request, db: Session = Depends(get_db)):
     state = web_integrations_whatsapp_service.build_config_state(db)
