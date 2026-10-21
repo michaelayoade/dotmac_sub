@@ -1031,6 +1031,7 @@ and the settings cutover all import from this list.
 - `dotmac_kernel.settings_crypto`
 - `dotmac_kernel.settings_models`
 - `dotmac_kernel.settings_resolver`
+- `dotmac_kernel.transactions`
 
 `dotmac_kernel.exceptions` is narrowed to `BadRequestError`,
 `NotFoundError` and `ConflictError` for payment-template adoption and versioned
@@ -1038,6 +1039,18 @@ Studio publication. The cutover's publication coordinator catches Studio's
 supported conflict exception and maps it into Sub's domain error; it does not
 install Kernel web/error handlers. No other
 Kernel exception or bare import of that module is admitted.
+
+`dotmac_kernel.transactions` is narrowed to `claim_conflict_savepoint_commit`
+and `current_conflict_savepoint`, added 2026-10-21 with the gateway prepaid
+lane. Starter kernel services run expected-conflict mutations inside
+`conflict_savepoint()`; when such a service executes inside a Sub owner
+command, the savepoint RELEASE fires the boundary's `before_commit` guard.
+The boundary itself stays kernel-free: `kernel_savepoint_guard` registers the
+kernel's exact claim/classification contract as participant hooks, so the
+boundary can tell a claimed kernel release (and a recovered kernel rollback)
+from a participant completing its transaction. No other transaction helper
+is admitted; reimplementing the claim protocol in Sub would create a second,
+divergent completion authority over composed savepoints.
 
 `dotmac_kernel.namespaces` is narrowed to `module_schema`, added 2026-08-31
 with the derived module schema contract. The commercial schema prerequisite

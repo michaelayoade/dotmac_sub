@@ -36,6 +36,41 @@ _AUTHORIZED_SAVEPOINT_KEY = "_dotmac_authorized_owner_savepoint"
 _ACTIVE_SAVEPOINT_KEY = "_dotmac_active_owner_savepoint"
 _OWNER_ROOT_KEY = "_dotmac_owner_root"
 _SAVEPOINT_RELEASE_KEY = "_dotmac_owner_savepoint_release"
+# Participant savepoint semantics, registered by composition. The boundary
+# itself stays free of participant runtime imports: a composed module whose
+# services run expected-conflict savepoints inside owner commands registers
+# how its exact savepoint release is claimed and how its recovered rollbacks
+# are classified. Unregistered, every non-boundary completion still fails
+# closed exactly as before.
+_SavepointReleaseClaim = Callable[[Session, SessionTransaction], bool]
+_RecoveredRollbackClassifier = Callable[[Session, SessionTransaction], bool]
+_savepoint_release_claim: _SavepointReleaseClaim | None = None
+_recovered_rollback_classifier: _RecoveredRollbackClassifier | None = None
+
+
+def register_savepoint_participant_hooks(
+    *,
+    claim_release: _SavepointReleaseClaim,
+    is_recovered_rollback: _RecoveredRollbackClassifier,
+) -> None:
+    """Register participant savepoint semantics once per process."""
+    global _recovered_rollback_classifier, _savepoint_release_claim
+    if _savepoint_release_claim is not None and (
+        _savepoint_release_claim is not claim_release
+        or _recovered_rollback_classifier is not is_recovered_rollback
+    ):
+        raise RuntimeError("Savepoint participant hooks are already registered")
+    _savepoint_release_claim = claim_release
+    _recovered_rollback_classifier = is_recovered_rollback
+
+
+def _ensure_savepoint_participant_hooks() -> None:
+    if _savepoint_release_claim is None:
+        from app.services import kernel_savepoint_guard
+
+        kernel_savepoint_guard.install()
+
+
 _OWNER_ROLES = {
     OwnerRole.AUTHORITATIVE_RECORD,
     OwnerRole.OBSERVATION_COLLECTOR,
@@ -276,6 +311,17 @@ def _reject_helper_commit(session: Session) -> None:
         and release.is_active
     ):
         return
+    # A composed participant's expected-conflict savepoint RELEASE is a
+    # savepoint commit, not a boundary completion. The registered claim
+    # consumes permission for exactly that release against this command's
+    # stored root; every other shape still fails closed below.
+    _ensure_savepoint_participant_hooks()
+    if (
+        _savepoint_release_claim is not None
+        and isinstance(root, SessionTransaction)
+        and _savepoint_release_claim(session, root)
+    ):
+        return
     session.info[_HELPER_ROLLBACK_KEY] = True
     raise _error(
         definition,
@@ -287,6 +333,17 @@ def _reject_helper_commit(session: Session) -> None:
 @event.listens_for(Session, "after_soft_rollback")
 def _record_helper_rollback(session: Session, previous_transaction: object) -> None:
     if session.info.get(_AUTHORIZED_SAVEPOINT_KEY) is previous_transaction:
+        return
+    # A participant savepoint that recovers exactly to its enclosing
+    # transaction is an expected-conflict outcome, not a participant
+    # completing the owner transaction; the registered classifier names
+    # that exact shape and nothing else.
+    _ensure_savepoint_participant_hooks()
+    if (
+        _recovered_rollback_classifier is not None
+        and isinstance(previous_transaction, SessionTransaction)
+        and _recovered_rollback_classifier(session, previous_transaction)
+    ):
         return
     active_savepoint = session.info.get(_ACTIVE_SAVEPOINT_KEY)
     if (
