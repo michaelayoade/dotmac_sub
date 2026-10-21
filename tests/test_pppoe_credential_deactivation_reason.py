@@ -237,3 +237,164 @@ def test_inherit_reuses_a_service_ended_predecessor_credential(
     assert outcome.credential_id == credential.id
     assert _plain(credential) == "old-secret"
     assert credential.deactivation_reason is None
+
+
+# --------------------- restore-tool cascade and restore ------------------
+
+
+def _deleted_subscriber(db_session, numbered):
+    from app.services import web_system_restore_tool as tool
+
+    numbered.is_active = False
+    db_session.commit()
+    tool.mark_subscriber_deleted(
+        db_session, subscriber_id=str(numbered.id), actor_id=None
+    )
+    return tool
+
+
+def _radius_user(db_session, numbered, sub, credential, *, active):
+    from app.models.radius import RadiusUser
+
+    row = RadiusUser(
+        subscriber_id=numbered.id,
+        subscription_id=sub.id,
+        access_credential_id=credential.id,
+        username=credential.username,
+        is_active=active,
+    )
+    db_session.add(row)
+    db_session.commit()
+    return row
+
+
+def test_restore_tool_cascade_records_subscriber_deleted(
+    db_session, numbered, catalog_offer
+):
+    sub = _sub(db_session, numbered, catalog_offer, SubscriptionStatus.active)
+    credential = _cred(db_session, numbered, sub, "10070000")
+    inactive = _inactive(db_session, numbered, sub, "other", "service_ended")
+
+    _deleted_subscriber(db_session, numbered)
+
+    db_session.refresh(credential)
+    db_session.refresh(inactive)
+    assert credential.is_active is False
+    assert credential.deactivation_reason == "subscriber_deleted"
+    assert inactive.deactivation_reason == "service_ended"
+
+
+@pytest.mark.parametrize("inherit", [False, True])
+def test_restore_reactivates_only_cascade_credentials_with_secret_kept(
+    db_session, numbered, catalog_offer, inherit
+):
+    if inherit:
+        _setting(db_session, "pppoe_credential_on_new_service", "inherit")
+    sub = _sub(db_session, numbered, catalog_offer, SubscriptionStatus.active)
+    live = _cred(db_session, numbered, sub, "live-login", secret="live-secret")
+    manual = _inactive(db_session, numbered, sub, "manual-login", "manual")
+    ended = _inactive(db_session, numbered, sub, "ended-login", "service_ended")
+    unknown = _inactive(db_session, numbered, sub, "unknown-login", None)
+    ru_live = _radius_user(db_session, numbered, sub, live, active=True)
+    ru_manual = _radius_user(db_session, numbered, sub, manual, active=False)
+    tool = _deleted_subscriber(db_session, numbered)
+    db_session.refresh(ru_live)
+    ru_live.is_active = False
+    ru_manual.is_active = False
+    db_session.commit()
+
+    result = tool.restore_subscriber(
+        db_session, subscriber_id=str(numbered.id), actor_id=None
+    )
+
+    for row in (live, manual, ended, unknown, ru_live, ru_manual):
+        db_session.refresh(row)
+    assert live.is_active is True
+    assert live.deactivation_reason is None
+    assert _plain(live) == "live-secret"
+    for stayed in (manual, ended, unknown):
+        assert stayed.is_active is False
+        assert _plain(stayed) == "old-secret"
+    assert manual.deactivation_reason == "manual"
+    assert ended.deactivation_reason == "service_ended"
+    assert unknown.deactivation_reason is None
+    assert result["touched"]["credentials_skipped"] == 3
+    # RADIUS rows follow the credentials.
+    assert ru_live.is_active is True
+    assert ru_manual.is_active is False
+
+
+def test_restore_skipped_count_is_visible_to_staff(db_session, numbered, catalog_offer):
+    from app.web.admin import system as system_web
+
+    sub = _sub(db_session, numbered, catalog_offer, SubscriptionStatus.active)
+    _inactive(db_session, numbered, sub, "manual-login", "manual")
+    _deleted_subscriber(db_session, numbered)
+
+    class _Req:
+        query_params: dict = {}
+        state = type("S", (), {})()
+        headers: dict = {}
+        client = None
+
+    with (
+        patch.object(system_web, "log_audit_event"),
+        patch("app.web.admin.get_current_user", return_value={}),
+    ):
+        response = system_web.restore_tool_restore(_Req(), numbered.id, db_session)
+
+    assert "restore_skipped=1" in response.headers["location"]
+
+
+# --------------------- bulk activation and backup restore (F3, F4) --------
+
+
+def test_bulk_activation_reactivation_clears_the_reason(
+    db_session, numbered, catalog_offer
+):
+    from app.services import web_provisioning_bulk_activate as bulk
+
+    sub = _sub(db_session, numbered, catalog_offer, SubscriptionStatus.active)
+    credential = _inactive(db_session, numbered, sub, "10070000", "manual")
+
+    bulk._upsert_access_credential(
+        db_session,
+        subscriber=numbered,
+        username="10070000",
+        password="new-pass",  # noqa: S106
+    )
+    db_session.commit()
+
+    db_session.refresh(credential)
+    assert credential.is_active is True
+    assert credential.deactivation_reason is None
+
+
+def test_backup_restore_that_deactivates_records_manual(
+    db_session, numbered, catalog_offer
+):
+    from app.services.connectivity_backup import (
+        capture_connectivity_state,
+        restore_connectivity_state,
+    )
+
+    sub = _sub(db_session, numbered, catalog_offer, SubscriptionStatus.active)
+    credential = _inactive(db_session, numbered, sub, "10070000", None)
+    backup = capture_connectivity_state(
+        db_session, numbered.id, reason="test", include_radius=False
+    )
+    db_session.commit()
+    credential.is_active = True
+    db_session.commit()
+
+    restore_connectivity_state(
+        db_session,
+        backup.id,
+        dry_run=False,
+        include_radius=False,
+        restored_by="tester",
+    )
+
+    db_session.refresh(credential)
+    assert credential.is_active is False
+    assert credential.deactivation_reason == "manual"
