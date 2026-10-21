@@ -28,7 +28,7 @@ Both producers emit the same three artifacts under one stem:
 
 | Artifact | Producer command | Contents |
 |---|---|---|
-| `<stem>.globals.sql.gz` | `pg_dumpall --globals-only --no-role-passwords` | roles, memberships, tablespaces, per-role/db config — **no password verifiers** |
+| `<stem>.globals.sql.gz` | `pg_dumpall --globals-only --no-role-passwords` | roles, memberships, tablespaces — **no password verifiers**; does **not** include database-level ACLs/settings (see below) |
 | `<stem>.sql.gz` | `pg_dump -d <db>` (no `--no-owner`/`--no-privileges`) | schema + data **with** ownership and GRANT/REVOKE evidence |
 | `<stem>.manifest.json` | `recovery_write_manifest` | sha256 + bytes per artifact, pg_dump version, UTC timestamp, git SHA, restore order |
 
@@ -52,10 +52,25 @@ Invariants:
   `--no-acl`, …) by `recovery_refuse_identity_stripping`, mirroring the
   facility's `IDENTITY_STRIPPING_ARGS`.
 
-`--globals-only` was chosen over `--roles-only` so tablespace definitions and
-database-level config/ACLs cannot drift into a separate, forgettable
-artifact; the drill adjudicates the benign "already exists" noise by
-asserting the restored model rather than by trusting exit codes.
+`--globals-only` was chosen over `--roles-only` so tablespace definitions
+cannot drift into a separate, forgettable artifact; the drill adjudicates the
+benign "already exists" noise by asserting the restored model rather than by
+trusting exit codes.
+
+**Known gap: database-level grants and settings are not captured.** On
+PostgreSQL >= 11, `pg_dumpall --globals-only` does not emit database-level
+ACLs or settings (`GRANT`/`REVOKE CONNECT ON DATABASE`, `ALTER DATABASE ... SET`,
+`ALTER ROLE ... IN DATABASE ... SET`), and `pg_dump -d` without `--create`
+does not either. A restored database must have these re-established from the
+approved configuration; a separate db-properties artifact (for example from
+`pg_dump --create --schema-only`) is a tracked follow-up.
+
+**Never apply a globals file to a cluster whose roles already exist.** A
+globals file re-applies the role attributes and memberships as they were at
+backup time. An old file could, for example, re-grant `app_admin` to
+`dotmac_app` after that grant was revoked, silently re-widening RLS bypass.
+Globals are for a fresh, empty cluster only; the restore drill applies them
+only to its generated scratch container.
 
 ## Restore order
 

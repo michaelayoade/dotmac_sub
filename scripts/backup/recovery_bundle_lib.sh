@@ -26,12 +26,18 @@
 #
 # Globals flag decision: `pg_dumpall --globals-only --no-role-passwords`
 # rather than `--roles-only`: globals-only also captures tablespace
-# definitions, role memberships, per-role/per-database config and database
-# ACLs, so no separate tablespace artifact can drift out of sync. The price
-# is `CREATE DATABASE`/db-config statements for every database in the
-# cluster; the restore drill applies globals with error-stop off and then
-# ASSERTS the isolation model, so benign "already exists" noise cannot mask
-# a real absence.
+# definitions and role memberships, so no separate tablespace artifact can
+# drift out of sync. It does NOT capture database-level ACLs or settings on
+# PostgreSQL >= 11 (GRANT/REVOKE CONNECT ON DATABASE, ALTER DATABASE ... SET,
+# ALTER ROLE ... IN DATABASE ... SET); `pg_dump -d` without --create does not
+# either. Those need a separate db-properties artifact (known follow-up).
+# The restore drill applies globals with error-stop off and then ASSERTS the
+# isolation model, so benign "already exists" noise cannot mask a real
+# absence.
+#
+# NEVER apply a globals file to a cluster whose roles already exist: it
+# re-applies backup-time role attributes and memberships (see
+# docs/RECOVERY_BUNDLE.md).
 #
 # Sourced, not executed. Callers keep their own docker-exec pattern and
 # credential handling; every flag comes from here so the defect class cannot
