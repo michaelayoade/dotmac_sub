@@ -3111,6 +3111,19 @@ def _settle_exact_payment_fundable_renewal(
     )
 
     decision_at = _utc(decision_at)
+
+    # Starter prepaid lane (ADR 0031): a period whose funding exists as
+    # a Starter earmark issues and settles entirely in Starter; the
+    # legacy issuance and credit application below never run for it.
+    from app.services.billing import starter_prepaid
+
+    funding_link = starter_prepaid.funding_link_for_invoice(db, invoice)
+    if funding_link is not None:
+        starter_prepaid.settle_prepaid_period_invoice(
+            db, invoice=invoice, link=funding_link, issued_at=decision_at
+        )
+        return
+
     try:
         Invoices.issue_draft_for_owner(
             db,
