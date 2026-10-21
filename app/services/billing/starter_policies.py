@@ -31,8 +31,10 @@ __all__ = [
     "due_terms_code",
     "percent_to_fraction",
     "StarterManualSettlementPolicies",
+    "StarterPrepaidFundingPolicies",
     "resolve_starter_billing_policies",
     "resolve_starter_manual_settlement_policies",
+    "resolve_starter_prepaid_funding_policies",
     "resolve_starter_settlement_policies",
     "has_starter_invoice_link",
     "starter_ledger_live_enabled",
@@ -121,6 +123,13 @@ class StarterBillingPolicies:
     recurring_source_fact_template: str
     recurring_line_source_fact_template: str
     recurring_fx_observation_template: str
+    prepaid_source_kind: str
+    prepaid_contract_line_template: str
+    prepaid_contract_version: str
+    prepaid_price_version: str
+    prepaid_source_fact_template: str
+    prepaid_line_source_fact_template: str
+    prepaid_fx_observation_template: str
     system_actor_ref: str
     default_minor_units: int
     subject_party_template: str
@@ -229,6 +238,38 @@ class StarterBillingPolicies:
             setting="starter_billing_recurring_fx_observation_template",
         )
 
+    def prepaid_source_fact_id(self, billing_line_key: str) -> str:
+        return _render_template(
+            self.prepaid_source_fact_template,
+            "billing_line_key",
+            billing_line_key,
+            setting="starter_billing_prepaid_source_fact_template",
+        )
+
+    def prepaid_line_source_fact_id(self, billing_line_key: str) -> str:
+        return _render_template(
+            self.prepaid_line_source_fact_template,
+            "billing_line_key",
+            billing_line_key,
+            setting="starter_billing_prepaid_line_source_fact_template",
+        )
+
+    def prepaid_contract_line_ref(self, billing_line_key: str) -> str:
+        return _render_template(
+            self.prepaid_contract_line_template,
+            "billing_line_key",
+            billing_line_key,
+            setting="starter_billing_prepaid_contract_line_template",
+        )
+
+    def prepaid_fx_observation_id(self, invoice_id: UUID) -> str:
+        return _render_template(
+            self.prepaid_fx_observation_template,
+            "invoice_id",
+            invoice_id,
+            setting="starter_billing_prepaid_fx_observation_template",
+        )
+
     def subject_ref(self, *, party_id: UUID | None, subscriber_id: UUID) -> str:
         if party_id is not None:
             return _render_template(
@@ -307,6 +348,21 @@ def resolve_starter_billing_policies(db: Session) -> StarterBillingPolicies:
         ),
         recurring_fx_observation_template=_text(
             db, "starter_billing_recurring_fx_observation_template"
+        ),
+        prepaid_source_kind=_text(db, "starter_billing_prepaid_source_kind"),
+        prepaid_contract_line_template=_text(
+            db, "starter_billing_prepaid_contract_line_template"
+        ),
+        prepaid_contract_version=_text(db, "starter_billing_prepaid_contract_version"),
+        prepaid_price_version=_text(db, "starter_billing_prepaid_price_version"),
+        prepaid_source_fact_template=_text(
+            db, "starter_billing_prepaid_source_fact_template"
+        ),
+        prepaid_line_source_fact_template=_text(
+            db, "starter_billing_prepaid_line_source_fact_template"
+        ),
+        prepaid_fx_observation_template=_text(
+            db, "starter_billing_prepaid_fx_observation_template"
         ),
         system_actor_ref=_text(db, "starter_billing_system_actor_ref"),
         default_minor_units=_minor_units(db, "starter_billing_default_minor_units"),
@@ -601,5 +657,50 @@ def resolve_starter_manual_settlement_policies(
         manual_intent_channel=_text(db, "starter_payments_manual_intent_channel"),
         manual_intent_expiry_hours=_positive_int(
             db, "starter_payments_manual_intent_expiry_hours"
+        ),
+    )
+
+
+@dataclass(frozen=True, slots=True)
+class StarterPrepaidFundingPolicies:
+    """Resolved Starter prepaid funding policy surface (ADR 0031)."""
+
+    prepaid_confirmation_source: str
+    prepaid_funding_lane: str
+    prepaid_earmark_source_ref_template: str
+    prepaid_allocation_source_ref_template: str
+
+    def prepaid_earmark_source_ref(self, confirmation_id: UUID) -> str:
+        return _render_template(
+            self.prepaid_earmark_source_ref_template,
+            "confirmation_id",
+            confirmation_id,
+            setting="starter_billing_prepaid_earmark_source_ref_template",
+        )
+
+    def prepaid_allocation_source_ref(self, source_fact_id: str) -> str:
+        # One confirmation funds many earmarked periods, so the allocation
+        # idempotency identity is the period target, never the confirmation.
+        return _render_template(
+            self.prepaid_allocation_source_ref_template,
+            "source_fact_id",
+            source_fact_id,
+            setting="starter_billing_prepaid_allocation_source_ref_template",
+        )
+
+
+def resolve_starter_prepaid_funding_policies(
+    db: Session,
+) -> StarterPrepaidFundingPolicies:
+    return StarterPrepaidFundingPolicies(
+        prepaid_confirmation_source=_text(
+            db, "starter_payments_prepaid_confirmation_source"
+        ),
+        prepaid_funding_lane=_text(db, "starter_billing_prepaid_funding_lane"),
+        prepaid_earmark_source_ref_template=_text(
+            db, "starter_billing_prepaid_earmark_source_ref_template"
+        ),
+        prepaid_allocation_source_ref_template=_text(
+            db, "starter_billing_prepaid_allocation_source_ref_template"
         ),
     )

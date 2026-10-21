@@ -106,6 +106,32 @@ _SHADOW_IMPORTS = {
         ("dotmac_billing.errors", "BillingError"),
         ("dotmac_billing.service", "issue_credit_note"),
     },
+    # Thin-client prepaid funding (ADR 0031): confirmed purchase-
+    # funding purchases earmark period targets in dotmac-billing and
+    # settle funded period invoices from those earmarks.
+    "app/services/billing/starter_prepaid.py": {
+        ("dotmac_billing", "AcceptSettlementV1"),
+        ("dotmac_billing", "GetCurrentReceivablePositionV1"),
+        ("dotmac_billing", "get_current_receivable_position"),
+        ("dotmac_billing.commands", "AllocationCommand"),
+        ("dotmac_billing.contracts", "SettlementFundingLane"),
+        ("dotmac_billing.earmark_contracts", "EarmarkSettlementV1"),
+        ("dotmac_billing.earmark_contracts", "SettlementEarmarkTargetV1"),
+        ("dotmac_billing.earmarks", "earmark_settlement"),
+        ("dotmac_billing.errors", "BillingError"),
+        ("dotmac_billing.service", "accept_settlement"),
+        ("dotmac_billing.service", "allocate_settlement"),
+        ("dotmac_billing.service", "create_billing_account"),
+        ("dotmac_payments", "ConfirmationSource"),
+        ("dotmac_payments", "GetConfirmedCashV1"),
+        ("dotmac_payments", "GetPaymentIntentV1"),
+        ("dotmac_payments", "PaymentError"),
+        ("dotmac_payments", "PaymentPurpose"),
+        ("dotmac_payments", "RecordConfirmation"),
+        ("dotmac_payments", "get_confirmed_cash_v1"),
+        ("dotmac_payments", "get_payment_intent_v1"),
+        ("dotmac_payments", "record_confirmation"),
+    },
     # Thin-client manual settlement (ADR 0031): staff-recorded payments
     # against Starter-issued invoices open a bound dotmac-payments
     # intent and discharge through the shared settlement owner.
