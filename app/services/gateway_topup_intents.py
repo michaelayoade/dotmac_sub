@@ -339,6 +339,48 @@ def _open_module_invoice_intent(db: Session, intent: TopupIntent) -> None:
         ) from exc
 
 
+def _open_module_purchase_funding_intent(
+    db: Session, intent: TopupIntent, purchase: PrepaidPeriodPurchase
+) -> None:
+    """Open the Starter payments purchase-funding intent for one checkout.
+
+    The module intent is bound to the purchase identity alone (ADR 0031:
+    opaque structural references, no amounts or periods in the binding
+    beyond the authorized total). Only the authenticated provider
+    confirmation for this intent can later fund the purchase through
+    ``starter_prepaid``; opening is replay-safe with identical fields.
+    """
+    if intent.account_id is None:
+        raise _error(
+            "module_intent_rejected",
+            "Period purchase checkout binding is incomplete for the payments module",
+            reference=intent.reference,
+        )
+    try:
+        requested = Money(purchase.total, Currency(str(purchase.currency).upper(), 2))
+        open_payment_intent(
+            db,
+            scope=TenantScope(OPERATOR_TENANT_ID),
+            command=OpenPaymentIntent(
+                reference=intent.reference,
+                payer_reference=str(intent.account_id),
+                purpose=PaymentPurpose.PURCHASE_FUNDING,
+                target_reference=str(purchase.id),
+                requested=requested,
+                provider_type=intent.provider_type,
+                channel=intent.channel or "customer_selfcare",
+                opened_at=intent.created_at,
+                expires_at=intent.expires_at,
+            ),
+        )
+    except (PaymentError, ValueError) as exc:
+        raise _error(
+            "module_intent_rejected",
+            "Payments module refused the purchase funding intent",
+            reference=intent.reference,
+        ) from exc
+
+
 def _create_customer_gateway_topup_intent(
     db: Session,
     *,
@@ -574,6 +616,16 @@ def _create_customer_gateway_topup_intent(
             )
         purchase.topup_intent_id = staged.intent.id
         purchase.status = PrepaidPeriodPurchaseStatus.payment_pending
+        # D1 hold, as for invoice checkout: with the Starter live switch
+        # OFF the purchase is exactly the legacy TopupIntent and never
+        # touches the mod_payments schema. When eligible, the purchase
+        # funds through Starter from this bound intent only.
+        from app.services.billing import starter_prepaid
+
+        if starter_prepaid.prepaid_funding_checkout_eligible(
+            db, subscriber_id=command.account_id
+        ):
+            _open_module_purchase_funding_intent(db, staged.intent, purchase)
         preview_fingerprint = purchase.preview_fingerprint
 
     if not staged.replayed:
