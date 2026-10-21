@@ -297,6 +297,10 @@ class OntDesiredState:
     # actions at all — see ``planner.resolve_acs_device_id``.
     acs_device_id: str | None = None
 
+    # Internet (WAN) service-port traffic tables from the OLT config pack.
+    wan_traffic_table_inbound: int | None = None
+    wan_traffic_table_outbound: int | None = None
+
 
 # ── Observed state ──────────────────────────────────────────────────────────
 

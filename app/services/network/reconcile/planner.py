@@ -1026,6 +1026,16 @@ def _plan_service_port_create(
             vlan=vlan,
             gem_index=gem_index,
             slot=slot,
+            **(
+                {
+                    "traffic_table_inbound": desired.wan_traffic_table_inbound,
+                    "traffic_table_outbound": desired.wan_traffic_table_outbound,
+                }
+                if slot == "wan"
+                and desired.wan_traffic_table_inbound is not None
+                and desired.wan_traffic_table_outbound is not None
+                else {}
+            ),
         )
     )
     debt = Drift(
@@ -1068,12 +1078,46 @@ def _plan_wan_service_port(
         )
         return
     if (
-        desired.wan_service_port_index is not None
-        and desired.wan_vlan is not None
+        desired.wan_vlan is not None
         and is_deliverable("wan_vlan", desired.wan_vlan)
         and desired.wan_mode == "pppoe"
     ):
         gem_index = desired.wan_gem_index or 1
+        # Judge "missing" by what the OLT shows for THIS ONT at the internet
+        # VLAN+GEM, not by the index alone. Existing ports are never altered.
+        matching = [
+            sp
+            for sp in observed.olt.olt_service_ports
+            if _sp_int(sp, "vlan", "vlan_id") == desired.wan_vlan
+            and _sp_int(sp, "gem_index", "gem") == gem_index
+        ]
+        if len(matching) > 1:
+            # Ambiguous: fail closed, no create, no delete.
+            drifts.append(
+                Drift(
+                    field="olt_service_ports[wan]",
+                    surface="olt",
+                    desired={"vlan": desired.wan_vlan, "gem": gem_index},
+                    observed=f"ambiguous:{len(matching)}_matching_ports",
+                    repairable=False,
+                )
+            )
+            return
+        if matching:
+            return
+        if desired.wan_service_port_index is None:
+            # The lifecycle allocates and persists the index before reconcile;
+            # reaching here means that has not happened. Report, don't guess.
+            drifts.append(
+                Drift(
+                    field="olt_service_ports[wan]",
+                    surface="olt",
+                    desired={"vlan": desired.wan_vlan, "gem": gem_index},
+                    observed=None,
+                    repairable=False,
+                )
+            )
+            return
         # A create is planned only when NOTHING occupies the index —
         # matched or mismatched. A mismatched occupant is a live customer
         # port and is flagged as unrepairable drift by the main per-port
@@ -1192,6 +1236,18 @@ def _plan_acs_side(
     wifi_only_change = _is_wifi_only_change(mode, proposed_fields)
     remote_only_change = _is_remote_access_only_change(mode, proposed_fields)
     wan_only_change = _is_wan_only_change(mode, proposed_fields)
+
+    # CR-credential repair is planned before every other ACS write (G3).
+    if not (wifi_only_change or remote_only_change or wan_only_change):
+        _plan_acs_management_server(
+            desired,
+            observed,
+            device_id,
+            actions,
+            drifts,
+            proposed_fields=proposed_fields,
+            force_proposed_writes=force_proposed_writes,
+        )
 
     # TR-069 WAN PPP — skipped when OMCI owns the WAN.
     narrow_feature_change = wifi_only_change or remote_only_change
@@ -1461,9 +1517,26 @@ def _plan_acs_side(
             )
         )
 
-    # ManagementServer (CR creds + inform interval) — last in the ACS
-    # sequence. Critical for the next reconcile's NBI calls to deliver
-    # synchronously.
+    return identity
+
+
+def _plan_acs_management_server(
+    desired: OntDesiredState,
+    observed: OntObservedState,
+    device_id: str,
+    actions: list[Action],
+    drifts: list[Drift],
+    *,
+    proposed_fields: frozenset[str],
+    force_proposed_writes: bool,
+) -> None:
+    """Plan the ManagementServer (CR credentials + inform interval) write.
+
+    Planned FIRST in the ACS sequence: GenieACS executes queued tasks in
+    order, so when the Connection Request credentials are what is failing,
+    the repair must precede every other write or those writes queue behind
+    a CR that can never succeed. Credentials come from the config pack.
+    """
     force_endpoint_write = bool(proposed_fields & _ACS_ENDPOINT_FIELDS) and (
         force_proposed_writes
     )
@@ -1505,8 +1578,6 @@ def _plan_acs_side(
                 repairable=True,
             )
         )
-
-    return identity
 
 
 def _plan_acs_wan_ppp(

@@ -437,6 +437,122 @@ def _queue_saved_service_apply_after_stale_inform(
     return dispatch.queued
 
 
+def _resume_apply_after_inform(
+    db: Session,
+    *,
+    ont_id: uuid.UUID | None,
+    inform_at: datetime,
+) -> bool:
+    """Run the NEXT APPLY step (a write pass, not only a verify) on an Inform
+    for a head parked on a Connection Request failure or on a pending
+    WCD/PPP-child creation (the #3758 pending markers).
+
+    * waiting head (``awaiting_inform_cr_failed`` or a drain/readback wait with
+      a pending-create marker): owner resume command.
+    * failed head (``acs_cr_failed``/``verification_mismatch``) with a pending
+      create marker: the owner's existing retry command.
+
+    Both require the ACS queue to be confirmed empty, so no task is queued
+    twice; the resumed pass re-plans from observation and the markers adopt
+    the WCD that was created instead of adding another.
+    """
+    if ont_id is None:
+        return False
+
+    from app.models.network_operation import NetworkOperation
+    from app.models.ont_service_configuration import (
+        OntServiceConfigurationHead,
+        OntServiceConfigurationPhase,
+    )
+    from app.services.db_session_adapter import db_session_adapter
+    from app.services.network import ont_turnup_gaps
+    from app.services.network.ont_service_configuration import (
+        OntServiceConfigurationError,
+        ResumeOntServiceConfigurationCommand,
+        RetryOntServiceConfigurationCommand,
+        resume_ont_service_configuration_after_inform,
+        retry_ont_service_configuration,
+    )
+    from app.services.owner_commands import CommandContext
+
+    head = db.scalar(
+        select(OntServiceConfigurationHead).where(
+            OntServiceConfigurationHead.ont_unit_id == ont_id,
+            OntServiceConfigurationHead.phase.in_(
+                (
+                    OntServiceConfigurationPhase.readback_pending,
+                    OntServiceConfigurationPhase.failed,
+                )
+            ),
+        )
+    )
+    if head is None or head.latest_operation_id is None:
+        db_session_adapter.release_read_transaction(db)
+        return False
+    ont = db.get(OntUnit, ont_id)
+    operation = db.get(NetworkOperation, head.latest_operation_id)
+    waiting = head.phase is OntServiceConfigurationPhase.readback_pending
+    marker = ont is not None and ont_turnup_gaps.has_pending_create_marker(ont)
+    eligible = waiting or (
+        head.failure_code in {"acs_cr_failed", "verification_mismatch"} and marker
+    )
+    completed_at = (
+        _normalize_utc_timestamp(operation.completed_at)
+        if operation is not None and not waiting
+        else None
+    )
+    normalized_inform_at = _normalize_utc_timestamp(inform_at)
+    if not waiting:
+        eligible = (
+            eligible
+            and completed_at is not None
+            and normalized_inform_at is not None
+            and completed_at < normalized_inform_at
+            and ont is not None
+            and ont_turnup_gaps.acs_queued_task_count(db, ont) == 0
+        )
+    head_id = head.id
+    revision = head.current_revision
+    operation_id = head.latest_operation_id
+    db_session_adapter.release_read_transaction(db)
+    if not eligible:
+        return False
+
+    stamp = int(normalized_inform_at.timestamp()) if normalized_inform_at else 0
+    key = f"ont-service-config-inform-resume:{head_id}:{operation_id}:{stamp}"
+    context = CommandContext.system(
+        actor="system:tr069_inform_handler",
+        scope="network:ont:write",
+        reason="Resume apply after a fresh ACS Inform (CR failure / pending create)",
+        command_id=uuid.uuid4(),
+        idempotency_key=key,
+    )
+    try:
+        if waiting:
+            outcome = resume_ont_service_configuration_after_inform(
+                db,
+                ResumeOntServiceConfigurationCommand(
+                    context=context,
+                    ont_unit_id=ont_id,
+                    expected_head_id=head_id,
+                    expected_revision=revision,
+                ),
+            )
+            return outcome.message.startswith("Apply resumed")
+        retry_ont_service_configuration(
+            db,
+            RetryOntServiceConfigurationCommand(
+                context=context,
+                ont_unit_id=ont_id,
+                expected_head_id=head_id,
+                expected_revision=revision,
+            ),
+        )
+    except OntServiceConfigurationError:
+        return False
+    return True
+
+
 def _trigger_acs_cr_failure_readback_after_inform(
     db: Session,
     *,
@@ -1850,10 +1966,25 @@ def receive_inform(
 
     cr_failure_readback_triggered = False
     try:
-        cr_failure_readback_triggered = _trigger_acs_cr_failure_readback_after_inform(
-            db,
-            ont_id=ont_id_for_service_apply,
-            inform_at=now,
+        apply_resumed = _resume_apply_after_inform(
+            db, ont_id=ont_id_for_service_apply, inform_at=now
+        )
+    except Exception:
+        if db.in_transaction():
+            db.rollback()
+        apply_resumed = False
+        logger.warning(
+            "Failed to resume ONT service apply after inform for ONT %s",
+            ont_id_for_service_apply,
+            exc_info=True,
+        )
+    try:
+        cr_failure_readback_triggered = apply_resumed or (
+            _trigger_acs_cr_failure_readback_after_inform(
+                db,
+                ont_id=ont_id_for_service_apply,
+                inform_at=now,
+            )
         )
     except Exception:
         if db.in_transaction():

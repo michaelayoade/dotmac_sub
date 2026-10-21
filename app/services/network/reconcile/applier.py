@@ -513,6 +513,15 @@ def _execute(action: Action, ctx: ApplyContext) -> AppliedAction:
                 vlan_id=action.vlan,
                 user_vlan=action.vlan,
                 port_index=action.service_port_index,
+                **(
+                    {
+                        "traffic_table_inbound": action.traffic_table_inbound,
+                        "traffic_table_outbound": action.traffic_table_outbound,
+                    }
+                    if action.traffic_table_inbound is not None
+                    and action.traffic_table_outbound is not None
+                    else {}
+                ),
             )
             evidence = _olt_check(action, result)
             return _ok(
