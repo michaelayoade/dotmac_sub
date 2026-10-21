@@ -1,15 +1,11 @@
-# Thin-client / feature-freeze guard surface. Billing code is owned by
+# Thin-client guard surface. Billing code is owned by
 # Michael (decided 2026-10-13); the guard itself must not be weakened
 # without his review. Takes effect once branch protection requires
-# code-owner reviews (docs/FEATURE_FREEZE.md).
+# code-owner reviews.
 
 # Guard machinery
 /CODEOWNERS @michaelayoade
 /.gitattributes @michaelayoade
-/.github/workflows/feature-freeze.yml @michaelayoade
-/scripts/ci/check_feature_freeze.py @michaelayoade
-/docs/FEATURE_FREEZE.md @michaelayoade
-/docs/feature_freeze_exceptions.json @michaelayoade
 /templates/admin/dashboard/ @michaelayoade
 /app/services/web_admin_dashboard.py @michaelayoade
 /tests/architecture/billing_thin_client_baseline.txt @michaelayoade

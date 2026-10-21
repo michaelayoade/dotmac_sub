@@ -1,5 +1,5 @@
 {
-  "comment": "Transitional billing cutover tools allowed to exist in Sub only until their deletion trigger fires. Each entry is owner-approved surface under the thin-client gate (docs/FEATURE_FREEZE.md): no entry may grow beyond baseline_lines, and no detected transitional tool may exist without an entry here.",
+  "comment": "Transitional billing cutover tools allowed to exist in Sub only until their deletion trigger fires. Each entry is owner-approved surface under the thin-client gate: no entry may grow beyond baseline_lines, and no detected transitional tool may exist without an entry here.",
   "tools": [
     {
       "path": "app/services/billing/opening_balance_history.py",
