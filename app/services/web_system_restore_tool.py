@@ -14,7 +14,11 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session, selectinload
 
 from app.models.billing import Invoice, Payment
-from app.models.catalog import Subscription, SubscriptionStatus
+from app.models.catalog import (
+    DEACTIVATION_SUBSCRIBER_DELETED,
+    Subscription,
+    SubscriptionStatus,
+)
 from app.models.network import (
     CPEDevice,
     DeviceStatus,
@@ -225,7 +229,7 @@ def _apply_soft_delete_cascade(
     for credential in credentials:
         if credential.is_active:
             credential.is_active = False
-            credential.deactivation_reason = "manual"
+            credential.deactivation_reason = DEACTIVATION_SUBSCRIBER_DELETED
             touched["radius_accounts"] += 1
 
     radius_users = db.scalars(
@@ -370,6 +374,7 @@ def restore_subscriber(
         "ip_assignments": 0,
         "ont_assignments": 0,
         "splitter_assignments": 0,
+        "credentials_skipped": 0,
     }
 
     subscriber.is_active = True
@@ -468,17 +473,29 @@ def restore_subscriber(
             access_credential_service.model.subscriber_id == subscriber.id
         )
     ).all()
+    # Undo exactly what the delete cascade did: only credentials it switched off
+    # come back, with their existing secret. Every other inactive credential
+    # (manual, service ended, unknown) stays inactive and is counted.
+    reactivated_credential_ids: set[Any] = set()
     for credential in credentials:
-        if not credential.is_active:
-            credential.is_active = True
-            credential.deactivation_reason = None
-            touched["radius_accounts"] += 1
+        if credential.is_active:
+            continue
+        if credential.deactivation_reason != DEACTIVATION_SUBSCRIBER_DELETED:
+            touched["credentials_skipped"] += 1
+            continue
+        credential.is_active = True
+        credential.deactivation_reason = None
+        reactivated_credential_ids.add(credential.id)
+        touched["radius_accounts"] += 1
 
     radius_users = db.scalars(
         select(RadiusUser).where(RadiusUser.subscriber_id == subscriber.id)
     ).all()
     for radius_user in radius_users:
-        if not radius_user.is_active:
+        if (
+            not radius_user.is_active
+            and radius_user.access_credential_id in reactivated_credential_ids
+        ):
             radius_user.is_active = True
             touched["radius_users"] += 1
 

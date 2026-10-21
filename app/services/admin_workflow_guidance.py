@@ -1265,6 +1265,7 @@ HELP_ONLY_GUIDANCE: tuple[AdminWorkflowGuidance, ...] = (
         "Verify the result and audit record; use destructive tools only with an approved operational plan.",
         notes=(
             "Deactivate a staff account before deleting it. Delete removes its credentials, factors, sessions, grants and staff-bound API keys only when linked history permits it; its native identity history is retained. A failed deletion leaves the selected accounts and keys unchanged.",
+            "Restoring a deleted subscriber brings back only the logins that the delete switched off, with their existing passwords. Logins that were already inactive stay inactive, and the page shows how many were left that way.",
             "The ad-hoc database inspector was retired. Use the reviewed reports, exports and audit views instead of free-form queries.",
             "Saving or deleting a secret records an audit entry first; if the entry cannot be written the secret is left unchanged. Request auditing can no longer be switched off in settings.",
             "Bulk Delete skips active or missing users and repeated selections. Its deleted count reports distinct accounts; one linked-record blocker prevents the whole batch from being deleted. Review the blocked records before trying again.",
