@@ -27,6 +27,17 @@ POLICIES = ("sub-staging-ci", "sub-production-ci", "gate0-proof")
 NETWORK_CLAIMS = {"ip", "cidr", "source_ip", "remote_addr", "client_ip"}
 
 
+GH_VERIFY_PINS = (
+    "--repo michaelayoade/dotmac_sub",
+    "--signer-workflow michaelayoade/dotmac_sub/.github/workflows/release-candidate.yml",
+    "--source-ref refs/heads/main",
+)
+IDENTITY_PIN = (
+    r"^https://github\.com/michaelayoade/dotmac_sub/\.github/workflows/"
+    r"release-candidate\.yml@refs/heads/main$"
+)
+
+
 def _load(path: Path) -> dict:
     return yaml.safe_load(path.read_text(encoding="utf-8"))
 
@@ -232,7 +243,11 @@ def test_gate0_scripts_are_posix_and_value_free() -> None:
         assert path.read_text(encoding="utf-8").startswith("#!/bin/sh")
     verify = (ROOT / "deploy/gate0/verify_artifact.sh").read_text(encoding="utf-8")
     assert "--insecure-ignore-tlog" not in verify
-    assert "verify-attestation --type slsaprovenance" in verify
+    assert "verify-attestation" not in verify
+    assert "slsaprovenance" not in verify
+    assert 'gh attestation verify "oci://$REF"' in verify
+    for pin in GH_VERIFY_PINS:
+        assert pin in verify, pin
 
 
 def test_proof_workflow_uses_secret_for_openbao_addr_never_a_variable() -> None:
@@ -320,3 +335,137 @@ def test_proof_script_keeps_secrets_off_curl_argv() -> None:
         if "jq " in line or "curl " in line:
             assert "$JWT" not in line.replace('JWT="$JWT" jq', "jq"), line
     assert 'JWT="$JWT" jq -nc' in text and "jwt:env.JWT" in text
+
+
+def _rc_steps() -> list[dict]:
+    return _load(RC)["jobs"]["build"]["steps"]
+
+
+def test_release_candidate_provenance_uses_gh_attestation_not_cosign() -> None:
+    source = RC.read_text(encoding="utf-8")
+    # attest-build-provenance stores a Sigstore bundle, not a cosign .att.
+    assert "slsaprovenance" not in source
+    assert "verify-attestation" not in source
+    assert "--type slsaprovenance" not in source
+    verify = [s for s in _rc_steps() if "gh attestation verify" in s.get("run", "")]
+    assert len(verify) == 1
+    step = verify[0]
+    run = step["run"]
+    assert 'gh attestation verify "oci://$ref"' in run
+    for pin in GH_VERIFY_PINS:
+        assert pin in run, pin
+    # cosign signature check stays, identity + issuer pinned.
+    assert "cosign verify --certificate-identity-regexp" in run
+    assert IDENTITY_PIN in run
+    assert "--certificate-oidc-issuer https://token.actions.githubusercontent.com" in run
+    assert step["env"]["GH_TOKEN"] == "${{ github.token }}"
+    # gh is the runner's preinstalled CLI, not installed here.
+    assert "gh/install" not in source and "setup-gh" not in source
+
+
+def test_release_candidate_reuse_mode_runs_the_same_verification() -> None:
+    steps = _rc_steps()
+    names = [s.get("name") for s in steps]
+    name = "Verify signature and provenance (build and reuse)"
+    assert names.count(name) == 1
+    step = steps[names.index(name)]
+    # Not gated on mode: runs for build AND reuse, with no skip path.
+    assert "if" not in step
+    assert "continue-on-error" not in step
+    assert step["env"]["IMAGE_DIGEST"] == "${{ steps.accepted.outputs.image_digest }}"
+    # Runs after the accepted digest is resolved, before evidence is produced.
+    assert names.index("Resolve accepted candidate digest") < names.index(name)
+    assert names.index(name) < names.index("Write typed candidate evidence")
+    # cosign is installed for both modes and before verification.
+    install = [i for i, s in enumerate(steps) if s.get("name") == "Install cosign"]
+    assert len(install) == 1 and "if" not in steps[install[0]]
+    assert install[0] < names.index(name)
+    # A failure fails the job (no `|| true`, no swallowed exit).
+    assert "|| true" not in step["run"]
+    assert "exit 1" in step["run"]
+
+
+def test_release_candidate_attest_step_pinned_and_push_to_registry() -> None:
+    steps = {s.get("name"): s for s in _rc_steps()}
+    attest = steps["Attest build provenance"]
+    assert re.fullmatch(
+        r"actions/attest-build-provenance@[0-9a-f]{40}", attest["uses"]
+    )
+    assert attest["with"]["push-to-registry"] is True
+    for name in ("Install cosign",):
+        assert re.fullmatch(r"sigstore/cosign-installer@[0-9a-f]{40}", steps[name]["uses"])
+
+
+def _run_proof_negative(tmp_path: Path, http_code: str, body: str) -> subprocess.CompletedProcess[str]:
+    """Run the negative proof with stubbed curl/jq-free network (no real I/O)."""
+    import shutil
+
+    if shutil.which("jq") is None:
+        pytest.skip("jq not installed")
+    bindir = tmp_path / "bin"
+    bindir.mkdir()
+    (tmp_path / "body.json").write_text(body, encoding="utf-8")
+    # First curl call mints the JWT (-K -), second is the login (-o FILE).
+    stub = bindir / "curl"
+    stub.write_text(
+        "#!/bin/sh\n"
+        "out=''\n"
+        "while [ $# -gt 0 ]; do\n"
+        "  case \"$1\" in -o) out=$2; shift ;; esac\n"
+        "  shift\n"
+        "done\n"
+        "cat >/dev/null\n"
+        "if [ -n \"$out\" ]; then\n"
+        f"  cat {tmp_path}/body.json > \"$out\"\n"
+        f"  printf '%s' '{http_code}'\n"
+        "  [ '" + http_code + "' = 000 ] && exit 7\n"
+        "  exit 0\n"
+        "fi\n"
+        "printf '{\"value\":\"x\"}'\n",
+        encoding="utf-8",
+    )
+    stub.chmod(0o755)
+    env = {
+        "PATH": f"{bindir}:{os.environ.get('PATH', '/usr/bin:/bin')}",
+        "OPENBAO_ADDR": "https://openbao.example.com",
+        "PROOF_MODE": "negative",
+        "PROOF_ROLE": "sub-staging-ci",
+        "ACTIONS_ID_TOKEN_REQUEST_URL": "https://token.example.com/?a=b",
+        "ACTIONS_ID_TOKEN_REQUEST_TOKEN": "t",
+    }
+    return subprocess.run(
+        ["sh", str(ROOT / "deploy/gate0/proof1_oidc_openbao.sh")],
+        capture_output=True, text=True, env=env, check=False,
+    )
+
+
+@pytest.mark.parametrize(
+    ("code", "body"),
+    [
+        ("400", '{"errors":["error validating claims: claim \\"ref\\" does not match"]}'),
+        ("403", '{"errors":["permission denied"]}'),
+    ],
+)
+def test_proof_negative_passes_only_on_definite_login_refusal(tmp_path, code, body) -> None:
+    result = _run_proof_negative(tmp_path, code, body)
+    assert result.returncode == 0, result.stderr
+    assert "negative OK" in result.stdout
+
+
+@pytest.mark.parametrize(
+    ("code", "body"),
+    [
+        ("000", ""),  # network error
+        ("404", '{"errors":[]}'),
+        ("502", "<html>bad gateway</html>"),
+        ("503", '{"errors":["Vault is sealed"]}'),
+        ("400", "not json"),
+        ("400", '{"errors":[]}'),
+        ("400", '{"errors":["role \\"sub-staging-ci\\" could not be found"]}'),
+        ("200", '{"auth":{"client_token":"s.x"}}'),
+    ],
+)
+def test_proof_negative_is_not_a_pass_for_unrelated_errors(tmp_path, code, body) -> None:
+    result = _run_proof_negative(tmp_path, code, body)
+    assert result.returncode == 1, (code, body, result.stdout)
+    assert "negative OK" not in result.stdout

@@ -259,22 +259,25 @@ def test_release_candidate_build_is_explicit_green_main_and_digest_evidenced() -
     # write, upload) must run in EVERY accepted mode, or a reused candidate
     # would strand staging with a missing evidence artifact.
     # Gate 0 increment 1 adds build-mode-only keyless signing steps right after
-    # the build: install cosign, sign, attest, verify. They are build-only by
-    # design (reuse mode verifies instead); nothing else may be build-gated.
-    assert workflow.count("if: steps.reconcile.outputs.mode == 'build'") == 5
+    # the build: sign and attest (3 gated steps in total with the build).
+    # Cosign installation and the signature + provenance verification run in
+    # EVERY accepted mode (reuse must pass the same checks as a fresh build),
+    # so they are deliberately NOT build-gated; nothing else may be.
+    assert workflow.count("if: steps.reconcile.outputs.mode == 'build'") == 3
     for signing_step in (
-        "- name: Install cosign\n        if: steps.reconcile.outputs.mode == 'build'",
         "- name: Sign candidate digest (keyless)\n        if: steps.reconcile.outputs.mode == 'build'",
         "- name: Attest build provenance\n        if: steps.reconcile.outputs.mode == 'build'",
-        "- name: Verify signature and attestation (build mode)\n        if: steps.reconcile.outputs.mode == 'build'",
     ):
         assert signing_step in workflow
+    assert "mode != 'build'" not in workflow
     build_step_index = workflow.index("- name: Build and push candidate once")
     gate_index = workflow.index(
         "if: steps.reconcile.outputs.mode == 'build'", build_step_index
     )
     assert gate_index - build_step_index < 200
     for never_gated in (
+        "- name: Install cosign",
+        "- name: Verify signature and provenance (build and reuse)",
         "- name: Verify published digest",
         "- name: Extract and verify the embedded product manifest",
         "- name: Write typed candidate evidence",

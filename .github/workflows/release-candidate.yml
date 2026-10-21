@@ -349,9 +349,10 @@ jobs:
             forgejo_token=${{ secrets.FORGEJO_READ_TOKEN }}
 
       # Increment 1 (§4.1): keyless-sign + attest the pushed DIGEST, build
-      # mode only. The reuse path verifies below and never re-signs.
+      # mode only. Cosign is installed in every accepted mode because both
+      # build and reuse run the same verification step below. The reuse path
+      # verifies and never re-signs.
       - name: Install cosign
-        if: steps.reconcile.outputs.mode == 'build'
         uses: sigstore/cosign-installer@398d4b0eeef1380460a10c8013a76f728fb906ac # v3
 
       - name: Sign candidate digest (keyless)
@@ -365,20 +366,6 @@ jobs:
           subject-name: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
           subject-digest: ${{ steps.build.outputs.digest }}
           push-to-registry: true
-
-      # §7.1.5: prove verifiability at build time with the exact host
-      # identity regexp from §4.2, before any host depends on it.
-      - name: Verify signature and attestation (build mode)
-        if: steps.reconcile.outputs.mode == 'build'
-        run: |
-          set -euo pipefail
-          ref="${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}@${{ steps.build.outputs.digest }}"
-          identity='^https://github\.com/michaelayoade/dotmac_sub/\.github/workflows/release-candidate\.yml@refs/heads/main$'
-          cosign verify --certificate-identity-regexp "$identity" \
-            --certificate-oidc-issuer https://token.actions.githubusercontent.com "$ref" >/dev/null
-          cosign verify-attestation --type slsaprovenance \
-            --certificate-identity-regexp "$identity" \
-            --certificate-oidc-issuer https://token.actions.githubusercontent.com "$ref" >/dev/null
 
       # Runs in EVERY accepted mode (build or reuse), never gated: even the
       # "already done" reuse path must re-derive and re-upload evidence under
@@ -401,24 +388,53 @@ jobs:
             echo "build_run_id=$RESOLVED_BUILD_RUN_ID" >> "$GITHUB_OUTPUT"
           fi
 
-      # Reuse mode (§4.1): an existing candidate must already be signed.
-      # Absent signature fails the run — the candidate must rebuild, never
-      # silently promote unsigned.
-      - name: Install cosign (reuse verification)
-        if: steps.reconcile.outputs.mode != 'build'
-        uses: sigstore/cosign-installer@398d4b0eeef1380460a10c8013a76f728fb906ac # v3
-
-      - name: Verify existing candidate is signed (reuse mode)
-        if: steps.reconcile.outputs.mode != 'build'
+      # §7.1.5 / §4.1: ONE verification step for every accepted mode. A freshly
+      # built digest and a reused candidate digest must both pass the identical
+      # signature and provenance checks; there is no skip path. A reused
+      # candidate that fails is refused (rebuild required), never promoted.
+      #   - Signature: cosign verify, certificate identity and issuer pinned to
+      #     this workflow on main.
+      #   - Provenance: actions/attest-build-provenance stores a Sigstore
+      #     bundle (GitHub attestations API, plus an OCI referrer), not a
+      #     cosign `.att` attestation, so it is verified with `gh attestation
+      #     verify` (default predicate type is SLSA provenance v1), never with
+      #     cosign's own attestation lookup. `gh` is the GitHub CLI
+      #     preinstalled on the GitHub-hosted runner image (not installed or
+      #     downloaded here). GH_TOKEN is the job's GITHUB_TOKEN; the job's
+      #     existing attestations permission already covers the read.
+      - name: Verify signature and provenance (build and reuse)
+        env:
+          GH_TOKEN: ${{ github.token }}
+          IMAGE_DIGEST: ${{ steps.accepted.outputs.image_digest }}
+          MODE: ${{ steps.reconcile.outputs.mode }}
         run: |
           set -euo pipefail
-          ref="${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}@${{ steps.accepted.outputs.image_digest }}"
+          if ! printf '%s' "$IMAGE_DIGEST" | grep -Eq '^sha256:[0-9a-f]{64}$'; then
+            echo "Refusing to verify: not an immutable OCI digest." >&2
+            exit 1
+          fi
+          ref="${REGISTRY}/${IMAGE_NAME}@${IMAGE_DIGEST}"
           identity='^https://github\.com/michaelayoade/dotmac_sub/\.github/workflows/release-candidate\.yml@refs/heads/main$'
-          cosign verify --certificate-identity-regexp "$identity" \
-            --certificate-oidc-issuer https://token.actions.githubusercontent.com "$ref" >/dev/null || {
-            echo "Existing candidate digest is unsigned; refusing reuse (rebuild required)." >&2
+          fail() {
+            echo "Candidate verification failed ($1, mode=$MODE); refusing to accept this digest (a reused candidate must be rebuilt)." >&2
             exit 1
           }
+          cosign verify --certificate-identity-regexp "$identity" \
+            --certificate-oidc-issuer https://token.actions.githubusercontent.com "$ref" >/dev/null \
+            || fail "cosign signature"
+          # The attestation can lag the push by a few seconds; bounded retry,
+          # then fail closed.
+          attempt=1
+          until gh attestation verify "oci://$ref" \
+            --repo michaelayoade/dotmac_sub \
+            --signer-workflow michaelayoade/dotmac_sub/.github/workflows/release-candidate.yml \
+            --source-ref refs/heads/main >/dev/null; do
+            if [ "$attempt" -ge 3 ]; then
+              fail "GitHub build provenance"
+            fi
+            sleep "$((attempt * 5))"
+            attempt=$((attempt + 1))
+          done
 
       # The digest-visibility read below is the actual flaky step from the
       # 2026-09-09 incident: GHCR sometimes has not yet propagated a digest it
