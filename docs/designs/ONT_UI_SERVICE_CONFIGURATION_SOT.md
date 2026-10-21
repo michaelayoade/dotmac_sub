@@ -63,11 +63,11 @@ to infer whether evidence belongs to the current lifecycle.
 section, desired-change evidence with secrets redacted, operation identity,
 delivery phase, waiting/failure reason, and verification time.
 
-For WiFi revisions, the executor derives a typed field-only delivery scope
-from this redacted evidence. The actual SSID and encrypted password remain in
-canonical desired state. Initial delivery may force those explicitly admitted
-fields even when ACS has no readable observation; readback-only attempts retain
-the scope but never force or repeat a write-only password action.
+For WiFi and WAN revisions, the executor derives typed field-only delivery
+scopes from this redacted evidence. Actual values and encrypted credentials
+remain in canonical desired state. Initial delivery may force explicitly
+admitted write-only fields; readback-only attempts retain the same scope but
+never force or repeat a write.
 
 The current reconciler projection is bound explicitly on `OntUnit` to:
 
@@ -181,7 +181,10 @@ after broker delivery. It records these distinct phases:
 - `superseded` or `retired`: no longer current.
 
 Readback-pending work remains on the same operation and uses bounded delayed
-verification dispatches. It is never rendered as configured.
+`ont_service_config_verify.v1` dispatches. Those dispatches carry only the
+attempt counter and the worker fixes sweep/readback-only execution. They cannot
+re-enter the apply command or repeat a device write. Pending work is never
+rendered as configured.
 
 The section-scoped delivery projection returns the newest revision for a
 requested section on the exact active assignment. This lets customer WiFi

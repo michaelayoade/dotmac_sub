@@ -596,9 +596,11 @@ TASK_RELIABILITY_CONTRACTS: dict[str, TaskReliabilityContract] = {
         "readback-only branch and never calls setParameterValues or any "
         "other OLT write function -- repeated execution against the same "
         "operation is inherently safe, unlike the sibling apply task it "
-        "otherwise mirrors. The dispatch outbox still admits the queued "
-        "verification operation once; an operator queues a fresh attempt "
-        "through verify_ont_service_configuration_readback, which is itself "
+        "otherwise mirrors. The dispatch outbox carries only a bounded "
+        "verification-attempt counter; readback-pending execution stages the "
+        "next delayed verification on the same operation, while an Inform "
+        "may queue a fresh attempt through "
+        "verify_ont_service_configuration_readback, which is itself "
         "gated on a fresh ACS Inform since the original failure.",
     ),
     "app.tasks.ont_reconcile.run_ont_reconcile_sweep": _c(

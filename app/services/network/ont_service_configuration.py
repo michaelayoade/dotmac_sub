@@ -56,7 +56,12 @@ from app.services.events import emit_event
 from app.services.events.types import EventType
 from app.services.network import ont_turnup_gaps as _turnup
 from app.services.network.effective_ont_config import resolve_effective_ont_config
-from app.services.network.ont_desired_config import set_desired_config_values
+from app.services.network.ont_desired_config import (
+    desired_config,
+    get_desired_config_value,
+    resolve_field_path,
+    set_desired_config_values,
+)
 from app.services.network.ont_lan_block_choices import OPERATOR_LAN_BLOCK_PREFIXES
 from app.services.network.ont_management_ipam import (
     allocate_ont_management_ip,
@@ -97,6 +102,7 @@ from app.services.owner_commands import (
 
 if TYPE_CHECKING:
     from app.services.network.reconcile.state import (
+        OntWanProposedChange,
         OntWifiDeliveryScope,
         ReconcileResult,
     )
@@ -148,6 +154,8 @@ _REPAIR = OwnerCommandDefinition(
 
 _MAX_IDEMPOTENCY_LENGTH = 160
 _MAX_READBACK_ATTEMPTS = 3
+# Evidence key listing the WAN keys a revision actually changed.
+_WAN_CHANGED_KEYS = "wan.changed_keys"
 SERVICE_CONFIGURATION_RECONCILE_TIMEOUT_SECONDS = 120
 
 
@@ -532,6 +540,16 @@ def _ip(value: str | None, field: str) -> str | None:
         raise _error(
             "invalid_change", f"{field} is not a valid IP address.", field=field
         ) from exc
+
+
+def _desired_values_for(ont: OntUnit, updates: dict[str, object]) -> dict[str, object]:
+    """Stored desired values for the given keys, as the reconciler would see them."""
+
+    config = desired_config(ont)
+    return {
+        key: get_desired_config_value(config, *resolve_field_path(key))
+        for key in updates
+    }
 
 
 def _change_updates(
@@ -1332,7 +1350,13 @@ def _admit(
             revision=head.current_revision,
         )
 
+    before_values = _desired_values_for(ont, updates)
     set_desired_config_values(ont, updates)
+    if section is OntConfigurationSection.wan:
+        after_values = _desired_values_for(ont, updates)
+        evidence[_WAN_CHANGED_KEYS] = sorted(
+            key for key in updates if before_values[key] != after_values[key]
+        )
     wan_intent_id: uuid.UUID | None = None
     effective_vlan: int | None = None
     vlan_source: WanVlanSource | None = None
@@ -1638,9 +1662,74 @@ def _wifi_delivery_scope(
     changed_fields = frozenset(
         field
         for evidence_key, field in field_by_evidence_key.items()
-        if evidence_key in evidence
+        if evidence.get(evidence_key) is not None
     )
     return OntWifiDeliveryScope(changed_fields=changed_fields)
+
+
+def _wan_delivery_scope(
+    db: Session,
+    ont: OntUnit,
+    revision: OntServiceConfigurationRevision,
+) -> OntWanProposedChange | None:
+    """Recover the admitted WAN fields while keeping values in canonical state."""
+
+    from app.services.network.reconcile.adapters import desired_from_ont_unit
+    from app.services.network.reconcile.state import (
+        OntWanProposedChange,
+        OntWanProposedField,
+    )
+
+    if revision.section != OntConfigurationSection.wan.value:
+        return None
+    evidence = revision.desired_change_evidence or {}
+    field_by_evidence_key: dict[str, tuple[OntWanProposedField, ...]] = {
+        "wan.mode": ("wan_mode",),
+        "wan.ip_protocol": ("ipv6_enabled",),
+        "wan.static_ip": ("wan_static_ip", "wan_static_ip_is_public"),
+        "wan.static_subnet": ("wan_static_subnet",),
+        "wan.static_gateway": ("wan_static_gateway",),
+        "wan.static_dns": ("wan_static_dns",),
+        "wan.pppoe_wcd_index": ("wan_pppoe_wcd_index",),
+    }
+    # Presence is not enough: ``_change_updates`` records every submitted WAN
+    # key, including blanks. Only a submitted (non-None) value is in scope.
+    changed_fields = frozenset(
+        field
+        for evidence_key, fields in field_by_evidence_key.items()
+        if evidence.get(evidence_key) is not None
+        for field in fields
+    )
+    if not changed_fields:
+        return None
+    # Of those, only fields this revision actually changed may force a
+    # PPPoE / WAN-IP push; the rest are delivered on observed drift only.
+    # Revisions admitted before this record carry no list: keep all forced.
+    changed_keys = evidence.get(_WAN_CHANGED_KEYS)
+    forced_fields: frozenset[OntWanProposedField] | None = None
+    if isinstance(changed_keys, list):
+        forced_fields = frozenset(
+            field
+            for evidence_key in changed_keys
+            for field in field_by_evidence_key.get(str(evidence_key), ())
+            if field in changed_fields
+        )
+
+    desired = desired_from_ont_unit(db, ont)
+    return OntWanProposedChange(
+        changed_fields=changed_fields,
+        wan_mode=desired.wan_mode,
+        wan_pppoe_username=desired.wan_pppoe_username,
+        wan_pppoe_password_ref=desired.wan_pppoe_password_ref,
+        wan_pppoe_wcd_index=desired.wan_pppoe_wcd_index,
+        wan_static_ip=desired.wan_static_ip,
+        wan_static_subnet=desired.wan_static_subnet,
+        wan_static_gateway=desired.wan_static_gateway,
+        wan_static_dns=desired.wan_static_dns,
+        wan_static_ip_is_public=desired.wan_static_ip_is_public,
+        ipv6_enabled=desired.ipv6_enabled,
+        forced_fields=forced_fields,
+    )
 
 
 def _force_lan_delivery(revision: OntServiceConfigurationRevision) -> bool:
@@ -1665,6 +1754,26 @@ def _only_ppp_delivery_residual_drift(result: ReconcileResult) -> bool:
         str(getattr(drift, "field", "") or "").startswith("ppp_delivery[")
         for drift in result.drift_after
     )
+
+
+def _readback_converged(result: ReconcileResult, scoped_readback: bool) -> bool:
+    if not result.success or result.drift_after:
+        return False
+    if result.sync_status == "synced":
+        return True
+    return scoped_readback and result.sync_status == "out_of_sync"
+
+
+def _readback_drift_fields(failure: object) -> list[str]:
+    """Drift field names carried by a verification failure, names only."""
+
+    evidence = getattr(failure, "evidence", None)
+    if not isinstance(evidence, dict):
+        return []
+    raw = evidence.get("drift_fields")
+    if not isinstance(raw, (list, tuple)):
+        return []
+    return [item for item in raw if isinstance(item, str)]
 
 
 def _connection_request_queued_pending(result: ReconcileResult) -> bool:
@@ -1875,19 +1984,32 @@ def _execution_locked(
     from app.services.network.reconcile.lifecycle import ReconcileLifecycleBinding
 
     wifi_scope = _wifi_delivery_scope(revision)
+    wan_scope = _wan_delivery_scope(db, ont, revision)
     # ``force_readback_only`` is set exclusively by the readback-verification
     # worker task (``app.tasks.ont_service_configuration.verify_readback``)
     # and is never derived from anything in the dispatch payload — see that
     # task and ``_ont_service_config_verify_invocation`` for why no caller
     # input can flip this back to a write.
     readback_only = command.verification_attempt > 0 or command.force_readback_only
+    # A WAN- or Wi-Fi-scoped readback proves only its own surface, so the
+    # reconciler leaves a foreign out_of_sync status alone; "converged" for
+    # the lifecycle then means success with no residual drift, whichever
+    # sync_status the ONT keeps.
+    scoped_readback = readback_only and (
+        wan_scope is not None or wifi_scope is not None
+    )
     if not readback_only and revision.section == OntConfigurationSection.wan.value:
         _ensure_wan_service_port(db, ont)
     pass_started_at = datetime.now(UTC)
     result = reconcile_ont(
         db,
         ont.id,
-        mode="sweep" if command.explicit_repair else "sync",
+        # Every observation-only pass must bypass the write-path
+        # ``out_of_sync`` guard. This also lets dispatches staged by an older
+        # release as ``apply + verify:N`` drain safely after deployment: the
+        # attempt marker already makes them readback-only above.
+        mode="sweep" if readback_only or command.explicit_repair else "sync",
+        proposed_change=wan_scope,
         wifi_delivery_scope=wifi_scope,
         force_lan_config=_force_lan_delivery(revision),
         lifecycle_binding=ReconcileLifecycleBinding(
@@ -1917,9 +2039,7 @@ def _execution_locked(
     # promote that gap to ``verified``.
     wifi_password_unverifiable_on_readback = (
         readback_only
-        and result.success
-        and result.sync_status == "synced"
-        and not result.drift_after
+        and _readback_converged(result, scoped_readback)
         and wifi_scope is not None
         and "wifi_password_ref" in wifi_scope.changed_fields
     )
@@ -2099,7 +2219,7 @@ def _execution_locked(
             "Readable configuration verified; WiFi password cannot be "
             "confirmed by readback."
         )
-    elif result.success and result.sync_status == "synced" and not result.drift_after:
+    elif _readback_converged(result, scoped_readback):
         now = datetime.now(UTC)
         head.phase = OntServiceConfigurationPhase.verified
         revision.phase = OntServiceConfigurationPhase.verified
@@ -2149,58 +2269,7 @@ def _execution_locked(
             waiting_reason=prior_waiting_reason,
             result=result,
         )
-        if command.force_readback_only and (
-            readback_pending or connection_request_queued_pending
-        ):
-            # A readback-only verification (``verify_ont_service_configuration_
-            # readback``) must never auto re-dispatch. The retry loop below
-            # re-stages ``ont_service_config_apply_v1`` with a ``verify:N``
-            # dispatch key, which only STAYS readback-only because
-            # ``_ont_service_config_invocation`` parses that key into
-            # ``verification_attempt`` and this function's own
-            # ``readback_only`` check honours it — a flag check deep in
-            # shared dispatch code, exactly the shape this command was built
-            # to avoid relying on structurally. It also carries no
-            # ``explicit_repair`` marker, so that re-entry runs in
-            # ``mode="sync"`` while the ONT is still ``out_of_sync``, gets
-            # refused by the ``BLOCKED_OUT_OF_SYNC`` guard ~30s later, and
-            # overwrites this accurate "still not converged" diagnosis with a
-            # misleading one. Report the mismatch directly instead; an
-            # operator or scheduler re-runs the verify command explicitly.
-            head.phase = OntServiceConfigurationPhase.failed
-            revision.phase = OntServiceConfigurationPhase.failed
-            head.failure_code = "verification_mismatch"
-            head.failure_message = failure_message
-            head.waiting_reason = None
-            network_operations.mark_failed(
-                db,
-                str(operation.id),
-                failure_message,
-                output_payload={
-                    "configuration_head_id": str(head.id),
-                    "configuration_revision": revision.revision,
-                    "phase": OntServiceConfigurationPhase.failed.value,
-                    "failure_code": "verification_mismatch",
-                    "verification": "still_unverified",
-                },
-            )
-            _record_execution_event(
-                db,
-                ont=ont,
-                assignment=assignment,
-                head=head,
-                revision=revision,
-                operation_id=operation.id,
-                phase=OntServiceConfigurationPhase.failed,
-                message=failure_message,
-                success=False,
-            )
-            phase = OntServiceConfigurationPhase.failed
-            message = (
-                "still_unverified: readback did not converge. Re-run "
-                "verification once the device has informed again."
-            )
-        elif readback_pending and command.verification_attempt < _MAX_READBACK_ATTEMPTS:
+        if readback_pending and command.verification_attempt < _MAX_READBACK_ATTEMPTS:
             next_attempt = command.verification_attempt + 1
             head.phase = OntServiceConfigurationPhase.readback_pending
             revision.phase = OntServiceConfigurationPhase.readback_pending
@@ -2211,7 +2280,7 @@ def _execution_locked(
             stage_dispatch(
                 db,
                 operation,
-                NetworkOperationCommand.ont_service_config_apply_v1,
+                NetworkOperationCommand.ont_service_config_verify_v1,
                 dispatch_key=f"verify:{next_attempt}",
                 not_before=datetime.now(UTC) + timedelta(seconds=30 * next_attempt),
             )
@@ -2248,7 +2317,7 @@ def _execution_locked(
             stage_dispatch(
                 db,
                 operation,
-                NetworkOperationCommand.ont_service_config_apply_v1,
+                NetworkOperationCommand.ont_service_config_verify_v1,
                 dispatch_key=f"verify:{next_attempt}",
                 not_before=datetime.now(UTC) + timedelta(seconds=30 * next_attempt),
             )
@@ -2329,16 +2398,22 @@ def _execution_locked(
             head.failure_code = failure_code
             head.failure_message = failure_message
             head.waiting_reason = None
+            # Field names only (never values) so the exhausted diagnosis says
+            # which readback fields still diverge.
+            drift_fields = _readback_drift_fields(failure)
+            failed_payload: dict[str, Any] = {
+                "configuration_head_id": str(head.id),
+                "configuration_revision": revision.revision,
+                "phase": OntServiceConfigurationPhase.failed.value,
+                "failure_code": failure_code,
+            }
+            if drift_fields:
+                failed_payload["drift_fields"] = drift_fields
             network_operations.mark_failed(
                 db,
                 str(operation.id),
                 failure_message,
-                output_payload={
-                    "configuration_head_id": str(head.id),
-                    "configuration_revision": revision.revision,
-                    "phase": OntServiceConfigurationPhase.failed.value,
-                    "failure_code": failure_code,
-                },
+                output_payload=failed_payload,
             )
             _record_execution_event(
                 db,
@@ -2350,6 +2425,7 @@ def _execution_locked(
                 phase=OntServiceConfigurationPhase.failed,
                 message=failure_message,
                 success=False,
+                extra_data={"drift_fields": drift_fields} if drift_fields else None,
             )
             phase = OntServiceConfigurationPhase.failed
             message = failure_message

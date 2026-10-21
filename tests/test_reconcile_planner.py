@@ -837,23 +837,54 @@ def test_wan_only_change_preserves_service_ports_and_excludes_unrelated_drift():
         ),
     )
 
-    plan = compute_plan(
+    for mode in ("sync", "sweep"):
+        plan = compute_plan(
+            desired,
+            observed,
+            mode,
+            proposed_fields=frozenset({"wan_pppoe_username"}),
+        )
+
+        assert AcsSetPppoe in _types(plan)
+        assert OltDeleteServicePort not in _types(plan)
+        assert OltModifyDescription not in _types(plan)
+        assert OltIpconfig not in _types(plan)
+        assert AcsSetDhcpServer not in _types(plan)
+        assert AcsSetWifiConfig not in _types(plan)
+        # CR-setting drift may be repaired on a WAN pass, but never the ACS endpoint.
+        for action in plan.actions:
+            if isinstance(action, AcsSetManagementServer):
+                assert action.acs_url is None and action.acs_password_ref is None
+
+
+def test_forced_fields_limit_the_pppoe_push_to_fields_that_changed():
+    """The WAN scope stays WAN-only, but an unchanged PPPoE object is left alone."""
+    desired = _desired()
+    observed = _synced_observed(desired)
+    scope = frozenset({"wan_mode", "wan_static_dns"})
+
+    unforced = compute_plan(
         desired,
         observed,
         "sync",
-        proposed_fields=frozenset({"wan_pppoe_username"}),
+        proposed_fields=scope,
+        forced_fields=frozenset({"wan_static_dns"}),
     )
+    forced = compute_plan(
+        desired,
+        observed,
+        "sync",
+        proposed_fields=scope,
+        forced_fields=frozenset({"wan_mode"}),
+    )
+    legacy = compute_plan(desired, observed, "sync", proposed_fields=scope)
 
-    assert AcsSetPppoe in _types(plan)
-    assert OltDeleteServicePort not in _types(plan)
-    assert OltModifyDescription not in _types(plan)
-    assert OltIpconfig not in _types(plan)
-    assert AcsSetDhcpServer not in _types(plan)
-    assert AcsSetWifiConfig not in _types(plan)
-    # CR-setting drift may be repaired on a WAN pass, but never the ACS endpoint.
-    for action in plan.actions:
-        if isinstance(action, AcsSetManagementServer):
-            assert action.acs_url is None and action.acs_password_ref is None
+    assert AcsSetPppoe not in _types(unforced)
+    assert AcsSetWanIp not in _types(unforced)
+    assert AcsSetPppoe in _types(forced)
+    assert AcsSetPppoe in _types(legacy)
+    for plan in (unforced, forced, legacy):
+        assert not any(action.surface == "olt" for action in plan.actions)
 
 
 def test_wan_only_change_creates_only_the_missing_wan_service_port():

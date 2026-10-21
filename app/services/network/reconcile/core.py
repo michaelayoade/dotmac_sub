@@ -40,8 +40,9 @@ import logging
 import time
 import uuid
 from concurrent.futures import ThreadPoolExecutor
-from dataclasses import replace
+from dataclasses import dataclass, replace
 from datetime import UTC, datetime, timedelta
+from functools import partial
 from typing import Any
 
 from sqlalchemy import select, text
@@ -75,7 +76,10 @@ from .lifecycle import (
     reconcile_binding_matches,
 )
 from .locking import OntNotFound, acquire_reconcile_lock
-from .planner import compute_plan
+from .planner import (
+    compute_plan,
+    is_scoped_plan,
+)
 from .readers import ReadResult, read_acs_state, read_olt_state
 from .readers.reachability import PingFunction, is_pingable
 from .secrets import default_secret_resolver_from_env
@@ -99,6 +103,43 @@ logger = logging.getLogger(__name__)
 
 
 _IDLE_TIMEOUT_MARGIN_SEC = 30
+
+# ``last_error`` text written by this module's own readback/verification
+# failures. A scoped readback may clear only these (and only under the same
+# lifecycle binding); any other error belongs to a different writer.
+READBACK_PENDING_MESSAGE = "Current revision is still awaiting device readback."
+_POST_APPLY_MISMATCH_PREFIX = "Post-apply state still diverges from desired:"
+
+
+@dataclass(frozen=True)
+class _ForeignStatePreserve:
+    """Pre-pass ONT status a scoped readback must not overwrite.
+
+    A WAN- or Wi-Fi-scoped readback only observes part of the device, so a
+    pass result says nothing about OLT/LAN/other drift. When the ONT was
+    already out_of_sync for a reason this pass does not own, the pass leaves
+    ``sync_status``/``last_error`` as found.
+    """
+
+    sync_status: OntSyncStatus
+    last_error: str | None
+
+
+def _owns_prior_marker(
+    ont: OntUnit,
+    binding: ReconcileLifecycleBinding | None,
+    last_error: str | None,
+) -> bool:
+    """Whether the ONT's current error is this lifecycle's own pending marker."""
+    if binding is None or not reconcile_binding_matches(ont, binding):
+        return False
+    return bool(
+        last_error
+        and (
+            last_error == READBACK_PENDING_MESSAGE
+            or last_error.startswith(_POST_APPLY_MISMATCH_PREFIX)
+        )
+    )
 
 
 def _widen_idle_in_transaction_timeout(db: Session, timeout_sec: int) -> None:
@@ -264,6 +305,11 @@ def reconcile_ont(
                     ),
                 )
 
+            prior_sync_status = ont.sync_status
+            prior_last_error = ont.last_error
+            prior_marker_is_own = _owns_prior_marker(
+                ont, lifecycle_binding, prior_last_error
+            )
             if lifecycle_binding is not None:
                 bind_reconcile_projection(ont, lifecycle_binding)
 
@@ -293,12 +339,18 @@ def reconcile_ont(
                         "lan_gateway_ip",
                     }
                 )
+            forced_fields: frozenset[str] | None = None
             if proposed_values:
                 # Filter the proposed_change to OntDesiredState fields only —
                 # callers may have copy-pasted extras.
                 allowed = {f for f in vars(desired_current)}
                 filtered = {k: v for k, v in proposed_values.items() if k in allowed}
                 proposed_fields = frozenset(filtered)
+                if (
+                    isinstance(proposed_change, OntWanProposedChange)
+                    and proposed_change.forced_fields is not None
+                ):
+                    forced_fields = proposed_fields & proposed_change.forced_fields
                 target = replace(desired_current, **filtered)
                 # Validation runs only on actual mutations — the principle is
                 # "validate at the write boundary." When proposed_change is
@@ -323,6 +375,21 @@ def reconcile_ont(
                     )
             else:
                 target = desired_current
+
+            # A scoped (WAN / Wi-Fi limited) readback proves only its own
+            # surface. If the ONT was already out_of_sync for a reason this
+            # pass does not own, leave status and error untouched.
+            preserve: _ForeignStatePreserve | None = None
+            if (
+                readback_only
+                and prior_sync_status == OntSyncStatus.out_of_sync
+                and not prior_marker_is_own
+                and is_scoped_plan(mode, proposed_fields)
+            ):
+                preserve = _ForeignStatePreserve(
+                    sync_status=prior_sync_status, last_error=prior_last_error
+                )
+            finalise = partial(_finalise, preserve=preserve)
 
             # ── Resolve adapters ────────────────────────────────────────────
             olt_only_profile_change = mode == "sync" and proposed_fields == frozenset(
@@ -421,7 +488,7 @@ def reconcile_ont(
             # ``observed_surfaces`` below).
             if olt_result.status == "unavailable":
                 olt_unavailable_reason = _olt_unavailable_reason(olt_result)
-                return _finalise(
+                return finalise(
                     db,
                     ont,
                     success=False,
@@ -455,6 +522,7 @@ def reconcile_ont(
                 mode,
                 proposed_fields=proposed_fields,
                 force_proposed_writes=not readback_only,
+                forced_fields=forced_fields,
             )
 
             # ── Precondition: surfaces the plan needs must be reachable ─────
@@ -486,7 +554,7 @@ def reconcile_ont(
                 else:
                     reason = ReconcileFailureReason.ACS_UNREACHABLE
                     message = f"ACS unreachable: {acs_result.error or 'no detail'}"
-                return _finalise(
+                return finalise(
                     db,
                     ont,
                     success=False,
@@ -511,7 +579,7 @@ def reconcile_ont(
             if readback_only:
                 plan_wait = _plan_wait_failure(plan)
                 if plan_wait is not None:
-                    return _finalise(
+                    return finalise(
                         db,
                         ont,
                         success=False,
@@ -541,13 +609,13 @@ def reconcile_ont(
                     # so a readback pass can never claim convergence, and
                     # therefore can never clear ``out_of_sync``, while
                     # unrelated drift remains on record.
-                    return _finalise(
+                    return finalise(
                         db,
                         ont,
                         success=False,
                         failure=ReconcileFailure(
                             reason=ReconcileFailureReason.VERIFICATION_MISMATCH,
-                            message="Current revision is still awaiting device readback.",
+                            message=READBACK_PENDING_MESSAGE,
                             evidence={
                                 "readback_pending": True,
                                 "drift_fields": [
@@ -571,7 +639,7 @@ def reconcile_ont(
                             olt_result, read_attempted=olt_read_attempted
                         ),
                     )
-                return _finalise(
+                return finalise(
                     db,
                     ont,
                     success=True,
@@ -623,7 +691,7 @@ def reconcile_ont(
             apply_outcome = apply_plan(plan, ctx, deadline=deadline)
 
             if not apply_outcome.success:
-                return _finalise(
+                return finalise(
                     db,
                     ont,
                     success=False,
@@ -689,7 +757,7 @@ def reconcile_ont(
             # exists to prevent.
             if not apply_outcome.actions_applied and not residual_ppp_drift:
                 if plan_wait is not None:
-                    return _finalise(
+                    return finalise(
                         db,
                         ont,
                         success=False,
@@ -715,7 +783,7 @@ def reconcile_ont(
                         target,
                         changed_fields=proposed_fields,
                     )
-                return _finalise(
+                return finalise(
                     db,
                     ont,
                     success=True,
@@ -770,7 +838,7 @@ def reconcile_ont(
             # if the plan happened to be a delete-only pass.
             if verify_olt_result.status == "unavailable":
                 verify_olt_reason = _olt_unavailable_reason(verify_olt_result)
-                return _finalise(
+                return finalise(
                     db,
                     ont,
                     success=False,
@@ -797,7 +865,7 @@ def reconcile_ont(
                     ),
                 )
             if verify_acs_result.status == "unavailable":
-                return _finalise(
+                return finalise(
                     db,
                     ont,
                     success=False,
@@ -857,7 +925,7 @@ def reconcile_ont(
                 drift for drift in verify_debt if not is_ppp_attributable_drift(drift)
             )
             if verify_debt and residual_ppp_drift and not unattributed:
-                return _finalise(
+                return finalise(
                     db,
                     ont,
                     success=True,
@@ -901,14 +969,14 @@ def reconcile_ont(
                         "drift_fields": [f"{d.surface}:{d.field}" for d in verify_debt],
                     },
                 )
-                return _finalise(
+                return finalise(
                     db,
                     ont,
                     success=False,
                     failure=ReconcileFailure(
                         reason=ReconcileFailureReason.VERIFICATION_MISMATCH,
                         message=(
-                            "Post-apply state still diverges from desired: "
+                            f"{_POST_APPLY_MISMATCH_PREFIX} "
                             f"{_summarise_drifts(verify_debt)}"
                         ),
                         evidence={
@@ -941,7 +1009,7 @@ def reconcile_ont(
                 # its service-port deletes (both indices unallocated).
                 # Reporting success here would tell an operator the device
                 # was fully configured when part of the plan was withheld.
-                return _finalise(
+                return finalise(
                     db,
                     ont,
                     success=False,
@@ -968,7 +1036,7 @@ def reconcile_ont(
                     target,
                     changed_fields=proposed_fields,
                 )
-            return _finalise(
+            return finalise(
                 db,
                 ont,
                 success=True,
@@ -1323,6 +1391,7 @@ def _finalise(
     drift_after,
     observed_surfaces: frozenset[WriteSurface],
     olt_read_status: str | None,
+    preserve: _ForeignStatePreserve | None = None,
 ) -> ReconcileResult:
     """Persist state on the OntUnit row + observation table, build the result.
 
@@ -1345,7 +1414,16 @@ def _finalise(
     now = datetime.now(UTC)
     duration_ms = int((time.monotonic() - started_monotonic) * 1000)
 
-    if success and drift_after:
+    if preserve is not None:
+        # Scoped readback over a foreign out_of_sync: restore what we found.
+        # Neither success nor failure of this narrow pass may clear or replace
+        # an error it does not own. ``last_reconciled_at`` is left alone so
+        # the sweeper still sees the ONT as due for its full pass.
+        set_sync_status(ont, preserve.sync_status, reason="scoped_readback_preserved")
+        ont.last_error = preserve.last_error
+        if not success:
+            _record_acs_delivery_fault(ont, failure)
+    elif success and drift_after:
         # Converged everything it was allowed to, but something was withheld.
         # Not `synced` (which asserts zero residual drift) and not a failure
         # either -- no write was rejected. The drift stays visible so the
@@ -1366,7 +1444,8 @@ def _finalise(
         set_sync_status(ont, OntSyncStatus.out_of_sync, reason="reconcile_failed")
         ont.last_error = failure.message if failure else "unknown failure"
         _record_acs_delivery_fault(ont, failure)
-    ont.last_reconciled_at = now
+    if preserve is None:
+        ont.last_reconciled_at = now
 
     if observed_after is not None:
         upsert_ont_observation(

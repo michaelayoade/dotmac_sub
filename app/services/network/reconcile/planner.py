@@ -281,8 +281,13 @@ def _is_remote_access_only_change(
 
 
 def _is_wan_only_change(mode: ReconcileMode, proposed_fields: frozenset[str]) -> bool:
+    # The configuration lifecycle retains the exact WAN field scope while its
+    # delayed readback worker uses sweep mode to observe an out-of-sync ONT.
+    # Periodic sweeps carry no proposed fields and therefore remain full-device.
     return (
-        mode == "sync" and bool(proposed_fields) and proposed_fields <= _WAN_ONLY_FIELDS
+        mode in ("sync", "sweep")
+        and bool(proposed_fields)
+        and proposed_fields <= _WAN_ONLY_FIELDS
     )
 
 
@@ -296,6 +301,20 @@ def _is_tr069_profile_only_change(
     )
 
 
+def is_scoped_plan(mode: ReconcileMode, proposed_fields: frozenset[str]) -> bool:
+    """Whether these proposed fields restrict the plan to one device surface.
+
+    A scoped plan never computes drift for the rest of the device, so its
+    outcome says nothing about unrelated drift.
+    """
+    return (
+        _is_wifi_only_change(mode, proposed_fields)
+        or _is_remote_access_only_change(mode, proposed_fields)
+        or _is_wan_only_change(mode, proposed_fields)
+        or _is_tr069_profile_only_change(mode, proposed_fields)
+    )
+
+
 def compute_plan(
     desired: OntDesiredState,
     observed: OntObservedState,
@@ -303,6 +322,7 @@ def compute_plan(
     *,
     proposed_fields: frozenset[str] | None = None,
     force_proposed_writes: bool = True,
+    forced_fields: frozenset[str] | None = None,
 ) -> Plan:
     """Diff desired vs observed; emit the ordered action list.
 
@@ -313,7 +333,10 @@ def compute_plan(
     For narrow WiFi edits, it scopes the plan to the relevant ACS writes so
     unrelated drift does not block the UI action. ``force_proposed_writes`` is
     used for write-only values, where observed state cannot prove drift; verify
-    calls keep the scope but disable the force.
+    calls keep the scope but disable the force. ``forced_fields`` narrows which
+    of the proposed fields force a WAN push (PPPoE / WAN IP): ``None`` means all
+    of them; a narrower set lets a scoped WAN apply leave unchanged, undrifted
+    WAN objects alone so a live session is not re-dialled.
     """
     actions: list[Action] = []
     drifts: list[Drift] = []
@@ -362,6 +385,7 @@ def compute_plan(
             omci_wan_planned,
             proposed_fields,
             force_proposed_writes,
+            forced_fields=forced_fields,
         )
 
     olt_wait_detail = ""
@@ -1217,6 +1241,8 @@ def _plan_acs_side(
     omci_wan_planned: bool,
     proposed_fields: frozenset[str],
     force_proposed_writes: bool,
+    *,
+    forced_fields: frozenset[str] | None = None,
 ) -> AcsIdentity:
     if not desired.acs_server_id:
         # Without an ACS server bound, no ACS actions to plan. Reconciler
@@ -1283,6 +1309,7 @@ def _plan_acs_side(
             drifts,
             proposed_fields=proposed_fields,
             force_proposed_writes=force_proposed_writes,
+            forced_fields=forced_fields,
         )
 
     # Bring-up pushes below key off ``olt_present`` (the authorization), not
@@ -1300,7 +1327,7 @@ def _plan_acs_side(
         and is_deliverable("wan_vlan", wan_vlan)
     ):
         force_wan_ip_write = force_proposed_writes and bool(
-            proposed_fields
+            (proposed_fields if forced_fields is None else forced_fields)
             & {
                 "wan_mode",
                 "wan_pppoe_wcd_index",
@@ -1597,6 +1624,7 @@ def _plan_acs_wan_ppp(
     *,
     proposed_fields: frozenset[str],
     force_proposed_writes: bool,
+    forced_fields: frozenset[str] | None = None,
 ) -> None:
     """Plan WAN PPP via TR-069 — addObject if missing, then PPPoE params.
 
@@ -1653,7 +1681,7 @@ def _plan_acs_wan_ppp(
     # used to ride on ``_wan_ppp_differs``'s "ACS has nothing yet" shortcut,
     # which only ever fired for devices the ACS could not deliver to at all.
     force_pppoe_write = force_proposed_writes and bool(
-        proposed_fields
+        (proposed_fields if forced_fields is None else forced_fields)
         & {
             "wan_mode",
             "wan_pppoe_username",
