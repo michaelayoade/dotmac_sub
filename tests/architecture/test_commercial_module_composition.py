@@ -132,6 +132,30 @@ _SHADOW_IMPORTS = {
         ("dotmac_payments", "get_payment_intent_v1"),
         ("dotmac_payments", "record_confirmation"),
     },
+    # Thin-client reseller consolidated settlement (ADR 0031): one bound
+    # dotmac-payments intent (payer = reseller party) is confirmed once
+    # and discharged in dotmac-billing as per-subscriber slices; Sub
+    # mirrors from the Starter position.
+    "app/services/billing/starter_reseller_settlement.py": {
+        ("dotmac_billing", "AcceptSettlementV1"),
+        ("dotmac_billing.commands", "AllocationCommand"),
+        ("dotmac_billing.contracts", "SettlementFundingLane"),
+        ("dotmac_billing.errors", "BillingError"),
+        ("dotmac_billing.service", "accept_settlement"),
+        ("dotmac_billing.service", "allocate_settlement"),
+        ("dotmac_billing.service", "create_billing_account"),
+        ("dotmac_payments", "ConfirmationSource"),
+        ("dotmac_payments", "GetConfirmedCashV1"),
+        ("dotmac_payments", "GetPaymentIntentV1"),
+        ("dotmac_payments", "OpenPaymentIntent"),
+        ("dotmac_payments", "PaymentError"),
+        ("dotmac_payments", "PaymentPurpose"),
+        ("dotmac_payments", "RecordConfirmation"),
+        ("dotmac_payments", "get_confirmed_cash_v1"),
+        ("dotmac_payments", "get_payment_intent_v1"),
+        ("dotmac_payments", "open_payment_intent"),
+        ("dotmac_payments", "record_confirmation"),
+    },
     # Thin-client manual settlement (ADR 0031): staff-recorded payments
     # against Starter-issued invoices open a bound dotmac-payments
     # intent and discharge through the shared settlement owner.
