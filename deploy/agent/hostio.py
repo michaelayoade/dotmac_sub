@@ -514,7 +514,10 @@ class HostIO:
         for name, url in (("live", LIVE), ("ready", READY)):
             status, body_status = None, None
             try:
-                with urllib.request.urlopen(url, timeout=10) as response:  # noqa: S310 - fixed staging URLs
+                # These endpoints are compile-time staging constants, not input.
+                with urllib.request.urlopen(  # noqa: S310  # nosec B310
+                    url, timeout=10
+                ) as response:
                     status = response.status
                     if name == "ready":
                         body_status = json.loads(response.read(65536)).get("status")
@@ -564,7 +567,7 @@ class HostIO:
         with logfile.open("xb") as output:
             os.chmod(logfile, 0o600)
             child = subprocess.Popen(
-                ["bash", "scripts/deploy_staging.sh", image_digest],
+                ["/usr/bin/bash", "scripts/deploy_staging.sh", image_digest],
                 cwd=self.config.deploy_dir,
                 env=executor_env,
                 stdout=subprocess.PIPE,

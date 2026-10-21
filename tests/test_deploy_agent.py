@@ -308,7 +308,7 @@ def test_executor_scrubs_tokens_and_uses_only_digest(tmp_path, harness, monkeypa
     monkeypatch.setattr(hostio, "digest", lambda body: DIGEST)
     execution = HostIO(agent.config).execute(DIGEST, tmp_path / "run.log", PREVIOUS)
     argv, options = calls[0]
-    assert argv == ["bash", "scripts/deploy_staging.sh", DIGEST]
+    assert argv == ["/usr/bin/bash", "scripts/deploy_staging.sh", DIGEST]
     assert "GITHUB_TOKEN" not in options["env"]
     assert options["env"]["COMPOSE_PROJECT_NAME"] == "dotmac_sub"
     assert execution.receipt_line == "DEPLOY RECEIPT: exact"

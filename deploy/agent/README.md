@@ -4,7 +4,8 @@ This source owns the staging outbound poll/verify/report loop. CP owns
 `contracts.py`; copy that file byte for byte from `vendor_cp.deploy_agent`,
 including conformance vectors. Sub app/kernel code is never imported.
 `HostIO` observes Docker, named `.env` pins, config bytes, Git ancestry and
-HTTP/Celery health. It invokes only `bash scripts/deploy_staging.sh <digest>`.
+HTTP/Celery health. It invokes only
+`/usr/bin/bash scripts/deploy_staging.sh <digest>`.
 
 CP issuance owns independent upstream candidate evidence validation: the exact
 successful `release-candidate.yml` evidence run and its immutable candidate
