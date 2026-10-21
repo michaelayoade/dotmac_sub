@@ -59,7 +59,7 @@ LOOPBACK_HOSTS = ("127.0.0.1", "localhost", "::1", "0.0.0.0")
 #: Python-bearing top-level directories this guard neither scans nor treats as
 #: an excluded lane. Naming them keeps "unmonitored" honest: these are regions
 #: the guard does not see, not regions it has cleared.
-UNMONITORED_PYTHON_LANES = ("examples", "mobile")
+UNMONITORED_PYTHON_LANES = ("examples", "mobile", "deploy")
 
 #: A stand-in value used only to drive the detector. It is not a credential and
 #: is not the value of anything.

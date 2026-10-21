@@ -161,6 +161,7 @@ EXCLUDED_PYTHON_ROOTS: Final[dict[str, str]] = {
     "stubs": "typeshed stubs; declarations with no runtime behaviour",
     "mobile": "a static-asset dev server, no database session",
     "examples": "a sample connector shipped for documentation",
+    "deploy": "human-run OpenBao apply tooling; HTTP to OpenBao, no database session",
 }
 
 #: Receivers whose `.get(...)`/`.query(...)` mean "database", used to bind a
