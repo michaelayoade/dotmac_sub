@@ -240,6 +240,43 @@ def test_verified_purchase_settles_through_starter_funding(
     )
     db_session.commit()
 
+    # TEMP-PROBE pre-flight: call funding directly (no owner boundary) in
+    # a savepoint rolled back afterwards, to surface the raw refusal.
+    from datetime import UTC, datetime
+
+    _preflight = "not-run"
+    _sp = db_session.begin_nested()
+    try:
+        starter_prepaid.fund_prepaid_purchase(
+            db_session,
+            subscriber_id=purchase.account_id,
+            purchase_ref=str(purchase.id),
+            intent_reference=intent.reference,
+            external_reference=settle.external_transaction_id,
+            confirmed_amount=purchase.total,
+            currency_code=purchase.currency,
+            targets=tuple(
+                starter_prepaid.PrepaidPeriodTarget(
+                    subscription_id=purchase.subscription_id,
+                    billing_line_key=(
+                        f"prepaid-period-purchase:{purchase.id}:{ordinal}"
+                    ),
+                    amount=purchase.total / purchase.period_count,
+                )
+                for ordinal in range(1, purchase.period_count + 1)
+            ),
+            occurred_at=datetime.now(UTC),
+        )
+        _preflight = "fund-ok"
+    except Exception as exc:  # noqa: BLE001 - probe only
+        _preflight = (
+            f"{type(exc).__name__} code={getattr(exc, 'code', None)}"
+            f" cause={type(exc.__cause__).__name__ if exc.__cause__ else None}"
+            f" cause_code={getattr(exc.__cause__, 'code', None)} msg={exc}"
+        )
+    finally:
+        _sp.rollback()
+
     db_session_adapter.release_read_transaction(db_session)
     # TEMP-PROBE: name the participant whose soft rollback poisons the
     # owner boundary; remove once the composition gap is fixed.
@@ -271,7 +308,7 @@ def test_verified_purchase_settles_through_starter_funding(
             current = current.__cause__ or current.__context__
         purchase_after = db_session.get(PrepaidPeriodPurchase, purchase_id)
         raise AssertionError(
-            "CHAIN:\n"
+            f"PREFLIGHT: {_preflight}\nCHAIN:\n"
             + "\n".join(chain)
             + f"\nPURCHASE: status={purchase_after.status if purchase_after else None}"
             f" failure={purchase_after.failure_code if purchase_after else None}"
