@@ -70,6 +70,7 @@ ALLOWED_KERNEL_MODULES = frozenset(
         "dotmac_kernel.settings_crypto",
         "dotmac_kernel.settings_models",
         "dotmac_kernel.settings_resolver",
+        "dotmac_kernel.transactions",
     }
 )
 
@@ -119,6 +120,12 @@ DENIED_NAMES = frozenset(
 #: claimed that narrowing in prose while nothing enforced it, so the name was
 #: importable here — this entry is what makes the sentence true.
 RESTRICTED_MODULE_NAMES: dict[str, frozenset[str]] = {
+    # Owner-boundary participant hooks only (ledger amendment 2026-10-21):
+    # claim one exact kernel savepoint RELEASE and classify its recovered
+    # rollbacks. conflict_savepoint itself is never admitted under app/.
+    "dotmac_kernel.transactions": frozenset(
+        {"claim_conflict_savepoint_commit", "current_conflict_savepoint"}
+    ),
     # `Scope` is the union alias the pinned billing NumberingProvider
     # protocol declares; admitted as a type name only (ledger amendment
     # 2026-10-18). Sub constructs TenantScope exclusively.

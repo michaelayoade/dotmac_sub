@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import getpass
 import json
 import os
 import subprocess
@@ -93,6 +94,11 @@ def _run_deploy(
     sed_attempts.write_text("0")
     heads_file = tmp_path / "alembic-heads"
     heads_file.write_text(heads_before + "\n")
+    migration_admin_pgpass = tmp_path / "migration-admin.pgpass"
+    migration_admin_pgpass.write_text(
+        "db.example.test:5432:dotmac_sub:app_admin:not-a-real-pw\n"
+    )
+    migration_admin_pgpass.chmod(0o400)
     app_env, server_name = (
         ("production", "dotmac-sub-prod")
         if deployment_target == "production"
@@ -397,6 +403,11 @@ exit 0
         **os.environ,
         "PATH": f"{bin_dir}:{os.environ['PATH']}",
         "DEPLOY_DIR": str(deploy_dir),
+        "MIGRATION_ADMIN_URL": (
+            "postgresql://app_admin@db.example.test:5432/dotmac_sub"
+        ),
+        "MIGRATION_ADMIN_PGPASS": str(migration_admin_pgpass),
+        "MIGRATION_ADMIN_OWNER": getpass.getuser(),
         "REPO_DIR": str(repo_root),
         "DEPLOY_LOCK_FILE": str(tmp_path / "deploy.lock"),
         "DEPLOY_BACKUP_MODE": "skip_staging",
