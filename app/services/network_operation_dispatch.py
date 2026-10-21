@@ -8,6 +8,7 @@ an arbitrary Celery task name or payload.
 from __future__ import annotations
 
 import logging
+import re
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
@@ -363,6 +364,36 @@ def _ont_reconcile_invocation(
     )
 
 
+_ONT_SERVICE_VERIFY_KEY = re.compile(r"^verify:([1-9]\d*)(?:@r([1-9]\d*))?$")
+
+
+def ont_service_config_verify_key(attempt: int, resume_generation: int = 0) -> str:
+    """Dispatch key of a delayed readback hop.
+
+    ``resume_generation`` is the operation's Inform-resume count: a resumed
+    apply schedules its own hops instead of colliding with the first cycle's
+    ``verify:N`` rows (the outbox returns the existing row for a seen key).
+    """
+    if attempt < 1 or resume_generation < 0:
+        raise NetworkOperationDispatchError(
+            "invalid_dispatch_key",
+            "ONT service configuration verification key is invalid.",
+        )
+    suffix = f"@r{resume_generation}" if resume_generation else ""
+    return f"verify:{attempt}{suffix}"
+
+
+def parse_ont_service_config_verify_key(dispatch_key: str) -> int:
+    """Strictly parse ``verify:N`` / ``verify:N@rG`` into the attempt number."""
+    match = _ONT_SERVICE_VERIFY_KEY.fullmatch(dispatch_key)
+    if match is None:
+        raise NetworkOperationDispatchError(
+            "invalid_dispatch_key",
+            "ONT service configuration verification key is invalid.",
+        )
+    return int(match.group(1))
+
+
 def _ont_service_config_invocation(
     operation: NetworkOperation,
     dispatch_key: str,
@@ -382,15 +413,11 @@ def _ont_service_config_invocation(
             "invalid_operation_payload",
             "ONT service configuration revision must be positive.",
         )
-    verification_attempt = 0
-    if dispatch_key.startswith("verify:"):
-        try:
-            verification_attempt = int(dispatch_key.partition(":")[2])
-        except ValueError as exc:
-            raise NetworkOperationDispatchError(
-                "invalid_dispatch_key",
-                "ONT service configuration verification key is invalid.",
-            ) from exc
+    verification_attempt = (
+        parse_ont_service_config_verify_key(dispatch_key)
+        if dispatch_key.startswith("verify:")
+        else 0
+    )
     return DispatchInvocation(
         args=[ont_id, str(operation.id), head_id, parsed_revision],
         kwargs={
@@ -404,14 +431,13 @@ def _ont_service_config_invocation(
 
 def _ont_service_config_verify_invocation(
     operation: NetworkOperation,
-    _dispatch_key: str,
+    dispatch_key: str,
 ) -> DispatchInvocation:
     """Build the readback-only verification invocation.
 
-    Deliberately forwards no attempt-count or repair-mode payload field at
-    all: nothing in the dispatched command can select a write path. The
-    worker task fixes its own readback flag unconditionally, independent of
-    anything staged here.
+    The attempt count bounds delayed observations; it cannot select a write
+    path. The worker task fixes repair/readback-only mode unconditionally,
+    independent of anything staged here.
     """
     ont_id = _payload_matches_target(operation, "ont_id")
     head_id = _required_payload_id(operation, "configuration_head_id")
@@ -428,9 +454,21 @@ def _ont_service_config_verify_invocation(
             "invalid_operation_payload",
             "ONT service configuration verification revision must be positive.",
         )
+    verification_attempt = (
+        parse_ont_service_config_verify_key(dispatch_key)
+        if dispatch_key.startswith("verify:")
+        else 0
+    )
     return DispatchInvocation(
         args=[ont_id, str(operation.id), head_id, parsed_revision],
-        kwargs={},
+        # Keep the primary invocation byte-for-byte compatible with
+        # verification dispatches staged before this attempt counter existed.
+        # The task default is zero; delayed verify:N hops carry the counter.
+        kwargs=(
+            {"verification_attempt": verification_attempt}
+            if verification_attempt
+            else {}
+        ),
     )
 
 
