@@ -845,7 +845,12 @@ def prepaid_eligibility_reason(
     source fact equals the earmark target funded for that period.
     """
 
-    reason = eligibility_reason(db, invoice, require_timing="advance")
+    # Prepaid period drafts are always system-staged, and the invoice
+    # owner auto-numbers at staging; the Starter document number
+    # replaces that system number at issuance (the allow_numbered case).
+    reason = eligibility_reason(
+        db, invoice, require_timing="advance", allow_numbered=True
+    )
     if reason is not None:
         return reason
     lines = _active_lines(invoice)
