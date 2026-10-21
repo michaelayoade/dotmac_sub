@@ -246,7 +246,9 @@ def test_verified_purchase_settles_through_starter_funding(
     )
     db_session.commit()
 
-    assert result.status is PrepaidPeriodPurchaseStatus.completed
+    assert result.status is PrepaidPeriodPurchaseStatus.completed, (
+        f"settlement held: failure_code={result.failure_code}"
+    )
     assert len(result.invoice_ids) == 2
     assert len(result.entitlement_ids) == 2
 

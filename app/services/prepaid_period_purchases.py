@@ -1476,6 +1476,9 @@ def settle_prepaid_period_purchase(
             links_by_key = {link.billing_line_key: link for link in funding.links}
         for row, invoice, line in staged_periods:
             if starter_route:
+                # Legacy issuance receives due_at as an issuance input;
+                # Starter eligibility reads it from the draft itself.
+                invoice.due_at = observed_at
                 starter_prepaid.settle_prepaid_period_invoice(
                     db,
                     invoice=invoice,
