@@ -113,7 +113,8 @@
                 </button>
                 {% if user.mfa_enabled %}
                 <button hx-post="/admin/system/users/{{ user.id }}/disable-mfa"
-                        hx-confirm="This will disable MFA for this user. Are you sure?"
+                        hx-prompt="Reason for removing MFA (verification channel + ticket, 3-500 characters)"
+                        hx-confirm="This will disable MFA for this user and notify them. Are you sure?"
                         class="block w-full px-4 py-2 text-left text-sm text-slate-700 hover:bg-slate-100 dark:text-slate-200 dark:hover:bg-slate-700">
                     Disable MFA
                 </button>

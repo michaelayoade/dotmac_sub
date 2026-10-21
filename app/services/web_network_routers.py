@@ -16,6 +16,7 @@ from app.schemas.router_management import (
     RouterUpdate,
 )
 from app.services.credential_crypto import decrypt_credential
+from app.services.router_health import read_models as router_health_read_models
 from app.services.router_management.config import (
     RouterConfigService,
     RouterTemplateService,
@@ -47,18 +48,49 @@ def list_context(
     *,
     status: str | None = None,
     search: str | None = None,
+    health: str | None = None,
     limit: int = 50,
     offset: int = 0,
 ) -> dict[str, object]:
-    total = RouterInventory.count(db, status=status, search=search)
+    health_filter = (
+        health if health in router_health_read_models.HEALTH_FILTERS else None
+    )
+    if health_filter:
+        # The health badge is derived (alerts + signals), so filter first and
+        # paginate in memory; the fleet is a few dozen routers.
+        everything = RouterInventory.list(
+            db, status=status, search=search, limit=1000, offset=0
+        )
+        badges = router_health_read_models.router_health_badges(
+            db, [r.id for r in everything]
+        )
+        wanted = router_health_read_models.filter_router_ids_by_health(
+            badges, health_filter
+        )
+        matched = [r for r in everything if wanted is None or r.id in wanted]
+        total = len(matched)
+        routers = matched[offset : offset + limit]
+    else:
+        total = RouterInventory.count(db, status=status, search=search)
+        routers = RouterInventory.list(
+            db, status=status, search=search, limit=limit, offset=offset
+        )
+        badges = router_health_read_models.router_health_badges(
+            db, [r.id for r in routers]
+        )
     page = (offset // limit) + 1 if limit else 1
     total_pages = max(1, (total + limit - 1) // limit) if limit else 1
     context = _base_context(request, db)
     context.update(
         {
-            "routers": RouterInventory.list(
-                db, status=status, search=search, limit=limit, offset=offset
-            ),
+            "routers": routers,
+            "health_badges": badges,
+            "health_filter": health_filter,
+            "health_filters": [
+                {"value": value, "label": router_health_read_models.level_label(value)}
+                for value in router_health_read_models.HEALTH_FILTERS
+            ],
+            "health_mode": router_health_read_models.current_alert_mode(db),
             "status_filter": status,
             "search": search or "",
             "limit": limit,
@@ -184,6 +216,10 @@ def detail_context(
             "identity_view": router_identity_view(router),
         }
     )
+    if tab == "overview":
+        context["health"] = router_health_read_models.router_health_detail(
+            db, router_id
+        )
 
     if tab == "interfaces":
         context["interfaces"] = RouterInventory.list_interfaces(db, router_id)

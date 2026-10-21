@@ -16,12 +16,16 @@ failed and retryable instead of a warning log.
 from __future__ import annotations
 
 from datetime import datetime
+from uuid import UUID
 
 from sqlalchemy.orm import Session
 
 from app.services.common import coerce_uuid
 from app.services.events.handlers.owner_session import owner_session as _owner_session
-from app.services.events.owner_outputs import require_output_text
+from app.services.events.owner_outputs import (
+    invalid_output_payload,
+    require_output_text,
+)
 from app.services.events.types import Event, EventType
 
 HANDLED_EVENT_TYPES = frozenset(
@@ -140,14 +144,52 @@ class SupportLifecycleProjectionHandler:
             event_id=event.event_id,
             event_type=_RESOLUTION_GRACE_TRIGGER,
         )
+        timer_text = require_output_text(
+            event.payload,
+            "timer_id",
+            consumer="support.ticket_lifecycle",
+            event_id=event.event_id,
+            event_type=_RESOLUTION_GRACE_TRIGGER,
+        )
+        generation = event.payload.get("generation")
+        entity_kind = event.payload.get("entity_kind")
+        try:
+            timer_id = UUID(timer_text)
+            entity_id = UUID(ticket_id)
+        except ValueError as exc:
+            raise invalid_output_payload(
+                consumer="support.ticket_lifecycle",
+                event_id=event.event_id,
+                event_type=_RESOLUTION_GRACE_TRIGGER,
+                field="timer_identity",
+                reason="expected_uuid",
+            ) from exc
+        if (
+            not isinstance(generation, int)
+            or isinstance(generation, bool)
+            or generation < 1
+            or entity_kind not in {"support_ticket", "support_resolution_request"}
+        ):
+            raise invalid_output_payload(
+                consumer="support.ticket_lifecycle",
+                event_id=event.event_id,
+                event_type=_RESOLUTION_GRACE_TRIGGER,
+                field="timer_identity",
+                reason="invalid_generation_or_entity_kind",
+            )
         from app.services.support import Tickets
 
         with _owner_session(db) as owner_db:
             Tickets.consume_resolution_confirmation_due(
                 owner_db,
-                ticket_id=str(ticket_id),
+                ticket_id=str(entity_id),
                 event_id=event.event_id,
-                context=self._context(event, str(ticket_id)),
+                context=self._context(event, str(entity_id)),
+                timer_id=timer_id,
+                timer_generation=generation,
+                resolution_request_id=(
+                    entity_id if entity_kind == "support_resolution_request" else None
+                ),
             )
 
     def _wake_snoozed_conversation(self, db: Session, event: Event) -> None:

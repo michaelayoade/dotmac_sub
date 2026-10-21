@@ -269,6 +269,8 @@ This document catalogs feature improvements for DotMac Sub based on a comprehens
 
 **DotMac Sub Improvements:**
 
+> RETIRED: the DB inspector was removed (ad-hoc SQL console). Items below are historical.
+
 - [x] Add a read-only database inspection tool at `/admin/system/tools/db-inspector` that allows super-admins to view table schemas, row counts, and run SELECT-only queries against the DotMac database
 - [x] Gate access behind a separate password confirmation step with a prominent warning about data sensitivity
 - [x] Restrict to SELECT queries only (no INSERT/UPDATE/DELETE) with query validation before execution

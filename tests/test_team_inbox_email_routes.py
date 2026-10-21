@@ -10,17 +10,159 @@ See docs/designs/TEAM_INBOX_ADMIN_UI_PORT.md §3 and §5 slice 6.
 
 from __future__ import annotations
 
+from datetime import timedelta
 from pathlib import Path
+from uuid import UUID
 
 import pytest
 
+from app.models.audit import AuditActorType, AuditEvent
 from app.models.service_team import ServiceTeam, ServiceTeamType
+from app.models.team_inbox import TeamInboxAiRoute
 from app.services import email as email_service
 from app.services import team_inbox_commands, team_inbox_routing
+from app.services.audit_adapter import AuditActor
+from app.services.domain_errors import DomainError
+from app.services.owner_commands import CommandContext
 
 ROUTES_TEMPLATE = Path("templates/admin/inbox/email_routes.html").read_text()
 AI_TESTING_TEMPLATE = Path("templates/admin/inbox/partials/ai_testing.html").read_text()
 ROUTES_MODULE = Path("app/web/admin/inbox.py").read_text()
+
+
+def test_inactive_ai_route_can_be_reassigned_and_enabled_without_duplicate(db_session):
+    support = _team(db_session, "Help Desk")
+    sales = _team(db_session, "Sales (call center)")
+    team_inbox_commands.create_ai_route(
+        db_session,
+        channel_type="whatsapp",
+        intent_key="coverage_request",
+        service_team_id=support,
+        confidence_threshold=0.8,
+    )
+    route = db_session.query(TeamInboxAiRoute).one()
+    route.is_active = False
+    db_session.commit()
+    route_id, timestamp = route.id, route.updated_at
+    db_session.commit()
+    outcome = team_inbox_commands.update_ai_route(
+        db_session,
+        command=team_inbox_commands.UpdateAiRouteCommand(
+            context=CommandContext.system(
+                actor="test:staff",
+                scope="inbox:route-edit",
+                reason="test reviewed reassignment",
+            ),
+            actor=AuditActor.service("test:staff"),
+            patch=team_inbox_routing.AiRoutePatch(
+                route_id=route_id,
+                service_team_id=UUID(str(sales)),
+                is_active=True,
+                expected_updated_at=timestamp,
+            ),
+        ),
+    )
+    assert outcome.route_id == route_id
+    assert outcome.service_team_id == sales
+    assert outcome.is_active
+    assert db_session.query(TeamInboxAiRoute).count() == 1
+    row = db_session.query(TeamInboxAiRoute).one()
+    assert (row.channel_type, row.intent_key, row.confidence_threshold) == (
+        "whatsapp",
+        "coverage_request",
+        0.8,
+    )
+    audit = db_session.query(AuditEvent).one()
+    assert audit.actor_type is AuditActorType.service
+    assert audit.actor_id == "test:staff"
+
+
+def test_ai_route_stale_edit_is_rejected(db_session):
+    support = _team(db_session, "Support")
+    team_inbox_commands.create_ai_route(
+        db_session,
+        channel_type="whatsapp",
+        intent_key="coverage_request",
+        service_team_id=support,
+    )
+    row = db_session.query(TeamInboxAiRoute).one()
+    route_id, stale = row.id, row.updated_at - timedelta(seconds=1)
+    db_session.commit()
+    with pytest.raises(DomainError, match="Reload settings"):
+        team_inbox_commands.update_ai_route(
+            db_session,
+            command=team_inbox_commands.UpdateAiRouteCommand(
+                context=CommandContext.system(
+                    actor="test:staff",
+                    scope="inbox:route-edit",
+                    reason="test stale form",
+                ),
+                actor=AuditActor.service("test:staff"),
+                patch=team_inbox_routing.AiRoutePatch(
+                    route_id=route_id, expected_updated_at=stale, is_active=False
+                ),
+            ),
+        )
+    assert db_session.query(TeamInboxAiRoute).one().is_active
+
+
+@pytest.mark.parametrize("threshold", [-0.1, 1.1, float("nan"), float("inf")])
+def test_ai_route_patch_rejects_invalid_threshold(threshold):
+    from uuid import uuid4
+
+    with pytest.raises(DomainError):
+        team_inbox_routing.AiRoutePatch(
+            route_id=uuid4(), confidence_threshold=threshold
+        )
+
+
+def test_edit_route_renders_inactive_destination_and_stale_form_version():
+    from datetime import UTC, datetime
+    from uuid import uuid4
+
+    from jinja2 import DictLoader, Environment
+
+    route_id, inactive_team_id, active_team_id = uuid4(), uuid4(), uuid4()
+    route = team_inbox_routing.AiRouteRow(
+        id=str(route_id),
+        channel_type="whatsapp",
+        intent_key="coverage_request",
+        display_name="Coverage & Sales",
+        service_team_id=str(inactive_team_id),
+        service_team_name="Former Help Desk",
+        confidence_threshold=0.8,
+        priority=100,
+        is_active=False,
+        updated_at=datetime.now(UTC),
+    )
+    start = ROUTES_TEMPLATE.index('<details class="relative text-left">')
+    fragment = ROUTES_TEMPLATE[
+        start : ROUTES_TEMPLATE.index("</details>", start) + len("</details>")
+    ]
+    html = (
+        Environment(
+            autoescape=True,
+            loader=DictLoader(
+                {
+                    "components/forms/csrf_input.html": '<input name="csrf_token" value="test">'
+                }
+            ),
+        )
+        .from_string(fragment)
+        .render(
+            route=route,
+            service_team_options=[{"id": active_team_id, "name": "Active Help Desk"}],
+        )
+    )
+    assert f"/ai-routes/{route_id}" in html
+    assert 'name="expected_updated_at"' in html
+    assert 'value="false" selected' in html
+    assert "Coverage &amp; Sales" in html
+    assert "Keep current: Former Help Desk" in html
+    assert '<option value="" selected disabled>' in html
+    assert (
+        f'<option value="{active_team_id}">Change to Active Help Desk</option>' in html
+    )
 
 
 def test_ai_intake_meta_social_form_uses_connector_key():

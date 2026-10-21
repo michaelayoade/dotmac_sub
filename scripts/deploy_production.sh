@@ -112,6 +112,9 @@ if [[ -n "${SKIP_BACKUP:-}" ]]; then
 fi
 
 export PRODUCTION_RELEASE_EVIDENCE="${AUTHORIZATION_FILE}"
+# Only the separately verified first-deployment path below may forward this
+# document into the candidate's read-only empty-catalogue assessment.
+unset PRODUCTION_BOOTSTRAP_AUTHORIZATION_FILE
 unset SKIP_BACKUP
 unset PRODUCTION_BACKUP_DECISION_FILE
 if [[ "${RESUME_AFTER_MIGRATION}" == "1" ]]; then
@@ -194,6 +197,7 @@ if [[ -z "${CONTAINER_NAMES}" ]]; then
     --target-server "dotmac-sub-prod" \
     || die "bootstrap authorization does not authorize first deployment of ${TARGET_REVISION} to dotmac-sub-prod"
   echo "Authorized first deployment of ${TARGET_REVISION} to dotmac-sub-prod."
+  export PRODUCTION_BOOTSTRAP_AUTHORIZATION_FILE="$(realpath -- "${BOOTSTRAP_AUTHORIZATION}")"
 else
   [[ "${CONTAINER_NAMES}" == "${APP_CONTAINER}" ]] || die \
     "production container inventory is ambiguous for ${APP_CONTAINER}"

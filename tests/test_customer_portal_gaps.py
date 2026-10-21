@@ -10,7 +10,12 @@ from unittest.mock import MagicMock, patch
 
 from fastapi import HTTPException
 
+from app.services.audit_adapter import AuditActor
 from app.services.events.types import EventType
+from tests.customer_profile_owner_support import (
+    profile_command_context,
+    profile_owner_session,
+)
 
 # ---------------------------------------------------------------------------
 # 1. Customer event types
@@ -18,17 +23,8 @@ from app.services.events.types import EventType
 
 
 class TestCustomerEventTypes:
-    def test_customer_login_event(self) -> None:
-        assert EventType.customer_login.value == "customer.login"
-
-    def test_customer_logout_event(self) -> None:
-        assert EventType.customer_logout.value == "customer.logout"
-
     def test_customer_ticket_created_event(self) -> None:
         assert EventType.customer_ticket_created.value == "customer.ticket_created"
-
-    def test_customer_password_changed_event(self) -> None:
-        assert EventType.customer_password_changed.value == "customer.password_changed"
 
 
 # ---------------------------------------------------------------------------
@@ -223,18 +219,18 @@ class TestTicketCreationSchema:
 
 class TestPasswordValidation:
     def test_password_hashing_roundtrip(self) -> None:
-        from app.services.auth_flow import hash_password, verify_password
+        from app.services.auth_flow import hash_password, verify_user_password
 
         password = "TestP@ssw0rd!2024"
         hashed = hash_password(password)
         assert hashed != password
-        assert verify_password(password, hashed)
+        assert verify_user_password(password, hashed)
 
     def test_wrong_password_fails(self) -> None:
-        from app.services.auth_flow import hash_password, verify_password
+        from app.services.auth_flow import hash_password, verify_user_password
 
         hashed = hash_password("correct_password")
-        assert not verify_password("wrong_password", hashed)
+        assert not verify_user_password("wrong_password", hashed)
 
 
 # ---------------------------------------------------------------------------
@@ -260,7 +256,9 @@ class TestEventEmissionHelper:
         with patch("app.web.customer.routes.emit_event", create=True):
             from app.web.customer.routes import _emit_customer_event
 
-            _emit_customer_event(db, "customer_login", {"subscriber_id": "test"})
+            _emit_customer_event(
+                db, "customer_ticket_created", {"subscriber_id": "test"}
+            )
 
 
 # ---------------------------------------------------------------------------
@@ -307,11 +305,15 @@ class TestCommentSchema:
 
 
 class TestCaptiveRedirectPersistence:
-    def test_subscriber_update_schema_accepts_captive_redirect_flag(self) -> None:
+    def test_subscriber_update_schema_refuses_retired_captive_flag(self) -> None:
+        """The flag is a retired decision input: captive policy rules decide."""
+        import pytest
+        from pydantic import ValidationError
+
         from app.schemas.subscriber import SubscriberUpdate
 
-        payload = SubscriberUpdate(captive_redirect_enabled=True)
-        assert payload.captive_redirect_enabled is True
+        with pytest.raises(ValidationError):
+            SubscriberUpdate(captive_redirect_enabled=True)
 
     def test_save_radius_config_persists_explicit_captive_redirect_toggle(
         self, db_session
@@ -331,7 +333,7 @@ class TestCaptiveRedirectPersistence:
         setting = radius_settings.get_by_key(db_session, "captive_redirect_enabled")
         assert setting.value_text == "true"
 
-    def test_billing_override_payload_sets_captive_redirect_flag(self) -> None:
+    def test_billing_override_payload_no_longer_writes_captive_flag(self) -> None:
         from app.services.web_customer_actions import _billing_override_payload
 
         payload = _billing_override_payload(
@@ -340,12 +342,11 @@ class TestCaptiveRedirectPersistence:
             payment_due_days=None,
             grace_period_days=None,
             min_balance=None,
-            captive_redirect_enabled="true",
             tax_rate_id=None,
             payment_method=None,
         )
 
-        assert payload["captive_redirect_enabled"] is True
+        assert "captive_redirect_enabled" not in payload
 
 
 class TestRestrictedContextHelpers:
@@ -1295,30 +1296,34 @@ class TestCustomerProfileNotifications:
     def test_update_customer_profile_persists_preferences_and_emits_subscriber_updated(
         self, db_session, subscriber
     ) -> None:
-        from app.services.events.types import EventType
-        from app.services.web_customer_actions import (
+        from app.services.customer_portal_profile_commands import (
             UpdateCustomerProfileCommand,
             update_customer_profile,
         )
+        from app.services.events.types import EventType
 
         with patch(
             "app.services.customer_portal_profile_commands.emit_event"
         ) as emit_event_mock:
-            outcome = update_customer_profile(
-                db_session,
-                command=UpdateCustomerProfileCommand(
-                    subscriber_id=subscriber.id,
-                    first_name="Updated",
-                    last_name="Customer",
-                    email="updated@example.com",
-                    phone="+2348000000012",
-                    billing_notifications=False,
-                    sms_updates=True,
-                ),
-            )
+            with profile_owner_session(db_session) as owner_db:
+                outcome = update_customer_profile(
+                    owner_db,
+                    command=UpdateCustomerProfileCommand(
+                        context=profile_command_context(actor_id=subscriber.id),
+                        actor=AuditActor.user(str(subscriber.id)),
+                        subscriber_id=subscriber.id,
+                        first_name="Updated",
+                        last_name="Customer",
+                        email="updated@example.com",
+                        phone="+2348000000012",
+                        billing_notifications=False,
+                        sms_updates=True,
+                    ),
+                )
+            db_session.refresh(subscriber)
 
         assert outcome is not None
-        updated = outcome.subscriber
+        updated = subscriber
         assert updated.email == "updated@example.com"
         assert updated.phone == "+2348000000012"
         assert (updated.metadata_ or {}).get("billing_notifications") is False

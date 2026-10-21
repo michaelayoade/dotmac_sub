@@ -217,6 +217,7 @@ class CacheInterceptor extends Interceptor {
   bool _cacheable(RequestOptions o) =>
       o.method.toUpperCase() == 'GET' &&
       o.extra['skipAuth'] != true &&
+      o.extra['requireFresh'] != true &&
       !o.path.startsWith('/auth');
 
   /// Stable signature: method + path + sorted query (so param order can't fork

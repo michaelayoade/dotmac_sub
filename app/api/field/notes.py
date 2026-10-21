@@ -1,15 +1,15 @@
-from uuid import UUID, uuid4
+from uuid import uuid4
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, status
 from sqlalchemy.orm import Session
 
 from app.api.deps import get_db
+from app.api.field.execution import field_domain_errors, field_system_user_id
 from app.schemas.field import FieldNoteCreate, FieldNoteRead
 from app.services.auth_dependencies import require_user_auth
 from app.services.db_session_adapter import db_session_adapter
 from app.services.field.note_commands import (
     CreateFieldWorkOrderNote,
-    FieldNoteCommandError,
     create_field_work_order_note,
 )
 from app.services.owner_commands import CommandContext
@@ -29,12 +29,12 @@ def create_field_note(
     db: Session = Depends(get_db),
 ):
     request_id = payload.client_ref or uuid4()
-    principal_id = UUID(str(auth["principal_id"]))
-    try:
+    principal_id = field_system_user_id(auth)
+    with field_domain_errors():
         db_session_adapter.release_read_transaction(db)
         return create_field_work_order_note(
-            db,
-            CreateFieldWorkOrderNote(
+            db=db,
+            command=CreateFieldWorkOrderNote(
                 context=CommandContext(
                     command_id=request_id,
                     correlation_id=request_id,
@@ -51,18 +51,3 @@ def create_field_note(
                 attachment_ids=tuple(payload.attachment_ids),
             ),
         )
-    except FieldNoteCommandError as exc:
-        if exc.code.endswith(
-            ("requester_not_found", "work_order_not_found", "attachment_not_found")
-        ):
-            status_code = status.HTTP_404_NOT_FOUND
-        elif exc.code.endswith("attachment_forbidden"):
-            status_code = status.HTTP_403_FORBIDDEN
-        elif exc.code.endswith("invalid_request"):
-            status_code = status.HTTP_422_UNPROCESSABLE_ENTITY
-        else:
-            status_code = status.HTTP_409_CONFLICT
-        raise HTTPException(
-            status_code=status_code,
-            detail={"code": exc.code, "message": exc.message, "details": exc.details},
-        ) from exc

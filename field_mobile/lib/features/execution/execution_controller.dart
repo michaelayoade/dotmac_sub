@@ -5,11 +5,16 @@ import 'package:uuid/uuid.dart';
 import '../../core/location/device_location.dart';
 import '../../core/location/location_source.dart';
 import '../../core/offline/sync_service.dart';
+import '../../core/api/token_store.dart';
+import '../auth/auth_state.dart';
 
 /// Real devices use geolocator; tests override with fakes. kIsWeb and
 /// headless test binaries never construct the plugin path.
 final locationSourceProvider = Provider<LocationSource>((ref) {
-  if (kIsWeb) return const UnavailableLocation();
+  final auth = ref.watch(authControllerProvider);
+  if (kIsWeb || auth is! Authenticated || auth.mode != LoginMode.staff) {
+    return const UnavailableLocation();
+  }
   return GeolocatorLocationSource();
 });
 
@@ -55,6 +60,7 @@ class ExecutionController extends Notifier<ActiveTimer?> {
   Future<String> transition(
     String jobId,
     String event, {
+    String? assignmentGeneration,
     String? note,
     Map<String, dynamic>? payload,
   }) async {
@@ -67,6 +73,7 @@ class ExecutionController extends Notifier<ActiveTimer?> {
         'work_order_id': jobId,
         'event': event,
         'client_event_id': clientEventId,
+        'assignment_generation': ?assignmentGeneration,
         'occurred_at': DateTime.now().toUtc().toIso8601String(),
         'latitude': ?position?.latitude,
         'longitude': ?position?.longitude,
@@ -98,11 +105,13 @@ class ExecutionController extends Notifier<ActiveTimer?> {
   Future<String> unableToComplete(
     String jobId, {
     required String reason,
+    String? assignmentGeneration,
     String? note,
   }) {
     return transition(
       jobId,
       'unable_to_complete',
+      assignmentGeneration: assignmentGeneration,
       note: note,
       payload: {'reason': reason},
     );

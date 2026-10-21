@@ -1374,4 +1374,449 @@ SERVICES: tuple[SOTService, ...] = (
             "runtime.db_sessions",
         ),
     ),
+    SOTService(
+        name="network.router_health",
+        module="app.services.router_health.commands",
+        owns=(
+            "router config export evidence",
+            "router health findings projection",
+            "CoA canary operation",
+            "router runtime observations",
+        ),
+        depends_on=(
+            "network.identity",
+            "network.nas_inventory",
+            "network.coa_outcome_evidence",
+            "access.enforcement_evidence",
+            "access.session_enforcement",
+            "observability.recording",
+            "runtime.db_sessions",
+            "events.dispatcher",
+        ),
+        notes=(
+            "Read-only router health reconciler. Judges stored router "
+            "configuration snapshots, snapshot freshness, CoA outcome counters, "
+            "enforcement-path failures, the daily no-op CoA canary and a "
+            "periodic read-only REST runtime poll (reachability, NTP and clock, "
+            "BGP/OSPF, link flaps, PPPoE drop, service users, optional SFP "
+            "optics), and projects findings into admin alerts (shadow mode by "
+            "default). It never writes to a router and never changes the policy."
+        ),
+        contract=ServiceContract(
+            concerns=(
+                ConcernContract(
+                    name="router config export evidence",
+                    role=OwnerRole.OBSERVATION_COLLECTOR,
+                    input_names=("router inventory", "snapshot export outcomes"),
+                    canonical_writer="network.router_health",
+                ),
+                ConcernContract(
+                    name="router runtime observations",
+                    role=OwnerRole.OBSERVATION_COLLECTOR,
+                    input_names=(
+                        "router inventory",
+                        "router runtime REST observations",
+                    ),
+                    canonical_writer="network.router_health",
+                ),
+                ConcernContract(
+                    name="router health findings projection",
+                    role=OwnerRole.PROJECTION_WRITER,
+                    input_names=(
+                        "router inventory",
+                        "router configuration export snapshots",
+                        "router runtime REST observations",
+                        "snapshot export outcomes",
+                        "CoA outcome counters",
+                        "enforcement application evidence",
+                        "NAS device inventory",
+                        "router health policy",
+                    ),
+                    canonical_writer="network.router_health",
+                ),
+                ConcernContract(
+                    name="CoA canary operation",
+                    role=OwnerRole.COMMAND_WRITER,
+                    input_names=(
+                        "NAS device inventory",
+                        "canary probe replies",
+                        "router health policy",
+                    ),
+                    canonical_writer="network.router_health",
+                ),
+            ),
+            authoritative_inputs=(
+                AuthorityInput(
+                    name="router inventory",
+                    owner="network.identity",
+                    kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                    source="routers rows (id, name, management_ip, is_active)",
+                ),
+                AuthorityInput(
+                    name="router configuration export snapshots",
+                    owner="external:mikrotik_routeros",
+                    kind=AuthorityKind.EXTERNAL_OBSERVATION,
+                    source=(
+                        "latest router_config_snapshots /export text captured by "
+                        "the scheduled router snapshot task"
+                    ),
+                ),
+                AuthorityInput(
+                    name="router runtime REST observations",
+                    owner="external:mikrotik_routeros",
+                    kind=AuthorityKind.EXTERNAL_OBSERVATION,
+                    source=(
+                        "fixed-path GET reads of /system, /routing, /interface, "
+                        "/ppp/active (count only) and /user over the RouterOS "
+                        "REST API; the optional SFP optics sample is one "
+                        "read-only POST to /interface/ethernet/monitor with once"
+                    ),
+                ),
+                AuthorityInput(
+                    name="snapshot export outcomes",
+                    owner="external:mikrotik_routeros",
+                    kind=AuthorityKind.EXTERNAL_OBSERVATION,
+                    source=(
+                        "typed success or failure class of each scheduled SSH "
+                        "/export attempt (never the exception text)"
+                    ),
+                ),
+                AuthorityInput(
+                    name="CoA outcome counters",
+                    owner="network.coa_outcome_evidence",
+                    kind=AuthorityKind.OBSERVATION,
+                    source="nas_coa_outcome_buckets",
+                ),
+                AuthorityInput(
+                    name="enforcement application evidence",
+                    owner="access.enforcement_evidence",
+                    kind=AuthorityKind.OBSERVATION,
+                    source="enforcement_applications (read only)",
+                ),
+                AuthorityInput(
+                    name="NAS device inventory",
+                    owner="network.nas_inventory",
+                    kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                    source="nas_devices",
+                ),
+                AuthorityInput(
+                    name="router health policy",
+                    owner="network.router_health",
+                    kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                    source=(
+                        "setting network.router_health_policy, written only "
+                        "through the audited owner-command settings path"
+                    ),
+                ),
+                AuthorityInput(
+                    name="canary probe replies",
+                    owner="external:routeros",
+                    kind=AuthorityKind.EXTERNAL_OBSERVATION,
+                    source=(
+                        "Disconnect-ACK/NAK for a synthetic non-existent user "
+                        "sent through enforcement.send_coa_probe_disconnect"
+                    ),
+                ),
+            ),
+            transaction=TransactionContract(
+                mode=TransactionMode.OWNER_MANAGED,
+                boundary=(
+                    "each public command enters execute_owner_command once on a "
+                    "transaction-free session after all reads and network I/O; "
+                    "the operation only flushes signal upserts, admin-alert "
+                    "findings, audit rows and one count-only event"
+                ),
+                locking=(
+                    "Postgres advisory lock per task makes runs single-flight; "
+                    "signal rows are unique per (router, signal, scope)"
+                ),
+                idempotency=(
+                    "findings are keyed by fingerprint and re-judged per "
+                    "(layer, subject, check) scope; a re-run on the same inputs "
+                    "changes nothing"
+                ),
+                retries=(
+                    "no automatic retries; the next scheduled run rebuilds the "
+                    "projection and the canary is re-attempted daily"
+                ),
+            ),
+            errors=ErrorContract(
+                domain_codes=owner_command_boundary_error_codes(
+                    "network.router_health"
+                ),
+                mapping_owner="app.tasks.router_health",
+                fail_closed_on=(
+                    "unparseable or low-coverage snapshot (posture carried forward)",
+                    "invalid stored policy (strictest defaults apply)",
+                    "canary username collision (packet aborted)",
+                    "unreadable router (runtime findings carried forward; only the access check is judged)",
+                    "database errors",
+                    "soft time limit",
+                ),
+            ),
+            events=EventContract(
+                event_types=("router_health.reconciled",),
+                schema_version=1,
+                delivery_owner="events.dispatcher",
+                compatibility=(
+                    "count-only envelope staged atomically; no router payloads, "
+                    "credentials or community names"
+                ),
+                replay="the next scheduled run rebuilds findings from stored state",
+            ),
+            projections=(
+                ProjectionContract(
+                    name="router health alerts",
+                    input_names=(
+                        "router inventory",
+                        "router configuration export snapshots",
+                        "router runtime REST observations",
+                        "snapshot export outcomes",
+                        "CoA outcome counters",
+                        "enforcement application evidence",
+                        "NAS device inventory",
+                        "router health policy",
+                    ),
+                    writer="network.router_health",
+                    freshness=(
+                        "recomputed every router_health_posture_interval_hours and "
+                        "service-path interval and router_health_runtime_interval_minutes; "
+                        "snapshot staleness is itself a finding"
+                    ),
+                    stale_behavior=(
+                        "an unparsed router keeps its prior posture findings and "
+                        "raises snapshot-unparseable; nothing is silently resolved"
+                    ),
+                    drift_signal="admin alerts under network:router-health: and the router_health state snapshot",
+                    rebuild_operation="app.tasks.router_health.reconcile_router_posture",
+                    repair_owner="network.router_health",
+                ),
+            ),
+            migration=MigrationContract(
+                state=AuthorityMigrationState.NATIVE,
+                new_owner="network.router_health",
+            ),
+            steward="network operations",
+            design_refs=(
+                "docs/network/ROUTER_HEALTH.md",
+                "docs/adr/0018-coa-outcome-evidence.md",
+                "docs/SOT_RELATIONSHIP_MAP.md",
+            ),
+            test_refs=(
+                "tests/services/router_health/test_routeros_export.py",
+                "tests/services/router_health/test_posture_checks.py",
+                "tests/services/router_health/test_real_fixtures.py",
+                "tests/services/router_health/test_findings.py",
+                "tests/services/router_health/test_canary.py",
+                "tests/services/router_health/test_runtime_checks.py",
+                "tests/services/router_health/test_runtime_reader.py",
+                "tests/services/router_health/test_runtime_poll.py",
+                "tests/services/router_health/test_read_models.py",
+                "tests/architecture/test_router_health_single_writer.py",
+            ),
+        ),
+    ),
+    SOTService(
+        name="network.coa_outcome_evidence",
+        module="app.services.router_health.coa_evidence",
+        owns=("CoA outcome counter observation",),
+        depends_on=(
+            "runtime.db_sessions",
+            "observability.recording",
+            "access.session_enforcement",
+        ),
+        notes=(
+            "Hourly per-NAS counts of RADIUS CoA outcomes, written out of band so "
+            "the evidence of an irreversible device effect survives the caller's "
+            "rollback. Evidence, never intended state."
+        ),
+        contract=ServiceContract(
+            concerns=(
+                ConcernContract(
+                    name="CoA outcome counter observation",
+                    role=OwnerRole.OBSERVATION_COLLECTOR,
+                    input_names=("final CoA attempt disposition",),
+                    canonical_writer="network.coa_outcome_evidence",
+                ),
+            ),
+            authoritative_inputs=(
+                AuthorityInput(
+                    name="final CoA attempt disposition",
+                    owner="access.session_enforcement",
+                    kind=AuthorityKind.OBSERVATION,
+                    source=(
+                        "CoADisconnectDisposition / CoA-Update result returned by "
+                        "app/services/enforcement.py and the router-health canary"
+                    ),
+                ),
+            ),
+            transaction=TransactionContract(
+                mode=TransactionMode.OUT_OF_BAND_EVIDENCE,
+                boundary=(
+                    "one db_session_adapter.create_session() unit of work per "
+                    "record, independent of the caller (ADR 0018)"
+                ),
+                locking=(
+                    "no foreign keys; SET LOCAL statement_timeout 500ms and "
+                    "lock_timeout 200ms; never waits on the caller's row locks"
+                ),
+                idempotency=(
+                    "upsert ON CONFLICT (nas_device_id, kind, disposition, "
+                    "bucket_start) increments an hourly counter"
+                ),
+                retries=(
+                    "none; a failed write is counted and logged ERROR then "
+                    "dropped, a circuit breaker skips writes for 60 s after 3 "
+                    "failures, and a Celery soft time limit is re-raised"
+                ),
+            ),
+            errors=ErrorContract(
+                domain_codes=(),
+                mapping_owner="network.coa_outcome_evidence",
+            ),
+            migration=MigrationContract(
+                state=AuthorityMigrationState.NATIVE,
+                new_owner="network.coa_outcome_evidence",
+            ),
+            steward="network access",
+            design_refs=(
+                "docs/adr/0018-coa-outcome-evidence.md",
+                "docs/SOT_RELATIONSHIP_MAP.md",
+            ),
+            test_refs=(
+                "tests/services/router_health/test_coa_evidence.py",
+                "tests/services/router_health/test_enforcement_coa_instrumentation.py",
+                "tests/architecture/test_router_health_single_writer.py",
+            ),
+        ),
+    ),
+    SOTService(
+        name="network.router_control",
+        module="app.services.router_control.report",
+        implementation_modules=(
+            "app.services.router_control.plugin",
+            "app.services.router_control.inputs",
+            "app.services.router_control.seed_layers",
+            "app.services.router_control.surfaces",
+            "app.services.router_control.modules.ntp",
+            "app.services.router_control.modules.snmp",
+            "app.services.router_control.modules.services_hardening",
+        ),
+        owns=(
+            "composed router desired state",
+            "router desired-state drift evaluation",
+        ),
+        depends_on=(
+            "network.identity",
+            "network.router_health",
+        ),
+        notes=(
+            "PR1 is a read-only resolver. app.services.composition is a pure "
+            "library, not an owner: it composes weighted tiered layers into an "
+            "effective desired state with per-value provenance and is "
+            "independent of Sub (import-linter contract). Layers here are a "
+            "PROPOSED synthetic seed or a private file; storage, owner "
+            "commands, approvals, apply and UI belong to later PRs. The "
+            "report compares the effective state with the latest stored "
+            "/export, never contacts a router and writes nothing."
+        ),
+        contract=ServiceContract(
+            concerns=(
+                ConcernContract(
+                    name="composed router desired state",
+                    role=OwnerRole.RESOLVER,
+                    input_names=(
+                        "router desired-state layers",
+                        "router subject declarations",
+                    ),
+                ),
+                ConcernContract(
+                    name="router desired-state drift evaluation",
+                    role=OwnerRole.RESOLVER,
+                    input_names=(
+                        "router desired-state layers",
+                        "router subject declarations",
+                        "router configuration export snapshots",
+                    ),
+                ),
+            ),
+            authoritative_inputs=(
+                AuthorityInput(
+                    name="router desired-state layers",
+                    owner="network.router_control",
+                    kind=AuthorityKind.CONTROL_INPUT,
+                    source=(
+                        "PR1: the in-code PROPOSED seed or an operator-supplied "
+                        "layers file; PR2 adds reviewed storage"
+                    ),
+                ),
+                AuthorityInput(
+                    name="router subject declarations",
+                    owner="network.router_control",
+                    kind=AuthorityKind.CONTROL_INPUT,
+                    source=(
+                        "PR1: operator-supplied assignments (site, profiles, "
+                        "policy tags, lifecycle, loopback) or the current "
+                        "network.router_health_policy role; never routers.tags"
+                    ),
+                ),
+                AuthorityInput(
+                    name="router configuration export snapshots",
+                    owner="external:mikrotik_routeros",
+                    kind=AuthorityKind.EXTERNAL_OBSERVATION,
+                    source=(
+                        "latest router_config_snapshots /export text captured by "
+                        "network.router_health, read through a read-only session"
+                    ),
+                ),
+            ),
+            transaction=TransactionContract(
+                mode=TransactionMode.READ_ONLY,
+                boundary=(
+                    "the CLI adapter reads inside one REPEATABLE READ, READ ONLY "
+                    "snapshot session and rolls back; composition is a pure "
+                    "function with no I/O"
+                ),
+                locking="none; reads one consistent snapshot",
+                idempotency=(
+                    "the same layers, subject, exceptions, date and export give "
+                    "the same effective hashes, provenance and report"
+                ),
+                retries="read-only; safe to retry",
+            ),
+            errors=ErrorContract(
+                domain_codes=(
+                    "layer_invalid",
+                    "composition_conflict",
+                    "invalid_desired",
+                    "snapshot_unparseable",
+                ),
+                mapping_owner="scripts.network.router_control_report",
+                fail_closed_on=(
+                    "invalid layer, exception or assignment input, or any unexpected error (exit 2)",
+                    "equal-weight composition conflict (exit 2)",
+                    "invalid desired state for an enrolled module (exit 2)",
+                    "missing, stale or unparseable snapshot (module not evaluated, never missing)",
+                ),
+            ),
+            migration=MigrationContract(
+                state=AuthorityMigrationState.NATIVE,
+                new_owner="network.router_control",
+            ),
+            steward="network operations",
+            design_refs=(
+                "docs/network/ROUTER_CONTROL_PLANE.md",
+                "docs/SOT_RELATIONSHIP_MAP.md",
+            ),
+            test_refs=(
+                "tests/services/composition/test_spec_vectors.py",
+                "tests/services/composition/test_equal_rank.py",
+                "tests/services/composition/test_widening.py",
+                "tests/services/router_control/test_modules.py",
+                "tests/services/router_control/test_report.py",
+                "tests/services/router_control/test_cli.py",
+                "tests/architecture/test_router_control_boundaries.py",
+            ),
+        ),
+    ),
 )

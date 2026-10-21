@@ -110,13 +110,48 @@ def test_deploy_uses_and_verifies_the_authorized_release_compose_tree() -> None:
     assert "does not match image source tree" in deploy
 
 
-def test_deploy_checks_openbao_boot_secrets_before_migrations() -> None:
+def test_deploy_checks_openbao_boot_secrets_before_database_work() -> None:
     deploy = (ROOT / "scripts/deploy.sh").read_text(encoding="utf-8")
 
-    preflight = "python -m scripts.setup.verify_openbao_boot_secrets"
+    preflight_definition = deploy[
+        deploy.index("preflight_deployment_secrets() {") : deploy.index(
+            '\nlog "Verifying candidate secret readiness before database work"'
+        )
+    ]
+    assert "--entrypoint /opt/venv/bin/python" in preflight_definition
+    assert (
+        '-m scripts.setup.verify_openbao_boot_secrets --component "${component}"'
+        in preflight_definition
+    )
+    assert 'plan_args+=(--component "${component}")' in preflight_definition
+
+    gate = "\nif ! preflight_deployment_secrets; then\n"
+    bootstrap = "\nrun_database_prerequisite_bootstrap\n"
+    backup = "Backing up database before migrations"
     migration = 'log "Applying migrations (alembic upgrade heads)"'
-    assert preflight in deploy
-    assert deploy.index(preflight) < deploy.index(migration)
+    assert gate in deploy
+    gate_index = deploy.index(gate)
+    assert gate_index < deploy.index(bootstrap)
+    assert gate_index < deploy.index(backup)
+    assert gate_index < deploy.index(migration)
+    fail_closed_gate = deploy[gate_index : deploy.index(bootstrap)]
+    assert (
+        'echo "DEPLOY REFUSED before database bootstrap, backup, migrations or service replacement." >&2'
+        in fail_closed_gate
+    )
+    assert "  exit 1\nfi\n" in fail_closed_gate
+    assert (
+        "preflight_feature_secret_requirements before_migrations"
+        in preflight_definition
+    )
+
+    post_migration_check = "\npreflight_feature_secret_requirements after_migrations\n"
+    migration_invocation = "\nif ! pin_and_migrate; then\n"
+    warm_candidate = 'log "Starting warm candidate on 127.0.0.1:'
+    assert post_migration_check in deploy
+    assert deploy.index(migration) < deploy.index(post_migration_check)
+    assert deploy.index(migration_invocation) < deploy.index(post_migration_check)
+    assert deploy.index(post_migration_check) < deploy.index(warm_candidate)
 
 
 def test_deploy_checks_database_prerequisites_before_backup_and_migrations() -> None:

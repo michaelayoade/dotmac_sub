@@ -30,7 +30,7 @@ from app.web.admin.billing_extensions import templates
 
 _NOW = datetime(2026, 7, 24, 12, 0, tzinfo=UTC)
 _ADMIN_AUTH = {
-    "principal_id": "test-admin",
+    "principal_id": str(uuid4()),
     "principal_type": "system_user",
     "roles": ["admin"],
 }

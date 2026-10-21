@@ -11,28 +11,39 @@ from __future__ import annotations
 import hashlib
 import secrets
 from dataclasses import dataclass
+from dataclasses import field as dataclass_field
 from datetime import UTC, datetime
 from enum import Enum
 from typing import TYPE_CHECKING
 from uuid import UUID
 
 from pydantic import EmailStr, TypeAdapter, ValidationError
-from sqlalchemy import func, or_, select, text
-from sqlalchemy.exc import IntegrityError
+from sqlalchemy import delete, func, or_, select, text
+from sqlalchemy.exc import IntegrityError, OperationalError, SQLAlchemyError
 from sqlalchemy.orm import Session
 
 from app.models.audit import AuditActorType
-from app.models.auth import AuthProvider, SessionStatus, UserCredential
+from app.models.auth import (
+    AuthProvider,
+    MFAMethod,
+    SessionStatus,
+    UserCredential,
+)
 from app.models.auth import Session as AuthSession
 from app.models.dispatch import TechnicianProfile
 from app.models.party import PartyDataClassification, PartyType
 from app.models.subscriber import UserType
 from app.models.system_user import SystemUser
-from app.services import auth_cache, credential_party_binding, credential_recovery
+from app.services import (
+    auth_cache,
+    credential_party_binding,
+    credential_recovery,
+    mfa_removal,
+)
 from app.services import auth_flow as auth_flow_service
 from app.services import party as party_registry
 from app.services import system_user_assignments as assignment_service
-from app.services.audit_adapter import stage_audit_event
+from app.services.audit_adapter import AuditActor, stage_audit_event
 from app.services.domain_errors import DomainError
 from app.services.events import emit_event
 from app.services.events.types import EventType
@@ -76,6 +87,11 @@ _SET_ACTIVE_COMMAND = OwnerCommandDefinition(
     owner="auth.staff_provisioning",
     concern="staff account provisioning",
     name="set_staff_account_active",
+)
+_REMOVE_MFA_COMMAND = OwnerCommandDefinition(
+    owner="auth.staff_provisioning",
+    concern="staff identity maintenance",
+    name="remove_staff_mfa",
 )
 _UPDATE_IDENTITY_COMMAND = OwnerCommandDefinition(
     owner="auth.staff_provisioning",
@@ -171,6 +187,15 @@ class SetStaffAccountActiveCommand:
     context: CommandContext
     user_id: UUID
     is_active: bool
+
+
+@dataclass(frozen=True)
+class RemoveStaffMfaCommand:
+    """Administrative removal of every MFA factor of one staff principal."""
+
+    context: CommandContext
+    user_id: UUID
+    removal_reason: str
 
 
 @dataclass(frozen=True)
@@ -2112,6 +2137,136 @@ def set_staff_account_active(
     )
 
 
+def _require_may_remove_staff_mfa(
+    db: Session,
+    *,
+    actor_type: AuditActorType,
+    actor_id: str,
+    target_id: UUID,
+) -> None:
+    """Refuse unless an admin actor removes MFA of a non-admin, other account.
+
+    No role hierarchy exists: ``admin`` is the top role and short-circuits every
+    permission check, so "equal or higher" means the target holds the admin
+    role. The actor must be a human holding the admin role (matching direct
+    password set and the credential API), never an API key, and never the
+    target itself. The error is deliberately generic.
+    """
+
+    denied = _error(
+        "mfa_removal_forbidden",
+        "You are not permitted to remove this account's MFA.",
+    )
+    if actor_type != AuditActorType.user:
+        raise denied
+    if actor_id == str(target_id):
+        raise denied
+    try:
+        actor_uuid = UUID(actor_id)
+    except ValueError as exc:
+        raise denied from exc
+    actor_roles = assignment_service.system_user_role_names(db, actor_uuid)
+    if not any(role.lower() == "admin" for role in actor_roles):
+        raise denied
+    target_roles = assignment_service.system_user_role_names(db, target_id)
+    if any(role.lower() == "admin" for role in target_roles):
+        raise denied
+
+
+def remove_staff_mfa(
+    db: Session,
+    command: RemoveStaffMfaCommand,
+) -> StaffAccountOutcome:
+    """Disable all MFA factors of a staff principal atomically.
+
+    Principal lock first (same order as login), then the factor rows. Seeds are
+    wiped, recovery codes deactivated, active sessions revoked and the audit is
+    staged in the same transaction. A repeat call is a no-op (audited, no event).
+    """
+
+    def operation() -> StaffAccountOutcome:
+        actor_type, actor_id = _validate_context(command.context)
+        reason = mfa_removal.normalize_reason(command.removal_reason)
+        if reason is None:
+            raise _error(
+                "mfa_removal_reason_required",
+                mfa_removal.REASON_REQUIRED_MESSAGE,
+                field="removal_reason",
+            )
+        mfa_removal.set_lock_timeout(db)
+        user = _locked_user(db, command.user_id)
+        _require_may_remove_staff_mfa(
+            db, actor_type=actor_type, actor_id=actor_id, target_id=user.id
+        )
+        from app.services.credential_administration_mutation import (
+            disable_locked_principal_factors,
+        )
+
+        result = disable_locked_principal_factors(
+            db, principal_column=MFAMethod.system_user_id, principal_id=user.id
+        )
+        revoked_sessions = _revoke_active_sessions(db, user.id) if result.changed else 0
+        changed = result.changed
+        _invalidate_auth_after_commit(db, user.id)
+        evidence: dict[str, object] = {
+            "changed": changed,
+            "methods_disabled": result.methods_disabled,
+            "recovery_codes_deactivated": result.recovery_codes_deactivated,
+            "revoked_sessions": int(revoked_sessions),
+            "removal_reason": reason,
+        }
+        _stage_audit(
+            db,
+            action="auth.mfa_disabled",
+            user_id=user.id,
+            context=command.context,
+            actor_type=actor_type,
+            actor_id=actor_id,
+            metadata=evidence,
+        )
+        if changed:
+            _emit_staff_event(
+                db,
+                event_type=EventType.credential_administration_completed,
+                user=user,
+                context=command.context,
+                payload={
+                    "schema_version": 1,
+                    "principal_type": "system_user",
+                    "principal_id": str(user.id),
+                    "aggregate_type": "system_user",
+                    "aggregate_id": str(user.id),
+                    "transition": "staff_mfa_removed",
+                    "invalidate_sessions": True,
+                    "sessions_revoked": int(revoked_sessions),
+                    "recovery_codes_deactivated": result.recovery_codes_deactivated,
+                    "methods_disabled": result.methods_disabled,
+                    "removed_at": datetime.now(UTC).isoformat(),
+                    "notify_mfa_removal": True,
+                },
+            )
+        return _outcome(
+            user,
+            role_names=assignment_service.system_user_role_names(db, user.id),
+            created=False,
+            changed=changed,
+            invite_requested=False,
+            context=command.context,
+        )
+
+    try:
+        return execute_owner_command(
+            db,
+            definition=_REMOVE_MFA_COMMAND,
+            context=command.context,
+            operation=operation,
+        )
+    except OperationalError as exc:
+        if mfa_removal.is_lock_timeout(exc):
+            raise _error("lock_timeout", mfa_removal.LOCK_TIMEOUT_MESSAGE) from exc
+        raise
+
+
 def find_by_email(db: Session, email: str) -> SystemUser | None:
     """Read-only ERP reconcile lookup by normalized canonical email."""
 
@@ -2205,3 +2360,203 @@ def materialize_staff_invite_email(
         body_text=rendered.body_text,
         activity="auth_user_invite",
     )
+
+
+STAFF_DELETION_CONCERN = "inactive staff account deletion"
+_DELETE_STAFF_COMMAND = OwnerCommandDefinition(
+    owner="auth.staff_provisioning",
+    concern=STAFF_DELETION_CONCERN,
+    name="delete_staff_account",
+)
+_BULK_DELETE_STAFF_COMMAND = OwnerCommandDefinition(
+    owner="auth.staff_provisioning",
+    concern=STAFF_DELETION_CONCERN,
+    name="bulk_delete_staff_accounts",
+)
+
+
+class StaffDeletionProvenance(str, Enum):
+    AUTHENTICATED_ADMINISTRATOR = "authenticated_administrator"
+
+
+@dataclass(frozen=True, slots=True)
+class DeleteStaffAccountCommand:
+    context: CommandContext = dataclass_field(repr=False)
+    user_id: UUID
+    actor: AuditActor = dataclass_field(repr=False)
+    provenance: StaffDeletionProvenance = dataclass_field(
+        default=StaffDeletionProvenance.AUTHENTICATED_ADMINISTRATOR, init=False
+    )
+
+
+@dataclass(frozen=True, slots=True)
+class BulkDeleteStaffAccountsCommand:
+    context: CommandContext = dataclass_field(repr=False)
+    user_ids: tuple[UUID, ...]
+    actor: AuditActor = dataclass_field(repr=False)
+    provenance: StaffDeletionProvenance = dataclass_field(
+        default=StaffDeletionProvenance.AUTHENTICATED_ADMINISTRATOR, init=False
+    )
+
+
+@dataclass(frozen=True, slots=True)
+class StaffDeletionOutcome:
+    deleted_user_ids: tuple[UUID, ...]
+    skipped_count: int
+    deleted_key_ids: tuple[UUID, ...]
+
+
+def _validate_staff_deletion(
+    command: DeleteStaffAccountCommand | BulkDeleteStaffAccountsCommand,
+) -> None:
+    if (
+        not isinstance(
+            command, (DeleteStaffAccountCommand, BulkDeleteStaffAccountsCommand)
+        )
+        or not isinstance(command.context, CommandContext)
+        or not isinstance(command.actor, AuditActor)
+        or command.provenance is not StaffDeletionProvenance.AUTHENTICATED_ADMINISTRATOR
+        or command.actor.actor_type not in {AuditActorType.user, AuditActorType.api_key}
+        or command.context.scope != STAFF_ASSIGN_SCOPE
+        or command.context.actor
+        != f"{command.actor.actor_type.value}:{command.actor.actor_id}"
+    ):
+        raise _error(
+            "invalid_command", "Trusted administrative deletion context required."
+        )
+    ids = (
+        (command.user_id,)
+        if isinstance(command, DeleteStaffAccountCommand)
+        else command.user_ids
+    )
+    if (
+        not isinstance(ids, tuple)
+        or not ids
+        or any(not isinstance(value, UUID) for value in ids)
+    ):
+        raise _error("invalid_command", "Valid staff account targets required.")
+
+
+def _staff_deletion_storage_error(exc: SQLAlchemyError) -> StaffProvisioningError:
+    if isinstance(exc, IntegrityError):
+        return _error("linked_records", "User cannot be deleted due to linked records.")
+    if isinstance(exc, OperationalError) and (
+        getattr(exc.orig, "sqlstate", None) == "55P03"
+        or getattr(exc.orig, "pgcode", None) == "55P03"
+    ):
+        return _error("deletion_busy", "Staff account deletion busy.")
+    return _error("deletion_unavailable", "Staff account deletion unavailable.")
+
+
+def _stage_staff_deletion(
+    db: Session, *, command: DeleteStaffAccountCommand | BulkDeleteStaffAccountsCommand
+) -> StaffDeletionOutcome:
+    from app.services import api_key_administration as key_owner
+
+    requested = (
+        (command.user_id,)
+        if isinstance(command, DeleteStaffAccountCommand)
+        else command.user_ids
+    )
+    if db.get_bind().dialect.name == "postgresql":
+        db.execute(text("SELECT set_config('lock_timeout', '5s', true)"))
+    # Refresh every principal under lock before any child or shared RBAC lock.
+    rows = (
+        db.execute(
+            select(SystemUser)
+            .where(SystemUser.id.in_(set(requested)))
+            .order_by(SystemUser.id)
+            .with_for_update(nowait=True)
+            .execution_options(populate_existing=True)
+        )
+        .scalars()
+        .all()
+    )
+    inactive = tuple(row.id for row in rows if not row.is_active)
+    if isinstance(command, DeleteStaffAccountCommand):
+        if not rows:
+            raise _error("staff_account_not_found", "User not found")
+        if rows[0].is_active:
+            raise _error("active_staff_deletion", "Deactivate user before deleting.")
+    # Child locks follow authentication's principal -> credential -> factor -> session order.
+    for model in (UserCredential, MFAMethod, AuthSession):
+        ids = tuple(
+            db.scalars(
+                select(model.id)
+                .where(model.system_user_id.in_(inactive))
+                .order_by(model.id)
+                .with_for_update()
+            )
+        )
+        if ids:
+            db.execute(delete(model).where(model.id.in_(ids)))
+            db.flush()
+    key_result = key_owner.stage_staff_key_deletion(
+        db,
+        command=key_owner.StaffKeyDeletionCommand(
+            command.context, command.actor, inactive
+        ),
+    )
+    for user_id in inactive:
+        assignment_service.remove_all_for_system_user(
+            db,
+            command=assignment_service.RemoveSystemUserAssignmentsCommand(
+                command.context, user_id
+            ),
+        )
+    if inactive:
+        db.execute(delete(SystemUser).where(SystemUser.id.in_(inactive)))
+        db.flush()
+    for user_id in inactive:
+        stage_audit_event(
+            db,
+            action="auth.staff_account.deleted",
+            entity_type="system_user",
+            entity_id=str(user_id),
+            actor=AuditActor(command.actor.actor_type, command.actor.actor_id),
+            details={
+                "schema_version": 1,
+                "scope": "rbac:assign",
+                "reason": "inactive_staff_account_deletion",
+                "command_id": str(command.context.command_id),
+                "correlation_id": str(command.context.correlation_id),
+            },
+        )
+        _invalidate_auth_after_commit(db, user_id)
+    return StaffDeletionOutcome(
+        inactive, len(requested) - len(inactive), key_result.deleted_key_ids
+    )
+
+
+def delete_staff_account(
+    db: Session, *, command: DeleteStaffAccountCommand
+) -> StaffDeletionOutcome:
+    _validate_staff_deletion(command)
+    if not isinstance(command, DeleteStaffAccountCommand):
+        raise _error("invalid_command", "Single staff deletion command required.")
+    try:
+        return execute_owner_command(
+            db,
+            definition=_DELETE_STAFF_COMMAND,
+            context=command.context,
+            operation=lambda: _stage_staff_deletion(db, command=command),
+        )
+    except SQLAlchemyError as exc:
+        raise _staff_deletion_storage_error(exc) from None
+
+
+def bulk_delete_staff_accounts(
+    db: Session, *, command: BulkDeleteStaffAccountsCommand
+) -> StaffDeletionOutcome:
+    _validate_staff_deletion(command)
+    if not isinstance(command, BulkDeleteStaffAccountsCommand):
+        raise _error("invalid_command", "Bulk staff deletion command required.")
+    try:
+        return execute_owner_command(
+            db,
+            definition=_BULK_DELETE_STAFF_COMMAND,
+            context=command.context,
+            operation=lambda: _stage_staff_deletion(db, command=command),
+        )
+    except SQLAlchemyError as exc:
+        raise _staff_deletion_storage_error(exc) from None

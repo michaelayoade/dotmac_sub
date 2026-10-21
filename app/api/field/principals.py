@@ -16,10 +16,12 @@ from __future__ import annotations
 from fastapi import Depends, HTTPException
 from sqlalchemy.orm import Session
 
+from app.api.field.execution import field_system_user_id
 from app.db import get_db
 from app.models.dispatch import TechnicianProfile
 from app.services.auth_dependencies import require_user_auth
 from app.services.field.vendor_auth import vendor_context
+from app.services.field.work_order_access import FieldAccessError
 
 
 def require_field_principal(
@@ -36,9 +38,10 @@ def require_field_principal(
 
     from app.services.field.jobs import _profile_from_principal
 
+    field_system_user_id(auth)
     try:
         profile: TechnicianProfile | None = _profile_from_principal(db, auth)
-    except HTTPException:
+    except FieldAccessError:
         profile = None
     if profile is not None:
         return {**auth, "technician_profile": profile, "field_actor": "technician"}
@@ -54,3 +57,19 @@ def require_field_principal(
         status_code=403,
         detail="Field technician or vendor access required",
     )
+
+
+def require_technician_map_principal(
+    auth: dict = Depends(require_user_auth),
+    db: Session = Depends(get_db),
+) -> dict:
+    """Global plant inventory is available only to active technician actors."""
+    from app.services.field.work_order_access import (
+        ResolveFieldActor,
+        require_technician_map_actor,
+    )
+
+    require_technician_map_actor(
+        db, query=ResolveFieldActor(field_system_user_id(auth))
+    )
+    return auth

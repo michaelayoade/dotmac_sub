@@ -37,7 +37,6 @@ from app.schemas.vendor_purchase_invoice import (
     VendorPurchaseInvoiceLineCreate,
 )
 from app.services import (
-    network_map,
     vendor_fiber,
     vendor_submission_proposals,
     work_order_views,
@@ -46,13 +45,9 @@ from app.services.common import coerce_uuid
 from app.services.db_session_adapter import db_session_adapter
 from app.services.domain_errors import DomainError
 from app.services.field import vendor_capabilities
-from app.services.field.map_assets import VENDOR_ROUTE_AUTHORING_POI_FILTERS
 from app.services.field.vendor_auth import vendor_context
 from app.services.owner_commands import CommandContext
 from app.services.vendor_portal_operations import (
-    VENDOR_ROUTE_AUTHORING_LAYER_FILTERS,
-    VENDOR_ROUTE_AUTHORING_RADIUS_OPTIONS,
-    VENDOR_ROUTE_AUTHORING_STATUS_FILTERS,
     AddVendorQuoteLineCommand,
     CreateVendorQuoteCommand,
     CreateVendorRouteRevisionCommand,
@@ -248,7 +243,6 @@ def _project_detail_response(
         str(project["id"]),
         vendor_id,
     )
-    route_planning_map = network_map.build_vendor_route_planning_map_projection(db=db)
     supply = project_workspace(
         db,
         project_id=str(project["id"]),
@@ -275,14 +269,9 @@ def _project_detail_response(
             "quote": quote,
             "invoice": invoice,
             "route_geojson": route_geojson,
-            "route_planning_map_geojson": route_planning_map.to_transport(),
             "supply": supply,
             "vendor_work_orders": vendor_work_orders,
             "can_propose_closure": can_propose_closure,
-            "vendor_route_authoring_layer_filters": VENDOR_ROUTE_AUTHORING_LAYER_FILTERS,
-            "vendor_route_authoring_poi_filters": VENDOR_ROUTE_AUTHORING_POI_FILTERS,
-            "vendor_route_authoring_radius_options": VENDOR_ROUTE_AUTHORING_RADIUS_OPTIONS,
-            "vendor_route_authoring_status_filters": VENDOR_ROUTE_AUTHORING_STATUS_FILTERS,
             "message": message,
             "error_message": error_message,
         },
@@ -403,16 +392,8 @@ def vendor_project_detail(
     db: Session = Depends(get_db),
 ):
     context = _context(auth, db, vendor_capabilities.PROJECT_READ)
-    # _project_detail_response resolves route_geojson through
-    # build_vendor_project_route_geojson and gates can_propose_closure with
-    # vendor_capabilities.AS_BUILT_WRITE. _project_detail_response calls
-    # build_vendor_route_planning_map_projection and supplies
-    # "route_planning_map_geojson", "vendor_route_authoring_layer_filters",
-    # "vendor_route_authoring_poi_filters", "vendor_route_authoring_radius_options",
-    # and "vendor_route_authoring_status_filters" from
-    # VENDOR_ROUTE_AUTHORING_LAYER_FILTERS, VENDOR_ROUTE_AUTHORING_POI_FILTERS,
-    # VENDOR_ROUTE_AUTHORING_RADIUS_OPTIONS, and
-    # VENDOR_ROUTE_AUTHORING_STATUS_FILTERS for the route authoring map.
+    # Only the existing vendor-owned proposed/as-built route evidence is rendered.
+    # Global network plant belongs to the staff map; Field destinations are job-scoped.
     return _project_detail_response(
         request,
         db,

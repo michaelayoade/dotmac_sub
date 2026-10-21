@@ -118,6 +118,7 @@ def freshly_migrated_database(monkeypatch: pytest.MonkeyPatch) -> Iterator[URL]:
         replace(
             app_config.settings,
             database_url=target.render_as_string(hide_password=False),
+            migration_database_url=target.render_as_string(hide_password=False),
         ),
     )
     try:
@@ -508,11 +509,17 @@ def test_family_history_makes_the_scope_migration_non_downgradable(
     engine, cloned_database
 ):
     """Append-only contractual history is refused, never silently discarded."""
-    database = cloned_database("heads")
+    # Exercise 484's own refusal without crossing later forward-only revisions.
+    database = cloned_database(FAMILY_CANDIDATE)
+    policy_id = uuid.uuid4()
+    before = _constraint_definitions(database)
+    assert "plan_family" in before["ex_sla_policy_versions_no_overlap"]
+    assert "ck_sla_policy_versions_plan_family_vocab" in before
 
     with psycopg.connect(_render(database), autocommit=True) as conn:
         _insert(
             conn,
+            id=policy_id,
             policy_key="plan_family:home_flex",
             source="plan_family",
             plan_family="home_flex",
@@ -520,6 +527,20 @@ def test_family_history_makes_the_scope_migration_non_downgradable(
 
     with pytest.raises(RuntimeError, match="plan_family SLA policy version"):
         _alembic_downgrade(database, FAMILY_PREDECESSOR)
+
+    with psycopg.connect(_render(database)) as conn:
+        policy = conn.execute(
+            """
+            SELECT id, policy_key, source, plan_family
+            FROM sla_policy_versions
+            WHERE id = %s
+            """,
+            (policy_id,),
+        ).fetchone()
+        revisions = conn.execute("SELECT version_num FROM alembic_version").fetchall()
+    assert policy == (policy_id, "plan_family:home_flex", "plan_family", "home_flex")
+    assert revisions == [(FAMILY_CANDIDATE,)]
+    assert _constraint_definitions(database) == before
 
 
 def test_contractual_history_outlives_its_parents(engine, cloned_database):

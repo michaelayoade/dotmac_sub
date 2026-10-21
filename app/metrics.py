@@ -29,16 +29,31 @@ WORKER_STARTUP_DURATION = Histogram(
 APPLICATION_READINESS = Gauge(
     "application_readiness", "Whether essential startup and routes are ready"
 )
+AUDIT_SETTINGS_FALLBACKS = Counter(
+    "audit_settings_fallbacks_total",
+    "Supplementary request audit settings failures using enabled defaults",
+)
 INTEGRATION_ROUTE_404 = Counter(
     "integration_route_404_total",
     "404 responses for registered integration routes",
     ["path"],
+)
+TR069_WEBHOOK_AUTH = Counter(
+    "tr069_webhook_auth_total",
+    "GenieACS webhook token checks by mode and outcome",
+    ["mode", "outcome"],
 )
 APPLICATION_EXCEPTIONS = Counter(
     "application_exceptions_total",
     "Unhandled application exceptions by bounded route and exception fingerprint",
     ["surface", "exception_type"],
 )
+PAYMENT_INTENT_MODULE_PARITY = Counter(
+    "payment_intent_module_parity_total",
+    "Authorized invoice checkout module binding parity (bounded field names only)",
+    ["outcome", "field"],
+)
+
 PAYMENT_VERIFICATION_OUTCOMES = Counter(
     "payment_verification_outcomes_total",
     "Customer payment verification outcomes by channel and safe category",
@@ -595,6 +610,47 @@ class _IpConsistencyAuditCollector(Collector):
 REGISTRY.register(_IpConsistencyAuditCollector())
 
 
+class _Ipv4RetentionCollector(Collector):
+    """Latest daily IPv4 retention sweep counts by class (shadow or apply)."""
+
+    def describe(self):  # noqa: ANN201 - prometheus collector protocol
+        yield _gauge_description(
+            "ipv4_retention_release",
+            "IPv4 retention sweep count by class in the last daily run",
+            labels=["class", "mode"],
+        )
+
+    def collect(self):  # noqa: ANN201 - prometheus collector protocol
+        import json
+
+        from prometheus_client.core import GaugeMetricFamily
+
+        try:
+            from app.services.ip_consistency_audit import _get_redis
+
+            client = _get_redis()
+            raw = (
+                client.get("network:ipv4_retention_release:latest") if client else None
+            )
+            data = json.loads(raw) if raw else None
+        except Exception:
+            return
+        if not data:
+            return
+        gauge = GaugeMetricFamily(
+            "ipv4_retention_release",
+            "IPv4 retention sweep count by class in the last daily run",
+            labels=["class", "mode"],
+        )
+        mode = str(data.get("mode") or "shadow")
+        for klass, count in (data.get("counts") or {}).items():
+            gauge.add_metric([klass, mode], float(count or 0))
+        yield gauge
+
+
+REGISTRY.register(_Ipv4RetentionCollector())
+
+
 class _BillingHealthCollector(Collector):
     """Exports the latest worker-produced billing-health snapshot.
 
@@ -989,16 +1045,24 @@ class _PollerHealthCollector(Collector):
         if not data:
             return
 
-        for key, help_text in (
-            ("devices_total", "MikroTik devices in the poller pool"),
-            ("devices_ok", "Devices polled without recent failures"),
-            ("devices_failing", "Devices in failure backoff (silently broken)"),
+        for key, value, help_text in (
+            (
+                "devices_total",
+                data.devices_total,
+                "MikroTik devices in the poller pool",
+            ),
+            ("devices_ok", data.devices_ok, "Devices polled without recent failures"),
+            (
+                "devices_failing",
+                data.devices_failing,
+                "Devices in failure backoff (silently broken)",
+            ),
         ):
             gauge = GaugeMetricFamily(f"bandwidth_poller_{key}", help_text)
-            gauge.add_metric([], float(data.get(key) or 0))
+            gauge.add_metric([], float(value))
             yield gauge
 
-        cycle = data.get("cycle_seconds")
+        cycle = data.cycle_seconds
         if cycle is not None:
             gauge = GaugeMetricFamily(
                 "bandwidth_poller_cycle_seconds",
@@ -1007,12 +1071,12 @@ class _PollerHealthCollector(Collector):
             gauge.add_metric([], float(cycle))
             yield gauge
 
-        ts = data.get("ts")
+        ts = data.observed_at
         if ts:
             from datetime import UTC, datetime
 
             try:
-                age = (datetime.now(UTC) - datetime.fromisoformat(ts)).total_seconds()
+                age = (datetime.now(UTC) - ts).total_seconds()
             except ValueError:
                 return
             gauge = GaugeMetricFamily(
@@ -1296,3 +1360,40 @@ def record_customer_device_command_refusal(*, command: str, code: str) -> None:
     CUSTOMER_DEVICE_COMMAND_REFUSALS_TOTAL.labels(
         command=str(command), code=str(code)
     ).inc()
+
+
+CREDENTIAL_FORMAT_REJECTIONS = Counter(
+    "credential_format_rejections_total",
+    "Credential verification refused unavailable, unknown or malformed stored material",
+)
+
+PORTAL_AUTHENTICATION_SUCCESSES = Counter(
+    "portal_authentication_successes_total",
+    "Delivered customer portal logins by verified credential source",
+    ["src"],
+)
+
+
+def record_portal_authentication_success(*, src: str) -> None:
+    """Bound label cardinality; telemetry cannot change authentication results."""
+    if src not in {"user_credential", "access_credential", "radius_user"}:
+        return
+    try:
+        PORTAL_AUTHENTICATION_SUCCESSES.labels(src=src).inc()
+    except Exception:
+        pass
+
+
+AUTHENTICATION_DENIAL_WRITE_FAILURES = Counter(
+    "authentication_denial_write_failures_total",
+    "Failure-side authentication evidence writes that did not complete.",
+)
+AUTHENTICATION_UNKNOWN_DENIALS = Counter(
+    "authentication_unknown_denials_total",
+    "Authentication denials without a trusted resolved target; no identity labels.",
+)
+
+ANONYMOUS_RECOVERY_FAILURES = Counter(
+    "anonymous_password_recovery_failures_total",
+    "Anonymous recovery owner or session lifecycle failures.",
+)

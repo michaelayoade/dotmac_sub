@@ -16,7 +16,11 @@ from app.schemas.infrastructure import (
 )
 from app.schemas.project import ProjectCreate, ProjectRead, ProjectUpdate
 from app.services import infrastructure_catalogue, web_customer_lists, web_projects
-from app.services.projects import ProjectServiceError, projects
+from app.services.projects import (
+    PHYSICAL_INFRASTRUCTURE_PROJECT_TYPES,
+    ProjectServiceError,
+    projects,
+)
 
 
 @pytest.fixture
@@ -267,3 +271,80 @@ def test_form_reference_round_trip_and_partial_selection(
             infrastructure_type="base_station",
             infrastructure_id="",
         )
+
+
+@pytest.mark.parametrize("project_type", PHYSICAL_INFRASTRUCTURE_PROJECT_TYPES)
+def test_every_physical_type_can_create_retarget_and_update_infrastructure(
+    db_session, infrastructure_scope, project_type
+):
+    template, site = infrastructure_scope
+    template.project_type = project_type.value
+    other = PopSite(name="Updated physical target", zabbix_group_id="physical-other")
+    db_session.add(other)
+    db_session.commit()
+    project = projects.create(
+        db_session,
+        ProjectCreate(
+            name="Physical project",
+            project_type=project_type,
+            project_template_id=template.id,
+            infrastructure=InfrastructureReference(
+                type=InfrastructureType.base_station, id=site.id
+            ),
+        ),
+    )
+    assert ProjectRead.model_validate(project).infrastructure.id == site.id
+    project = projects.update(
+        db_session,
+        str(project.id),
+        ProjectUpdate(
+            infrastructure=InfrastructureReference(
+                type=InfrastructureType.base_station, id=other.id
+            )
+        ),
+    )
+    project = projects.update(
+        db_session, str(project.id), ProjectUpdate(description="Updated physical scope")
+    )
+    assert project.project_type == project_type.value
+    assert ProjectRead.model_validate(project).infrastructure.id == other.id
+    scopes = db_session.scalars(
+        select(InstallationProject).where(InstallationProject.project_id == project.id)
+    ).all()
+    assert len(scopes) == 1 and scopes[0].status == "draft"
+
+
+def test_null_type_cannot_select_infrastructure_or_clear_type_while_linked(
+    db_session, infrastructure_scope
+):
+    _, site = infrastructure_scope
+    reference = InfrastructureReference(
+        type=InfrastructureType.base_station, id=site.id
+    )
+    with pytest.raises(ProjectServiceError, match="physical project type"):
+        projects.create(
+            db_session,
+            ProjectCreate(name="Unclassified infrastructure", infrastructure=reference),
+        )
+    unclassified = projects.create(
+        db_session, ProjectCreate(name="Unclassified project")
+    )
+    with pytest.raises(ProjectServiceError, match="physical project type"):
+        projects.update(
+            db_session, str(unclassified.id), ProjectUpdate(infrastructure=reference)
+        )
+    classified = projects.create(
+        db_session,
+        ProjectCreate(
+            name="Classified physical project",
+            project_type=ProjectType.air_fiber_installation,
+            infrastructure=reference,
+        ),
+    )
+    with pytest.raises(ProjectServiceError, match="Clear the infrastructure"):
+        projects.update(
+            db_session, str(classified.id), ProjectUpdate(project_type=None)
+        )
+    db_session.refresh(classified)
+    assert classified.project_type == ProjectType.air_fiber_installation.value
+    assert classified.infrastructure.id == site.id

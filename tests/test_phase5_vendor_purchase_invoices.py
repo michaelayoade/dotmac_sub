@@ -416,6 +416,9 @@ def test_vendor_invoice_attachment_metadata_rolls_back_after_staging_failure(
         def upload(self, key: str, _data: bytes, _content_type: str | None):
             uploaded_keys.append(key)
 
+        def exists(self, key: str) -> bool:
+            return key in uploaded_keys
+
     def _fail_event(*_args, **_kwargs):
         raise RuntimeError("synthetic event staging failure")
 

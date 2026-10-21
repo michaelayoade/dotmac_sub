@@ -220,6 +220,24 @@ def test_subscription_detail_uses_canonical_preview_and_execute_endpoints():
     assert "Cancel the pending plan-change request first" in source
 
 
+def test_ticket_pause_card_links_source_and_effective_merged_tickets():
+    source = Path("templates/admin/catalog/subscription_detail.html").read_text()
+    Environment(autoescape=True).parse(source)
+
+    assert "Ticket number" in source
+    assert (
+        "/admin/support/tickets/{{ ticket_pause_resume_preview.source_ticket_id }}"
+        in source
+    )
+    assert "ticket_pause_resume_preview.source_ticket_number" in source
+    assert "Merged to" in source
+    assert (
+        "/admin/support/tickets/{{ ticket_pause_resume_preview.effective_ticket_id }}"
+        in source
+    )
+    assert "ticket_pause_resume_preview.effective_ticket_status.value" in source
+
+
 def test_subscription_detail_does_not_use_legacy_single_action_paths():
     source = Path("templates/admin/catalog/subscription_detail.html").read_text()
 

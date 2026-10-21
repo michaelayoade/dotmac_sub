@@ -1,13 +1,15 @@
 from __future__ import annotations
 
+import hashlib
 from collections.abc import Iterator
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from uuid import uuid4
 
 import pytest
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI
 from fastapi.testclient import TestClient
+from sqlalchemy.orm import Session
 
 from app.api.field import router
 from app.db import get_db
@@ -21,11 +23,29 @@ from app.models.subscription_engine import SettingValueType
 from app.models.support import Ticket, TicketComment
 from app.models.system_user import SystemUser
 from app.models.work_order import WorkOrder
+from app.schemas.field import FieldAttachmentRead, FieldTransitionResponse
 from app.services.auth_dependencies import require_user_auth
+from app.services.db_session_adapter import db_session_adapter
 from app.services.field import attachments as attachments_module
 from app.services.field.attachments import field_attachments
+from app.services.field.execution_contracts import (
+    ApplyFieldTransition,
+    CreateFieldAttachment,
+    FieldEvent,
+    FieldJobQuery,
+    FieldTransitionPayload,
+)
 from app.services.field.jobs import field_jobs
 from app.services.field.transitions import field_transitions
+from app.services.field.work_order_access import FieldAccessError
+from app.services.field.work_order_kind import WorkOrderKind
+from app.services.file_storage import UnifiedFileUploadService
+from app.services.owner_commands import CommandContext
+from app.services.work_order_templates import (
+    ClassificationSource,
+    WorkOrderAccessTechnology,
+    WorkOrderPurpose,
+)
 
 
 def _with_utc(value: datetime) -> datetime:
@@ -39,24 +59,25 @@ class _Stream:
     content_length: int
 
 
-class _FakeUploads:
+class _FakeUploads(UnifiedFileUploadService):
     def __init__(self):
         self.contents: dict[str, bytes] = {}
 
-    def upload(self, **kwargs):
+    def stage_upload(self, **kwargs):
         record = StoredFile(
             entity_type=kwargs["entity_type"],
             entity_id=kwargs["entity_id"],
             original_filename=kwargs["original_filename"],
             storage_key_or_relative_path=f"attachments/{uuid4().hex}",
             file_size=len(kwargs["data"]),
+            checksum=hashlib.sha256(kwargs["data"]).hexdigest(),
             content_type=kwargs["content_type"],
             storage_provider="s3",
             uploaded_by=kwargs["uploaded_by"],
             owner_subscriber_id=kwargs["owner_subscriber_id"],
         )
         kwargs["db"].add(record)
-        kwargs["db"].commit()
+        kwargs["db"].flush()
         kwargs["db"].refresh(record)
         self.contents[str(record.id)] = kwargs["data"]
         return record
@@ -65,9 +86,9 @@ class _FakeUploads:
         data = self.contents[str(record.id)]
         return _Stream(iter([data]), record.content_type, len(data))
 
-    def soft_delete(self, *, db, file, hard_delete_object=True):
+    def stage_soft_delete(self, *, db, file, hard_delete_object=True):
         file.is_deleted = True
-        db.commit()
+        db.flush()
         return file
 
 
@@ -145,14 +166,22 @@ def _work_order(db_session, subscriber: Subscriber, **overrides) -> WorkOrder:
 
 
 def _attach_photo(db_session, user, crm_work_order_id: str, *, kind: str = "photo"):
-    return field_attachments.create(
-        db_session,
-        _auth(user),
-        kind=kind,
-        file_name=f"{kind}.jpg",
-        mime_type="image/jpeg",
-        content=b"image-bytes",
-        crm_work_order_id=crm_work_order_id,
+    return _attachments_create(
+        db=db_session,
+        command=CreateFieldAttachment(
+            requester_system_user_id=user.id,
+            kind=kind,
+            file_name=f"{kind}.jpg",
+            mime_type="image/jpeg",
+            content=b"image-bytes",
+            public_id=crm_work_order_id,
+            context=CommandContext.system(
+                actor=f"user:{user.id}",
+                scope="field:test",
+                reason="test_field_execution",
+                idempotency_key=str(uuid4()),
+            ),
+        ),
     )
 
 
@@ -165,47 +194,76 @@ def test_transition_start_replay_and_pause_updates_mirror_timer_and_history(db_s
     db_session.commit()
 
     start_ref = uuid4()
-    started_result = field_transitions.apply(
-        db_session,
-        _auth(user),
-        "wo-transition-flow",
-        event="start",
-        client_event_id=start_ref,
-        occurred_at=started,
+    started_result = _transitions_apply(
+        db=db_session,
+        command=ApplyFieldTransition(
+            requester_system_user_id=user.id,
+            public_id="wo-transition-flow",
+            event=FieldEvent("start"),
+            client_event_id=start_ref,
+            occurred_at=started,
+            context=CommandContext.system(
+                actor=f"user:{user.id}",
+                scope="field:test",
+                reason="test_field_execution",
+                idempotency_key=str(uuid4()),
+            ),
+        ),
     )
-    replayed = field_transitions.apply(
-        db_session,
-        _auth(user),
-        "wo-transition-flow",
-        event="start",
-        client_event_id=start_ref,
-        occurred_at=started,
+    replayed = _transitions_apply(
+        db=db_session,
+        command=ApplyFieldTransition(
+            requester_system_user_id=user.id,
+            public_id="wo-transition-flow",
+            event=FieldEvent("start"),
+            client_event_id=start_ref,
+            occurred_at=started,
+            context=CommandContext.system(
+                actor=f"user:{user.id}",
+                scope="field:test",
+                reason="test_field_execution",
+                idempotency_key=str(uuid4()),
+            ),
+        ),
     )
 
-    assert started_result["job"].status == "in_progress"
-    assert replayed["replayed"] is True
+    assert started_result.job.status == "in_progress"
+    assert replayed.replayed is True
     assert db_session.query(FieldJobEvent).count() == 1
     open_log = db_session.query(FieldWorkLog).one()
     assert open_log.end_at is None
 
     paused_at = started + timedelta(minutes=30)
-    paused = field_transitions.apply(
-        db_session,
-        _auth(user),
-        "wo-transition-flow",
-        event="pause",
-        client_event_id=uuid4(),
-        occurred_at=paused_at,
-        note="Waiting for access",
+    paused = _transitions_apply(
+        db=db_session,
+        command=ApplyFieldTransition(
+            requester_system_user_id=user.id,
+            public_id="wo-transition-flow",
+            event=FieldEvent("pause"),
+            client_event_id=uuid4(),
+            occurred_at=paused_at,
+            note="Waiting for access",
+            context=CommandContext.system(
+                actor=f"user:{user.id}",
+                scope="field:test",
+                reason="test_field_execution",
+                idempotency_key=str(uuid4()),
+            ),
+        ),
     )
 
-    assert paused["job"].status == "paused"
-    assert paused["event"]["note"] == "Waiting for access"
+    assert paused.job.status == "paused"
+    assert paused.event.note == "Waiting for access"
     db_session.refresh(open_log)
     assert _with_utc(open_log.end_at) == paused_at
     assert open_log.minutes == 30
 
-    detail = field_jobs.get_detail(db_session, _auth(user), "wo-transition-flow")
+    detail = field_jobs.get_detail(
+        db=db_session,
+        query=FieldJobQuery(
+            requester_system_user_id=user.id, public_id="wo-transition-flow"
+        ),
+    )
     assert [event.event for event in detail.events] == ["start", "pause"]
 
 
@@ -237,59 +295,96 @@ def test_completion_requires_photo_and_signature_fallback(db_session, fake_uploa
     assert requirements.customer_signoff_required is True
     assert requirements.signature_unavailable_reason_allowed is True
 
-    with pytest.raises(HTTPException) as exc:
-        field_transitions.apply(
-            db_session,
-            _auth(user),
-            "wo-transition-complete",
-            event="complete",
-            client_event_id=uuid4(),
+    with pytest.raises(FieldAccessError) as exc:
+        _transitions_apply(
+            db=db_session,
+            command=ApplyFieldTransition(
+                requester_system_user_id=user.id,
+                public_id="wo-transition-complete",
+                event=FieldEvent("complete"),
+                client_event_id=uuid4(),
+                context=CommandContext.system(
+                    actor=f"user:{user.id}",
+                    scope="field:test",
+                    reason="test_field_execution",
+                    idempotency_key=str(uuid4()),
+                ),
+            ),
         )
 
-    assert exc.value.status_code == 422
-    assert exc.value.detail == "Completion requires at least one photo"
+    assert exc.value.code.endswith("invalid_request")
+    assert exc.value.message == "Completion requires at least one photo"
 
     _attach_photo(db_session, user, "wo-transition-complete")
     completed_at = datetime.now(UTC)
     completion_event_id = uuid4()
-    completed = field_transitions.apply(
-        db_session,
-        _auth(user),
-        "wo-transition-complete",
-        event="complete",
-        client_event_id=completion_event_id,
-        occurred_at=completed_at,
-        payload={"signature_unavailable_reason": "Customer unavailable"},
+    completed = _transitions_apply(
+        db=db_session,
+        command=ApplyFieldTransition(
+            requester_system_user_id=user.id,
+            public_id="wo-transition-complete",
+            event=FieldEvent("complete"),
+            client_event_id=completion_event_id,
+            occurred_at=completed_at,
+            payload=FieldTransitionPayload(
+                **{"signature_unavailable_reason": "Customer unavailable"}
+            ),
+            context=CommandContext.system(
+                actor=f"user:{user.id}",
+                scope="field:test",
+                reason="test_field_execution",
+                idempotency_key=str(uuid4()),
+            ),
+        ),
     )
 
-    assert completed["job"].status == "completed"
-    assert _with_utc(completed["job"].completed_at) == completed_at
-    assert completed["job"].metadata_["native_field_source"] == "sub"
+    assert completed.job.status == "completed"
+    assert _with_utc(completed.job.completed_at) == completed_at
     assert (
-        completed["job"].metadata_["native_field_activity"]["transition"]["event"]
+        db_session.query(WorkOrder)
+        .filter_by(public_id="wo-transition-complete")
+        .one()
+        .metadata_["native_field_source"]
+        == "sub"
+    )
+    assert (
+        db_session.query(WorkOrder)
+        .filter_by(public_id="wo-transition-complete")
+        .one()
+        .metadata_["native_field_activity"]["transition"]["event"]
         == "complete"
     )
-    assert completed["event"]["new_status"] == "completed"
+    assert completed.event.new_status == "completed"
     projection = db_session.query(TicketComment).filter_by(ticket_id=ticket.id).one()
     assert projection.is_internal is True
     assert projection.metadata_["source"] == "work_order_field_outcome"
     assert projection.metadata_["work_order_id"] == "wo-transition-complete"
-    assert projection.metadata_["field_event_id"] == str(completed["event"]["id"])
+    assert projection.metadata_["field_event_id"] == str(completed.event.id)
     assert projection.metadata_["outcome"] == "complete"
     assert "Support verification is required" in projection.body
     db_session.refresh(ticket)
     assert ticket.status == "open"
 
-    replayed = field_transitions.apply(
-        db_session,
-        _auth(user),
-        "wo-transition-complete",
-        event="complete",
-        client_event_id=completion_event_id,
-        occurred_at=completed_at,
-        payload={"signature_unavailable_reason": "Customer unavailable"},
+    replayed = _transitions_apply(
+        db=db_session,
+        command=ApplyFieldTransition(
+            requester_system_user_id=user.id,
+            public_id="wo-transition-complete",
+            event=FieldEvent("complete"),
+            client_event_id=completion_event_id,
+            occurred_at=completed_at,
+            payload=FieldTransitionPayload(
+                **{"signature_unavailable_reason": "Customer unavailable"}
+            ),
+            context=CommandContext.system(
+                actor=f"user:{user.id}",
+                scope="field:test",
+                reason="test_field_execution",
+                idempotency_key=str(uuid4()),
+            ),
+        ),
     )
-    assert replayed["replayed"] is True
+    assert replayed.replayed is True
     assert db_session.query(TicketComment).filter_by(ticket_id=ticket.id).count() == 1
 
 
@@ -316,19 +411,27 @@ def test_disabled_completion_evidence_policy_allows_completion_without_evidence(
     db_session.commit()
 
     requirements = field_transitions.completion_requirements(db_session)
-    completed = field_transitions.apply(
-        db_session,
-        _auth(user),
-        "wo-transition-no-evidence",
-        event="complete",
-        client_event_id=uuid4(),
+    completed = _transitions_apply(
+        db=db_session,
+        command=ApplyFieldTransition(
+            requester_system_user_id=user.id,
+            public_id="wo-transition-no-evidence",
+            event=FieldEvent("complete"),
+            client_event_id=uuid4(),
+            context=CommandContext.system(
+                actor=f"user:{user.id}",
+                scope="field:test",
+                reason="test_field_execution",
+                idempotency_key=str(uuid4()),
+            ),
+        ),
     )
 
     assert requirements.evidence_required is False
     assert requirements.minimum_photo_count == 0
     assert requirements.customer_signoff_required is False
     assert requirements.signature_unavailable_reason_allowed is False
-    assert completed["job"].status == "completed"
+    assert completed.job.status == "completed"
 
 
 def test_transition_rejects_hidden_jobs_and_invalid_unable_reason(db_session):
@@ -346,26 +449,42 @@ def test_transition_rejects_hidden_jobs_and_invalid_unable_reason(db_session):
     _work_order(db_session, subscriber, crm_work_order_id="wo-transition-unable")
     db_session.commit()
 
-    with pytest.raises(HTTPException) as hidden:
-        field_transitions.apply(
-            db_session,
-            _auth(user),
-            "wo-transition-hidden",
-            event="start",
-            client_event_id=uuid4(),
+    with pytest.raises(FieldAccessError) as hidden:
+        _transitions_apply(
+            db=db_session,
+            command=ApplyFieldTransition(
+                requester_system_user_id=user.id,
+                public_id="wo-transition-hidden",
+                event=FieldEvent("start"),
+                client_event_id=uuid4(),
+                context=CommandContext.system(
+                    actor=f"user:{user.id}",
+                    scope="field:test",
+                    reason="test_field_execution",
+                    idempotency_key=str(uuid4()),
+                ),
+            ),
         )
-    assert hidden.value.status_code == 404
+    assert hidden.value.code.endswith("not_found")
 
-    with pytest.raises(HTTPException) as invalid:
-        field_transitions.apply(
-            db_session,
-            _auth(user),
-            "wo-transition-unable",
-            event="unable_to_complete",
-            client_event_id=uuid4(),
-            payload={"reason": "bad_reason"},
+    with pytest.raises(FieldAccessError) as invalid:
+        _transitions_apply(
+            db=db_session,
+            command=ApplyFieldTransition(
+                requester_system_user_id=user.id,
+                public_id="wo-transition-unable",
+                event=FieldEvent("unable_to_complete"),
+                client_event_id=uuid4(),
+                payload=FieldTransitionPayload(**{"reason": "bad_reason"}),
+                context=CommandContext.system(
+                    actor=f"user:{user.id}",
+                    scope="field:test",
+                    reason="test_field_execution",
+                    idempotency_key=str(uuid4()),
+                ),
+            ),
         )
-    assert invalid.value.status_code == 422
+    assert invalid.value.code.endswith("invalid_request")
 
 
 def test_transition_api(db_session):
@@ -392,8 +511,12 @@ def test_transition_api(db_session):
     assert body["replayed"] is False
 
 
+@pytest.mark.parametrize(
+    "technology",
+    [WorkOrderAccessTechnology.FIBER, WorkOrderAccessTechnology.UNKNOWN, None],
+)
 def test_project_work_order_completion_requires_fiber_as_built_evidence(
-    db_session, fake_uploads
+    db_session, fake_uploads, technology: WorkOrderAccessTechnology | None
 ):
     from app.models.field_fiber import FieldFiberTestResult
     from app.models.project import Project
@@ -412,6 +535,12 @@ def test_project_work_order_completion_requires_fiber_as_built_evidence(
         status="in_progress",
         assigned_to_crm_person_id="crm-fiber-asbuilt",
         project_id=project.id,
+        access_technology=technology.value if technology else None,
+        purpose=WorkOrderPurpose.MAINTENANCE.value if technology else None,
+        template_version=1 if technology else None,
+        classification_source=ClassificationSource.EXPLICIT_OPERATOR_SELECTION.value
+        if technology
+        else None,
     )
     db_session.commit()
 
@@ -421,18 +550,28 @@ def test_project_work_order_completion_requires_fiber_as_built_evidence(
     assert evidence.required is True
     assert evidence.satisfied is False
 
-    with pytest.raises(HTTPException) as exc:
-        field_transitions.apply(
-            db_session,
-            _auth(user),
-            "wo-fiber-asbuilt",
-            event="complete",
-            client_event_id=uuid4(),
-            payload={"signature_unavailable_reason": "Plant work, no customer"},
+    with pytest.raises(FieldAccessError) as exc:
+        _transitions_apply(
+            db=db_session,
+            command=ApplyFieldTransition(
+                requester_system_user_id=user.id,
+                public_id="wo-fiber-asbuilt",
+                event=FieldEvent("complete"),
+                client_event_id=uuid4(),
+                payload=FieldTransitionPayload(
+                    **{"signature_unavailable_reason": "Plant work, no customer"}
+                ),
+                context=CommandContext.system(
+                    actor=f"user:{user.id}",
+                    scope="field:test",
+                    reason="test_field_execution",
+                    idempotency_key=str(uuid4()),
+                ),
+            ),
         )
 
-    assert exc.value.status_code == 422
-    assert "fiber" in exc.value.detail
+    assert exc.value.code.endswith("invalid_request")
+    assert "fiber" in exc.value.message
 
     db_session.add(
         FieldFiberTestResult(
@@ -453,15 +592,94 @@ def test_project_work_order_completion_requires_fiber_as_built_evidence(
     assert evidence.satisfied is True
     assert evidence.fiber_test_count == 1
 
-    completed = field_transitions.apply(
-        db_session,
-        _auth(user),
-        "wo-fiber-asbuilt",
-        event="complete",
-        client_event_id=uuid4(),
-        payload={"signature_unavailable_reason": "Plant work, no customer"},
+    completed = _transitions_apply(
+        db=db_session,
+        command=ApplyFieldTransition(
+            requester_system_user_id=user.id,
+            public_id="wo-fiber-asbuilt",
+            event=FieldEvent("complete"),
+            client_event_id=uuid4(),
+            payload=FieldTransitionPayload(
+                **{"signature_unavailable_reason": "Plant work, no customer"}
+            ),
+            context=CommandContext.system(
+                actor=f"user:{user.id}",
+                scope="field:test",
+                reason="test_field_execution",
+                idempotency_key=str(uuid4()),
+            ),
+        ),
     )
-    assert completed["job"].status == "completed"
+    assert completed.job.status == "completed"
+
+
+@pytest.mark.parametrize("with_signature", [True, False])
+def test_radio_project_completion_requires_photo_and_signoff_without_fiber(
+    db_session, fake_uploads, with_signature: bool
+):
+    from app.models.project import Project
+    from app.services.field.transitions import resolve_fiber_as_built_evidence
+
+    user = _user(db_session, "RadioAsBuilt")
+    _profile(db_session, user, crm_person_id="crm-radio-asbuilt")
+    project = Project(name="Radio rollout")
+    db_session.add(project)
+    db_session.flush()
+    row = _work_order(
+        db_session,
+        _subscriber(db_session),
+        crm_work_order_id="wo-radio-asbuilt",
+        status="in_progress",
+        assigned_to_crm_person_id="crm-radio-asbuilt",
+        project_id=project.id,
+        work_order_kind=WorkOrderKind.INFRASTRUCTURE.value,
+        access_technology=WorkOrderAccessTechnology.RADIO.value,
+        purpose=WorkOrderPurpose.INFRASTRUCTURE_ROLLOUT.value,
+        template_version=1,
+        classification_source=ClassificationSource.EXPLICIT_OPERATOR_SELECTION.value,
+    )
+    db_session.commit()
+    assert row.requires_as_built_evidence is True
+    evidence = resolve_fiber_as_built_evidence(db_session, row)
+    assert evidence.required is False and evidence.satisfied is True
+    assert (
+        evidence.fiber_test_count,
+        evidence.source_observation_count,
+        evidence.splice_proposal_count,
+    ) == (0, 0, 0)
+
+    def complete(payload: FieldTransitionPayload) -> FieldTransitionResponse:
+        return _transitions_apply(
+            db=db_session,
+            command=ApplyFieldTransition(
+                requester_system_user_id=user.id,
+                public_id="wo-radio-asbuilt",
+                event=FieldEvent.complete,
+                client_event_id=uuid4(),
+                payload=payload,
+                context=CommandContext.system(
+                    actor=f"user:{user.id}",
+                    scope="field:test",
+                    reason="test_radio_completion",
+                    idempotency_key=str(uuid4()),
+                ),
+            ),
+        )
+
+    with pytest.raises(FieldAccessError, match="at least one photo"):
+        complete(FieldTransitionPayload())
+    _attach_photo(db_session, user, "wo-radio-asbuilt")
+    with pytest.raises(FieldAccessError, match="customer signature"):
+        complete(FieldTransitionPayload())
+    if with_signature:
+        _attach_photo(db_session, user, "wo-radio-asbuilt", kind="signature")
+        payload = FieldTransitionPayload()
+    else:
+        payload = FieldTransitionPayload(
+            signature_unavailable_reason="Customerless radio infrastructure rollout"
+        )
+    completed = complete(payload)
+    assert completed.job.status == "completed"
 
 
 def test_non_project_work_order_completion_skips_fiber_as_built_gate(
@@ -486,12 +704,93 @@ def test_non_project_work_order_completion_skips_fiber_as_built_gate(
     assert evidence.satisfied is True
 
     _attach_photo(db_session, user, "wo-no-project")
-    completed = field_transitions.apply(
-        db_session,
-        _auth(user),
-        "wo-no-project",
-        event="complete",
-        client_event_id=uuid4(),
-        payload={"signature_unavailable_reason": "Customer unavailable"},
+    completed = _transitions_apply(
+        db=db_session,
+        command=ApplyFieldTransition(
+            requester_system_user_id=user.id,
+            public_id="wo-no-project",
+            event=FieldEvent("complete"),
+            client_event_id=uuid4(),
+            payload=FieldTransitionPayload(
+                **{"signature_unavailable_reason": "Customer unavailable"}
+            ),
+            context=CommandContext.system(
+                actor=f"user:{user.id}",
+                scope="field:test",
+                reason="test_field_execution",
+                idempotency_key=str(uuid4()),
+            ),
+        ),
     )
-    assert completed["job"].status == "completed"
+    assert completed.job.status == "completed"
+
+
+def _attachments_create(
+    db: Session, command: CreateFieldAttachment
+) -> FieldAttachmentRead:
+    db_session_adapter.release_read_transaction(db)
+    return field_attachments.create(db=db, command=command)
+
+
+def _transitions_apply(
+    db: Session, command: ApplyFieldTransition
+) -> FieldTransitionResponse:
+    db_session_adapter.release_read_transaction(db)
+    return field_transitions.apply(db=db, command=command)
+
+
+@pytest.mark.parametrize("supplied_generation", [None, "stale"])
+def test_generated_assignment_rejects_missing_or_stale_departure_generation(
+    db_session, supplied_generation
+):
+    from app.models.dispatch import WorkOrderAssignmentQueue
+
+    user = _user(db_session)
+    profile = _profile(db_session, user)
+    subscriber = _subscriber(db_session)
+    visit = _work_order(db_session, subscriber)
+    generation = uuid4()
+    db_session.add(
+        WorkOrderAssignmentQueue(
+            work_order_mirror_id=visit.id,
+            assigned_technician_id=profile.id,
+            status="assigned",
+            assignment_generation=generation,
+            assignment_effective_at=datetime.now(UTC),
+        )
+    )
+    public_id = visit.public_id
+    db_session.commit()
+    with pytest.raises(FieldAccessError) as exc:
+        _transitions_apply(
+            db_session,
+            ApplyFieldTransition(
+                context=CommandContext.system(
+                    actor=str(user.id), scope="field:test", reason="departure"
+                ),
+                requester_system_user_id=user.id,
+                public_id=public_id,
+                event=FieldEvent.en_route,
+                client_event_id=uuid4(),
+                assignment_generation=uuid4() if supplied_generation else None,
+            ),
+        )
+    assert (
+        exc.value.code == "operations.field_completion.assignment_generation_mismatch"
+    )
+    assert db_session.query(FieldJobEvent).count() == 0
+    db_session_adapter.release_read_transaction(db_session)
+    outcome = _transitions_apply(
+        db_session,
+        ApplyFieldTransition(
+            context=CommandContext.system(
+                actor=str(user.id), scope="field:test", reason="departure"
+            ),
+            requester_system_user_id=user.id,
+            public_id=public_id,
+            event=FieldEvent.en_route,
+            client_event_id=uuid4(),
+            assignment_generation=generation,
+        ),
+    )
+    assert outcome.event.assignment_generation == generation

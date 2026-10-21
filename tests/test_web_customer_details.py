@@ -719,6 +719,71 @@ def test_customer_360_view_more_is_available_for_paused_subscriptions(
     )
 
 
+@pytest.mark.parametrize(
+    "status",
+    [
+        SubscriptionStatus.active,
+        SubscriptionStatus.suspended,
+        SubscriptionStatus.disabled,
+    ],
+)
+@pytest.mark.parametrize("permitted", [False, True])
+def test_customer_test_connection_action_is_independent_of_invoice_and_status(
+    db_session,
+    subscriber,
+    subscription,
+    monkeypatch,
+    status: SubscriptionStatus,
+    permitted: bool,
+) -> None:
+    import app.web.admin as admin_module
+
+    subscriber.user_type = UserType.customer
+    subscription.status = status
+    db_session.commit()
+    monkeypatch.setattr(
+        customer_routes.web_notifications_service,
+        "customer_notification_picker_context",
+        lambda _db: {},
+    )
+    monkeypatch.setattr(
+        customer_routes.subscriber_party_binding_repair,
+        "resolve_repair_context",
+        lambda _db, *, subscriber_id: None,
+    )
+    monkeypatch.setattr(admin_module, "get_current_user", lambda request: None)
+    monkeypatch.setattr(admin_module, "get_sidebar_stats", lambda db: {})
+    monkeypatch.setattr(
+        customer_routes,
+        "has_permission",
+        lambda auth, db, permission: (
+            permitted and permission == "subscription:test_connection"
+        ),
+    )
+    request = _bare_request(f"/admin/customers/person/{subscriber.id}#subscriptions")
+    request.state.auth = {
+        "principal_id": str(uuid.uuid4()),
+        "principal_type": "system_user",
+    }
+    response = customer_routes.person_detail(
+        request=request,
+        customer_id=str(subscriber.id),
+        panel=None,
+        usage_period="current",
+        usage_page=1,
+        usage_per_page=25,
+        usage_view="chart",
+        db=db_session,
+    )
+    rendered = response.body.decode("utf-8")
+    action = (
+        f'href="/admin/customers/person/{subscriber.id}/subscriptions/'
+        f'{subscription.id}/test-connection"'
+    )
+    assert (action in rendered) is permitted
+    assert "/admin/billing/invoices/subscription-service" not in rendered
+
+
 def test_customer_360_unsuspend_action_is_permission_gated_and_reviewed() -> None:
     template = Path("templates/admin/customers/detail.html").read_text(encoding="utf-8")
 
@@ -1597,3 +1662,124 @@ def test_customer_total_invoiced_uses_canonical_billed_cohort(db_session, subscr
     result = web_customer_details._build_common_financials(db_session, [subscriber])
 
     assert result["financials"]["total_invoiced"] == Decimal("150.00")
+
+
+@pytest.mark.parametrize(
+    "metadata,expected_center",
+    [
+        ({}, None),
+        ({"latitude": "bad", "longitude": 3.3}, None),
+        ({"latitude": 6.5}, None),
+        ({"latitude": "0", "longitude": 0}, [0.0, 0.0]),
+        ({"latitude": "6.5", "longitude": "3.3"}, [6.5, 3.3]),
+    ],
+)
+def test_legacy_address_detail_read_preserves_metadata_and_caller_transaction(
+    db_session,
+    subscriber,
+    monkeypatch,
+    metadata: dict[str, object],
+    expected_center: list[float] | None,
+) -> None:
+    from copy import deepcopy
+
+    from app.services import geocoding
+
+    subscriber.user_type = UserType.customer
+    subscriber.address_line1 = " Legacy street "
+    subscriber.city = " Lagos "
+    subscriber.metadata_ = deepcopy(metadata)
+    db_session.commit()
+    subscriber.notes = "Caller owns this pending change"
+    db_session.flush()
+
+    def forbidden(*args, **kwargs):
+        pytest.fail("Customer detail GET must not geocode or complete the transaction")
+
+    monkeypatch.setattr(geocoding, "geocode_preview_from_request", forbidden)
+    monkeypatch.setattr(db_session, "commit", forbidden)
+    monkeypatch.setattr(db_session, "rollback", forbidden)
+    context = build_customer_detail_snapshot(db_session, str(subscriber.id))
+    assert subscriber.metadata_ == metadata
+    assert db_session.in_transaction()
+    assert context["addresses"][0].address_line1 == "Legacy street"
+    if expected_center is None:
+        assert context["map_data"] is None
+        assert context["geocode_target"]["id"] is None
+    else:
+        assert context["map_data"]["center"] == expected_center
+        point = context["map_data"]["geojson"]["features"][0]["geometry"]
+        assert point["coordinates"] == list(reversed(expected_center))
+        assert context["geocode_target"] is None
+    monkeypatch.undo()
+    db_session.rollback()
+    assert subscriber.notes != "Caller owns this pending change"
+
+
+def test_canonical_address_precedes_legacy_display(db_session, subscriber) -> None:
+    subscriber.user_type = UserType.customer
+    subscriber.address_line1 = "Legacy street"
+    subscriber.metadata_ = {"latitude": 1.0, "longitude": 2.0}
+    canonical = Address(
+        subscriber_id=subscriber.id,
+        address_line1="Canonical street",
+        is_primary=True,
+        latitude=6.5,
+        longitude=3.3,
+    )
+    db_session.add(canonical)
+    db_session.commit()
+    context = build_customer_detail_snapshot(db_session, str(subscriber.id))
+    assert context["addresses"] == [canonical]
+    assert context["map_data"]["center"] == [6.5, 3.3]
+
+
+@pytest.mark.parametrize("has_coordinates", [False, True])
+def test_legacy_detail_route_renders_manual_location_gate(
+    db_session,
+    subscriber,
+    monkeypatch,
+    has_coordinates: bool,
+) -> None:
+    import app.web.admin as admin_module
+    from app.services import geocoding
+
+    subscriber.user_type = UserType.customer
+    subscriber.address_line1 = "Legacy route street"
+    subscriber.metadata_ = {"latitude": 0, "longitude": 0} if has_coordinates else {}
+    db_session.commit()
+
+    def forbidden(*args, **kwargs):
+        pytest.fail("Rendering a customer detail must not call the provider")
+
+    monkeypatch.setattr(geocoding, "geocode_preview_from_request", forbidden)
+    monkeypatch.setattr(
+        customer_routes.web_notifications_service,
+        "customer_notification_picker_context",
+        lambda _db: {},
+    )
+    monkeypatch.setattr(
+        customer_routes.subscriber_party_binding_repair,
+        "resolve_repair_context",
+        lambda _db, *, subscriber_id: None,
+    )
+    monkeypatch.setattr(admin_module, "get_current_user", lambda request: None)
+    monkeypatch.setattr(admin_module, "get_sidebar_stats", lambda db: {})
+    request = _bare_request(f"/admin/customers/person/{subscriber.id}")
+    response = customer_routes.person_detail(
+        request=request,
+        customer_id=str(subscriber.id),
+        panel=None,
+        usage_period="current",
+        usage_page=1,
+        usage_per_page=25,
+        usage_view="chart",
+        db=db_session,
+    )
+    rendered = response.body.decode("utf-8")
+    assert "Legacy route street" in rendered
+    assert ('id="customer-coords-save-btn"' in rendered) is not has_coordinates
+    assert ("Location not set" in rendered) is not has_coordinates
+    assert subscriber.metadata_ == (
+        {"latitude": 0, "longitude": 0} if has_coordinates else {}
+    )

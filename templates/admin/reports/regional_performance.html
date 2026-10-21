@@ -151,8 +151,9 @@
                     <th class="sticky left-0 z-10 bg-slate-50 px-5 py-3 dark:bg-slate-900/50">Region</th>
                     <th class="px-4 py-3 text-right">Customers</th>
                     <th class="px-4 py-3 text-right">Active service</th>
-                    <th class="px-4 py-3 text-right text-violet-600 dark:text-violet-300">Wireless</th>
-                    <th class="px-4 py-3 text-right text-cyan-700 dark:text-cyan-300">Wired</th>
+                    {% for column in report.connection_type_columns %}
+                    <th class="px-4 py-3 text-right text-violet-600 dark:text-violet-300">{{ column.name }}{% if not column.is_active %} <span class="normal-case text-slate-400">(inactive)</span>{% endif %}</th>
+                    {% endfor %}
                     <th class="px-4 py-3 text-right">Unspecified</th>
                     <th class="px-4 py-3 text-right">Suspended</th>
                     <th class="px-4 py-3 text-right">Disabled</th>
@@ -180,8 +181,9 @@
                         </td>
                         <td class="px-4 py-4 text-right font-mono text-sm tabular-nums text-slate-700 dark:text-slate-200">{% if customer_filter %}<a href="/admin/customers?{{ customer_filter }}" class="font-semibold underline decoration-dotted underline-offset-2 hover:text-teal-600 dark:hover:text-teal-300" title="View customers in {{ row.name }}">{{ row.total_customers }}</a>{% else %}{{ row.total_customers }}{% endif %}</td>
                         <td class="px-4 py-4 text-right font-mono text-sm font-semibold tabular-nums text-emerald-600 dark:text-emerald-400">{{ row.active_services }}</td>
-                        <td class="px-4 py-4 text-right font-mono text-sm font-semibold tabular-nums text-violet-700 dark:text-violet-300">{{ row.wireless_customers }}</td>
-                        <td class="px-4 py-4 text-right font-mono text-sm font-semibold tabular-nums text-cyan-700 dark:text-cyan-300">{{ row.wired_customers }}</td>
+                        {% for item in row.connection_type_counts %}
+                        <td class="px-4 py-4 text-right font-mono text-sm font-semibold tabular-nums text-violet-700 dark:text-violet-300">{{ item.count }}</td>
+                        {% endfor %}
                         <td class="px-4 py-4 text-right font-mono text-sm tabular-nums text-slate-500 dark:text-slate-400">{{ row.unspecified_customers }}</td>
                         <td class="px-4 py-4 text-right font-mono text-sm tabular-nums text-amber-700 dark:text-amber-300">{% if customer_filter %}<a href="/admin/customers?{{ customer_filter }}&status=suspended" class="underline decoration-dotted underline-offset-2 hover:text-teal-600 dark:hover:text-teal-300" title="View suspended customers in {{ row.name }}">{{ row.suspended_customers }}</a>{% else %}{{ row.suspended_customers }}{% endif %}</td>
                         <td class="px-4 py-4 text-right font-mono text-sm tabular-nums text-slate-600 dark:text-slate-300">{% if customer_filter %}<a href="/admin/customers?{{ customer_filter }}&status=disabled" class="underline decoration-dotted underline-offset-2 hover:text-teal-600 dark:hover:text-teal-300" title="View disabled customers in {{ row.name }}">{{ row.disabled_customers }}</a>{% else %}{{ row.disabled_customers }}{% endif %}</td>
@@ -196,7 +198,7 @@
         </table>
     </div>
     <div class="border-t border-slate-200 px-5 py-4 text-xs text-slate-500 dark:border-slate-700 dark:text-slate-400">
-        Wireless and Wired counts use the customer’s explicit Connection Type field; existing customers without a classification remain Unspecified for manual backfill. Active service counts customers with at least one active subscription. Account status counts are based on the current customer status. Revenue is grouped by the customer’s current region assignment; customers without a winning region appear as Unassigned.
+        Connection-type counts use each customer’s explicit configured classification; customers without one remain Unspecified for manual backfill. Active service counts customers with at least one active subscription. Account status counts are based on the current customer status. Revenue is grouped by the customer’s current region assignment; customers without a winning region appear as Unassigned.
     </div>
     {% endcall %}
     {% else %}

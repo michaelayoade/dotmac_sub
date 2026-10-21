@@ -15,6 +15,7 @@ from app.models.subscriber import Subscriber, UserType
 from app.models.system_user import SystemUser
 from app.models.work_order import WorkOrder
 from app.services.auth_dependencies import require_user_auth
+from app.services.field.execution_contracts import FieldJobQuery
 from app.services.field.jobs import field_jobs
 from app.services.field.materials import field_materials
 
@@ -145,7 +146,10 @@ def test_list_consume_and_surface_materials_in_job_detail(db_session):
     assert work_order.metadata_["native_field_source"] == "sub"
     assert "materials" in work_order.metadata_["native_field_activity"]
 
-    detail = field_jobs.get_detail(db_session, _auth(user), "wo-materials")
+    detail = field_jobs.get_detail(
+        db=db_session,
+        query=FieldJobQuery(requester_system_user_id=user.id, public_id="wo-materials"),
+    )
     assert len(detail.materials) == 1
     assert detail.materials[0].status == "used"
 

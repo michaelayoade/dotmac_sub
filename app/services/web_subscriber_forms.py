@@ -7,15 +7,14 @@ from uuid import UUID
 
 from sqlalchemy.orm import Session
 
-from app.models.auth import AuthProvider
-from app.models.domain_settings import SettingDomain
 from app.models.subscriber import Subscriber, SubscriberCategory
-from app.schemas.auth import UserCredentialCreate
-from app.schemas.subscriber import SubscriberUpdate
-from app.services import auth as auth_service
-from app.services import settings_spec
 from app.services import subscriber as subscriber_service
-from app.services.auth_flow import hash_password
+from app.services.credential_administration import (
+    ProvisionSubscriberLogin,
+    SubscriberLoginOutcome,
+    provision_subscriber_login,
+)
+from app.services.owner_commands import CommandContext
 
 logger = logging.getLogger(__name__)
 
@@ -149,73 +148,25 @@ def create_subscriber_with_optional_login(
     create_user: str | None,
     user_username: str | None,
     user_password: str | None,
-):
-    subscriber = db.get(Subscriber, person_uuid)
-    if not subscriber:
-        raise ValueError("Subscriber not found")
-
-    if create_user == "true":
-        if subscriber_type != "person":
-            raise ValueError(
-                "Customer portal logins can only be created for person subscribers."
-            )
-        if not user_username or not user_password:
-            raise ValueError("Username and password are required to create a login.")
-        existing = auth_service.user_credentials.list(
-            db=db,
-            subscriber_id=str(person_uuid),
-            provider=AuthProvider.local.value,
-            is_active=True,
-            order_by="created_at",
-            order_dir="desc",
-            limit=1,
-            offset=0,
-        )
-        if existing:
-            raise ValueError("Customer already has a portal login.")
-
-    subscriber_number_value = subscriber_number.strip() if subscriber_number else None
-    if subscriber_number_value:
-        prefix = settings_spec.resolve_value(
-            db,
-            SettingDomain.subscriber,
-            "subscriber_number_prefix",
-        )
-        configured_prefix = prefix if isinstance(prefix, str) else "SUB-"
-        if configured_prefix and not subscriber_number_value.startswith(
-            configured_prefix
-        ):
-            # Keep manual numbers only when they respect configured numbering format.
-            subscriber_number_value = None
-
-    payload = SubscriberUpdate(
-        subscriber_number=subscriber_number_value,
-        category=(
-            SubscriberCategory.business.value
-            if subscriber_type == "business"
-            else subscriber_category.strip().lower()
-            if subscriber_category
-            else None
-        ),
-        notes=notes.strip() if notes else None,
-    )
-    subscriber = subscriber_service.subscribers.update(
-        db=db,
-        subscriber_id=str(person_uuid),
-        payload=payload,
-    )
-
-    if create_user == "true":
-        if user_username is None or user_password is None:
-            raise ValueError("Username and password are required to create a login.")
-        credential = UserCredentialCreate(
+    *,
+    context: CommandContext,
+) -> SubscriberLoginOutcome:
+    return provision_subscriber_login(
+        db,
+        command=ProvisionSubscriberLogin(
+            context=context,
             subscriber_id=person_uuid,
-            provider=AuthProvider.local,
-            username=user_username.strip(),
-            password_hash=hash_password(user_password),
-        )
-        auth_service.user_credentials.create(db=db, payload=credential)
-    return subscriber
+            business=subscriber_type == "business",
+            subscriber_number=subscriber_number,
+            category=SubscriberCategory(subscriber_category.strip().lower())
+            if subscriber_category
+            else None,
+            notes=notes,
+            create_login=create_user == "true",
+            username=user_username.strip() if user_username else None,
+            password=user_password,
+        ),
+    )
 
 
 def load_subscriber_form_options(db: Session, limit: int = 500):

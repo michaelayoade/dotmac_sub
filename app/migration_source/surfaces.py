@@ -37,20 +37,21 @@ Classification says what a surface is. It does not say what happens to it, and
 "what happens to it" is the question a cutover actually needs answered. Every
 surface therefore carries a `Disposition`, including the adapters and readers
 that write nothing: a route that reads a customer account has to come from
-somewhere after that account lives in another application.
+the selected module's typed contract after its authority switch inside Sub.
 
 `Disposition.UNDECIDED` is a real state and carries a required `open_question`.
-Three surfaces hold one today. They are enumerable through
-`undecided_surfaces()` precisely so they cannot be lost between here and
-`ctl-isp-006`.
+The three original questions were answered at the pinned Governance decision
+revision. Any future undecided surface remains enumerable through
+`undecided_surfaces()` so it cannot be lost between here and `ctl-isp-006`.
 
 ## The classification is a finding, not a plan
 
 `PARALLEL_WRITER` here does not schedule anything. It records that a second
 path writes a fact some other owner is declared to own, so the cutover sequence
-knows what has to be displaced before authority can move. Nothing in this
-module retires, disables or reroutes a writer; Sub remains the sole production
-writer for this cohort until a separately authorised sealed switch.
+knows what must be displaced in the selected module's authority-switch slice.
+The census does not schedule blanket pre-cutover refactoring. Nothing in this
+module retires, disables or reroutes a writer; existing Sub owners remain
+authoritative until each module's separately authorised one-writer switch.
 
 ## UNDETERMINED means undetermined
 
@@ -102,8 +103,8 @@ class BoundaryRole(StrEnum):
 
     #: Issues the write itself.
     PERSISTS = "persists"
-    #: Validates, authorises and calls an owner. Owns the transaction and
-    #: decides nothing — which is what `db.commit()` in a route means here.
+    #: Validates, authorises and calls an owner. Manages Session lifecycle;
+    #: the registered command owner controls the business transaction.
     DELEGATES = "delegates"
     #: Records an external fact as an observation, deciding nothing.
     OBSERVES = "observes"
@@ -143,20 +144,21 @@ class Disposition(StrEnum):
 
     There is deliberately no "stays as it is" member. Every surface here
     touches cohort-1 state — that is the inclusion criterion — and once that
-    state lives in another application, no such touch can survive unchanged.
+    authority belongs to the composed module, its callers must use that owner.
     A member meaning "nothing happens" would be the one anybody reached for to
     avoid deciding, and this vocabulary exists to force the decision.
     """
 
-    #: Displaced by the target. Must reach zero for `ctl-isp-009`.
+    #: Disable at the selected switch; remove by applicable rollback closure
+    #: and prove zero displaced writers for `ctl-isp-009`.
     RETIRE_AFTER_CUTOVER = "retire_after_cutover"
-    #: Must stop bypassing its declared owner *before* the cohort can be
-    #: shadowed — a comparison against a source with two writers cannot
-    #: distinguish drift from the second writer.
+    #: Historical label: route a surviving touch through the selected owner
+    #: at its switch. Earlier edits require an evidenced migration blocker or
+    #: immediate security/data-loss defect, not merely this classification.
     ROUTE_THROUGH_OWNER_FIRST = "route_through_owner_first"
     #: Reads or forwards a cohort fact, so after the switch it must reach the
-    #: target through a versioned contract. ADR 0012 permits no other shape:
-    #: the two applications share no tables, sessions or transactions.
+    #: module through a typed versioned contract in the same Sub process and
+    #: database. The historical API label does not require an HTTP boundary.
     REPOINT_TO_TARGET_API = "repoint_to_target_api"
     #: An applied migration. There is nothing to retire.
     HISTORICAL_NO_ACTION = "historical_no_action"
@@ -591,6 +593,27 @@ COHORT_SURFACES: Final[tuple[SourceSurface, ...]] = (
         ),
     ),
     SourceSurface(
+        path="app/services/customer_registration_metadata.py",
+        family=EntryPointFamily.SERVICE,
+        authority=AuthorityRole.DECLARED_OWNER,
+        boundary=BoundaryRole.PERSISTS,
+        reachability=Reachability.INTERNAL_ONLY,
+        disposition=Disposition.RETIRE_AFTER_CUTOVER,
+        entity_types=(CohortEntityType.CUSTOMER_ACCOUNT,),
+        owning_service="customer.registration_metadata",
+        registry_declared=True,
+        open_question=None,
+        note=(
+            "The registered flush-only participant applies subscriber number, "
+            "category and notes only inside auth.credential_administration, after "
+            "its principal lock. These existing form fields previously passed "
+            "through generic Subscribers.update; explicit assignments add four "
+            "counted sites while metadata, optional login, audit and outbox now "
+            "share the coordinator transaction. Its local cohort writes must "
+            "retire after cutover, not reach the target database directly."
+        ),
+    ),
+    SourceSurface(
         path="app/services/customer_location_requests.py",
         family=EntryPointFamily.SERVICE,
         authority=AuthorityRole.PARALLEL_WRITER,
@@ -773,6 +796,26 @@ COHORT_SURFACES: Final[tuple[SourceSurface, ...]] = (
         ),
     ),
     SourceSurface(
+        path="app/services/customer_account_deletion.py",
+        family=EntryPointFamily.SERVICE,
+        authority=AuthorityRole.DECLARED_OWNER,
+        boundary=BoundaryRole.PERSISTS,
+        reachability=Reachability.INTERNAL_ONLY,
+        disposition=Disposition.RETIRE_AFTER_CUTOVER,
+        entity_types=(CohortEntityType.CUSTOMER_ACCOUNT,),
+        owning_service="customer.account_deletion",
+        registry_declared=True,
+        open_question=None,
+        note=(
+            "Exact relocation of existing Subscriber hard deletion into one "
+            "audited coordinator transaction. Web and JSON retain their distinct "
+            "eligibility and auth-cleanup policies. The cohort census counts the "
+            "typed ORM instance deletion, while the boundary guard retires the "
+            "two legacy parent-delete paths. Other subscriber and profile writes "
+            "retain their existing owners."
+        ),
+    ),
+    SourceSurface(
         path="app/services/subscriber.py",
         family=EntryPointFamily.SERVICE,
         authority=AuthorityRole.DECLARED_OWNER,
@@ -861,17 +904,19 @@ COHORT_SURFACES: Final[tuple[SourceSurface, ...]] = (
     SourceSurface(
         path="app/services/web_customer_details.py",
         family=EntryPointFamily.WEB_PRESENTER,
-        authority=AuthorityRole.PARALLEL_WRITER,
-        boundary=BoundaryRole.PERSISTS,
+        authority=AuthorityRole.NO_AUTHORITY,
+        boundary=BoundaryRole.READS,
         reachability=Reachability.INTERNAL_ONLY,
-        disposition=Disposition.ROUTE_THROUGH_OWNER_FIRST,
+        disposition=Disposition.REPOINT_TO_TARGET_API,
         entity_types=(CohortEntityType.CUSTOMER_ACCOUNT,),
         owning_service="customer.accounts",
         registry_declared=False,
         open_question=None,
         note=(
-            "An undeclared detail presenter initialises the account `metadata` blob "
-            "in place."
+            "The detail presenter reads canonical Address rows first and delegates "
+            "retained inline-address display to customer.legacy_address_display. "
+            "Read-time geocoding, metadata writes and transaction completion are "
+            "retired; missing coordinates remain missing until an explicit action."
         ),
     ),
     SourceSurface(
@@ -1195,6 +1240,41 @@ COHORT_SURFACES: Final[tuple[SourceSurface, ...]] = (
             "A contract-step purge: removes undeclared, unread Splynx import keys "
             "from `subscribers.metadata` without copying their values. It adds no "
             "fact and is idempotent; once applied it matches no row again."
+        ),
+    ),
+    SourceSurface(
+        path="alembic/versions/665_backfill_splynx_billing_email_contacts.py",
+        family=EntryPointFamily.MIGRATION,
+        authority=AuthorityRole.SCHEMA_LINEAGE,
+        boundary=BoundaryRole.PERSISTS,
+        reachability=Reachability.APPLIED_ONCE,
+        disposition=Disposition.HISTORICAL_NO_ACTION,
+        entity_types=(CohortEntityType.CUSTOMER_ACCOUNT,),
+        owning_service="alembic migration lineage",
+        registry_declared=False,
+        open_question=None,
+        note=(
+            "Moves the Splynx billing email from `subscribers.metadata` onto the "
+            "existing typed billing contact and removes the key; never "
+            "overwrites a typed value, and re-runs write nothing."
+        ),
+    ),
+    SourceSurface(
+        path="alembic/versions/671_customer_connection_type_definitions.py",
+        family=EntryPointFamily.MIGRATION,
+        authority=AuthorityRole.SCHEMA_LINEAGE,
+        boundary=BoundaryRole.PERSISTS,
+        reachability=Reachability.APPLIED_ONCE,
+        disposition=Disposition.HISTORICAL_NO_ACTION,
+        entity_types=(CohortEntityType.CUSTOMER_ACCOUNT,),
+        owning_service="alembic migration lineage",
+        registry_declared=False,
+        open_question=None,
+        note=(
+            "The schema-lineage migration creates typed customer connection-type "
+            "definitions and its downgrade clears unsupported legacy subscriber "
+            "values before restoring the old constraint; each direction is bounded "
+            "to one migration execution."
         ),
     ),
 )

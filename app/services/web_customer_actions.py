@@ -18,8 +18,6 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.models.audit import AuditActorType
-from app.models.auth import ApiKey, MFAMethod, UserCredential
-from app.models.auth import Session as AuthSession
 from app.models.catalog import AccessCredential, Subscription, SubscriptionStatus
 from app.models.collections import DunningCase, DunningCaseStatus
 from app.models.enforcement_lock import EnforcementLock
@@ -61,7 +59,7 @@ from app.services.account_billing_approval import (
     change_account_billing_approval,
 )
 from app.services.account_lifecycle import compute_account_status, derive_account_status
-from app.services.audit_adapter import record_audit_event, stage_audit_event
+from app.services.audit_adapter import AuditActor, record_audit_event, stage_audit_event
 from app.services.branding_config import get_brand
 from app.services.bulk_actions import (
     BulkSelection,
@@ -70,6 +68,7 @@ from app.services.bulk_actions import (
 )
 from app.services.common import coerce_uuid
 from app.services.common import parse_date_filter as _parse_date
+from app.services.customer_account_deletion import CustomerDeletionExpectation
 from app.services.customer_bulk_message_contracts import (
     BulkMessageEvaluation,
     BulkMessageSpec,
@@ -105,49 +104,6 @@ from app.services.whatsapp_notification_templates import (
     build_provider_template_body,
     provider_template_from_template,
 )
-
-
-@dataclass(frozen=True, slots=True)
-class UpdateCustomerProfileCommand:
-    """Closed customer-portal profile update boundary."""
-
-    subscriber_id: UUID
-    first_name: str
-    last_name: str
-    email: str
-    billing_notifications: bool
-    sms_updates: bool
-    display_name: str | None = None
-    phone: str | None = None
-    nin: str | None = None
-    date_of_birth: str | None = None
-    gender: str | None = None
-    preferred_contact_method: str | None = None
-    address_line1: str | None = None
-    address_line2: str | None = None
-    city: str | None = None
-    region: str | None = None
-    lga: str | None = None
-    postal_code: str | None = None
-    country_code: str | None = None
-    push_notifications: bool = True
-    service_notifications: bool = True
-    account_notifications: bool = True
-    usage_notifications: bool = True
-    general_notifications: bool = True
-    locale: str | None = None
-    enforce_biodata: bool = False
-
-
-@dataclass(frozen=True, slots=True)
-class CustomerProfileUpdateOutcome:
-    subscriber_record: Subscriber
-    email_changed: bool
-
-    @property
-    def subscriber(self) -> Subscriber:
-        return self.subscriber_record
-
 
 CUSTOMER_INVOICE_PAYMENT_METHOD_PAYSTACK = "paystack"
 CUSTOMER_INVOICE_PAYMENT_METHOD_TRANSFER = "transfer"
@@ -338,7 +294,6 @@ def billing_form_defaults(subscriber: Subscriber | None) -> dict[str, str]:
         "billing_day_max": str(domain.maximum),
         "billing_day_is_legacy": "false",
         "billing_enabled_override": "",
-        "captive_redirect_enabled": "",
         "billing_day": "",
         "payment_due_days": "",
         "grace_period_days": "",
@@ -357,9 +312,6 @@ def billing_form_defaults(subscriber: Subscriber | None) -> dict[str, str]:
             )
             if subscriber.billing_enabled is not None
             else "",
-            "captive_redirect_enabled": "true"
-            if subscriber.captive_redirect_enabled
-            else "false",
             "billing_day": (
                 str(subscriber.billing_day)
                 if subscriber.billing_day is not None
@@ -666,7 +618,7 @@ def _status_impact_token(
 
 def _delete_impact(
     db: Session, resolved: ResolvedCustomerBulkScope
-) -> tuple[dict[str, object], str]:
+) -> tuple[dict[str, object], str, tuple[CustomerDeletionExpectation, ...]]:
     """Return exact deletion eligibility and a token that detects state drift."""
     customer_ids = [customer.id for customer in resolved.customers]
     with_subscriptions = set(
@@ -692,17 +644,23 @@ def _delete_impact(
         "with_subscriptions": subscription_blocked,
         "destructive": True,
     }
+    expectations = tuple(
+        CustomerDeletionExpectation(
+            customer.id, bool(customer.is_active), customer.id in with_subscriptions
+        )
+        for customer in resolved.customers
+    )
     token = membership_scope_token(
         f"{resolved.scope}:customer_delete",
         [
             (
-                f"{customer.id}:{int(bool(customer.is_active))}:"
-                f"{int(customer.id in with_subscriptions)}"
+                f"{expectation.subscriber_id}:{int(expectation.is_active)}:"
+                f"{int(expectation.has_subscriptions)}"
             )
-            for customer in resolved.customers
+            for expectation in expectations
         ],
     )
-    return impact, token
+    return impact, token, expectations
 
 
 def bulk_update_customer_status_from_payload(
@@ -767,7 +725,7 @@ def bulk_update_customer_status_from_payload(
 
 
 def bulk_delete_customers_from_payload(
-    db: Session, payload: dict[str, Any]
+    db: Session, payload: dict[str, Any], *, actor: AuditActor
 ) -> dict[str, object]:
     resolved = resolve_bulk_customer_scope(db, payload)
     if not resolved.customers:
@@ -776,7 +734,7 @@ def bulk_delete_customers_from_payload(
     # Deletion is permanent: bind the preview not only to membership but to
     # each row's active/subscription eligibility so newly eligible rows cannot
     # be deleted under a stale impact statement.
-    impact, confirmation_token = _delete_impact(db, resolved)
+    impact, confirmation_token, expectations = _delete_impact(db, resolved)
 
     if bool(payload.get("preview_only")):
         return {
@@ -796,7 +754,10 @@ def bulk_delete_customers_from_payload(
         confirmation_token=confirmation_token,
     )
     result = bulk_delete_customers(
-        db=db, customer_ids=_bulk_id_refs(resolved.customers)
+        db=db,
+        customer_ids=_bulk_id_refs(resolved.customers),
+        actor=actor,
+        expectations=expectations,
     )
     return {
         **result,
@@ -1545,7 +1506,6 @@ def _evaluate_bulk_message_domain(
     db: Session, *, spec: BulkMessageSpec
 ) -> BulkMessageEvaluation:
     """Translate legacy helper failures at its typed collaborator boundary."""
-    from app.services.domain_errors import DomainError
 
     try:
         return _evaluate_bulk_message(db=db, spec=spec)
@@ -1570,7 +1530,6 @@ def queue_bulk_message_from_payload(
         materialize_immediate,
     )
     from app.services.db_session_adapter import db_session_adapter
-    from app.services.domain_errors import DomainError
     from app.services.owner_commands import CommandContext
 
     try:
@@ -2116,7 +2075,6 @@ def _billing_override_payload(
     payment_due_days: str | None,
     grace_period_days: str | None,
     min_balance: str | None,
-    captive_redirect_enabled: str | None,
     tax_rate_id: str | None,
     payment_method: str | None,
 ) -> dict[str, Any]:
@@ -2126,7 +2084,6 @@ def _billing_override_payload(
         "min_balance": _optional_decimal(min_balance),
         "tax_rate_id": _normalize_optional(tax_rate_id),
         "payment_method": normalize_customer_invoice_payment_method(payment_method),
-        "captive_redirect_enabled": captive_redirect_enabled == "true",
     }
     # ABSENT and EMPTY are different instructions, and conflating them is how a
     # legacy billing day gets destroyed by an edit that never mentioned it.
@@ -2624,8 +2581,6 @@ def create_customer_from_form(
                 "marketing_opt_in": form_data.get("marketing_opt_in") == "true",
                 "category": SubscriberCategory.residential.value,
                 "reseller_id": reseller_id,
-                "captive_redirect_enabled": form_data.get("captive_redirect_enabled")
-                == "true",
                 "account_start_date": _parse_date(form_data.get("account_start_date")),
                 "notes": _normalize_optional(form_data.get("notes")),
             },
@@ -2731,6 +2686,8 @@ def create_impersonation_session(
         subscriber_id=selected_account.id,
         subscription_id=selected_subscription_id,
         is_impersonation=True,
+        db=db,
+        request=request,
         return_to=(
             f"/admin/customers/business/{selected_account.id}"
             if selected_account.category == SubscriberCategory.business
@@ -2741,7 +2698,13 @@ def create_impersonation_session(
     actor_id_value = None
     if isinstance(auth, dict):
         actor_id_value = (
-            str(auth.get("subscriber_id") or auth.get("person_id") or "") or None
+            str(
+                auth.get("principal_id")
+                or auth.get("subscriber_id")
+                or auth.get("person_id")
+                or ""
+            )
+            or None
         )
 
     record_audit_event(
@@ -2797,7 +2760,6 @@ def update_person_customer(
     payment_due_days: str | None,
     grace_period_days: str | None,
     min_balance: str | None,
-    captive_redirect_enabled: str | None,
     tax_rate_id: str | None,
     withholding_tax_enabled: str | None,
     payment_method: str | None,
@@ -2828,7 +2790,6 @@ def update_person_customer(
         payment_due_days=payment_due_days,
         grace_period_days=grace_period_days,
         min_balance=min_balance,
-        captive_redirect_enabled=captive_redirect_enabled,
         tax_rate_id=tax_rate_id,
         payment_method=payment_method,
     )
@@ -2951,7 +2912,6 @@ def update_business_customer(
     payment_due_days: str | None,
     grace_period_days: str | None,
     min_balance: str | None,
-    captive_redirect_enabled: str | None,
     tax_rate_id: str | None,
     withholding_tax_enabled: str | None,
     payment_method: str | None,
@@ -2980,7 +2940,6 @@ def update_business_customer(
         payment_due_days=payment_due_days,
         grace_period_days=grace_period_days,
         min_balance=min_balance,
-        captive_redirect_enabled=captive_redirect_enabled,
         tax_rate_id=tax_rate_id,
         payment_method=payment_method,
     )
@@ -3166,41 +3125,39 @@ def deactivate_business_customer(
     )
 
 
-def delete_person_customer(db: Session, customer_id: str) -> None:
-    subscriber = subscriber_service.subscribers.get(db=db, subscriber_id=customer_id)
-    if subscriber.is_active:
-        raise HTTPException(
-            status_code=409, detail="Deactivate customer before deleting."
+def delete_person_customer(db: Session, customer_id: str, *, actor: AuditActor) -> None:
+    from app.adapters.customer_account_deletion import (
+        delete_customer_from_adapter,
+        require_deleted,
+    )
+    from app.services.customer_account_deletion import CustomerDeletionPolicy
+
+    require_deleted(
+        delete_customer_from_adapter(
+            customer_id=customer_id,
+            actor=actor,
+            policy=CustomerDeletionPolicy.WEB_PERSON,
         )
-
-    db.query(UserCredential).filter(
-        UserCredential.subscriber_id == subscriber.id
-    ).delete(synchronize_session=False)
-    db.query(MFAMethod).filter(MFAMethod.subscriber_id == subscriber.id).delete(
-        synchronize_session=False
     )
-    db.query(AuthSession).filter(AuthSession.subscriber_id == subscriber.id).delete(
-        synchronize_session=False
-    )
-    db.query(ApiKey).filter(ApiKey.subscriber_id == subscriber.id).delete(
-        synchronize_session=False
-    )
-    db.commit()
-    subscriber_service.subscribers.delete(db=db, subscriber_id=customer_id)
 
 
-def delete_business_customer(db: Session, customer_id: str) -> None:
-    subscriber = subscriber_service.subscribers.get(db=db, subscriber_id=customer_id)
-    if (
-        db.query(Subscription)
-        .filter(Subscription.subscriber_id == subscriber.id)
-        .count()
-    ):
-        raise HTTPException(
-            status_code=409,
-            detail="Delete subscriptions before deleting business customer.",
-        )
-    delete_person_customer(db, customer_id)
+def delete_business_customer(
+    db: Session, customer_id: str, *, actor: AuditActor
+) -> None:
+    from app.adapters.customer_account_deletion import (
+        delete_customer_from_adapter,
+        require_deleted,
+    )
+    from app.services.customer_account_deletion import CustomerDeletionPolicy
+
+    require_deleted(
+        delete_customer_from_adapter(
+            customer_id=customer_id,
+            actor=actor,
+            policy=CustomerDeletionPolicy.WEB_BUSINESS,
+        ),
+        business=True,
+    )
 
 
 def bulk_update_customer_status(
@@ -3274,97 +3231,49 @@ def bulk_update_customer_status(
 def bulk_delete_customers(
     db: Session,
     customer_ids: list[dict[str, str]],
+    *,
+    actor: AuditActor,
+    expectations: tuple[CustomerDeletionExpectation, ...],
 ) -> dict[str, Any]:
+    from app.adapters.customer_account_deletion import (
+        delete_customer_from_adapter,
+    )
+    from app.services.customer_account_deletion import (
+        CustomerDeletionPolicy,
+        CustomerDeletionStatus,
+    )
+
+    expected_by_id = {str(value.subscriber_id): value for value in expectations}
     deleted_count = 0
     skipped: list[dict[str, str]] = []
     for item in customer_ids:
-        customer_id = item.get("id")
-        customer_type = item.get("type")
-        try:
-            if customer_type in {"person", "subscriber"}:
-                subscriber = db.get(Subscriber, customer_id)
-                if not subscriber:
-                    skipped.append(
-                        {
-                            "id": str(customer_id),
-                            "type": str(customer_type),
-                            "reason": "Subscriber not found",
-                        }
-                    )
-                    continue
-                if subscriber.is_active:
-                    skipped.append(
-                        {
-                            "id": str(customer_id),
-                            "type": str(customer_type),
-                            "reason": "Customer is still active",
-                        }
-                    )
-                    continue
-                if (
-                    db.query(Subscription)
-                    .filter(Subscription.subscriber_id == subscriber.id)
-                    .count()
-                ):
-                    skipped.append(
-                        {
-                            "id": str(customer_id),
-                            "type": str(customer_type),
-                            "reason": "Has associated subscriptions",
-                        }
-                    )
-                    continue
-                db.query(UserCredential).filter(
-                    UserCredential.subscriber_id == subscriber.id
-                ).delete(synchronize_session=False)
-                db.query(MFAMethod).filter(
-                    MFAMethod.subscriber_id == subscriber.id
-                ).delete(synchronize_session=False)
-                db.query(AuthSession).filter(
-                    AuthSession.subscriber_id == subscriber.id
-                ).delete(synchronize_session=False)
-                db.query(ApiKey).filter(ApiKey.subscriber_id == subscriber.id).delete(
-                    synchronize_session=False
+        customer_id = str(item.get("id") or "")
+        customer_type = str(item.get("type") or "")
+        reason = ""
+        if customer_type not in {"person", "subscriber", "business"}:
+            reason = "Unknown customer type"
+        else:
+            try:
+                outcome = delete_customer_from_adapter(
+                    customer_id=customer_id,
+                    actor=actor,
+                    policy=CustomerDeletionPolicy.WEB_BULK,
+                    expected_eligibility=expected_by_id.get(customer_id),
                 )
-                subscriber_service.subscribers.delete(
-                    db=db, subscriber_id=str(customer_id)
-                )
-                deleted_count += 1
-            elif customer_type == "business":
-                subscriber = db.get(Subscriber, customer_id)
-                if not subscriber:
-                    skipped.append(
-                        {
-                            "id": str(customer_id),
-                            "type": str(customer_type),
-                            "reason": "Business customer not found",
-                        }
-                    )
+                if outcome.status is CustomerDeletionStatus.DELETED:
+                    deleted_count += 1
                     continue
-                if (
-                    db.query(Subscription)
-                    .filter(Subscription.subscriber_id == subscriber.id)
-                    .count()
-                ):
-                    skipped.append(
-                        {
-                            "id": str(customer_id),
-                            "type": str(customer_type),
-                            "reason": "Has associated subscriptions",
-                        }
-                    )
-                    continue
-                delete_person_customer(db, str(customer_id))
-                deleted_count += 1
-        except Exception as exc:
-            skipped.append(
-                {"id": str(customer_id), "type": str(customer_type), "reason": str(exc)}
-            )
-    return {
-        "success": True,
-        "deleted_count": deleted_count,
-        "skipped": skipped,
-    }
+                reason = {
+                    CustomerDeletionStatus.MISSING: "Business customer not found"
+                    if customer_type == "business"
+                    else "Subscriber not found",
+                    CustomerDeletionStatus.ACTIVE: "Customer is still active",
+                    CustomerDeletionStatus.SUBSCRIBED: "Has associated subscriptions",
+                }[outcome.status]
+            except HTTPException as exc:
+                reason = str(exc.detail)
+        skipped.append({"id": customer_id, "type": customer_type, "reason": reason})
+    return {"success": True, "deleted_count": deleted_count, "skipped": skipped}
 
 
 def _status_from_legacy(
@@ -3478,66 +3387,6 @@ def delete_customer_contact(db: Session, *, contact_id: str) -> None:
     if channel:
         db.delete(channel)
         db.commit()
-
-
-def update_customer_profile(
-    db: Session,
-    *,
-    command: UpdateCustomerProfileCommand,
-) -> CustomerProfileUpdateOutcome | None:
-    """Compatibility adapter for the customer portal profile command owner."""
-    from app.services import customer_portal_profile_commands as owner
-
-    db_session_adapter.release_read_transaction(db)
-    try:
-        outcome = owner.update_customer_profile(
-            db,
-            command=owner.UpdateCustomerProfileCommand(
-                context=CommandContext.system(
-                    actor="customer_portal_legacy_adapter",
-                    scope=owner.PORTAL_PROFILE_WRITE_SCOPE,
-                    reason="legacy customer profile service adapter",
-                ),
-                subscriber_id=UUID(str(command.subscriber_id)),
-                first_name=command.first_name,
-                last_name=command.last_name,
-                display_name=command.display_name,
-                email=command.email,
-                phone=command.phone,
-                nin=command.nin,
-                date_of_birth=command.date_of_birth,
-                gender=command.gender,
-                preferred_contact_method=command.preferred_contact_method,
-                address_line1=command.address_line1,
-                address_line2=command.address_line2,
-                city=command.city,
-                region=command.region,
-                lga=command.lga,
-                postal_code=command.postal_code,
-                country_code=command.country_code,
-                billing_notifications=command.billing_notifications,
-                sms_updates=command.sms_updates,
-                push_notifications=command.push_notifications,
-                service_notifications=command.service_notifications,
-                account_notifications=command.account_notifications,
-                usage_notifications=command.usage_notifications,
-                general_notifications=command.general_notifications,
-                locale=command.locale,
-                enforce_biodata=command.enforce_biodata,
-            ),
-        )
-    except DomainError as exc:
-        if exc.code.endswith("subscriber_not_found"):
-            return None
-        raise ValueError(exc.message) from exc
-
-    subscriber = db.get(Subscriber, outcome.subscriber_id)
-    if subscriber is None:
-        return None
-    return CustomerProfileUpdateOutcome(
-        subscriber_record=subscriber,
-        email_changed=outcome.email_changed,
-    )
 
 
 def approve_subscriber_name_correction(

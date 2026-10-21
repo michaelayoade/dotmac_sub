@@ -1470,7 +1470,6 @@ def create_installation_invoice(
     existing invoice rather than creating a duplicate. Raises ``LookupError``
     when the subscriber does not exist.
     """
-    from app.services.billing.invoices import next_invoice_number
     from app.services.billing_adapter import (
         BillingAdapter,
         InvoiceIntent,
@@ -1493,7 +1492,7 @@ def create_installation_invoice(
     due_days = resolve_payment_due_days(db, subscriber=subscriber)
     intent = InvoiceIntent(
         account_id=subscriber.id,
-        invoice_number=next_invoice_number(db),
+        invoice_number=None,
         currency=currency,
         total=amount,
         memo=description,

@@ -2,16 +2,17 @@
 
 import logging
 import secrets
+from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from uuid import UUID
 
-from sqlalchemy import select
+from fastapi import Request
 from sqlalchemy.orm import Session
 
-from app.models.auth import AuthProvider, UserCredential
-from app.models.catalog import AccessCredential, Subscription
+from app.models.auth import Session as AuthSession
+from app.models.auth import SessionStatus
+from app.models.catalog import Subscription
 from app.models.domain_settings import SettingDomain
-from app.models.radius import RadiusUser
 from app.models.subscriber import Subscriber, SubscriberCategory
 from app.services.session_store import (
     delete_session,
@@ -56,26 +57,135 @@ def _parse_setting_int(value: object | None, default: int) -> int:
     return default
 
 
+@dataclass(frozen=True)
+class CreateCustomerPortalSession:
+    username: str
+    account_id: UUID | None
+    subscriber_id: UUID | None
+    subscription_id: UUID | None = None
+    return_to: str | None = None
+    is_impersonation: bool = False
+    read_only: bool = False
+    remember: bool = False
+    auth_session_id: UUID | None = None
+
+
+@dataclass(frozen=True)
+class CustomerPortalSessionCreated:
+    token: str
+    auth_session_id: UUID
+
+
+@dataclass(frozen=True)
+class CustomerSessionStandingQuery:
+    auth_session_id: UUID
+    subscriber_id: UUID
+    account_id: UUID
+
+
+@dataclass(frozen=True)
+class CustomerSessionStanding:
+    auth_session_id: UUID
+    subscriber_id: UUID
+    expires_at: datetime
+
+
+@dataclass(frozen=True)
+class CustomerSessionRefreshQuery:
+    standing: CustomerSessionStandingQuery
+    created_at: datetime
+    remember: bool
+    now: datetime
+
+
+@dataclass(frozen=True)
+class CustomerSessionRefreshOutcome:
+    expires_at: datetime
+    ttl_seconds: int
+
+
 def create_customer_session(
     username: str,
-    account_id: UUID | None,
-    subscriber_id: UUID | None,
-    subscription_id: UUID | None = None,
+    account_id: UUID | str | None,
+    subscriber_id: UUID | str | None,
+    subscription_id: UUID | str | None = None,
     return_to: str | None = None,
     is_impersonation: bool = False,
     read_only: bool = False,
     remember: bool = False,
     db: Session | None = None,
+    *,
+    auth_session_id: UUID | None = None,
+    request: Request | None = None,
 ) -> str:
-    """Create a new customer session and return the session token.
+    """Compatibility adapter from caller identifiers to typed cache issuance."""
+    command = CreateCustomerPortalSession(
+        username=username,
+        account_id=UUID(str(account_id)) if account_id else None,
+        subscriber_id=UUID(str(subscriber_id)) if subscriber_id else None,
+        subscription_id=UUID(str(subscription_id)) if subscription_id else None,
+        return_to=return_to,
+        is_impersonation=is_impersonation,
+        read_only=read_only,
+        remember=remember,
+        auth_session_id=auth_session_id,
+    )
+    return create_customer_portal_session(db=db, command=command, request=request).token
 
-    ``read_only`` marks a viewing-only session (reseller "view as customer"):
-    state-changing requests are blocked by the portal write-guard and write
-    controls are hidden in the UI. Admin "Login as Customer" is not read-only.
-    """
+
+def create_customer_portal_session(
+    *,
+    db: Session | None,
+    command: CreateCustomerPortalSession,
+    request: Request | None,
+) -> CustomerPortalSessionCreated:
+    """Deliver typed identity backed by already committed database standing."""
+    username, account_id, subscriber_id = (
+        command.username,
+        command.account_id,
+        command.subscriber_id,
+    )
+    subscription_id, return_to = command.subscription_id, command.return_to
+    is_impersonation, read_only, remember = (
+        command.is_impersonation,
+        command.read_only,
+        command.remember,
+    )
+    auth_session_id = command.auth_session_id
     session_token = secrets.token_urlsafe(32)
     ttl_seconds = _session_ttl_seconds(remember, db)
+    if is_impersonation and auth_session_id is None:
+        if db is None or subscriber_id is None:
+            raise ValueError("Impersonation requires database session standing")
+        from app.services import password_authentication as pa
+
+        staged = pa.establish_customer_impersonation_session(
+            db,
+            subscriber_id=UUID(str(subscriber_id)),
+            request=request or Request({"type": "http", "headers": []}),
+            expires_at=datetime.now(UTC) + timedelta(seconds=ttl_seconds),
+        )
+        auth_session_id = UUID(staged.session_id)
+    if auth_session_id is None:
+        raise ValueError("Customer session requires database standing")
+    if db is None or account_id is None or subscriber_id is None:
+        raise ValueError("Customer delivery requires database identity standing")
+    standing = resolve_customer_session_standing(
+        db,
+        query=CustomerSessionStandingQuery(
+            auth_session_id=auth_session_id,
+            subscriber_id=subscriber_id,
+            account_id=account_id,
+        ),
+    )
+    if standing is None:
+        raise RuntimeError("Customer session standing unavailable")
+    ttl_seconds = min(
+        ttl_seconds,
+        max(1, int((standing.expires_at - datetime.now(UTC)).total_seconds())),
+    )
     session_payload = {
+        "auth_session_id": str(auth_session_id) if auth_session_id else None,
         "username": username,
         "account_id": str(account_id) if account_id else None,
         "subscriber_id": str(subscriber_id) if subscriber_id else None,
@@ -85,18 +195,42 @@ def create_customer_session(
         "read_only": read_only,
         "remember": remember,
         "created_at": datetime.now(UTC).isoformat(),
-        "expires_at": (datetime.now(UTC) + timedelta(seconds=ttl_seconds)).isoformat(),
+        "expires_at": standing.expires_at.isoformat(),
     }
-    store_session(
-        _CUSTOMER_SESSION_PREFIX,
-        session_token,
-        session_payload,
-        ttl_seconds,
-        _CUSTOMER_SESSIONS,
-        principal_id=str(subscriber_id) if subscriber_id else None,
-        fallback_index=_CUSTOMER_SESSION_INDEX,
-    )
-    return session_token
+    try:
+        store_session(
+            _CUSTOMER_SESSION_PREFIX,
+            session_token,
+            session_payload,
+            ttl_seconds,
+            _CUSTOMER_SESSIONS,
+            principal_id=str(subscriber_id) if subscriber_id else None,
+            fallback_index=_CUSTOMER_SESSION_INDEX,
+        )
+    except RuntimeError:
+        if is_impersonation and db is not None and auth_session_id and subscriber_id:
+            from app.services import password_authentication as pa
+
+            try:
+                pa.revoke_undelivered_customer_session(
+                    db,
+                    session_id=auth_session_id,
+                    subscriber_id=UUID(str(subscriber_id)),
+                )
+            except Exception:
+                logger.warning("undelivered_impersonation_revoke_failed", exc_info=True)
+        raise
+    return CustomerPortalSessionCreated(session_token, auth_session_id)
+
+
+def _cache_timestamp(value: object) -> datetime | None:
+    if not isinstance(value, str):
+        return None
+    try:
+        parsed = datetime.fromisoformat(value)
+    except ValueError:
+        return None
+    return parsed if parsed.tzinfo is not None else parsed.replace(tzinfo=UTC)
 
 
 def get_customer_session(session_token: str) -> dict | None:
@@ -106,8 +240,8 @@ def get_customer_session(session_token: str) -> dict | None:
         return None
 
     # Check expiration
-    expires_at = datetime.fromisoformat(session["expires_at"])
-    if datetime.now(UTC) > expires_at:
+    expires_at = _cache_timestamp(session.get("expires_at"))
+    if expires_at is None or datetime.now(UTC) >= expires_at:
         invalidate_customer_session(session_token)
         return None
 
@@ -216,37 +350,40 @@ def refresh_customer_session(
         return None
 
     now = datetime.now(UTC)
-    expires_at = datetime.fromisoformat(session["expires_at"])
-    if now > expires_at:
+    expires_at = _cache_timestamp(session.get("expires_at"))
+    if expires_at is None or now >= expires_at:
         invalidate_customer_session(session_token)
         return None
 
-    if _customer_session_revoked(session):
+    identity = _standing_query_from_cache(session)
+    created = _cache_timestamp(session.get("created_at"))
+    if (
+        _customer_session_revoked(session)
+        or db is None
+        or identity is None
+        or created is None
+    ):
         invalidate_customer_session(session_token)
         return None
-
-    ttl_seconds = _session_ttl_seconds(session.get("remember", False), db)
-    new_expires_at = now + timedelta(seconds=ttl_seconds)
-    # Sliding refresh is capped at an absolute lifetime from creation so a
-    # keepalive tab can't extend a session forever.
-    created_raw = session.get("created_at")
-    if created_raw:
-        try:
-            created = datetime.fromisoformat(str(created_raw))
-        except ValueError:
-            created = None
-        if created:
-            absolute_limit = created + timedelta(seconds=_absolute_ttl_seconds(db))
-            if now >= absolute_limit:
-                invalidate_customer_session(session_token)
-                return None
-            new_expires_at = min(new_expires_at, absolute_limit)
+    outcome = resolve_customer_session_refresh(
+        db,
+        query=CustomerSessionRefreshQuery(
+            standing=identity,
+            created_at=created,
+            remember=bool(session.get("remember")),
+            now=now,
+        ),
+    )
+    if outcome is None:
+        invalidate_customer_session(session_token)
+        return None
+    new_expires_at = outcome.expires_at
     session["expires_at"] = new_expires_at.isoformat()
     store_session(
         _CUSTOMER_SESSION_PREFIX,
         session_token,
         session,
-        max(1, int((new_expires_at - now).total_seconds())),
+        outcome.ttl_seconds,
         _CUSTOMER_SESSIONS,
         principal_id=str(session.get("subscriber_id"))
         if session.get("subscriber_id")
@@ -300,6 +437,70 @@ def list_customer_sessions_for_subscriber(
     return sessions
 
 
+def resolve_customer_session_standing(
+    db: Session,
+    *,
+    query: CustomerSessionStandingQuery,
+) -> CustomerSessionStanding | None:
+    """Database-authoritative read. ORM state never crosses the query boundary."""
+    row = db.get(AuthSession, query.auth_session_id, populate_existing=True)
+    if (
+        row is None
+        or row.subscriber_id != query.subscriber_id
+        or query.account_id != query.subscriber_id
+        or row.status != SessionStatus.active
+        or row.revoked_at is not None
+        or row.expires_at is None
+    ):
+        return None
+    expiry = row.expires_at
+    if expiry.tzinfo is None:
+        expiry = expiry.replace(tzinfo=UTC)
+    if expiry <= datetime.now(UTC):
+        return None
+    return CustomerSessionStanding(query.auth_session_id, query.subscriber_id, expiry)
+
+
+def _standing_query_from_cache(session: dict) -> CustomerSessionStandingQuery | None:
+    # Cache mappings are serialized transport data, converted here.
+    try:
+        return CustomerSessionStandingQuery(
+            auth_session_id=UUID(str(session.get("auth_session_id"))),
+            subscriber_id=UUID(str(session.get("subscriber_id"))),
+            account_id=UUID(str(session.get("account_id"))),
+        )
+    except (ValueError, TypeError, AttributeError):
+        return None
+
+
+def _has_auth_session_standing(db: Session, session: dict) -> bool:
+    query = _standing_query_from_cache(session)
+    return (
+        query is not None
+        and resolve_customer_session_standing(db, query=query) is not None
+    )
+
+
+def resolve_customer_session_refresh(
+    db: Session,
+    *,
+    query: CustomerSessionRefreshQuery,
+) -> CustomerSessionRefreshOutcome | None:
+    standing = resolve_customer_session_standing(db, query=query.standing)
+    if standing is None:
+        return None
+    expiry = min(
+        query.now + timedelta(seconds=_session_ttl_seconds(query.remember, db)),
+        query.created_at + timedelta(seconds=_absolute_ttl_seconds(db)),
+        standing.expires_at,
+    )
+    if expiry <= query.now:
+        return None
+    return CustomerSessionRefreshOutcome(
+        expiry, max(1, int((expiry - query.now).total_seconds()))
+    )
+
+
 def get_current_customer(session_token: str | None, db: Session) -> dict | None:
     """Resolve a customer session token into a hydrated session dict."""
     if not session_token:
@@ -309,60 +510,25 @@ def get_current_customer(session_token: str | None, db: Session) -> dict | None:
     if not session:
         return None
 
-    # Enrich session with user data
-    username = session.get("username")
-    needs_identity_lookup = bool(
-        username
-        and (
-            not session.get("account_id")
-            or not session.get("subscriber_id")
-            or not session.get("subscription_id")
-        )
-    )
-    if needs_identity_lookup:
-        radius_user = db.scalars(
-            select(RadiusUser)
-            .where(RadiusUser.username == username)
-            .where(RadiusUser.is_active.is_(True))
-        ).first()
-        if radius_user:
-            session["radius_user_id"] = str(radius_user.id)
-            if radius_user.subscriber_id:
-                session["account_id"] = str(radius_user.subscriber_id)
-            if radius_user.subscription_id:
-                session["subscription_id"] = str(radius_user.subscription_id)
-        else:
-            credential = db.scalars(
-                select(AccessCredential)
-                .where(AccessCredential.username == username)
-                .where(AccessCredential.is_active.is_(True))
-            ).first()
-            if credential:
-                session["account_id"] = str(credential.subscriber_id)
-                session["subscriber_id"] = str(credential.subscriber_id)
-            else:
-                local_credential = db.scalars(
-                    select(UserCredential)
-                    .where(UserCredential.username == username)
-                    .where(UserCredential.provider == AuthProvider.local)
-                    .where(UserCredential.is_active.is_(True))
-                ).first()
-                if local_credential:
-                    subscriber = db.scalars(
-                        select(Subscriber)
-                        .where(Subscriber.id == local_credential.subscriber_id)
-                        .where(Subscriber.is_active.is_(True))
-                    ).first()
-                    if subscriber:
-                        session["subscriber_id"] = str(subscriber.id)
-                        session["account_id"] = str(subscriber.id)
+    # Redis is a delivery projection, never authentication authority. Legacy
+    # ordinary and impersonation payloads without standing must sign in again.
+    if not _has_auth_session_standing(db, session):
+        invalidate_customer_session(session_token)
+        return None
 
+    # Identity is bound at issuance. Never re-resolve it from a potentially
+    # colliding local/RADIUS/access username on subsequent requests.
     subscription_id = session.get("subscription_id")
-    if subscription_id and session.get("account_id") is None:
-        subscription = db.get(Subscription, subscription_id)
-        if subscription and subscription.subscriber_id:
-            session["account_id"] = str(subscription.subscriber_id)
-            session["subscriber_id"] = str(subscription.subscriber_id)
+    if subscription_id:
+        try:
+            subscription = db.get(Subscription, UUID(str(subscription_id)))
+        except (ValueError, TypeError, AttributeError):
+            subscription = None
+        if subscription is None or str(subscription.subscriber_id) != str(
+            session["subscriber_id"]
+        ):
+            invalidate_customer_session(session_token)
+            return None
 
     session["current_user"] = _build_current_user(db, session)
     return session

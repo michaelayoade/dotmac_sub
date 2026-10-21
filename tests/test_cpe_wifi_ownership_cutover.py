@@ -738,14 +738,15 @@ class _StubUser:
 
 
 def _admin_request(*, roles: list[str] | None = None) -> SimpleNamespace:
+    principal_id = str(uuid.uuid4())
     return SimpleNamespace(
         state=SimpleNamespace(
             auth={
-                "principal_id": "admin-1",
-                "principal_type": "user",
+                "principal_id": principal_id,
+                "principal_type": "system_user",
                 "roles": roles if roles is not None else ["admin"],
             },
-            user=_StubUser("admin-1"),
+            user=_StubUser(principal_id),
             request_id="",
         ),
         headers={},
@@ -888,14 +889,15 @@ def test_web_route_wifi_password_refuses_without_network_ont_write_permission(
         lambda _request: {"password": "correct-horse-battery"},
     )
 
+    principal_id = str(uuid.uuid4())
     non_ont_writer_request = SimpleNamespace(
         state=SimpleNamespace(
             auth={
-                "principal_id": "cpe-only-admin",
-                "principal_type": "user",
+                "principal_id": principal_id,
+                "principal_type": "system_user",
                 "roles": ["network_cpe_write_only"],
             },
-            user=_StubUser("cpe-only-admin"),
+            user=_StubUser(principal_id),
             request_id="",
         ),
         headers={},

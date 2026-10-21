@@ -7,6 +7,7 @@ from decimal import Decimal
 import pytest
 from sqlalchemy.orm import Session
 
+from app.models.admin_alert import AdminAlert
 from app.models.billing import (
     Invoice,
     InvoiceLine,
@@ -20,6 +21,7 @@ from app.models.billing import (
     PaymentSettlementOrigin,
     PaymentStatus,
     ServiceEntitlement,
+    TaxApplication,
 )
 from app.models.catalog import (
     AccessType,
@@ -213,6 +215,217 @@ def test_final_invoice_payment_restores_subscription_and_recomputes_account_stat
     assert invoice.status == InvoiceStatus.paid
     assert subscription.status == SubscriptionStatus.active
     assert subscriber.status == SubscriberStatus.active
+
+
+@pytest.mark.parametrize("application_finalizer", [False, True])
+def test_periodless_unlinked_prepaid_settlement_records_review_without_repair(
+    db_session,
+    application_finalizer,
+):
+    from app.services.billing.payments import (
+        _finalize_invoice_payment_effects,
+        finalize_invoice_application_for_owner,
+    )
+    from app.services.prepaid_draft_reconciliation import (
+        PaidPrepaidInvoiceRepairQuery,
+        preview_historical_paid_prepaid_invoice_repair,
+    )
+    from tests.prepaid_funding_helpers import ensure_test_prepaid_contract
+
+    subscriber = _make_subscriber(db_session, status=SubscriberStatus.suspended)
+    subscriber.billing_mode = BillingMode.prepaid
+    old_start = datetime(2026, 7, 3, tzinfo=UTC)
+    old_end = datetime(2026, 8, 3, tzinfo=UTC)
+    subscription = _make_subscription(
+        db_session,
+        subscriber,
+        status=SubscriptionStatus.suspended,
+        billing_mode=BillingMode.prepaid,
+        next_billing_at=old_end,
+    )
+    ensure_test_prepaid_contract(db_session, subscription, Decimal("1000.00"))
+    invoice = _make_prepaid_renewal_invoice(
+        db_session,
+        subscriber,
+        subscription,
+        period_start=old_start,
+        period_end=old_end,
+    )
+    invoice.billing_period_start = None
+    invoice.billing_period_end = None
+    line = db_session.query(InvoiceLine).filter_by(invoice_id=invoice.id).one()
+    line.subscription_id = None
+    line.metadata_ = {}
+    line.description = subscription.offer.name
+    # Canonical renewal terms are exempt when no tax rate is configured.
+    line.tax_application = TaxApplication.exempt
+    suspend_subscription(
+        db_session,
+        str(subscription.id),
+        reason=EnforcementReason.prepaid,
+        source="prepaid_balance_sweep",
+        emit=False,
+    )
+    db_session.commit()
+
+    payment = billing_service.payments.create(
+        db_session,
+        PaymentCreate(
+            account_id=subscriber.id,
+            amount=Decimal("1000.00"),
+            currency="NGN",
+            status=PaymentStatus.succeeded,
+            paid_at=datetime(2026, 8, 5, 14, 30, tzinfo=UTC),
+            allocations=[
+                PaymentAllocationApply(
+                    invoice_id=invoice.id,
+                    amount=Decimal("1000.00"),
+                )
+            ],
+        ),
+    )
+
+    db_session.refresh(invoice)
+    db_session.refresh(line)
+    db_session.refresh(subscription)
+    assert payment.status is PaymentStatus.succeeded
+    assert invoice.status is InvoiceStatus.paid
+    assert invoice.balance_due == Decimal("0.00")
+    assert invoice.billing_period_start is None
+    assert invoice.billing_period_end is None
+    assert line.subscription_id is None
+    assert line.metadata_ == {}
+    assert subscription.next_billing_at == _utc_naive(old_end)
+    assert subscription.status is SubscriptionStatus.suspended
+    assert (
+        db_session.query(ServiceEntitlement)
+        .filter_by(
+            source_invoice_id=invoice.id,
+        )
+        .count()
+        == 0
+    )
+    # Reload the relationship inspected before settlement creation.
+    db_session.refresh(payment, attribute_names=["settlement"])
+    # The former exact repair remains provable; policy is what holds it.
+    preview = preview_historical_paid_prepaid_invoice_repair(
+        db_session,
+        PaidPrepaidInvoiceRepairQuery(
+            invoice_id=invoice.id,
+            subscription_id=subscription.id,
+        ),
+    )
+    assert preview.automatically_actionable is True
+    alert = (
+        db_session.query(AdminAlert)
+        .filter_by(
+            fingerprint=f"prepaid-paid-invoice-repair-review:{invoice.id}",
+        )
+        .one()
+    )
+    assert alert.status.value == "open"
+    # PaymentCreate first finalizes allocations, then creates the settlement.
+    # Its initial review therefore cannot yet prove the exact repair evidence.
+    assert "ambiguous or non-actionable prepaid service evidence" in alert.summary
+    initial_summary = alert.summary
+    alert_id = alert.id
+    invoice_id = invoice.id
+    payment_id = payment.id
+    allocation = (
+        db_session.query(PaymentAllocation)
+        .filter_by(
+            payment_id=payment_id,
+            invoice_id=invoice_id,
+        )
+        .one()
+    )
+    financial_before = (
+        invoice.subtotal,
+        invoice.tax_total,
+        invoice.total,
+        invoice.balance_due,
+        invoice.currency,
+        payment.amount,
+        payment.status,
+        payment.settlement.id,
+        payment.settlement.amount,
+        payment.settlement.unallocated_amount,
+        payment.settlement.prepaid_amount,
+        allocation.id,
+        allocation.amount,
+        allocation.is_active,
+    )
+    ledger_before = {
+        row.id: (row.amount, row.entry_type, row.is_active)
+        for row in db_session.query(LedgerEntry).filter_by(account_id=subscriber.id)
+    }
+    db_session.commit()
+
+    # Both finalizers are flush-only participants in their caller's transaction.
+    # First roll back exact review evidence, then retry and replay after commit.
+    for rollback in (True, False, False):
+        invoice = db_session.get(Invoice, invoice_id, with_for_update=True)
+        payment = db_session.get(Payment, payment_id)
+        if application_finalizer:
+            finalize_invoice_application_for_owner(
+                db_session,
+                invoice,
+                effective_at=payment.paid_at,
+            )
+        else:
+            _finalize_invoice_payment_effects(db_session, invoice)
+        alert = db_session.query(AdminAlert).filter_by(id=alert_id).one()
+        assert "exact settlement-backed evidence retained" in alert.summary
+        assert alert.status.value == "open"
+        assert (
+            db_session.query(AdminAlert)
+            .filter_by(
+                fingerprint=f"prepaid-paid-invoice-repair-review:{invoice_id}",
+            )
+            .count()
+            == 1
+        )
+        db_session.refresh(line)
+        db_session.refresh(subscription)
+        assert invoice.billing_period_start is None
+        assert invoice.billing_period_end is None
+        assert line.subscription_id is None
+        assert line.metadata_ == {}
+        assert subscription.next_billing_at == _utc_naive(old_end)
+        assert subscription.status is SubscriptionStatus.suspended
+        assert (
+            db_session.query(ServiceEntitlement)
+            .filter_by(
+                source_invoice_id=invoice_id,
+            )
+            .count()
+            == 0
+        )
+        assert (
+            invoice.subtotal,
+            invoice.tax_total,
+            invoice.total,
+            invoice.balance_due,
+            invoice.currency,
+            payment.amount,
+            payment.status,
+            payment.settlement.id,
+            payment.settlement.amount,
+            payment.settlement.unallocated_amount,
+            payment.settlement.prepaid_amount,
+            allocation.id,
+            allocation.amount,
+            allocation.is_active,
+        ) == financial_before
+        assert {
+            row.id: (row.amount, row.entry_type, row.is_active)
+            for row in db_session.query(LedgerEntry).filter_by(account_id=subscriber.id)
+        } == ledger_before
+        if rollback:
+            db_session.rollback()
+            db_session.refresh(alert)
+            assert alert.summary == initial_summary
+        db_session.commit()
 
 
 def test_partial_invoice_payment_does_not_restore_or_mark_account_active(db_session):

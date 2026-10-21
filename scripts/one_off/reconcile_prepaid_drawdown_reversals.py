@@ -21,6 +21,7 @@ from sqlalchemy import func
 from app.db import SessionLocal
 from app.models.billing import LedgerEntry, LedgerEntryType, LedgerSource
 from app.services.common import round_money, to_decimal
+from scripts.billing._mutation_policy import refuse_apply
 
 BAD_DEBIT_PREFIX = "Prepaid charge: 30d"
 REVERSAL_PREFIX = "Reversal of erroneous prepaid drawdown charge"
@@ -48,6 +49,7 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--apply", action="store_true", help="Write ledger deltas.")
     args = parser.parse_args()
+    refuse_apply(args.apply)
 
     db = SessionLocal()
     under_count = 0

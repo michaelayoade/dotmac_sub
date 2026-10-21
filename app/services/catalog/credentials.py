@@ -9,10 +9,24 @@ from app.models.catalog import AccessCredential, RadiusProfile
 from app.models.subscriber import Subscriber
 from app.schemas.catalog import AccessCredentialCreate, AccessCredentialUpdate
 from app.services.common import apply_ordering, apply_pagination
+from app.services.credential_crypto import reject_reserved_service_password
 from app.services.crud import CRUDManager
 from app.services.query_builders import apply_active_state, apply_optional_equals
 
 logger = logging.getLogger(__name__)
+
+
+def _refuse_reserved_secret(secret_hash: str | None) -> None:
+    """Refuse a secret reference or at-rest wrapper written through the API.
+
+    ``secret_hash`` is stored through the credential encryption layer, which
+    keeps a reference raw and later resolves it; a service credential must
+    never be able to name an app secret. The message never echoes the value.
+    """
+    try:
+        reject_reserved_service_password(secret_hash)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
 
 
 def _sync_credential_to_radius(db: Session, credential: AccessCredential) -> None:
@@ -64,6 +78,7 @@ class AccessCredentials(CRUDManager[AccessCredential]):
             profile = db.get(RadiusProfile, payload.radius_profile_id)
             if not profile:
                 raise HTTPException(status_code=404, detail="RADIUS profile not found")
+        _refuse_reserved_secret(payload.secret_hash)
         credential = AccessCredential(**payload.model_dump())
         db.add(credential)
         db.commit()
@@ -110,6 +125,7 @@ class AccessCredentials(CRUDManager[AccessCredential]):
         if not credential:
             raise HTTPException(status_code=404, detail="Access credential not found")
         data = payload.model_dump(exclude_unset=True)
+        _refuse_reserved_secret(data.get("secret_hash"))
         if "subscriber_id" in data:
             subscriber = db.get(Subscriber, data["subscriber_id"])
             if not subscriber:
@@ -132,6 +148,9 @@ class AccessCredentials(CRUDManager[AccessCredential]):
                 raise HTTPException(status_code=404, detail="RADIUS profile not found")
         for key, value in data.items():
             setattr(credential, key, value)
+        if "is_active" in data:
+            # An explicit REST/admin change: record why, or clear on reactivation.
+            credential.deactivation_reason = None if data["is_active"] else "manual"
         db.commit()
         db.refresh(credential)
 
@@ -142,4 +161,7 @@ class AccessCredentials(CRUDManager[AccessCredential]):
 
     @classmethod
     def delete(cls, db: Session, credential_id: str):
+        credential = db.get(AccessCredential, credential_id)
+        if credential is not None:
+            credential.deactivation_reason = "manual"
         return super().delete(db, credential_id)

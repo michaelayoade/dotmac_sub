@@ -2,6 +2,7 @@ import 'dart:io' show Platform;
 
 import 'package:dio/dio.dart';
 import 'package:sentry/sentry.dart' show SentryLevel;
+import 'package:uuid/uuid.dart';
 
 import '../config/env.dart';
 import 'observability.dart';
@@ -132,6 +133,7 @@ class ApiClient {
           Log.breadcrumb(
             '${options.method} ${redactSensitivePath(options.path)}',
             category: 'http',
+            data: {'request_id': options.headers['X-Request-ID']},
           );
           handler.next(options);
         },
@@ -140,6 +142,9 @@ class ApiClient {
           Log.breadcrumb(
             '${response.statusCode} $path',
             category: 'http',
+            data: {
+              'request_id': response.requestOptions.headers['X-Request-ID']
+            },
             level: (response.statusCode ?? 0) >= 400
                 ? SentryLevel.warning
                 : SentryLevel.info,
@@ -223,6 +228,7 @@ class ApiClient {
     // Stable per-install id so the backend keeps one session per device
     // (login/refresh replace this device's prior session). Sent on all calls.
     options.headers['X-Device-Id'] = await _deviceId();
+    options.headers.putIfAbsent('X-Request-ID', () => const Uuid().v4());
     handler.next(options);
   }
 

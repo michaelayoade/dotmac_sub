@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import uuid
 from datetime import UTC, datetime, timedelta
+from functools import partial
 from types import SimpleNamespace
 
 import pytest
@@ -17,7 +18,7 @@ from app.models.event_store import EventStore
 from app.models.notification import CommunicationIntentRecord, Notification
 from app.models.subscriber import Subscriber
 from app.services import credential_recovery
-from app.services.auth_flow import hash_password, verify_password
+from app.services.auth_flow import hash_password, verify_user_password
 from app.services.domain_errors import DomainError
 from app.services.ephemeral_communication_actions import (
     EPHEMERAL_ACTION_METADATA_KEY,
@@ -25,6 +26,7 @@ from app.services.ephemeral_communication_actions import (
     materialize_email,
 )
 from app.services.owner_commands import CommandContext
+from tests.support.tx_trace import FactKind, assert_protected_tx, trace_transactions
 
 
 def _context(reason: str = "verify credential recovery") -> CommandContext:
@@ -176,13 +178,28 @@ def test_completion_changes_credential_revokes_sessions_and_spends_token(
         ),
     )
 
-    outcome = credential_recovery.complete_password_reset(
-        db_session,
-        credential_recovery.CompletePasswordResetCommand(
-            context=_context("redeem recovery capability"),
-            token=capability.token,
-            new_password="Replacement-password1",
-        ),
+    with trace_transactions(db_session.get_bind().engine) as trace:
+        outcome = credential_recovery.complete_password_reset(
+            db_session,
+            credential_recovery.CompletePasswordResetCommand(
+                context=_context("redeem recovery capability"),
+                token=capability.token,
+                new_password="Replacement-password1",
+            ),
+        )
+    # Whole-path evidence: synchronous dispatcher delivery creates helper roots.
+    # The bounded owner exemplar below separately stages intent without delivery.
+    with pytest.raises(AssertionError, match="exactly one root commit"):
+        assert_protected_tx(trace.result)
+    assert (
+        len(
+            {
+                fact.root
+                for fact in trace.result.facts
+                if fact.kind == FactKind.COMMIT and fact.transaction == fact.root
+            }
+        )
+        > 1
     )
 
     with pytest.raises(DomainError) as captured:
@@ -198,7 +215,7 @@ def test_completion_changes_credential_revokes_sessions_and_spends_token(
 
     db_session.refresh(credential)
     db_session.refresh(session)
-    assert verify_password("Replacement-password1", credential.password_hash)
+    assert verify_user_password("Replacement-password1", credential.password_hash)
     assert credential.must_change_password is False
     assert session.status == SessionStatus.revoked
     assert outcome.sessions_revoked == 1
@@ -377,7 +394,7 @@ def test_system_user_reset_accepts_password_at_shared_minimum(
     )
     assert outcome.principal_type == "system_user"
     db_session.refresh(credential)
-    assert verify_password("Abcdef1!", credential.password_hash)
+    assert verify_user_password("Abcdef1!", credential.password_hash)
 
 
 def _second_recovery_subscriber(
@@ -502,3 +519,43 @@ def test_exact_principal_recovery_remains_available_with_shared_email(
 
     assert outcome.accepted is True
     assert outcome.delivery_requested is True
+
+
+def test_reset_owner_transaction_trace_before_delivery(
+    db_session: Session, subscriber: Subscriber, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Stage real event intent; dispatcher delivery has its own transactions."""
+    monkeypatch.setenv("JWT_SECRET", "credential-recovery-test-secret")
+    credential = _credential(db_session, subscriber, email="trace.reset@example.com")
+    capability = credential_recovery.issue_exact_reset_capability(
+        db_session,
+        principal_type="subscriber",
+        principal_id=subscriber.id,
+    )
+    assert capability is not None
+    db_session.commit()
+    real_emit = credential_recovery.emit_event
+
+    monkeypatch.setattr(
+        credential_recovery,
+        "emit_event",
+        partial(real_emit, dispatch_after_commit=False),
+    )
+    with trace_transactions(db_session.get_bind().engine) as trace:
+        credential_recovery.complete_password_reset(
+            db_session,
+            credential_recovery.CompletePasswordResetCommand(
+                context=_context(),
+                token=capability.token,
+                new_password="Replacement-password1",
+            ),
+        )
+    assert_protected_tx(trace.result)
+    db_session.refresh(credential)
+    assert verify_user_password("Replacement-password1", credential.password_hash)
+    assert (
+        db_session.query(EventStore)
+        .filter_by(event_type="password_recovery.completed")
+        .count()
+        == 1
+    )

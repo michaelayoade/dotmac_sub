@@ -29,7 +29,7 @@ PERMANENT_LIFECYCLE_TASKS = frozenset(
         "app.tasks.catalog.apply_due_subscription_changes",
         "app.tasks.catalog.apply_due_subscription_status_commands",
         "app.tasks.vacation_holds.resume_expired_holds",
-        "app.tasks.enforcement.reconcile_billing_approval_drift",
+        "app.tasks.vacation_holds.resume_ticket_resolved_pauses",
         "app.tasks.notifications.deliver_notification_queue",
         "app.tasks.notifications.dispatch_customer_bulk_messages",
         "app.tasks.events.dispatch_pending_events",

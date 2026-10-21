@@ -40,6 +40,7 @@ from app.services.billing_remediation import (
     plan_remediation,
     rollback_remediation,
 )
+from scripts.billing._mutation_policy import refuse_apply
 
 
 def _csv_sha256(path: str) -> str:
@@ -68,6 +69,7 @@ def main() -> int:
     p.add_argument("--out", help="write the result manifest here")
     p.add_argument("--rollback", help="apply manifest whose changes to reverse")
     args = p.parse_args()
+    refuse_apply(args.apply or args.rollback)
 
     db = SessionLocal()
     try:

@@ -1,3 +1,4 @@
+import 'job_attachment.dart';
 import '../../app/status_presentation.dart';
 import '../../core/location/map_coordinates.dart';
 
@@ -11,6 +12,7 @@ class JobSummary {
     required this.workType,
     required this.priority,
     this.description,
+    this.assignmentGeneration,
     this.scheduledStart,
     this.scheduledEnd,
     this.estimatedDurationMinutes,
@@ -30,6 +32,7 @@ class JobSummary {
   final String workType;
   final String priority;
   final String? description;
+  final String? assignmentGeneration;
   final DateTime? scheduledStart;
   final DateTime? scheduledEnd;
   final int? estimatedDurationMinutes;
@@ -50,6 +53,7 @@ class JobSummary {
     workType: json['work_type']?.toString() ?? 'other',
     priority: json['priority']?.toString() ?? 'normal',
     description: json['description'] as String?,
+    assignmentGeneration: json['assignment_generation']?.toString(),
     scheduledStart: _date(json['scheduled_start']),
     scheduledEnd: _date(json['scheduled_end']),
     estimatedDurationMinutes: _int(json['estimated_duration_minutes']),
@@ -460,6 +464,26 @@ String? _noteString(Map<String, dynamic> note, List<String> keys) {
   return null;
 }
 
+/// Execution evidence from the server's FieldJobEventRead contract.
+/// Timeline history is a separate presentation projection.
+class JobEvent {
+  const JobEvent({
+    required this.id,
+    required this.event,
+    required this.occurredAt,
+  });
+
+  final String id;
+  final String event;
+  final DateTime occurredAt;
+
+  factory JobEvent.fromJson(Map<String, dynamic> json) => JobEvent(
+    id: json['id'] as String,
+    event: json['event'] as String,
+    occurredAt: DateTime.parse(json['occurred_at'] as String),
+  );
+}
+
 class JobDetail {
   const JobDetail({
     required this.job,
@@ -476,6 +500,7 @@ class JobDetail {
     this.materials = const [],
     this.materialRequests = const [],
     this.worklogs = const [],
+    this.events = const [],
     this.history = const [],
   });
 
@@ -489,17 +514,18 @@ class JobDetail {
   final List<JobVisitHistoryItem> recentVisits;
   final List<JobOpenTicketItem> openTickets;
   final List<JobNote> notes;
-  final List<Map<String, dynamic>> attachments;
+  final List<JobAttachment> attachments;
   final List<Map<String, dynamic>> materials;
   final List<Map<String, dynamic>> materialRequests;
   final List<Map<String, dynamic>> worklogs;
+  final List<JobEvent> events;
   final List<Map<String, dynamic>> history;
 
   int get completionPhotoCount =>
-      attachments.where((item) => item['kind'] == 'photo').length;
+      attachments.where((item) => item.kind == 'photo').length;
 
   bool get hasCompletionSignature =>
-      attachments.any((item) => item['kind'] == 'signature');
+      attachments.any((item) => item.kind == 'signature');
 
   factory JobDetail.fromJson(Map<String, dynamic> json) => JobDetail(
     job: JobSummary.fromJson((json['job'] as Map).cast<String, dynamic>()),
@@ -532,10 +558,13 @@ class JobDetail {
     ),
     openTickets: _typedList(json['open_tickets'], JobOpenTicketItem.fromJson),
     notes: _typedList(json['notes'], JobNote.fromJson),
-    attachments: _mapList(json['attachments']),
+    attachments: _mapList(
+      json['attachments'],
+    ).map(JobAttachment.fromJson).toList(growable: false),
     materials: _mapList(json['materials']),
     materialRequests: _mapList(json['material_requests']),
     worklogs: _mapList(json['worklogs']),
+    events: _typedList(json['events'], JobEvent.fromJson),
     history: _mapList(json['history']),
   );
 
@@ -554,6 +583,7 @@ class JobDetail {
     materials: materials,
     materialRequests: materialRequests,
     worklogs: worklogs,
+    events: events,
     history: history,
   );
 }

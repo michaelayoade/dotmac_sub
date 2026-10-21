@@ -22,8 +22,10 @@ from sqlalchemy import (
     DateTime,
     String,
     delete,
+    literal,
     or_,
     select,
+    text,
 )
 from sqlalchemy.orm import Session
 
@@ -109,6 +111,46 @@ def _radacct_table():
         Column("acctstoptime", DateTime),
         Column("acctupdatetime", DateTime),
     )
+
+
+def external_radacct_username_seen(
+    db: Session, username: str, *, timeout_ms: int = 500
+) -> bool | None:
+    """Read-only, bounded: has any external radacct row used this username?
+
+    Returns ``True``/``False`` when every configured external RADIUS DB
+    answered, ``False`` when none is configured (nothing to collide with), and
+    ``None`` when any lookup failed so the caller can fail safe. The lookup is
+    one indexed-equality ``SELECT 1 ... LIMIT 1`` with a server-side statement
+    timeout; the time spent waiting for a connection is NOT covered by it.
+    """
+    configs = _active_external_sync_configs(db)
+    _release_postgres_read_transaction(db)
+    if not configs:
+        return False
+    radacct = _radacct_table()
+    seen = False
+    for config in configs:
+        try:
+            engine = _get_external_engine(config["db_url"])
+            with engine.connect() as conn:
+                if conn.dialect.name == "postgresql":
+                    conn.execute(
+                        text(f"SET LOCAL statement_timeout = {int(timeout_ms)}")
+                    )
+                found = conn.execute(
+                    select(literal(1))
+                    .select_from(radacct)
+                    .where(radacct.c.username == username)
+                    .limit(1)
+                ).first()
+            seen = seen or found is not None
+        except Exception:
+            logger.warning(
+                "radacct username lookup failed for a RADIUS target", exc_info=True
+            )
+            return None
+    return seen
 
 
 def _read_open_sessions(

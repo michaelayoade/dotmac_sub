@@ -218,6 +218,7 @@ def test_admin_cancel_stale_intent_delegates_to_payment_proof_owner(
     }
     db_session.commit()
     captured: dict[str, object] = {}
+    principal_id = str(uuid4())
 
     def _reject_proof(
         db,
@@ -242,7 +243,7 @@ def test_admin_cancel_stale_intent_delegates_to_payment_proof_owner(
         reason="No matching transfer on the bank statement",
         db=db_session,
         auth={
-            "principal_id": "finance-admin",
+            "principal_id": principal_id,
             "principal_type": "system_user",
             "roles": ["admin"],
             "scopes": [],
@@ -251,7 +252,7 @@ def test_admin_cancel_stale_intent_delegates_to_payment_proof_owner(
 
     assert response.status_code == 303
     assert captured["proof_id"] == str(proof.id)
-    assert captured["verified_by"] == "finance-admin"
+    assert captured["verified_by"] == principal_id
     assert captured["review_notes"] == "No matching transfer on the bank statement"
     context = captured["context"]
     assert isinstance(context, CommandContext)

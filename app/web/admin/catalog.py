@@ -12,6 +12,7 @@ from fastapi.templating import Jinja2Templates
 from sqlalchemy.orm import Session
 from starlette.datastructures import FormData
 
+from app.csrf import require_browser_csrf_header
 from app.db import get_db
 from app.services import catalog as catalog_service
 from app.services import radio_registration as radio_registration_service
@@ -36,6 +37,7 @@ from app.services.auth_dependencies import (
 from app.services.db_session_adapter import db_session_adapter
 from app.services.domain_errors import DomainError
 from app.services.owner_commands import CommandContext
+from app.services.pppoe_password_reveal import REVEAL_PERMISSION, audited_reveal
 from app.services.prepaid_activation_funding_guard import (
     OVERRIDE_PERMISSION as PREPAID_ACTIVATION_OVERRIDE_PERMISSION,
 )
@@ -52,6 +54,7 @@ from app.web.request_parsing import parse_form_data, parse_form_data_sync
 logger = logging.getLogger(__name__)
 
 ADDITIONAL_IP_WRITE_PERMISSION = "subscription:additional_ip:write"
+CREDENTIAL_UPDATE_PERMISSION = "subscription:credential:update"
 templates = Jinja2Templates(directory="templates")
 router = APIRouter(prefix="/catalog", tags=["web-admin-catalog"])
 
@@ -106,36 +109,64 @@ def _fup_http_error(exc: DomainError) -> HTTPException:
     return HTTPException(status_code=status_code, detail=exc.message)
 
 
+LIFECYCLE_KIND_PERMISSION: dict[SubscriptionCommandKind, str] = {
+    SubscriptionCommandKind.activate: "subscription:activate",
+    SubscriptionCommandKind.restore: "subscription:activate",
+    SubscriptionCommandKind.resume_pause: "subscription:activate",
+    SubscriptionCommandKind.suspend: "subscription:suspend",
+    SubscriptionCommandKind.pause: "subscription:suspend",
+    SubscriptionCommandKind.cancel: "subscription:cancel",
+    # expire deprovisions and stops collection, as cancel does.
+    SubscriptionCommandKind.expire: "subscription:cancel",
+    SubscriptionCommandKind.disable: "subscription:suspend",
+    SubscriptionCommandKind.vacation_hold: "subscription:suspend",
+    SubscriptionCommandKind.vacation_resume: "subscription:activate",
+}
+# Every other lifecycle kind (renew, change_plan) is an edit of the
+# subscription and needs subscription:update.
+LIFECYCLE_DEFAULT_PERMISSION = "subscription:update"
+LIFECYCLE_EXECUTE_PERMISSIONS = (
+    "subscription:update",
+    "subscription:activate",
+    "subscription:suspend",
+    "subscription:cancel",
+)
+
+
+def _apply_edit_form_permissions(
+    context: dict[str, Any], auth: dict, db: Session
+) -> None:
+    """Set the edit-form permission flags and withhold credentials without update."""
+    context["can_manage_subscription_catalog"] = has_permission(
+        auth, db, "subscription:update"
+    )
+    context["can_manage_additional_ip"] = has_permission(
+        auth, db, ADDITIONAL_IP_WRITE_PERMISSION
+    )
+    context["can_update_credentials"] = has_permission(
+        auth, db, CREDENTIAL_UPDATE_PERMISSION
+    )
+    if not context["can_manage_subscription_catalog"]:
+        # Credentials are shown only to operators who may update the service.
+        context["has_current_service_password"] = False
+        if isinstance(context.get("subscription"), dict):
+            context["subscription"] = {
+                **context["subscription"],
+                "service_password": "",
+            }
+
+
 def _assert_lifecycle_command_permission(
     request: Request,
     db: Session,
     kind: SubscriptionCommandKind,
 ) -> None:
+    """Enforce the permission matching the requested lifecycle action."""
     auth = getattr(request.state, "auth", None) or {}
-    if auth and has_permission(auth, db, "catalog:write"):
-        return
-    action_permission = {
-        SubscriptionCommandKind.activate: "subscription:activate",
-        SubscriptionCommandKind.restore: "subscription:activate",
-        SubscriptionCommandKind.resume_pause: "subscription:activate",
-        SubscriptionCommandKind.suspend: "subscription:suspend",
-        SubscriptionCommandKind.pause: "subscription:suspend",
-    }.get(kind)
-    if action_permission and auth and has_permission(auth, db, action_permission):
+    required = LIFECYCLE_KIND_PERMISSION.get(kind, LIFECYCLE_DEFAULT_PERMISSION)
+    if auth and has_permission(auth, db, required):
         return
     raise HTTPException(status_code=403, detail="Forbidden")
-
-
-def _assert_lifecycle_preview_permission(
-    request: Request,
-    db: Session,
-    kind: SubscriptionCommandKind,
-) -> None:
-    """Allow catalog readers or the operator authorized for this exact action."""
-    auth = getattr(request.state, "auth", None) or {}
-    if auth and has_permission(auth, db, "catalog:read"):
-        return
-    _assert_lifecycle_command_permission(request, db, kind)
 
 
 @router.get(
@@ -575,7 +606,11 @@ def offer_usage_graph_data(
     return JSONResponse(data)
 
 
-@router.get("/subscriptions", response_class=HTMLResponse)
+@router.get(
+    "/subscriptions",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("subscription:read"))],
+)
 def catalog_subscriptions(
     request: Request,
     status: str | None = None,
@@ -591,7 +626,11 @@ def catalog_subscriptions(
     return templates.TemplateResponse("admin/catalog/subscriptions.html", context)
 
 
-@router.get("/subscriptions/new", response_class=HTMLResponse)
+@router.get(
+    "/subscriptions/new",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("subscription:create"))],
+)
 def catalog_subscription_new(
     request: Request, db: Session = Depends(get_db)
 ) -> HTMLResponse:
@@ -607,7 +646,11 @@ def catalog_subscription_new(
     return templates.TemplateResponse("admin/catalog/subscription_form.html", context)
 
 
-@router.get("/subscription-ipv4-addresses", response_class=JSONResponse)
+@router.get(
+    "/subscription-ipv4-addresses",
+    response_class=JSONResponse,
+    dependencies=[Depends(require_permission("subscription:read"))],
+)
 def catalog_subscription_ipv4_addresses(
     selector: str = Query(...),
     q: str = "",
@@ -631,7 +674,7 @@ def catalog_subscription_ipv4_addresses(
 @router.post(
     "/subscriptions",
     response_class=HTMLResponse,
-    dependencies=[Depends(require_permission("catalog:write"))],
+    dependencies=[Depends(require_permission("subscription:create"))],
 )
 def catalog_subscription_create(
     request: Request,
@@ -653,7 +696,7 @@ def catalog_subscription_create(
 
 @router.get(
     "/subscriptions/ipam/ipv4-available",
-    dependencies=[Depends(require_permission("catalog:read"))],
+    dependencies=[Depends(require_permission("subscription:read"))],
 )
 def catalog_subscription_ipv4_available(
     selector: str = Query(...),
@@ -697,7 +740,7 @@ def catalog_subscription_route_children(
 
 @router.get(
     "/subscriptions/service-access/available-ipv4",
-    dependencies=[Depends(require_permission("catalog:write"))],
+    dependencies=[Depends(require_permission("subscription:update"))],
 )
 def catalog_service_access_available_ipv4(
     target_nas_device_id: UUID = Query(...),
@@ -721,7 +764,7 @@ def catalog_subscription_edit(
     subscription_id: str,
     db: Session = Depends(get_db),
     auth: dict = Depends(
-        require_any_permission("catalog:read", ADDITIONAL_IP_WRITE_PERMISSION)
+        require_any_permission("subscription:update", ADDITIONAL_IP_WRITE_PERMISSION)
     ),
 ) -> HTMLResponse:
     form_context = (
@@ -740,13 +783,9 @@ def catalog_subscription_edit(
 
     context = _base_context(request, db, active_page="catalog-subscriptions")
     context.update(form_context)
-    context["can_manage_subscription_catalog"] = has_permission(
-        auth, db, "catalog:write"
-    )
-    context["can_manage_additional_ip"] = has_permission(
-        auth, db, ADDITIONAL_IP_WRITE_PERMISSION
-    )
+    _apply_edit_form_permissions(context, auth, db)
     context["notice"] = request.query_params.get("notice")
+    context["warning"] = request.query_params.get("warning")
     context["error"] = request.query_params.get("error") or context.get("error")
     return templates.TemplateResponse("admin/catalog/subscription_form.html", context)
 
@@ -782,7 +821,7 @@ def catalog_subscription_additional_ip_update(
 @router.get(
     "/subscriptions/{subscription_id}/access/move",
     response_class=HTMLResponse,
-    dependencies=[Depends(require_permission("catalog:write"))],
+    dependencies=[Depends(require_permission("subscription:update"))],
 )
 def catalog_subscription_service_access_move(
     request: Request,
@@ -810,7 +849,7 @@ def catalog_subscription_service_access_move(
 @router.post(
     "/subscriptions/{subscription_id}/access/move/preview",
     response_class=HTMLResponse,
-    dependencies=[Depends(require_permission("catalog:write"))],
+    dependencies=[Depends(require_permission("subscription:update"))],
 )
 def catalog_subscription_service_access_move_preview(
     request: Request,
@@ -859,7 +898,7 @@ def catalog_subscription_service_access_move_preview(
 
 @router.post(
     "/subscriptions/{subscription_id}/access/move/confirm",
-    dependencies=[Depends(require_permission("catalog:write"))],
+    dependencies=[Depends(require_permission("subscription:update"))],
 )
 def catalog_subscription_service_access_move_confirm(
     request: Request,
@@ -906,7 +945,11 @@ def catalog_subscription_service_access_move_confirm(
     return RedirectResponse(f"{edit_url}?notice={quote_plus(message)}", status_code=303)
 
 
-@router.get("/subscriptions/{subscription_id}", response_class=HTMLResponse)
+@router.get(
+    "/subscriptions/{subscription_id}",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("subscription:read"))],
+)
 def catalog_subscription_detail(
     request: Request,
     subscription_id: str,
@@ -932,10 +975,10 @@ def catalog_subscription_detail(
     context.update(detail_context)
     auth = getattr(request.state, "auth", None)
     context["can_correct_subscription"] = bool(
-        auth and has_permission(auth, db, "catalog:write")
+        auth and has_permission(auth, db, "subscription:update")
     )
     context["can_cancel_pending_plan_change"] = bool(
-        auth and has_permission(auth, db, "catalog:write")
+        auth and has_permission(auth, db, "subscription:update")
     )
     context["can_change_ont"] = bool(
         auth and has_permission(auth, db, "network:ont:write")
@@ -943,7 +986,7 @@ def catalog_subscription_detail(
     context["can_resume_ticket_pause"] = bool(
         auth
         and (
-            has_permission(auth, db, "catalog:write")
+            has_permission(auth, db, "subscription:activate")
             or has_permission(auth, db, "support:ticket_service_pause:resume")
         )
     )
@@ -990,7 +1033,7 @@ def catalog_subscription_detail(
     dependencies=[
         Depends(
             require_any_permission(
-                "catalog:write", "support:ticket_service_pause:resume"
+                "subscription:activate", "support:ticket_service_pause:resume"
             )
         )
     ],
@@ -1190,7 +1233,7 @@ def catalog_subscription_bill_now_confirm(
 @router.post(
     "/subscriptions/{subscription_id}/register-radio-mac",
     response_class=HTMLResponse,
-    dependencies=[Depends(require_permission("catalog:write"))],
+    dependencies=[Depends(require_permission("subscription:update"))],
 )
 def catalog_subscription_register_radio_mac(
     request: Request,
@@ -1239,7 +1282,7 @@ def catalog_subscription_register_radio_mac(
 @router.post(
     "/subscriptions/{subscription_id}/force-reauth",
     response_class=HTMLResponse,
-    dependencies=[Depends(require_permission("catalog:write"))],
+    dependencies=[Depends(require_permission("subscription:update"))],
 )
 def catalog_subscription_force_reauth(
     request: Request,
@@ -1297,7 +1340,7 @@ def catalog_subscription_force_reauth(
 
 @router.post(
     "/subscriptions/{subscription_id}/ipv4/replace",
-    dependencies=[Depends(require_permission("catalog:write"))],
+    dependencies=[Depends(require_permission("subscription:update"))],
 )
 def catalog_subscription_replace_ipv4(
     request: Request,
@@ -1318,7 +1361,7 @@ def catalog_subscription_replace_ipv4(
 
 @router.post(
     "/subscriptions/{subscription_id}/ipv4/reconcile",
-    dependencies=[Depends(require_permission("catalog:write"))],
+    dependencies=[Depends(require_permission("subscription:update"))],
 )
 def catalog_subscription_reconcile_ipv4(
     request: Request,
@@ -1370,40 +1413,38 @@ def catalog_subscription_reconcile_ipv4(
 @router.post(
     "/subscriptions/{subscription_id}/edit",
     response_class=HTMLResponse,
-    dependencies=[Depends(require_permission("catalog:write"))],
+    dependencies=[Depends(require_permission("subscription:update"))],
 )
 def catalog_subscription_update(
     request: Request,
     subscription_id: str,
     form: FormData = Depends(parse_form_data),
     db: Session = Depends(get_db),
+    auth: dict = Depends(require_permission("subscription:update")),
 ):
+    may_update_credentials = has_permission(auth, db, CREDENTIAL_UPDATE_PERMISSION)
     result = web_catalog_subscription_workflows_service.handle_subscription_update_form(
         db,
         subscription_id=subscription_id,
         form=form,
         request=request,
         actor_id=_get_actor_id(request),
+        credential_update_allowed=may_update_credentials,
     )
     if result.get("redirect_url"):
         return RedirectResponse(str(result["redirect_url"]), status_code=303)
     context = _base_context(request, db, active_page="catalog-subscriptions")
     context.update(cast(dict[str, Any], result["form_context"]))
+    _apply_edit_form_permissions(
+        context, getattr(request.state, "auth", None) or {}, db
+    )
+    context["can_update_credentials"] = may_update_credentials
     return templates.TemplateResponse("admin/catalog/subscription_form.html", context)
 
 
 @router.post(
     "/subscriptions/{subscription_id}/lifecycle/preview",
-    dependencies=[
-        Depends(
-            require_any_permission(
-                "catalog:read",
-                "catalog:write",
-                "subscription:activate",
-                "subscription:suspend",
-            )
-        )
-    ],
+    dependencies=[Depends(require_permission("subscription:read"))],
 )
 def catalog_subscription_preview_lifecycle_command(
     request: Request,
@@ -1418,7 +1459,6 @@ def catalog_subscription_preview_lifecycle_command(
     db: Session = Depends(get_db),
 ) -> JSONResponse:
     """Preview one lifecycle command without mutating subscription state."""
-    _assert_lifecycle_preview_permission(request, db, kind)
     payload, status_code = (
         web_catalog_subscription_workflows_service.preview_lifecycle_command_response(
             db,
@@ -1436,7 +1476,13 @@ def catalog_subscription_preview_lifecycle_command(
 
 @router.post(
     "/subscriptions/{subscription_id}/correction/execute",
-    dependencies=[Depends(require_permission("catalog:write"))],
+    # The correction cancels the mistaken active subscription and restores the
+    # prior one, so it needs every one of these.
+    dependencies=[
+        Depends(require_permission("subscription:update")),
+        Depends(require_permission("subscription:cancel")),
+        Depends(require_permission("subscription:activate")),
+    ],
 )
 def catalog_subscription_execute_correction(
     request: Request,
@@ -1480,15 +1526,7 @@ def catalog_subscription_execute_correction(
 
 @router.post(
     "/subscriptions/{subscription_id}/lifecycle/execute",
-    dependencies=[
-        Depends(
-            require_any_permission(
-                "catalog:write",
-                "subscription:activate",
-                "subscription:suspend",
-            )
-        )
-    ],
+    dependencies=[Depends(require_any_permission(*LIFECYCLE_EXECUTE_PERMISSIONS))],
 )
 def catalog_subscription_execute_lifecycle_command(
     request: Request,
@@ -1527,7 +1565,7 @@ def catalog_subscription_execute_lifecycle_command(
 
 @router.post(
     "/subscriptions/{subscription_id}/lifecycle/schedules/{schedule_id}/cancel",
-    dependencies=[Depends(require_permission("catalog:write"))],
+    dependencies=[Depends(require_permission("subscription:update"))],
 )
 def catalog_subscription_cancel_lifecycle_schedule(
     request: Request,
@@ -1549,7 +1587,7 @@ def catalog_subscription_cancel_lifecycle_schedule(
 
 @router.post(
     "/subscriptions/{subscription_id}/lifecycle/schedules/{schedule_id}/cancel-view",
-    dependencies=[Depends(require_permission("catalog:write"))],
+    dependencies=[Depends(require_permission("subscription:update"))],
 )
 def catalog_subscription_cancel_lifecycle_schedule_view(
     request: Request,
@@ -1570,11 +1608,41 @@ def catalog_subscription_cancel_lifecycle_schedule_view(
 
 
 @router.post(
+    "/subscriptions/{subscription_id}/reveal-service-password",
+    dependencies=[
+        Depends(require_browser_csrf_header),
+        Depends(require_permission(REVEAL_PERMISSION)),
+    ],
+)
+def catalog_subscription_reveal_service_password(
+    request: Request,
+    subscription_id: str,
+    db: Session = Depends(get_db),
+) -> JSONResponse:
+    """Explicit, audited reveal of the stored PPPoE service password."""
+    subscriber_id = web_catalog_subscriptions_service.subscription_subscriber_id(
+        db, subscription_id
+    )
+    return audited_reveal(
+        request,
+        db,
+        subscriber_id=subscriber_id or subscription_id,
+        metadata={"subscription_id": subscription_id, "surface": "subscription_form"},
+        lookup=lambda: (
+            web_catalog_subscriptions_service.reveal_subscription_service_password(
+                db, subscription_id
+            )
+        ),
+    )
+
+
+@router.post(
     "/subscriptions/{subscription_id}/send-credentials",
     response_class=HTMLResponse,
-    dependencies=[Depends(require_permission("catalog:write"))],
+    dependencies=[Depends(require_permission("subscription:update"))],
 )
 def catalog_subscription_send_credentials(
+    request: Request,
     subscription_id: str,
     db: Session = Depends(get_db),
 ) -> RedirectResponse:
@@ -1582,6 +1650,7 @@ def catalog_subscription_send_credentials(
         web_catalog_subscription_workflows_service.send_subscription_credentials_redirect(
             db,
             subscription_id=subscription_id,
+            actor_id=_get_actor_id(request),
         ),
         status_code=303,
     )
@@ -1590,7 +1659,7 @@ def catalog_subscription_send_credentials(
 @router.post(
     "/subscriptions/{subscription_id}/resume-vacation-hold",
     response_class=HTMLResponse,
-    dependencies=[Depends(require_permission("catalog:write"))],
+    dependencies=[Depends(require_permission("subscription:activate"))],
 )
 def catalog_subscription_resume_vacation_hold(
     request: Request,
@@ -1610,7 +1679,7 @@ def catalog_subscription_resume_vacation_hold(
 
 @router.post(
     "/subscriptions/bulk/lifecycle/preview",
-    dependencies=[Depends(require_permission("catalog:read"))],
+    dependencies=[Depends(require_permission("subscription:read"))],
 )
 def subscription_bulk_lifecycle_preview(
     request: Request,
@@ -1642,9 +1711,7 @@ def subscription_bulk_lifecycle_preview(
 
 @router.post(
     "/subscriptions/bulk/activate",
-    dependencies=[
-        Depends(require_any_permission("catalog:write", "subscription:activate"))
-    ],
+    dependencies=[Depends(require_permission("subscription:activate"))],
 )
 def subscription_bulk_activate(
     request: Request,
@@ -1676,9 +1743,7 @@ def subscription_bulk_activate(
 
 @router.post(
     "/subscriptions/bulk/restore",
-    dependencies=[
-        Depends(require_any_permission("catalog:write", "subscription:activate"))
-    ],
+    dependencies=[Depends(require_permission("subscription:activate"))],
 )
 def subscription_bulk_restore(
     request: Request,
@@ -1709,9 +1774,7 @@ def subscription_bulk_restore(
 
 @router.post(
     "/subscriptions/bulk/suspend",
-    dependencies=[
-        Depends(require_any_permission("catalog:write", "subscription:suspend"))
-    ],
+    dependencies=[Depends(require_permission("subscription:suspend"))],
 )
 def subscription_bulk_suspend(
     request: Request,
@@ -1743,7 +1806,7 @@ def subscription_bulk_suspend(
 
 @router.post(
     "/subscriptions/bulk/cancel",
-    dependencies=[Depends(require_permission("catalog:write"))],
+    dependencies=[Depends(require_permission("subscription:cancel"))],
 )
 def subscription_bulk_cancel(
     request: Request,
@@ -1775,7 +1838,7 @@ def subscription_bulk_cancel(
 
 @router.get(
     "/subscriptions/{subscription_id}/change-plan-quote",
-    dependencies=[Depends(require_permission("catalog:read"))],
+    dependencies=[Depends(require_permission("subscription:read"))],
 )
 def subscription_change_plan_quote(
     subscription_id: str,
@@ -1805,7 +1868,7 @@ def subscription_change_plan_quote(
 
 @router.post(
     "/subscriptions/bulk/change-plan",
-    dependencies=[Depends(require_permission("catalog:write"))],
+    dependencies=[Depends(require_permission("subscription:update"))],
 )
 def subscription_bulk_change_plan(
     request: Request,
@@ -1842,7 +1905,7 @@ def subscription_bulk_change_plan(
 
 @router.post(
     "/subscriptions/{subscription_id}/pending-change/{request_id}/cancel",
-    dependencies=[Depends(require_permission("catalog:write"))],
+    dependencies=[Depends(require_permission("subscription:update"))],
 )
 def subscription_cancel_pending_change(
     request: Request,
@@ -1866,7 +1929,7 @@ def subscription_cancel_pending_change(
 
 @router.post(
     "/subscriptions/{subscription_id}/scheduled-change/{request_id}/cancel",
-    dependencies=[Depends(require_permission("catalog:write"))],
+    dependencies=[Depends(require_permission("subscription:update"))],
 )
 def subscription_cancel_scheduled_change(
     request: Request,
@@ -1903,7 +1966,7 @@ def pricing_calculator(request: Request, db: Session = Depends(get_db)) -> HTMLR
 @router.get(
     "/bulk-tariff-change",
     response_class=HTMLResponse,
-    dependencies=[Depends(require_permission("catalog:write"))],
+    dependencies=[Depends(require_permission("subscription:read"))],
 )
 def bulk_tariff_change_page(
     request: Request, db: Session = Depends(get_db)
@@ -1917,7 +1980,7 @@ def bulk_tariff_change_page(
 @router.post(
     "/bulk-tariff-change/preview",
     response_class=HTMLResponse,
-    dependencies=[Depends(require_permission("catalog:write"))],
+    dependencies=[Depends(require_permission("subscription:read"))],
 )
 def bulk_tariff_change_preview(
     request: Request,

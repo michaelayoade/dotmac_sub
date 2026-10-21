@@ -34,7 +34,7 @@ def test_location_tracking_has_no_bare_commit() -> None:
     assert "db.commit(" not in source
     # Each write path enters the owner-command boundary exactly once, and a
     # batch additionally isolates each row in its own savepoint.
-    assert source.count("execute_owner_command(") == 3
+    assert source.count("execute_owner_command(") == 4
     assert "execute_owner_savepoint(" in source
 
 
@@ -42,6 +42,6 @@ def test_field_location_ingest_route_never_writes_directly() -> None:
     source = (ROOT / "app/api/field/locations.py").read_text(encoding="utf-8")
     for forbidden in ("db.query(", "db.get(", "db.commit(", ".session()"):
         assert forbidden not in source
-    # Both mutating routes release any implicit read transaction opened by
-    # the auth dependency before entering the owner-command boundary.
-    assert source.count("release_read_transaction(db)") == 2
+    # Presence initialization is also an owner write; all three adapters release
+    # the authentication read before entering their owner command.
+    assert source.count("release_read_transaction(db)") == 3

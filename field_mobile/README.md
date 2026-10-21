@@ -56,9 +56,51 @@ After upload, the server retains detailed GPS ping history for 30 days based on
 its receipt timestamp; current presence and work-order evidence have separate
 lifecycles.
 
+Vendors do not collect GPS: the device location source is unavailable for vendor
+and unresolved sessions, including transition, photo and signature capture.
+Vendor maps show only existing destinations authorized for their assigned jobs;
+they do not expose global inventory or staff tracking.
+
 Vendor mode uses the same sub-native work-order execution tabs as technicians,
 with backend scoping by vendor assignment. Do not re-add CRM project/quote
 routes; vendor work must come back as sub-native work orders.
+
+### Vendor login and read failures
+
+Vendor authentication resolves an active vendor membership and its native Vendor
+link. It does not require a technician profile. Dispatch assigns a work order to
+exactly one technician or native vendor through a preview and revision-checked
+confirmation. The current assignment queue row is authoritative; imported vendor
+metadata never grants job access.
+
+Vendors can read their assigned jobs and schedule, record travel and work
+transitions, add notes, upload photos/signatures, submit work time and complete a
+job subject to the same server completion requirements. Actor records retain the
+actual vendor member and SystemUser; person and technician IDs stay absent.
+Membership revocation and reassignment are checked again on mutations, retries
+and evidence downloads.
+
+The `/api/v1/field/me` capability response controls ancillary screens and
+background services. Vendor attendance, background location tracking, fiber
+evidence, chat, materials, expenses and equipment remain unavailable until their
+owners support the vendor workflow. Missing, loading or failed capability
+responses fail closed. Manager expense permission remains owned by the manager
+profile rather than a technician execution profile.
+
+Failed reads render a retry state; an empty offline cache does not prove that
+there is no work. Vendor account identity uses `/api/v1/auth/me`; profile failures
+remain visible and retryable. Installation projects remain a separate workflow.
+
+This change requires backend migration 668 and a new mobile build; earlier
+TestFlight builds do not include native vendor work-order execution.
+
+## Expense descriptions
+
+Each expense item shows a live character counter and accepts at most 500
+characters, matching the Sub and ERP description contracts. Spaces and
+punctuation count. Unicode text uses the backend's code-point count; typing and
+pasting never split a grapheme to fit the limit. Saved descriptions remain
+intact, and invalid saved items must be removed and added again before submission.
 
 ## Useful Commands
 
@@ -75,3 +117,41 @@ sign-in):
 ```sh
 ../scripts/mobile_sim.sh field_mobile ios        # or: android, and `run` for hot reload
 ```
+
+## Push startup
+
+Firebase configuration is resolved before the app root is built. Notification
+permission and cold-launch notification retrieval start only when the push
+registrar subscribes, after the UI starts. Neither native call gates login or
+job access. A pending iOS notification response therefore cannot hold the app
+on its native splash screen. Cold-launch taps are captured after a consumer
+exists so their navigation event is not discarded before subscription. Session
+restoration and encrypted-storage reconciliation retain their existing startup
+ordering.
+
+## Issued completion evidence and review
+
+The job detail panel reads the exact completion enrollment and immutable
+criteria revision from the scoped completion-review API. Observations and uploaded job
+attachment IDs request supervisor review; completing execution remains a separate
+action. The mobile panel labels recorded staff reviews explicitly and does not
+assert fresh engineering acceptance or close tickets, projects or payments.
+
+Completion evidence autosaves in the existing encrypted principal/deployment
+draft store. Closing the form or restarting restores observations, attachment
+IDs, intent UUID, enrollment, criteria revision, completed execution event, assignment generation, policy revision and review generation
+unchanged. An attempted intent stays frozen and a retry sends that exact payload.
+Nothing submits automatically. A server refusal blocks submission until the user
+chooses **Discard and reload issued criteria**; that action removes the old draft
+and starts a new intent after a successful scoped read. A confirmed server receipt
+removes the draft. Sign-out and the existing privacy wipe destroy these drafts
+with the rest of the scoped store.
+
+Native complaint and standalone work orders use their supervisor-authored
+completion criteria without a fabricated engineering issuance. Unenrolled jobs
+show the owner's enrollment prerequisite; staff publish an explicit work-order
+review policy and enroll the work order. Engineering jobs retain their actual
+engineering issuance as provenance. Evidence submission references the completed
+execution event, and supervisor acceptance remains a separate recorded decision.
+Older issuance-shaped drafts stay encrypted and blocked until explicit discard
+and reload; the app does not silently assign them new enrollment tokens.

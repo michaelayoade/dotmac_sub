@@ -123,11 +123,12 @@ files are harmless; it prevents the subtraction from changing silently.
 | `tests/test_integration_meta_social.py` | `test_typed_facade_returns_sanitized_outcome` | `outbound_transport` | `358e9784cd774b9cdd9e693c57365fc3842862f6cf7d8653bf3c4fcf53a13959` |
 | `tests/test_meta_capi_fiber_leads.py` | `<module>` | `outbound_transport` | `8128bc3956ebaff578adbfe2de1fec12f415e084450036187409e8c86beaf8ed` |
 | `tests/test_meta_oauth.py` | `test_provider_rejection_records_only_sanitized_evidence` | `outbound_transport` | `d081abb25b5f09a8dc4658709a0103d25b9d866728c1dc80594621e32fb3a582` |
+| `tests/test_nextcloud_talk_credential_setup.py` | `<module>` | `outbound_transport` | `c31304ba674a0781dc6e33990d28f68e19dda55814387eb4f4ed5929c6c59346` |
 | `tests/test_nextcloud_talk_staff_notifications.py` | `<module>` | `delivery_retry` | `e6a540dee1e6ddfb5448aef0a667aef1f3b7bf54e955fbcd9bd7ae86e2dbd315` |
 | `tests/test_router_management_connection.py` | `test_execute_honors_tunable_overrides` | `delivery_retry` | `c887e359adc3583a9c7332c37a3fb951afdad207057a5e96fb02cd136463d31e` |
 | `tests/test_team_inbox_meta_social_webhook.py` | `<module>` | `provider_credential` | `24ef8ff0b3d4670d3cc08efed8d4b43a85d4824b88e5f78d30bc08436e58cde0` |
 | `tests/test_team_inbox_smtp_runtime.py` | `test_readiness_uses_smtp_noop` | `outbound_transport` | `93abe275aa5f06c2edbe1286e2e1918d61e9cc2a4888101c70134c7cc8bc08b9` |
-| `tests/test_team_inbox_whatsapp_webhook.py` | `<module>` | `provider_credential` | `6b5ec793e3c6236cda3fd4a2acac14846cc9c8970a068551ed3b3bb8bfb2c3fc` |
+| `tests/test_team_inbox_whatsapp_webhook.py` | `<module>` | `provider_credential` | `065610eb62693ff22caf0bca689fe3af7d9790efd43bf2566e83c923e86947c8` |
 
 The 2026-09-05 review re-recorded `test_coverage_metrics.py` after its LLDP
 wrapper assertions moved to the typed detached-poll contracts. The file remains
@@ -153,3 +154,8 @@ cutover to a named connector distribution behind Dotmac Integrator.
 The ratchet reaches its sunset only when all baselines and conserved findings
 are zero and ADR 0011's runtime package, secret, egress, ingress, and contract
 conditions hold simultaneously.
+
+The Nextcloud Talk credential setup test module uses fake OpenBao HTTP responses
+and a GET-only validation harness. It declares tests, offers no public runtime
+definition, and no source outside the excluded set imports it. Its conserved
+exclusion adds no runtime exclusion or production surface allowance.

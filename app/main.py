@@ -37,12 +37,17 @@ from app.csrf import (
 )
 from app.errors import register_error_handlers
 from app.logging import configure_logging
-from app.metrics import APPLICATION_READINESS, WORKER_STARTUP_DURATION
+from app.metrics import (
+    APPLICATION_READINESS,
+    AUDIT_SETTINGS_FALLBACKS,
+    WORKER_STARTUP_DURATION,
+)
 from app.models.domain_settings import DomainSetting, SettingDomain
 from app.models.subscriber import Subscriber
 from app.monitoring import setup_monitoring
 from app.observability import ObservabilityMiddleware
 from app.request_meta import client_ip
+from app.schemas.error import ErrorResponse as WebErrorResponse
 from app.services import audit as audit_service
 from app.services.db_session_adapter import db_session_adapter
 from app.telemetry import setup_otel
@@ -68,6 +73,10 @@ _AUDIT_ALWAYS_SKIP_PATH_PREFIXES = (
     "/api/v1/webhooks/",
     "/api/v1/alerts/",
 )
+# Configuration can widen request-audit coverage but never narrow it: the
+# mutating methods are always audited and only these path prefixes may be skipped.
+_AUDIT_FIXED_METHODS = frozenset({"POST", "PUT", "PATCH", "DELETE"})
+_AUDIT_ALLOWED_SKIP_PATHS = frozenset({"/static", "/web", "/health"})
 _DEFERRED_ROUTER_TASK = None
 _DEFERRED_STARTUP_TASK = None
 
@@ -128,6 +137,7 @@ _DEFERRED_API_ROUTER_SPECS = [
     ("app.api.catalog", "admission_router", "api", "user"),
     ("app.api.auth", "router", "api", "admin"),
     ("app.api.auth_flow", "router", "api", "none"),
+    ("app.api.customer_auth", "router", "api", "none"),
     # Pre-authentication continuation, same class as `POST /auth/login`, so the
     # router-level mode is "none". The gate is the `auth.oidc_mobile_federation`
     # control, which the owning service reads first and which fails closed.
@@ -149,6 +159,7 @@ _DEFERRED_API_ROUTER_SPECS = [
     ("app.api.crm_referrals", "router", "api", "user"),
     ("app.api.crm_referrals", "public_router", "api", "none"),
     ("app.api.support", "router", "api", "user"),
+    ("app.api.support_resolution", "router", "api", "user"),
     # Native sales vertical: per-route crm:lead / crm:quote /
     # crm:sales_order permission guards on top of the user-auth base.
     ("app.api.crm_sales", "router", "api", "user"),
@@ -157,6 +168,9 @@ _DEFERRED_API_ROUTER_SPECS = [
     ("app.api.sales_orders", "router", "api", "user"),
     # Native projects vertical.
     ("app.api.projects", "router", "api", "user"),
+    ("app.api.project_engineering", "router", "api", "user"),
+    ("app.api.field_completion_review", "router", "api", "user"),
+    ("app.api.field_completion_review", "field_router", "api", "user"),
     # Read FLOOR for the whole router; every mutating route declares its own
     # operations:dispatch:write / :assign guard (app/api/dispatch.py). This is
     # deliberately "readperm:" and NOT "perm:operations:dispatch": the perm:
@@ -783,7 +797,6 @@ async def grafana_webhook_sink(request: Request) -> Response:
 
 def _default_audit_settings() -> dict:
     return {
-        "enabled": True,
         "methods": {"POST", "PUT", "PATCH", "DELETE"},
         "skip_paths": ["/static", "/web", "/health"],
         "read_trigger_header": "x-audit-read",
@@ -853,6 +866,7 @@ async def audit_middleware(request: Request, call_next):
             try:
                 audit_settings = _load_audit_settings(db)
             except SQLAlchemyError:
+                AUDIT_SETTINGS_FALLBACKS.inc()
                 logger.warning(
                     "audit_settings_refresh_failed",
                     exc_info=True,
@@ -862,11 +876,8 @@ async def audit_middleware(request: Request, call_next):
                     },
                 )
                 audit_settings = _default_audit_settings()
-                audit_settings["enabled"] = False
             finally:
                 db.close()
-    if not audit_settings["enabled"]:
-        return await call_next(request)
     track_read = request.method == "GET" and (
         request.headers.get(audit_settings["read_trigger_header"], "").lower() == "true"
         or request.query_params.get(audit_settings["read_trigger_query"]) == "true"
@@ -1283,9 +1294,9 @@ async def csrf_middleware(request: Request, call_next):
 
     # For state-changing methods, validate CSRF token
     if method in ("POST", "PUT", "DELETE", "PATCH"):
-        from fastapi.responses import HTMLResponse
+        from fastapi.responses import HTMLResponse, JSONResponse
 
-        def _csrf_forbidden(reason: str) -> HTMLResponse:
+        def _csrf_forbidden(reason: str) -> Response:
             return_url = _csrf_safe_return_url(request)
             logger.warning(
                 "CSRF validation failed for %s %s: %s",
@@ -1296,14 +1307,26 @@ async def csrf_middleware(request: Request, call_next):
             # Generate a request ID for tracking
             import uuid
 
-            request_id = str(uuid.uuid4())[:8]
+            request_id = getattr(request.state, "request_id", None) or str(uuid.uuid4())
+            accept = (request.headers.get("accept") or "").lower()
+            if "application/json" in accept and "text/html" not in accept:
+                return JSONResponse(
+                    status_code=403,
+                    content=WebErrorResponse(
+                        code="csrf_validation_failed",
+                        message="The security check failed. Refresh the page and try again.",
+                        request_id=request_id,
+                    ).model_dump(mode="json"),
+                )
+
+            reference_id = request_id[:8]
             try:
                 from jinja2 import Environment, FileSystemLoader
 
                 env = Environment(loader=FileSystemLoader("templates"), autoescape=True)
                 template = env.get_template("errors/csrf.html")
                 content = template.render(
-                    request_id=request_id,
+                    request_id=reference_id,
                     return_url=return_url,
                 )
                 return HTMLResponse(content=content, status_code=403)
@@ -1321,7 +1344,7 @@ async def csrf_middleware(request: Request, call_next):
 <div style="text-align:center;max-width:400px;padding:20px">
 <h1 style="color:#1e293b">Session Expired</h1>
 <p style="color:#64748b">Your session has expired or the security token is invalid. Please refresh the page and try again.</p>
-<p style="color:#94a3b8;font-size:12px">Reference: {request_id}</p>
+<p style="color:#94a3b8;font-size:12px">Reference: {reference_id}</p>
 {refresh_control}
 </div></body></html>""",
                     status_code=403,
@@ -1454,6 +1477,7 @@ _LOGIN_RATE_LIMIT_PATHS = frozenset(
         "/portal/auth/login",
         "/reseller/auth/login",
         "/api/v1/auth/login",
+        "/api/v1/customer/auth/login",
         # The field app's vendor login. Same credential-stuffing exposure as
         # the staff login above: the per-account lockout never trips for a
         # spray of one attempt across many usernames.
@@ -1469,6 +1493,7 @@ def _client_ip(request: Request) -> str:
 _API_SYNC_PRESSURE_DEFAULT_PREFIXES = ("/api/v1/",)
 _API_SYNC_PRESSURE_DEFAULT_EXEMPT_PREFIXES = (
     "/api/v1/auth/login",
+    "/api/v1/customer/auth/login",
     # Exempt for the same reason as the staff login: the login throttle above
     # is the right brake for a credential endpoint, and a crew behind one
     # site NAT must not be pushed into the generic per-IP burst bucket.
@@ -1819,12 +1844,16 @@ def _load_audit_settings(db: Session):
         .all()
     )
     values = {row.key: row for row in rows}
-    if "enabled" in values:
-        defaults["enabled"] = _to_bool(values["enabled"])
     if "methods" in values:
-        defaults["methods"] = _to_list(values["methods"], upper=True)
+        defaults["methods"] = set(_AUDIT_FIXED_METHODS) | set(
+            _to_list(values["methods"], upper=True)
+        )
     if "skip_paths" in values:
-        defaults["skip_paths"] = _to_list(values["skip_paths"], upper=False)
+        defaults["skip_paths"] = [
+            path
+            for path in _to_list(values["skip_paths"], upper=False)
+            if path.rstrip("/") in _AUDIT_ALLOWED_SKIP_PATHS
+        ]
     if "read_trigger_header" in values:
         defaults["read_trigger_header"] = _to_str(values["read_trigger_header"])
     if "read_trigger_query" in values:
@@ -1833,15 +1862,6 @@ def _load_audit_settings(db: Session):
         _AUDIT_SETTINGS_CACHE = defaults
         _AUDIT_SETTINGS_CACHE_AT = now
     return defaults
-
-
-def _to_bool(setting: DomainSetting) -> bool:
-    value = setting.value_json if setting.value_json is not None else setting.value_text
-    if isinstance(value, bool):
-        return value
-    if isinstance(value, str):
-        return value.strip().lower() in {"1", "true", "yes", "on"}
-    return False
 
 
 def _to_str(setting: DomainSetting) -> str:
@@ -1866,7 +1886,14 @@ def _to_list(setting: DomainSetting, upper: bool) -> set[str] | list[str]:
 
 
 def _is_audit_path_skipped(path: str, skip_paths: list[str]) -> bool:
-    return any(path.startswith(prefix) for prefix in skip_paths)
+    """Match whole path segments so ``/web`` skips ``/web/x`` but not ``/webhooks/x``."""
+    for prefix in skip_paths:
+        base = prefix.rstrip("/")
+        if not base:
+            continue
+        if path == base or path.startswith(base + "/"):
+            return True
+    return False
 
 
 def _include_api_router(router, dependencies=None):

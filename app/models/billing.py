@@ -696,6 +696,12 @@ class Invoice(Base):
     )
 
     @property
+    def legacy_external_reference(self) -> str | None:
+        """Return retained external provenance through a neutral read boundary."""
+
+        return self.crm_external_ref
+
+    @property
     def discounted_subtotal(self) -> Decimal:
         return max(
             Decimal("0.00"),
@@ -2094,6 +2100,182 @@ class TopupIntent(Base):
     invoice = relationship("Invoice")
     completed_payment = relationship("Payment", back_populates="topup_intents")
     provider = relationship("PaymentProvider")
+
+
+class StarterInvoiceLink(Base):
+    """Structural identity link from a Sub invoice to its Starter document.
+
+    Thin-client issuance (ADR 0031) records the Starter billing account,
+    obligation and document identities returned by the pinned
+    ``dotmac-billing`` issuance receipt. This is identity, never financial
+    state (ADR 0007); balances and document facts are read from Starter.
+    Retires with the legacy Invoice writer at the cutover seal.
+    """
+
+    __tablename__ = "starter_invoice_links"
+    __table_args__ = (
+        UniqueConstraint("invoice_id", name="uq_starter_invoice_link_invoice"),
+        UniqueConstraint("tenant_id", "id", name="uq_starter_invoice_link_scope"),
+        UniqueConstraint("document_id", name="uq_starter_invoice_link_document"),
+        Index(
+            "ix_starter_invoice_links_billing_account",
+            "billing_account_id",
+        ),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    tenant_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
+    invoice_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("invoices.id", ondelete="RESTRICT"),
+        nullable=False,
+    )
+    billing_account_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), nullable=False
+    )
+    obligation_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
+    document_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
+    source_fact_id: Mapped[str] = mapped_column(String(255), nullable=False)
+    issued_fact_version: Mapped[int | None] = mapped_column(Integer)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(UTC)
+    )
+
+    invoice = relationship("Invoice")
+
+
+class StarterInvoiceLineLink(Base):
+    """Per-line Starter obligation identity for multi-line issuance.
+
+    A multi-line Starter document carries one obligation per Sub invoice
+    line; the invoice-level ``StarterInvoiceLink`` then holds account and
+    document identity with a null obligation. Structural identity only.
+    """
+
+    __tablename__ = "starter_invoice_line_links"
+    __table_args__ = (
+        UniqueConstraint("invoice_line_id", name="uq_starter_invoice_line_link_line"),
+        UniqueConstraint("tenant_id", "id", name="uq_starter_invoice_line_link_scope"),
+        UniqueConstraint(
+            "obligation_id", name="uq_starter_invoice_line_link_obligation"
+        ),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    tenant_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
+    invoice_line_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("invoice_lines.id", ondelete="RESTRICT"),
+        nullable=False,
+    )
+    obligation_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(UTC)
+    )
+
+    invoice_line = relationship("InvoiceLine")
+
+
+class StarterCreditNoteLink(Base):
+    """Structural identity link from a Sub credit note to its Starter document.
+
+    Thin-client credit issuance records the Starter billing account and
+    credit document identities returned by the pinned ``dotmac-billing``
+    receipt. Identity only (ADR 0007); balances and document facts are
+    read from Starter. Retires with the legacy CreditNote writer at the
+    cutover seal.
+    """
+
+    __tablename__ = "starter_credit_note_links"
+    __table_args__ = (
+        UniqueConstraint("credit_note_id", name="uq_starter_credit_note_link_note"),
+        UniqueConstraint("tenant_id", "id", name="uq_starter_credit_note_link_scope"),
+        UniqueConstraint("document_id", name="uq_starter_credit_note_link_document"),
+        Index(
+            "ix_starter_credit_note_links_billing_account",
+            "billing_account_id",
+        ),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    tenant_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
+    credit_note_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("credit_notes.id", ondelete="RESTRICT"),
+        nullable=False,
+    )
+    billing_account_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), nullable=False
+    )
+    document_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
+    original_document_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), nullable=False
+    )
+    source_fact_id: Mapped[str] = mapped_column(String(255), nullable=False)
+    issued_fact_version: Mapped[int | None] = mapped_column(Integer)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(UTC)
+    )
+
+    credit_note = relationship("CreditNote")
+
+
+class StarterPrepaidFundingLink(Base):
+    """Structural identity link from a prepaid period to its Starter earmark.
+
+    Prepaid renewals (ADR 0031) record which Starter settlement
+    earmarked funding for one subscription period, keyed by the
+    renewal ``billing_line_key`` the draft line already carries.
+    Identity only (ADR 0007); funding availability and balances are
+    read from Starter. Retires with the legacy prepaid writers at
+    the cutover seal.
+    """
+
+    __tablename__ = "starter_prepaid_funding_links"
+    __table_args__ = (
+        UniqueConstraint(
+            "tenant_id",
+            "billing_line_key",
+            name="uq_starter_prepaid_funding_link_period",
+        ),
+        UniqueConstraint(
+            "tenant_id", "id", name="uq_starter_prepaid_funding_link_scope"
+        ),
+        Index(
+            "ix_starter_prepaid_funding_links_billing_account",
+            "billing_account_id",
+        ),
+        Index("ix_starter_prepaid_funding_links_settlement", "settlement_id"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    tenant_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
+    subscription_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("subscriptions.id", ondelete="RESTRICT"),
+        nullable=False,
+    )
+    billing_line_key: Mapped[str] = mapped_column(String(255), nullable=False)
+    source_fact_id: Mapped[str] = mapped_column(String(255), nullable=False)
+    billing_account_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), nullable=False
+    )
+    settlement_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
+    confirmation_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), nullable=False
+    )
+    purchase_ref: Mapped[str] = mapped_column(String(255), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(UTC)
+    )
 
 
 class PaymentAllocation(Base):

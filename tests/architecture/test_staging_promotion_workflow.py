@@ -1,8 +1,11 @@
 from __future__ import annotations
 
+import os
 import re
+import subprocess
 from pathlib import Path
 
+import pytest
 import yaml
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -935,12 +938,11 @@ def test_version_tag_refuses_an_existing_tag_pointing_at_the_wrong_commit() -> N
 
     # Peeled commit comparison, not just tag existence.
     assert "$TAG^{commit}" in existing_tag_branch
-    assert "git rev-parse HEAD" in existing_tag_branch
+    assert "$RELEASE_COMMIT" in existing_tag_branch
     assert "existing_commit" in existing_tag_branch
-    assert "current_commit" in existing_tag_branch
 
     # Matching commit: idempotent no-op.
-    assert 'if [ "$existing_commit" = "$current_commit" ]; then' in existing_tag_branch
+    assert 'if [ "$existing_commit" = "$RELEASE_COMMIT" ]; then' in existing_tag_branch
     assert "exit 0" in existing_tag_branch
 
     # Mismatched commit: hard failure, not a silent exit 0.
@@ -948,7 +950,7 @@ def test_version_tag_refuses_an_existing_tag_pointing_at_the_wrong_commit() -> N
     match_block_start = next(
         i
         for i, line in enumerate(lines)
-        if '$existing_commit" = "$current_commit"' in line
+        if '$existing_commit" = "$RELEASE_COMMIT"' in line
     )
     match_block_end = next(
         i
@@ -958,3 +960,293 @@ def test_version_tag_refuses_an_existing_tag_pointing_at_the_wrong_commit() -> N
     after_match_block = "\n".join(lines[match_block_end + 1 :])
     assert "exit 1" in after_match_block
     assert "exit 0" not in after_match_block
+
+
+def _version_tag_git(repo: Path, *args: str) -> str:
+    result = subprocess.run(
+        ["git", *args], cwd=repo, capture_output=True, text=True, check=True, timeout=30
+    )
+    return result.stdout.strip()
+
+
+def _version_tag_commit(repo: Path, version: str | None) -> str:
+    if version is not None:
+        (repo / "VERSION").write_text(version + "\n")
+        _version_tag_git(repo, "add", "VERSION")
+    _version_tag_git(repo, "commit", "--allow-empty", "-m", "synthetic change")
+    return _version_tag_git(repo, "rev-parse", "HEAD")
+
+
+@pytest.fixture
+def version_tag_repo(tmp_path: Path) -> Path:
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    _version_tag_git(repo, "init")
+    _version_tag_git(repo, "config", "user.name", "Synthetic version test")
+    _version_tag_git(repo, "config", "user.email", "version-test@example.invalid")
+    remote = tmp_path / "remote.git"
+    _version_tag_git(repo, "init", "--bare", str(remote))
+    _version_tag_git(repo, "remote", "add", "origin", str(remote))
+    return repo
+
+
+def _run_version_tag_steps(
+    repo: Path,
+    *,
+    commit: str,
+    workflow: str | None = None,
+) -> tuple[subprocess.CompletedProcess[str], subprocess.CompletedProcess[str] | None]:
+    document = yaml.safe_load(
+        workflow if workflow is not None else _read(".github/workflows/version-tag.yml")
+    )
+    steps = document["jobs"]["tag"]["steps"]
+    eligibility = next(step for step in steps if step.get("id") == "version")
+    tagging = next(step for step in steps if step.get("name") == "Create version tag")
+    output = repo / "step-output"
+    output.write_text("")
+    env = {
+        key: value for key, value in os.environ.items() if not key.startswith("GIT_")
+    }
+    env.update(EVENT_COMMIT=commit, GITHUB_OUTPUT=str(output), GIT_CONFIG_NOSYSTEM="1")
+    result = subprocess.run(
+        ["bash", "-e", "-o", "pipefail", "-c", eligibility["run"]],
+        cwd=repo,
+        env=env,
+        capture_output=True,
+        text=True,
+        check=False,
+        timeout=30,
+    )
+    if result.returncode:
+        return result, None
+    outputs = dict(line.split("=", 1) for line in output.read_text().splitlines())
+    assert tagging.get("if") is None
+    env.update(
+        TAG=outputs["tag"],
+        VERSION=outputs["version"],
+        RELEASE_COMMIT=outputs["release_commit"],
+    )
+    tag_result = subprocess.run(
+        ["bash", "-e", "-o", "pipefail", "-c", tagging["run"]],
+        cwd=repo,
+        env=env,
+        capture_output=True,
+        text=True,
+        check=False,
+        timeout=30,
+    )
+    return result, tag_result
+
+
+def test_version_tag_later_commit_tags_the_last_version_changing_commit(
+    version_tag_repo: Path,
+) -> None:
+    """A cancelled run for the bump commit must not lose the release."""
+
+    repo = version_tag_repo
+    _version_tag_commit(repo, "12.12.0")
+    bump = _version_tag_commit(repo, "12.13.0")
+    _version_tag_commit(repo, None)
+    current = _version_tag_commit(repo, None)
+    # A dirty worktree must not influence the committed VERSION.
+    (repo / "VERSION").write_text("99.0.0\n")
+
+    result, tagging = _run_version_tag_steps(repo, commit=current)
+
+    assert result.returncode == 0, result.stderr
+    assert tagging is not None and tagging.returncode == 0, tagging.stderr
+    assert _version_tag_git(repo, "rev-parse", "v12.13.0^{commit}") == bump
+    assert _version_tag_git(repo, "rev-parse", "v12.13.0^{commit}") != current
+
+    result, tagging = _run_version_tag_steps(repo, commit=current)
+    assert result.returncode == 0, result.stderr
+    assert tagging is not None and tagging.returncode == 0, tagging.stderr
+    assert "nothing to do" in tagging.stdout
+
+
+def test_version_tag_later_commit_refuses_a_tag_at_a_different_commit(
+    version_tag_repo: Path,
+) -> None:
+    repo = version_tag_repo
+    previous = _version_tag_commit(repo, "12.12.0")
+    _version_tag_git(repo, "tag", "-a", "v12.13.0", "-m", "synthetic collision")
+    _version_tag_commit(repo, "12.13.0")
+    current = _version_tag_commit(repo, None)
+
+    result, tagging = _run_version_tag_steps(repo, commit=current)
+
+    assert result.returncode == 0, result.stderr
+    assert tagging is not None and tagging.returncode != 0
+    assert "Refusing to silently accept" in tagging.stdout
+    assert _version_tag_git(repo, "rev-parse", "v12.13.0^{commit}") == previous
+
+
+def test_version_tag_new_transition_tags_exact_commit_and_reruns_idempotently(
+    version_tag_repo: Path,
+) -> None:
+    repo = version_tag_repo
+    _version_tag_commit(repo, "12.12.0")
+    current = _version_tag_commit(repo, "12.13.0")
+    (repo / "VERSION").write_text("99.0.0\n")
+
+    for _ in range(2):
+        result, tagging = _run_version_tag_steps(repo, commit=current)
+        assert result.returncode == 0, result.stderr
+        assert tagging is not None
+        assert tagging.returncode == 0, tagging.stderr
+    assert "nothing to do" in tagging.stdout
+    assert _version_tag_git(repo, "rev-parse", "v12.13.0^{commit}") == current
+    assert _version_tag_git(repo, "ls-remote", "origin", "refs/tags/v12.13.0^{}")
+
+
+def test_version_tag_transition_refuses_an_immutable_tag_collision(
+    version_tag_repo: Path,
+) -> None:
+    repo = version_tag_repo
+    previous = _version_tag_commit(repo, "12.12.0")
+    _version_tag_git(repo, "tag", "-a", "v12.13.0", "-m", "synthetic collision")
+    current = _version_tag_commit(repo, "12.13.0")
+
+    result, tagging = _run_version_tag_steps(repo, commit=current)
+
+    assert result.returncode == 0, result.stderr
+    assert tagging is not None and tagging.returncode != 0
+    assert "Refusing to silently accept" in tagging.stdout
+    assert _version_tag_git(repo, "rev-parse", "v12.13.0^{commit}") == previous
+
+
+@pytest.mark.parametrize("invalid", ["", "12.13", "release-12.13.0"])
+def test_version_tag_invalid_current_version_refuses(
+    version_tag_repo: Path,
+    invalid: str,
+) -> None:
+    repo = version_tag_repo
+    _version_tag_commit(repo, "12.12.0")
+    current = _version_tag_commit(repo, invalid)
+
+    result, tagging = _run_version_tag_steps(repo, commit=current)
+
+    assert result.returncode != 0
+    assert "VERSION must be semantic version" in result.stdout
+    assert tagging is None
+    assert _version_tag_git(repo, "tag", "--list") == ""
+
+
+def test_version_tag_root_version_commit_is_tagged(version_tag_repo: Path) -> None:
+    repo = version_tag_repo
+    root = _version_tag_commit(repo, "12.12.0")
+
+    result, tagging = _run_version_tag_steps(repo, commit=root)
+
+    assert result.returncode == 0, result.stderr
+    assert tagging is not None and tagging.returncode == 0, tagging.stderr
+    assert _version_tag_git(repo, "rev-parse", "v12.12.0^{commit}") == root
+
+
+def test_version_tag_unresolvable_event_commit_refuses(version_tag_repo: Path) -> None:
+    repo = version_tag_repo
+    _version_tag_commit(repo, "12.12.0")
+    _version_tag_commit(repo, "12.13.0")
+
+    result, tagging = _run_version_tag_steps(repo, commit="f" * 40)
+
+    assert result.returncode != 0
+    assert tagging is None
+
+
+def test_version_tag_resolvable_event_with_wrong_checkout_refuses(
+    version_tag_repo: Path,
+) -> None:
+    repo = version_tag_repo
+    previous = _version_tag_commit(repo, "12.12.0")
+    _version_tag_commit(repo, "12.13.0")
+
+    result, tagging = _run_version_tag_steps(repo, commit=previous)
+
+    assert result.returncode != 0
+    assert "checkout does not match" in result.stdout
+    assert tagging is None
+
+
+def test_version_tag_missing_current_version_refuses(version_tag_repo: Path) -> None:
+    repo = version_tag_repo
+    _version_tag_commit(repo, "12.12.0")
+    _version_tag_git(repo, "rm", "VERSION")
+    current = _version_tag_commit(repo, None)
+
+    result, tagging = _run_version_tag_steps(repo, commit=current)
+
+    assert result.returncode != 0
+    assert "event commit has no readable VERSION" in result.stdout
+    assert tagging is None
+
+
+def test_version_tag_shallow_history_refuses(
+    version_tag_repo: Path, tmp_path: Path
+) -> None:
+    repo = version_tag_repo
+    _version_tag_commit(repo, "12.12.0")
+    current = _version_tag_commit(repo, "12.13.0")
+    shallow = tmp_path / "shallow"
+    _version_tag_git(repo, "clone", "--depth=1", repo.as_uri(), str(shallow))
+
+    result, tagging = _run_version_tag_steps(shallow, commit=current)
+
+    assert result.returncode != 0
+    assert "Full history is required" in result.stdout
+    assert tagging is None
+
+
+def test_version_tag_follows_first_parent_of_a_merge(version_tag_repo: Path) -> None:
+    repo = version_tag_repo
+    base = _version_tag_commit(repo, "12.12.0")
+    _version_tag_git(repo, "checkout", "-b", "side")
+    _version_tag_commit(repo, "99.0.0")
+    _version_tag_git(repo, "checkout", "--detach", base)
+    _version_tag_commit(repo, None)
+    _version_tag_git(repo, "merge", "--no-ff", "-s", "ours", "side", "-m", "merge")
+    current = _version_tag_git(repo, "rev-parse", "HEAD")
+
+    result, tagging = _run_version_tag_steps(repo, commit=current)
+
+    assert result.returncode == 0, result.stderr
+    assert tagging is not None and tagging.returncode == 0, tagging.stderr
+    assert _version_tag_git(repo, "rev-parse", "v12.12.0^{commit}") == base
+
+
+def test_version_tag_sensitivity_tagging_the_pushed_commit_loses_the_release(
+    version_tag_repo: Path,
+) -> None:
+    repo = version_tag_repo
+    bump = _version_tag_commit(repo, "12.13.0")
+    current = _version_tag_commit(repo, None)
+    workflow = _read(".github/workflows/version-tag.yml")
+    lookup = "git log -1 --first-parent --format=%H "
+    assert lookup in workflow
+    mutated = workflow.replace(
+        'release_commit="$(git log -1 --first-parent --format=%H "$current_commit" -- VERSION)"',
+        'release_commit="$current_commit"',
+        1,
+    )
+    assert mutated != workflow
+
+    result, tagging = _run_version_tag_steps(repo, commit=current, workflow=mutated)
+
+    assert tagging is not None and tagging.returncode == 0
+    assert _version_tag_git(repo, "rev-parse", "v12.13.0^{commit}") != bump
+
+
+def test_version_tag_workflow_keeps_safe_inputs() -> None:
+    workflow = _read(".github/workflows/version-tag.yml")
+    document = yaml.safe_load(workflow)
+    assert document["permissions"] == {"contents": "write"}
+    steps = document["jobs"]["tag"]["steps"]
+    assert steps[0]["with"]["fetch-depth"] == 0
+    for step in steps:
+        assert "${{" not in step.get("run", "")
+    version_run = next(s for s in steps if s.get("id") == "version")["run"]
+    assert version_run.index("VERSION must be semantic version") < version_run.index(
+        "git log -1 --first-parent"
+    )
+    assert "github.event" not in workflow
+    assert "github.head_ref" not in workflow

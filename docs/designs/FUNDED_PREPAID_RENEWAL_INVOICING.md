@@ -96,6 +96,72 @@ preview, actor, and approval-reference evidence. Replay returns the same
 invoice. There is no customer-specific branch, raw SQL repair, balance override,
 or second service period.
 
+## Tax-inclusive documentary conversion
+
+An already tax-inclusive `AccountAdjustment` is a distinct reviewed shape and
+never enters the base-only correction above. Its typed preview additionally
+selects the succeeded, settled, unreturned Payment and proves that adjustment,
+ledger debit, entitlement funding, canonical exclusive-tax gross, currency,
+historical period, current residual credit, and billing anchor are exact. A
+suspended subscription is eligible only when no active prepaid enforcement lock
+exists; the suspension is documentary state and is preserved.
+
+The fingerprint-bound owner locks the account, subscription, adjustment,
+ledger, entitlement, Payment, and settlement. It reverses the selected
+adjustment through its participant, retires only the selected entitlement,
+creates the exact paid invoice from the selected Payment, replaces coverage for
+the identical interval, and reprojects the same anchor with reviewed authority.
+The restored gross is consumed by the invoice, so final credit equals initial
+credit. Status, coverage, and access state do not change; no payment-received or
+funding-change observation is emitted. A distinct reservation scope, invoice
+metadata key, audit action, and version-2 correction event make replay return
+the original identities without another financial or entitlement row.
+
+The next missing-document period may explicitly select
+`documented_anniversary`. That selection requires the replacement entitlement
+from this conversion, its exact aware UTC interval, and the approved initial
+anchor. The resolver preserves only that entitlement's Lagos clock, requires
+its end and the current anchor to equal the proposed next start, and verifies
+the canonical next cadence boundary. Business-midnight remains the default and
+rejects documentary-only inputs.
+
+## Reviewed payment-backed legacy renewal invoice repair
+
+A second, deliberately separate historical shape has no `AccountAdjustment`.
+One active customer-position debit is linked directly to the successful,
+unreturned settled Payment; the debit has no invoice and funds one active
+ledger-backed entitlement. The ordinary renewal owner must continue to reject
+that already-funded period, and the generic missing-paid-invoice repair must
+continue to reject its overlapping entitlement.
+
+`preview_legacy_payment_backed_renewal_invoice_repair` is the read-only proof
+for this shape. It requires explicit account, subscription, Payment, ledger,
+entitlement, period, gross, currency, expected post-repair funding, and exact
+contract-tax evidence. It rejects an AccountAdjustment owner, any refund or
+reversal, missing settlement, mixed currency, a non-service or inactive debit,
+an invoice/grant-backed entitlement, another overlap, a competing invoice, or
+an unsupported billing anchor. Its fingerprint includes the selected records'
+current versions and settlement/funding evidence.
+
+Historical settlements may also carry the same direct renewal in their
+`prepaid_amount` projection or one payment-linked invoice-less renewal outcome.
+The preview permits only zero such projection or one exact gross match for the
+selected chain. The payment participant temporarily releases at most that
+selected legacy consumption while it fingerprints the replacement allocation.
+After repair, the active paid invoice metadata reclassifies the immutable legacy
+amount into the invoice allocation, so payment reporting never counts both.
+
+The fingerprint-bound owner command locks the account and every selected row,
+re-previews, appends the unique ledger reversal through `financial.ledger`,
+retires the old entitlement, and creates the canonical exclusive-tax invoice
+and base line through `financial.invoices`. It settles only from the selected
+Payment, creates the invoice-backed entitlement, and projects the anchor from
+surviving coverage. The period and anchor are unchanged, and the restored
+credit from the reversal is consumed by the invoice allocation, so available
+funding before and after is identical. Audit and version-2
+`prepaid_service.renewal_document_corrected` evidence commit with the repair.
+Exact replay returns the recorded invoice and evidence without another write.
+
 ## Verification and rollout
 
 Behavior tests prove fully funded creation and settlement, insufficient-funding
@@ -109,3 +175,7 @@ reconciled through the reviewed missed-renewal command. A period that already
 has an invoice-less adjustment-backed renewal uses the separate reviewed legacy
 tax-invoice correction runbook, one explicitly approved account period at a
 time.
+
+A payment-linked debit and entitlement with no `AccountAdjustment` uses
+`docs/runbooks/LEGACY_PAYMENT_BACKED_PREPAID_RENEWAL_INVOICE_REPAIR.md`; it is
+never coerced into either of the older repair shapes.

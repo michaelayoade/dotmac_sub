@@ -46,10 +46,17 @@ from app.services.auth_flow import (
     hash_password,
     request_password_reset,
     reset_password,
-    verify_password,
+    verify_user_password,
 )
 from app.services.owner_commands import CommandContext
+from tests.authentication_denial_unit import (
+    authentication_denial_unit_session as authentication_denial_unit_session,
+)
 from tests.staff_identity_fixtures import add_bound_staff_user, project_staff_login
+from tests.subscriber_mfa_fixtures import seed_enabled_subscriber_mfa
+from tests.subscriber_mfa_owner_support import authenticated_subscriber_enrollment
+
+pytestmark = pytest.mark.usefixtures("authentication_denial_unit_session")
 
 
 def _make_request(user_agent: str = "pytest"):
@@ -477,9 +484,9 @@ def test_access_credential_login_returns_mfa_token_when_enabled(
     db_session.add(access_credential)
     db_session.commit()
 
-    setup = AuthFlow.mfa_setup(db_session, str(person.id), label="device")
-    code = pyotp.TOTP(setup["secret"]).now()
-    AuthFlow.mfa_confirm(db_session, str(setup["method_id"]), code, str(person.id))
+    setup = seed_enabled_subscriber_mfa(
+        db_session, subscriber_id=person.id, label="device"
+    )
 
     result = AuthFlow.login(
         db_session,
@@ -508,8 +515,11 @@ def test_mfa_setup_confirm(db_session, person, monkeypatch):
     db_session.add(credential)
     db_session.commit()
 
-    setup = AuthFlow.mfa_setup(db_session, str(person.id), label="device")
-    secret = setup["secret"]
+    enrollment = authenticated_subscriber_enrollment(
+        db_session, subscriber_id=person.id
+    )
+    setup = enrollment.setup(label="device")
+    secret = setup.secret
 
     # Generate OTP code and verify using an explicit timecode to avoid
     # timezone skew (app imports may change TZ from CEST to Africa/Lagos,
@@ -531,9 +541,7 @@ def test_mfa_setup_confirm(db_session, person, monkeypatch):
 
     monkeypatch.setattr(pyotp.TOTP, "verify", _verify_fixed)
 
-    method = AuthFlow.mfa_confirm(
-        db_session, str(setup["method_id"]), code, str(person.id)
-    )
+    method = enrollment.confirm(method_id=setup.method_id, code=code)
 
     assert method.enabled is True
     assert method.is_primary is True
@@ -665,9 +673,9 @@ def test_login_returns_mfa_token_when_enabled(db_session, person, monkeypatch):
     db_session.add(credential)
     db_session.commit()
 
-    setup = AuthFlow.mfa_setup(db_session, str(person.id), label="device")
-    code = pyotp.TOTP(setup["secret"]).now()
-    AuthFlow.mfa_confirm(db_session, str(setup["method_id"]), code, str(person.id))
+    setup = seed_enabled_subscriber_mfa(
+        db_session, subscriber_id=person.id, label="device"
+    )
 
     request = _make_request()
     result = AuthFlow.login(
@@ -827,7 +835,7 @@ def test_reset_password_updates_only_local_credential(db_session, person, monkey
     db_session.refresh(radius_credential)
     db_session.refresh(local_credential)
     assert radius_credential.password_hash is None
-    assert verify_password("Resetpass1!", local_credential.password_hash)
+    assert verify_user_password("Resetpass1!", local_credential.password_hash)
     assert local_credential.must_change_password is False
     assert local_credential.failed_login_attempts == 0
 
@@ -856,7 +864,7 @@ def test_change_password_updates_only_local_credential(db_session, person):
     db_session.refresh(radius_credential)
     db_session.refresh(local_credential)
     assert radius_credential.password_hash is None
-    assert verify_password("Resetpass1!", local_credential.password_hash)
+    assert verify_user_password("Resetpass1!", local_credential.password_hash)
     assert local_credential.must_change_password is False
 
 
@@ -1073,8 +1081,14 @@ def test_forgot_password_flow_rate_limited(db_session, person, monkeypatch):
 
 
 def test_web_forgot_password_submit_sends_email(db_session, person, monkeypatch):
+    from sqlalchemy.orm import Session
+
+    from app.services import db_session_adapter as session_module
     from app.services import web_auth as web_auth_service
 
+    monkeypatch.setattr(
+        session_module, "SessionLocal", lambda: Session(bind=db_session.get_bind())
+    )
     monkeypatch.setenv("JWT_SECRET", "test-secret")
     person.email = "web-forgot@example.com"
     credential = UserCredential(
@@ -1116,17 +1130,16 @@ def test_password_reset_does_not_bypass_mfa(db_session, person, monkeypatch):
     db_session.add(credential)
     db_session.commit()
 
-    setup = AuthFlow.mfa_setup(db_session, str(person.id), label="device")
-    AuthFlow.mfa_confirm(
-        db_session,
-        str(setup["method_id"]),
-        pyotp.TOTP(setup["secret"]).now(),
-        str(person.id),
+    setup = seed_enabled_subscriber_mfa(
+        db_session, subscriber_id=person.id, label="device"
     )
 
     result = request_password_reset(db_session, person.email)
     assert result
     reset_password(db_session, result["token"], "Brandnew1!")
+    # The legacy compatibility redemption joins this session's transaction;
+    # login (phase A) requires a transaction-free session, so settle it.
+    db_session.commit()
 
     login_result = AuthFlow.login(
         db_session, person.email, "Brandnew1!", _make_request(), None
@@ -1239,13 +1252,10 @@ def test_mfa_recovery_code_is_one_time_login_fallback(db_session, person, monkey
     db_session.add(credential)
     db_session.commit()
 
-    setup = AuthFlow.mfa_setup(db_session, str(person.id), label="device")
-    method = AuthFlow.mfa_confirm(
-        db_session,
-        str(setup["method_id"]),
-        pyotp.TOTP(setup["secret"]).now(),
-        str(person.id),
+    setup = seed_enabled_subscriber_mfa(
+        db_session, subscriber_id=person.id, label="device"
     )
+    method = db_session.get(MFAMethod, setup.method_id)
     recovery_codes = auth_flow_service.generate_mfa_recovery_codes(db_session, method)
 
     assert len(recovery_codes) == 10
@@ -1522,11 +1532,10 @@ def test_mfa_verify_locks_after_repeated_wrong_codes(db_session, person, monkeyp
     db_session.add(credential)
     db_session.commit()
 
-    setup = AuthFlow.mfa_setup(db_session, str(person.id), label="device")
-    totp = pyotp.TOTP(setup["secret"])
-    AuthFlow.mfa_confirm(
-        db_session, str(setup["method_id"]), totp.now(), str(person.id)
+    setup = seed_enabled_subscriber_mfa(
+        db_session, subscriber_id=person.id, label="device"
     )
+    totp = pyotp.TOTP(setup.secret)
 
     request = _make_request()
     result = AuthFlow.login(
@@ -1546,7 +1555,7 @@ def test_mfa_verify_locks_after_repeated_wrong_codes(db_session, person, monkeyp
     assert exc.value.status_code == 429
     assert "Try again in 15 minutes." in str(exc.value.detail)
 
-    method = db_session.get(MFAMethod, setup["method_id"])
+    method = db_session.get(MFAMethod, setup.method_id)
     assert method.locked_until is not None
 
 
@@ -1581,11 +1590,10 @@ def test_mfa_lockout_uses_configured_policy(db_session, person, monkeypatch):
     db_session.add(credential)
     db_session.commit()
 
-    setup = AuthFlow.mfa_setup(db_session, str(person.id), label="device")
-    totp = pyotp.TOTP(setup["secret"])
-    AuthFlow.mfa_confirm(
-        db_session, str(setup["method_id"]), totp.now(), str(person.id)
+    setup = seed_enabled_subscriber_mfa(
+        db_session, subscriber_id=person.id, label="device"
     )
+    totp = pyotp.TOTP(setup.secret)
 
     request = _make_request()
     result = AuthFlow.login(
@@ -1598,7 +1606,7 @@ def test_mfa_lockout_uses_configured_policy(db_session, person, monkeypatch):
             AuthFlow.mfa_verify(db_session, mfa_token, wrong, request)
         assert exc.value.status_code == 401
 
-    method = db_session.get(MFAMethod, setup["method_id"])
+    method = db_session.get(MFAMethod, setup.method_id)
     assert method.locked_until is not None
     remaining = auth_flow_service._as_utc(method.locked_until) - datetime.now(UTC)
     assert timedelta(minutes=3) <= remaining <= timedelta(minutes=4)
@@ -1611,9 +1619,12 @@ def test_mfa_lockout_uses_configured_policy(db_session, person, monkeypatch):
 
 def test_mfa_setup_reuses_pending_method_row(db_session, person, monkeypatch):
     monkeypatch.setenv("TOTP_ENCRYPTION_KEY", Fernet.generate_key().decode("utf-8"))
-    first = AuthFlow.mfa_setup(db_session, str(person.id), label="device")
-    second = AuthFlow.mfa_setup(db_session, str(person.id), label="device")
-    assert str(first["method_id"]) == str(second["method_id"])
+    enrollment = authenticated_subscriber_enrollment(
+        db_session, subscriber_id=person.id
+    )
+    first = enrollment.setup(label="device")
+    second = enrollment.setup(label="device")
+    assert first.method_id == second.method_id
     pending = (
         db_session.query(MFAMethod).filter(MFAMethod.subscriber_id == person.id).count()
     )
@@ -1652,7 +1663,7 @@ def test_change_password_revokes_other_sessions(db_session, person, monkeypatch)
     assert sessions[0].status == SessionStatus.active
     assert sessions[1].status == SessionStatus.revoked
     db_session.refresh(credential)
-    assert verify_password("Resetpass1!", credential.password_hash)
+    assert verify_user_password("Resetpass1!", credential.password_hash)
 
 
 def test_reset_password_rejects_canceled_subscriber(db_session, person, monkeypatch):
@@ -1722,10 +1733,17 @@ def test_session_manager_handles_system_user_principals(db_session):
     )
     assert listed.total == 1
 
-    revoked = session_manager.revoke_all_other_sessions(
-        db_session, system_user.id, None, principal_type="system_user"
-    )
-    assert revoked.revoked_count == 1
+    from app.services.db_session_adapter import db_session_adapter
+
+    principal_id = system_user.id
+    with db_session_adapter.owner_command_session() as command_db:
+        with pytest.raises(session_manager.SessionRevocationError) as exc:
+            session_manager.revoke_all_other_sessions(
+                command_db, principal_id, None, principal_type="system_user"
+            )
+    assert exc.value.code == "app_sessions.auth.invalid_current_session"
+    db_session.expire_all()
+    assert session.status == SessionStatus.active
 
 
 def test_admin_reset_password_clears_lockout(db_session, monkeypatch):

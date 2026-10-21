@@ -6,6 +6,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import '../attendance/attendance_models.dart';
 import '../attendance/attendance_repository.dart';
 import '../jobs/jobs_providers.dart';
+import '../jobs/job_models.dart';
 import 'location_cadence.dart';
 import 'location_ping_service.dart';
 
@@ -13,13 +14,13 @@ final fieldShiftProvider = StateProvider<ShiftState>(
   (ref) => ShiftState.offShift,
 );
 
-String? _activeWorkOrderId(JobList? list) {
+JobSummary? _activeWorkOrder(JobList? list) {
   if (list == null) return null;
   for (final job in list.jobs) {
     if (job.status == 'in_progress' ||
         job.status == 'paused' ||
         job.status == 'dispatched') {
-      return job.id;
+      return job;
     }
   }
   return null;
@@ -41,6 +42,8 @@ class _LocationTrackingHostState extends ConsumerState<LocationTrackingHost>
   bool _foreground = true;
   ShiftState? _lastShift;
   String? _lastWorkOrderId;
+  String? _lastAssignmentGeneration;
+  JobSummary? _lastJob;
   // Captured during build so dispose can stop tracking without touching `ref`
   // (which is invalid once the element is unmounted).
   LocationPingService? _service;
@@ -89,6 +92,7 @@ class _LocationTrackingHostState extends ConsumerState<LocationTrackingHost>
       await service.captureOnce(
         hasActiveJob: hasActiveJob,
         workOrderId: _lastWorkOrderId,
+        assignmentGeneration: _lastAssignmentGeneration,
       );
       await service.flush();
       if (mounted) _scheduleNext();
@@ -114,23 +118,35 @@ class _LocationTrackingHostState extends ConsumerState<LocationTrackingHost>
       });
     }
     final jobs = ref.watch(jobsListProvider);
-    final workOrderId = jobs.when(
-      data: _activeWorkOrderId,
-      loading: () => _lastWorkOrderId,
-      error: (_, _) => _lastWorkOrderId,
+    final job = jobs.when(
+      data: _activeWorkOrder,
+      loading: () => _lastJob,
+      error: (_, _) => _lastJob,
     );
-    if (effectiveShift != _lastShift || workOrderId != _lastWorkOrderId) {
+    final workOrderId = job?.id;
+    final assignmentGeneration = job?.assignmentGeneration;
+    if (effectiveShift != _lastShift ||
+        workOrderId != _lastWorkOrderId ||
+        assignmentGeneration != _lastAssignmentGeneration) {
       final shiftChanged = effectiveShift != _lastShift;
       _lastShift = effectiveShift;
       _lastWorkOrderId = workOrderId;
+      _lastAssignmentGeneration = assignmentGeneration;
+      _lastJob = job;
       final service = ref.read(locationPingServiceProvider);
       _service = service;
       service.setShift(effectiveShift);
-      service.setActiveWorkOrder(workOrderId);
+      service.setActiveWorkOrder(
+        workOrderId,
+        assignmentGeneration: assignmentGeneration,
+      );
       // Native background stream keeps fixes flowing when backgrounded; the
       // foreground timer below still covers the stationary heartbeat in-app.
       if (effectiveShift == ShiftState.onShift) {
-        service.startBackgroundTracking(workOrderId: workOrderId);
+        service.startBackgroundTracking(
+          workOrderId: workOrderId,
+          assignmentGeneration: assignmentGeneration,
+        );
       } else {
         service.stopBackgroundTracking();
       }

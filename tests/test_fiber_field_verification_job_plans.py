@@ -1,42 +1,32 @@
 from __future__ import annotations
 
 import copy
+import hashlib
+import json
 import uuid
+from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 
 import pytest
-from fastapi import FastAPI
-from fastapi.testclient import TestClient
 
-from app.api.dispatch import router
-from app.db import get_db
 from app.models.audit import AuditEvent
 from app.models.dispatch import TechnicianProfile, WorkOrderAssignmentQueue
-from app.models.fiber_topology_field_observation import (
-    FiberTopologyFieldObservation,
-)
 from app.models.fiber_topology_staging import (
     FiberTopologySourceBatch,
     FiberTopologyStagedFeature,
 )
-from app.models.subscriber import Subscriber, UserType
+from app.models.subscriber import Reseller, Subscriber, UserType
 from app.models.system_user import SystemUser
+from app.models.vendor_routes import Vendor
 from app.models.work_order import WorkOrder
-from app.schemas.dispatch import WorkOrderHeaderUpdate
-from app.services.auth_dependencies import require_user_auth
 from app.services.network.fiber_field_verification_job_plans import (
     FiberFieldVerificationJobPlanError,
     execute_fiber_field_verification_job_plan,
     preview_fiber_field_verification_job_plan,
 )
-from app.services.network.fiber_topology_field_observations import (
-    FiberTopologyFieldObservationError,
-    record_fiber_field_observation,
-)
 from app.services.network.fiber_topology_field_worklist import (
     reconcile_fiber_field_worklist,
 )
-from app.services.work_order_commands import work_order_commands
 
 
 def _sha() -> str:
@@ -92,7 +82,11 @@ def _stage(
 
 
 def _subscriber(db_session) -> Subscriber:
+    reseller = Reseller(name=f"Synthetic fiber plan reseller {uuid.uuid4()}")
+    db_session.add(reseller)
+    db_session.flush()
     row = Subscriber(
+        reseller_id=reseller.id,
         first_name="Fiber",
         last_name="Plan Customer",
         email=f"fiber-plan-{uuid.uuid4().hex[:8]}@example.com",
@@ -123,264 +117,348 @@ def _technician(db_session) -> TechnicianProfile:
     return row
 
 
-def _args(
-    db_session,
-    features: list[FiberTopologyStagedFeature],
-    subscriber: Subscriber,
-    technician: TechnicianProfile | None = None,
-) -> dict:
+from app.models.field_vendor import FieldVendor, FieldVendorUser
+from app.services.network.fiber_field_verification_job_plan_contracts import (
+    FiberJobPlanCommand,
+    FiberJobPlanQuery,
+    FiberPlanAuditPrincipal,
+)
+from app.services.network.fiber_field_verification_job_plans import (
+    serialize_fiber_plan_command,
+)
+from app.services.network.fiber_field_verification_job_scope import (
+    FiberFieldVerificationJobScopeError,
+    assert_feature_in_planned_scope,
+    planned_feature_scope,
+    planned_scope_payload,
+)
+from app.services.owner_commands import CommandContext, OwnerCommandError
+from app.services.permission_admission import PermissionAdmission
+from app.services.work_order_assignment_contracts import (
+    TechnicianAssignmentTarget,
+    VendorAssignmentTarget,
+)
+from app.services.work_order_commands import WorkOrderCommandError
+
+
+def _query(db_session, features, subscriber, target=None) -> FiberJobPlanQuery:
     report = reconcile_fiber_field_worklist(db_session)
-    return {
-        "expected_worklist_report_sha256": report.report_sha256,
-        "staged_feature_ids": [feature.id for feature in features],
-        "subscriber_id": subscriber.id,
-        "title": "Verify selected FAT evidence",
-        "description": "Observe only the exact planned source scope.",
-        "priority": "high",
-        "address": "Jabi field route",
-        "scheduled_start": datetime.now(UTC) + timedelta(hours=1),
-        "scheduled_end": datetime.now(UTC) + timedelta(hours=3),
-        "assigned_technician_id": technician.id if technician else None,
-        "assignment_reason": "Exact fiber evidence route",
-        "idempotency_key": "pytest-fiber-field-plan-0001",
-    }
+    return FiberJobPlanQuery(
+        expected_worklist_report_sha256=report.report_sha256,
+        staged_feature_ids=tuple(feature.id for feature in features),
+        subscriber_id=subscriber.id,
+        title="Verify selected FAT evidence",
+        description="Exact planned source scope.",
+        priority="high",
+        address="Jabi field route",
+        scheduled_start=datetime.now(UTC) + timedelta(hours=1),
+        scheduled_end=datetime.now(UTC) + timedelta(hours=3),
+        target=target,
+        assignment_reason="Exact fiber evidence route",
+        idempotency_key="pytest-fiber-field-plan-0001",
+    )
+
+
+def _command(db_session, query, digest) -> FiberJobPlanCommand:
+    staff = SystemUser(
+        first_name="Dispatch",
+        last_name="Staff",
+        email=f"dispatch-{uuid.uuid4()}@example.com",
+        user_type=UserType.system_user,
+    )
+    db_session.add(staff)
+    db_session.flush()
+    principal_id = staff.id
+    return FiberJobPlanCommand(
+        query=query,
+        expected_plan_sha256=digest,
+        context=CommandContext.system(
+            actor=str(principal_id),
+            scope="operations:dispatch:assign",
+            reason="Exact fiber plan",
+            idempotency_key=query.idempotency_key,
+        ),
+        access=PermissionAdmission(
+            principal_id,
+            "system_user",
+            frozenset(
+                {
+                    "operations:dispatch:assign",
+                    "operations:dispatch:write",
+                    "network:fiber:read",
+                }
+            ),
+        ),
+        audit=FiberPlanAuditPrincipal(principal_id, "fiber-plan-request-1"),
+    )
+
+
+def _ready(db_session, query):
+    preview = preview_fiber_field_verification_job_plan(db_session, query=query)
+    command = _command(db_session, query, preview.plan_sha256)
+    db_session.commit()
+    return preview, command
 
 
 def test_job_plan_preview_is_exact_stable_and_write_free(db_session):
-    first = _stage(db_session, "FAT-PLAN-001")
-    second = _stage(db_session, "FAT-PLAN-002")
-    subscriber = _subscriber(db_session)
-    args = _args(db_session, [second, first], subscriber)
-    before_orders = db_session.query(WorkOrder).count()
-
-    preview = preview_fiber_field_verification_job_plan(db_session, **args)
-    replay = preview_fiber_field_verification_job_plan(db_session, **args)
-
-    assert preview["plan_sha256"] == replay["plan_sha256"]
-    assert len(preview["scope_sha256"]) == 64
-    assert preview["selected_feature_count"] == 2
-    assert [row["staged_feature_id"] for row in preview["selected_features"]] == [
-        str(first.id),
-        str(second.id),
+    first, second = _stage(db_session, "FAT-001"), _stage(db_session, "FAT-002")
+    query = _query(db_session, [second, first], _subscriber(db_session))
+    before = db_session.query(WorkOrder).count()
+    preview = preview_fiber_field_verification_job_plan(db_session, query=query)
+    replay = preview_fiber_field_verification_job_plan(db_session, query=query)
+    assert preview == replay
+    assert [row.staged_feature_id for row in preview.scope.selected_features] == [
+        first.id,
+        second.id,
     ]
     assert all(
-        row["verification_state"] == "unobserved"
-        for row in preview["selected_features"]
+        row.verification_state == "unobserved"
+        for row in preview.scope.selected_features
     )
-    assert preview["command"]["public_id"].startswith("sub-fv-")
-    assert db_session.query(WorkOrder).count() == before_orders
+    assert db_session.query(WorkOrder).count() == before
+    # Exact legacy command/scope JSON is the digest input for unassigned and technician plans.
+    payload = {
+        "command": serialize_fiber_plan_command(preview),
+        **planned_scope_payload(preview.scope),
+    }
+    assert "assigned_vendor_user_id" not in payload["command"]
+    assert (
+        hashlib.sha256(
+            json.dumps(
+                payload, sort_keys=True, separators=(",", ":"), allow_nan=False
+            ).encode()
+        ).hexdigest()
+        == preview.plan_sha256
+    )
 
 
 def test_execute_atomically_creates_assigns_audits_and_replays(db_session):
-    feature = _stage(db_session, "FAT-PLAN-EXECUTE")
-    subscriber = _subscriber(db_session)
+    feature = _stage(db_session, "FAT-EXECUTE")
     technician = _technician(db_session)
-    args = _args(db_session, [feature], subscriber, technician)
-    preview = preview_fiber_field_verification_job_plan(db_session, **args)
-    auth = {
-        "principal_type": "system_user",
-        "principal_id": str(uuid.uuid4()),
-    }
-
-    result = execute_fiber_field_verification_job_plan(
+    query = _query(
         db_session,
-        expected_plan_sha256=preview["plan_sha256"],
-        auth=auth,
-        request_id="fiber-plan-request-1",
-        **args,
+        [feature],
+        _subscriber(db_session),
+        TechnicianAssignmentTarget(technician.id),
     )
-    replayed = execute_fiber_field_verification_job_plan(
-        db_session,
-        expected_plan_sha256=preview["plan_sha256"],
-        auth=auth,
-        request_id="fiber-plan-request-1",
-        **args,
-    )
-
-    work_order = result["work_order"]
-    assignment = result["assignment"]
-    assert isinstance(work_order, WorkOrder)
-    assert isinstance(assignment, WorkOrderAssignmentQueue)
-    assert result["replayed"] is False
-    assert replayed["replayed"] is True
-    assert replayed["work_order"].id == work_order.id
-    assert work_order.status == "dispatched"
-    assert assignment.status == "assigned"
-    assert assignment.assigned_technician_id == technician.id
-    plan = work_order.metadata_["fiber_field_verification_plan"]
-    assert plan["plan_sha256"] == preview["plan_sha256"]
-    assert plan["scope_sha256"] == preview["scope_sha256"]
-    assert plan["selected_features"][0]["staged_feature_id"] == str(feature.id)
+    preview, command = _ready(db_session, query)
+    result = execute_fiber_field_verification_job_plan(db_session, command=command)
+    replay = execute_fiber_field_verification_job_plan(db_session, command=command)
+    assert not result.replayed and replay.replayed
+    assert result.work_order.id == replay.work_order.id
+    assert result.assignment.id == replay.assignment.id
     assert (
-        db_session.query(WorkOrder).filter_by(public_id=work_order.public_id).count()
-        == 1
+        result.assignment_receipt.assignment_generation
+        == replay.assignment_receipt.assignment_generation
     )
+    assert result.work_order.status == "dispatched"
+    row = db_session.get(WorkOrder, result.work_order.id)
     assert (
-        db_session.query(WorkOrderAssignmentQueue)
-        .filter_by(work_order_mirror_id=work_order.id)
+        row.metadata_["fiber_field_verification_plan"]["plan_sha256"]
+        == preview.plan_sha256
+    )
+    assert planned_feature_scope(row)[0].staged_feature_id == feature.id
+    assert db_session.query(WorkOrderAssignmentQueue).count() == 1
+    assert (
+        db_session.query(AuditEvent)
+        .filter_by(action="fiber_field_verification_job_plan.executed")
         .count()
         == 1
     )
-    plan_events = (
-        db_session.query(AuditEvent)
-        .filter(AuditEvent.action == "fiber_field_verification_job_plan.executed")
-        .filter(AuditEvent.entity_id == preview["plan_sha256"])
-        .all()
-    )
-    assert len(plan_events) == 1
-    assert plan_events[0].request_id == "fiber-plan-request-1"
-    assert plan_events[0].metadata_["public_id"] == work_order.public_id
 
-    original_plan = copy.deepcopy(plan)
-    work_order_commands.update_header(
+
+def _vendor_target(db_session):
+    native = Vendor(name="Fiber contractor", is_active=True)
+    db_session.add(native)
+    db_session.flush()
+    vendor = FieldVendor(
+        native_vendor_id=native.id, name="Fiber contractor", is_active=True
+    )
+    person = SystemUser(
+        first_name="Vendor",
+        last_name="Person",
+        email=f"vendor-{uuid.uuid4()}@example.com",
+        user_type=UserType.system_user,
+    )
+    db_session.add_all([vendor, person])
+    db_session.flush()
+    member = FieldVendorUser(
+        vendor_id=vendor.id, system_user_id=person.id, role="field", is_active=True
+    )
+    db_session.add(member)
+    db_session.flush()
+    return VendorAssignmentTarget(native.id, member.id), member
+
+
+def test_vendor_member_changes_digest_and_revocation_denies_replay(db_session):
+    feature = _stage(db_session, "FAT-VENDOR")
+    target, member = _vendor_target(db_session)
+    query = _query(db_session, [feature], _subscriber(db_session), target)
+    other_person = SystemUser(
+        first_name="Other",
+        last_name="Vendor",
+        email=f"other-{uuid.uuid4()}@example.com",
+        user_type=UserType.system_user,
+    )
+    db_session.add(other_person)
+    db_session.flush()
+    other_member = FieldVendorUser(
+        vendor_id=member.vendor_id,
+        system_user_id=other_person.id,
+        role="field",
+        is_active=True,
+    )
+    db_session.add(other_member)
+    db_session.flush()
+    other_preview = preview_fiber_field_verification_job_plan(
         db_session,
-        work_order.public_id,
-        WorkOrderHeaderUpdate(
-            metadata={"fiber_field_verification_plan": {"tampered": True}}
+        query=replace(
+            query, target=VendorAssignmentTarget(target.vendor_id, other_member.id)
         ),
     )
-    assert work_order.metadata_["fiber_field_verification_plan"] == original_plan
+    preview, command = _ready(db_session, query)
+    assert serialize_fiber_plan_command(preview)["assigned_vendor_user_id"] == str(
+        target.vendor_user_id
+    )
+    assert preview.plan_sha256 != other_preview.plan_sha256
+    assert preview.scope.scope_sha256 == other_preview.scope.scope_sha256
+    result = execute_fiber_field_verification_job_plan(db_session, command=command)
+    assert result.assignment.assigned_vendor_id == target.vendor_id
+    assert result.assignment.assigned_vendor_user_id == target.vendor_user_id
+    member.is_active = False
+    db_session.commit()
+    with pytest.raises(WorkOrderCommandError, match="active|attending|membership"):
+        execute_fiber_field_verification_job_plan(db_session, command=command)
+    assert db_session.query(WorkOrder).count() == 1
+    assert db_session.query(WorkOrderAssignmentQueue).count() == 1
 
 
 def test_execute_rejects_changed_confirmation_and_worklist(db_session):
-    feature = _stage(db_session, "FAT-PLAN-STALE")
-    subscriber = _subscriber(db_session)
-    args = _args(db_session, [feature], subscriber)
-    preview = preview_fiber_field_verification_job_plan(db_session, **args)
-
-    changed = {**args, "title": "Changed after preview"}
-    with pytest.raises(FiberFieldVerificationJobPlanError) as confirmation:
+    feature = _stage(db_session, "FAT-STALE")
+    query = _query(db_session, [feature], _subscriber(db_session))
+    _, command = _ready(db_session, query)
+    with pytest.raises(FiberFieldVerificationJobPlanError) as stale:
         execute_fiber_field_verification_job_plan(
-            db_session,
-            expected_plan_sha256=preview["plan_sha256"],
-            **changed,
+            db_session, command=replace(command, query=replace(query, title="Changed"))
         )
-    assert confirmation.value.status_code == 409
-    assert "confirmation is stale" in confirmation.value.detail
-
+    assert stale.value.code.endswith("stale_plan")
     _stage(
-        db_session,
-        "FAT-PLAN-STALE",
-        created_at=feature.created_at + timedelta(seconds=1),
+        db_session, "FAT-STALE", created_at=feature.created_at + timedelta(seconds=1)
     )
-    with pytest.raises(FiberFieldVerificationJobPlanError) as worklist:
-        execute_fiber_field_verification_job_plan(
-            db_session,
-            expected_plan_sha256=preview["plan_sha256"],
-            **args,
-        )
-    assert worklist.value.status_code == 409
-    assert "worklist changed" in worklist.value.detail
+    db_session.commit()
+    with pytest.raises(FiberFieldVerificationJobPlanError) as stale:
+        execute_fiber_field_verification_job_plan(db_session, command=command)
+    assert stale.value.code.endswith("stale_worklist")
     assert db_session.query(WorkOrder).count() == 0
 
 
 def test_planned_job_observations_fail_closed_outside_exact_scope(db_session):
-    selected = _stage(db_session, "FAT-PLAN-SCOPED")
-    outside = _stage(db_session, "FAT-PLAN-OUTSIDE")
-    subscriber = _subscriber(db_session)
-    technician = _technician(db_session)
-    args = _args(db_session, [selected], subscriber, technician)
-    preview = preview_fiber_field_verification_job_plan(db_session, **args)
-    result = execute_fiber_field_verification_job_plan(
-        db_session,
-        expected_plan_sha256=preview["plan_sha256"],
-        **args,
+    selected, outside = (
+        _stage(db_session, "FAT-SCOPE"),
+        _stage(db_session, "FAT-OUTSIDE"),
     )
-    work_order = result["work_order"]
-
-    observation = record_fiber_field_observation(
-        db_session,
-        staged_feature_id=selected.id,
-        expected_feature_content_sha256=selected.content_sha256,
-        work_order_id=work_order.id,
-        recorded_by_technician_id=technician.id,
-        recorded_by_person_id=technician.person_id,
-        recorded_by_system_user_id=technician.system_user_id,
-        verification_scope="identity",
-        outcome="agrees",
-        observed_at=datetime.now(UTC),
-        client_ref=uuid.uuid4(),
-        observed_external_label="FAT-PLAN-SCOPED",
-    )
-    assert isinstance(observation, FiberTopologyFieldObservation)
-
-    with pytest.raises(FiberTopologyFieldObservationError) as exc:
-        record_fiber_field_observation(
-            db_session,
-            staged_feature_id=outside.id,
-            expected_feature_content_sha256=outside.content_sha256,
-            work_order_id=work_order.id,
-            recorded_by_technician_id=technician.id,
-            recorded_by_person_id=technician.person_id,
-            recorded_by_system_user_id=technician.system_user_id,
-            verification_scope="identity",
-            outcome="agrees",
-            observed_at=datetime.now(UTC),
-            client_ref=uuid.uuid4(),
-            observed_external_label="FAT-PLAN-OUTSIDE",
-        )
-    assert "outside this work order's verification plan" in str(exc.value)
-
-    tampered_metadata = copy.deepcopy(work_order.metadata_)
-    tampered_metadata["fiber_field_verification_plan"]["selected_features"][0][
+    query = _query(db_session, [selected], _subscriber(db_session))
+    _, command = _ready(db_session, query)
+    result = execute_fiber_field_verification_job_plan(db_session, command=command)
+    row = db_session.get(WorkOrder, result.work_order.id)
+    assert_feature_in_planned_scope(row, selected)
+    with pytest.raises(FiberFieldVerificationJobScopeError, match="outside"):
+        assert_feature_in_planned_scope(row, outside)
+    metadata = copy.deepcopy(row.metadata_)
+    metadata["fiber_field_verification_plan"]["selected_features"][0][
         "content_sha256"
     ] = _sha()
-    work_order.metadata_ = tampered_metadata
-    db_session.commit()
-
-    with pytest.raises(FiberTopologyFieldObservationError) as tampered:
-        record_fiber_field_observation(
-            db_session,
-            staged_feature_id=selected.id,
-            expected_feature_content_sha256=selected.content_sha256,
-            work_order_id=work_order.id,
-            recorded_by_technician_id=technician.id,
-            recorded_by_person_id=technician.person_id,
-            recorded_by_system_user_id=technician.system_user_id,
-            verification_scope="identity",
-            outcome="agrees",
-            observed_at=datetime.now(UTC),
-            client_ref=uuid.uuid4(),
-            observed_external_label="FAT-PLAN-SCOPED",
-        )
-    assert "source scope digest does not match" in str(tampered.value)
+    row.metadata_ = metadata
+    with pytest.raises(
+        FiberFieldVerificationJobScopeError, match="digest does not match"
+    ):
+        assert_feature_in_planned_scope(row, selected)
 
 
-def test_dispatch_api_exposes_authorized_preview_and_execute(db_session):
-    feature = _stage(db_session, "FAT-PLAN-API")
-    subscriber = _subscriber(db_session)
+def test_plan_rolls_back_all_participants_on_audit_failure(db_session, monkeypatch):
+    feature = _stage(db_session, "FAT-ROLLBACK")
     technician = _technician(db_session)
-    args = _args(db_session, [feature], subscriber, technician)
-    app = FastAPI()
-    app.include_router(router, prefix="/api/v1")
-    app.dependency_overrides[get_db] = lambda: db_session
-    app.dependency_overrides[require_user_auth] = lambda: {
-        "principal_type": "system_user",
-        "principal_id": str(uuid.uuid4()),
-        "roles": ["admin"],
-        "scopes": [],
-    }
-    client = TestClient(app)
-    payload = {
-        **args,
-        "staged_feature_ids": [str(feature.id)],
-        "subscriber_id": str(subscriber.id),
-        "assigned_technician_id": str(technician.id),
-        "scheduled_start": args["scheduled_start"].isoformat(),
-        "scheduled_end": args["scheduled_end"].isoformat(),
-    }
+    query = _query(
+        db_session,
+        [feature],
+        _subscriber(db_session),
+        TechnicianAssignmentTarget(technician.id),
+    )
+    _, command = _ready(db_session, query)
 
-    preview_response = client.post(
-        "/api/v1/dispatch/field-verification-job-plans/preview",
-        json=payload,
+    def reject(*args, **kwargs):
+        raise RuntimeError("audit unavailable")
+
+    monkeypatch.setattr(
+        "app.services.network.fiber_field_verification_job_plans.stage_audit_event",
+        reject,
     )
-    assert preview_response.status_code == 200
-    plan_sha256 = preview_response.json()["plan_sha256"]
-    execute_response = client.post(
-        "/api/v1/dispatch/field-verification-job-plans/execute",
-        headers={"X-Request-ID": "fiber-plan-api-1"},
-        json={**payload, "expected_plan_sha256": plan_sha256},
+    with pytest.raises(RuntimeError, match="audit unavailable"):
+        execute_fiber_field_verification_job_plan(db_session, command=command)
+    assert db_session.query(WorkOrder).count() == 0
+    assert db_session.query(WorkOrderAssignmentQueue).count() == 0
+
+
+def test_missing_canonical_admission_is_denied_and_helper_commit_rolls_back(
+    db_session, monkeypatch
+):
+    feature = _stage(db_session, "FAT-AUTH")
+    query = _query(db_session, [feature], _subscriber(db_session))
+    _, command = _ready(db_session, query)
+    with pytest.raises(FiberFieldVerificationJobPlanError) as denied:
+        execute_fiber_field_verification_job_plan(
+            db_session,
+            command=replace(
+                command,
+                access=replace(command.access, admitted_permissions=frozenset()),
+            ),
+        )
+    assert denied.value.code.endswith("forbidden")
+
+    def commit_inside_owner(db, **kwargs):
+        db.commit()
+
+    monkeypatch.setattr(
+        "app.services.network.fiber_field_verification_job_plans.stage_audit_event",
+        commit_inside_owner,
     )
-    assert execute_response.status_code == 201
-    assert execute_response.json()["work_order"]["status"] == "dispatched"
-    assert execute_response.json()["assignment"]["status"] == "assigned"
+    with pytest.raises(OwnerCommandError) as invalid:
+        execute_fiber_field_verification_job_plan(db_session, command=command)
+    assert invalid.value.code.endswith("nested_transaction_completion")
+    assert db_session.query(WorkOrder).count() == 0
+
+
+def test_technician_command_keeps_historical_json_shape(db_session):
+    feature = _stage(db_session, "FAT-LEGACY-JSON")
+    technician = _technician(db_session)
+    query = _query(
+        db_session,
+        [feature],
+        _subscriber(db_session),
+        TechnicianAssignmentTarget(technician.id),
+    )
+    preview = preview_fiber_field_verification_job_plan(db_session, query=query)
+    assert serialize_fiber_plan_command(preview) == {
+        "address": query.address,
+        "assigned_technician_id": str(technician.id),
+        "assigned_vendor_id": None,
+        "assignment_reason": query.assignment_reason,
+        "description": query.description,
+        "idempotency_key": query.idempotency_key,
+        "priority": query.priority,
+        "public_id": preview.public_id,
+        "scheduled_end": query.scheduled_end.isoformat(),
+        "scheduled_start": query.scheduled_start.isoformat(),
+        "subscriber_id": str(query.subscriber_id),
+        "title": query.title,
+    }
+    scope = planned_scope_payload(preview.scope)
+    payload = {key: value for key, value in scope.items() if key != "scope_sha256"}
+    assert (
+        hashlib.sha256(
+            json.dumps(
+                payload, sort_keys=True, separators=(",", ":"), allow_nan=False
+            ).encode()
+        ).hexdigest()
+        == preview.scope.scope_sha256
+    )

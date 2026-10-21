@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 from app.api import me as me_api
 from app.schemas.portal import MyProjectsResponse
@@ -26,16 +26,20 @@ def test_projects_have_no_read_flip_control():
 def test_me_projects_unconditionally_uses_native_lifecycle(monkeypatch):
     principal = _principal()
     expected = MyProjectsResponse()
-    calls: list[str] = []
+    calls: list[customer_experience_lifecycle.CustomerLifecycleQuery] = []
 
-    def _read(db, subscriber_id):
-        calls.append(subscriber_id)
+    def _read(db, *, query: customer_experience_lifecycle.CustomerLifecycleQuery):
+        calls.append(query)
         return expected
 
     monkeypatch.setattr(customer_experience_lifecycle, "projects_for_subscriber", _read)
 
     assert me_api.my_projects(db=None, principal=principal) is expected
-    assert calls == [principal["subscriber_id"]]
+    assert calls == [
+        customer_experience_lifecycle.CustomerLifecycleQuery(
+            UUID(principal["subscriber_id"])
+        )
+    ]
 
 
 def test_quote_read_control_remains_independent(db_session):

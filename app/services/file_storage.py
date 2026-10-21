@@ -14,7 +14,7 @@ from pathlib import Path
 from typing import Literal
 
 from fastapi import HTTPException
-from sqlalchemy import select
+from sqlalchemy import select, text
 from sqlalchemy.orm import Session
 
 from app.models.stored_file import StoredFile
@@ -22,6 +22,7 @@ from app.models.subscriber import Subscriber, SubscriberCategory
 from app.services.file_upload import MAGIC_BYTES
 from app.services.object_storage import (
     ObjectNotFoundError,
+    ObjectStorageError,
     S3StorageService,
     StreamResult,
     get_s3_storage,
@@ -181,6 +182,187 @@ DOMAIN_CONFIGS: dict[str, FileDomainConfig] = {
 }
 
 
+@dataclass(frozen=True, slots=True)
+class FileRetentionQuery:
+    file_id: uuid.UUID
+
+
+@dataclass(frozen=True, slots=True)
+class FileEvidenceLock:
+    file_ids: tuple[uuid.UUID, ...]
+
+
+def _lock_object_keys(db: Session, *, keys: tuple[tuple[str, str], ...]) -> None:
+    if db.get_bind().dialect.name == "postgresql":
+        for provider, storage_key in keys:
+            lock_id = int.from_bytes(
+                hashlib.sha256(
+                    ("file-evidence:" + provider + ":" + storage_key).encode()
+                ).digest()[:8],
+                "big",
+                signed=True,
+            )
+            db.execute(text("SELECT pg_advisory_xact_lock(:key)"), {"key": lock_id})
+
+
+def lock_files_for_evidence(
+    db: Session, *, query: FileEvidenceLock
+) -> tuple[StoredFile, ...]:
+    """One common physical-object lock for reference creation and deletion."""
+    from app.services.domain_errors import DomainError
+
+    requested = db.scalars(
+        select(StoredFile).where(StoredFile.id.in_(query.file_ids))
+    ).all()
+    if {file.id for file in requested} != set(query.file_ids):
+        raise DomainError(
+            code="files.not_found", message="File not found", retryable=False
+        )
+    keys = sorted(
+        {
+            (file.storage_provider, file.storage_key_or_relative_path)
+            for file in requested
+        }
+    )
+    _lock_object_keys(db, keys=tuple(keys))
+    aliases: list[StoredFile] = []
+    for provider, storage_key in keys:
+        aliases.extend(
+            db.scalars(
+                select(StoredFile)
+                .where(
+                    StoredFile.storage_provider == provider,
+                    StoredFile.storage_key_or_relative_path == storage_key,
+                )
+                .order_by(StoredFile.id)
+                .with_for_update()
+                .execution_options(populate_existing=True)
+            ).all()
+        )
+    if not set(query.file_ids).issubset({file.id for file in aliases}):
+        raise DomainError(
+            code="files.not_found",
+            message="File reference changed while locking",
+            retryable=False,
+        )
+    return tuple(aliases)
+
+
+def lock_file_for_retention(db: Session, *, query: FileRetentionQuery) -> StoredFile:
+    """Refuse retained physical objects before S3 effects or metadata mutation."""
+    from app.models.stored_file_retention import StoredFileRetention
+    from app.services.domain_errors import DomainError
+
+    files = lock_files_for_evidence(db, query=FileEvidenceLock((query.file_id,)))
+    if (
+        db.scalar(
+            select(StoredFileRetention.stored_file_id)
+            .where(
+                StoredFileRetention.stored_file_id.in_(tuple(file.id for file in files))
+            )
+            .limit(1)
+        )
+        is not None
+    ):
+        raise DomainError(
+            code="files.evidence_retained",
+            message="Completion evidence must be retained",
+            retryable=False,
+        )
+    return next(file for file in files if file.id == query.file_id)
+
+
+@dataclass(frozen=True, slots=True)
+class CompletionFileRetentionRegistration:
+    stored_file_id: uuid.UUID
+    submission_id: uuid.UUID
+
+
+@dataclass(frozen=True, slots=True)
+class FileRetentionRegistered:
+    stored_file_id: uuid.UUID
+    reference_id: uuid.UUID
+
+
+def stage_completion_retention(
+    db: Session, *, command: CompletionFileRetentionRegistration
+) -> FileRetentionRegistered:
+    """Storage owns retention facts; completion owns the originating evidence."""
+    from app.models.stored_file_retention import StoredFileRetention
+    from app.services.domain_errors import DomainError
+    from app.services.owner_commands import owner_command_active
+
+    if not owner_command_active(db, owner="operations.field_completion"):
+        raise DomainError(
+            code="files.retention_participant_required",
+            message="Completion owner transaction required",
+            retryable=False,
+        )
+    files = lock_files_for_evidence(
+        db, query=FileEvidenceLock((command.stored_file_id,))
+    )
+    file = next(value for value in files if value.id == command.stored_file_id)
+    if file.is_deleted:
+        raise DomainError(
+            code="files.not_found", message="File not found", retryable=False
+        )
+    if (
+        file.entity_type != "field_attachment"
+        or not file.checksum
+        or file.file_size < 1
+        or file.file_size > DOMAIN_CONFIGS["attachments"].max_size_bytes
+    ):
+        raise DomainError(
+            code="files.evidence_unavailable",
+            message="Completion evidence is unavailable",
+            retryable=False,
+        )
+    # Verify actual retained bytes; metadata alone cannot prove an object survived
+    # an earlier external-delete/database-rollback failure.
+    digest = hashlib.sha256()
+    size = 0
+    try:
+        stream = file_uploads.stream_file(file)
+        for chunk in stream.chunks:
+            size += len(chunk)
+            if size > file.file_size:
+                raise DomainError(
+                    code="files.evidence_unavailable",
+                    message="Completion evidence size does not match",
+                    retryable=False,
+                )
+            digest.update(chunk)
+    except ObjectNotFoundError as exc:
+        raise DomainError(
+            code="files.evidence_unavailable",
+            message="Completion evidence object is missing",
+            retryable=False,
+        ) from exc
+    except (ObjectStorageError, OSError) as exc:
+        raise DomainError(
+            code="files.storage_unavailable",
+            message="Completion evidence could not be verified",
+            retryable=True,
+        ) from exc
+    if size != file.file_size or digest.hexdigest() != file.checksum:
+        raise DomainError(
+            code="files.evidence_unavailable",
+            message="Completion evidence checksum does not match",
+            retryable=False,
+        )
+    key = (command.stored_file_id, command.submission_id)
+    if db.get(StoredFileRetention, key) is None:
+        db.add(
+            StoredFileRetention(
+                stored_file_id=command.stored_file_id,
+                reference_id=command.submission_id,
+                source_owner="operations.field_completion",
+            )
+        )
+        db.flush()
+    return FileRetentionRegistered(command.stored_file_id, command.submission_id)
+
+
 class FileValidationError(ValueError):
     """File validation failure."""
 
@@ -338,6 +520,7 @@ class UnifiedFileUploadService:
             extension=ext,
         )
 
+        _lock_object_keys(db, keys=(("s3", storage_key),))
         self._storage_client().upload(storage_key, data, final_content_type)
         checksum = hashlib.sha256(data).hexdigest() if config.compute_checksum else None
 
@@ -445,7 +628,24 @@ class UnifiedFileUploadService:
     def stage_prepared_upload(
         self, *, db: Session, prepared: PreparedFileUpload
     ) -> StoredFile:
-        """Stage a previously uploaded object's metadata in the caller transaction."""
+        """Lock and verify a prepared object before creating active metadata."""
+        from app.services.domain_errors import DomainError
+
+        _lock_object_keys(db, keys=(("s3", prepared.storage_key),))
+        try:
+            exists = self._storage_client().exists(prepared.storage_key)
+        except ObjectStorageError as exc:
+            raise DomainError(
+                code="files.storage_unavailable",
+                message="Prepared object could not be verified",
+                retryable=True,
+            ) from exc
+        if not exists:
+            raise DomainError(
+                code="files.prepared_object_missing",
+                message="Prepared object is missing; prepare the upload again",
+                retryable=True,
+            )
         record = StoredFile(
             owner_subscriber_id=prepared.owner_subscriber_id,
             entity_type=prepared.entity_type,
@@ -486,6 +686,8 @@ class UnifiedFileUploadService:
     def assert_owner_access(
         self, file: StoredFile, current_owner_subscriber_id: uuid.UUID | None
     ) -> None:
+        if file.entity_type in {"field_identity_portrait", "field_identity_evidence"}:
+            raise HTTPException(status_code=404, detail="File not found")
         if file.owner_subscriber_id is None:
             return
         if current_owner_subscriber_id != file.owner_subscriber_id:
@@ -527,7 +729,12 @@ class UnifiedFileUploadService:
         file: StoredFile,
         hard_delete_object: bool = True,
     ) -> StoredFile:
-        if hard_delete_object and file.storage_provider == "s3":
+        file = lock_file_for_retention(db, query=FileRetentionQuery(file.id))
+        aliases = lock_files_for_evidence(db, query=FileEvidenceLock((file.id,)))
+        object_unreferenced = all(
+            alias.id == file.id or alias.is_deleted for alias in aliases
+        )
+        if hard_delete_object and object_unreferenced and file.storage_provider == "s3":
             self._storage_client().delete(file.storage_key_or_relative_path)
         file.is_deleted = True
         file.deleted_at = datetime.now(UTC)
@@ -546,6 +753,7 @@ class UnifiedFileUploadService:
         database commit would make rollback unable to restore the authoritative
         attachment. Retention cleanup can safely remove unreferenced objects later.
         """
+        file = lock_file_for_retention(db, query=FileRetentionQuery(file.id))
         file.is_deleted = True
         file.deleted_at = datetime.now(UTC)
         db.add(file)
@@ -555,3 +763,91 @@ class UnifiedFileUploadService:
 
 
 file_uploads = UnifiedFileUploadService()
+
+
+@dataclass(frozen=True, slots=True)
+class RetainedEvidenceStreamQuery:
+    stored_file_id: uuid.UUID
+    submission_id: uuid.UUID
+    expected_checksum: str
+
+
+@dataclass(frozen=True, slots=True)
+class RetainedEvidenceStream:
+    filename: str
+    content_type: str
+    file_size: int
+    checksum: str
+    stream: StreamResult
+
+
+def stream_retained_evidence(
+    db: Session, *, query: RetainedEvidenceStreamQuery
+) -> RetainedEvidenceStream:
+    """Internal storage participant; caller owns purpose-scoped native admission.
+
+    Buffer at most the canonical attachment limit, verifying retained bytes before
+    returning any content. No URL, storage key or general private-file grant escapes.
+    """
+    from app.models.stored_file_retention import StoredFileRetention
+    from app.services.domain_errors import DomainError
+
+    files = lock_files_for_evidence(db, query=FileEvidenceLock((query.stored_file_id,)))
+    file = next(value for value in files if value.id == query.stored_file_id)
+    retention = db.get(StoredFileRetention, (query.stored_file_id, query.submission_id))
+    if (
+        retention is None
+        or retention.source_owner != "operations.field_completion"
+        or file.is_deleted
+        or file.entity_type != "field_attachment"
+        or file.checksum != query.expected_checksum
+        or file.file_size < 1
+        or file.file_size > DOMAIN_CONFIGS["attachments"].max_size_bytes
+    ):
+        raise DomainError(
+            code="files.evidence_unavailable",
+            message="Retained evidence is unavailable",
+            retryable=False,
+        )
+    data = bytearray()
+    digest = hashlib.sha256()
+    try:
+        source = file_uploads.stream_file(file)
+        for chunk in source.chunks:
+            if len(data) + len(chunk) > file.file_size:
+                raise DomainError(
+                    code="files.evidence_unavailable",
+                    message="Retained evidence size does not match",
+                    retryable=False,
+                )
+            data.extend(chunk)
+            digest.update(chunk)
+    except ObjectNotFoundError as exc:
+        raise DomainError(
+            code="files.evidence_unavailable",
+            message="Retained evidence object is missing",
+            retryable=False,
+        ) from exc
+    except (ObjectStorageError, OSError) as exc:
+        raise DomainError(
+            code="files.storage_unavailable",
+            message="Retained evidence could not be read",
+            retryable=True,
+        ) from exc
+    if len(data) != file.file_size or digest.hexdigest() != query.expected_checksum:
+        raise DomainError(
+            code="files.evidence_unavailable",
+            message="Retained evidence checksum does not match",
+            retryable=False,
+        )
+    return RetainedEvidenceStream(
+        filename=file.original_filename,
+        content_type=file.content_type or "application/octet-stream",
+        file_size=file.file_size,
+        checksum=query.expected_checksum,
+        stream=StreamResult(
+            chunks=iter((bytes(data),)),
+            content_type=file.content_type,
+            content_length=file.file_size,
+        ),
+    )

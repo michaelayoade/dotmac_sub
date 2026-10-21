@@ -324,3 +324,107 @@ def test_owner_savepoint_still_rejects_participant_transaction_completion(
 
     assert not db_session.in_transaction()
     assert _count(db_session) == 0
+
+
+def test_swallowed_optional_commit_attempt_still_aborts_owner(
+    db_session: Session,
+) -> None:
+    def participant() -> None:
+        db_session.add(_projection("swallowed-illegal-commit"))
+        with pytest.raises(OwnerCommandError):
+            db_session.commit()
+
+    def operation() -> None:
+        with pytest.raises(OwnerCommandError):
+            execute_owner_savepoint(db_session, participant)
+        db_session.add(_projection("cannot-hide-boundary-violation"))
+
+    with pytest.raises(OwnerCommandError):
+        execute_owner_command(
+            db_session, definition=_DEFINITION, context=_context(), operation=operation
+        )
+    assert not db_session.in_transaction()
+    assert not any(key.startswith("_dotmac_") for key in db_session.info)
+    assert _count(db_session) == 0
+
+
+def test_optional_failure_preserves_exception_identity_and_cause(
+    db_session: Session,
+) -> None:
+    first = ValueError("optional business failure")
+    cause = LookupError("original failure cause")
+
+    def participant() -> None:
+        db_session.add(_projection("discarded-with-diagnostic"))
+        db_session.flush()
+        raise first from cause
+
+    def operation() -> None:
+        with pytest.raises(ValueError) as captured:
+            execute_owner_savepoint(db_session, participant)
+        assert captured.value is first
+        assert captured.value.__cause__ is cause
+        db_session.add(_projection("retained-diagnostic-evidence"))
+
+    execute_owner_command(
+        db_session, definition=_DEFINITION, context=_context(), operation=operation
+    )
+    assert not db_session.in_transaction()
+    assert not any(key.startswith("_dotmac_") for key in db_session.info)
+    assert set(db_session.scalars(select(DeviceProjection.source_id))) == {
+        "retained-diagnostic-evidence"
+    }
+
+
+def test_kernel_conflict_savepoint_release_is_claimed(db_session) -> None:
+    """A Starter kernel expected-conflict savepoint may release inside a command."""
+    from dotmac_kernel.transactions import conflict_savepoint
+
+    def operation() -> None:
+        with conflict_savepoint(db_session):
+            db_session.add(_projection("kernel-savepoint-write"))
+            db_session.flush()
+
+    execute_owner_command(
+        db_session,
+        definition=_DEFINITION,
+        context=_context(),
+        operation=operation,
+    )
+
+    assert _count(db_session) == 1
+
+
+def test_kernel_conflict_savepoint_recovery_inside_owner_savepoint(
+    db_session: Session,
+) -> None:
+    """Recovered kernel conflicts do not poison the owner boundary.
+
+    This is the gateway prepaid composition: Starter money services run
+    inside execute_owner_savepoint (purchase staging) and their
+    expected-conflict rollback must be classified as recovered, while
+    the surrounding command still completes exactly once.
+    """
+    from dotmac_kernel.transactions import conflict_savepoint
+
+    def participant() -> None:
+        db_session.add(_projection("kernel-duplicate"))
+        db_session.flush()
+        with pytest.raises(IntegrityError):
+            with conflict_savepoint(db_session):
+                db_session.add(_projection("kernel-duplicate"))
+                db_session.flush()
+        db_session.add(_projection("after-kernel-conflict"))
+
+    def operation() -> None:
+        execute_owner_savepoint(db_session, participant)
+
+    execute_owner_command(
+        db_session, definition=_DEFINITION, context=_context(), operation=operation
+    )
+
+    assert not db_session.in_transaction()
+    assert set(db_session.scalars(select(DeviceProjection.source_id))) == {
+        "kernel-duplicate",
+        "after-kernel-conflict",
+    }

@@ -4,6 +4,7 @@
 {% block title %}Project {{ project.number or project.id }}{% endblock %}
 
 {% block content %}
+{% if can(request, 'project:update') %}<a class="text-sm underline" href="/admin/projects/{{ project.id }}/accepted-field-completion">Apply accepted field completion</a>{% endif %}
 {% if project_infrastructure %}
 <div class="mb-4 rounded-lg border border-slate-200 p-3 text-sm dark:border-slate-700">
     <span class="font-semibold">Infrastructure:</span> {{ project_infrastructure.label }}{% if project_infrastructure.context %} · {{ project_infrastructure.context }}{% endif %}
@@ -30,6 +31,10 @@
         {{ action_button('Edit Project', '/admin/projects/' ~ (project.number or project.id) ~ '/edit', icon_edit(), 'secondary', 'emerald') }}
         {% endif %}
     {% endcall %}
+
+{% if can(request, 'operations:completion-review:write') %}<a class="text-sm underline" href="/admin/completion-review/projects/{{ project.id }}/policy">Completion review enrollment and policy</a>{% endif %}
+{% with engineering_project_id=project.id, engineering_task_id=none %}{% include "admin/projects/engineering/_links.html" %}{% endwith %}
+
 
     {% if custom_field_values %}
     {% include "admin/customers/_custom_fields.html" %}

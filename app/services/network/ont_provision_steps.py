@@ -494,14 +494,14 @@ def wait_tr069_bootstrap(
 
 
 def _decrypt_optional_secret(value: object) -> str | None:
-    if value in (None, ""):
-        return None
-    from app.services.credential_crypto import decrypt_credential
+    """Decrypt a stored CPE credential for pushing, fail closed.
 
-    try:
-        return decrypt_credential(str(value)) or str(value)
-    except Exception:
-        return str(value)
+    A stored reference is never resolved and a decryption failure never
+    pushes the stored text; both return ``None`` (credential not configured).
+    """
+    from app.services.credential_crypto import decrypt_stored_secret_or_none
+
+    return decrypt_stored_secret_or_none(value)
 
 
 def _igd_wan_instance_for_vlan_from_snapshot(
@@ -967,7 +967,6 @@ def apply_saved_service_config(
     """
 
     from app.models.network import OntProvisioningStatus
-    from app.services.credential_crypto import decrypt_credential
     from app.services.network.ont_action_network import (
         probe_wan_capabilities,
     )
@@ -1075,10 +1074,7 @@ def apply_saved_service_config(
     wifi_password = None
     raw_wifi_password = effective_values.get("wifi_password")
     if raw_wifi_password:
-        try:
-            wifi_password = decrypt_credential(str(raw_wifi_password))
-        except ValueError:
-            wifi_password = str(raw_wifi_password)
+        wifi_password = _decrypt_optional_secret(raw_wifi_password)
     channel = effective_values.get("wifi_channel")
     try:
         channel_int = int(str(channel).strip()) if channel not in (None, "") else None

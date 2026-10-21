@@ -67,8 +67,22 @@ There is deliberately no `AuthProvider.oidc`. Adding one would make the storage
 enum a second closed mechanism vocabulary competing with the registry's open
 one, and a write could then name a mechanism in the storage column.
 
-The native writer locks the credential, Person Party, binding, and legacy
-principal before projecting. It requires:
+The native writer locks the exact typed legacy principal first, then refreshes
+and locks its credential, validates every legacy principal FK, and locks the
+Person Party followed by the authentication binding. All locking ORM reads
+refresh cached state. It never locks an incumbent credential after the binding:
+the Party → binding arbitration serializes canonical projection competitors,
+and `uq_user_credentials_tenant_party_auth_binding` is the unique backstop.
+Staff principal adoption and subscriber repair use principal → Party; staff
+session projection uses principal → Party → session. `AuthSession.party_id`'s
+foreign key also takes a Party KEY SHARE lock during session writes, so the
+principal-first order matters even without an explicit Party lock at issuance.
+Backfill fresh execution and replay lock Subscribers before Parties, with each
+set ordered by UUID. Receipt validation, exact identity/evidence refusal and
+native writer ownership remain unchanged. This dependency slice introduces no
+schema changes or OIDC/password-flow changes.
+
+It requires:
 
 1. the explicit operator tenant;
 2. an active or quarantined Person Party;

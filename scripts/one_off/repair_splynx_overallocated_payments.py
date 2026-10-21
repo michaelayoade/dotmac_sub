@@ -35,6 +35,7 @@ from app.models.billing import (
 )
 from app.services.billing._common import _recalculate_invoice_totals
 from app.services.common import coerce_uuid, round_money, to_decimal
+from scripts.billing._mutation_policy import refuse_apply
 
 
 @dataclass
@@ -237,6 +238,7 @@ def main() -> None:
         help="Limit the number of over-allocated payments considered.",
     )
     args = parser.parse_args()
+    refuse_apply(args.apply)
 
     db = SessionLocal()
     try:

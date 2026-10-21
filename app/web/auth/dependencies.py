@@ -1,22 +1,27 @@
 """Web authentication dependencies for cookie-based auth with redirects."""
 
+import logging
 import time
-from typing import TypedDict, cast
+from typing import Any, NotRequired, TypedDict, cast
 from urllib.parse import quote, urlparse
 
 from fastapi import Depends, HTTPException, Request
+from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
 from app.db import get_db as _get_db
 from app.models.subscriber import ResellerUser, Subscriber
 from app.models.system_user import SystemUser
 from app.services import auth_cache
+from app.services import auth_dependencies as _auth_dependencies
 from app.services.auth_flow import (
     _load_rbac_claims,
     decode_access_token,
     is_admin_portal_principal,
     validate_active_session,
 )
+
+logger = logging.getLogger(__name__)
 
 
 class WebAuthInfo(TypedDict):
@@ -28,6 +33,7 @@ class WebAuthInfo(TypedDict):
     scopes: list[str]
     subscriber: Subscriber | ResellerUser | SystemUser
     access_expires_at: int | None
+    permission_keys: NotRequired[frozenset[str]]
 
 
 class AuthenticationRequired(Exception):
@@ -236,6 +242,20 @@ def require_admin_web_auth(
             status_code=403,
             detail="Administrator access is required for this area.",
         )
+
+    # Navigation is shared by every admin page, including authenticated GET
+    # routes that do not need a route-specific permission dependency. Hydrate
+    # the permission projection at the admin boundary so sidebar visibility
+    # cannot depend on which route happened to render the shared shell.
+    try:
+        _auth_dependencies.load_permission_keys(cast(dict[str, Any], auth), db)
+    except SQLAlchemyError:
+        # Fail safe: the sidebar hides permission-gated links; server-side
+        # route permission checks still enforce access.
+        logger.exception("Failed to load admin permission keys for navigation")
+        auth["permission_keys"] = frozenset()
+    request.state.auth = auth
+
     from app.services import erp_staff_access
 
     auth_values: dict[str, object] = dict(auth)

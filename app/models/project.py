@@ -332,6 +332,7 @@ class ProjectInfrastructure(Base):
 class ProjectTask(Base):
     __tablename__ = "project_tasks"
     __table_args__ = (
+        UniqueConstraint("project_id", "id", name="uq_project_tasks_project_id_id"),
         UniqueConstraint(
             "external_system",
             "external_reference",

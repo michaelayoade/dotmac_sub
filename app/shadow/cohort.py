@@ -53,9 +53,9 @@ COHORT_REVISION: Final[str] = "516c5a99d7331f1f3ca4e6da0b7305c9620b5733"
 #: pin belongs only to the independently released Subscriptions distribution.
 SUBSCRIPTIONS_REVISION: Final[str] = SUBSCRIPTIONS_RELEASE.revision
 
-#: Released Billing a1 and Collections a1 peeled-tag commits. These are release
+#: Released Billing a8 and Collections a1 peeled-tag commits. These are release
 #: source pins, not the older integrated cohort worktree snapshot above.
-BILLING_REVISION: Final[str] = "92a1626b16d7e068f92536d8cfcb2ef9b6f270c2"
+BILLING_REVISION: Final[str] = "76c18287626ff6005b3b55bff41dd996800ffd03"
 COLLECTIONS_REVISION: Final[str] = "6ecf518a6985b8bf4b163eccb3de2fef171ecccc"
 
 
@@ -73,8 +73,8 @@ _SUBSCRIPTIONS_RELEASE_IDENTITY: Final[ReleaseIdentity] = _locked_wheel_release(
     digest="sha256:01fd4a2260a09e26a45cd105c474e1c90dd7f0aee23bd470790701c1677ac53d",
 )
 _BILLING_RELEASE_IDENTITY: Final[ReleaseIdentity] = _locked_wheel_release(
-    filename="dotmac_billing-0.1.0a1-py3-none-any.whl",
-    digest="sha256:ec1f50c2e30b29c4f9e2427fe6c11d0fe98c1042920825efa50bf204c01dd50b",
+    filename="dotmac_billing-0.1.0a8-py3-none-any.whl",
+    digest="sha256:a1d76c5a3244777a60854078991fbbfa1e6c4bfc6de03d26c581cbe23de5e537",
 )
 _COLLECTIONS_RELEASE_IDENTITY: Final[ReleaseIdentity] = _locked_wheel_release(
     filename="dotmac_collections-0.1.0a1-py3-none-any.whl",
@@ -202,7 +202,7 @@ _ENTRIES: Final[tuple[ModuleEntry, ...]] = (
     _module(
         module="billing",
         package="dotmac-billing",
-        version="0.1.0a1",
+        version="0.1.0a8",
         revision=BILLING_REVISION,
         plane=PersistencePlane.DUAL,
         gate=(

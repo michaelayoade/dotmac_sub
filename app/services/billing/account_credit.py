@@ -40,6 +40,7 @@ from app.models.billing import (
     PaymentAllocation,
     PaymentSettlement,
     PaymentStatus,
+    StarterInvoiceLink,
     TopupIntent,
 )
 from app.models.customer_subledger import (
@@ -431,7 +432,11 @@ def _invoice_void_release_preview(
 
 
 def eligible_invoices(db: Session, account_id: str) -> list[Invoice]:
-    """Return collectible invoices in the canonical oldest-debt order."""
+    """Return collectible invoices in the canonical oldest-debt order.
+
+    Starter-linked invoices are excluded: their receivable is owned by
+    dotmac-billing, so legacy account credit must never settle them.
+    """
     return (
         db.query(Invoice)
         .filter(Invoice.account_id == coerce_uuid(account_id))
@@ -439,6 +444,9 @@ def eligible_invoices(db: Session, account_id: str) -> list[Invoice]:
         .filter(Invoice.is_proforma.is_not(True))
         .filter(Invoice.status.in_(ELIGIBLE_INVOICE_STATUSES))
         .filter(Invoice.balance_due > 0)
+        .filter(
+            ~Invoice.id.in_(db.query(StarterInvoiceLink.invoice_id).scalar_subquery())
+        )
         .order_by(
             Invoice.due_at.asc().nulls_last(),
             Invoice.created_at.asc(),
@@ -550,6 +558,28 @@ def _invoice_funding_fingerprint(payload: dict[str, object]) -> str:
     return hashlib.sha256(encoded).hexdigest()
 
 
+def _refuse_starter_linked_invoice(db: Session, invoice: Invoice) -> None:
+    """Close legacy credit application to Starter receivables (ADR 0031).
+
+    A Starter-issued invoice's receivable lives in dotmac-billing;
+    legacy account-credit allocation against it would write legacy
+    ledger state the Starter position never sees. Settlement happens
+    through the Starter settlement lanes only.
+    """
+    linked = db.execute(
+        select(StarterInvoiceLink.id).where(StarterInvoiceLink.invoice_id == invoice.id)
+    ).first()
+    if linked is not None:
+        raise AccountCreditApplicationError(
+            code="financial.account_credit_applications.starter_invoice",
+            message=(
+                "Account credit cannot be applied to a Starter-issued "
+                "invoice through the legacy lane."
+            ),
+            details={"invoice_id": str(invoice.id)},
+        )
+
+
 class AccountCreditApplications:
     """Single orchestration owner for payment-backed account-credit use."""
 
@@ -621,6 +651,7 @@ class AccountCreditApplications:
     ) -> AccountCreditApplicationResult:
         """Apply the exact credit reserved before this invoice posted its debit."""
 
+        _refuse_starter_linked_invoice(db, invoice)
         lock_account(db, str(invoice.account_id))
         db.refresh(invoice)
         current_remaining = round_money(to_decimal(invoice.balance_due))
@@ -835,6 +866,44 @@ class AccountCreditApplications:
     ) -> AccountCreditApplicationResult:
         """Fund one invoice from one explicitly reviewed native payment."""
 
+        return AccountCreditApplications._apply_invoice_from_selected_payment_fully(
+            db,
+            invoice,
+            payment_id=payment_id,
+            expected_amount=expected_amount,
+            replace_legacy_prepaid_debit=False,
+        )
+
+    @staticmethod
+    def apply_invoice_from_legacy_prepaid_debit_fully(
+        db: Session,
+        invoice: Invoice,
+        *,
+        payment_id: UUID,
+        expected_amount: Decimal,
+    ) -> AccountCreditApplicationResult:
+        """Replace one reviewed prepaid debit with canonical invoice allocation."""
+
+        return AccountCreditApplications._apply_invoice_from_selected_payment_fully(
+            db,
+            invoice,
+            payment_id=payment_id,
+            expected_amount=expected_amount,
+            replace_legacy_prepaid_debit=True,
+        )
+
+    @staticmethod
+    def _apply_invoice_from_selected_payment_fully(
+        db: Session,
+        invoice: Invoice,
+        *,
+        payment_id: UUID,
+        expected_amount: Decimal,
+        replace_legacy_prepaid_debit: bool,
+    ) -> AccountCreditApplicationResult:
+        """Shared selected-payment application with an explicit evidence mode."""
+
+        _refuse_starter_linked_invoice(db, invoice)
         lock_account(db, str(invoice.account_id))
         db.refresh(invoice)
         invoice_remaining = round_money(to_decimal(invoice.balance_due))
@@ -857,15 +926,22 @@ class AccountCreditApplications:
                 currency=currency,
             )
         )
-        payment_available = (
-            round_money(
+        if payment is None:
+            payment_available = Decimal("0.00")
+        elif replace_legacy_prepaid_debit:
+            payment_available = round_money(
+                PaymentAllocations.available_amount_for_reviewed_legacy_debit_replacement(
+                    db,
+                    str(payment_id),
+                    expected_reversal_credit=expected,
+                )
+            )
+        else:
+            payment_available = round_money(
                 PaymentAllocations.available_amount_for_reviewed_document_correction(
                     db, str(payment_id)
                 )
             )
-            if payment is not None
-            else Decimal("0.00")
-        )
         if (
             invoice_remaining <= Decimal("0.00")
             or invoice_remaining != expected
@@ -898,13 +974,11 @@ class AccountCreditApplications:
             amount=expected,
         )
         try:
-            allocation_preview = (
-                PaymentAllocations.preview_reviewed_document_correction_for_owner(
+            if replace_legacy_prepaid_debit:
+                allocation_preview = PaymentAllocations.preview_legacy_prepaid_debit_replacement_for_owner(
                     db, request
                 )
-            )
-            confirmation = (
-                PaymentAllocations.stage_confirm_reviewed_document_correction(
+                confirmation = PaymentAllocations.stage_confirm_legacy_prepaid_debit_replacement_for_owner(
                     db,
                     PaymentAllocationConfirm(
                         **request.model_dump(),
@@ -912,7 +986,22 @@ class AccountCreditApplications:
                         idempotency_key=_allocation_key(payment, invoice),
                     ),
                 )
-            )
+            else:
+                allocation_preview = (
+                    PaymentAllocations.preview_reviewed_document_correction_for_owner(
+                        db, request
+                    )
+                )
+                confirmation = (
+                    PaymentAllocations.stage_confirm_reviewed_document_correction(
+                        db,
+                        PaymentAllocationConfirm(
+                            **request.model_dump(),
+                            preview_fingerprint=allocation_preview.fingerprint,
+                            idempotency_key=_allocation_key(payment, invoice),
+                        ),
+                    )
+                )
         except HTTPException as exc:
             raise AccountCreditApplicationError(
                 code="financial.account_credit_applications.allocation_rejected",
@@ -989,6 +1078,7 @@ class AccountCreditApplications:
         require_full_funding: bool,
         funding_position_at: datetime | None,
     ) -> AccountCreditApplicationResult:
+        _refuse_starter_linked_invoice(db, invoice)
         lock_account(db, str(invoice.account_id))
         db.refresh(invoice)
         preview = AccountCreditApplications.preview_invoice_funding(

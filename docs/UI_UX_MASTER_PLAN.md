@@ -1153,13 +1153,44 @@ URL | Events | Status | Success Rate | Last Delivery | Actions
 ### 8f. Audit Log (`/admin/system/audit`)
 
 #### Filters
-- Actor (user dropdown)
-- Action type
-- Entity type
-- Date range
+- Actor name or identifier
+- Actor type (user, system, service, API key)
+- Result (successful or failed recorded audit events)
+- Module, backed by the exact recorded `entity_type` values rather than a separate module classification
+- Searchable action populated from recorded action values
+- Today, last 7 days, last 30 days, or a custom application-timezone date range
+- Exact record ID or request ID, including explicit missing-ID filters
+
+Filter state remains in pagination requests and the browser URL. Module and
+action options come from bounded distinct values owned by
+`observability.audit_log`; the template does not hardcode them. Pagination
+shows the exact visible range and total, compact numbered pages, Previous/Next,
+and 10/25/50/100-row page-size choices.
 
 #### Table
-Timestamp | Actor | Action | Entity Type | Entity ID | Details (expandable)
+Timestamp | Actor | Action | Module | Details | Status
+
+Module and Record ID remain visible for every row. Legacy events without a
+module are labelled `Unknown module` rather than leaving the column blank.
+Each row has an event expander with request and record IDs, status code, actor
+type, IP address, and bounded details whose sensitive values are redacted by
+the audit owner before they reach the template.
+Invalid dates and conflicting ID filters leave the current HTMX results in
+place and show a specific error above the filters. Full-page invalid URLs fall
+back to an unfiltered page with the same error visible.
+From and To controls appear only for Custom. Choosing a preset clears stale
+custom dates in both the submitted filters and the browser URL.
+Missing Record ID and Request ID values are shown as `Not recorded`; they are
+never represented by a blank space or a hidden field.
+The Action control searches friendly labels from recorded values, resolves a
+unique choice, and submits the exact stored action. Unmatched free text is not
+sent as a misleading exact-match filter.
+Filtering and pagination show a `Loading…` indicator. Network or server
+failures keep the current rows visible and show a Retry action using the same
+filter controls.
+CSV and JSON exports reuse the current filters, `audit:read` permission, and
+the same audit-owner redaction policy as row details. Exports above 10,000 rows
+fail with a request to narrow the filters; they are never silently truncated.
 
 ### 8g. Health (`/admin/system/health`)
 

@@ -7,13 +7,12 @@ from datetime import UTC, datetime
 from decimal import Decimal
 from enum import Enum
 from types import SimpleNamespace
+from unittest.mock import Mock
 from uuid import uuid4
 
 import pytest
 
 from app.services.payment_reconciliation import (
-    PAYSTACK_OUTSIDE_WINDOW_RECOVERY_SCOPE,
-    ConfirmPaystackOutsideWindowRecoveryCommand,
     PreviewPaystackOutsideWindowRecoveryQuery,
 )
 from scripts.billing import reconcile_paystack_reference as command
@@ -155,125 +154,45 @@ def test_preview_requires_exact_intent_and_reference(argv: list[str]) -> None:
     assert exc_info.value.code == 2
 
 
-def test_apply_uses_owner_session_and_emits_only_typed_result_fields(
-    monkeypatch: pytest.MonkeyPatch,
-    capsys: pytest.CaptureFixture[str],
-) -> None:
-    intent_id = uuid4()
-    payment_id = uuid4()
-    result = _result(intent_id=intent_id, payment_id=payment_id)
-    owner_db = object()
-    observed: list[str] = []
-    captured_commands: list[ConfirmPaystackOutsideWindowRecoveryCommand] = []
+def test_result_payload_emits_only_typed_result_fields() -> None:
+    result = _result()
 
-    @contextmanager
-    def forbidden_read_session():
-        observed.append("read")
-        raise AssertionError("apply opened a read-only session")
-        yield  # pragma: no cover
-
-    @contextmanager
-    def owner_session():
-        observed.append("owner")
-        yield owner_db
-
-    def confirm_recovery(
-        db: object,
-        recovery_command: ConfirmPaystackOutsideWindowRecoveryCommand,
-    ) -> SimpleNamespace:
-        assert db is owner_db
-        captured_commands.append(recovery_command)
-        return result
-
-    monkeypatch.setattr(
-        command.db_session_adapter,
-        "read_session",
-        forbidden_read_session,
-    )
-    monkeypatch.setattr(
-        command.db_session_adapter,
-        "owner_command_session",
-        owner_session,
-    )
-    monkeypatch.setattr(
-        command,
-        "confirm_paystack_outside_window_recovery",
-        confirm_recovery,
-    )
-
-    exit_code = command.main(
-        [
-            "--intent-id",
-            str(intent_id),
-            "--reference",
-            "ps_ref_reviewed",
-            "--apply",
-            "--fingerprint",
-            result.preview_fingerprint,
-            "--actor",
-            "finance.operator@example.com",
-            "--reason",
-            "Approved after settlement evidence review",
-            "--review-reference",
-            "FIN-2026-0819",
-            "--idempotency-key",
-            "paystack-recovery:FIN-2026-0819",
-            "--confirm",
-            "APPLY_REVIEWED_PAYSTACK_RECOVERY",
-        ]
-    )
-
-    assert exit_code == 0
-    assert observed == ["owner"]
-    recovery_command = captured_commands[0]
-    assert recovery_command.intent_id == intent_id
-    assert recovery_command.reference == "ps_ref_reviewed"
-    assert recovery_command.preview_fingerprint == result.preview_fingerprint
-    assert recovery_command.review_reference == "FIN-2026-0819"
-    assert recovery_command.confirmed is True
-    assert recovery_command.context.actor == "finance.operator@example.com"
-    assert recovery_command.context.reason == (
-        "Approved after settlement evidence review"
-    )
-    assert recovery_command.context.scope == PAYSTACK_OUTSIDE_WINDOW_RECOVERY_SCOPE
-    assert recovery_command.context.idempotency_key == (
-        "paystack-recovery:FIN-2026-0819"
-    )
-    payload = json.loads(capsys.readouterr().out)
-    assert payload == {
+    assert command._result_payload(result) == {
         "disposition": "recovered",
-        "intent_id": str(intent_id),
-        "payment_id": str(payment_id),
+        "intent_id": str(result.intent_id),
+        "payment_id": str(result.payment_id),
         "preview_fingerprint": "b" * 64,
         "recovery_run_id": str(result.recovery_run_id),
         "replayed": False,
     }
-    assert "raw" not in payload
-    assert "metadata" not in payload
 
 
-@pytest.mark.parametrize(
-    "confirmation",
-    [None, "apply_reviewed_paystack_recovery", "APPLY_REVIEWED_PAYSTACK_RECOVER"],
-)
-def test_apply_rejects_missing_or_inexact_confirmation_before_opening_session(
+def _assert_apply_refused(
     monkeypatch: pytest.MonkeyPatch,
-    confirmation: str | None,
+    capsys: pytest.CaptureFixture[str],
+    argv: list[str],
 ) -> None:
-    opened = False
+    forbidden = Mock(side_effect=AssertionError("apply reached a session or handler"))
+    monkeypatch.setattr(command.db_session_adapter, "read_session", forbidden)
+    monkeypatch.setattr(command.db_session_adapter, "owner_command_session", forbidden)
+    monkeypatch.setattr(command, "confirm_paystack_outside_window_recovery", forbidden)
+    monkeypatch.setattr(command, "preview_paystack_outside_window_recovery", forbidden)
 
-    @contextmanager
-    def owner_session():
-        nonlocal opened
-        opened = True
-        yield object()
+    with pytest.raises(SystemExit) as exc_info:
+        command.main(argv)
 
-    monkeypatch.setattr(
-        command.db_session_adapter,
-        "owner_command_session",
-        owner_session,
+    assert exc_info.value.code == 1
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert captured.err == (
+        "billing repair writes are disabled by policy (2026-10-12); "
+        "record the case for the billing exceptions review instead.\n"
     )
-    argv = [
+    forbidden.assert_not_called()
+
+
+def _apply_argv() -> list[str]:
+    return [
         "--intent-id",
         str(uuid4()),
         "--reference",
@@ -284,20 +203,39 @@ def test_apply_rejects_missing_or_inexact_confirmation_before_opening_session(
         "--actor",
         "finance.operator@example.com",
         "--reason",
-        "Reviewed",
+        "Approved after settlement evidence review",
         "--review-reference",
         "FIN-2026-0819",
         "--idempotency-key",
         "paystack-recovery:FIN-2026-0819",
+        "--confirm",
+        "APPLY_REVIEWED_PAYSTACK_RECOVERY",
     ]
+
+
+def test_apply_refuses_complete_review_evidence_before_sessions_or_handlers(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    _assert_apply_refused(monkeypatch, capsys, _apply_argv())
+
+
+@pytest.mark.parametrize(
+    "confirmation",
+    [None, "apply_reviewed_paystack_recovery", "APPLY_REVIEWED_PAYSTACK_RECOVER"],
+)
+def test_apply_freeze_precedes_missing_or_inexact_confirmation_validation(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    confirmation: str | None,
+) -> None:
+    argv = _apply_argv()
+    confirm_index = argv.index("--confirm")
+    del argv[confirm_index : confirm_index + 2]
     if confirmation is not None:
         argv.extend(["--confirm", confirmation])
 
-    with pytest.raises(SystemExit) as exc_info:
-        command.main(argv)
-
-    assert exc_info.value.code == 2
-    assert opened is False
+    _assert_apply_refused(monkeypatch, capsys, argv)
 
 
 @pytest.mark.parametrize(
@@ -310,32 +248,16 @@ def test_apply_rejects_missing_or_inexact_confirmation_before_opening_session(
         "--idempotency-key",
     ],
 )
-def test_apply_requires_all_review_evidence(
+def test_apply_freeze_precedes_missing_review_evidence_validation(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
     omitted_option: str,
 ) -> None:
-    option_values = {
-        "--fingerprint": "d" * 64,
-        "--actor": "finance.operator@example.com",
-        "--reason": "Reviewed",
-        "--review-reference": "FIN-2026-0819",
-        "--idempotency-key": "paystack-recovery:FIN-2026-0819",
-        "--confirm": "APPLY_REVIEWED_PAYSTACK_RECOVERY",
-    }
-    argv = [
-        "--intent-id",
-        str(uuid4()),
-        "--reference",
-        "ps_ref_reviewed",
-        "--apply",
-    ]
-    for option, value in option_values.items():
-        if option != omitted_option:
-            argv.extend([option, value])
+    argv = _apply_argv()
+    omitted_index = argv.index(omitted_option)
+    del argv[omitted_index : omitted_index + 2]
 
-    with pytest.raises(SystemExit) as exc_info:
-        command.main(argv)
-
-    assert exc_info.value.code == 2
+    _assert_apply_refused(monkeypatch, capsys, argv)
 
 
 def test_cli_contains_no_financial_writes_or_orm_access() -> None:

@@ -103,11 +103,11 @@ EXPECTED_RELEASED_MODULES = {
     ),
     "billing": ExpectedReleasedModule(
         package="dotmac-billing",
-        version="0.1.0a1",
-        revision="92a1626b16d7e068f92536d8cfcb2ef9b6f270c2",
-        wheel="dotmac_billing-0.1.0a1-py3-none-any.whl",
+        version="0.1.0a8",
+        revision="76c18287626ff6005b3b55bff41dd996800ffd03",
+        wheel="dotmac_billing-0.1.0a8-py3-none-any.whl",
         digest=(
-            "sha256:ec1f50c2e30b29c4f9e2427fe6c11d0fe98c1042920825efa50bf204c01dd50b"
+            "sha256:a1d76c5a3244777a60854078991fbbfa1e6c4bfc6de03d26c581cbe23de5e537"
         ),
     ),
     "collections": ExpectedReleasedModule(

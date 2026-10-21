@@ -9,17 +9,22 @@ from sqlalchemy import (
     CheckConstraint,
     DateTime,
     Enum,
+    FetchedValue,
     ForeignKey,
+    ForeignKeyConstraint,
     Index,
+    Integer,
     String,
     Text,
     UniqueConstraint,
+    event,
 )
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.ext.mutable import MutableDict, MutableList
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db import Base
+from app.models.transaction_provenance import OuterTransactionId
 
 
 class TicketStatus(enum.Enum):
@@ -509,7 +514,12 @@ class AutomationActionType(enum.Enum):
 
 
 class TicketAutomationRule(Base):
-    """Declarative rule that runs against tickets on a trigger event.
+    """RETIRED: the legacy ticket rule engine was removed (cleanup M2).
+
+    The model and table are kept only until a later migration drops them; no
+    application code reads or writes these rows. Use the Automation Center.
+
+    Declarative rule that ran against tickets on a trigger event.
 
     conditions: equality dict matched against the ticket
     (e.g. {"priority": "urgent", "ticket_type": "outage"}).
@@ -560,4 +570,203 @@ class TicketAutomationRule(Base):
         DateTime(timezone=True),
         default=lambda: datetime.now(UTC),
         onupdate=lambda: datetime.now(UTC),
+    )
+
+
+class SupportResolutionRequest(Base):
+    """Immutable customer confirmation request with exact completion basis."""
+
+    __tablename__ = "support_resolution_requests"
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    ticket_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("support_tickets.id", ondelete="RESTRICT"),
+        nullable=False,
+    )
+    token_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("ticket_access_tokens.id", ondelete="RESTRICT"),
+        nullable=False,
+        unique=True,
+    )
+    command_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
+    intent_key: Mapped[str] = mapped_column(String(255), nullable=False)
+    fingerprint: Mapped[str] = mapped_column(String(64), nullable=False)
+    requested_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False
+    )
+    grace_hours: Mapped[int] = mapped_column(Integer, nullable=False)
+    requested_by: Mapped[str] = mapped_column(String(255), nullable=False)
+    __table_args__ = (
+        CheckConstraint("grace_hours >= 0"),
+        CheckConstraint("length(fingerprint) = 64"),
+        UniqueConstraint("ticket_id", "intent_key"),
+    )
+    creation_outer_xid: Mapped[str | None] = mapped_column(
+        OuterTransactionId(), nullable=True, server_default=FetchedValue()
+    )
+
+
+class SupportResolutionBasis(Base):
+    __tablename__ = "support_resolution_bases"
+    request_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("support_resolution_requests.id", ondelete="RESTRICT"),
+        primary_key=True,
+    )
+    work_order_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("work_order.id", ondelete="RESTRICT"),
+        primary_key=True,
+    )
+    enrollment_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("completion_enrollments.id", ondelete="RESTRICT"),
+        nullable=False,
+    )
+    criteria_revision_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("completion_criteria_revisions.id", ondelete="RESTRICT"),
+        nullable=False,
+    )
+    policy_revision_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("completion_review_policies.id", ondelete="RESTRICT"),
+        nullable=False,
+    )
+    assignment_generation: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), nullable=False
+    )
+    completed_event_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("field_job_events.id", ondelete="RESTRICT"),
+        nullable=False,
+    )
+    submission_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("completion_submissions.id", ondelete="RESTRICT"),
+        nullable=False,
+    )
+    accepted_decision_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("completion_review_decisions.id", ondelete="RESTRICT"),
+        nullable=False,
+    )
+    review_generation: Mapped[int] = mapped_column(Integer, nullable=False)
+    __table_args__ = (CheckConstraint("review_generation > 0"),)
+
+
+class SupportResolutionAttempt(Base):
+    """Durable confirmation or grace refusal; never rewrites a request."""
+
+    __tablename__ = "support_resolution_attempts"
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    request_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("support_resolution_requests.id", ondelete="RESTRICT"),
+    )
+    ticket_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("support_tickets.id", ondelete="RESTRICT"),
+        nullable=False,
+    )
+    command_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
+    outcome: Mapped[str] = mapped_column(String(40), nullable=False)
+    source: Mapped[str] = mapped_column(String(20), nullable=False)
+    reason: Mapped[str] = mapped_column(String(255), nullable=False)
+    attempted_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(UTC), nullable=False
+    )
+    __table_args__ = (
+        CheckConstraint("outcome IN ('confirmed', 'blocked_completion_basis')"),
+        CheckConstraint("source IN ('customer', 'grace')"),
+    )
+
+
+def _immutable_resolution_record(
+    _mapper: object, _connection: object, _target: object
+) -> None:
+    raise ValueError(
+        "Support resolution request, basis and attempt history is immutable"
+    )
+
+
+for _resolution_model in (
+    SupportResolutionRequest,
+    SupportResolutionBasis,
+    SupportResolutionAttempt,
+):
+    event.listen(_resolution_model, "before_update", _immutable_resolution_record)
+    event.listen(_resolution_model, "before_delete", _immutable_resolution_record)
+
+
+class SupportResolutionEffectiveBasis(Base):
+    """Endpoint of a reviewed replacement chain; original basis scope is retained."""
+
+    __tablename__ = "support_resolution_effective_bases"
+    request_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True)
+    work_order_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True
+    )
+    effective_work_order_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("work_order.id", ondelete="RESTRICT"),
+        nullable=False,
+    )
+    effective_enrollment_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("completion_enrollments.id", ondelete="RESTRICT"),
+        nullable=False,
+    )
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["request_id", "work_order_id"],
+            [
+                "support_resolution_bases.request_id",
+                "support_resolution_bases.work_order_id",
+            ],
+            ondelete="RESTRICT",
+        ),
+    )
+
+
+class SupportResolutionReplacementLineage(Base):
+    __tablename__ = "support_resolution_replacement_lineage"
+    request_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True)
+    work_order_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True
+    )
+    position: Mapped[int] = mapped_column(Integer, primary_key=True)
+    decision_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("completion_replacement_decisions.id", ondelete="RESTRICT"),
+        nullable=False,
+    )
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["request_id", "work_order_id"],
+            [
+                "support_resolution_effective_bases.request_id",
+                "support_resolution_effective_bases.work_order_id",
+            ],
+            ondelete="RESTRICT",
+        ),
+        CheckConstraint("position >= 0"),
+        UniqueConstraint("request_id", "work_order_id", "decision_id"),
+    )
+
+
+for _replacement_basis_model in (
+    SupportResolutionEffectiveBasis,
+    SupportResolutionReplacementLineage,
+):
+    event.listen(
+        _replacement_basis_model, "before_update", _immutable_resolution_record
+    )
+    event.listen(
+        _replacement_basis_model, "before_delete", _immutable_resolution_record
     )

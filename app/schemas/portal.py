@@ -388,6 +388,7 @@ class CustomerFieldJobChatMessage(BaseModel):
 
 class CustomerFieldJobChatMessageCreate(BaseModel):
     body: str = Field(min_length=1, max_length=2000)
+    request_id: UUID | None = None
 
 
 class CustomerFieldJobChatThread(BaseModel):

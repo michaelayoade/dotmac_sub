@@ -15,25 +15,39 @@ implements.
 | | |
 |---|---|
 | Programme | `pgm-dotmac-isp-replacement` |
-| Accepted revision | `d91a87f6823bfd2afa6c2025bdb1af644331fa39` |
+| Accepted revision | `dbd9cec107ee5125a8d41f75065d3823f69d6b8e` |
 | Record | `programmes/dotmac-isp-replacement.json` in `dotmac_governance` |
 | Decision | `docs/adr/0012-dotmac-isp-replacement-programme.md` (Accepted) |
-| Source assembly | `asm-dotmac-sub-legacy` — **source-authoritative** |
-| Target assembly | `asm-dotmac-isp` — candidate, independent database |
+| Source assembly | `asm-dotmac-sub-legacy-domains` — **source-authoritative** |
+| Target assembly | `asm-dotmac-sub-composed` — same Sub runtime/database (`shared-in-process`) |
 | Track | `track-isp-sub-cutover` |
 | Cohort | `cohort-isp-01`, sequence 1, state **blocked** |
 | Components | kernel (reuse), UI (reuse), `dotmac-party` (release), `dotmac-brand-profiles` (adopt), `dotmac-customers` (build), `dotmac-addresses` (build) |
 
-Sub's readiness work produces inputs for `ctl-isp-006` (source dispositions and
-idempotent replay), `ctl-isp-007` (zero-unexplained-drift shadow) and
-`ctl-isp-009` (bidirectional writer ratchet to zero). Producing an input is not
-verifying a control. Every one of those three is `blocked`, and the two open
-decisions that gate the cohort — `dec-isp-002`, the production deployment
-owner, and `dec-isp-003`, the enforceable legacy Sub transition rule — are
-Michael's and are unresolved.
+Both assemblies name `dotmac_sub`; Sub's product, runtime and API are
+preserved. The separate ISP skeleton is frozen. `ctl-isp-001` is verified;
+002/005/007/008 are superseded; 003/004/006/009/010/011/012 and cohort 1 remain
+blocked. No programme decisions remain open. `dec-isp-002` is superseded and
+is not a deployment-host procurement blocker.
 
-**Nothing in this repository opens the cohort.** Sub is the sole production
-writer of every fact below until a separately authorised sealed switch.
+Source dispositions and idempotent replay feed `ctl-isp-006`; production-shaped
+Sub/module lineage rehearsal feeds `ctl-isp-010`; same-database in-process shadow
+feeds `ctl-isp-011`; operator-approved per-domain one-writer configuration and
+rollback feed `ctl-isp-012`; zero displaced writers before rollback-window
+closure feeds `ctl-isp-009`. Producing inputs does not verify controls.
+
+**Nothing here opens the cohort or moves authority.** Sub's existing owners
+continue until the selected module's separately authorized switch. The fifteen
+parallel production paths are switch-time retirement entries, not fifteen
+prerequisite cleanup PRs. Earlier source changes need a concrete migration
+blocker, a deliberately retained path or an immediate security/data-loss defect.
+Independent modules need their own complete evidence, not unrelated cohort
+closure. No host, migration, backfill, shadow, purge or cutover is authorized.
+
+Historical source snapshots retain their recorded assembly IDs and Governance
+pins: explicit historical `SourceRevision` values remain parseable and their
+digests reproducible. New defaults identify the current source and pin.
+Historical tooling receipts are not in-place population/adoption evidence.
 
 ## Tenant scope
 
@@ -68,8 +82,29 @@ operator-tenant data.
 | `organization_membership` | `organization_memberships` | `OrganizationMembership` | **none declared** | `dotmac-customers` |
 | `brand_profile` | `brand_profiles` | `BrandProfile` | `customer.branding` | `dotmac-brand-profiles` |
 
-The expected target component is an expectation recorded from the Governance
-matrix. It is not a plan, an approval, or a claim that any module is released.
+The expected target component is a historical source-mapping expectation, not
+proof of released capability or a complete adoption contract. In the selected
+slice, bind every entity/relation to an actual typed owner/link, explicit
+product retention, or retirement outcome. Kernel already implements
+Party/person/organization identity; its explicit mapping/link remains to be
+proved. Party excludes person/organization identity and customer accounts;
+Customers excludes identity, reachability and addresses. In particular, the
+contact and organization/membership rows cannot be assigned to Customers merely
+because this table historically expected it. Full cohort closure needs all
+six components and all twelve source entity types; independent slices need
+only their own complete dependencies.
+
+Current Starter artifact evidence does not establish a verified graph for the
+whole cohort. Party/Brand Profiles/Customers historical a1 tags are
+legacy-unverified/non-pinnable. Addresses has no tracked owner package in the
+inspected tree; registry availability is unknown. The same kernel a104 wheel
+filename has SHA256
+`183e0aa003db22fc2cfd8a846df14589027e34a9632180b018222d5eac0d6076` in the
+kernel receipt and
+`54562973a659427aed067a504aa0eaaa427fda8e13d184e8401d72d234ec2534` in the
+module dependency ledger. This is a record inconsistency, not a registry-byte
+finding. Reconcile retained evidence and independent readback, not a rebuild
+of the existing tag. The runbook records the remaining exact-artifact frontier.
 
 ### Addresses are owned, four ways
 
@@ -155,6 +190,19 @@ merge.
 
 ## Writer census
 
+The 2026-10-11 credential administration slice adds the individually classified
+`customer.registration_metadata` participant. It moves existing optional-login
+form subscriber-number, category and notes writes from `SubscriberUpdate` /
+`Subscribers.update` into explicit assignments under the coordinator's principal
+lock. Four AST sites (number, two category branches, notes) raise the census
+from 125 to 129; the generic writer remains for its other consumers. This does
+not add four new business facts. The required new behavior is atomic registration
+metadata, optional credential, audit and outbox completion, with no participant
+commit or adapter bypass. The participant is internal-only and its cohort writes
+have disposition `RETIRE_AFTER_CUTOVER`; this registration grants no target-
+database authority. Prefix policy resolution moved from the form adapter to
+coordinator preparation, so the retired adapter read-handoff baseline is removed.
+
 Counted mechanically across every entry-point family by
 `scripts/architecture/isp_cohort_writers.py` and frozen by **two** baselines,
 because membership and magnitude are different events wanting different
@@ -175,11 +223,17 @@ already-baselined files looks like an ordinary shrink-and-grow pair.
 
 | Family | Files | Write sites |
 |---|---|---|
-| `service` | 19 | 86 |
-| `web_presenter` | 5 | 13 |
-| `cli_script` | 6 | 14 |
-| `migration` | 6 | 8 |
-| **total** | **36** | **121** |
+| `service` | 21 | 95 |
+| `web_presenter` | 4 | 12 |
+| `cli_script` | 5 | 12 |
+| `migration` | 9 | 12 |
+| **total** | **39** | **131** |
+
+The detail location retirement removes one existing presenter write site:
+132 → 131, 40 → 39 counted files, and 29 → 28 production writer surfaces.
+No replacement persistence path is added. Three test-only construction sites
+(one migrated-clone engine and two Sessions) raise the fixture census from
+322 to 325; production Session-construction allowances remain unchanged.
 
 `api_route`, `webhook_handler`, `web_route`, `task_worker`, `scheduled_job`,
 `event_handler`, `websocket`, `importer`, `poller`, `app_module` and
@@ -207,10 +261,10 @@ inventory now answers them separately.
 
 | `AuthorityRole` | Files |
 |---|---|
-| `PARALLEL_WRITER` | 18 |
-| `NO_AUTHORITY` | 13 |
-| `DECLARED_OWNER` | 8 |
-| `SCHEMA_LINEAGE` | 6 |
+| `PARALLEL_WRITER` | 15 |
+| `NO_AUTHORITY` | 14 |
+| `DECLARED_OWNER` | 11 |
+| `SCHEMA_LINEAGE` | 9 |
 | `PROJECTION_WRITER` | 2 |
 | `UNDETERMINED` | 0 |
 
@@ -218,9 +272,9 @@ inventory now answers them separately.
 
 | `BoundaryRole` | Files |
 |---|---|
-| `PERSISTS` | 36 |
+| `PERSISTS` | 39 |
 | `DELEGATES` | 8 |
-| `READS` | 2 |
+| `READS` | 3 |
 | `TRANSPORTS` | 1 |
 | `OBSERVES` | 0 |
 | `UNDETERMINED` | 0 |
@@ -229,11 +283,11 @@ inventory now answers them separately.
 
 | `Reachability` | Files |
 |---|---|
-| `INTERNAL_ONLY` | 23 |
-| `ONLINE_REQUEST` | 9 |
-| `APPLIED_ONCE` | 6 |
-| `OPERATOR_COMMAND` | 4 |
-| `BACKGROUND_JOB` | 3 |
+| `INTERNAL_ONLY` | 25 |
+| `ONLINE_REQUEST` | 10 |
+| `APPLIED_ONCE` | 9 |
+| `OPERATOR_COMMAND` | 3 |
+| `BACKGROUND_JOB` | 2 |
 | `NON_PRODUCTION` | 2 |
 | `UNDETERMINED` | 0 |
 
@@ -245,9 +299,9 @@ authorities; `NO_AUTHORITY` appears with five different boundary roles;
 `INTERNAL_ONLY` appears with four different authorities. If that ever
 collapses, the axes should be merged rather than kept apart for appearances.
 
-Of the 36 writing surfaces, **28 can write production again**. The other eight
-cannot: two touch only disposable databases and six are applied migrations
-Alembic will not re-run. All eight stay in the ratchet, because a *new* one is
+Of the 39 writing surfaces, **28 can write production again**. The other eleven
+cannot: two touch only disposable databases and nine are applied migrations
+Alembic will not re-run. All eleven stay in the ratchet, because a *new* one is
 exactly what the guard should catch; none counts as something a cutover has to
 displace, because none can be retired.
 
@@ -261,9 +315,9 @@ it meant — and there is no second place to edit, so the two cannot disagree.
 |---|---|
 | `LEGACY_PARALLEL_WRITER` | 26 |
 | `AUTHORIZED_ADAPTER` | 8 |
-| `AUTHORITATIVE_WRITER` | 8 |
+| `AUTHORITATIVE_WRITER` | 11 |
 | `DERIVED_PROJECTION` | 2 |
-| `READ_ONLY_CONSUMER` | 2 |
+| `READ_ONLY_CONSUMER` | 3 |
 | `TRANSPORT` | 1 |
 | `OBSERVATION_COLLECTOR` | 0 |
 | `UNKNOWN` | 0 |
@@ -283,45 +337,47 @@ Classification says what a surface is; it does not say what becomes of it, and
 that is the question a cutover actually needs answered. Every surface carries
 one, **including the adapters and readers that write nothing**: a route that
 reads a customer account has to read it from somewhere once that account lives
-in another application.
+behind a composed module owner in this same application.
 
 | `Disposition` | Files | Meaning |
 |---|---|---|
-| `ROUTE_THROUGH_OWNER_FIRST` | 14 | Must stop bypassing its declared owner *before* the cohort can be shadowed |
-| `RETIRE_AFTER_CUTOVER` | 14 | Displaced by the target; must reach zero for `ctl-isp-009` |
-| `REPOINT_TO_TARGET_API` | 11 | Reads or forwards a cohort fact; after the switch it must reach the target through a versioned contract |
-| `HISTORICAL_NO_ACTION` | 6 | An applied migration; nothing to retire |
+| `ROUTE_THROUGH_OWNER_FIRST` | 12 | Explicitly resolve this bypass for its selected module switch; earlier routing needs an evidenced blocker |
+| `RETIRE_AFTER_CUTOVER` | 16 | Disable at the selected authority switch; zero displaced writers before rollback closure (`ctl-isp-009`) |
+| `REPOINT_TO_TARGET_API` | 12 | Historical enum: reads/forwards through the composed owner typed boundary; no cross-application HTTP requirement |
+| `HISTORICAL_NO_ACTION` | 9 | An applied migration; nothing to retire |
 | `NON_PRODUCTION_NO_ACTION` | 2 | Writes only disposable databases |
 | `UNDECIDED` | 0 | Needs a decision, and says which one |
 
 There is deliberately no "stays as it is" disposition. Every surface here
 touches cohort-1 state — that is the inclusion criterion — and once that state
-lives in another application, no such touch survives unchanged. A member
-meaning "nothing happens" would be the one anybody reached for to avoid
+moves behind a composed owner, each touch needs an explicit boundary outcome.
+A member meaning "nothing happens" would be the one anybody reached for to avoid
 deciding.
 
 **Every counted writer has an individual disposition; the readers take a
-declared default.** 401 files reference cohort state and 47 are inventoried
-here. Assigning an individual disposition to the other 356 would be fabrication
-at scale — the reference census is a bounded reach, not an impact analysis, and
+declared default.** 443 files reference cohort state; 51 surfaces are
+individually inventoried, of which 48 occur in that reference census. The other
+395 references take the declared caller default. Assigning an individual
+disposition to each of them would be fabrication at scale — the reference census is a bounded reach, not an impact analysis, and
 many of those files only mention a model in a type hint.
 
-The default is `REPOINT_TO_TARGET_API`, and it is an answer rather than a gap
-because only one shape is available: ADR 0012 gives the two applications
-separate databases, sessions and transactions, so after the switch a file that
-reads a cohort fact either reaches the target through a versioned contract or
-stops reading it. What the default may never cover is a **writer** — "displace
-this" is a decision about a specific line of code, and a guard fails the build
-if a counted writer ever falls through to it.
+The default remains `REPOINT_TO_TARGET_API` for compatibility with the
+executable inventory. Under in-place conversion it means the composed owner's
+typed public read/delegation boundary, not a separate HTTP application or
+database. It never covers a writer: each counted writer needs its own explicit
+disposition and guard. A shared database does not authorize bypassing the new
+owner or silently retaining a parallel ORM write path.
 
 The disposition is about the surface's **cohort-1 touch**, not the whole file.
 `account_lifecycle.py` keeps owning subscription lifecycle long after its
 Subscriber projection writes are displaced.
 
-`ROUTE_THROUGH_OWNER_FIRST` is the one that gates `ctl-isp-007` rather than
-`ctl-isp-009`: a shadow comparison run against a source with two writers cannot
-tell drift from the second writer, so those fourteen have to be routed
-through their owners before a comparison means anything.
+`ROUTE_THROUGH_OWNER_FIRST` and `RETIRE_AFTER_CUTOVER` are retained enum
+names, not current blanket timing instructions. For the selected slice,
+identify what blocks a valid backfill/shadow/switch and retire or redirect all
+displaced authority at its switch. Do not refactor all twelve routing entries
+before an independent module can be shadowed. `ctl-isp-007` is superseded;
+in-process comparison belongs to `ctl-isp-011`.
 
 ### No undecided surfaces
 
@@ -337,25 +393,30 @@ recorded in `programmes/dotmac-isp-replacement.json` at `d91a87f`:
 `undecided_surfaces()` now returns empty, and the test asserting that is paired
 with a sensitivity check so it cannot pass by the accessor quietly breaking.
 
-**Two of the three answers create work rather than finishing it.** `addresses`
-still has no *Sub* owner — dec-isp-007 names the target owner, and product-first
-extraction needs a proven Sub implementation to extract from, so Sub must grow
-that owner before the write can be routed and before the cohort can be
-shadowed. And decomposing the recovery cascade is what makes the cohort-1 half
-separable at all: today one restore touches invoices, payments, credentials,
-RADIUS, IP assignments and ONT assignments in the same pass, and only the
-account rows belong to cohort 1.
+**Two of the three answers create work rather than finishing it.** The existing
+Sub address owners are `customer.accounts` for identity/text and
+`gis.spatial_sync` for coordinates/projection. Dec-isp-007 names the extracted
+target owner, `dotmac-addresses`; it does not justify another Sub address writer.
+Retire or redirect the selected slice's bypasses at its authority switch; route
+earlier only where a concrete rehearsal/shadow/switch blocker requires it.
+For the selected Customers switch, prove the recovery cascade's account touch
+can be separated while preserving its other owners: today one restore touches
+invoices, payments, credentials, RADIUS, IP assignments and ONT assignments in
+the same pass, and only the account rows belong to cohort 1. This is not a
+prerequisite for unrelated modules.
 
 ### Declared owners
 
 | Path | Owner | Writes |
 |---|---|---|
-| `app/services/party.py` | `party.registry` | 21 |
+| `app/services/party.py` | `party.registry` | 23 |
 | `app/services/customer_canonical_profile_patch.py` | `customer.canonical_profile_patch` | 20 |
-| `app/services/subscriber.py` | `customer.accounts` | 14 |
+| `app/services/customer_registration_metadata.py` | `customer.registration_metadata` | 4 |
+| `app/services/customer_account_deletion.py` | `customer.account_deletion` | 1 |
+| `app/services/subscriber.py` | `customer.accounts` | 15 |
 | `app/services/gis_sync.py` | `gis.spatial_sync` | 3 |
 | `app/services/customer_portal_profile_commands.py` | `customer.portal_profile_commands` | 2 |
-| `app/services/web_customer_actions.py` | `customer.profile_commands` | 1 |
+| `app/services/web_customer_actions.py` | `customer.profile_commands` | 7 |
 | `app/services/brand_profiles.py` | `customer.branding` | 2 |
 | `app/services/subscriber_profile_cleanup.py` | `customer.profile_cleanup` | 2 |
 | `app/services/crm_customer_name_repair.py` | `customer.name_remediation` | 1 |
@@ -366,6 +427,21 @@ customer portal profile POSTs now use the separately registered
 family because that is where a reader will find them. Family is location;
 classification is authority.
 
+Customer hard deletion now has an exact coordinator,
+`customer.account_deletion` in `app/services/customer_account_deletion.py`.
+This relocates existing destructive writes from `subscriber.py` and the web
+presenter into an audited transaction; it does not add a new customer state
+transition or change the cohort's blocked status. The executable surface map
+records the coordinator as a declared internal owner. The census now also counts
+recognized session deletion of a tracked ORM entity. The previous detector
+missed three existing sites in the accepted source: two Subscriber deletions
+and one Address deletion in `subscriber.py`. With the same corrected detector,
+the accepted source measures 133 sites and this migration measures 132: the two
+parent-delete sites consolidate into one. The Address site is existing debt,
+not a new writer or a new runtime allowance. Positive and negative sensitivity
+tests cover this detection shape; the focused boundary guard separately retires
+legacy deletion methods. Other account and profile owners remain unchanged.
+
 ### Derived projections written onto cohort rows
 
 | Path | Owner | Fact |
@@ -373,19 +449,19 @@ classification is authority.
 | `app/services/account_lifecycle.py` | `access.subscription_lifecycle` | Subscriber lifecycle status and its override columns |
 | `app/services/mrr_snapshot.py` | **none declared** | `subscribers.mrr_total` |
 
-Both must cross to the destination as *derived*, never as the account's own
+Both remain *derived* across an in-process owner change, never the account's own
 state. `mrr_total` is the sharper risk: a money figure, computed elsewhere,
 stored on the account row, written by a module the registry does not declare.
 The target recomputes it; it does not trust it.
 
 ### Legacy parallel writers — the displacement list
 
-Twenty-five files write a cohort fact some other owner is declared to own.
-**Seventeen of them can do it again**, and that seventeen is the set `ctl-isp-009`
-must ratchet to zero; the remaining eight are listed for completeness and
-marked non-production. The CRM ticket pull writer was retired on 2026-09-27
-after the production stop gate; the surviving entries retain their checked-in
-dispositions.
+Fifteen production surfaces remain classified as `PARALLEL_WRITER`; these
+cohort touches need retirement or routing through their declared owner. Applied
+migrations and disposable-database writers have separate reachability and are
+not parallel production authority. The executable per-surface inventory is the
+complete classification record. The detail location writer is retired by this
+slice.
 
 | Path | Bypasses | Entity |
 |---|---|---|
@@ -399,13 +475,11 @@ dispositions.
 | `app/services/nin_verifications.py` | `customer.accounts` | account `metadata` |
 | `app/services/team_inbox_commands.py` | `party.registry` | constructs `PartyRelationship` |
 | `app/services/web_admin_resellers.py` | `customer.accounts` | `reseller_id` |
-| `app/services/web_customer_details.py` | `customer.accounts` | account `metadata` |
 | `app/services/web_system_import_wizard.py` | `customer.accounts` | constructs `Subscriber` |
 | `app/services/web_system_restore_tool.py` | `customer.accounts` | `is_active`, account `metadata` |
 | `scripts/migration/backfill_crm_subscriber_links.py` | `customer.accounts` | raw DML |
 | `scripts/migration/backfill_party_status.py` | `party.registry` | raw DML |
 | `scripts/migration/import_crm_phase3.py` | `customer.accounts` | raw DML |
-| `scripts/one_off/backfill_crm_subscriber_ids.py` | `customer.accounts` | raw DML |
 | `scripts/seed/seed_test_fixtures.py` | — | fixtures only, non-production |
 | `scripts/migration/kernel_lineage_rehearsal_canaries.py` | — | rehearsal canaries, non-production |
 | `alembic/versions/045_contact_channels_without_name.py` | — | applied migration, non-production |
@@ -417,24 +491,27 @@ dispositions.
 
 ### The `subscribers.metadata` finding
 
-Seven modules write `subscribers.metadata`: account deletion, NIN
-verification, portal notification read-state, CRM name repair, location
-requests, the customer detail presenter and the system restore tool. No owner
-declares its shape, no schema constrains it, and its keys are added by
-whichever feature needed somewhere to put something.
+The original inventory found seven modules writing `subscribers.metadata`:
+account deletion, NIN verification, portal notification read-state, CRM name
+repair, location requests, the customer detail presenter and the system restore
+tool. This is a historical finding, not the current writer count. The detail
+presenter's location writer is now retired: page reads no longer geocode or
+persist coordinates. The remaining blob has no complete typed shape or schema
+constraint; the executable census and per-surface inventory track its writers.
 
 This is the single most consequential fact in the cohort for migration
 purposes, and it is why the export contract treats the blob as an **inventory
 of keys plus a digest**, never as typed facts. A migration that reads
 structure into that column is inventing a contract nobody owns, and it would
-carry seven features' private conventions into the destination as though they
+carry legacy features' private conventions into the destination as though they
 were data.
 
 ## Adapters and callers
 
-Nine adapters reach cohort state and write none of it. They validate,
-authorise, delegate to an owning service, and own only the transaction —
-which is what `db.commit()` in a route means here.
+These adapters and read surfaces reach cohort state and write none of it.
+Adapters validate, authorise and delegate; they manage Session lifecycle while
+registered command owners control business transactions. Remaining legacy
+transaction-completion debt is tracked separately.
 
 | Path | Family | Guard |
 |---|---|---|
@@ -449,27 +526,27 @@ which is what `db.commit()` in a route means here.
 | `app/tasks/nin_tasks.py` | `task_worker` | worker context; writes verification rows outside this cohort |
 | `app/api/crm_webhooks.py` | `webhook_handler` | provider signature verification; hands the payload to a service and writes no cohort row |
 | `app/services/crm_customers.py` | `service` | reads accounts by exact CRM provenance; creates and updates nothing |
+| `app/services/web_customer_details.py` | `web_presenter` | reads canonical addresses first; pure typed legacy display fallback has no location writes |
 
 ## Reader reach and downstream consequences
 
 Writers are the set a cutover has to displace. Readers are the set it has to
-not surprise, and they are an order of magnitude larger: **401 files** name a
+not surprise, and they are an order of magnitude larger: **443 files** name a
 cohort-1 model or table somewhere in their body — measured by
 `python -m scripts.architecture.isp_cohort_writers` on this consolidation
 commit.
 
 | Family | Files referencing cohort state |
 |---|---|
-| `service` | 222 |
-| `web_presenter` | 48 |
-| `migration` | 46 |
-| `cli_script` | 46 |
-| `app_module` | 21 |
-| `web_route` | 10 |
-| `event_handler` | 3 |
 | `api_route` | 3 |
+| `app_module` | 22 |
+| `cli_script` | 46 |
+| `event_handler` | 4 |
+| `migration` | 57 |
+| `service` | 253 |
 | `task_worker` | 2 |
-| `webhook_handler` | 0 |
+| `web_presenter` | 46 |
+| `web_route` | 10 |
 
 This is a deliberately coarse measure — a mapped-class name anywhere in the
 module, or a table name in a string that also contains a SQL keyword — and it
@@ -526,14 +603,17 @@ roots. It reads "no counted writer" for that reason. The disposition of these
 rows — historical B2B account records with no live owner — is an open item for
 `ctl-isp-006`.
 
-## Unresolved
+## Remaining evidence tasks
 
-- `dec-isp-002` — production deployment owner for `asm-dotmac-isp`. Michael's.
-- `dec-isp-003` — the enforceable legacy Sub transition rule. Michael's.
+No programme decision remains open; evidence gaps are not open decisions.
+
+- Programme-wide enforcement evidence for the resolved `dec-isp-003` rule;
+  `ctl-isp-003` remains blocked.
 - The disposition of `organizations` / `organization_memberships` rows.
-- An owner for `subscribers.mrr_total`, or an explicit decision that the
-  target recomputes it and the column is not migrated.
-- An owner and shape for `subscribers.metadata`, or an explicit decision that
-  it crosses as an opaque inventory only.
-- Whether `subscriber_nin_verifications` migrates, is retained in Sub as
-  regulatory evidence, or is retired.
+- Proof that the target recomputes `subscribers.mrr_total`; the no-migration
+  decision is already resolved.
+- Selected-module mapping and switch-time retirement for displaced metadata
+  writers; earlier edits require a concrete blocker. The opaque
+  key-inventory/digest export rule is already decided.
+- Compliance/Records retention evidence for `subscriber_nin_verifications`,
+  already excluded from this cohort export; no purge is authorized here.

@@ -14,6 +14,7 @@ from app.models.subscriber import Subscriber
 from app.models.subscription_engine import SettingValueType
 from app.services import customer_portal_profile_commands as profile_commands
 from app.services import settings_spec
+from app.services.audit_adapter import AuditActor
 from app.services.owner_commands import CommandContext
 from app.timezone import APP_TIMEZONE
 from app.web.customer import routes as customer_routes
@@ -31,6 +32,7 @@ def _command(
             reason="customer portal minimum-age test",
         ),
         subscriber_id=subscriber.id,
+        actor=AuditActor.user(str(subscriber.id)),
         first_name=subscriber.first_name,
         last_name=subscriber.last_name,
         email=subscriber.email,

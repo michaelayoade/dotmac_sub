@@ -3,11 +3,10 @@
 Prepaid enforcement fails closed with ``renewal_terms_unresolved`` when an
 active prepaid subscription carries no frozen contracted amount
 (``Subscription.unit_price`` NULL or <= 0). The contracted amount is never
-inferred from the mutable catalog (ADR 0007 Phase 1): this owner restores it
-only from the subscription's own exact evidence — the base-subscription lines
-of its PAID invoices. A subscription whose paid evidence is absent or
-self-contradictory becomes an owned, SLA-bound finance work item and stays
-fail-closed.
+inferred from the mutable catalog (ADR 0007 Phase 1). Capture retains paid
+base-subscription evidence in owned, SLA-bound finance work items, including
+exact evidence. Automatic historical amount restoration is retired under the
+billing mutation policy; unresolved subscriptions stay fail-closed.
 
 TRANSITIONAL: retire at the ADR 0007 Phase 1 cutover, when
 ``billing.contracts`` becomes authoritative and ``Subscription.unit_price``
@@ -35,6 +34,11 @@ from app.services.owner_commands import (
     CommandContext,
     OwnerCommandDefinition,
     execute_owner_command,
+)
+from app.services.sole_approver_exception import (
+    SoleApproverExceptionGrant,
+    authorize_sole_approver,
+    stage_sole_approver_exception_audit,
 )
 
 logger = logging.getLogger(__name__)
@@ -486,10 +490,16 @@ class RenewalTermsNextAction(StrEnum):
 
     reviewed_record = "reviewed_renewal_term_record"
     charge_inputs = "resolve_charge_inputs"
+    manual_exceptions_review = "manual_exceptions_review"
 
 
 #: admin_alerts.summary is VARCHAR(255) in production PostgreSQL.
 WORK_ITEM_SUMMARIES: dict[RenewalTermsNextAction, str] = {
+    RenewalTermsNextAction.manual_exceptions_review: (
+        "Exact paid renewal-term evidence is retained for manual exceptions "
+        "review. Automatic historical amount restoration is disabled by "
+        "billing mutation policy; the subscription stays blocked. See runbook."
+    ),
     RenewalTermsNextAction.reviewed_record: (
         "Prepaid subscription has no contracted amount and its paid evidence "
         "is missing or conflicting. Request and approve a reviewed "
@@ -505,6 +515,8 @@ WORK_ITEM_SUMMARIES: dict[RenewalTermsNextAction, str] = {
 
 
 def _next_action(decision: RenewalTermsDecision) -> RenewalTermsNextAction:
+    if decision is RenewalTermsDecision.repairable:
+        return RenewalTermsNextAction.manual_exceptions_review
     if decision is RenewalTermsDecision.missing_charge_inputs:
         return RenewalTermsNextAction.charge_inputs
     return RenewalTermsNextAction.reviewed_record
@@ -566,7 +578,7 @@ def capture_prepaid_renewal_terms_backfill(
     *,
     context: CommandContext,
 ) -> RenewalTermsBackfillResult:
-    """Apply the fingerprint-bound backfill through the owner boundary."""
+    """Capture fingerprint-bound review evidence through the owner boundary."""
     return execute_owner_command(
         db,
         definition=_CAPTURE_COMMAND,
@@ -593,54 +605,10 @@ def _capture(
             "Evidence changed since the reviewed preview; re-run the preview "
             "and review the new fingerprint.",
         )
-    repaired = 0
-    unresolved: list[RenewalTermsEvidenceItem] = []
-    for item in preview.items:
-        if item.decision is RenewalTermsDecision.repairable:
-            subscription = db.execute(
-                select(Subscription)
-                .where(Subscription.id == item.subscription_id)
-                .with_for_update()
-            ).scalar_one_or_none()
-            if subscription is None:
-                continue
-            if (
-                subscription.unit_price is not None
-                and subscription.unit_price > Decimal("0.00")
-            ):
-                continue
-            subscription.unit_price = item.contracted_amount
-            repaired += 1
-            from app.services.events import EventType, emit_event
-
-            emit_event(
-                db,
-                EventType.prepaid_renewal_terms_backfilled,
-                {
-                    "schema_version": 1,
-                    "account_id": str(item.account_id),
-                    "subscription_id": str(item.subscription_id),
-                    "contracted_amount": str(item.contracted_amount),
-                    "paid_line_count": item.paid_line_count,
-                    "preview_fingerprint": preview.fingerprint,
-                },
-                subscriber_id=item.account_id,
-                account_id=item.account_id,
-                subscription_id=item.subscription_id,
-            )
-            logger.info(
-                "prepaid_renewal_terms_backfilled: subscription=%s amount=%s "
-                "paid_lines=%d",
-                item.subscription_id,
-                item.contracted_amount,
-                item.paid_line_count,
-            )
-        else:
-            unresolved.append(item)
-    _sync_evidence_work_items(db, tuple(unresolved), now=preview.as_of)
+    _sync_evidence_work_items(db, preview.items, now=preview.as_of)
     return RenewalTermsBackfillResult(
-        repaired_count=repaired,
-        work_item_count=len(unresolved),
+        repaired_count=0,
+        work_item_count=len(preview.items),
         fingerprint=preview.fingerprint,
     )
 
@@ -1148,6 +1116,9 @@ class ApproveRenewalTermRecordCommand:
     approved_amount: Decimal
     approved_by: UUID
     permission_granted: bool
+    #: Only for ``approved_by == requested_by`` under the governed
+    #: sole-approver exception (``governance.sole_approver_exception``).
+    sole_approver_justification: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -1587,11 +1558,20 @@ def _approve_record(
         raise _error(
             "request_not_found", "The renewal-term record request was not found."
         )
+    exception_grant: SoleApproverExceptionGrant | None = None
     if command.approved_by == request.requested_by:
-        raise _error(
-            "self_approval_forbidden",
-            "The approver must be a different staff member from the requester.",
-        )
+        exception_grant = authorize_sole_approver(
+            db,
+            flow=OWNER,
+            approver_id=command.approved_by,
+            actor=context.actor,
+            justification=command.sole_approver_justification,
+        ).grant
+        if exception_grant is None:
+            raise _error(
+                "self_approval_forbidden",
+                "The approver must be a different staff member from the requester.",
+            )
     if _money(command.approved_amount) != request.reviewed_amount:
         raise _error(
             "approval_amount_mismatch",
@@ -1666,6 +1646,11 @@ def _approve_record(
             "evidence_sha256": request.evidence_sha256,
             "requested_by_system_user_id": str(request.requested_by),
             "approved_by_system_user_id": str(command.approved_by),
+            **(
+                exception_grant.evidence()
+                if exception_grant is not None
+                else {"sole_approver_exception": False}
+            ),
             "approved_at": now.isoformat(),
             "actor": context.actor,
             "command_id": str(context.command_id),
@@ -1679,6 +1664,14 @@ def _approve_record(
         account_id=subscription.subscriber_id,
         subscription_id=subscription.id,
     )
+    if exception_grant is not None:
+        stage_sole_approver_exception_audit(
+            db,
+            exception_grant,
+            entity_type="subscription",
+            entity_id=str(subscription.id),
+            evidence_ref=f"{OWNER}:{request.request_id}",
+        )
     logger.info(
         "prepaid_renewal_term_recorded: request=%s subscription=%s "
         "work_item_resolved=%s",

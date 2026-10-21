@@ -11,11 +11,18 @@ command owners.
 from __future__ import annotations
 
 # Importing the flow module executes its register() call — mirrors app import.
+import app.services.advance_renewal_invoicing  # noqa: F401
 import app.services.billing_mode_transitions  # noqa: F401
 import app.services.customer_portal_flow_changes  # noqa: F401
+import app.services.field_completion_review_projection  # noqa: F401
+import app.services.project_engineering_projection  # noqa: F401
 import app.services.subscription_correction  # noqa: F401
 import app.services.test_connection  # noqa: F401
+
+# Importing the flow module executes its register() call — mirrors app import.
+import app.services.web_integrations_nextcloud_talk  # noqa: F401
 import app.services.web_prepaid_draft_reconciliation  # noqa: F401
+import app.services.web_subledger_opening_corrections  # noqa: F401
 from app.services.form_contracts import (
     FORM_CONTRACT_REGISTRY,
     HIGH_IMPACT_EDITORS,

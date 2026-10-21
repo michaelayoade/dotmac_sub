@@ -62,7 +62,10 @@ DOMAIN = DomainSOT(
             notes=(
                 "The web form validates its complete submitted batch through the "
                 "registered setting specification before this owner stages every "
-                "row and one value-free audit record in a single transaction."
+                "row and one value-free audit record in a single transaction. "
+                "Read-modify-write editors, such as the walled-garden allowed-"
+                "resource page, pass the stored-value fingerprint they rendered; "
+                "the owner locks those rows and refuses a stale batch."
             ),
             contract=ServiceContract(
                 concerns=(
@@ -112,7 +115,9 @@ DOMAIN = DomainSOT(
                     locking=(
                         "The database setting identity constraint arbitrates "
                         "concurrent inserts; the owner transaction isolates the "
-                        "complete submitted batch."
+                        "complete submitted batch. A write carrying an expected "
+                        "value fingerprint locks that setting's rows FOR UPDATE "
+                        "and is refused when the stored value has changed."
                     ),
                     idempotency=(
                         "Repeated absolute setting values converge on the same rows; "
@@ -128,6 +133,7 @@ DOMAIN = DomainSOT(
                     domain_codes=(
                         "control.settings_form_updates.invalid_scope",
                         "control.settings_form_updates.invalid_update",
+                        "control.settings_form_updates.stale_update",
                         *owner_command_boundary_error_codes(
                             "control.settings_form_updates"
                         ),
@@ -137,14 +143,16 @@ DOMAIN = DomainSOT(
                         "ambiguous or undeclared setting identity",
                         "invalid setting value or relationship",
                         "incomplete persistence batch",
+                        "stored value changed since the editor rendered it",
                     ),
                 ),
                 events=EventContract(
                     event_types=("control.settings_form_updated",),
-                    schema_version=1,
+                    schema_version=2,
                     delivery_owner="observability.audit_log",
                     compatibility=(
-                        "Version 1 records only setting identities and batch count; "
+                        "Version 2 adds the command reason to the setting "
+                        "identities and batch count recorded by version 1; "
                         "setting values and secret material are excluded."
                     ),
                     replay=(
@@ -176,6 +184,7 @@ DOMAIN = DomainSOT(
                 ),
                 test_refs=(
                     "tests/test_web_system_settings_forms.py",
+                    "tests/test_web_walled_garden_settings.py",
                     "tests/architecture/test_settings_form_update_boundary.py",
                 ),
             ),

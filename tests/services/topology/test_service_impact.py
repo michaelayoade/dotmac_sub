@@ -170,3 +170,25 @@ def test_subscription_lookup_finds_its_covering_incident(db_session, catalog_off
     assert impact is not None
     assert impact.incident_id == str(incident.id)
     assert impact.state is ImpactState.confirmed_unavailable
+
+
+def test_first_revision_noop_rereads_concurrent_winner(
+    db_session, catalog_offer, monkeypatch
+):
+    from app.services.network import service_impact
+    from app.services.topology.outage import latest_scope_revision
+
+    _, node, subscriptions = _nas_node_with_subs(db_session, catalog_offer.id, 1)
+    incident = declare_outage(db_session, node=node)
+    winner = latest_scope_revision(db_session, incident.id)
+    assert winner is not None
+    reads = iter((None, winner))
+    monkeypatch.setattr(
+        service_impact, "latest_scope_revision", lambda *args: next(reads)
+    )
+    monkeypatch.setattr(
+        service_impact, "record_scope_revision", lambda *args, **kwargs: None
+    )
+    impacts = service_impact.resolve_incident_impacts(db_session, incident)
+    assert len(impacts) == 1
+    assert impacts[0].subscription_id == str(subscriptions[0].id)

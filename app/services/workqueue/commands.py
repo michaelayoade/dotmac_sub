@@ -607,6 +607,13 @@ def execute_action(
     def operation() -> WorkqueueActionOutcome:
         if _replay(db, command) is not None:
             return _replayed_outcome(db, command)
+        if command.item_kind is ItemKind.ticket:
+            from app.services.topology.outage_completion import lock_complaint_graph
+            from app.services.topology.outage_completion_contracts import (
+                ComplaintGraphLocksQuery,
+            )
+
+            lock_complaint_graph(db, query=ComplaintGraphLocksQuery((command.item_id,)))
         _lock_target(db, command)
         item = _visible_item(db, command)
         if (

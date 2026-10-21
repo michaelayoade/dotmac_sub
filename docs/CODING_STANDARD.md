@@ -141,6 +141,20 @@ before returning success and rolls back before propagating failure. Use
 session lifecycle. The auto-committing session context and `UnitOfWork` are
 legacy migration paths; do not introduce them in a new or migrated command.
 
+Optional savepoint release uses an exact, active child and a private single-use
+commit claim; participant BODY and rollback authorization never grant commit
+permission. The exact owner root must stay active throughout. An optional
+exception is safe to catch only after the executor proves exact-child rollback
+returned, the same active root remains, and no savepoint is open. Unproven
+cleanup and swallowed guard-observed completion violations force the owner to
+abort. SQLAlchemy reentry denied before event dispatch must remain unpublished
+and roll back on a later owner failure; it need not poison the owner. Cleanup
+retains the first exception and cause and records static secondary failure
+notes with exception types, without database-bound values;
+the optional executor closes only its exact child and leaves root rollback to
+the command owner. See ADR 0002 and the migrated PostgreSQL optional-savepoint
+canaries for this existing product boundary; this adds no Kernel facility.
+
 Do not catch an exception merely to roll back and re-raise it at multiple
 layers. The transaction owner performs rollback. Adapters map the resulting
 domain error after the session is safe to reuse or close.
@@ -165,7 +179,8 @@ the record survives the caller's rollback. It never joins or reads back the
 caller's transaction, emits no domain event, and never raises into the caller
 except to propagate a task time limit. Every use needs its own approving ADR,
 registered in `tests/architecture/test_out_of_band_evidence_ratchet.py`; the
-first is ADR 0017 (`access.enforcement_evidence`).
+first is ADR 0017 (`access.enforcement_evidence`); the second is ADR 0018
+(`network.coa_outcome_evidence`).
 
 ## 4. Concurrency and idempotency
 

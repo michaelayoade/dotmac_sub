@@ -318,6 +318,52 @@ _FEATURE_CONTROLS: tuple[Control, ...] = (
         ),
     ),
     Control(
+        key="network.router_health_posture",
+        layer=Layer.feature,
+        owner_module="network",
+        default=False,
+        on_missing=False,
+        description=(
+            "Router health reconciler: snapshot posture, snapshot staleness and "
+            "CoA service-path findings (database-only evaluation)."
+        ),
+    ),
+    Control(
+        key="network.router_health_coa_canary",
+        layer=Layer.feature,
+        owner_module="network",
+        default=False,
+        on_missing=False,
+        description=(
+            "Router health reconciler: daily no-op CoA canary. Sends a "
+            "Disconnect-Request for a non-existent user to production NAS."
+        ),
+    ),
+    Control(
+        key="network.router_health_runtime_poll",
+        layer=Layer.feature,
+        owner_module="network",
+        default=False,
+        on_missing=False,
+        description=(
+            "Router health reconciler: periodic read-only REST poll of every "
+            "active router (reachability, NTP and clock, BGP/OSPF, link flaps, "
+            "PPPoE drop, service users)."
+        ),
+    ),
+    Control(
+        key="network.router_health_optics",
+        layer=Layer.feature,
+        owner_module="network",
+        default=False,
+        on_missing=False,
+        description=(
+            "Router health reconciler: SFP optical power checks. Needs one "
+            "read-only POST per router per hour (/interface/ethernet/monitor "
+            "with once) to the SFP interfaces; also requires the runtime poll."
+        ),
+    ),
+    Control(
         key="network.tr069_sync",
         layer=Layer.feature,
         owner_module="network",

@@ -41,27 +41,15 @@ The endpoint requires `network:map:read`; the dispatch route retains only
 `operations:dispatch:read` and omits plant controls for viewers without the
 additional permission.
 
-## Vendor route-planning subset
+## Vendor map boundary
 
-The proposed-route planner in the native vendor portal consumes a minimized,
-read-only projection from the same `ui.network_map_projection` owner used by
-Network Admin. It includes canonical FDH cabinets, splice closures, fiber access
-points, service buildings, and validated feeder/distribution/drop geometry.
-Customer identities, ONTs, management addresses, device state, staff links, and
-free-form operational notes are excluded at the typed projection boundary. The
-As-built map remains project-scoped and does not consume this projection.
-
-The projection is rebuilt on each vendor project read. Missing coordinates or
-validated segment geometry omit only the affected feature; the vendor adapter
-does not infer locations, draw endpoint-proximity lines, or read CRM staging
-tables directly.
-
-The vendor presentation exposes only relevant canonical layer controls: FDHs,
-closures, access points, service buildings, and segments. OSP, backbone,
-customer-edge, all, and hidden presets are local visibility choices and do not
-change topology or authority. Search is positioned within the planning map and
-blue asset-type icons distinguish canonical point features without copying
-staff-only QA, OLT, device-health, or mutation controls from Network Admin.
+The previous vendor-wide route-planning plant projection is retired. Removing
+customer and management fields did not restrict network geometry to authorized
+work. Vendor web project maps retain only their existing owned proposed/as-built
+route evidence, and no longer receive global plant geometry or plant lookup
+controls. Field vendors view and navigate only explicit targets of their current
+selected jobs through `operations.field_jobs`; see `VENDOR_JOB_MAP_PRIVACY.md`.
+Network Admin plant and V2 projections remain staff-owned.
 
 ## Isolated Network Map V2
 

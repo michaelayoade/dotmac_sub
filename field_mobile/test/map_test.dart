@@ -95,8 +95,7 @@ void main() {
     expect(
       defaultMapAssetTypes,
       containsAll({
-        'olt',
-        'fdh',
+        'fdh_cabinet',
         'fiber_access_point',
         'splice_closure',
         'wireless_mast',
@@ -300,7 +299,7 @@ void main() {
     final assets = [
       const MapAsset(
         id: 'olt-1',
-        type: 'olt',
+        type: 'fdh_cabinet',
         title: 'OLT Marina',
         subtitle: 'Central office',
         latitude: 6.52,
@@ -324,7 +323,7 @@ void main() {
     );
     await tester.pumpAndSettle();
     await tester.tap(
-      find.byKey(const Key('map-search-result-asset-olt-olt-1')),
+      find.byKey(const Key('map-search-result-asset-fdh_cabinet-olt-1')),
     );
     await tester.pumpAndSettle();
 
@@ -383,7 +382,7 @@ void main() {
     final assets = [
       const MapAsset(
         id: 'olt-1',
-        type: 'olt',
+        type: 'fdh_cabinet',
         title: 'OLT Alpha',
         latitude: 9.1,
         longitude: 7.4,
@@ -400,11 +399,11 @@ void main() {
     );
     await tester.pumpAndSettle();
 
-    expect(find.byKey(const Key('asset-olt-olt-1')), findsOneWidget);
-    expect(find.text('OLT'), findsOneWidget);
+    expect(find.byKey(const Key('asset-fdh_cabinet-olt-1')), findsOneWidget);
     expect(find.text('FDH'), findsOneWidget);
+    expect(find.text('OLT'), findsNothing);
 
-    await tester.tap(find.byKey(const Key('asset-olt-olt-1')));
+    await tester.tap(find.byKey(const Key('asset-fdh_cabinet-olt-1')));
     await tester.pumpAndSettle();
     expect(find.text('OLT Alpha'), findsOneWidget);
     expect(find.text('Edit asset location'), findsOneWidget);
@@ -425,7 +424,7 @@ void main() {
     final assets = [
       const MapAsset(
         id: 'bad-asset',
-        type: 'olt',
+        type: 'fdh_cabinet',
         title: 'Bad asset',
         latitude: 9.1,
         longitude: double.infinity,
@@ -443,7 +442,7 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(find.byKey(const Key('pin-bad-job')), findsNothing);
-    expect(find.byKey(const Key('asset-olt-bad-asset')), findsNothing);
+    expect(find.byKey(const Key('asset-fdh_cabinet-bad-asset')), findsNothing);
 
     await tester.tap(find.byKey(const Key('edit-pins-button')));
     await tester.pumpAndSettle();
@@ -484,7 +483,7 @@ void main() {
             home: AssetPinScreen(
               asset: MapAsset(
                 id: 'bad-asset',
-                type: 'olt',
+                type: 'fdh_cabinet',
                 title: 'Bad asset',
                 latitude: 9.1,
                 longitude: double.infinity,

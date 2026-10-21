@@ -1,4 +1,5 @@
 import uuid
+from datetime import UTC, datetime
 from http.cookies import SimpleCookie
 from pathlib import Path
 from unittest.mock import Mock
@@ -19,26 +20,28 @@ from app.models.auth import (
 )
 from app.models.domain_settings import DomainSetting, SettingDomain
 from app.models.rbac import Role, SystemUserRole
-from app.models.subscriber import UserType
+from app.models.subscriber import Subscriber, UserType
 from app.models.subscription_engine import SettingValueType
 from app.models.system_user import SystemUser
 from app.schemas.auth import (
     ApiKeyCreate,
     ApiKeyGenerateRequest,
     ApiKeyUpdate,
-    MFAMethodCreate,
-    MFAMethodUpdate,
-    SessionCreate,
     UserCredentialCreate,
     UserCredentialUpdate,
 )
 from app.schemas.auth_flow import TokenResponse
 from app.services import auth as auth_service
 from app.services import auth_flow as auth_flow_service
-from app.services import settings_spec, staff_party_authentication
+from app.services import credential_administration as credential_admin
+from app.services import settings_spec
 from app.services import web_auth as web_auth_service
 from app.services import web_system_config as web_system_config_service
+from app.services.audit_adapter import AuditActor
 from app.services.auth_flow import hash_password
+from tests import api_key_issuance_fixtures as issuance_commands
+from tests import api_key_update_fixtures as update_commands
+from tests import credential_administration_fixtures as credential_commands
 from tests.staff_identity_fixtures import project_staff_login
 
 
@@ -316,9 +319,9 @@ def test_user_credentials_soft_delete(db_session, person):
     payload = UserCredentialCreate(
         person_id=person.id,
         username="user@example.com",
-        password_hash=hash_password("secret"),
+        password="Strong-Test-Password-42!",
     )
-    credential = auth_service.user_credentials.create(db_session, payload)
+    credential = credential_commands.create(db_session, payload)
     active = auth_service.user_credentials.list(
         db_session,
         person_id=str(person.id),
@@ -330,7 +333,7 @@ def test_user_credentials_soft_delete(db_session, person):
         offset=0,
     )
     assert len(active) == 1
-    auth_service.user_credentials.delete(db_session, str(credential.id))
+    credential_commands.deactivate(db_session, str(credential.id))
     active = auth_service.user_credentials.list(
         db_session,
         person_id=str(person.id),
@@ -359,88 +362,28 @@ def test_user_credentials_require_valid_person(db_session):
     payload = UserCredentialCreate(
         person_id=uuid.uuid4(),
         username="user@example.com",
-        password_hash=hash_password("secret"),
+        password="Strong-Test-Password-42!",
     )
-    with pytest.raises(HTTPException) as exc:
-        auth_service.user_credentials.create(db_session, payload)
-    assert exc.value.status_code == 404
-
-
-def test_mfa_primary_switch(db_session, person):
-    payload = MFAMethodCreate(
-        person_id=person.id,
-        method_type="totp",
-        label="primary",
-        secret="encrypted",
-        is_primary=True,
-        enabled=True,
-    )
-    first = auth_service.mfa_methods.create(db_session, payload)
-    second = auth_service.mfa_methods.create(
-        db_session,
-        MFAMethodCreate(
-            person_id=person.id,
-            method_type="totp",
-            label="secondary",
-            secret="encrypted2",
-            is_primary=True,
-            enabled=True,
-        ),
-    )
-    db_session.refresh(first)
-    db_session.refresh(second)
-    assert first.is_primary is False
-    assert second.is_primary is True
-
-
-def test_mfa_update_primary_clears_previous(db_session, person):
-    first = auth_service.mfa_methods.create(
-        db_session,
-        MFAMethodCreate(
-            person_id=person.id,
-            method_type="totp",
-            label="primary",
-            secret="encrypted",
-            is_primary=True,
-            enabled=True,
-        ),
-    )
-    second = auth_service.mfa_methods.create(
-        db_session,
-        MFAMethodCreate(
-            person_id=person.id,
-            method_type="totp",
-            label="secondary",
-            secret="encrypted2",
-            is_primary=False,
-            enabled=True,
-        ),
-    )
-    updated = auth_service.mfa_methods.update(
-        db_session,
-        str(second.id),
-        MFAMethodUpdate(
-            person_id=person.id,
-            is_primary=True,
-        ),
-    )
-    db_session.refresh(first)
-    db_session.refresh(updated)
-    assert first.is_primary is False
-    assert updated.is_primary is True
+    with pytest.raises(credential_admin.CredentialAdministrationError) as exc:
+        credential_commands.create(db_session, payload)
+    assert exc.value.code.endswith("_not_found")
 
 
 def test_session_delete_revokes(db_session, person):
-    payload = SessionCreate(
-        person_id=person.id,
-        status=SessionStatus.active,
-        token_hash="hash",
-        ip_address="127.0.0.1",
-        user_agent="pytest",
-        expires_at="2099-01-01T00:00:00+00:00",
+    session = AuthSession(
+        subscriber_id=person.id,
+        token_hash="unit-fixture-hash",
+        expires_at=datetime(2099, 1, 1, tzinfo=UTC),
     )
-    session = auth_service.sessions.create(db_session, payload)
-    auth_service.sessions.delete(db_session, str(session.id))
+    db_session.add(session)
+    db_session.flush()
+    session_id = str(session.id)
+    db_session.commit()
+    auth_service.sessions.delete(
+        db_session,
+        session_id,
+        actor=AuditActor.system("auth-service-test"),
+    )
     db_session.refresh(session)
     assert session.status == SessionStatus.revoked
     assert session.revoked_at is not None
@@ -450,22 +393,22 @@ def test_user_credentials_update_requires_radius_server(db_session, person):
     payload = UserCredentialCreate(
         person_id=person.id,
         username="user@example.com",
-        password_hash=hash_password("secret"),
+        password="Strong-Test-Password-42!",
     )
-    credential = auth_service.user_credentials.create(db_session, payload)
+    credential = credential_commands.create(db_session, payload)
     update = UserCredentialUpdate(radius_server_id=uuid.uuid4())
-    with pytest.raises(HTTPException) as exc:
-        auth_service.user_credentials.update(db_session, str(credential.id), update)
-    assert exc.value.status_code == 404
+    with pytest.raises(credential_admin.CredentialAdministrationError) as exc:
+        credential_commands.update(db_session, str(credential.id), update)
+    assert exc.value.code.endswith("_not_found")
 
 
 def test_api_key_generate_with_redis(monkeypatch, db_session):
     fake = _FakeRedis()
     monkeypatch.setattr(auth_service, "_get_redis_client", lambda: fake)
     payload = ApiKeyGenerateRequest(label="test")
-    result = auth_service.api_keys.generate_with_rate_limit(db_session, payload, None)
-    raw_key = result["key"]
-    api_key = result["api_key"]
+    result = issuance_commands.generate_with_rate_limit(db_session, payload, None)
+    raw_key = result.key
+    api_key = result.api_key
     # Scheme-agnostic: matches whatever hash_api_key produces (HMAC when a
     # server secret is configured, legacy sha256 otherwise).
     assert auth_service.hash_api_key(raw_key) == api_key.key_hash
@@ -474,7 +417,7 @@ def test_api_key_generate_with_redis(monkeypatch, db_session):
 def test_api_key_rate_limit_requires_redis(monkeypatch, db_session):
     monkeypatch.setattr(auth_service, "_get_redis_client", lambda: None)
     with pytest.raises(HTTPException) as exc:
-        auth_service.api_keys.generate_with_rate_limit(
+        issuance_commands.generate_with_rate_limit(
             db_session, ApiKeyGenerateRequest(label="test"), None
         )
     assert exc.value.status_code == 503
@@ -485,14 +428,14 @@ def test_api_key_rate_limit_exceeded(monkeypatch, db_session):
     monkeypatch.setattr(auth_service, "_get_redis_client", lambda: fake)
     monkeypatch.setattr(auth_service, "_auth_int_setting", lambda _db, key, default: 1)
     with pytest.raises(HTTPException) as exc:
-        auth_service.api_keys.generate_with_rate_limit(
+        issuance_commands.generate_with_rate_limit(
             db_session, ApiKeyGenerateRequest(label="test"), None
         )
     assert exc.value.status_code == 429
 
 
 def test_api_key_update_and_revoke(db_session, person):
-    created = auth_service.api_keys.create(
+    created = issuance_commands.create(
         db_session,
         ApiKeyCreate(
             person_id=person.id,
@@ -500,14 +443,19 @@ def test_api_key_update_and_revoke(db_session, person):
             key_hash="raw-key",
         ),
     )
-    updated = auth_service.api_keys.update(
+    updated = update_commands.update(
         db_session,
         str(created.id),
         ApiKeyUpdate(key_hash="new-key"),
     )
     assert updated.key_hash == auth_service.hash_api_key("new-key")
 
-    auth_service.api_keys.revoke(db_session, str(created.id))
+    from app.services import api_key_administration
+    from tests.test_api_key_administration import command
+
+    key_id = created.id
+    db_session.commit()
+    api_key_administration.revoke(db_session, command=command(key_id))
     db_session.refresh(created)
     assert created.is_active is False
     assert created.revoked_at is not None
@@ -679,12 +627,25 @@ def test_web_mfa_enroll_confirm_creates_admin_session(db_session, monkeypatch):
     setup = auth_flow_service.auth_flow.admin_mfa_setup(
         db_session, str(system_user.id), "Authenticator app"
     )
-    enrollment_token = auth_flow_service._issue_mfa_enrollment_token(  # noqa: SLF001
-        db_session,
-        str(system_user.id),
-        "system_user",
-        staff_binding=staff_party_authentication.binding_for_principal(system_user),
+    db_session.add(
+        DomainSetting(
+            domain=SettingDomain.auth,
+            key="admin_mfa_required",
+            value_type=SettingValueType.boolean,
+            value_text="true",
+            is_active=True,
+        )
     )
+    db_session.commit()
+    # A genuine v2 enrollment challenge, bound to the credential's version.
+    login_result = auth_flow_service.auth_flow.login(
+        db_session,
+        system_user.email,
+        "secret",
+        _make_request(),
+        None,
+    )
+    enrollment_token = login_result["mfa_enrollment_token"]
     request = _make_request()
     request.scope["headers"].append(
         (
@@ -823,20 +784,25 @@ def test_user_credentials_duplicate_username_is_409_not_500(db_session, person):
     payload = UserCredentialCreate(
         person_id=person.id,
         username="taken@example.com",
-        password_hash=hash_password("secret"),
+        password="Strong-Test-Password-42!",
     )
-    auth_service.user_credentials.create(db_session, payload)
+    credential_commands.create(db_session, payload)
 
+    other = Subscriber(
+        first_name="Other", last_name="Person", email="other-duplicate@example.test"
+    )
+    db_session.add(other)
+    db_session.flush()
     duplicate = UserCredentialCreate(
-        person_id=person.id,
+        person_id=other.id,
         username="taken@example.com",
-        password_hash=hash_password("other"),
+        password="Other-Test-Password-42!",
     )
-    with pytest.raises(HTTPException) as excinfo:
-        auth_service.user_credentials.create(db_session, duplicate)
+    with pytest.raises(credential_admin.CredentialAdministrationError) as excinfo:
+        credential_commands.create(db_session, duplicate)
 
-    assert excinfo.value.status_code == 409
-    assert "username" in str(excinfo.value.detail).lower()
+    assert excinfo.value.code.endswith(".conflict")
+    assert "identity" in excinfo.value.message.lower()
 
     # The session must still be usable: an un-rolled-back failed flush poisons
     # every later query on it with PendingRollbackError. Deliberately not a

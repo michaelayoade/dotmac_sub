@@ -54,6 +54,7 @@ ALLOWED_KERNEL_MODULES = frozenset(
         "dotmac_kernel.exceptions",
         "dotmac_kernel.features",
         "dotmac_kernel.machine_auth",
+        "dotmac_kernel.machine_models",
         "dotmac_kernel.models",
         "dotmac_kernel.money",
         "dotmac_kernel.namespaces",
@@ -69,6 +70,7 @@ ALLOWED_KERNEL_MODULES = frozenset(
         "dotmac_kernel.settings_crypto",
         "dotmac_kernel.settings_models",
         "dotmac_kernel.settings_resolver",
+        "dotmac_kernel.transactions",
     }
 )
 
@@ -118,12 +120,22 @@ DENIED_NAMES = frozenset(
 #: claimed that narrowing in prose while nothing enforced it, so the name was
 #: importable here — this entry is what makes the sentence true.
 RESTRICTED_MODULE_NAMES: dict[str, frozenset[str]] = {
-    "dotmac_kernel.cache": frozenset({"TenantScope"}),
+    # Owner-boundary participant hooks only (ledger amendment 2026-10-21):
+    # claim one exact kernel savepoint RELEASE and classify its recovered
+    # rollbacks. conflict_savepoint itself is never admitted under app/.
+    "dotmac_kernel.transactions": frozenset(
+        {"claim_conflict_savepoint_commit", "current_conflict_savepoint"}
+    ),
+    # `Scope` is the union alias the pinned billing NumberingProvider
+    # protocol declares; admitted as a type name only (ledger amendment
+    # 2026-10-18). Sub constructs TenantScope exclusively.
+    "dotmac_kernel.cache": frozenset({"Scope", "TenantScope"}),
     "dotmac_kernel.exceptions": frozenset(
         {"BadRequestError", "NotFoundError", "ConflictError"}
     ),
     "dotmac_kernel.migrations.verify": frozenset({"require_prerequisites"}),
     "dotmac_kernel.models": frozenset({"Tenant", "TenantDomain"}),
+    "dotmac_kernel.machine_models": frozenset({"MachineCredential"}),
     "dotmac_kernel.namespaces": frozenset({"module_schema"}),
     "dotmac_kernel.planes": frozenset({"ModulePlane", "ModulePlaneSelection"}),
     "dotmac_kernel.settings_models": frozenset({"SettingDomain"}),
@@ -359,13 +371,21 @@ def test_tenant_scope_is_admitted_but_platform_scope_is_not(tmp_path: Path) -> N
     )
     assert not _kernel_import_violations(tmp_path)
 
+    # The `Scope` union alias is admitted as a type name only (ledger
+    # amendment 2026-10-18); constructing PlatformScope still is not.
+    subject.write_text(
+        "from dotmac_kernel.cache import Scope, TenantScope\n",
+        encoding="utf-8",
+    )
+    assert not _kernel_import_violations(tmp_path)
+
     subject.write_text(
         "from dotmac_kernel.cache import PlatformScope\n",
         encoding="utf-8",
     )
     violations = _kernel_import_violations(tmp_path)
     assert len(violations) == 1
-    assert "only TenantScope" in violations[0]
+    assert "only Scope, TenantScope" in violations[0]
 
 
 def test_only_named_kernel_exceptions_are_admitted(tmp_path: Path) -> None:

@@ -6,11 +6,11 @@ from typing import cast
 from urllib.parse import urlparse
 
 from fastapi import HTTPException
-from sqlalchemy import and_, or_
+from sqlalchemy import and_, case, func, or_, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
-from app.models.catalog import Subscription
+from app.models.catalog import Subscription, SubscriptionStatus
 from app.models.connector import ConnectorConfig
 from app.models.domain_settings import SettingDomain
 from app.models.network import (
@@ -25,6 +25,7 @@ from app.models.provisioning import (
     ProvisioningWorkflow,
     ServiceOrder,
 )
+from app.models.radius_active_session import RadiusActiveSession
 from app.schemas.network import IPAssignmentCreate
 from app.services import network as network_service
 from app.services import settings_spec
@@ -32,6 +33,7 @@ from app.services.common import (
     coerce_uuid,
     validate_enum,
 )
+from app.services.ip_assignment_lifecycle import find_ipv4_live_use
 from app.services.provisioning_context import extend_provisioning_context
 from app.services.secrets import resolve_secret
 
@@ -200,8 +202,57 @@ def _get_address_by_id(
     return address
 
 
+_TERMINAL_SUBSCRIPTION_STATUSES = (
+    SubscriptionStatus.canceled,
+    SubscriptionStatus.expired,
+)
+
+
+def _ipv4_in_use_elsewhere_clauses(subscription_id):
+    """Allocator exclusions beyond IPAM: addresses held by another live service.
+
+    IPAM can show an address free while another subscription's served
+    ``ipv4_address`` column or a live RADIUS session still uses it (a partial
+    Replace IPv4 left exactly that state and the allocator reissued the IP).
+    Returns (taken_by_subscription, taken_by_session) subqueries of address
+    strings, excluding ``subscription_id`` itself.
+    """
+    # ``x/32`` is stored by some writers; strip it so it matches bare addresses.
+    subs = select(func.replace(Subscription.ipv4_address, "/32", "")).where(
+        Subscription.ipv4_address.is_not(None),
+        Subscription.status.notin_(_TERMINAL_SUBSCRIPTION_STATUSES),
+    )
+    sessions = select(
+        func.replace(RadiusActiveSession.framed_ip_address, "/32", "")
+    ).where(RadiusActiveSession.framed_ip_address.is_not(None))
+    if subscription_id is not None:
+        subs = subs.where(Subscription.id != subscription_id)
+        sessions = sessions.where(
+            or_(
+                RadiusActiveSession.subscription_id.is_(None),
+                RadiusActiveSession.subscription_id != subscription_id,
+            )
+        )
+    return subs, sessions
+
+
+def _ipv4_held_by_other_live_service(
+    db: Session, subscription_id, address_value: str | None
+) -> bool:
+    """True if another live service (non-terminal subscription's served column
+    or a live RADIUS session) holds this IPv4; ``x/32`` forms are matched."""
+    if not address_value:
+        return False
+    return find_ipv4_live_use(
+        db,
+        subscription_id=subscription_id,
+        addresses={str(address_value)},
+        exclude_own_sessions=True,
+    ).in_use
+
+
 def _find_available_address(
-    db: Session, ip_version: IPVersion, pool_id: str
+    db: Session, ip_version: IPVersion, pool_id: str, subscription_id=None
 ) -> IPv4Address | IPv6Address | None:
     # An address is free when it has no *active* assignment — a released
     # (is_active=false) assignment stays for history but must not block reuse
@@ -211,6 +262,7 @@ def _find_available_address(
     # *different* free rows instead of racing onto the same lowest address. (No-op
     # on SQLite, which the test suite uses; real protection on Postgres.)
     if ip_version == IPVersion.ipv4:
+        taken_by_sub, taken_by_session = _ipv4_in_use_elsewhere_clauses(subscription_id)
         return cast(
             IPv4Address | None,
             (
@@ -225,6 +277,8 @@ def _find_available_address(
                 .filter(IPv4Address.pool_id == pool_id)
                 .filter(IPv4Address.is_reserved.is_(False))
                 .filter(IPAssignment.id.is_(None))
+                .filter(IPv4Address.address.notin_(taken_by_sub))
+                .filter(IPv4Address.address.notin_(taken_by_session))
                 .order_by(IPv4Address.address.asc())
                 .with_for_update(skip_locked=True, of=IPv4Address)
                 .first()
@@ -338,7 +392,9 @@ def _pool_candidate_ipv4_cidrs(pool: IpPool) -> list[str]:
 _ON_DEMAND_HOST_SCAN_CAP = 4096
 
 
-def _allocate_ipv4_on_demand(db: Session, pool: IpPool) -> IPv4Address | None:
+def _allocate_ipv4_on_demand(
+    db: Session, pool: IpPool, subscription_id=None
+) -> IPv4Address | None:
     """Create-on-demand fallback: the lowest-numbered safe, free IPv4 host in the
     pool, materialized as an ``IPv4Address`` row.
 
@@ -368,6 +424,12 @@ def _allocate_ipv4_on_demand(db: Session, pool: IpPool) -> IPv4Address | None:
 
     allow_network_broadcast = _pool_allows_network_broadcast(pool)
     route_nets = _active_additional_route_networks(db)
+    taken_by_sub, taken_by_session = _ipv4_in_use_elsewhere_clauses(subscription_id)
+    in_use_elsewhere = {
+        str(v).strip()
+        for v in (*db.scalars(taken_by_sub).all(), *db.scalars(taken_by_session).all())
+        if v
+    }
 
     for cidr in _pool_candidate_ipv4_cidrs(pool):
         try:
@@ -386,6 +448,8 @@ def _allocate_ipv4_on_demand(db: Session, pool: IpPool) -> IPv4Address | None:
                 break
             if any(host in net for net in route_nets):
                 continue  # routed block — owned via Framed-Route, not assignable
+            if str(host) in in_use_elsewhere:
+                continue  # served column / live session of another service
             host_strs.append(str(host))
             if len(host_strs) >= _ON_DEMAND_HOST_SCAN_CAP:
                 break
@@ -444,17 +508,47 @@ def _allocate_ipv4_on_demand(db: Session, pool: IpPool) -> IPv4Address | None:
     return None
 
 
+def _exact_assignment_scope(db: Session, subscription: Subscription):
+    """Which assignments this subscription may adopt.
+
+    Exactly its own. A legacy row with no ``subscription_id`` is adoptable only
+    when the subscriber has no other live service; otherwise a new service
+    copied a sibling's IP (a real collision).
+    """
+    sibling = db.scalar(
+        select(Subscription.id)
+        .where(
+            Subscription.subscriber_id == subscription.subscriber_id,
+            Subscription.id != subscription.id,
+            Subscription.status.notin_(_TERMINAL_SUBSCRIPTION_STATUSES),
+        )
+        .limit(1)
+    )
+    if sibling is not None:
+        return IPAssignment.subscription_id == subscription.id
+    return and_(
+        IPAssignment.subscriber_id == subscription.subscriber_id,
+        or_(
+            IPAssignment.subscription_id == subscription.id,
+            IPAssignment.subscription_id.is_(None),
+        ),
+    )
+
+
 def _ensure_ip_assignment_for_version(
     db: Session,
     subscription: Subscription,
     ip_version: IPVersion,
     context: dict,
 ) -> tuple[IPAssignment | None, IPv4Address | IPv6Address | None]:
+    scope = _exact_assignment_scope(db, subscription)
+    exact_first = case((IPAssignment.subscription_id == subscription.id, 0), else_=1)
     assignment = (
         db.query(IPAssignment)
-        .filter(IPAssignment.subscriber_id == subscription.subscriber_id)
+        .filter(scope)
         .filter(IPAssignment.ip_version == ip_version)
         .filter(IPAssignment.is_active.is_(True))
+        .order_by(exact_first, IPAssignment.id)
         .first()
     )
     # If no active assignment, check for an inactive one (e.g. from suspension)
@@ -462,10 +556,10 @@ def _ensure_ip_assignment_for_version(
     if not assignment:
         inactive_assignment = (
             db.query(IPAssignment)
-            .filter(IPAssignment.subscriber_id == subscription.subscriber_id)
+            .filter(scope)
             .filter(IPAssignment.ip_version == ip_version)
             .filter(IPAssignment.is_active.is_(False))
-            .order_by(IPAssignment.updated_at.desc())
+            .order_by(exact_first, IPAssignment.updated_at.desc())
             .first()
         )
         if inactive_assignment:
@@ -474,8 +568,11 @@ def _ensure_ip_assignment_for_version(
                 if ip_version == IPVersion.ipv4
                 else inactive_assignment.ipv6_address
             )
-            if ip_version == IPVersion.ipv4 and not _reactivation_address_is_valid(
-                db, candidate_addr
+            if ip_version == IPVersion.ipv4 and (
+                not _reactivation_address_is_valid(db, candidate_addr)
+                or _ipv4_held_by_other_live_service(
+                    db, subscription.id, candidate_addr.address
+                )
             ):
                 # Address changed role since release — don't resurrect onto it;
                 # fall through to a fresh allocation below.
@@ -555,10 +652,32 @@ def _ensure_ip_assignment_for_version(
                 status_code=400,
                 detail=f"{version_key} address override does not match address_id.",
             )
+        if ip_version == IPVersion.ipv4 and _ipv4_held_by_other_live_service(
+            db, subscription.id, manual_value
+        ):
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    f"{version_key} address is held by another live service "
+                    "(served address or live session)."
+                ),
+            )
         if not address:
             address = _get_or_create_address_by_value(
                 db, ip_version, manual_value, pool
             )
+    elif (
+        address is not None
+        and ip_version == IPVersion.ipv4
+        and _ipv4_held_by_other_live_service(db, subscription.id, address.address)
+    ):
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                f"{version_key} address is held by another live service "
+                "(served address or live session)."
+            ),
+        )
 
     if not address:
         if not pool:
@@ -566,12 +685,16 @@ def _ensure_ip_assignment_for_version(
                 status_code=400,
                 detail=f"No active {version_key} pool available for assignment.",
             )
-        address = _find_available_address(db, ip_version, str(pool.id))
+        address = _find_available_address(
+            db, ip_version, str(pool.id), subscription_id=subscription.id
+        )
         if not address and ip_version == IPVersion.ipv4:
             # No materialized free row — create-on-demand the lowest free host
             # from the pool's blocks/CIDR (closes the display/allocate gap that
             # leaves "free" pools unable to assign).
-            address = _allocate_ipv4_on_demand(db, pool)
+            address = _allocate_ipv4_on_demand(
+                db, pool, subscription_id=subscription.id
+            )
         if not address:
             raise HTTPException(
                 status_code=400,

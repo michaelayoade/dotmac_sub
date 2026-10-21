@@ -145,7 +145,10 @@ def resolve_repair_context(
 
 def _locked_subscriber(db: Session, subscriber_id: UUID) -> Subscriber:
     subscriber = db.scalar(
-        select(Subscriber).where(Subscriber.id == subscriber_id).with_for_update()
+        select(Subscriber)
+        .where(Subscriber.id == subscriber_id)
+        .with_for_update()
+        .execution_options(populate_existing=True)
     )
     if subscriber is None:
         raise _error("subscriber_not_found", "Customer account was not found.")
@@ -203,12 +206,16 @@ def _bind_existing(
 ) -> SubscriberPartyBindingRepairOutcome:
     actor_id = _actor_id(command.context)
     reason = _review_reason(command.binding_reason)
+    subscriber = _locked_subscriber(db, command.subscriber_id)
     party = db.scalar(
-        select(Party).where(Party.id == command.party_id).with_for_update()
+        select(Party)
+        .where(Party.id == command.party_id)
+        .with_for_update()
+        .execution_options(populate_existing=True)
     )
     if party is None:
         raise _error("party_binding_refused", "The reviewed Party is unavailable.")
-    subscriber = _locked_subscriber(db, command.subscriber_id)
+
     replayed = subscriber.party_id is not None
     if replayed and (
         subscriber.party_id != party.id

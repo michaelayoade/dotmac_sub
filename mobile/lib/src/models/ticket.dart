@@ -9,6 +9,7 @@ class TicketAttachment {
     this.url,
     this.contentType,
     this.size,
+    this.storedFileId,
   });
 
   final String id;
@@ -16,17 +17,23 @@ class TicketAttachment {
   final String? url;
   final String? contentType;
   final int? size;
+  final String? storedFileId;
 
   bool get isImage => (contentType ?? '').startsWith('image/');
   bool get isPdf => (contentType ?? '').contains('pdf');
 
   factory TicketAttachment.fromJson(Map<String, dynamic> json) =>
       TicketAttachment(
-        id: json['id'].toString(),
-        filename: (json['filename'] ?? json['name'] ?? 'attachment').toString(),
+        id: (json['stored_file_id'] ?? json['id'] ?? '').toString(),
+        storedFileId: json['stored_file_id']?.toString(),
+        filename: (json['file_name'] ??
+                json['filename'] ??
+                json['name'] ??
+                'attachment')
+            .toString(),
         url: (json['url'] ?? json['download_url'])?.toString(),
         contentType: (json['content_type'] ?? json['mime_type'])?.toString(),
-        size: (json['size'] as num?)?.toInt(),
+        size: ((json['file_size'] ?? json['size']) as num?)?.toInt(),
       );
 }
 

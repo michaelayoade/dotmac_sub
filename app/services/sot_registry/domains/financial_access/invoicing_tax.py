@@ -21,6 +21,241 @@ from app.services.sot_manifest import (
 
 SERVICES: tuple[SOTService, ...] = (
     SOTService(
+        name="financial.invoices.opening_export",
+        module="app.services.billing.opening_export",
+        implementation_modules=("app.services.billing.opening_export_contracts",),
+        owns=("complete billing opening evidence census",),
+        depends_on=(
+            "financial.invoices",
+            "financial.payments",
+            "financial.credit_notes",
+            "financial.ledger",
+            "financial.customer_subledger",
+            "customer.accounts",
+        ),
+        notes="Read-only invoice-domain evidence; incumbent owners retain every mutation and authority decision. V2 separately captures unqualified cash receipts. V3 adds current documentary/tax observations with explicit unavailable original-document and discharge/replay evidence; V1/V2 output remains unchanged. No import or activation command.",
+        contract=ServiceContract(
+            concerns=(
+                ConcernContract(
+                    name="complete billing opening evidence census",
+                    role=OwnerRole.RESOLVER,
+                    input_names=(
+                        "current financial source population",
+                        "canonical invoice settlement",
+                        "bounded immutable position evidence",
+                        "declared capture provenance",
+                    ),
+                ),
+            ),
+            authoritative_inputs=(
+                AuthorityInput(
+                    name="current financial source population",
+                    owner="financial.invoices",
+                    kind=AuthorityKind.OBSERVATION,
+                    source="All subscriber, invoice/line, payment/refund/reversal/allocation, credit/application, ledger, opening/funding baseline and posting/effect rows in one caller-owned current snapshot; no creation window or subscription join. Explicit V2 additionally retains typed payment settlement/provider-event, safe inbox consequence-ID metadata, proof/correction and topup populations as unqualified cash evidence. Explicit V3 additionally observes current invoice documentary columns and persisted line tax snapshots; unavailable original-document and historical-discharge replay evidence remains explicit per invoice, never inferred from current party, tax, settings or PDF metadata.",
+                ),
+                AuthorityInput(
+                    name="canonical invoice settlement",
+                    owner="financial.invoices",
+                    kind=AuthorityKind.DERIVED_PROJECTION,
+                    source="Existing resolve_invoice_settlement_amounts including proportional refunds, credit applications and opening consumption; no second resolver.",
+                ),
+                AuthorityInput(
+                    name="bounded immutable position evidence",
+                    owner="financial.customer_subledger",
+                    kind=AuthorityKind.DERIVED_PROJECTION,
+                    source="Existing resolve_position_evidence_at bounded by economic and recorded time; effective durable authority cutover required; shadow never promoted.",
+                ),
+                AuthorityInput(
+                    name="declared capture provenance",
+                    owner="financial.invoices.opening_export",
+                    kind=AuthorityKind.CONTROL_INPUT,
+                    source="Caller-declared installation UUID, repository SHA, cutoff, population version and precision evidence; declarations are not authenticated installation or source proof. Actual schema heads/snapshot/capture instant come from PostgreSQL.",
+                ),
+            ),
+            transaction=TransactionContract(
+                mode=TransactionMode.READ_ONLY,
+                boundary="Caller supplies clean PostgreSQL READ ONLY REPEATABLE READ/SERIALIZABLE transaction; no begin, commit, rollback, savepoint or flush; autoflush restored.",
+                locking="No write locks. Snapshot captures current mutable rows; timestamps cannot reconstruct historical values.",
+                idempotency="No persistence. Canonically ordered evidence produces a content fingerprint excluding capture clock/snapshot label.",
+                retries="Caller retries entire read snapshot on failure; never partial capture.",
+            ),
+            errors=ErrorContract(
+                domain_codes=(
+                    "financial.invoices.opening_export.invalid_query",
+                    "financial.invoices.opening_export.snapshot_required",
+                    "financial.invoices.opening_export.schema_evidence_missing",
+                    "financial.invoices.opening_export.nonfinite_source",
+                ),
+                mapping_owner="future source evidence adapter",
+                fail_closed_on=(
+                    "unsupported or dirty caller snapshot",
+                    "missing schema evidence",
+                    "unproven authority or unsupported source mapping",
+                ),
+            ),
+            migration=MigrationContract(
+                state=AuthorityMigrationState.NATIVE,
+                new_owner="financial.invoices.opening_export",
+                verification="Hosted census completeness, canonical refund, exact controls, snapshot and no-write tests.",
+                cutover_gate="Evidence only; no source authority switch, export operation or Starter import command is authorized.",
+                fallback_retirement="No parallel settlement or lane resolver introduced.",
+            ),
+            steward="billing operations",
+            design_refs=("docs/designs/BILLING_OPENING_EVIDENCE_CENSUS.md",),
+            test_refs=(
+                "tests/test_billing_opening_export.py",
+                "tests/integration/test_billing_opening_export.py",
+                "tests/architecture/test_billing_opening_export_boundary.py",
+            ),
+        ),
+    ),
+    SOTService(
+        name="financial.billing_numbering_readiness",
+        module="app.services.billing_numbering_readiness",
+        owns=(
+            "billing numbering complete-population seed readiness",
+            "invoice numbering disjoint-format candidate proof",
+        ),
+        depends_on=(
+            "control.settings_spec",
+            "financial.invoices",
+            "financial.credit_notes",
+        ),
+        notes=(
+            "Read-only census and digest-bound seed proposal; incumbent writers remain authoritative. "
+            "V2 companion module app.services.billing_numbering_activation_proof is the same "
+            "read-only owner; candidate proof never grants activation."
+        ),
+        contract=ServiceContract(
+            concerns=(
+                ConcernContract(
+                    name="billing numbering complete-population seed readiness",
+                    role=OwnerRole.RESOLVER,
+                    input_names=(
+                        "effective billing numbering settings",
+                        "complete invoice number population",
+                        "complete credit-note number population",
+                        "legacy and module sequence state",
+                    ),
+                ),
+                ConcernContract(
+                    name="invoice numbering disjoint-format candidate proof",
+                    role=OwnerRole.RESOLVER,
+                    input_names=(
+                        "effective billing numbering settings",
+                        "complete invoice number population",
+                        "legacy and module sequence state",
+                        "explicit invoice numbering format proposal",
+                        "observed released invoice numbering preview",
+                    ),
+                ),
+            ),
+            authoritative_inputs=(
+                AuthorityInput(
+                    name="effective billing numbering settings",
+                    owner="control.settings_spec",
+                    kind=AuthorityKind.CONTROL_INPUT,
+                    source="canonical invoice and credit-note prefix, padding and start settings",
+                ),
+                AuthorityInput(
+                    name="complete invoice number population",
+                    owner="financial.invoices",
+                    kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                    source="all Invoice identifiers and invoice_number values, regardless of lifecycle",
+                ),
+                AuthorityInput(
+                    name="complete credit-note number population",
+                    owner="financial.credit_notes",
+                    kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                    source="all CreditNote identifiers and credit_number values, regardless of lifecycle",
+                ),
+                AuthorityInput(
+                    name="legacy and module sequence state",
+                    owner="financial.billing_numbering_readiness",
+                    kind=AuthorityKind.OBSERVATION,
+                    source="snapshot observation only: incumbent app.services.numbering owns DocumentSequence writes; released dotmac_numbering owns NumberSeries, SeriesCounter and AllocationReceipt storage; census owns no allocation authority",
+                ),
+                AuthorityInput(
+                    name="explicit invoice numbering format proposal",
+                    owner="financial.billing_numbering_readiness",
+                    kind=AuthorityKind.CONTROL_INPUT,
+                    source=(
+                        "Explicit typed caller proposal inspected by app.services.billing_numbering_activation_proof; "
+                        "no approved target policy, installed configuration, seed permission or activation authority "
+                        "is inferred from its values."
+                    ),
+                ),
+                AuthorityInput(
+                    name="observed released invoice numbering preview",
+                    owner="financial.billing_numbering_readiness",
+                    kind=AuthorityKind.OBSERVATION,
+                    source=(
+                        "Snapshot read through released dotmac_numbering.preview for exact operator scope, invoice "
+                        "series and reference date; actual NumberSeries/SeriesCounter configuration is observed "
+                        "separately and must match proposal, with an explicit seeded counter; fallback preview "
+                        "without a counter is not readiness."
+                    ),
+                ),
+            ),
+            transaction=TransactionContract(
+                mode=TransactionMode.READ_ONLY,
+                boundary="Caller owns a read-only repeatable snapshot and session lifecycle; owner never completes a transaction.",
+                locking=(
+                    "No locks or writes. Future seed command must revalidate the complete digest under incumbent-writer exclusion. "
+                    "V2 preview takes no locks and cannot attest writer drain or exclusion."
+                ),
+                idempotency=(
+                    "No idempotency record. Same ordered population, configuration and counters yield the same versioned digest. "
+                    "V2 additionally binds the explicit proposal, complete receipt-key stream and actual public preview; "
+                    "it writes no replay ledger."
+                ),
+                retries="Retry the entire snapshot after transient read failure; incomplete or incompatible evidence cannot admit a seed.",
+            ),
+            errors=ErrorContract(
+                domain_codes=(
+                    "financial.billing_numbering_readiness.unsupported_configuration",
+                    "financial.billing_numbering_readiness.incomplete_population",
+                    "financial.billing_numbering_readiness.unsafe_snapshot",
+                ),
+                mapping_owner="standalone billing numbering readiness CLI",
+                fail_closed_on=(
+                    "incomplete census",
+                    "unsupported configuration or exhausted counter",
+                    "incompatible module state",
+                    "unproved grammar disjointness or historical target collision, including legacy OTHER values",
+                    "nonempty target receipt history awaiting separate reconciliation",
+                    "missing or mismatched target configuration, seeded counter or preview",
+                ),
+            ),
+            migration=MigrationContract(
+                state=AuthorityMigrationState.NATIVE,
+                new_owner="financial.billing_numbering_readiness",
+                verification="Full-population census, formatter round-trip, immutable digest, PostgreSQL snapshot and architecture canaries.",
+                cutover_gate=(
+                    "Native read-only resolver only. Future writer adoption has a separate contract and requires fresh digest "
+                    "and stable document UUID/date inputs. V2 candidate validity is not activation readiness: approved target "
+                    "grammar, retired incumbent setting writes, writer drain, accepted inverse and released Kernel bridge "
+                    "remain separate mandatory gates."
+                ),
+                fallback_retirement="Incumbent runtime paths remain unchanged until the separate authorized numbering cutover.",
+            ),
+            steward="billing operations",
+            design_refs=(
+                "docs/designs/BILLING_NUMBERING_READINESS.md",
+                "docs/designs/BILLING_NUMBERING_ACTIVATION_PROOF.md",
+            ),
+            test_refs=(
+                "tests/test_billing_numbering_readiness.py",
+                "tests/integration/test_billing_numbering_readiness.py",
+                "tests/architecture/test_billing_numbering_readiness_boundary.py",
+                "tests/test_billing_numbering_activation_proof.py",
+                "tests/integration/test_billing_numbering_activation_proof.py",
+                "tests/architecture/test_billing_numbering_activation_proof_boundary.py",
+            ),
+        ),
+    ),
+    SOTService(
         name="financial.payment_gateway_finance",
         module="app.services.payment_gateway_finance",
         owns=(
@@ -248,7 +483,233 @@ SERVICES: tuple[SOTService, ...] = (
             "error financial.payments.invoice_application_rejected. Composing "
             "owners can retain captured money while rolling back rejected "
             "invoice consequences in an owner-managed savepoint; infrastructure "
-            "errors propagate for whole-command retry."
+            "errors propagate for whole-command retry. Existing historical "
+            "service invoice markers retain historical-only settlement and "
+            "refund/reversal semantics after the #3605 creation workflows are "
+            "retired; see docs/designs/REVERT_3605_BILLING.md and "
+            "tests/test_retired_manual_service_invoicing.py."
+        ),
+    ),
+    SOTService(
+        name="financial.legacy_over_allocation_correction",
+        module="app.services.billing.legacy_over_allocation_correction",
+        owns=("reviewed legacy payment over-allocation return to account credit",),
+        depends_on=(
+            "auth.permission_gate",
+            "financial.invoices",
+            "financial.ledger",
+            "financial.payments",
+            "observability.audit_log",
+        ),
+        notes=(
+            "The reviewed reversal in financial.payments refuses a Splynx-era "
+            "allocation (no paired ledger evidence) and is limited to void "
+            "invoices. This owner returns an over-allocation on a PAID invoice "
+            "to account credit, and only for legacy evidence: an active "
+            "allocation with no ledger links and no preview or idempotency "
+            "evidence, on an unrefunded, unreversed, settlement-less customer "
+            "payment whose only active allocation it is, whose whole amount is "
+            "already one invoice-free ledger credit with no consumption debit, "
+            "and where the invoice stays exactly paid by its remaining "
+            "allocations and credit notes. Because the ledger already holds "
+            "that credit, the correct posting is none; a reversal credit would "
+            "double-count it. The read-only preview restates and proves every "
+            "amount; confirmation rechecks under account, invoice, payment, "
+            "and allocation locks, requires the identical fingerprint, "
+            "deactivates the allocation through the payment owner's flush-only "
+            "participant, and stages audit and a domain event. The invoice "
+            "status and balance, the payment, and every ledger entry never "
+            "change."
+        ),
+        contract=ServiceContract(
+            concerns=(
+                ConcernContract(
+                    name="reviewed legacy payment over-allocation return to account credit",
+                    role=OwnerRole.RECONCILER,
+                    input_names=(
+                        "authenticated legacy over-allocation return command",
+                        "legacy payment allocation without ledger evidence",
+                        "fully paid invoice settlement",
+                        "payment account-credit ledger evidence",
+                    ),
+                    canonical_writer="financial.legacy_over_allocation_correction",
+                ),
+            ),
+            authoritative_inputs=(
+                AuthorityInput(
+                    name="authenticated legacy over-allocation return command",
+                    owner="auth.permission_gate",
+                    kind=AuthorityKind.CONTROL_INPUT,
+                    source=(
+                        "billing:payment:update grant for an active staff "
+                        "principal, plus the restated allocation, invoice total "
+                        "and remaining settlement amounts, reason, evidence "
+                        "reference and SHA-256, preview fingerprint, and "
+                        "idempotency key"
+                    ),
+                ),
+                AuthorityInput(
+                    name="legacy payment allocation without ledger evidence",
+                    owner="financial.payments",
+                    kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                    source=(
+                        "one active PaymentAllocation with no ledger, "
+                        "consumption, preview, idempotency, or reversal evidence "
+                        "on an active succeeded payment that has no settlement, "
+                        "refund, reversal, or purchase reservation"
+                    ),
+                ),
+                AuthorityInput(
+                    name="fully paid invoice settlement",
+                    owner="financial.invoices",
+                    kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                    source=(
+                        "one active non-proforma PAID invoice with zero balance "
+                        "whose active allocations plus applied credit notes "
+                        "exceed its total by exactly the allocation"
+                    ),
+                ),
+                AuthorityInput(
+                    name="payment account-credit ledger evidence",
+                    owner="financial.ledger",
+                    kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                    source=(
+                        "exactly one active invoice-free payment credit equal to "
+                        "the payment amount and no account-credit consumption "
+                        "debit for the payment"
+                    ),
+                ),
+            ),
+            transaction=TransactionContract(
+                mode=TransactionMode.OWNER_MANAGED,
+                boundary=(
+                    "The return enters execute_owner_command once on a "
+                    "transaction-free session. The allocation deactivation, the "
+                    "audit row, and the payment_allocation.over_allocation_returned "
+                    "event commit or roll back together."
+                ),
+                locking=(
+                    "Lock the account, invoice, payment, and every allocation "
+                    "of the invoice FOR UPDATE in that order, expire, and "
+                    "recompute the preview before comparing its fingerprint; "
+                    "the payment participant re-locks and re-verifies the "
+                    "allocation."
+                ),
+                idempotency=(
+                    "The correction identity is uuid5 of the business "
+                    "idempotency key (same key and proposal replays the stored "
+                    "outcome; a different proposal conflicts). The allocation's "
+                    "reversal idempotency key is unique, and a returned "
+                    "allocation is inactive, so a new key is refused."
+                ),
+                retries=(
+                    "Retry with the same key. Changed evidence returns "
+                    "stale_preview and needs a new preview."
+                ),
+            ),
+            errors=ErrorContract(
+                domain_codes=(
+                    *owner_command_boundary_error_codes(
+                        "financial.legacy_over_allocation_correction"
+                    ),
+                    "financial.legacy_over_allocation_correction.allocation_evidence_incomplete",
+                    "financial.legacy_over_allocation_correction.allocation_not_found",
+                    "financial.legacy_over_allocation_correction.idempotency_conflict",
+                    "financial.legacy_over_allocation_correction.invalid_actor",
+                    "financial.legacy_over_allocation_correction.invalid_evidence",
+                    "financial.legacy_over_allocation_correction.invalid_reason",
+                    "financial.legacy_over_allocation_correction.missing_idempotency_key",
+                    "financial.legacy_over_allocation_correction.not_actionable",
+                    "financial.legacy_over_allocation_correction.participant_rejected",
+                    "financial.legacy_over_allocation_correction.permission_denied",
+                    "financial.legacy_over_allocation_correction.stale_preview",
+                ),
+                mapping_owner="legacy over-allocation return operator CLI",
+                retryable_codes=(),
+                fail_closed_on=(
+                    "an allocation with any ledger, native, or reversal evidence",
+                    "a payment with a settlement, refund, reversal, reservation, "
+                    "or another active allocation",
+                    "a payment whose whole amount is not one invoice-free ledger "
+                    "credit, or that has a consumption debit",
+                    "an invoice that is not paid or would not stay exactly paid",
+                    "an allocation that is not exactly the excess",
+                    "restated amounts that differ from the stored amounts",
+                    "a missing staff permission",
+                    "a stale preview fingerprint",
+                ),
+            ),
+            events=EventContract(
+                event_types=("payment_allocation.over_allocation_returned",),
+                schema_version=1,
+                delivery_owner="events.dispatcher",
+                compatibility=(
+                    "Version 1 carries the correction id, allocation, payment, "
+                    "invoice, account, amount, currency, settlement before and "
+                    "after, the account-credit ledger entry, empty ledger "
+                    "postings, zero economic delta, fingerprint, reason, "
+                    "evidence reference and SHA-256, and the staff identity. "
+                    "Additions are backward compatible."
+                ),
+                replay=(
+                    "Consumers deduplicate by event id; replaying the command "
+                    "returns the stored outcome and writes nothing."
+                ),
+            ),
+            projections=(
+                ProjectionContract(
+                    name="reviewed legacy payment allocation settlement",
+                    input_names=(
+                        "authenticated legacy over-allocation return command",
+                        "legacy payment allocation without ledger evidence",
+                        "fully paid invoice settlement",
+                    ),
+                    writer="financial.legacy_over_allocation_correction",
+                    freshness=(
+                        "Computed from the current database snapshot at preview "
+                        "and again under lock at confirmation."
+                    ),
+                    stale_behavior=(
+                        "A changed fingerprint rejects the confirmation and "
+                        "requires a new preview."
+                    ),
+                    drift_signal=(
+                        "Paid invoices whose active allocations plus applied "
+                        "credit notes exceed their total."
+                    ),
+                    rebuild_operation=(
+                        "preview_legacy_over_allocation_return deterministically "
+                        "re-derives the proposal's before/after and fingerprint."
+                    ),
+                    repair_owner="financial.legacy_over_allocation_correction",
+                ),
+            ),
+            migration=MigrationContract(
+                state=AuthorityMigrationState.NATIVE,
+                old_owner=None,
+                new_owner="financial.legacy_over_allocation_correction",
+                verification=(
+                    "Preview blocker, exact-amount, ledger-evidence, stale, "
+                    "replay, and PostgreSQL concurrency tests."
+                ),
+                cutover_gate=(
+                    "The reviewed payment-allocation reversal still refuses "
+                    "legacy allocations; this owner is the only route for them."
+                ),
+                fallback_retirement=(
+                    "Manual SQL deactivation of legacy over-allocations is retired."
+                ),
+            ),
+            steward="billing and finance operations",
+            design_refs=(
+                "docs/runbooks/LEGACY_OVER_ALLOCATION_RETURN.md",
+                "docs/SOT_RELATIONSHIP_MAP.md",
+            ),
+            test_refs=(
+                "tests/test_legacy_over_allocation_correction.py",
+                "tests/integration/test_legacy_over_allocation_correction_concurrency.py",
+                "tests/architecture/test_legacy_over_allocation_correction_boundary.py",
+            ),
         ),
     ),
     SOTService(
@@ -545,9 +1006,14 @@ SERVICES: tuple[SOTService, ...] = (
                 ),
                 AuthorityInput(
                     name="canonical invoice numbering policy",
-                    owner="control.settings_spec",
+                    owner="financial.invoices",
                     kind=AuthorityKind.CONTROL_INPUT,
-                    source="billing invoice number settings and sequence",
+                    source=(
+                        "invoice UUID, persisted document reference date and allocation "
+                        "purpose passed to released dotmac_numbering; configured "
+                        "operator-tenant invoice series and seeded counter are "
+                        "required, and incumbent settings are compatibility evidence"
+                    ),
                 ),
             ),
             transaction=TransactionContract(
@@ -819,11 +1285,13 @@ SERVICES: tuple[SOTService, ...] = (
             steward="billing operations",
             design_refs=(
                 "docs/designs/ADVANCE_RENEWAL_INVOICING.md",
+                "docs/designs/REVERT_3605_BILLING.md",
                 "docs/SOT_RELATIONSHIP_MAP.md",
             ),
             test_refs=(
                 "tests/test_advance_renewal_invoicing.py",
                 "tests/architecture/test_advance_renewal_invoicing_boundary.py",
+                "tests/architecture/test_retired_service_invoicing_boundary.py",
             ),
         ),
     ),
@@ -864,7 +1332,21 @@ SERVICES: tuple[SOTService, ...] = (
             "historical observation state: it remains reportable but cannot "
             "drive overdue or Collections. Legacy NULL provenance is a bounded "
             "migration state measured by billing health, not a valid new "
-            "issuance outcome."
+            "issuance outcome. Existing #3605 controlled-draft seals retain "
+            "issue-time validation and ordinary-edit refusal; the new creation "
+            "and idempotency participants are retired. Compatibility evidence "
+            "is tests/test_retired_manual_service_invoicing.py and "
+            "docs/designs/REVERT_3605_BILLING.md. The isolated numbering "
+            "adoption candidate routes invoice construction and proforma "
+            "conversion through one flush-only participant using released "
+            "dotmac_numbering. UUID, persisted UTC document date and allocation "
+            "purpose bind each request; supplied labels and existing-document "
+            "adoption spend no allocation. No runtime selector, automatic "
+            "series configuration or counter seed exists. This candidate is "
+            "not approved for deployment: complete census, preview parity, "
+            "incumbent-writer exclusion and an accepted inverse remain "
+            "prerequisites. Credit-note numbering stays with its separate "
+            "incumbent owner."
         ),
     ),
     SOTService(
@@ -3109,6 +3591,1111 @@ SERVICES: tuple[SOTService, ...] = (
             test_refs=(
                 "tests/test_billing_mode_transitions.py",
                 "tests/architecture/test_billing_profile_boundary.py",
+            ),
+        ),
+    ),
+    SOTService(
+        name="financial.starter_issuance",
+        module="app.services.billing.starter_issuance",
+        implementation_modules=("app.services.web_billing_invoices",),
+        owns=(
+            "Starter-issued admin invoice mirror and structural link",
+            "Starter issuance eligibility decision for admin drafts",
+            "Starter-issued multi-line admin invoice line links",
+            "Starter-issued scheduled-cycle invoice mirror",
+        ),
+        depends_on=(
+            "control.settings_spec",
+            "customer.accounts",
+            "customer.branding",
+            "financial.account_credit_applications",
+            "financial.billing_automation",
+            "financial.collection_accounts",
+            "financial.invoices",
+        ),
+        notes=(
+            "Slice 6a thin-client lane (ADR 0031): eligible admin drafts are "
+            "issued by pinned dotmac-billing as sole ledger writer. Sub "
+            "retains only the invoice-row mirror (number, status, issued_at), "
+            "the structural StarterInvoiceLink, the audit row, and the "
+            "announce event. app.services.web_billing_invoices is an "
+            "implementation module because its only direct persistence "
+            "mutation is committing this lane's transaction; its remaining "
+            "flows delegate to incumbent owners. The scheduled-cycle lane "
+            "reuses the same core as a caller: app.services.billing_automation stages "
+            "cycle drafts, appends lines, and at end-of-run issues eligible "
+            "drafts (single-subscription homogeneous line sets with no "
+            "spendable account credit) through this service inside the "
+            "cycle transaction; ineligible drafts keep legacy system "
+            "issuance, and Starter-linked invoices are excluded from both "
+            "legacy line appends and legacy account-credit settlement."
+        ),
+        contract=ServiceContract(
+            concerns=(
+                ConcernContract(
+                    name="Starter-issued admin invoice mirror and structural link",
+                    role=OwnerRole.COMMAND_WRITER,
+                    input_names=(
+                        "eligible admin draft invoice",
+                        "canonical Starter billing policies",
+                        "canonical seller legal identity",
+                        "canonical subscriber billing identity",
+                        "canonical collection bank account",
+                    ),
+                    canonical_writer="financial.starter_issuance",
+                ),
+                ConcernContract(
+                    name="Starter issuance eligibility decision for admin drafts",
+                    role=OwnerRole.POLICY,
+                    input_names=(
+                        "eligible admin draft invoice",
+                        "canonical Starter billing policies",
+                        "canonical seller legal identity",
+                        "canonical subscriber billing identity",
+                        "canonical collection bank account",
+                    ),
+                ),
+                ConcernContract(
+                    name="Starter-issued multi-line admin invoice line links",
+                    role=OwnerRole.COMMAND_WRITER,
+                    input_names=(
+                        "eligible admin draft invoice",
+                        "canonical Starter billing policies",
+                        "canonical seller legal identity",
+                        "canonical subscriber billing identity",
+                        "canonical collection bank account",
+                    ),
+                    canonical_writer="financial.starter_issuance",
+                ),
+                ConcernContract(
+                    name="Starter-issued scheduled-cycle invoice mirror",
+                    role=OwnerRole.COMMAND_WRITER,
+                    input_names=(
+                        "eligible scheduled-cycle draft invoice",
+                        "canonical account-credit funding preview",
+                        "canonical Starter billing policies",
+                        "canonical seller legal identity",
+                        "canonical subscriber billing identity",
+                        "canonical collection bank account",
+                    ),
+                    canonical_writer="financial.starter_issuance",
+                ),
+            ),
+            authoritative_inputs=(
+                AuthorityInput(
+                    name="eligible admin draft invoice",
+                    owner="financial.invoices",
+                    kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                    source=(
+                        "draft invoice with reconciled homogeneous lines "
+                        "(one service exposure, per-line frozen tax "
+                        "snapshots whose derived taxes reconcile), due "
+                        "date, and postpaid subscriber billing mode"
+                    ),
+                ),
+                AuthorityInput(
+                    name="eligible scheduled-cycle draft invoice",
+                    owner="financial.billing_automation",
+                    kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                    source=(
+                        "cycle-staged draft with complete reconciled "
+                        "single-subscription homogeneous lines, frozen tax "
+                        "snapshots, verified due evidence, and a postpaid "
+                        "subscription and subscriber billing mode"
+                    ),
+                ),
+                AuthorityInput(
+                    name="canonical account-credit funding preview",
+                    owner="financial.account_credit_applications",
+                    kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                    source=(
+                        "write-free funding projection proving the account "
+                        "holds no spendable credit for this invoice, so no "
+                        "legacy credit application is bypassed"
+                    ),
+                ),
+                AuthorityInput(
+                    name="canonical Starter billing policies",
+                    owner="control.settings_spec",
+                    kind=AuthorityKind.CONTROL_INPUT,
+                    source=(
+                        "starter_* settings resolved through "
+                        "starter_policies (ADR 0031): account-ref template, "
+                        "series, tax policy, document profile, due terms"
+                    ),
+                ),
+                AuthorityInput(
+                    name="canonical seller legal identity",
+                    owner="customer.branding",
+                    kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                    source=(
+                        "resolved brand profile legal name and legal "
+                        "address for the issuing subscriber scope"
+                    ),
+                ),
+                AuthorityInput(
+                    name="canonical subscriber billing identity",
+                    owner="customer.accounts",
+                    kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                    source=(
+                        "subscriber legal/billing name and billing or "
+                        "contact postal address frozen into the Starter "
+                        "document party snapshot"
+                    ),
+                ),
+                AuthorityInput(
+                    name="canonical collection bank account",
+                    owner="financial.collection_accounts",
+                    kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                    source=(
+                        "active collection account for the invoice currency "
+                        "resolved as document payment instructions"
+                    ),
+                ),
+            ),
+            transaction=TransactionContract(
+                mode=TransactionMode.PARTICIPANT,
+                boundary=(
+                    "The caller owns the transaction: Starter obligation, "
+                    "document, numbering allocation, Sub mirror, link, "
+                    "audit row, and announce event commit or roll back "
+                    "together. A Starter refusal propagates and never "
+                    "falls back to the legacy writer for that draft."
+                ),
+                locking=(
+                    "No Sub-side row locks beyond the caller's invoice "
+                    "load; Starter billing and numbering apply their own "
+                    "writer fences inside the same transaction."
+                ),
+                idempotency=(
+                    "The obligation source fact and correlation derive "
+                    "from the Sub invoice identity, so a replay after "
+                    "rollback re-presents identical evidence; a committed "
+                    "issuance leaves the draft issued and ineligible."
+                ),
+                retries=(
+                    "Callers retry the whole issuance after rollback with "
+                    "the same draft; partial Starter writes never survive "
+                    "a failed attempt."
+                ),
+            ),
+            errors=ErrorContract(
+                domain_codes=(
+                    "financial.starter_issuance.amount_unrepresentable",
+                    "financial.starter_issuance.ineligible",
+                    "financial.starter_issuance.source_kind_undeclared",
+                    "financial.starter_issuance.starter_refused",
+                ),
+                mapping_owner="admin billing invoice adapters",
+                retryable_codes=(),
+                fail_closed_on=(
+                    "incomplete seller, customer, or bank document evidence",
+                    "unreconciled totals or missing frozen tax snapshot",
+                    "Starter billing refusal after eligibility was granted",
+                    "undeclared obligation source kind",
+                ),
+            ),
+            events=EventContract(
+                event_types=("invoice.sent",),
+                schema_version=1,
+                delivery_owner="events.dispatcher",
+                compatibility=(
+                    "Version 1 payload is identical to the legacy "
+                    "issue-with-announce event: invoice identity, number, "
+                    "total, due date, currency, and status transition."
+                ),
+                replay=(
+                    "Replay re-notifies from the committed mirror row; "
+                    "the Starter document remains the ledger authority."
+                ),
+            ),
+            migration=MigrationContract(
+                state=AuthorityMigrationState.CUTOVER_READY,
+                old_owner="financial.invoices native draft issuance",
+                new_owner="financial.starter_issuance",
+                verification=(
+                    "Eligibility unit tests and the migrated-PostgreSQL "
+                    "switch proof: eligible drafts carry Starter numbers "
+                    "and links with exact collectible position; "
+                    "ineligible drafts stay on the legacy writer."
+                ),
+                cutover_gate=(
+                    "ADR 0031 composable policies resolve from settings "
+                    "and the numbering series is seeded past the legacy "
+                    "maximum before production enablement."
+                ),
+                fallback_retirement=(
+                    "Eligibility narrows as lanes migrate; the legacy "
+                    "writer is deleted at the money-pack cutover, never "
+                    "used as a per-draft fallback after eligibility."
+                ),
+            ),
+            steward="billing operations",
+            design_refs=(
+                "docs/adr/0031-composable-starter-billing-policies.md",
+                "docs/SOT_RELATIONSHIP_MAP.md",
+            ),
+            test_refs=(
+                "tests/test_starter_issuance_eligibility.py",
+                "tests/integration/test_starter_issuance_switch_pg.py",
+                "tests/integration/test_starter_recurring_issuance_pg.py",
+                "tests/architecture/test_sot_manifest_contracts.py",
+            ),
+        ),
+    ),
+    SOTService(
+        name="financial.starter_settlement",
+        module="app.services.billing.starter_settlement",
+        owns=(
+            "Starter invoice settlement from confirmed provider cash",
+            "Starter-settled invoice balance and status mirror",
+        ),
+        depends_on=(
+            "control.settings_spec",
+            "financial.invoices",
+            "financial.payment_webhooks",
+            "financial.starter_issuance",
+        ),
+        notes=(
+            "Settlement back-half (ADR 0031, pay-then-record): the webhook "
+            "coordinator hands authenticated provider evidence for a "
+            "Starter-linked invoice to this lane instead of the legacy "
+            "provider-event money staging. dotmac-payments records the "
+            "confirmation, dotmac-billing accepts and allocates the cash, "
+            "and Sub mirrors balance/status from the Starter collectible "
+            "position. No legacy Payment is created and the legacy "
+            "TopupIntent projection is left to expire. The invoice.paid "
+            "email consequence stays legacy-coupled until its consumer "
+            "repoint; payment.received is emitted without a legacy "
+            "payment identity."
+        ),
+        contract=ServiceContract(
+            concerns=(
+                ConcernContract(
+                    name="Starter invoice settlement from confirmed provider cash",
+                    role=OwnerRole.COMMAND_WRITER,
+                    input_names=(
+                        "verified provider settlement evidence",
+                        "canonical Starter payments intent binding",
+                        "canonical Starter settlement policies",
+                        "Starter-issued invoice and structural link",
+                    ),
+                    canonical_writer="financial.starter_settlement",
+                ),
+                ConcernContract(
+                    name="Starter-settled invoice balance and status mirror",
+                    role=OwnerRole.COMMAND_WRITER,
+                    input_names=(
+                        "Starter-issued invoice and structural link",
+                        "canonical Starter collectible position",
+                    ),
+                    canonical_writer="financial.starter_settlement",
+                ),
+            ),
+            authoritative_inputs=(
+                AuthorityInput(
+                    name="verified provider settlement evidence",
+                    owner="external:payment_provider",
+                    kind=AuthorityKind.EXTERNAL_OBSERVATION,
+                    source=(
+                        "signature-verified webhook settlement normalized "
+                        "by the webhook coordinator: succeeded status, "
+                        "gross amount, currency, provider transaction "
+                        "identity, and paid instant"
+                    ),
+                ),
+                AuthorityInput(
+                    name="canonical Starter payments intent binding",
+                    owner="external:dotmac_payments",
+                    kind=AuthorityKind.EXTERNAL_OBSERVATION,
+                    source=(
+                        "persisted intent observation by checkout "
+                        "reference: invoice-settlement purpose, invoice "
+                        "target, payer account, requested money"
+                    ),
+                ),
+                AuthorityInput(
+                    name="canonical Starter settlement policies",
+                    owner="control.settings_spec",
+                    kind=AuthorityKind.CONTROL_INPUT,
+                    source=(
+                        "starter_* settlement settings resolved through "
+                        "starter_policies (ADR 0031): source system and "
+                        "version, funding lane, presented and accepted "
+                        "confirmation evidence"
+                    ),
+                ),
+                AuthorityInput(
+                    name="Starter-issued invoice and structural link",
+                    owner="financial.starter_issuance",
+                    kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                    source=(
+                        "StarterInvoiceLink binding the Sub invoice to "
+                        "the Starter billing account, obligation, and "
+                        "document identities"
+                    ),
+                ),
+                AuthorityInput(
+                    name="canonical Starter collectible position",
+                    owner="external:dotmac_billing",
+                    kind=AuthorityKind.EXTERNAL_OBSERVATION,
+                    source=(
+                        "current receivable position read after allocation; "
+                        "its collectible amount is the only balance the "
+                        "Sub mirror may show"
+                    ),
+                ),
+            ),
+            transaction=TransactionContract(
+                mode=TransactionMode.PARTICIPANT,
+                boundary=(
+                    "The webhook owner command owns the transaction: "
+                    "payments confirmation, billing acceptance and "
+                    "allocation, Sub mirror, payment.received event, "
+                    "audit row, and inbox consequence commit or roll "
+                    "back together."
+                ),
+                locking=(
+                    "The claimed inbox receipt is locked by the caller; "
+                    "Starter payments and billing apply their own writer "
+                    "fences inside the same transaction."
+                ),
+                idempotency=(
+                    "The billing source settlement key is the payments "
+                    "confirmation identity, and a repeated provider "
+                    "external reference retains its original intent, "
+                    "amount, and source in payments; a processed receipt "
+                    "replays from its recorded consequence."
+                ),
+                retries=(
+                    "The webhook coordinator retries the whole claimed "
+                    "receipt after rollback; partial Starter writes "
+                    "never survive a failed attempt."
+                ),
+            ),
+            errors=ErrorContract(
+                domain_codes=(
+                    "financial.starter_settlement.amount_unrepresentable",
+                    "financial.starter_settlement.configuration_invalid",
+                    "financial.starter_settlement.intent_binding_mismatch",
+                    "financial.starter_settlement.intent_missing",
+                    "financial.starter_settlement.starter_refused",
+                ),
+                mapping_owner="payment webhook coordinator",
+                retryable_codes=(),
+                fail_closed_on=(
+                    "missing or mismatched Starter payments intent binding",
+                    "confirmed cash that does not match presented evidence",
+                    "presented evidence outside the accepted set",
+                    "Starter payments or billing refusal",
+                ),
+            ),
+            events=EventContract(
+                event_types=("payment.received",),
+                schema_version=1,
+                delivery_owner="events.dispatcher",
+                compatibility=(
+                    "Version 1 carries amount, currency, invoice "
+                    "identity, succeeded status, and the Starter "
+                    "confirmation/settlement identities; it deliberately "
+                    "omits the legacy payment identity, which existing "
+                    "handlers treat as optional."
+                ),
+                replay=(
+                    "Replay re-observes the payment for enforcement and "
+                    "arrangements; the Starter ledger remains the money "
+                    "authority and is never rewritten by replay."
+                ),
+            ),
+            migration=MigrationContract(
+                state=AuthorityMigrationState.CUTOVER_READY,
+                old_owner="financial.payment_webhooks legacy provider-event staging",
+                new_owner="financial.starter_settlement",
+                verification=(
+                    "Migrated-PostgreSQL proof: a Starter-issued invoice "
+                    "paid through the lane reaches zero collectible with "
+                    "a paid mirror and no legacy Payment row; an exact "
+                    "replay returns the same Starter identities and new "
+                    "cash against the discharged document is refused."
+                ),
+                cutover_gate=(
+                    "Only invoices carrying a StarterInvoiceLink take "
+                    "this lane; every other invoice keeps the legacy "
+                    "staging until its issuance lane migrates."
+                ),
+                fallback_retirement=(
+                    "The legacy provider-event money staging is deleted "
+                    "at the money-pack cutover; it is never used as a "
+                    "fallback for a Starter-linked invoice."
+                ),
+            ),
+            steward="billing operations",
+            design_refs=(
+                "docs/adr/0031-composable-starter-billing-policies.md",
+                "docs/SOT_RELATIONSHIP_MAP.md",
+            ),
+            test_refs=(
+                "tests/integration/test_starter_settlement_pg.py",
+                "tests/architecture/test_sot_manifest_contracts.py",
+            ),
+        ),
+    ),
+    SOTService(
+        name="financial.starter_credit_notes",
+        module="app.services.billing.starter_credit_notes",
+        owns=(
+            "Starter credit-note issuance against Starter invoices",
+            "Starter-issued credit note mirror and structural link",
+        ),
+        depends_on=(
+            "control.settings_spec",
+            "financial.credit_notes",
+            "financial.invoices",
+            "financial.starter_issuance",
+        ),
+        notes=(
+            "Credits lane (ADR 0031): a fully-applied credit against a "
+            "Starter-linked invoice is issued by pinned dotmac-billing as "
+            "sole ledger writer inside the legacy credit owner's "
+            "preview/confirm transaction. Sub retains the CreditNote "
+            "mirror (Starter document number, issued status, applied "
+            "total), the structural StarterCreditNoteLink, and the audit "
+            "row; no legacy funding or application ledger entries are "
+            "written, and legacy void/apply writers refuse Starter "
+            "credits. Partially applied or unlinked credits stay legacy "
+            "in this slice."
+        ),
+        contract=ServiceContract(
+            concerns=(
+                ConcernContract(
+                    name="Starter credit-note issuance against Starter invoices",
+                    role=OwnerRole.COMMAND_WRITER,
+                    input_names=(
+                        "confirmed credit issue preview",
+                        "Starter-issued invoice and structural link",
+                        "canonical Starter billing policies",
+                        "canonical credit tax rate",
+                    ),
+                    canonical_writer="financial.starter_credit_notes",
+                ),
+                ConcernContract(
+                    name="Starter-issued credit note mirror and structural link",
+                    role=OwnerRole.COMMAND_WRITER,
+                    input_names=(
+                        "Starter-issued invoice and structural link",
+                        "canonical Starter collectible position",
+                    ),
+                    canonical_writer="financial.starter_credit_notes",
+                ),
+            ),
+            authoritative_inputs=(
+                AuthorityInput(
+                    name="confirmed credit issue preview",
+                    owner="financial.credit_notes",
+                    kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                    source=(
+                        "fingerprint-confirmed preview proving the credit "
+                        "applies in full to the named invoice at issue "
+                        "with reconciled totals"
+                    ),
+                ),
+                AuthorityInput(
+                    name="Starter-issued invoice and structural link",
+                    owner="financial.starter_issuance",
+                    kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                    source=(
+                        "StarterInvoiceLink binding the Sub invoice to "
+                        "the Starter billing account, obligation, and "
+                        "document identities"
+                    ),
+                ),
+                AuthorityInput(
+                    name="canonical Starter billing policies",
+                    owner="control.settings_spec",
+                    kind=AuthorityKind.CONTROL_INPUT,
+                    source=(
+                        "starter_* settings resolved through "
+                        "starter_policies (ADR 0031): credit series and "
+                        "profile, source-fact and correlation templates, "
+                        "tax policy, currency minor units"
+                    ),
+                ),
+                AuthorityInput(
+                    name="canonical credit tax rate",
+                    owner="financial.invoices",
+                    kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                    source=(
+                        "active TaxRate named by the confirmed credit "
+                        "payload; its code and rate form the exact "
+                        "Starter tax snapshot"
+                    ),
+                ),
+                AuthorityInput(
+                    name="canonical Starter collectible position",
+                    owner="external:dotmac_billing",
+                    kind=AuthorityKind.EXTERNAL_OBSERVATION,
+                    source=(
+                        "current receivable position read after credit "
+                        "issuance; its collectible amount is the only "
+                        "balance the Sub mirror may show"
+                    ),
+                ),
+            ),
+            transaction=TransactionContract(
+                mode=TransactionMode.PARTICIPANT,
+                boundary=(
+                    "The credit issue owner owns the transaction: "
+                    "Starter credit issuance, Sub credit-note and link "
+                    "mirrors, invoice balance/status mirror, audit row, "
+                    "and idempotency reservation commit or roll back "
+                    "together."
+                ),
+                locking=(
+                    "The account and invoice locks are held by the "
+                    "credit issue owner; Starter billing applies its "
+                    "own writer fences inside the same transaction."
+                ),
+                idempotency=(
+                    "The confirmed issue idempotency key is the "
+                    "correlation identity; an exact replay returns the "
+                    "recorded Starter credit identities without new "
+                    "postings."
+                ),
+                retries=(
+                    "The caller retries the whole confirmed issue after "
+                    "rollback; partial Starter writes never survive a "
+                    "failed attempt."
+                ),
+            ),
+            errors=ErrorContract(
+                domain_codes=(
+                    "financial.starter_credit_notes.amount_unrepresentable",
+                    "financial.starter_credit_notes.configuration_invalid",
+                    "financial.starter_credit_notes.position_unavailable",
+                    "financial.starter_credit_notes.starter_refused",
+                ),
+                mapping_owner="credit note issue owner",
+                retryable_codes=(),
+                fail_closed_on=(
+                    "credit that is not fully applied to a Starter-linked invoice",
+                    "manually numbered credit",
+                    "missing or inactive credit tax evidence",
+                    "Starter billing refusal",
+                ),
+            ),
+            events=EventContract(
+                event_types=("credit_note.issued", "credit_note.applied"),
+                schema_version=1,
+                delivery_owner="events.dispatcher",
+                compatibility=(
+                    "Version 1 keeps the legacy credit owner's issued "
+                    "and applied meanings; the Starter document number "
+                    "and identity ride on the mirror and structural "
+                    "link. Settlement of the credited invoice hands "
+                    "its consequence to the access owner through the "
+                    "existing settlement reconciliation path."
+                ),
+                replay=(
+                    "Replay re-observes the recorded credit identities; "
+                    "the Starter ledger is never rewritten by replay."
+                ),
+            ),
+            migration=MigrationContract(
+                state=AuthorityMigrationState.CUTOVER_READY,
+                old_owner="financial.credit_notes legacy funding writer",
+                new_owner="financial.starter_credit_notes",
+                verification=(
+                    "Migrated-PostgreSQL proof: a full credit against "
+                    "a Starter-issued invoice reaches zero collectible "
+                    "with a paid mirror, a StarterCreditNoteLink, and "
+                    "no legacy funding ledger entry."
+                ),
+                cutover_gate=(
+                    "Only fully-applied credits against Starter-linked "
+                    "invoices take this lane; every other credit keeps "
+                    "the legacy writer until its lane migrates."
+                ),
+                fallback_retirement=(
+                    "The legacy credit funding writer is deleted at "
+                    "the money-pack cutover; it is never used as a "
+                    "fallback for a Starter-linked invoice."
+                ),
+            ),
+            steward="billing operations",
+            design_refs=(
+                "docs/adr/0031-composable-starter-billing-policies.md",
+                "docs/SOT_RELATIONSHIP_MAP.md",
+            ),
+            test_refs=(
+                "tests/test_starter_credit_eligibility.py",
+                "tests/integration/test_starter_credit_notes_pg.py",
+                "tests/architecture/test_sot_manifest_contracts.py",
+            ),
+        ),
+    ),
+    SOTService(
+        name="financial.starter_positions",
+        module="app.services.billing.starter_positions",
+        owns=(
+            "Starter document fact and receivable position reads",
+            "Fact overlay for Starter invoice document rendering",
+        ),
+        depends_on=(
+            "control.settings_spec",
+            "financial.invoices",
+            "financial.starter_issuance",
+        ),
+        notes=(
+            "Readers lane (ADR 0031): read-only. For Starter-linked "
+            "invoices the frozen Starter document fact is the document "
+            "truth (PDF renders from a transient overlay; the mirror "
+            "row is untouched) and the Starter receivable position is "
+            "the account balance truth. Legacy invoices and Starter "
+            "documents without an exact fact version (multi-line "
+            "receipts) render from mirror rows written at issuance. "
+            "Aggregate reporting keeps reading mirror balances "
+            "maintained by the settlement and credit owners. Reads "
+            "are not gated by the D1 issuance switch."
+        ),
+        contract=ServiceContract(
+            concerns=(
+                ConcernContract(
+                    name="Starter document fact and receivable position reads",
+                    role=OwnerRole.RESOLVER,
+                    input_names=(
+                        "Starter-issued invoice and structural link",
+                        "canonical Starter billing policies",
+                    ),
+                ),
+                ConcernContract(
+                    name="Fact overlay for Starter invoice document rendering",
+                    role=OwnerRole.RESOLVER,
+                    input_names=(
+                        "Starter-issued invoice and structural link",
+                        "canonical Starter document fact",
+                    ),
+                ),
+            ),
+            authoritative_inputs=(
+                AuthorityInput(
+                    name="Starter-issued invoice and structural link",
+                    owner="financial.starter_issuance",
+                    kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                    source=(
+                        "StarterInvoiceLink binding the Sub invoice to "
+                        "the Starter billing account, document, and "
+                        "exact issued fact version identities"
+                    ),
+                ),
+                AuthorityInput(
+                    name="canonical Starter billing policies",
+                    owner="control.settings_spec",
+                    kind=AuthorityKind.CONTROL_INPUT,
+                    source=(
+                        "starter_* settings resolved through "
+                        "starter_policies (ADR 0031): currency minor "
+                        "units for position reads"
+                    ),
+                ),
+                AuthorityInput(
+                    name="canonical Starter document fact",
+                    owner="external:dotmac_billing",
+                    kind=AuthorityKind.EXTERNAL_OBSERVATION,
+                    source=(
+                        "exact frozen InvoiceDocumentFactV1 read by "
+                        "document identity and issued fact version; "
+                        "no implicit latest-version selection"
+                    ),
+                ),
+            ),
+            transaction=TransactionContract(
+                mode=TransactionMode.READ_ONLY,
+                boundary=(
+                    "Reads run inside the caller's transaction and "
+                    "write nothing; the PDF overlay is a transient "
+                    "copy discarded after rendering."
+                ),
+                locking="No locks taken; Starter reads are account-fenced observations.",
+                idempotency=(
+                    "Reads are naturally idempotent; the exact fact "
+                    "version pins the document bytes observed."
+                ),
+                retries=(
+                    "Callers may retry reads freely; a Starter "
+                    "refusal propagates and never falls back to "
+                    "legacy numbers for a fact-versioned document."
+                ),
+            ),
+            errors=ErrorContract(
+                domain_codes=(
+                    "financial.starter_positions.fact_unavailable",
+                    "financial.starter_positions.position_unavailable",
+                ),
+                mapping_owner="billing document readers",
+                retryable_codes=(),
+                fail_closed_on=(
+                    "Starter billing refusal for a fact-versioned document",
+                ),
+            ),
+            migration=MigrationContract(
+                state=AuthorityMigrationState.CUTOVER_READY,
+                old_owner="financial.invoices legacy document projections",
+                new_owner="financial.starter_positions",
+                verification=(
+                    "Unit overlay/eligibility tests and the "
+                    "migrated-PostgreSQL proof: a Starter-issued "
+                    "invoice renders its PDF from the frozen Starter "
+                    "fact number and totals."
+                ),
+                cutover_gate=(
+                    "Only Starter-linked invoices with an exact "
+                    "issued fact version take this lane; every other "
+                    "document keeps the mirror reader until cutover."
+                ),
+                fallback_retirement=(
+                    "Mirror-based rendering retires with the legacy "
+                    "Invoice writer at the money-pack cutover."
+                ),
+            ),
+            steward="billing operations",
+            design_refs=(
+                "docs/adr/0031-composable-starter-billing-policies.md",
+                "docs/SOT_RELATIONSHIP_MAP.md",
+            ),
+            test_refs=(
+                "tests/test_starter_positions_overlay.py",
+                "tests/integration/test_starter_positions_pg.py",
+                "tests/architecture/test_sot_manifest_contracts.py",
+            ),
+        ),
+    ),
+    SOTService(
+        name="financial.starter_manual_settlement",
+        module="app.services.billing.starter_manual_settlement",
+        owns=("Staff-recorded manual payment settlement of Starter invoices",),
+        depends_on=(
+            "control.settings_spec",
+            "financial.invoices",
+            "financial.manual_payment_recording",
+            "financial.starter_issuance",
+            "financial.starter_settlement",
+        ),
+        notes=(
+            "Manual lane (ADR 0031): one succeeded staff-recorded "
+            "payment allocated in full to one Starter-linked invoice "
+            "opens a dotmac-payments intent bound to that invoice and "
+            "discharges through the shared Starter settlement owner "
+            "with a policy-resolved confirmation source (default "
+            "TRANSFER_PROOF). No legacy Payment or ledger entry is "
+            "written; the manual recording owner presents the Starter "
+            "confirmation as its payment projection. Any other "
+            "Starter-touching manual shape is refused before legacy "
+            "writers run, and legacy account-credit application to "
+            "Starter receivables is closed at its choke points."
+        ),
+        contract=ServiceContract(
+            concerns=(
+                ConcernContract(
+                    name="Staff-recorded manual payment settlement of Starter invoices",
+                    role=OwnerRole.COMMAND_WRITER,
+                    input_names=(
+                        "confirmed manual payment recording preview",
+                        "Starter-issued invoice and structural link",
+                        "canonical Starter manual settlement policies",
+                    ),
+                    canonical_writer="financial.starter_manual_settlement",
+                ),
+            ),
+            authoritative_inputs=(
+                AuthorityInput(
+                    name="confirmed manual payment recording preview",
+                    owner="financial.manual_payment_recording",
+                    kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                    source=(
+                        "duplicate-reviewed, fingerprint-confirmed "
+                        "preview allocating one succeeded payment in "
+                        "full to the named Starter-linked invoice"
+                    ),
+                ),
+                AuthorityInput(
+                    name="Starter-issued invoice and structural link",
+                    owner="financial.starter_issuance",
+                    kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                    source=(
+                        "StarterInvoiceLink binding the Sub invoice to "
+                        "the Starter billing account and document "
+                        "identities"
+                    ),
+                ),
+                AuthorityInput(
+                    name="canonical Starter manual settlement policies",
+                    owner="control.settings_spec",
+                    kind=AuthorityKind.CONTROL_INPUT,
+                    source=(
+                        "starter_* settings resolved through "
+                        "starter_policies (ADR 0031): manual intent "
+                        "reference template, confirmation source, "
+                        "provider type, channel, expiry, minor units"
+                    ),
+                ),
+            ),
+            transaction=TransactionContract(
+                mode=TransactionMode.PARTICIPANT,
+                boundary=(
+                    "The manual recording owner owns the transaction: "
+                    "intent opening, confirmation, Starter settlement "
+                    "and allocation, invoice mirror, audit row, and "
+                    "events commit or roll back together."
+                ),
+                locking=(
+                    "The account lock is held by the manual recording "
+                    "owner and the invoice row is locked before "
+                    "settlement; Starter applies its own writer "
+                    "fences inside the same transaction."
+                ),
+                idempotency=(
+                    "The intent reference derives from the recording "
+                    "idempotency key, so an exact replay re-presents "
+                    "the same intent and confirmation identities "
+                    "without new postings or a second access signal."
+                ),
+                retries=(
+                    "The caller retries the whole confirmed recording "
+                    "after rollback with the same idempotency key."
+                ),
+            ),
+            errors=ErrorContract(
+                domain_codes=(
+                    "financial.starter_manual_settlement.amount_unrepresentable",
+                    "financial.starter_manual_settlement.configuration_invalid",
+                    "financial.starter_manual_settlement.starter_refused",
+                ),
+                mapping_owner="manual payment recording owner",
+                retryable_codes=(),
+                fail_closed_on=(
+                    "manual payment not allocated in full to one Starter-linked invoice",
+                    "prepaid funding or account-credit movement in the same recording",
+                    "Starter payments or billing refusal",
+                ),
+            ),
+            events=EventContract(
+                event_types=("payment.received",),
+                schema_version=1,
+                delivery_owner="events.dispatcher",
+                compatibility=(
+                    "Version 1 is the shared settlement access signal: "
+                    "exactly one payment.received per Starter "
+                    "confirmation, identical to the webhook lane."
+                ),
+                replay=(
+                    "Replay returns the recorded confirmation and "
+                    "settlement identities without a second signal."
+                ),
+            ),
+            migration=MigrationContract(
+                state=AuthorityMigrationState.CUTOVER_READY,
+                old_owner="financial.payments legacy manual allocation",
+                new_owner="financial.starter_manual_settlement",
+                verification=(
+                    "Migrated-PostgreSQL proof: a manual payment "
+                    "against a Starter-issued invoice reaches zero "
+                    "collectible with a paid mirror, no legacy "
+                    "Payment row, and an exact replay returning the "
+                    "same Starter identities."
+                ),
+                cutover_gate=(
+                    "Only single-invoice full-allocation succeeded "
+                    "manual payments take this lane; other shapes are "
+                    "refused until their lane migrates."
+                ),
+                fallback_retirement=(
+                    "The legacy manual allocation writer is deleted "
+                    "at the money-pack cutover; it is never used for "
+                    "a Starter-linked invoice."
+                ),
+            ),
+            steward="billing operations",
+            design_refs=(
+                "docs/adr/0031-composable-starter-billing-policies.md",
+                "docs/SOT_RELATIONSHIP_MAP.md",
+            ),
+            test_refs=(
+                "tests/test_starter_manual_eligibility.py",
+                "tests/integration/test_starter_manual_settlement_pg.py",
+                "tests/architecture/test_sot_manifest_contracts.py",
+            ),
+        ),
+    ),
+    SOTService(
+        name="financial.starter_prepaid",
+        module="app.services.billing.starter_prepaid",
+        owns=(
+            "Prepaid purchase funding acceptance and period earmarks",
+            "Earmark-funded prepaid period invoice settlement",
+        ),
+        depends_on=(
+            "control.settings_spec",
+            "financial.invoices",
+            "financial.prepaid_service_renewals",
+            "financial.starter_issuance",
+        ),
+        notes=(
+            "Prepaid lane (ADR 0031): a confirmed purchase-funding "
+            "intent is accepted on the prepaid funding lane and "
+            "earmarked in full to named subscription periods; "
+            "StarterPrepaidFundingLink rows record the settlement "
+            "identity per period. At renewal, a period draft whose "
+            "line carries a funded billing_line_key issues through "
+            "the prepaid issuance flavor (obligation source fact "
+            "equals the earmark target) and allocates from that "
+            "earmark, mirroring the Starter collectible position. "
+            "Periods without a Starter earmark keep the legacy "
+            "renewal path. Intent opening stays with the payment "
+            "caller; no legacy money state is written."
+        ),
+        contract=ServiceContract(
+            concerns=(
+                ConcernContract(
+                    name="Prepaid purchase funding acceptance and period earmarks",
+                    role=OwnerRole.COMMAND_WRITER,
+                    input_names=(
+                        "confirmed purchase-funding intent",
+                        "canonical Starter prepaid policies",
+                    ),
+                    canonical_writer="financial.starter_prepaid",
+                ),
+                ConcernContract(
+                    name="Earmark-funded prepaid period invoice settlement",
+                    role=OwnerRole.COMMAND_WRITER,
+                    input_names=(
+                        "prepaid period draft and funding link",
+                        "canonical Starter prepaid policies",
+                    ),
+                    canonical_writer="financial.starter_prepaid",
+                ),
+            ),
+            authoritative_inputs=(
+                AuthorityInput(
+                    name="confirmed purchase-funding intent",
+                    owner="external:dotmac_payments",
+                    kind=AuthorityKind.EXTERNAL_OBSERVATION,
+                    source=(
+                        "PURCHASE_FUNDING intent bound to the purchase "
+                        "reference and payer, confirmed through the "
+                        "policy-resolved confirmation source"
+                    ),
+                ),
+                AuthorityInput(
+                    name="prepaid period draft and funding link",
+                    owner="financial.prepaid_service_renewals",
+                    kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                    source=(
+                        "renewal-owned period draft whose single line "
+                        "carries the funded billing_line_key, resolved "
+                        "through StarterPrepaidFundingLink"
+                    ),
+                ),
+                AuthorityInput(
+                    name="canonical Starter prepaid policies",
+                    owner="control.settings_spec",
+                    kind=AuthorityKind.CONTROL_INPUT,
+                    source=(
+                        "starter_* settings resolved through "
+                        "starter_policies (ADR 0031): prepaid flavor "
+                        "identity, source-fact templates, funding "
+                        "lane, confirmation source, minor units"
+                    ),
+                ),
+            ),
+            transaction=TransactionContract(
+                mode=TransactionMode.PARTICIPANT,
+                boundary=(
+                    "Funding acceptance, earmarking, and link rows "
+                    "commit together; period issuance, allocation, "
+                    "mirror, audit, and the access signal commit "
+                    "together inside the renewal owner's transaction."
+                ),
+                locking=(
+                    "Renewal cycle locks the subscription and draft; "
+                    "Starter applies its own writer fences inside "
+                    "the same transaction."
+                ),
+                idempotency=(
+                    "A funding replay returns the recorded links for "
+                    "its purchase reference; period settlement is "
+                    "keyed by the renewal's deterministic period "
+                    "identity and emits at most one access signal "
+                    "per funding confirmation for the invoice."
+                ),
+                retries=(
+                    "Callers retry the whole funding or renewal step "
+                    "after rollback with the same references."
+                ),
+            ),
+            errors=ErrorContract(
+                domain_codes=(
+                    "financial.starter_prepaid.configuration_invalid",
+                    "financial.starter_prepaid.confirmed_cash_mismatch",
+                    "financial.starter_prepaid.intent_binding_mismatch",
+                    "financial.starter_prepaid.no_targets",
+                    "financial.starter_prepaid.starter_refused",
+                    "financial.starter_prepaid.targets_do_not_cover_purchase",
+                ),
+                mapping_owner="prepaid funding and renewal owners",
+                retryable_codes=(),
+                fail_closed_on=(
+                    "intent not bound to the named purchase and payer",
+                    "period targets not covering the confirmed amount in full",
+                    "Starter payments or billing refusal",
+                ),
+            ),
+            events=EventContract(
+                event_types=("payment.received",),
+                schema_version=1,
+                delivery_owner="events.dispatcher",
+                compatibility=(
+                    "Version 1 is the shared settlement access "
+                    "signal: exactly one payment.received per funding "
+                    "confirmation for the settled period invoice."
+                ),
+                replay=(
+                    "Replay returns the recorded Starter identities "
+                    "without a second signal."
+                ),
+            ),
+            migration=MigrationContract(
+                state=AuthorityMigrationState.CUTOVER_READY,
+                old_owner="financial.prepaid_service_renewals legacy funding",
+                new_owner="financial.starter_prepaid",
+                verification=(
+                    "Migrated-PostgreSQL proof: a funded purchase "
+                    "earmarks two periods, the first period invoice "
+                    "issues and settles to zero collectible from its "
+                    "earmark with no legacy ledger entry, and the "
+                    "second period's earmark cannot fund the first."
+                ),
+                cutover_gate=(
+                    "Only periods with a StarterPrepaidFundingLink "
+                    "take this lane; unfunded periods keep the "
+                    "legacy renewal path until their funding enters "
+                    "Starter."
+                ),
+                fallback_retirement=(
+                    "Legacy prepaid funding writers are deleted at "
+                    "the money-pack cutover; they are never used for "
+                    "an earmark-funded period."
+                ),
+            ),
+            steward="billing operations",
+            design_refs=(
+                "docs/adr/0031-composable-starter-billing-policies.md",
+                "docs/adr/0032-lifecycle-workflows-money-access.md",
+                "docs/SOT_RELATIONSHIP_MAP.md",
+            ),
+            test_refs=(
+                "tests/test_starter_prepaid_eligibility.py",
+                "tests/integration/test_starter_prepaid_pg.py",
+                "tests/architecture/test_sot_manifest_contracts.py",
             ),
         ),
     ),

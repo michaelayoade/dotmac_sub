@@ -9,12 +9,12 @@ import '../execution/execution_controller.dart';
 import 'map_models.dart';
 
 class MapAssetsRepository {
-  const MapAssetsRepository(this._ref);
+  MapAssetsRepository(this._ref);
 
   final Ref _ref;
 
   static const _refreshInterval = Duration(minutes: 5);
-  static final _refreshes = <String, Future<void>>{};
+  final _refreshes = <String, Future<void>>{};
 
   Future<List<MapAsset>> fetchAssets(Set<String> types) async {
     final orderedTypes = _orderedTypes(types);
@@ -28,7 +28,7 @@ class MapAssetsRepository {
       return cached;
     }
 
-    return _refreshAssets(orderedTypes, incremental: false);
+    return _refreshAssets(orderedTypes);
   }
 
   List<String> _orderedTypes(Set<String> types) {
@@ -41,40 +41,36 @@ class MapAssetsRepository {
     return orderedTypes;
   }
 
-  Future<_MapAssetFetch> _fetchAssetType(
-    String type, {
-    DateTime? updatedSince,
-  }) async {
-    final response = await _ref
-        .read(apiClientProvider)
-        .dio
-        .get(
-          '/api/v1/field/map-assets',
-          queryParameters: {
-            'types': type,
-            'limit': 1000,
-            if (updatedSince != null)
-              'updated_since': updatedSince.toIso8601String(),
-          },
-        );
-    final items = (response.data['items'] as List).cast<Map>();
-    final deletedItems =
-        ((response.data as Map)['deleted'] as List? ?? const []).cast<Map>();
-    final serverTimeRaw = (response.data as Map)['server_time'] as String?;
-    return _MapAssetFetch(
-      assets: items
-          .map((item) => MapAsset.fromJson(item.cast<String, dynamic>()))
-          .where((asset) => asset.hasValidCoordinates)
-          .toList(),
-      deleted: deletedItems
-          .map(
-            (item) => _DeletedMapAsset.fromJson(item.cast<String, dynamic>()),
-          )
-          .toList(),
-      serverTime: serverTimeRaw != null
-          ? DateTime.parse(serverTimeRaw).toUtc()
-          : DateTime.now().toUtc(),
-    );
+  // The list API has no tombstones or snapshot cursor. Fetch every page before
+  // replacing this rebuildable projection; updated_since cannot remove assets.
+  Future<List<MapAsset>> _fetchAssetType(String type) async {
+    const limit = 1000;
+    final assets = <MapAsset>[];
+    for (var offset = 0; ; offset += limit) {
+      final response = await _ref
+          .read(apiClientProvider)
+          .dio
+          .get(
+            '/api/v1/field/map-assets',
+            queryParameters: {
+              'asset_type': [type],
+              'limit': limit,
+              'offset': offset,
+            },
+          );
+      final page = _MapAssetPage.fromJson(
+        (response.data as Map).cast<String, dynamic>(),
+      );
+      if (page.offset != offset ||
+          page.limit != limit ||
+          page.count > limit ||
+          page.assets.any((asset) => asset.type != type)) {
+        throw const FormatException('Unexpected map asset page');
+      }
+      assets.addAll(page.assets.where((asset) => asset.hasValidCoordinates));
+      // Count is this page's raw row count, including invalid coordinates.
+      if (page.count < limit) return assets;
+    }
   }
 
   Future<List<MapAsset>> _readCachedAssets(List<String> types) async {
@@ -132,45 +128,28 @@ class MapAssetsRepository {
 
   void _refreshInBackground(List<String> types) {
     final key = types.join(',');
-    _refreshes[key] ??= _refreshAssets(types, incremental: true)
+    _refreshes[key] ??= _refreshAssets(types)
         .then((_) => _ref.invalidate(mapAssetsProvider))
+        // A failed background read retains the last complete offline snapshot.
+        .catchError((Object _, StackTrace _) {})
         .whenComplete(() => _refreshes.remove(key));
   }
 
-  Future<List<MapAsset>> _refreshAssets(
-    List<String> types, {
-    required bool incremental,
-  }) async {
+  Future<List<MapAsset>> _refreshAssets(List<String> types) async {
     final groups = <List<MapAsset>>[];
     for (final type in types) {
-      final cursor = incremental ? await _readCursor(type) : null;
-      final fetched = await _fetchAssetType(type, updatedSince: cursor);
-      if (incremental) {
-        await _deleteCachedAssets(fetched.deleted);
-        await _upsertCachedAssets(fetched.assets);
-      } else {
-        await _replaceCachedAssetType(type, fetched.assets);
-      }
-      await _writeCursor(type, fetched.serverTime);
-      groups.add(fetched.assets);
+      final fetched = await _fetchAssetType(type);
+      final db = _ref.read(syncServiceProvider).db;
+      await db.transaction(() async {
+        await _replaceCachedAssetType(type, fetched);
+        await _writeCursor(type, DateTime.now().toUtc());
+      });
+      groups.add(fetched);
     }
     return [for (final group in groups) ...group];
   }
 
-  Future<DateTime?> _readCursor(String type) async {
-    final sync = _ref.read(syncServiceProvider);
-    final db = sync.db;
-    final row =
-        await (db.select(db.cachedMapAssetSyncCursors)..where(
-              (row) =>
-                  row.scopeKey.equals(sync.scopeKey) &
-                  row.assetType.equals(type),
-            ))
-            .getSingleOrNull();
-    return row?.syncedAt;
-  }
-
-  Future<void> _writeCursor(String type, DateTime serverTime) async {
+  Future<void> _writeCursor(String type, DateTime completedAt) async {
     final sync = _ref.read(syncServiceProvider);
     final db = sync.db;
     await db
@@ -179,7 +158,7 @@ class MapAssetsRepository {
           CachedMapAssetSyncCursorsCompanion.insert(
             scopeKey: sync.scopeKey,
             assetType: type,
-            syncedAt: serverTime,
+            syncedAt: completedAt,
           ),
           mode: InsertMode.insertOrReplace,
         );
@@ -197,21 +176,6 @@ class MapAssetsRepository {
         ))
         .go();
     await _upsertCachedAssets(assets);
-  }
-
-  Future<void> _deleteCachedAssets(List<_DeletedMapAsset> deleted) async {
-    if (deleted.isEmpty) return;
-    final sync = _ref.read(syncServiceProvider);
-    final db = sync.db;
-    for (final asset in deleted) {
-      await (db.delete(db.cachedMapAssets)..where(
-            (row) =>
-                row.scopeKey.equals(sync.scopeKey) &
-                row.assetType.equals(asset.type) &
-                row.assetId.equals(asset.id),
-          ))
-          .go();
-    }
   }
 
   Future<void> _upsertCachedAssets(List<MapAsset> assets) async {
@@ -306,26 +270,35 @@ List<Map<String, dynamic>> _items(Object? data) {
   return const [];
 }
 
-class _MapAssetFetch {
-  const _MapAssetFetch({
+class _MapAssetPage {
+  const _MapAssetPage({
     required this.assets,
-    required this.deleted,
-    required this.serverTime,
+    required this.count,
+    required this.limit,
+    required this.offset,
   });
 
   final List<MapAsset> assets;
-  final List<_DeletedMapAsset> deleted;
-  final DateTime serverTime;
-}
+  final int count;
+  final int limit;
+  final int offset;
 
-class _DeletedMapAsset {
-  const _DeletedMapAsset({required this.type, required this.id});
-
-  final String type;
-  final String id;
-
-  factory _DeletedMapAsset.fromJson(Map<String, dynamic> json) =>
-      _DeletedMapAsset(type: json['type'] as String, id: json['id'] as String);
+  factory _MapAssetPage.fromJson(Map<String, dynamic> json) {
+    final assets = (json['items'] as List)
+        .cast<Map>()
+        .map((item) => MapAsset.fromJson(item.cast<String, dynamic>()))
+        .toList();
+    final count = json['count'] as int;
+    if (count != assets.length) {
+      throw const FormatException('Unexpected map asset count');
+    }
+    return _MapAssetPage(
+      assets: assets,
+      count: count,
+      limit: json['limit'] as int,
+      offset: json['offset'] as int,
+    );
+  }
 }
 
 final mapAssetsRepositoryProvider = Provider<MapAssetsRepository>(

@@ -81,12 +81,13 @@ def test_upsert_audit_setting_list_and_bool(db_session):
     )
     assert methods.value_json == ["POST", "GET"]
 
-    enabled = settings_api.upsert_audit_setting(
+    # `audit.enabled` was removed: request auditing cannot be switched off.
+    flag = settings_api.upsert_audit_setting(
         db_session,
-        "enabled",
+        "cross_app_drift_detection_enabled",
         DomainSettingUpdate(value_json=False),
     )
-    assert enabled.value_text == "false"
+    assert flag.value_text == "false"
 
 
 def test_upsert_imports_setting(db_session):

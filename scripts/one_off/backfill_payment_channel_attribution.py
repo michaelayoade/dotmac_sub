@@ -41,6 +41,7 @@ import sys
 from sqlalchemy import text
 
 from app.db import SessionLocal
+from scripts.billing._mutation_policy import refuse_apply
 
 # splynx description -> (channel name, collection account name or None)
 SPLYNX_MAP: dict[str, tuple[str, str | None]] = {
@@ -122,6 +123,7 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--apply", action="store_true", help="commit the backfill")
     args = parser.parse_args()
+    refuse_apply(args.apply)
 
     db = SessionLocal()
     try:

@@ -119,6 +119,130 @@ void main() {
     expect(list.jobs.single.title, 'Cached job');
   });
 
+  test(
+    'nullable server fields survive network, cache, and offline read',
+    () async {
+      adapter.on(
+        'GET',
+        '/api/v1/field/jobs',
+        (_) => (
+          200,
+          {
+            'items': [
+              {
+                'id': 'wo-nullable',
+                'work_order_mirror_id': '00000000-0000-0000-0000-000000000001',
+                'title': 'Native repair',
+                'status': 'dispatched',
+                'work_type': null,
+                'priority': null,
+                'scheduled_start': null,
+              },
+            ],
+            'count': 1,
+            'limit': 200,
+            'offset': 0,
+          },
+        ),
+      );
+      final online = await repo().fetchJobs();
+      expect(online.fromCache, isFalse);
+      expect(online.jobs.single.workType, 'other');
+      expect(online.jobs.single.priority, 'normal');
+      final cached = (await sync.readCachedJobs()).single;
+      expect(cached.workType, 'other');
+      expect(cached.priority, 'normal');
+
+      adapter.on('GET', '/api/v1/field/jobs', (_) => (503, {'detail': 'down'}));
+      final offline = await repo().fetchJobs();
+      expect(offline.fromCache, isTrue);
+      expect(offline.jobs.single.id, 'wo-nullable');
+      expect(offline.jobs.single.workType, 'other');
+      expect(offline.jobs.single.priority, 'normal');
+    },
+  );
+
+  test(
+    'job futures recover from an unbound store and follow account switches',
+    () async {
+      final secondStore = await openTestStore(techTwo);
+      final api = container.read(apiClientProvider);
+      final secondSync = SyncService(
+        db: secondStore.database,
+        api: api,
+        connectivity: FakeConnectivity(),
+        evidence: secondStore.evidence,
+        delay: (_) async {},
+      );
+      final scoped = ProviderContainer(
+        overrides: [
+          apiClientProvider.overrideWithValue(api),
+          syncServiceProvider.overrideWith((ref) {
+            final active = ref.watch(sessionStoreProvider);
+            if (active == null) throw StateError('No signed-in offline store');
+            return identical(active, store) ? sync : secondSync;
+          }),
+        ],
+      );
+      addTearDown(() async {
+        scoped.dispose();
+        await secondSync.dispose();
+        await secondStore.database.close();
+      });
+      final providers = [
+        todayJobsProvider,
+        allAssignedJobsProvider,
+        jobsListProvider,
+      ];
+      for (final provider in providers) {
+        await expectLater(scoped.read(provider.future), throwsStateError);
+      }
+
+      var jobId = 'first-account-job';
+      adapter.on(
+        'GET',
+        '/api/v1/field/jobs',
+        (_) => (
+          200,
+          {
+            'items': [
+              {
+                'id': jobId,
+                'title': jobId,
+                'status': 'dispatched',
+                'work_type': 'repair',
+                'priority': 'normal',
+              },
+            ],
+            'count': 1,
+          },
+        ),
+      );
+      scoped.read(sessionStoreProvider.notifier).adopt(store);
+      await scoped.pump();
+      for (final provider in providers) {
+        expect((await scoped.read(provider.future)).jobs.single.id, jobId);
+      }
+
+      scoped.read(sessionStoreProvider.notifier).adopt(null);
+      await scoped.pump();
+      for (final provider in providers) {
+        await expectLater(scoped.read(provider.future), throwsStateError);
+      }
+      jobId = 'second-account-job';
+      scoped.read(sessionStoreProvider.notifier).adopt(secondStore);
+      await scoped.pump();
+      for (final provider in providers) {
+        expect((await scoped.read(provider.future)).jobs.single.id, jobId);
+      }
+      expect((await sync.readCachedJobs()).single.id, 'first-account-job');
+      expect(
+        (await secondSync.readCachedJobs()).single.id,
+        'second-account-job',
+      );
+    },
+  );
+
   test('detail falls back to cached detail json when offline', () async {
     await sync.cacheJobs([
       {

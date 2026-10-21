@@ -781,6 +781,10 @@
                 showSearchMessage("Type at least 2 characters.");
                 return;
             }
+            if (config.plantLookupEnabled === false) {
+                showSearchMessage("Open an assigned work order for authorized destinations.");
+                return;
+            }
             abortSearchRequest();
             searchController = new AbortController();
             showSearchMessage("Searching selected reference plant types...");
@@ -805,6 +809,7 @@
         }
 
         function loadNearbyPoints(latitude, longitude) {
+            if (config.plantLookupEnabled === false) return;
             abortNearbyRequest();
             nearbyController = new AbortController();
             setNearbyLoading(true);

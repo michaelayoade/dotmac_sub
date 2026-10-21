@@ -77,6 +77,9 @@ _DESIRED_TOP_LEVEL = {
 }
 
 
+from app.services.credential_crypto import is_secret_reference_value  # noqa: E402
+
+
 class UispIntentError(ValueError):
     pass
 
@@ -127,6 +130,10 @@ def _validate_desired(desired: dict) -> dict:
             or not wifi["password_ref"].strip()
         ):
             raise UispIntentError("Wi-Fi password_ref must be a non-empty string")
+        if "password_ref" in wifi and is_secret_reference_value(wifi["password_ref"]):
+            # Stored as an encrypted (enc:) value only; a secret reference would
+            # be resolved at push time. Fixed text, never echoes the value.
+            raise UispIntentError("Wi-Fi password_ref cannot be a secret reference")
     remote_access = desired.get("remote_access")
     if remote_access is not None:
         if not isinstance(remote_access, dict):
@@ -588,8 +595,15 @@ def update_intent_desired(
         if wifi_password:
             if not (8 <= len(wifi_password) <= 63):
                 raise UispIntentError("Wi-Fi password must be 8-63 characters")
-            from app.services.credential_crypto import encrypt_credential
+            from app.services.credential_crypto import (
+                encrypt_credential,
+                reject_reserved_service_password,
+            )
 
+            try:
+                reject_reserved_service_password(wifi_password)
+            except ValueError:
+                raise UispIntentError("That Wi-Fi password is not allowed") from None
             encrypted = encrypt_credential(wifi_password)
             if not encrypted or encrypted.startswith("plain:"):
                 raise UispIntentError(

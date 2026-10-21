@@ -23,6 +23,9 @@ from app.services.sot_manifest import (
     TransactionMode,
     owner_command_boundary_error_codes,
 )
+from app.services.sot_registry.captive_access_contracts import (
+    SERVICES as CAPTIVE_ACCESS_SERVICES,
+)
 from app.services.sot_registry.domains.financial_access.test_connections import (
     ACTIONS as TEST_CONNECTION_ACTIONS,
 )
@@ -79,6 +82,14 @@ DOMAIN = DomainSOT(
                 "key_share flag omitted by pinned SQLAlchemy's cache traversal. "
                 "Expiry audit, lock resolution, IP release, and access "
                 "projections stay in the same lifecycle transaction. "
+                "Only an explicit fixed-term end_at is eligible for terminal "
+                "expiry. A due prepaid billing anchor is handled by renewal "
+                "and financial enforcement, leaving existing suspended service "
+                "and locks intact for payment recovery. "
+                "When service history is terminal without an explicit account "
+                "deletion, the derived account status remains login-capable "
+                "(suspended); only the explicit account-deletion transition may "
+                "project the account as canceled. "
                 "That non-key projection uses a PostgreSQL NO KEY UPDATE lock: "
                 "competing anchor writers serialize without blocking KEY SHARE "
                 "foreign-key checks from concurrent observations. The typed "
@@ -101,6 +112,147 @@ DOMAIN = DomainSOT(
                 "extends the billing anchor by exact elapsed pause time on resume; "
                 "Suspend is an enforcement lock that stops access and future "
                 "recurring billing without preserving unused period time."
+                " Each lock persists the requested treatment "
+                "(requested_access_mode) and the effective one (access_mode); "
+                "reevaluate_enforcement_lock_access_modes is the only post-"
+                "creation writer of access_mode, called by "
+                "access.captive_access_policy_change, and never raises a lock "
+                "above its request."
+            ),
+        ),
+        SOTService(
+            name="access.prepaid_expiry_lock_repair",
+            module="app.services.prepaid_expiry_lock_repair",
+            owns=("reviewed expiry-cleared prepaid lock recovery",),
+            depends_on=(
+                "access.subscription_lifecycle",
+                "access.walled_garden_policy",
+                "financial.prepaid_service_coverage",
+            ),
+            notes=(
+                "This coordinator admits an operator-reviewed exact historical "
+                "prepaid lock resolved by expiry only when its subscription "
+                "remains suspended, due, and uncovered. It locks and rechecks "
+                "the fingerprint, then asks access.subscription_lifecycle to "
+                "recreate that one prepaid lock. It never moves money, grants "
+                "coverage, clears other holds, or changes terminal state."
+            ),
+            contract=ServiceContract(
+                concerns=(
+                    ConcernContract(
+                        name="reviewed expiry-cleared prepaid lock recovery",
+                        role=OwnerRole.APPLICATION_COORDINATOR,
+                        input_names=(
+                            "reviewed exact-lock repair command",
+                            "canonical subscription and account state",
+                            "historical expiry-resolved enforcement lock",
+                            "current prepaid service coverage",
+                            "current restriction policy",
+                        ),
+                    ),
+                ),
+                authoritative_inputs=(
+                    AuthorityInput(
+                        name="reviewed exact-lock repair command",
+                        owner="access.prepaid_expiry_lock_repair",
+                        kind=AuthorityKind.CONTROL_INPUT,
+                        source=(
+                            "Operator-selected subscription and historical lock IDs, "
+                            "as-of, fingerprint, actor, reason, and idempotency key"
+                        ),
+                    ),
+                    AuthorityInput(
+                        name="canonical subscription and account state",
+                        owner="access.subscription_lifecycle",
+                        kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                        source="Locked Subscription and Subscriber lifecycle state",
+                    ),
+                    AuthorityInput(
+                        name="historical expiry-resolved enforcement lock",
+                        owner="access.subscription_lifecycle",
+                        kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                        source=(
+                            "Exact inactive prepaid EnforcementLock with "
+                            "resolved_by=expired and resolved_at evidence"
+                        ),
+                    ),
+                    AuthorityInput(
+                        name="current prepaid service coverage",
+                        owner="financial.prepaid_service_coverage",
+                        kind=AuthorityKind.DERIVED_PROJECTION,
+                        source="Current entitlement and applied-grant classification",
+                    ),
+                    AuthorityInput(
+                        name="current restriction policy",
+                        owner="access.walled_garden_policy",
+                        kind=AuthorityKind.DERIVED_PROJECTION,
+                        source=(
+                            "Current per-subscription captive or hard-reject "
+                            "decision for a financial suspension request"
+                        ),
+                    ),
+                ),
+                transaction=TransactionContract(
+                    mode=TransactionMode.COORDINATOR_MANAGED,
+                    boundary=(
+                        "One public owner command holds the root transaction; "
+                        "the lifecycle lock participant only stages and flushes."
+                    ),
+                    locking=(
+                        "Lock account, subscription, and selected historical lock "
+                        "before fingerprint recheck and prepaid lock creation."
+                    ),
+                    idempotency=(
+                        "Historical lock ID, operator key and preview fingerprint "
+                        "determine the repair source; an exact replay returns its "
+                        "active lock and a conflicting prepaid lock blocks repair."
+                    ),
+                    retries=(
+                        "Retry transient database failures with the same key; "
+                        "changed or ambiguous evidence needs a fresh preview."
+                    ),
+                ),
+                errors=ErrorContract(
+                    domain_codes=(
+                        *owner_command_boundary_error_codes(
+                            "access.prepaid_expiry_lock_repair"
+                        ),
+                        "access.prepaid_expiry_lock_repair.naive_as_of",
+                        "access.prepaid_expiry_lock_repair.future_as_of",
+                        "access.prepaid_expiry_lock_repair.stale_as_of",
+                        "access.prepaid_expiry_lock_repair.invalid_discovery",
+                        "access.prepaid_expiry_lock_repair.idempotency_required",
+                        "access.prepaid_expiry_lock_repair.invalid_preview_fingerprint",
+                        "access.prepaid_expiry_lock_repair.stale_preview",
+                        "access.prepaid_expiry_lock_repair.repair_blocked",
+                    ),
+                    mapping_owner="reviewed lock-repair CLI adapter",
+                    fail_closed_on=(
+                        "missing or ambiguous historical expiry lock",
+                        "covered or unresolved current prepaid service",
+                        "changed restriction policy or network readiness",
+                        "terminal or non-prepaid subscription",
+                        "changed preview fingerprint",
+                    ),
+                ),
+                migration=MigrationContract(
+                    state=AuthorityMigrationState.NATIVE,
+                    new_owner="access.prepaid_expiry_lock_repair",
+                    verification=(
+                        "Exact-lock preview, stale-preview, replay, payment "
+                        "eligibility, and unrelated-lock preservation tests"
+                    ),
+                ),
+                steward="billing and network access operations",
+                design_refs=(
+                    "docs/FINANCIAL_ACCESS_ENFORCEMENT.md",
+                    "docs/runbooks/PREPAID_EXPIRY_LOCK_REPAIR.md",
+                    "docs/SOT_RELATIONSHIP_MAP.md",
+                ),
+                test_refs=(
+                    "tests/test_prepaid_expiry_lock_repair.py",
+                    "tests/architecture/test_prepaid_expiry_lock_repair_boundary.py",
+                ),
             ),
         ),
         SOTService(
@@ -980,31 +1132,35 @@ DOMAIN = DomainSOT(
             name="access.walled_garden_policy",
             module="app.services.walled_garden_policy",
             owns=(
-                "captive account eligibility",
+                "captive safety rails",
                 "captive network readiness",
                 "effective hard-reject/captive restriction",
                 "most-restrictive-active-lock resolution",
             ),
             depends_on=(
                 "access.subscription_lifecycle",
+                "access.captive_access_policy",
+                "access.captive_router_gate",
                 "control.settings_spec",
                 "customer.accounts",
                 "customer.identity_scope",
             ),
             notes=(
-                "Hard reject is the fail-closed default. Captive access "
-                "requires explicit account opt-in, eligible direct-house "
-                "residential scope, ready network settings, and no more-"
-                "restrictive active lock."
+                "Hard reject is the fail-closed default. Captive access for a "
+                "subscription requires a captive request, the fixed safety rails "
+                "(customer principal, active service-eligible account, non-"
+                "terminal service), an allow from access.captive_access_policy, "
+                "ready network settings, every serving router ready per "
+                "access.captive_router_gate, and no more-restrictive active lock."
             ),
             contract=ServiceContract(
                 concerns=(
                     ConcernContract(
-                        name="captive account eligibility",
+                        name="captive safety rails",
                         role=OwnerRole.POLICY,
                         input_names=(
                             "canonical subscriber access identity",
-                            "canonical reseller scope",
+                            "canonical subscription lifecycle state",
                             "captive restriction protocol",
                         ),
                     ),
@@ -1024,6 +1180,8 @@ DOMAIN = DomainSOT(
                             "canonical reseller scope",
                             "canonical captive network settings",
                             "canonical enforcement locks",
+                            "captive access policy resolution",
+                            "serving-router walled-garden readiness",
                             "captive restriction protocol",
                         ),
                     ),
@@ -1044,7 +1202,7 @@ DOMAIN = DomainSOT(
                         kind=AuthorityKind.AUTHORITATIVE_RECORD,
                         source=(
                             "Subscriber user type, active and lifecycle state, "
-                            "explicit category evidence, and captive opt-in"
+                            "and explicit category evidence"
                         ),
                     ),
                     AuthorityInput(
@@ -1076,6 +1234,25 @@ DOMAIN = DomainSOT(
                         owner="access.subscription_lifecycle",
                         kind=AuthorityKind.AUTHORITATIVE_RECORD,
                         source=("active per-subscription EnforcementLock access modes"),
+                    ),
+                    AuthorityInput(
+                        name="captive access policy resolution",
+                        owner="access.captive_access_policy",
+                        kind=AuthorityKind.DERIVED_PROJECTION,
+                        source=(
+                            "per-subscription rule resolution: account > "
+                            "customer_set > plan_family > global, deny beats "
+                            "allow, default deny"
+                        ),
+                    ),
+                    AuthorityInput(
+                        name="serving-router walled-garden readiness",
+                        owner="access.captive_router_gate",
+                        kind=AuthorityKind.DERIVED_PROJECTION,
+                        source=(
+                            "every router serving the subscription is ready "
+                            "per access.walled_garden_router_readiness"
+                        ),
                     ),
                     AuthorityInput(
                         name="captive restriction protocol",
@@ -1115,10 +1292,12 @@ DOMAIN = DomainSOT(
                         "financial, lifecycle, event, RADIUS, and status adapters"
                     ),
                     fail_closed_on=(
-                        "missing explicit residential or direct-house evidence",
-                        "inactive or ineligible account scope",
+                        "non-customer principal or inactive/ineligible account",
+                        "no allow rule (default deny) or a winning deny rule",
                         "disabled or invalid captive network settings",
+                        "unresolved or not-ready serving router",
                         "terminal subscription state or ambiguous active locks",
+                        "a request without subscription scope",
                     ),
                 ),
                 migration=MigrationContract(
@@ -1129,9 +1308,9 @@ DOMAIN = DomainSOT(
                     ),
                     new_owner="access.walled_garden_policy",
                     verification=(
-                        "Eligibility, opt-in, network readiness, terminal status, "
-                        "most-restrictive-lock, RADIUS projection, and architecture "
-                        "tests."
+                        "Safety-rail, policy-precedence, network readiness, "
+                        "router-gate, terminal status, most-restrictive-lock, "
+                        "RADIUS projection, and architecture tests."
                     ),
                     cutover_gate=(
                         "Financial, event, RADIUS, connectivity, and service-status "
@@ -1150,6 +1329,7 @@ DOMAIN = DomainSOT(
                 ),
                 test_refs=(
                     "tests/test_walled_garden_policy.py",
+                    "tests/test_captive_access_policy.py",
                     "tests/test_radius_shadow_handler_integration.py",
                     "tests/architecture/test_grace_walled_garden_ownership.py",
                     "tests/architecture/test_walled_garden_policy_boundary.py",
@@ -1165,7 +1345,6 @@ DOMAIN = DomainSOT(
                 "legacy suspended-quarantine retirement worklist",
             ),
             depends_on=(
-                "access.walled_garden_policy",
                 "control.settings_spec",
                 "network.routeros_sot",
             ),
@@ -1413,6 +1592,7 @@ DOMAIN = DomainSOT(
                 ),
             ),
         ),
+        *CAPTIVE_ACCESS_SERVICES,
         SOTService(
             name="access.radius_state",
             module="app.services.radius_access_state",

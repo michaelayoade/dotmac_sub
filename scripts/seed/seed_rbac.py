@@ -27,7 +27,6 @@ ADMIN_ONLY_PERMISSION_KEYS = {
     # not a permission an admin attaches to a human role.
     "integration:accounting_sync:read",
     "reseller:impersonate",
-    "system:db_admin",
     "system:read",
     "system:write",
     "billing:read",
@@ -99,7 +98,6 @@ DEFAULT_PERMISSIONS = [
         "communications:nextcloud_talk_staff:manage",
         "Manage ERP staff-to-Nextcloud Talk identity mappings",
     ),
-    ("system:db_admin", "Perform restricted database administration"),
     ("system:settings:read", "View system settings"),
     ("system:settings:write", "Modify system settings"),
     # Secret management (OpenBao) — admin-only; intentionally NOT granted to any
@@ -125,6 +123,10 @@ DEFAULT_PERMISSIONS = [
     ("reseller:read", "View resellers"),
     ("reseller:write", "Manage resellers"),
     # Billing - Invoices
+    (
+        "billing:starter_ledger_live:write",
+        "Change the Starter ledger live (D1) switch; granted to no role by default",
+    ),
     ("billing:invoice:read", "View invoices"),
     ("billing:invoice:create", "Create invoices"),
     ("billing:invoice:update", "Update invoices"),
@@ -214,6 +216,14 @@ DEFAULT_PERMISSIONS = [
     ),
     ("subscription:create", "Create subscriptions"),
     ("subscription:update", "Update subscriptions"),
+    (
+        "subscription:credential:update",
+        "Change a subscription's PPPoE service login and password",
+    ),
+    (
+        "subscription:credential:reveal",
+        "Reveal a stored PPPoE service password (audited)",
+    ),
     (
         "subscription:additional_ip:write",
         "Assign and remove additional subscription IP ranges",
@@ -320,6 +330,14 @@ DEFAULT_PERMISSIONS = [
     ("operations:expense_request:pay", "Initiate approved expense reimbursements"),
     ("operations:asset_custody:read", "View asset custody records"),
     ("operations:asset_custody:write", "Manage asset custody records"),
+    (
+        "operations:completion-review:read",
+        "View issued-work completion review evidence",
+    ),
+    (
+        "operations:completion-review:write",
+        "Publish policy and review issued-work completion evidence",
+    ),
     ("operations:dispatch:read", "View dispatch work orders and maps"),
     ("operations:dispatch:write", "Create and edit dispatch work orders"),
     ("operations:dispatch:assign", "Queue and assign dispatch work orders"),
@@ -465,8 +483,16 @@ DEFAULT_ROLES = [
     ("customer_experience_manager", "Customer experience manager access"),
 ]
 
+# Dedicated permissions granted to NO role by default (even admin): the owner
+# grants them explicitly to named users.
+NO_DEFAULT_ROLE_PERMISSION_KEYS = {"billing:starter_ledger_live:write"}
+
 ROLE_PERMISSIONS = {
-    "admin": [perm for perm, _ in DEFAULT_PERMISSIONS],
+    "admin": [
+        perm
+        for perm, _ in DEFAULT_PERMISSIONS
+        if perm not in NO_DEFAULT_ROLE_PERMISSION_KEYS
+    ],
     "auditor": [
         "audit:read",
         "billing:invoice:read",

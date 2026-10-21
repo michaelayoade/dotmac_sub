@@ -99,17 +99,19 @@ def test_asbuilt_action_is_owned_and_only_allows_the_assigned_vendor():
     assert "action_permitted(request, project.as_built_action)" in TEMPLATE
 
 
-def test_detail_route_feeds_proposed_route_context():
+def test_detail_route_feeds_proposed_route_context() -> None:
     # The proposed route geometry is rendered server-side (vendor auth is
     # ownership-based, so it does not call the admin route API).
-    source = inspect.getsource(vendor_portal.vendor_project_detail)
+    route = inspect.getsource(vendor_portal.vendor_project_detail)
+    assert "_project_detail_response" in route
+    source = inspect.getsource(vendor_portal._project_detail_response)
     assert "route_geojson" in source
     assert "build_vendor_project_route_geojson" in source
     assert "route_geojson" in TEMPLATE  # and the template consumes it
 
 
-def test_closure_pin_is_not_coupled_to_asbuilt_submission_eligibility():
-    source = inspect.getsource(vendor_portal.vendor_project_detail)
+def test_closure_pin_is_not_coupled_to_asbuilt_submission_eligibility() -> None:
+    source = inspect.getsource(vendor_portal._project_detail_response)
 
     assert "can_propose_closure" in source
     assert "vendor_capabilities.AS_BUILT_WRITE" in source

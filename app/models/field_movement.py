@@ -15,6 +15,10 @@ class FieldWorkOrderMovement(Base):
 
     __tablename__ = "field_work_order_movements"
     __table_args__ = (
+        CheckConstraint(
+            "(actor_vendor_user_id IS NULL AND actor_technician_id IS NOT NULL AND actor_person_id IS NOT NULL) OR (actor_vendor_user_id IS NOT NULL AND actor_technician_id IS NULL AND actor_person_id IS NULL AND actor_system_user_id IS NOT NULL)",
+            name="ck_field_work_order_movements_actor",
+        ),
         Index(
             "ix_field_work_order_movements_mirror_started",
             "work_order_mirror_id",
@@ -40,11 +44,14 @@ class FieldWorkOrderMovement(Base):
         ForeignKey("work_order.id", ondelete="CASCADE"),
         nullable=False,
     )
-    actor_technician_id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True), ForeignKey("technician_profiles.id"), nullable=False
+    actor_vendor_user_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("field_vendor_users.id")
     )
-    actor_person_id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True), nullable=False
+    actor_technician_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("technician_profiles.id"), nullable=True
+    )
+    actor_person_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), nullable=True
     )
     actor_system_user_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True), ForeignKey("system_users.id")

@@ -38,6 +38,7 @@ from sqlalchemy import text
 
 from app.db import SessionLocal
 from app.services.billing import invoices as invoice_service
+from scripts.billing._mutation_policy import refuse_apply
 
 REASON = "splynx_migration_terminal_account_cleanup"
 
@@ -106,6 +107,7 @@ def main() -> None:
         "--apply", action="store_true", help="Write off (default: dry-run)"
     )
     args = parser.parse_args()
+    refuse_apply(args.apply)
 
     db = SessionLocal()
     try:

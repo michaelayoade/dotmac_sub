@@ -4,6 +4,7 @@ import 'dart:io';
 import 'package:dio/dio.dart';
 import 'package:dotmac_portal/src/core/data_scope.dart';
 import 'package:dotmac_portal/src/core/response_cache.dart';
+import 'package:dotmac_portal/src/repositories/work_order_repository.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
 
@@ -140,6 +141,25 @@ void main() {
       dio.httpClientAdapter = adapter;
       return dio;
     }
+
+    test('cached visit eligibility cannot authorize sending after timeout',
+        () async {
+      await cache.write('GET /me/work-orders/sub-visit/chat?', {
+        'available': true,
+        'can_send': true,
+        'messages': [],
+      });
+      final dio = buildDio(_FakeAdapter((options) async {
+        throw DioException(
+          requestOptions: options,
+          type: DioExceptionType.receiveTimeout,
+        );
+      }));
+      await expectLater(
+        WorkOrderRepository(dio).chat('sub-visit'),
+        throwsA(isA<Exception>()),
+      );
+    });
 
     test('writes through on a successful GET, then serves it on a timeout',
         () async {

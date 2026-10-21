@@ -31,6 +31,18 @@ class RouterConfigExportError(RuntimeError):
     """Raised when the SSH config export fails or returns no config."""
 
 
+class RouterConfigExportEmptyError(RouterConfigExportError):
+    """The router answered but returned no configuration text."""
+
+
+class RouterConfigExportStrictUnsupportedError(RouterConfigExportError):
+    """Strict host-key checking was requested on a transport that cannot honour it."""
+
+
+class RouterConfigExportNoAuthError(RouterConfigExportError):
+    """No SSH key or password is configured on the Sub worker."""
+
+
 def _export_to_text(data: object) -> str:
     if isinstance(data, str):
         return data
@@ -43,10 +55,25 @@ def _export_to_text(data: object) -> str:
     return str(data)
 
 
-def fetch_config_export(router: Router) -> str:
-    """Fetch a non-empty RouterOS export through the configured transport."""
+def fetch_config_export(router: Router, *, strict_host_key: bool = False) -> str:
+    """Fetch a non-empty RouterOS export through the configured transport.
+
+    ``strict_host_key`` forces the SSH transport to reject a host that is not
+    already pinned in known_hosts (no trust-on-first-use), whatever the global
+    ``router_config_ssh_strict_host_key`` setting is. It can only tighten. The
+    REST transport cannot honour it and refuses (``strict_unsupported``).
+    """
     if settings.router_config_export_via_ssh:
+        if strict_host_key:
+            return export_config_via_ssh(router, strict_host_key=True)
         return export_config_via_ssh(router)
+
+    if strict_host_key:
+        # The REST transport has no SSH host key to pin; refuse rather than
+        # silently ignore a request that can only tighten security.
+        raise RouterConfigExportStrictUnsupportedError(
+            "strict host-key checking is not supported by the REST export transport"
+        )
 
     from app.services.router_management.connection import RouterConnectionService
 
@@ -54,14 +81,16 @@ def fetch_config_export(router: Router) -> str:
     text = _export_to_text(data)
     if not text.strip():
         name = getattr(router, "name", "router")
-        raise RouterConfigExportError(
+        raise RouterConfigExportEmptyError(
             f"Router {name} returned an empty config export; the REST API "
             "identity may be missing the sensitive policy"
         )
     return text
 
 
-def _install_host_key_policy(client: paramiko.SSHClient) -> None:
+def _install_host_key_policy(
+    client: paramiko.SSHClient, *, strict: bool = False
+) -> None:
     """Pin router SSH host keys (trust-on-first-use).
 
     Loading the known_hosts file means paramiko rejects a *changed* host key
@@ -81,7 +110,7 @@ def _install_host_key_policy(client: paramiko.SSHClient) -> None:
             client.load_host_keys(known_hosts)  # type: ignore[attr-defined]
         except OSError as exc:
             logger.warning("router known_hosts %r unavailable: %s", known_hosts, exc)
-    if getattr(settings, "router_config_ssh_strict_host_key", False):
+    if strict or getattr(settings, "router_config_ssh_strict_host_key", False):
         client.set_missing_host_key_policy(paramiko.RejectPolicy())
     else:
         # Not blind trust: load_host_keys() above still rejects a *changed* key;
@@ -129,6 +158,7 @@ def export_config_via_ssh(
     password: str | None = None,
     command: str = "/export",
     timeout: int = 30,
+    strict_host_key: bool = False,
 ) -> str:
     """Return the router's full config as text via ``ssh <router> /export``.
 
@@ -148,13 +178,13 @@ def export_config_via_ssh(
     # instead of a public-key file import.
     pkey = _load_private_key(key_path) if key_path else None
     if pkey is None and not password:
-        raise RouterConfigExportError(
+        raise RouterConfigExportNoAuthError(
             "no SSH auth configured: set ROUTER_CONFIG_SSH_KEY_PATH or "
             "ROUTER_CONFIG_SSH_PASSWORD"
         )
 
     client = paramiko.SSHClient()
-    _install_host_key_policy(client)
+    _install_host_key_policy(client, strict=strict_host_key)
     try:
         try:
             if pkey is not None:
@@ -212,7 +242,7 @@ def export_config_via_ssh(
         client.close()
 
     if not out.strip():
-        raise RouterConfigExportError(
+        raise RouterConfigExportEmptyError(
             f"SSH {command} to {getattr(router, 'name', router.management_ip)} "
             f"returned no config (exit={exit_status}, stderr={err.strip()[:200]!r})"
         )

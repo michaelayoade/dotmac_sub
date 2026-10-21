@@ -236,6 +236,23 @@ entitlement. `Subscription.next_billing_at` is also a projection: a future
 anchor without exact evidence is `unresolved_projection`, blocks adverse
 action, and enters reconciliation.
 
+The daily subscription-expiry job treats only an explicit fixed-term `end_at`
+as a terminal contract boundary. A due prepaid `next_billing_at` is a renewal
+and financial-enforcement input, not an expiry trigger. Unfunded prepaid
+service remains nonterminal; the prepaid enforcement owner decides warning,
+grace, suspension, and restoration. Existing reason-scoped locks are preserved;
+historically missing prepaid locks require reviewed repair before the current
+payment-recovery path can renew those suspended services. The exact-lock
+recovery command in
+`docs/runbooks/PREPAID_EXPIRY_LOCK_REPAIR.md` accepts only a historical prepaid
+lock proved to have been cleared by expiry, rechecks current uncovered service,
+and leaves independent holds intact. Services without that historical proof
+remain for separate finance/access review. For already-confirmed funding, the
+existing reviewed renewal owner can be invoked with its `funding_recovery`
+eligibility context after the lock is repaired; it alone settles the invoice,
+coverage and restoration. Fixed-term expiry still
+checks authoritative coverage and holds unresolved projections before acting.
+
 The prepaid-renewal owner's billing-anchor repair discovers absent or lagging
 anchors from exact active entitlement evidence. An evidence-free anchor lead
 is never repaired in bulk: an operator must select the exact subscription in a
@@ -490,6 +507,12 @@ the same transaction after flushing lock changes. Delivery begins only after
 commit. A rollback therefore cannot send a suspension/restoration event for
 state that never existed.
 
+Expired or canceled service history alone does not mean the customer deleted
+their account. When no non-terminal service remains, the lifecycle projection
+uses the login-capable `suspended` status. The account can become `canceled` only
+through an explicit account-deletion transition, which records the deletion
+request and intentionally prevents portal login.
+
 Enforcement handlers attempt the owned local and external consequences. A
 failed RADIUS projection, access-state projection, session-cleanup enqueue, or
 financial restoration is raised to the durable dispatcher. The handler remains
@@ -506,17 +529,121 @@ evaluation rather than an inferred renewal.
 
 ## Access tier and RADIUS
 
-Hard reject is the default. Captive/walled-garden access is an explicit
-exception for an eligible direct-house residential account with valid portal
-network configuration. Business, government, NGO, reseller-owned,
-reseller-principal, system, disabled, canceled, and unclassified accounts fail
-to hard reject even if a stale opt-in flag exists.
+Hard reject is the default. Captive/walled-garden access is an explicit,
+per-SUBSCRIPTION exception. `access.walled_garden_policy` grants it only when
+every gate passes, in this order:
 
-The lifecycle owner persists the requested restriction on each active lock.
-`access.walled_garden_policy` derives the most restrictive effective state.
+1. the lock's originator requested captive (dunning or prepaid `suspend`, FUP
+   `block`); a hard-reject request is never upgraded;
+2. fixed safety rails, which no rule can override: the account is a customer
+   principal (never a system user, reseller principal, or vendor), is active
+   with a service-eligible status, and the subscription is not disabled,
+   canceled, or terminal;
+3. `access.captive_access_policy` resolves an `allow` rule for the
+   subscription (below);
+4. global readiness: `radius.captive_redirect_enabled`, a valid
+   `captive_portal_ip`, and an HTTPS `captive_portal_url`;
+5. `access.captive_router_gate`: every router serving the subscription is
+   `ready` per `access.walled_garden_router_readiness` (below).
+
+Any failure resolves to hard reject with a typed reason
+(`captive_no_policy_rule`, `captive_policy_denied`, `router_unresolved`,
+`router_not_ready`, ...).
+
+### Captive access policy
+
+Rules (`captive_access_rules`) have a scope, an effect (`allow`/`deny`),
+optional conditions, `enabled`, `created_by`, `reason`, and timestamps:
+
+| Scope | Target |
+| --- | --- |
+| `account` | one account (individual override) |
+| `customer_set` | a named, audited cohort (`captive_customer_sets`; membership history in `captive_customer_set_members`, removal stamps `removed_at`) |
+| `plan_family` | `CatalogOffer.plan_family` of the subscription's offer, optionally narrowed to exact offer ids |
+| `global` | every subscription |
+
+Conditions are the subscriber category (explicit `subscriber_category`
+evidence; unclassified accounts never match a category condition) and the
+reseller relationship (`any`, `house` = active house reseller, or `specific`
+reseller ids). Category and reseller are conditions rather than hard-coded
+eligibility, so business accounts can be enabled deliberately.
+
+Resolution is per subscription: the most specific matching scope wins
+(`account` > `customer_set` > `plan_family` > `global`); at the same scope
+`deny` beats `allow`; with no matching rule the result is a default deny. A
+rule whose conditions do not hold does not match, so resolution falls through
+to the next scope.
+
+`Subscriber.captive_redirect_enabled` is retired as a decision input.
+Migration 667 converted every opt-in into one `account` `allow` rule with the
+conditions the old check hard-coded (`residential`, `house`), so the backfill
+changed no decision. The admin customer form no longer writes the flag and
+`SubscriberUpdate` refuses it. Retirement plan: the column stays readable
+(`SubscriberRead`, migration export) for one release so a rollback image still
+works; a later contract revision drops it once rollback to a pre-policy image
+is no longer required.
+
+### Serving-router gate
+
+Serving NAS candidates for a subscription are
+`subscriptions.provisioning_nas_device_id` (desired assignment) plus every
+`radius_active_sessions` row bound to the subscription or unbound rows of the
+same account (accounting observations; the NAS is `nas_device_id`, else the one
+NAS whose `nas_ip`/`ip_address` equals `nas_ip_address`). Each NAS maps to its
+active routers through `routers.nas_device_id`. The gate passes only when at
+least one router is resolvable and every serving router is `ready`. A missing
+assignment and session, an unidentifiable or ambiguous session NAS, a NAS
+without an active router, or any router that is `not_ready`, `stale`,
+`no_snapshot`, or `not_configured` fails closed. Session rows are not filtered
+by age: a stale row only adds a candidate, which can only make the gate more
+restrictive. Readiness is snapshot-derived (48h freshness by default) and
+evaluated once per router per run (`CaptiveRouterGate` /
+`WalledGardenEvaluation` are per-run caches); nothing contacts a router.
+
+### Lock re-evaluation
+
+Each active lock persists the requested treatment (`requested_access_mode`)
+and the effective treatment granted when it was created (`access_mode`).
+`ck_enforcement_locks_effective_within_request` keeps the effective mode within
+the request. Read paths still revalidate captive locks, so a revoked rule or a
+router that stops being ready downgrades to hard reject at the next
+projection. Upgrades (an opt-in after suspension, a newly ready router) need
+the explicit policy-change coordinator, `access.captive_access_policy_change`:
+
+- `preview_captive_policy_change` (read-only) evaluates a candidate change
+  against every subscription holding an active lock that requested captive and
+  returns the lock updates, the subscriptions moving `hard_reject -> captive`
+  and `captive -> hard_reject` grouped by serving router and plan family, and
+  an exact fingerprint;
+- `apply_captive_policy_change` (owner command) re-derives the plan, refuses a
+  stale fingerprint, writes the change through the policy owner, verifies the
+  written policy reproduces the preview, and updates lock access modes through
+  the lifecycle owner (`reevaluate_enforcement_lock_access_modes`,
+  compare-and-set, never above the request) for at most `max_subscriptions`
+  subscriptions. It stages audit evidence and one
+  `enforcement_lock.access_mode_changed` event per changed lock; after commit
+  the enforcement handler reprojects RADIUS
+  (`radius.reconcile_subscription_connectivity`) and enqueues the existing
+  session cleanup (CoA/disconnect). Re-running a `reevaluate` change drains the
+  remaining batches. The idempotency key replays the stored outcome.
+
+Migration 667 derived `requested_access_mode` from structured evidence only:
+captive locks requested captive, and locks linked to a financial consequence
+requested captive (`suspend`) or hard reject (`reject`). Other locks keep
+`NULL`, which is treated as a hard-reject request and never upgraded.
+
+Operators use `python -m scripts.network.captive_access_policy`
+(`rules`, `preview`, `apply`, `drain`; customer-set `create-set`,
+`add-members`, `remove-members`). The owner re-verifies the staff principal's
+`network:radius:write` grant inside its transaction. An admin UI is a later
+change.
+
 RADIUS population, connectivity reconciliation, session cleanup, portal views,
-and audit comparators consume that state; none independently interprets account
-or subscription statuses.
+and audit comparators consume the effective state; none independently
+interprets account or subscription statuses. Financial consequences resolve
+captive per target subscription; the account-level `access_decision` is
+captive only when every target resolved captive, and
+`subscription_access_decisions` records each one.
 
 Service status and restriction are desired-state inputs. Network and accounting
 records are projections or observations:
@@ -586,11 +713,21 @@ the derived entry). Keys are unique and hostnames must be FQDNs; every
 settings write path validates the value against
 `app.schemas.walled_garden.WalledGardenAllowedResources`. A disabled Paystack
 preset (`checkout.paystack.com`, `api.paystack.co`, `js.paystack.co`,
-`standard.paystack.co`) is seeded; an operator enables it explicitly. Until
-the admin UI exists, operators change entries through the settings owner
-(`apply_admin_settings_form_updates`, scope `control:settings:write`, audited
-as `control.settings_form_updated`). Toggling one entry changes only that
-entry's tagged elements.
+`standard.paystack.co`) is seeded; an operator enables it explicitly.
+Operators manage entries at Admin → Settings → Network → **Walled Garden**
+(`/admin/system/config/walled-garden`; read `system:settings:read`, change
+`system:settings:write`). The page lists the read-only derived portal entry
+and every configured entry, adds or edits one entry (label, kind, hosts; keys
+are immutable because routers carry them in tags), enables or disables it,
+and removes it. Each change is turned into the complete validated value and
+submitted to the settings owner (`apply_admin_settings_form_updates`, scope
+`control:settings:write`, audited as `control.settings_form_updated` with the
+command reason naming the action and entry key). The page sends the stored
+value's fingerprint with every change; the owner locks the setting rows and
+refuses a stale submission, so two operators cannot silently overwrite each
+other. Saving changes desired state only; routers keep their rows until the
+module is re-applied, and the page's readiness panel shows the drift until
+then. Toggling one entry changes only that entry's tagged elements.
 
 `access.walled_garden_router_readiness` compares the module rendered from
 current settings with each router's latest `router_config_snapshots` export
@@ -600,8 +737,11 @@ findings, `stale` (snapshot older than 48h by default), `no_snapshot`, or
 entry still present on the router is `disabled_entry_present` drift. It also
 reports how many legacy quarantine rules remain and how many static
 `suspended` entries are enabled or disabled. Captive must fail closed: only a
-`ready` serving router may carry captive subscribers. Inspect with
-`python -m scripts.network.walled_garden_router_module render|readiness`.
+`ready` serving router may carry captive subscribers; `access.captive_router_gate`
+enforces this (see "Serving-router gate"). Inspect with
+`python -m scripts.network.walled_garden_router_module render|readiness`, or
+read the same fleet query on the Walled Garden admin page (attention-first,
+with missing enabled entries and disabled entries still present per router).
 
 Legacy retirement is a separate, explicitly approved operator step: the
 module returns `legacy_elements_to_retire` (the six legacy comments) and never
@@ -656,7 +796,7 @@ not a network-enforcement decision, and belongs wherever a non-PPPoE
 subscription is first provisioned (the same place that should be setting
 `provisioning_nas_device_id` today and currently is not, for a known cohort
 inherited from the retired Splynx billing system — see
-`517_retire_splynx_staging_schema.py`; `splynx_service_id`/`router_id` are
+`alembic/versions/518_retire_splynx_staging_schema.py`; `splynx_service_id`/`router_id` are
 carried display fields only, not FKs into `nas_devices`/`RouterInventory`,
 and identify no current NAS). Fixing that acquisition gap for the existing
 cohort is a data investigation/backfill task, not a code change to this
@@ -782,6 +922,31 @@ settlement command, which atomically allocates funding, creates entitlement,
 and advances the billing anchor. Ambiguous or changed evidence leaves all
 customer and financial state unchanged.
 
+## Legacy payment-backed prepaid renewal invoice repair
+
+A historical payment-linked service debit and its active ledger-backed
+entitlement can be converted to canonical paid-invoice evidence only through
+`financial.prepaid_service_renewals`. The preview is read-only and accepts
+explicit account, subscription, Payment, ledger, entitlement, UTC period,
+gross, currency, and expected surviving funding. It proves one active
+succeeded and unreturned settlement, one unreversed invoice-source service
+debit with no invoice or `AccountAdjustment`, one exact entitlement, exclusive
+contract tax, an anchor equal to the selected coverage end, and no competing
+invoice or overlap. Settlement-level prepaid consumption must be zero or the
+same gross amount, and any payment-linked invoice-less renewal outcome must
+identify only the selected chain. The payment projection retains those
+historical facts but reclassifies their amount to the new paid allocation,
+preventing double consumption in payment history.
+
+Apply requires the reviewed fingerprint, a real user UUID, confirmed
+`billing:ledger:write` permission, a non-secret approval reference, reason, and
+bounded idempotency key. The owner appends a structural ledger reversal,
+retires the old entitlement, creates and settles the canonical invoice from
+the selected Payment, replaces the entitlement for the identical interval,
+and reprojects the unchanged anchor. It refuses any cross-currency netting or
+funding drift. See
+`docs/runbooks/LEGACY_PAYMENT_BACKED_PREPAID_RENEWAL_INVOICE_REPAIR.md`.
+
 ## Subscription pause
 
 `paused` is distinct from `suspended`. A paused subscription denies normal
@@ -854,6 +1019,25 @@ and `malformed_renewal_origin` with
 `docs/runbooks/PREPAID_COVERAGE_QUARANTINE_FINANCE_REVIEW.md`, starting from the
 read-only `scripts/billing/diagnose_prepaid_coverage_quarantine.py`, which lists
 the exact records and the reviewed owner (if any) for each.
+A malformed paid-invoice period is corrected only by the four-eyes
+`financial.prepaid_paid_invoice_period_repair` owner
+(`scripts/billing/repair_prepaid_paid_invoice_period.py`): Finance supplies the
+subscription and period, a second staff member approves the fingerprint-bound
+request, and the owner restores the period and its entitlement atomically.
+A `malformed_renewal_origin` debit that Finance has decided is legitimate (the
+customer received the service; only the reference is wrong) is corrected by
+`financial.prepaid_renewal_origin_correction`
+(`scripts/billing/correct_prepaid_renewal_origin.py`): a read-only preview, then
+a confirmation bound to its fingerprint. The canonical
+`<subscription>:<start>:<end>` reference is derived from structured coverage
+evidence (the one entitlement already linked to the debit, the one Finance
+names, or an entitlement created through the existing wallet-debit writer), and
+only `origin_ref` changes; no money, ledger debit, or balance moves.
+A PAID invoice that carries a legacy (Splynx-era) allocation exceeding its total
+is corrected by `financial.legacy_over_allocation_correction`
+(`scripts/billing/return_legacy_over_allocation.py`,
+`docs/runbooks/LEGACY_OVER_ALLOCATION_RETURN.md`), which the reviewed
+payment-allocation reversal cannot do.
 
 Preview prepaid-lock cleanup from active lock evidence, not subscriber status,
 invoice status, or paid-through date:
@@ -994,6 +1178,11 @@ exports, or secret values in these records.
 - `app/services/radius_access_state.py`
 - `app/services/radius_population.py`
 - `app/services/radius_projection_planner.py`
+- `app/services/walled_garden_policy.py`
+- `app/services/captive_access_policy.py`
+- `app/services/captive_router_gate.py`
+- `app/services/captive_access_policy_change.py`
+- `scripts/network/captive_access_policy.py`
 - `app/services/radius.py`
 - `app/services/enforcement.py`
 - `app/tasks/radius.py`
@@ -1012,6 +1201,11 @@ exports, or secret values in these records.
 - `tests/test_account_lifecycle.py`
 - `tests/test_events_enforcement_services.py`
 - `tests/test_radius_shadow_handler_integration.py`
+- `tests/test_walled_garden_policy.py`
+- `tests/test_captive_access_policy.py`
+- `tests/test_captive_router_gate.py`
+- `tests/test_captive_access_policy_change.py`
+- `tests/integration/test_captive_access_policy_migration.py`
 # Account-scoped native opening omissions
 
 An account created after the legacy financial handoff but before the prepaid

@@ -28,8 +28,10 @@ from app.services.channel_health_contracts import (
 )
 from app.services.operator_tenant import operator_tenant_id
 from app.services.response import ListResponseMixin
+from app.services.router_health.policy import router_health_policy_error
 from app.services.settings_specs.integration import build_integration_specs
 from app.services.settings_specs.provisioning import build_provisioning_specs
+from app.services.settings_specs.router_health import build_router_health_specs
 from app.timezone import APP_TIMEZONE_NAME
 
 logger = logging.getLogger(__name__)
@@ -92,6 +94,21 @@ class SettingSpec(ListResponseMixin):
     #: Translated to the kernel spec verbatim (``settings_kernel_bridge``); the
     #: kernel resolver is what actually shortens the chain.
     inherits: bool = True
+    #: ``True`` keeps the key out of every generic writer (REST PUT, the
+    #: ``DomainSettings`` create/update/upsert/delete helpers, form savers). The
+    #: only write path is ``apply_admin_settings_form_updates`` (scope
+    #: ``control:settings:write``), which audits every change. Declare it for a
+    #: governance switch whose change must always leave an audit event.
+    owner_command_only: bool = False
+    #: Optional dedicated RBAC permission key the acting system user must hold
+    #: (exact key, granted through a role or directly; the ``admin`` role and
+    #: wildcard grants do NOT satisfy it) IN ADDITION to ``control:settings:write``
+    #: before the owner command writes this key. Refused attempts are audited.
+    required_permission: str | None = None
+    #: With ``required_permission`` on a boolean: require it only to turn the
+    #: setting ON. Writing ``False`` (the safe direction) needs only
+    #: ``control:settings:write`` and is still audited.
+    required_permission_enable_only: bool = False
     allowed: set[str] | None = None
     min_value: int | None = None
     max_value: int | None = None
@@ -115,6 +132,7 @@ SCHEDULER_BOOLEAN_SETTING_KEYS = frozenset(
         (SettingDomain.notification, "operational_escalation_delivery_enabled"),
         (SettingDomain.notification, "zeptomail_delivery_tracking_enabled"),
         (SettingDomain.radius, "connectivity_shadow_audit_enabled"),
+        (SettingDomain.network, "ipv4_retention_release_enabled"),
         (SettingDomain.radius, "ip_consistency_audit_enabled"),
         (SettingDomain.radius, "radius_sync_enabled"),
         (SettingDomain.radius, "suspension_audit_enabled"),
@@ -1994,6 +2012,40 @@ SETTINGS_SPECS: list[SettingSpec] = [
         label="PPPoE Auto-Generated Password Length",
     ),
     SettingSpec(
+        domain=SettingDomain.radius,
+        key="pppoe_credential_on_new_service",
+        env_var=None,
+        value_type=SettingValueType.string,
+        default="new",
+        # "ask" is reserved for the Starter access-credentials owner and is
+        # deliberately not accepted here.
+        allowed={"new", "inherit"},
+        string_normalization=SettingStringNormalization.LOWERCASE,
+        label="PPPoE credential on a replacement service (new | inherit)",
+    ),
+    SettingSpec(
+        domain=SettingDomain.radius,
+        key="pppoe_credential_inherit_from_statuses",
+        env_var=None,
+        value_type=SettingValueType.string,
+        default="disabled,canceled,expired",
+        string_normalization=SettingStringNormalization.LOWERCASE,
+        label=(
+            "Ended service statuses whose PPPoE credential a replacement may "
+            "inherit (comma-separated subset of disabled, canceled, expired)"
+        ),
+    ),
+    SettingSpec(
+        domain=SettingDomain.radius,
+        key="pppoe_credential_change_disconnect",
+        env_var=None,
+        value_type=SettingValueType.string,
+        default="immediate_after_projection",
+        allowed={"immediate_after_projection", "none"},
+        string_normalization=SettingStringNormalization.LOWERCASE,
+        label="Disconnect live session after a PPPoE credential edit",
+    ),
+    SettingSpec(
         domain=SettingDomain.billing,
         key="default_currency",
         env_var="BILLING_DEFAULT_CURRENCY",
@@ -2174,6 +2226,594 @@ SETTINGS_SPECS: list[SettingSpec] = [
         min_value=5,
         max_value=1440,
         label="Gateway Top-Up Intent Lifetime (minutes)",
+    ),
+    SettingSpec(
+        domain=SettingDomain.billing,
+        key="starter_billing_account_ref_template",
+        env_var="BILLING_STARTER_BILLING_ACCOUNT_REF_TEMPLATE",
+        value_type=SettingValueType.string,
+        default="subscriber:{subscriber_id}",
+        label="Starter Billing Account Reference Template",
+    ),
+    SettingSpec(
+        domain=SettingDomain.billing,
+        key="starter_billing_source_system",
+        env_var="BILLING_STARTER_BILLING_SOURCE_SYSTEM",
+        value_type=SettingValueType.string,
+        default="dotmac-sub",
+        label="Starter Billing Source System",
+    ),
+    SettingSpec(
+        domain=SettingDomain.billing,
+        key="starter_billing_admin_source_kind",
+        env_var="BILLING_STARTER_BILLING_ADMIN_SOURCE_KIND",
+        value_type=SettingValueType.string,
+        default="admin_manual_invoice_line",
+        label="Starter Billing Admin Obligation Source Kind",
+    ),
+    SettingSpec(
+        domain=SettingDomain.billing,
+        key="starter_billing_admin_contract_line_template",
+        env_var="BILLING_STARTER_BILLING_ADMIN_CONTRACT_LINE_TEMPLATE",
+        value_type=SettingValueType.string,
+        default="admin-manual:{line_id}",
+        label="Starter Billing Admin Contract Line Template",
+    ),
+    SettingSpec(
+        domain=SettingDomain.billing,
+        key="starter_billing_admin_contract_version",
+        env_var="BILLING_STARTER_BILLING_ADMIN_CONTRACT_VERSION",
+        value_type=SettingValueType.string,
+        default="admin-manual-v1",
+        label="Starter Billing Admin Contract Version",
+    ),
+    SettingSpec(
+        domain=SettingDomain.billing,
+        key="starter_billing_admin_price_version",
+        env_var="BILLING_STARTER_BILLING_ADMIN_PRICE_VERSION",
+        value_type=SettingValueType.string,
+        default="admin-manual-v1",
+        label="Starter Billing Admin Price Version",
+    ),
+    SettingSpec(
+        domain=SettingDomain.billing,
+        key="starter_billing_admin_fx_observation_template",
+        env_var="BILLING_STARTER_BILLING_ADMIN_FX_OBSERVATION_TEMPLATE",
+        value_type=SettingValueType.string,
+        default="admin-manual-fx:{invoice_id}",
+        label="Starter Billing Admin FX Observation Template",
+    ),
+    SettingSpec(
+        domain=SettingDomain.billing,
+        key="starter_billing_recurring_source_kind",
+        env_var="BILLING_STARTER_BILLING_RECURRING_SOURCE_KIND",
+        value_type=SettingValueType.string,
+        default="scheduled_billing_invoice_line",
+        label="Starter Billing Recurring Obligation Source Kind",
+    ),
+    SettingSpec(
+        domain=SettingDomain.billing,
+        key="starter_billing_recurring_contract_line_template",
+        env_var="BILLING_STARTER_BILLING_RECURRING_CONTRACT_LINE_TEMPLATE",
+        value_type=SettingValueType.string,
+        default="scheduled-billing:{line_id}",
+        label="Starter Billing Recurring Contract Line Template",
+    ),
+    SettingSpec(
+        domain=SettingDomain.billing,
+        key="starter_billing_recurring_contract_version",
+        env_var="BILLING_STARTER_BILLING_RECURRING_CONTRACT_VERSION",
+        value_type=SettingValueType.string,
+        default="scheduled-billing-v1",
+        label="Starter Billing Recurring Contract Version",
+    ),
+    SettingSpec(
+        domain=SettingDomain.billing,
+        key="starter_billing_recurring_price_version",
+        env_var="BILLING_STARTER_BILLING_RECURRING_PRICE_VERSION",
+        value_type=SettingValueType.string,
+        default="scheduled-billing-v1",
+        label="Starter Billing Recurring Price Version",
+    ),
+    SettingSpec(
+        domain=SettingDomain.billing,
+        key="starter_billing_recurring_source_fact_template",
+        env_var="BILLING_STARTER_BILLING_RECURRING_SOURCE_FACT_TEMPLATE",
+        value_type=SettingValueType.string,
+        default="scheduled-billing-invoice:{invoice_id}",
+        label="Starter Billing Recurring Source Fact Template",
+    ),
+    SettingSpec(
+        domain=SettingDomain.billing,
+        key="starter_billing_recurring_line_source_fact_template",
+        env_var="BILLING_STARTER_BILLING_RECURRING_LINE_SOURCE_FACT_TEMPLATE",
+        value_type=SettingValueType.string,
+        default="scheduled-billing-invoice-line:{line_id}",
+        label="Starter Billing Recurring Line Source Fact Template",
+    ),
+    SettingSpec(
+        domain=SettingDomain.billing,
+        key="starter_billing_recurring_fx_observation_template",
+        env_var="BILLING_STARTER_BILLING_RECURRING_FX_OBSERVATION_TEMPLATE",
+        value_type=SettingValueType.string,
+        default="scheduled-billing-fx:{invoice_id}",
+        label="Starter Billing Recurring FX Observation Template",
+    ),
+    SettingSpec(
+        domain=SettingDomain.billing,
+        key="starter_billing_prepaid_source_kind",
+        env_var="BILLING_STARTER_BILLING_PREPAID_SOURCE_KIND",
+        value_type=SettingValueType.string,
+        default="prepaid_period_purchase",
+        label="Starter Billing Prepaid Obligation Source Kind",
+    ),
+    SettingSpec(
+        domain=SettingDomain.billing,
+        key="starter_billing_prepaid_contract_line_template",
+        env_var="BILLING_STARTER_BILLING_PREPAID_CONTRACT_LINE_TEMPLATE",
+        value_type=SettingValueType.string,
+        default="prepaid-period:{billing_line_key}",
+        label="Starter Billing Prepaid Contract Line Template",
+    ),
+    SettingSpec(
+        domain=SettingDomain.billing,
+        key="starter_billing_prepaid_contract_version",
+        env_var="BILLING_STARTER_BILLING_PREPAID_CONTRACT_VERSION",
+        value_type=SettingValueType.string,
+        default="prepaid-renewal-v1",
+        label="Starter Billing Prepaid Contract Version",
+    ),
+    SettingSpec(
+        domain=SettingDomain.billing,
+        key="starter_billing_prepaid_price_version",
+        env_var="BILLING_STARTER_BILLING_PREPAID_PRICE_VERSION",
+        value_type=SettingValueType.string,
+        default="prepaid-renewal-v1",
+        label="Starter Billing Prepaid Price Version",
+    ),
+    SettingSpec(
+        domain=SettingDomain.billing,
+        key="starter_billing_prepaid_source_fact_template",
+        env_var="BILLING_STARTER_BILLING_PREPAID_SOURCE_FACT_TEMPLATE",
+        value_type=SettingValueType.string,
+        default="prepaid-period:{billing_line_key}",
+        label="Starter Billing Prepaid Source Fact Template",
+    ),
+    SettingSpec(
+        domain=SettingDomain.billing,
+        key="starter_billing_prepaid_line_source_fact_template",
+        env_var="BILLING_STARTER_BILLING_PREPAID_LINE_SOURCE_FACT_TEMPLATE",
+        value_type=SettingValueType.string,
+        default="prepaid-period-line:{billing_line_key}",
+        label="Starter Billing Prepaid Line Source Fact Template",
+    ),
+    SettingSpec(
+        domain=SettingDomain.billing,
+        key="starter_billing_prepaid_fx_observation_template",
+        env_var="BILLING_STARTER_BILLING_PREPAID_FX_OBSERVATION_TEMPLATE",
+        value_type=SettingValueType.string,
+        default="prepaid-period-fx:{invoice_id}",
+        label="Starter Billing Prepaid FX Observation Template",
+    ),
+    SettingSpec(
+        domain=SettingDomain.billing,
+        key="starter_payments_prepaid_confirmation_source",
+        env_var="BILLING_STARTER_PAYMENTS_PREPAID_CONFIRMATION_SOURCE",
+        value_type=SettingValueType.string,
+        default="PROVIDER_CALLBACK",
+        label="Starter Prepaid Funding Confirmation Source",
+    ),
+    SettingSpec(
+        domain=SettingDomain.billing,
+        key="starter_billing_prepaid_funding_lane",
+        env_var="BILLING_STARTER_BILLING_PREPAID_FUNDING_LANE",
+        value_type=SettingValueType.string,
+        default="prepaid_funding",
+        label="Starter Billing Prepaid Funding Lane",
+    ),
+    SettingSpec(
+        domain=SettingDomain.billing,
+        key="starter_billing_prepaid_earmark_source_ref_template",
+        env_var="BILLING_STARTER_BILLING_PREPAID_EARMARK_SOURCE_REF_TEMPLATE",
+        value_type=SettingValueType.string,
+        default="prepaid-earmark:{confirmation_id}",
+        label="Starter Billing Prepaid Earmark Source Reference Template",
+    ),
+    SettingSpec(
+        domain=SettingDomain.billing,
+        key="starter_billing_prepaid_allocation_source_ref_template",
+        env_var=("BILLING_STARTER_BILLING_PREPAID_ALLOCATION_SOURCE_REF_TEMPLATE"),
+        value_type=SettingValueType.string,
+        default="prepaid-allocation:{source_fact_id}",
+        label="Starter Billing Prepaid Allocation Source Reference Template",
+    ),
+    SettingSpec(
+        domain=SettingDomain.billing,
+        key="starter_billing_system_actor_ref",
+        env_var="BILLING_STARTER_BILLING_SYSTEM_ACTOR_REF",
+        value_type=SettingValueType.string,
+        default="system:billing_automation",
+        label="Starter Billing System Actor Reference",
+    ),
+    SettingSpec(
+        domain=SettingDomain.billing,
+        key="starter_billing_default_minor_units",
+        env_var="BILLING_STARTER_BILLING_DEFAULT_MINOR_UNITS",
+        value_type=SettingValueType.integer,
+        default=2,
+        min_value=0,
+        max_value=6,
+        label="Starter Billing Default Currency Minor Units",
+    ),
+    SettingSpec(
+        domain=SettingDomain.billing,
+        key="starter_billing_subject_party_template",
+        env_var="BILLING_STARTER_BILLING_SUBJECT_PARTY_TEMPLATE",
+        value_type=SettingValueType.string,
+        default="party:{party_id}",
+        label="Starter Billing Subject Party Reference Template",
+    ),
+    SettingSpec(
+        domain=SettingDomain.billing,
+        key="starter_billing_subject_subscriber_template",
+        env_var="BILLING_STARTER_BILLING_SUBJECT_SUBSCRIBER_TEMPLATE",
+        value_type=SettingValueType.string,
+        default="subscriber:{subscriber_id}",
+        label="Starter Billing Subject Subscriber Reference Template",
+    ),
+    SettingSpec(
+        domain=SettingDomain.billing,
+        key="starter_billing_service_subscription_template",
+        env_var="BILLING_STARTER_BILLING_SERVICE_SUBSCRIPTION_TEMPLATE",
+        value_type=SettingValueType.string,
+        default="subscription:{subscription_id}",
+        label="Starter Billing Service Subscription Reference Template",
+    ),
+    SettingSpec(
+        domain=SettingDomain.billing,
+        key="starter_billing_service_subscriber_template",
+        env_var="BILLING_STARTER_BILLING_SERVICE_SUBSCRIBER_TEMPLATE",
+        value_type=SettingValueType.string,
+        default="subscriber:{subscriber_id}",
+        label="Starter Billing Service Subscriber Reference Template",
+    ),
+    SettingSpec(
+        domain=SettingDomain.billing,
+        key="starter_billing_source_fact_version",
+        env_var="BILLING_STARTER_BILLING_SOURCE_FACT_VERSION",
+        value_type=SettingValueType.string,
+        default="1",
+        label="Starter Billing Source Fact Version",
+    ),
+    SettingSpec(
+        domain=SettingDomain.billing,
+        key="starter_billing_fx_observation_version",
+        env_var="BILLING_STARTER_BILLING_FX_OBSERVATION_VERSION",
+        value_type=SettingValueType.string,
+        default="1",
+        label="Starter Billing FX Observation Version",
+    ),
+    SettingSpec(
+        domain=SettingDomain.billing,
+        key="starter_billing_fx_rate_purpose",
+        env_var="BILLING_STARTER_BILLING_FX_RATE_PURPOSE",
+        value_type=SettingValueType.string,
+        default="document_currency",
+        label="Starter Billing FX Rate Purpose",
+    ),
+    SettingSpec(
+        domain=SettingDomain.billing,
+        key="starter_billing_fx_rounding_policy",
+        env_var="BILLING_STARTER_BILLING_FX_ROUNDING_POLICY",
+        value_type=SettingValueType.string,
+        default="minor_units",
+        label="Starter Billing FX Rounding Policy",
+    ),
+    SettingSpec(
+        domain=SettingDomain.billing,
+        key="starter_billing_fx_provenance",
+        env_var="BILLING_STARTER_BILLING_FX_PROVENANCE",
+        value_type=SettingValueType.string,
+        default="source-supplied",
+        label="Starter Billing FX Provenance",
+    ),
+    SettingSpec(
+        domain=SettingDomain.billing,
+        key="starter_billing_payment_method_code",
+        env_var="BILLING_STARTER_BILLING_PAYMENT_METHOD_CODE",
+        value_type=SettingValueType.string,
+        default="bank_transfer",
+        label="Starter Billing Payment Method Code",
+    ),
+    SettingSpec(
+        domain=SettingDomain.billing,
+        key="starter_billing_correlation_template",
+        env_var="BILLING_STARTER_BILLING_CORRELATION_TEMPLATE",
+        value_type=SettingValueType.string,
+        default="starter-issuance:{invoice_id}",
+        label="Starter Billing Issuance Correlation Template",
+    ),
+    SettingSpec(
+        domain=SettingDomain.billing,
+        key="starter_billing_due_evidence_ref_template",
+        env_var="BILLING_STARTER_BILLING_DUE_EVIDENCE_REF_TEMPLATE",
+        value_type=SettingValueType.string,
+        default="invoice-draft:{invoice_id}",
+        label="Starter Billing Due Evidence Reference Template",
+    ),
+    SettingSpec(
+        domain=SettingDomain.billing,
+        key="starter_billing_default_charge_component",
+        env_var="BILLING_STARTER_BILLING_DEFAULT_CHARGE_COMPONENT",
+        value_type=SettingValueType.string,
+        default="other",
+        label="Starter Billing Default Charge Component",
+    ),
+    SettingSpec(
+        domain=SettingDomain.billing,
+        key="starter_billing_tax_jurisdiction",
+        env_var="BILLING_STARTER_BILLING_TAX_JURISDICTION",
+        value_type=SettingValueType.string,
+        default="NG",
+        label="Starter Billing Tax Jurisdiction",
+    ),
+    SettingSpec(
+        domain=SettingDomain.billing,
+        key="starter_billing_tax_policy_id",
+        env_var="BILLING_STARTER_BILLING_TAX_POLICY_ID",
+        value_type=SettingValueType.string,
+        default="sub-manual-vat",
+        label="Starter Billing Tax Policy Id",
+    ),
+    SettingSpec(
+        domain=SettingDomain.billing,
+        key="starter_billing_tax_policy_version",
+        env_var="BILLING_STARTER_BILLING_TAX_POLICY_VERSION",
+        value_type=SettingValueType.string,
+        default="1",
+        label="Starter Billing Tax Policy Version",
+    ),
+    SettingSpec(
+        domain=SettingDomain.billing,
+        key="starter_billing_due_terms_version",
+        env_var="BILLING_STARTER_BILLING_DUE_TERMS_VERSION",
+        value_type=SettingValueType.string,
+        default="1",
+        label="Starter Billing Due Terms Version",
+    ),
+    SettingSpec(
+        domain=SettingDomain.billing,
+        key="starter_billing_due_derivation_policy",
+        env_var="BILLING_STARTER_BILLING_DUE_DERIVATION_POLICY",
+        value_type=SettingValueType.string,
+        default="calendar_days",
+        label="Starter Billing Due Derivation Policy",
+    ),
+    SettingSpec(
+        domain=SettingDomain.billing,
+        key="starter_billing_due_derivation_version",
+        env_var="BILLING_STARTER_BILLING_DUE_DERIVATION_VERSION",
+        value_type=SettingValueType.string,
+        default="1",
+        label="Starter Billing Due Derivation Version",
+    ),
+    SettingSpec(
+        domain=SettingDomain.billing,
+        key="starter_billing_invoice_series",
+        env_var="BILLING_STARTER_BILLING_INVOICE_SERIES",
+        value_type=SettingValueType.string,
+        default="invoice",
+        label="Starter Billing Invoice Numbering Series",
+    ),
+    SettingSpec(
+        domain=SettingDomain.billing,
+        key="starter_billing_credit_source_fact_template",
+        env_var="BILLING_STARTER_BILLING_CREDIT_SOURCE_FACT_TEMPLATE",
+        value_type=SettingValueType.string,
+        default="credit-note-issue:{credit_note_id}",
+        label="Starter Billing Credit Source Fact Template",
+    ),
+    SettingSpec(
+        domain=SettingDomain.billing,
+        key="starter_billing_credit_correlation_template",
+        env_var="BILLING_STARTER_BILLING_CREDIT_CORRELATION_TEMPLATE",
+        value_type=SettingValueType.string,
+        default="starter-credit-issue:{idempotency_key}",
+        label="Starter Billing Credit Correlation Template",
+    ),
+    SettingSpec(
+        domain=SettingDomain.billing,
+        key="starter_billing_credit_note_series",
+        env_var="BILLING_STARTER_BILLING_CREDIT_NOTE_SERIES",
+        value_type=SettingValueType.string,
+        default="credit-note",
+        label="Starter Billing Credit Note Numbering Series",
+    ),
+    SettingSpec(
+        domain=SettingDomain.billing,
+        key="starter_billing_document_profile_code",
+        env_var="BILLING_STARTER_BILLING_DOCUMENT_PROFILE_CODE",
+        value_type=SettingValueType.string,
+        default="invoice.standard",
+        label="Starter Billing Invoice Document Profile",
+    ),
+    SettingSpec(
+        domain=SettingDomain.billing,
+        key="starter_billing_document_profile_version",
+        env_var="BILLING_STARTER_BILLING_DOCUMENT_PROFILE_VERSION",
+        value_type=SettingValueType.string,
+        default="1",
+        label="Starter Billing Invoice Document Profile Version",
+    ),
+    SettingSpec(
+        domain=SettingDomain.billing,
+        key="starter_billing_credit_note_profile_code",
+        env_var="BILLING_STARTER_BILLING_CREDIT_NOTE_PROFILE_CODE",
+        value_type=SettingValueType.string,
+        default="credit_note.standard",
+        label="Starter Billing Credit Note Document Profile",
+    ),
+    SettingSpec(
+        domain=SettingDomain.billing,
+        key="starter_billing_default_locale",
+        env_var="BILLING_STARTER_BILLING_DEFAULT_LOCALE",
+        value_type=SettingValueType.string,
+        default="en-NG",
+        label="Starter Billing Default Locale",
+    ),
+    SettingSpec(
+        domain=SettingDomain.billing,
+        key="starter_billing_default_timezone",
+        env_var="BILLING_STARTER_BILLING_DEFAULT_TIMEZONE",
+        value_type=SettingValueType.string,
+        default="Africa/Lagos",
+        label="Starter Billing Default Timezone",
+    ),
+    SettingSpec(
+        domain=SettingDomain.billing,
+        key="starter_billing_default_unit_code",
+        env_var="BILLING_STARTER_BILLING_DEFAULT_UNIT_CODE",
+        value_type=SettingValueType.string,
+        default="unit",
+        label="Starter Billing Default Unit Code",
+    ),
+    SettingSpec(
+        domain=SettingDomain.billing,
+        key="starter_payments_accepted_evidence",
+        env_var="BILLING_STARTER_PAYMENTS_ACCEPTED_EVIDENCE",
+        value_type=SettingValueType.string,
+        default="dotmac-payments:confirmed-cash-v1",
+        label="Starter Payments Accepted Confirmation Evidence (comma-separated)",
+    ),
+    SettingSpec(
+        domain=SettingDomain.billing,
+        key="starter_billing_admin_source_fact_template",
+        env_var="BILLING_STARTER_BILLING_ADMIN_SOURCE_FACT_TEMPLATE",
+        value_type=SettingValueType.string,
+        default="admin-manual-invoice:{invoice_id}",
+        label="Starter Billing Admin Source Fact Template",
+    ),
+    SettingSpec(
+        domain=SettingDomain.billing,
+        key="starter_billing_admin_line_source_fact_template",
+        env_var="BILLING_STARTER_BILLING_ADMIN_LINE_SOURCE_FACT_TEMPLATE",
+        value_type=SettingValueType.string,
+        default="admin-manual-invoice-line:{line_id}",
+        label="Starter Billing Admin Line Source Fact Template",
+    ),
+    SettingSpec(
+        domain=SettingDomain.billing,
+        key="starter_billing_invoice_series_prefix",
+        env_var="BILLING_STARTER_BILLING_INVOICE_SERIES_PREFIX",
+        value_type=SettingValueType.string,
+        default="INV",
+        label="Starter Billing Invoice Series Prefix",
+    ),
+    SettingSpec(
+        domain=SettingDomain.billing,
+        key="starter_billing_credit_note_series_prefix",
+        env_var="BILLING_STARTER_BILLING_CREDIT_NOTE_SERIES_PREFIX",
+        value_type=SettingValueType.string,
+        default="CN",
+        label="Starter Billing Credit Note Series Prefix",
+    ),
+    SettingSpec(
+        domain=SettingDomain.billing,
+        key="starter_billing_default_country_code",
+        env_var="BILLING_STARTER_BILLING_DEFAULT_COUNTRY_CODE",
+        value_type=SettingValueType.string,
+        default="NGA",
+        label="Starter Billing Default Country Code (ISO alpha-3)",
+    ),
+    SettingSpec(
+        domain=SettingDomain.billing,
+        key="starter_billing_series_start_value",
+        env_var="BILLING_STARTER_BILLING_SERIES_START_VALUE",
+        value_type=SettingValueType.integer,
+        default=1,
+        min_value=1,
+        label="Starter Billing Numbering Series Start Value (seed past legacy maximum before enabling issuance)",
+    ),
+    SettingSpec(
+        domain=SettingDomain.billing,
+        key="starter_payments_settlement_source_system",
+        env_var="BILLING_STARTER_PAYMENTS_SETTLEMENT_SOURCE_SYSTEM",
+        value_type=SettingValueType.string,
+        default="dotmac-payments",
+        label="Starter Settlement Source System",
+    ),
+    SettingSpec(
+        domain=SettingDomain.billing,
+        key="starter_billing_settlement_source_version",
+        env_var="BILLING_STARTER_BILLING_SETTLEMENT_SOURCE_VERSION",
+        value_type=SettingValueType.string,
+        default="1",
+        label="Starter Billing Settlement Source Version",
+    ),
+    SettingSpec(
+        domain=SettingDomain.billing,
+        key="starter_billing_settlement_funding_lane",
+        env_var="BILLING_STARTER_BILLING_SETTLEMENT_FUNDING_LANE",
+        value_type=SettingValueType.string,
+        default="available_credit",
+        label="Starter Billing Settlement Funding Lane",
+    ),
+    SettingSpec(
+        domain=SettingDomain.billing,
+        key="starter_billing_settlement_source_ref_template",
+        env_var="BILLING_STARTER_BILLING_SETTLEMENT_SOURCE_REF_TEMPLATE",
+        value_type=SettingValueType.string,
+        default="payments-confirmation:{confirmation_id}",
+        label="Starter Billing Settlement Source Reference Template",
+    ),
+    SettingSpec(
+        domain=SettingDomain.billing,
+        key="starter_payments_confirmation_evidence",
+        env_var="BILLING_STARTER_PAYMENTS_CONFIRMATION_EVIDENCE",
+        value_type=SettingValueType.string,
+        default="dotmac-payments:confirmed-cash-v1",
+        label="Starter Payments Confirmation Evidence Token Presented To Billing",
+    ),
+    SettingSpec(
+        domain=SettingDomain.billing,
+        key="starter_payments_manual_intent_reference_template",
+        env_var="BILLING_STARTER_PAYMENTS_MANUAL_INTENT_REFERENCE_TEMPLATE",
+        value_type=SettingValueType.string,
+        default="manual:{idempotency_key}",
+        label="Starter Manual Payment Intent Reference Template",
+    ),
+    SettingSpec(
+        domain=SettingDomain.billing,
+        key="starter_payments_manual_confirmation_source",
+        env_var="BILLING_STARTER_PAYMENTS_MANUAL_CONFIRMATION_SOURCE",
+        value_type=SettingValueType.string,
+        default="TRANSFER_PROOF",
+        label="Starter Manual Payment Confirmation Source",
+    ),
+    SettingSpec(
+        domain=SettingDomain.billing,
+        key="starter_payments_manual_intent_provider_type",
+        env_var="BILLING_STARTER_PAYMENTS_MANUAL_INTENT_PROVIDER_TYPE",
+        value_type=SettingValueType.string,
+        default="manual",
+        label="Starter Manual Payment Intent Provider Type",
+    ),
+    SettingSpec(
+        domain=SettingDomain.billing,
+        key="starter_payments_manual_intent_channel",
+        env_var="BILLING_STARTER_PAYMENTS_MANUAL_INTENT_CHANNEL",
+        value_type=SettingValueType.string,
+        default="staff_admin",
+        label="Starter Manual Payment Intent Channel",
+    ),
+    SettingSpec(
+        domain=SettingDomain.billing,
+        key="starter_payments_manual_intent_expiry_hours",
+        env_var="BILLING_STARTER_PAYMENTS_MANUAL_INTENT_EXPIRY_HOURS",
+        value_type=SettingValueType.integer,
+        default=24,
+        min_value=1,
+        label="Starter Manual Payment Intent Expiry (hours)",
     ),
     SettingSpec(
         domain=SettingDomain.billing,
@@ -3113,14 +3753,6 @@ SETTINGS_SPECS: list[SettingSpec] = [
         value_type=SettingValueType.string,
         default="local",
         allowed={"local", "sso", "radius"},
-    ),
-    SettingSpec(
-        domain=SettingDomain.auth,
-        key="default_session_status",
-        env_var="AUTH_DEFAULT_SESSION_STATUS",
-        value_type=SettingValueType.string,
-        default="active",
-        allowed={"active", "revoked", "expired"},
     ),
     # --- Field-mobile OIDC federation (docs/designs/OIDC_MOBILE_FEDERATION.md).
     #
@@ -4502,6 +5134,8 @@ SETTINGS_SPECS: list[SettingSpec] = [
     *build_provisioning_specs(SettingSpec),
     # ============== Integration Domain (DotMac ERP edge) ==============
     *build_integration_specs(SettingSpec),
+    # ============== Router health reconciler (network.router_health) ==============
+    *build_router_health_specs(SettingSpec),
     SettingSpec(
         domain=SettingDomain.snmp,
         key="interface_walk_interval_seconds",
@@ -4525,6 +5159,32 @@ SETTINGS_SPECS: list[SettingSpec] = [
         value_type=SettingValueType.string,
         default=None,
         label="Default TR-069 ACS Server ID",
+    ),
+    SettingSpec(
+        domain=SettingDomain.tr069,
+        key="tr069_webhook_auth_mode",
+        env_var=None,
+        value_type=SettingValueType.string,
+        default="log_only",
+        allowed={"log_only", "enforce"},
+        label="GenieACS webhook token check (log_only | enforce)",
+        inherits=False,
+        owner_command_only=True,
+    ),
+    SettingSpec(
+        domain=SettingDomain.tr069,
+        key="tr069_webhook_allowed_sources",
+        env_var=None,
+        value_type=SettingValueType.string,
+        default=None,
+        label=(
+            "GenieACS webhook allowed source addresses (comma-separated IPs/CIDRs; "
+            "empty = token only). nginx and GenieACS can share a source address "
+            "(the bridge gateway), so this only keeps out sibling containers; "
+            "the token is the real control"
+        ),
+        inherits=False,
+        owner_command_only=True,
     ),
     SettingSpec(
         domain=SettingDomain.network,
@@ -5148,21 +5808,14 @@ SETTINGS_SPECS: list[SettingSpec] = [
         default=True,
         label="Cross-application drift detection",
     ),
-    # The request-audit middleware's five controls. They were writable through
+    # The request-audit middleware's four controls (the former `enabled` switch
+    # was removed: request auditing cannot be turned off by configuration). They were writable through
     # `settings_api_custom` with NO spec at all — the custom handler validates
     # against its own `_AUDIT_SETTING_*` sets, so nothing required a
     # declaration. Declared here at their EXACT current shape (seed:
     # `seed_audit_settings`; runtime defaults: `app.main._default_audit_settings`)
     # so the two agree before the handler is routed through the spec.
     # `tests/architecture/test_audit_setting_defaults.py` pins that agreement.
-    SettingSpec(
-        domain=SettingDomain.audit,
-        key="enabled",
-        env_var=None,
-        value_type=SettingValueType.boolean,
-        default=True,
-        label="Request audit logging",
-    ),
     SettingSpec(
         domain=SettingDomain.audit,
         key="methods",
@@ -5218,6 +5871,43 @@ SETTINGS_SPECS: list[SettingSpec] = [
         value_type=SettingValueType.boolean,
         default=True,
         label="RADIUS IPv4 consistency audit",
+    ),
+    SettingSpec(
+        domain=SettingDomain.network,
+        key="ipv4_retention_release_enabled",
+        env_var="NETWORK_IPV4_RETENTION_RELEASE_ENABLED",
+        value_type=SettingValueType.boolean,
+        default=True,
+        label="IPv4 retention sweep (daily; shadow unless mode=apply)",
+    ),
+    SettingSpec(
+        domain=SettingDomain.network,
+        key="ipv4_retention_days_after_disable",
+        env_var="NETWORK_IPV4_RETENTION_DAYS_AFTER_DISABLE",
+        value_type=SettingValueType.integer,
+        default=30,
+        min_value=1,
+        max_value=3650,
+        label="IPv4 retention days after disable/hide/cancel/archive",
+    ),
+    SettingSpec(
+        domain=SettingDomain.network,
+        key="ipv4_retention_release_mode",
+        env_var="NETWORK_IPV4_RETENTION_RELEASE_MODE",
+        value_type=SettingValueType.string,
+        default="shadow",
+        allowed={"shadow", "apply"},
+        label="IPv4 retention release mode (shadow reports only)",
+    ),
+    SettingSpec(
+        domain=SettingDomain.network,
+        key="ipv4_retention_max_per_run",
+        env_var="NETWORK_IPV4_RETENTION_MAX_PER_RUN",
+        value_type=SettingValueType.integer,
+        default=200,
+        min_value=1,
+        max_value=5000,
+        label="IPv4 retention subscriptions examined per daily run",
     ),
     SettingSpec(
         domain=SettingDomain.radius,
@@ -5404,6 +6094,77 @@ SETTINGS_SPECS: list[SettingSpec] = [
         string_normalization=SettingStringNormalization.LOWERCASE,
     ),
 ]
+
+# Governed sole-approver exception (Governance decision style of 53). Off by
+# default and inert on or after the review date; no environment bootstrap on
+# purpose. The four keys are ``owner_command_only``: generic writers (REST PUT,
+# DomainSettings.upsert_by_key and friends) refuse them, so the only way to
+# change them is apply_admin_settings_form_updates (control:settings:write),
+# which audits every write. Read only through
+# app.services.sole_approver_exception.
+# D1 hold (Michael, 2026-10-19): the Starter live slice (admin issuance
+# 6a/multi-line and Starter settlement) stays dark until one deliberate
+# switch decision. Owner-command-only so every change is audited through
+# apply_admin_settings_form_updates (control:settings:write).
+SETTINGS_SPECS.append(
+    SettingSpec(
+        domain=SettingDomain.billing,
+        key="starter_ledger_live_enabled",
+        env_var=None,
+        value_type=SettingValueType.boolean,
+        default=False,
+        label="Starter ledger live (issue and settle eligible postpaid invoices through Starter)",
+        inherits=False,
+        owner_command_only=True,
+        required_permission="billing:starter_ledger_live:write",
+        required_permission_enable_only=True,
+    )
+)
+
+SETTINGS_SPECS.extend(
+    [
+        SettingSpec(
+            domain=SettingDomain.billing,
+            key="sole_approver_exception_enabled",
+            env_var=None,
+            value_type=SettingValueType.boolean,
+            default=False,
+            label="Sole-approver exception enabled",
+            inherits=False,
+            owner_command_only=True,
+        ),
+        SettingSpec(
+            domain=SettingDomain.billing,
+            key="sole_approver_exception_principal",
+            env_var=None,
+            value_type=SettingValueType.string,
+            default="",
+            label="Sole-approver exception principal (system user UUID)",
+            inherits=False,
+            owner_command_only=True,
+        ),
+        SettingSpec(
+            domain=SettingDomain.billing,
+            key="sole_approver_exception_review_due",
+            env_var=None,
+            value_type=SettingValueType.string,
+            default="",
+            label="Sole-approver exception review date (YYYY-MM-DD, Africa/Lagos, inert on or after)",
+            inherits=False,
+            owner_command_only=True,
+        ),
+        SettingSpec(
+            domain=SettingDomain.billing,
+            key="sole_approver_exception_decision_ref",
+            env_var=None,
+            value_type=SettingValueType.string,
+            default="",
+            label="Sole-approver exception decision reference",
+            inherits=False,
+            owner_command_only=True,
+        ),
+    ]
+)
 
 # These cadence and worker-tuning settings were previously resolved through
 # scheduler-local call-site defaults. Registering them here makes the schema,
@@ -5891,6 +6652,10 @@ TYPED_JSON_SETTING_VALIDATORS: dict[
         SettingDomain.radius,
         "walled_garden_allowed_resources",
     ): walled_garden_allowed_resources_error,
+    (
+        SettingDomain.network,
+        "router_health_policy",
+    ): router_health_policy_error,
 }
 
 

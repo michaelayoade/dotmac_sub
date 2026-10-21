@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from email.utils import getaddresses
 from uuid import UUID
 
@@ -16,6 +18,39 @@ from app.models.team_inbox import (
     TeamInboxEmailRoute,
 )
 from app.services import team_outbound
+from app.services.domain_errors import DomainError
+
+
+@dataclass(frozen=True, slots=True)
+class AiRoutePatch:
+    route_id: UUID
+    service_team_id: UUID | None = None
+    display_name: str | None = None
+    confidence_threshold: float | None = None
+    priority: int | None = None
+    is_active: bool | None = None
+    expected_updated_at: datetime | None = None
+
+    def __post_init__(self) -> None:
+        if self.confidence_threshold is not None and (
+            not math.isfinite(self.confidence_threshold)
+            or not 0 <= self.confidence_threshold <= 1
+        ):
+            raise DomainError(
+                code="communications.team_inbox_routing.invalid_route_threshold",
+                message="Confidence must be between zero and one.",
+            )
+
+
+@dataclass(frozen=True, slots=True)
+class AiRouteUpdateOutcome:
+    route_id: UUID
+    service_team_id: UUID
+    is_active: bool
+
+
+def _route_time(value: datetime) -> datetime:
+    return value.replace(tzinfo=UTC) if value.tzinfo is None else value.astimezone(UTC)
 
 
 @dataclass(frozen=True)
@@ -361,6 +396,7 @@ class AiRouteRow:
     confidence_threshold: float
     priority: int
     is_active: bool
+    updated_at: datetime
 
 
 @dataclass(frozen=True)
@@ -586,6 +622,7 @@ def list_ai_routes(db: Session, *, include_inactive: bool = True) -> list[AiRout
             confidence_threshold=float(route.confidence_threshold),
             priority=int(route.priority),
             is_active=bool(route.is_active),
+            updated_at=route.updated_at,
         )
         for route, team in query.all()
     ]
@@ -629,36 +666,44 @@ def create_ai_route(
     return route
 
 
-def update_ai_route(
-    db: Session,
-    route_id: str | UUID,
-    *,
-    service_team_id: str | UUID | None = None,
-    display_name: str | None = None,
-    confidence_threshold: float | None = None,
-    priority: int | None = None,
-    is_active: bool | None = None,
-) -> TeamInboxAiRoute:
-    route_uuid = _coerce_uuid(route_id)
-    route = db.get(TeamInboxAiRoute, UUID(route_uuid)) if route_uuid else None
+def update_ai_route(db: Session, *, patch: AiRoutePatch) -> AiRouteUpdateOutcome:
+    route = (
+        db.query(TeamInboxAiRoute)
+        .filter(TeamInboxAiRoute.id == patch.route_id)
+        .with_for_update()
+        .populate_existing()
+        .one_or_none()
+    )
     if route is None:
-        raise EmailRouteError("AI route not found.")
-    if service_team_id:
-        route.service_team_id = _active_team(db, service_team_id).id
-    if display_name is not None:
-        route.display_name = str(display_name or "").strip()[:160] or None
-    if confidence_threshold is not None:
-        route.confidence_threshold = min(max(float(confidence_threshold), 0.0), 1.0)
-    if priority is not None:
-        route.priority = int(priority)
-    if is_active is not None:
-        route.is_active = bool(is_active)
+        raise DomainError(
+            code="communications.team_inbox_routing.route_not_found",
+            message="AI route not found.",
+        )
+    if patch.expected_updated_at is not None and _route_time(
+        route.updated_at
+    ) != _route_time(patch.expected_updated_at):
+        raise DomainError(
+            code="communications.team_inbox_routing.route_changed",
+            message="This route changed. Reload settings before editing it.",
+        )
+    if patch.service_team_id is not None:
+        try:
+            route.service_team_id = _active_team(db, patch.service_team_id).id
+        except EmailRouteError as exc:
+            raise DomainError(
+                code="communications.team_inbox_routing.invalid_route_team",
+                message=str(exc),
+            ) from exc
+    if patch.display_name is not None:
+        route.display_name = patch.display_name.strip()[:160] or None
+    if patch.confidence_threshold is not None:
+        route.confidence_threshold = patch.confidence_threshold
+    if patch.priority is not None:
+        route.priority = patch.priority
+    if patch.is_active is not None:
+        route.is_active = patch.is_active
     db.flush()
-    return route
-
-
-def delete_ai_route(db: Session, route_id: str | UUID) -> None:
-    update_ai_route(db, route_id, is_active=False)
+    return AiRouteUpdateOutcome(route.id, route.service_team_id, route.is_active)
 
 
 def _metadata_text(metadata: dict | None, *keys: str) -> str | None:

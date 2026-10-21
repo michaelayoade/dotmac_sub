@@ -1,0 +1,44 @@
+{% extends "layouts/admin.html" %}
+{% block content %}
+<div class="mx-auto max-w-3xl space-y-6 p-4">
+  <a href="/admin/support/tickets/{{ page.ticket_id }}" class="text-primary-600">Back to ticket</a>
+  <h1 class="text-2xl font-semibold">Link incident to {{ page.ticket_label }}</h1>
+  <p>Review the incident and exact service membership before recording this complaint.</p>
+  {% for consequence in form_contract.consequences %}<p>{{ consequence.label }}</p>{% endfor %}
+  {% if error %}<div role="alert" class="rounded border border-red-300 p-4">{{ error }}</div>{% endif %}
+  {% if stale %}
+    <div class="rounded border p-4"><p>Your submitted evidence and reason are retained below. Reload current evidence to start a new intent.</p>
+      <a href="/admin/support/tickets/{{ page.ticket_id }}/incident-link" class="text-primary-600">Reload current evidence</a>
+      <dl>{% for key, value in submitted.items() %}<dt>{{ key | replace('_', ' ') }}</dt><dd class="break-all">{{ value }}</dd>{% endfor %}</dl>
+    </div>
+  {% endif %}
+  {% for row in page.rows %}
+  <section class="space-y-3 rounded border p-4">
+    {% if row.incident_status.value == 'open' %}
+    <a class="text-primary-600" href="/admin/network/outages">{{ row.incident_label }}</a>
+    {% elif row.incident_status.value in ('suspected', 'confirmed', 'clearing') %}
+    <a class="text-primary-600" href="/admin/network/detected-outages">{{ row.incident_label }}</a>
+    {% else %}
+    <span>{{ row.incident_label }}</span>
+    {% endif %}
+    <p>Status: {{ row.incident_status }} · Reviewed revision {{ row.reviewed_revision_sequence }}</p>
+    <p>{{ row.subscription_label }} · Audience membership: {{ row.membership }}</p>
+    {% for blocker in row.readiness.blockers %}<p role="status">{{ blocker.staff_detail }}</p>{% endfor %}
+    {% if row.readiness.is_ready and not stale %}
+    <form method="post" class="space-y-3">
+      <input type="hidden" name="_csrf_token" value="{{ csrf_token }}">
+      <input type="hidden" name="intent_key" value="{{ intent_key }}">
+      <input type="hidden" name="incident_id" value="{{ row.incident_id }}">
+      <input type="hidden" name="subscription_id" value="{{ row.subscription_id }}">
+      <input type="hidden" name="revision_id" value="{{ row.reviewed_revision_id }}">
+      <input type="hidden" name="membership_token" value="{{ row.membership_token }}">
+      {% if row.needs_legacy_review %}<p>This historical link has no native selected-service proof. This review establishes a current service scope for future resolution; it does not assert historical service membership.</p><label><input type="checkbox" name="adopt_legacy" value="yes" required> Explicitly adopt this historical complaint using the displayed current service and audience revision</label>{% endif %}
+      <label class="block">Review reason<textarea name="reason" required maxlength="500" class="block w-full rounded border">{{ submitted.get('reason', '') }}</textarea></label>
+      <button type="submit" class="rounded bg-primary-600 px-4 py-2 text-white">{{ 'Record current legacy correlation review' if row.needs_legacy_review else 'Link reviewed incident' }}</button>
+    </form>
+    {% endif %}
+  </section>
+  {% else %}<p>No persisted incident audience matches this ticket's services on this page.</p>{% endfor %}
+  {% if page.next_incident_id %}<a href="?after={{ page.next_incident_id }}" class="text-primary-600">Next incidents</a>{% endif %}
+</div>
+{% endblock %}

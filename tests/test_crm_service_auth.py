@@ -11,6 +11,9 @@ from fastapi import HTTPException
 from app.api.crm import CRM_INTEGRATION_PERMISSION, require_crm_service_auth
 from app.models.auth import ApiKey
 from app.services.auth import hash_api_key
+from tests.test_api_key_authentication_maintenance import (
+    local_auth_owner_session,  # noqa: F401
+)
 
 
 def _make_key(db, *, scopes, raw="raw-crm-key"):

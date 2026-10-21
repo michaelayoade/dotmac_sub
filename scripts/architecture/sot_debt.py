@@ -178,11 +178,54 @@ def persistence_writer_modules(
     }
 
 
+def _expr_name(node: ast.AST) -> str:
+    if isinstance(node, ast.Name):
+        return node.id
+    if isinstance(node, ast.Attribute):
+        return node.attr
+    return ""
+
+
+def _is_dynamic_projection_write(node: ast.AST, attribute: str) -> bool:
+    """Return whether a call writes the served attribute without naming it.
+
+    Catches the dict-driven shapes the plain ``x.attr = ...`` scan cannot see:
+    ``setattr(subscription, key, value)`` and ``setattr(sub, f"{v}_address", ..)``
+    loops, ``Subscription(**data)`` / ``Subscription(attr=...)`` construction,
+    and ``.values(attr=...)`` Core updates. A subscription-named ``setattr``
+    with an opaque key is counted because it can carry the attribute.
+    """
+
+    if not isinstance(node, ast.Call):
+        return False
+    callee = _expr_name(node.func)
+    if callee == "setattr" and len(node.args) >= 2:
+        owner = _expr_name(node.args[0]).lower()
+        if "subscription" not in owner and owner != "sub":
+            return False
+        key = node.args[1]
+        if isinstance(key, ast.Constant):
+            return key.value == attribute
+        if isinstance(key, ast.JoinedStr):
+            suffix = attribute.split("_", 1)[1]  # "address"
+            return any(
+                isinstance(part, ast.Constant) and str(part.value).endswith(suffix)
+                for part in key.values
+            )
+        return True
+    if callee == "Subscription":
+        return any(kw.arg is None or kw.arg == attribute for kw in node.keywords)
+    if callee == "values":
+        return any(kw.arg == attribute for kw in node.keywords)
+    return False
+
+
 def _served_projection_writes(
     attribute: str,
     *,
     app_dir: Path,
     project_root: Path,
+    dynamic: bool = False,
 ) -> dict[str, int]:
     """Return per-file counts of direct writes to one served-address attribute.
 
@@ -208,6 +251,9 @@ def _served_projection_writes(
             continue
         hits = 0
         for node in ast.walk(tree):
+            if dynamic and _is_dynamic_projection_write(node, attribute):
+                hits += 1
+                continue
             targets: list[ast.expr] = []
             if isinstance(node, ast.Assign):
                 targets = list(node.targets)
@@ -233,7 +279,7 @@ def served_ipv4_projection_writes(
     """
 
     return _served_projection_writes(
-        "ipv4_address", app_dir=app_dir, project_root=project_root
+        "ipv4_address", app_dir=app_dir, project_root=project_root, dynamic=True
     )
 
 
@@ -256,7 +302,12 @@ def served_ipv6_projection_writes(
 def declared_owner_modules(domains: Iterable[Any]) -> set[str]:
     """Return every module declared as an owner in the registry."""
 
-    return {service.module for domain in domains for service in domain.services}
+    return {
+        module
+        for domain in domains
+        for service in domain.services
+        for module in service.owner_modules
+    }
 
 
 def undeclared_writer_modules(domains: Iterable[Any]) -> set[str]:

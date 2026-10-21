@@ -20,6 +20,443 @@ from app.services.sot_manifest import (
 )
 from app.services.sot_registry.model import DomainSOT
 
+
+def _customer_authentication_service() -> SOTService:
+    inputs = (
+        AuthorityInput(
+            name="customer login identity",
+            owner="auth.customer_login_identity",
+            kind=AuthorityKind.AUTHORITATIVE_RECORD,
+            source="Typed customer identity resolution; staff credentials are excluded.",
+        ),
+        AuthorityInput(
+            name="credential standing and MFA",
+            owner="auth.password_authentication",
+            kind=AuthorityKind.AUTHORITATIVE_RECORD,
+            source="Local credential versions and immutable pre-network RADIUS/access snapshots.",
+        ),
+        AuthorityInput(
+            name="customer account eligibility",
+            owner="customer.accounts",
+            kind=AuthorityKind.AUTHORITATIVE_RECORD,
+            source="Subscriber identity, classification, active state and status.",
+        ),
+        AuthorityInput(
+            name="user password policy",
+            owner="auth.user_passwords",
+            kind=AuthorityKind.CONTROL_INPUT,
+            source="Existing COMPAT user-password verification; no new representations or upgrades.",
+        ),
+        AuthorityInput(
+            name="customer login limits",
+            owner="control.settings_spec",
+            kind=AuthorityKind.CONTROL_INPUT,
+            source="Customer lockout settings and the existing bounded portal RADIUS throttle.",
+        ),
+        AuthorityInput(
+            name="RADIUS acceptance observation",
+            owner="external:radius",
+            kind=AuthorityKind.EXTERNAL_OBSERVATION,
+            source="Typed RADIUS transport acceptance only; immutable database source standing and customer eligibility remain mandatory.",
+        ),
+    )
+    concerns = ("customer password-step preparation", "native customer login admission")
+    codes = tuple(
+        f"auth.customer_authentication.{kind}"
+        for kind in (
+            "invalid_credentials",
+            "locked",
+            "must_change_password",
+            "account_disabled",
+            "customer_required",
+        )
+    )
+    return SOTService(
+        name="auth.customer_authentication",
+        module="app.services.customer_authentication",
+        owns=concerns,
+        depends_on=tuple(
+            dict.fromkeys(
+                item.owner
+                for item in inputs
+                if item.kind is not AuthorityKind.EXTERNAL_OBSERVATION
+            )
+        ),
+        notes="One customer password policy prepares immutable standing for browser and native adapters. Native admission excludes every non-customer principal. Password/MFA completion and denial writes remain with auth.password_authentication.",
+        contract=ServiceContract(
+            concerns=tuple(
+                ConcernContract(
+                    name=name,
+                    role=OwnerRole.POLICY,
+                    input_names=tuple(item.name for item in inputs),
+                )
+                for name in concerns
+            ),
+            authoritative_inputs=inputs,
+            transaction=TransactionContract(
+                mode=TransactionMode.READ_ONLY,
+                boundary="Preparation performs caller-session reads without flush or commit. Independent denial evidence and counters delegate to the existing password-authentication owner; success enters that owner's version-bound transaction.",
+                locking="Preparation holds no decision lock; the success owner rechecks principal and source standing under its existing locks.",
+                idempotency="Preparation creates no session or challenge. Each failed attempt has its own typed denial evidence.",
+                retries="No password/RADIUS retry or alternate account selection; adapters may offer an explicit user retry.",
+            ),
+            errors=ErrorContract(
+                domain_codes=codes,
+                mapping_owner="app.customer_authentication_http and app.services.web_customer_auth",
+                fail_closed_on=(
+                    "ambiguous identity",
+                    "missing or changed source standing",
+                    "disabled account",
+                    "non-customer native principal",
+                ),
+            ),
+            migration=MigrationContract(
+                state=AuthorityMigrationState.COMPLETE,
+                old_owner="Customer password decisions embedded in app.services.web_customer_auth.customer_login_submit",
+                new_owner="auth.customer_authentication",
+                verification="Customer identity collision, web/native parity, source/byte preservation and customer-only admission tests.",
+                cutover_gate="Both web and native adapters call the same preparation owner before password-authentication completion.",
+                fallback_retirement="The web adapter-local credential lookup and verification branches are removed; approved RADIUS/access compatibility remains inside this one policy.",
+            ),
+            steward="platform security",
+            design_refs=(
+                "docs/designs/CUSTOMER_LOGIN_PARITY.md",
+                "docs/designs/CUSTOMER_PORTAL_CREDENTIAL_STANDING.md",
+            ),
+            test_refs=(
+                "tests/test_customer_authentication.py",
+                "tests/test_customer_auth_api.py",
+                "tests/test_web_customer_auth.py",
+                "tests/integration/test_password_auth_credential_race.py",
+                "tests/architecture/test_customer_auth_boundary.py",
+                "tests/architecture/test_customer_login_identity_boundary.py",
+                "tests/architecture/test_password_authentication_boundary.py",
+                "tests/architecture/test_adapter_identifiability.py",
+                "tests/architecture/test_openapi_contract_surface.py",
+            ),
+        ),
+    )
+
+
+def _credential_administration_service(
+    name: str,
+    module: str,
+    concern: str,
+    *,
+    coordinator: bool,
+    events: tuple[str, ...],
+    dependencies: tuple[str, ...],
+) -> SOTService:
+    input_name = f"{name} command and canonical state"
+    customer_mfa = name == "auth.credential_administration"
+    customer_cleanup = name == "auth.credential_administration_mutation"
+    return SOTService(
+        name=name,
+        module=module,
+        owns=(concern, "administrative customer MFA reset")
+        if customer_mfa
+        else (concern, "customer hard deletion auth cleanup")
+        if customer_cleanup
+        else (concern,),
+        depends_on=dependencies,
+        contract=ServiceContract(
+            concerns=(
+                ConcernContract(
+                    name=concern,
+                    role=OwnerRole.APPLICATION_COORDINATOR
+                    if coordinator
+                    else OwnerRole.COMMAND_WRITER,
+                    input_names=(input_name,),
+                    canonical_writer=None if coordinator else name,
+                ),
+            )
+            + (
+                (
+                    ConcernContract(
+                        name="administrative customer MFA reset",
+                        role=OwnerRole.APPLICATION_COORDINATOR,
+                        input_names=(input_name,),
+                    ),
+                )
+                if customer_mfa
+                else ()
+            )
+            + (
+                (
+                    ConcernContract(
+                        name="customer hard deletion auth cleanup",
+                        role=OwnerRole.COMMAND_WRITER,
+                        input_names=(input_name,),
+                        canonical_writer=name,
+                    ),
+                )
+                if customer_cleanup
+                else ()
+            ),
+            authoritative_inputs=(
+                AuthorityInput(
+                    name=input_name,
+                    owner=name,
+                    kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                    source="Typed authorized CommandContext and canonical principal, credential, registration metadata, and AuthSession rows; effective password/provider policy from control.settings_spec.",
+                ),
+            ),
+            transaction=TransactionContract(
+                mode=TransactionMode.COORDINATOR_MANAGED
+                if coordinator
+                else TransactionMode.PARTICIPANT,
+                boundary="Public coordinator executes once on a transaction-free session; participants flush only. Customer cleanup admits only the exact customer.account_deletion/delete_customer_account definition, matching context and AuditActor; sorted credential/MFA/session NOWAIT locks, no recovery/Party/binding removal. Credential, subscriber registration metadata, database session revocation, audit and outbox commit or roll back together. Preparation reads/hash occur on a separate session before locks.",
+                locking="Principal FOR UPDATE precedes credential FOR UPDATE; creation and customer MFA reset serialize on refreshed Subscriber. MFA factors lock in UUID order before recovery and AuthSession updates. PostgreSQL per-lock wait is bounded at five seconds.",
+                idempotency="No durable command replay claim. Repeated deactivation is a no-op; unique credential identity arbitrates creation. Password reset is a fresh transition on each successful invocation. Customer MFA clean repeat audits only; live-factor removal or secret/counter/recovery residue cleanup revokes sessions and stages one event.",
+                retries="Lock timeout is retryable only after rollback and maps to 503 Retry-After. Unknown commit outcome is not automatically retried; inspect committed state before resubmission.",
+            ),
+            errors=ErrorContract(
+                domain_codes=tuple(
+                    f"auth.credential_administration.{code}"
+                    for code in (
+                        "invalid_command_context",
+                        "ineligible_customer",
+                        "invalid_password",
+                        "invalid_username",
+                        "invalid_principal",
+                        "principal_not_found",
+                        "credential_not_found",
+                        "radius_not_found",
+                        "invalid_provider",
+                        "stale_credential",
+                        "conflict",
+                        "lock_timeout",
+                    )
+                )
+                + (owner_command_boundary_error_codes(name) if coordinator else ()),
+                mapping_owner="app.api.auth and administrative web adapters",
+                retryable_codes=("auth.credential_administration.lock_timeout",),
+                fail_closed_on=(
+                    "missing trusted actor or credential-write scope; customer MFA reset requires matching active SystemUser provenance and customer:write",
+                    "active caller transaction including flushed writes",
+                    "stale principal/provider",
+                    "audit or outbox failure",
+                ),
+            ),
+            events=EventContract(
+                event_types=events,
+                schema_version=1,
+                delivery_owner="events.dispatcher",
+                compatibility="Identifiers, version, transition and command evidence only; never passwords, hashes or submitted secret values.",
+                replay="Credential state and AuthSession revocation remain authoritative. Projection handler replay idempotently invalidates principal caches and portal projections.",
+            ),
+            projections=(
+                ProjectionContract(
+                    name="administrative credential session invalidation",
+                    input_names=(input_name,),
+                    writer="auth.credential_administration_mutation",
+                    freshness="AuthSession revocation is atomic; cache/portal projection repair follows durable event dispatch.",
+                    stale_behavior="Failed handler remains retryable. Redis portal revocation remains asynchronous until R-PR2 AuthSession-backed portal validation is deployed.",
+                    drift_signal="Failed credential_session_projection handler attempt.",
+                    rebuild_operation="Replay credential_administration.completed for the exact principal.",
+                    repair_owner="auth.credential_administration",
+                ),
+            )
+            if coordinator
+            else (),
+            migration=MigrationContract(
+                state=AuthorityMigrationState.COMPLETE,
+                new_owner=name,
+                old_owner="auth.UserCredentials generic create/update/delete and web subscriber optional-login split commits",
+                verification="Focused behavior and architecture tests plus PostgreSQL hosted concurrency tests.",
+                cutover_gate="All credential API and optional-login writers call the coordinator; arbitrary hash/standing fields return 422.",
+                fallback_retirement="Removed generic credential writers and local form hashing; no hash import HTTP interface.",
+            ),
+            steward="platform security",
+            design_refs=(
+                "docs/designs/CREDENTIAL_ADMINISTRATION.md",
+                "docs/adr/0002-owner-command-transaction-boundary.md",
+            ),
+            test_refs=(
+                "tests/test_credential_administration.py",
+                "tests/architecture/test_credential_administration_boundary.py",
+                "tests/test_customer_mfa_reset.py",
+            ),
+        ),
+    )
+
+
+CREDENTIAL_ADMINISTRATION_SERVICES = (
+    _credential_administration_service(
+        "auth.credential_administration",
+        "app.services.credential_administration",
+        "administrative credential and subscriber login transition",
+        coordinator=True,
+        events=("credential_administration.completed", "subscriber.updated"),
+        dependencies=(
+            "auth.credential_administration_mutation",
+            "customer.registration_metadata",
+            "control.settings_spec",
+            "events.dispatcher",
+            "observability.audit_log",
+        ),
+    ),
+    _credential_administration_service(
+        "auth.credential_administration_mutation",
+        "app.services.credential_administration_mutation",
+        "administrative credential mutation",
+        coordinator=False,
+        events=("credential_administration.completed",),
+        dependencies=("events.dispatcher", "observability.audit_log"),
+    ),
+    _credential_administration_service(
+        "customer.registration_metadata",
+        "app.services.customer_registration_metadata",
+        "subscriber registration metadata mutation",
+        coordinator=False,
+        events=("subscriber.updated",),
+        dependencies=("events.dispatcher", "observability.audit_log"),
+    ),
+)
+
+PERMISSION_MATCHING_OWNER = "auth.permission_key_matching"
+PERMISSION_MATCHING_CONCERN = "effective permission key vocabulary matching"
+PERMISSION_MATCHING_SERVICE = SOTService(
+    name=PERMISSION_MATCHING_OWNER,
+    module="app.services.permission_matching",
+    owns=(PERMISSION_MATCHING_CONCERN,),
+    contract=ServiceContract(
+        concerns=(
+            ConcernContract(
+                name=PERMISSION_MATCHING_CONCERN,
+                role=OwnerRole.POLICY,
+                input_names=("effective permission matching inputs",),
+            ),
+        ),
+        authoritative_inputs=(
+            AuthorityInput(
+                name="effective permission matching inputs",
+                owner=PERMISSION_MATCHING_OWNER,
+                kind=AuthorityKind.CONTROL_INPUT,
+                source="Typed effective grant set and required permission; checked-in exact aliases and wildcard vocabulary. This policy does not load or grant permissions.",
+            ),
+        ),
+        transaction=TransactionContract(
+            mode=TransactionMode.NOT_APPLICABLE,
+            boundary="Pure matching with no database or external effects.",
+            locking="None; immutable typed inputs.",
+            idempotency="Same inputs return the same boolean.",
+            retries="No retries; recompute after the grant owner refreshes effective grants.",
+        ),
+        errors=ErrorContract(
+            domain_codes=(),
+            mapping_owner="Calling authorization adapter",
+            fail_closed_on=("No matching exact, explicit alias, or wildcard grant",),
+        ),
+        migration=MigrationContract(
+            state=AuthorityMigrationState.NATIVE,
+            new_owner=PERMISSION_MATCHING_OWNER,
+            verification="Existing RBAC wildcard tests and typed identity wildcard-review regression tests.",
+            fallback_retirement="auth_dependencies reexports the original expansion helper; no parallel matching vocabulary remains there.",
+        ),
+        steward="identity and access",
+        design_refs=("docs/designs/FIELD_IDENTITY_REVIEW.md",),
+        test_refs=("tests/test_rbac_wildcard_perms.py", "tests/test_field_identity.py"),
+    ),
+)
+
+STAFF_ADMISSION_OWNER = "auth.staff_permission_admission"
+STAFF_ADMISSION_CONCERN = "fresh canonical active staff Person permission admission"
+STAFF_ADMISSION_SERVICE = SOTService(
+    name=STAFF_ADMISSION_OWNER,
+    module="app.services.staff_permission_admission",
+    owns=(STAFF_ADMISSION_CONCERN,),
+    depends_on=("auth.permission_gate", "auth.erp_staff_access"),
+    notes="Strict typed staff admission only. Delegates the gate-owned canonical RBAC calculator, then requires current active staff and canonical Person, native vendor exclusion and write leave eligibility. No route gate, generic permission policy, grants, denial audit or authentication mutation authority. Existing gate transport/audit debt remains outside this capability.",
+    contract=ServiceContract(
+        concerns=(
+            ConcernContract(
+                name=STAFF_ADMISSION_CONCERN,
+                role=OwnerRole.POLICY,
+                input_names=(
+                    "server permission admission",
+                    "canonical gate permission decision",
+                    "canonical staff Person binding",
+                    "canonical active Person",
+                    "native vendor membership",
+                    "current staff leave restriction",
+                ),
+            ),
+        ),
+        authoritative_inputs=(
+            AuthorityInput(
+                name="server permission admission",
+                owner="auth.permission_gate",
+                kind=AuthorityKind.CONTROL_INPUT,
+                source="Typed server-produced PermissionAdmission from the existing canonical HTTP gate; never deserialized from user input.",
+            ),
+            AuthorityInput(
+                name="canonical gate permission decision",
+                owner="auth.permission_gate",
+                kind=AuthorityKind.DERIVED_PROJECTION,
+                source="Typed PermissionPrincipal (native UUID/principal-kind enum/role and scope sets) passed to the gate-owned has_permission calculator. Current active Role and Permission rows and native staff role/direct grants are read fresh; exact aliases, wildcards and canonical admin semantics remain unchanged. The admission owner does not duplicate RBAC SQL or issue grants.",
+            ),
+            AuthorityInput(
+                name="canonical staff Person binding",
+                owner="auth.staff_provisioning",
+                kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                source="Current SystemUser activity, system_user classification and canonical person_party_id binding; native UUIDs, never guessed from CRM identifiers.",
+            ),
+            AuthorityInput(
+                name="canonical active Person",
+                owner="party.registry",
+                kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                source="Current Party row must be an active Person at the staff principal's exact canonical person_party_id; missing or inactive Person denies admission.",
+            ),
+            AuthorityInput(
+                name="native vendor membership",
+                owner="auth.vendor_user_provisioning",
+                kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                source="Any native FieldVendorUser membership for the authentication principal excludes it from strict staff admission, independently of staff RBAC grants.",
+            ),
+            AuthorityInput(
+                name="current staff leave restriction",
+                owner="auth.erp_staff_access",
+                kind=AuthorityKind.DERIVED_PROJECTION,
+                source="Typed active_leave_restriction query rechecks current effective ERP leave projection for write admission; read admission retains read-only access. Projection writes and denial audit remain with existing owners.",
+            ),
+        ),
+        transaction=TransactionContract(
+            mode=TransactionMode.READ_ONLY,
+            boundary="Read-only typed PermissionAdmission plus required permission/write mode to AuthorizedStaffPerson or stable domain refusal. Never completes caller transactions, writes grants, audits denials or mutates authentication state.",
+            locking="Fresh server reads at invocation. A command caller revalidates after domain lock waits and compares returned Person with its initially evaluated Person; the final check defines authorization linearization, not a long-lived grant.",
+            idempotency="No persisted state or receipts; repeat reads evaluate current canonical facts and may deny after revocation.",
+            retries="No internal retries or stale/cache fallback. Calling owner retries its whole command only for database concurrency failure.",
+        ),
+        errors=ErrorContract(
+            domain_codes=("auth.staff_permission_admission.denied",),
+            mapping_owner="Calling command owner or HTTP adapter; no FastAPI in strict admission",
+            fail_closed_on=(
+                "non-staff principal",
+                "missing exact server admission",
+                "inactive principal or Person",
+                "native vendor membership",
+                "revoked current permission",
+                "active staff leave write restriction",
+            ),
+        ),
+        migration=MigrationContract(
+            state=AuthorityMigrationState.NATIVE,
+            new_owner=STAFF_ADMISSION_OWNER,
+            verification="Typed boundary and fresh role/direct grant, wildcard, leave and caller post-lock revalidation unit tests.",
+            cutover_gate="Engineering commands and protected current resolver use only this strict staff capability; coordinator full gates remain required.",
+            fallback_retirement="No copied generic permission calculator, raw auth dictionary, Any result bag, route-gate migration, grant writer or new denial-audit path. Existing auth.permission_gate remains accurately in its legacy baseline.",
+        ),
+        steward="identity and access",
+        design_refs=("docs/designs/PROJECT_ENGINEERING_PLANS.md",),
+        test_refs=(
+            "tests/test_project_engineering_plans.py",
+            "tests/architecture/test_project_engineering_plan_boundary.py",
+            "tests/test_rbac_wildcard_perms.py",
+        ),
+    ),
+)
+
 DOMAIN = DomainSOT(
     domain="authorization_control_plane",
     # `oidc` joins `local` here because this domain implements it: the
@@ -30,6 +467,524 @@ DOMAIN = DomainSOT(
     setting_domains=("auth",),
     services=(
         SOTService(
+            name="auth.user_passwords",
+            module="app.services.user_passwords",
+            owns=(
+                "user password representation verification",
+                "explicit Argon2id hash parameters",
+                "explicit native password admission",
+                "dormant native password work observation",
+            ),
+            notes=(
+                "User-only foundation with dormant explicitly configured process-local admission and work observation; no login installation or performance acceptance. "
+                "Existing adapters default COMPAT; REFUSE "
+                "is explicit and is not connected to settings. Service-secret compatibility "
+                "remains in auth_flow. No rehash, notices, or persistence."
+            ),
+            contract=ServiceContract(
+                concerns=(
+                    ConcernContract(
+                        name="user password representation verification",
+                        role=OwnerRole.POLICY,
+                        input_names=(
+                            "submitted user password and stored representation",
+                            "explicit password policy and parameters",
+                        ),
+                    ),
+                    ConcernContract(
+                        name="explicit Argon2id hash parameters",
+                        role=OwnerRole.POLICY,
+                        input_names=("explicit password policy and parameters",),
+                    ),
+                    ConcernContract(
+                        name="explicit native password admission",
+                        role=OwnerRole.POLICY,
+                        input_names=("explicit native password admission budget",),
+                    ),
+                    ConcernContract(
+                        name="dormant native password work observation",
+                        role=OwnerRole.POLICY,
+                        input_names=(
+                            "submitted user password and stored representation",
+                            "explicit password policy and parameters",
+                            "explicit native password admission budget",
+                            "explicit native password observer",
+                        ),
+                    ),
+                ),
+                authoritative_inputs=(
+                    AuthorityInput(
+                        name="explicit native password observer",
+                        owner="auth.user_passwords",
+                        kind=AuthorityKind.CONTROL_INPUT,
+                        source="Typed NativePasswordObserver receives secret-free low-level intervals after admission release and explicitly acknowledges capture; require_complete_capture rejects lost delivery after callers drain.",
+                    ),
+                    AuthorityInput(
+                        name="submitted user password and stored representation",
+                        owner="auth.user_passwords",
+                        kind=AuthorityKind.CONTROL_INPUT,
+                        source="Typed UserPasswordVerification supplied by auth_flow; no database or secret-reference reads under REFUSE.",
+                    ),
+                    AuthorityInput(
+                        name="explicit password policy and parameters",
+                        owner="auth.user_passwords",
+                        kind=AuthorityKind.CONTROL_INPUT,
+                        source="ReversiblePasswordPolicy, Argon2idParameters and explicit Argon2idVerificationLimits; absent verification limits deny Argon2, COMPAT adapter default, no production parameter default.",
+                    ),
+                    AuthorityInput(
+                        name="explicit native password admission budget",
+                        owner="auth.user_passwords",
+                        kind=AuthorityKind.CONTROL_INPUT,
+                        source="Immutable LimiterConfiguration explicitly supplies native capacity, bounded waiters, finite admission timeout, threadpool tokens and reserved tokens; no default or installed runtime caller.",
+                    ),
+                ),
+                transaction=TransactionContract(
+                    mode=TransactionMode.NOT_APPLICABLE,
+                    boundary="Verification, hashing and process-local admission never write or complete a database transaction.",
+                    locking="No database locks. A per-instance condition protects bounded active and waiting counters; no FIFO guarantee. Credential standing remains the authentication owner's responsibility.",
+                    idempotency="Verification repeats the same decision; hashing intentionally generates a fresh random salt.",
+                    retries="No automatic retries; compatibility secret-resolution failures retain their existing error boundary.",
+                ),
+                errors=ErrorContract(
+                    domain_codes=(
+                        "auth.user_passwords.invalid_argon2id_parameters",
+                        "auth.user_passwords.invalid_admission_configuration",
+                        "auth.user_passwords.admission_saturated",
+                        "auth.user_passwords.admission_timed_out",
+                        "auth.user_passwords.incomplete_native_capture",
+                    ),
+                    mapping_owner="auth_flow compatibility adapter and future password creation owners",
+                    fail_closed_on=(
+                        "malformed or unsupported hashes",
+                        "REFUSE reversible material before resolution",
+                        "bcrypt input above 72 UTF-8 bytes",
+                        "invalid explicit admission budget",
+                        "full waiter budget or expired admission timeout",
+                        "incomplete native observation capture before measurement acceptance",
+                    ),
+                ),
+                migration=MigrationContract(
+                    state=AuthorityMigrationState.NATIVE,
+                    new_owner="auth.user_passwords",
+                ),
+                steward="platform security",
+                design_refs=("docs/designs/USER_PASSWORD_POLICY_FOUNDATION.md",),
+                test_refs=(
+                    "tests/test_user_password_policy.py",
+                    "tests/test_user_password_admission.py",
+                    "tests/test_user_password_work.py",
+                    "tests/architecture/test_credential_verifier_boundary.py",
+                    "tests/test_auth_legacy_bcrypt.py",
+                ),
+            ),
+        ),
+        SOTService(
+            name="identity.capability_recipient",
+            module="app.services.capability_recipient",
+            owns=("exact authorized capability email recipient",),
+            contract=ServiceContract(
+                concerns=(
+                    ConcernContract(
+                        name="exact authorized capability email recipient",
+                        role=OwnerRole.RESOLVER,
+                        input_names=("canonical capability contact field",),
+                    ),
+                ),
+                authoritative_inputs=(
+                    AuthorityInput(
+                        name="canonical capability contact field",
+                        owner="customer.accounts",
+                        kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                        source="Contact email field supplied by the exact principal owner; parser must yield exactly one deliverable address.",
+                    ),
+                ),
+                transaction=TransactionContract(
+                    mode=TransactionMode.NOT_APPLICABLE,
+                    boundary="Pure recipient resolution; no database mutation or transaction completion.",
+                    locking="The calling principal owner supplies locked current contact state when requesting a capability.",
+                    idempotency="Same contact value resolves the same one address or same refusal.",
+                    retries="Malformed or multiple addresses require canonical contact correction before retry.",
+                ),
+                errors=ErrorContract(
+                    domain_codes=(
+                        "identity.capability_recipient.no_deliverable_address",
+                        "identity.capability_recipient.ambiguous_address",
+                    ),
+                    mapping_owner="Calling capability owner and authenticated adapters",
+                    fail_closed_on=(
+                        "no deliverable address",
+                        "multiple deliverable addresses",
+                    ),
+                ),
+                migration=MigrationContract(
+                    state=AuthorityMigrationState.NATIVE,
+                    new_owner="identity.capability_recipient",
+                ),
+                steward="platform security",
+                design_refs=("docs/EMAIL_VERIFICATION_EPHEMERAL_DELIVERY.md",),
+                test_refs=("tests/test_capability_recipient.py",),
+            ),
+        ),
+        SOTService(
+            name="auth.email_verification",
+            module="app.services.email_verification",
+            owns=(
+                "email verification delivery request",
+                "email verification completion",
+            ),
+            depends_on=(
+                "customer.accounts",
+                "identity.capability_recipient",
+                "auth.token_signing",
+                "communications.intents",
+                "communications.ephemeral_actions",
+                "observability.audit_log",
+            ),
+            contract=ServiceContract(
+                concerns=(
+                    ConcernContract(
+                        name="email verification delivery request",
+                        role=OwnerRole.COMMAND_WRITER,
+                        input_names=("exact Subscriber verification request",),
+                        canonical_writer="auth.email_verification",
+                    ),
+                    ConcernContract(
+                        name="email verification completion",
+                        role=OwnerRole.COMMAND_WRITER,
+                        input_names=(
+                            "locked Subscriber email verification state",
+                            "signed email capability",
+                        ),
+                        canonical_writer="auth.email_verification",
+                    ),
+                ),
+                authoritative_inputs=(
+                    AuthorityInput(
+                        name="exact Subscriber verification request",
+                        owner="customer.accounts",
+                        kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                        source="Typed request context with trusted actual AuditActor and exact locked/reloaded Subscriber email, verified and active state; configured bounded TTL.",
+                    ),
+                    AuthorityInput(
+                        name="locked Subscriber email verification state",
+                        owner="customer.accounts",
+                        kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                        source="Exact Subscriber UUID/current canonical email and verified flag, refreshed under the completion row lock; capability expiry is rechecked after lock acquisition, before mutation or no-op success.",
+                    ),
+                    AuthorityInput(
+                        name="signed email capability",
+                        owner="auth.token_signing",
+                        kind=AuthorityKind.CONTROL_INPUT,
+                        source="Verified purpose, Subscriber principal UUID and exact email claim, decoded inside the completion owner; capability possession is not password login.",
+                    ),
+                ),
+                transaction=TransactionContract(
+                    mode=TransactionMode.OWNER_MANAGED,
+                    boundary="Public request and completion each enter execute_owner_command once; completion stages the verified flag and canonical audit atomically. Flush-only stage_email_verification participates only in this owner or customer.portal_profile_commands. Audit and communication intent/outbox commit or roll back together.",
+                    locking="Public request and completion set PostgreSQL transaction-local lock_timeout5s before exact Subscriber UUID FOR UPDATE with populate_existing; caller writes are never rolled back. Profile flush precedes participant reload.",
+                    idempotency="Stable request key uses the existing unique intent dedupe constraint. Email-digest/Subscriber/TTL/purpose fingerprint mismatch fails closed; same evidence replays one intent. Completion is a no-op only for the same current verified address.",
+                    retries="Retry complete request after rollback with unchanged context; unique constraint arbitrates cross-Subscriber key races, which fail without delivery.",
+                ),
+                errors=ErrorContract(
+                    domain_codes=owner_command_boundary_error_codes(
+                        "auth.email_verification"
+                    )
+                    + (
+                        "auth.email_verification.invalid_command",
+                        "auth.email_verification.invalid_capability",
+                        "auth.email_verification.unavailable",
+                        "auth.email_verification.active_caller_transaction",
+                        "auth.email_verification.invalid_scope",
+                        "auth.email_verification.invalid_participant",
+                        "auth.email_verification.lock_timeout",
+                        "auth.email_verification.idempotency_conflict",
+                    ),
+                    mapping_owner="Completion API/web map invalid capability to generic401/400 and operational failures503 Retry-After5. Authenticated API/customer/reseller resend adapters: lock_timeout maps to 503 Retry-After5; impersonation without actual actor is refused403",
+                    retryable_codes=(
+                        "auth.email_verification.lock_timeout",
+                        "auth.email_verification.unavailable",
+                    ),
+                    fail_closed_on=(
+                        "changed recipient or verified/inactive account",
+                        "malformed purpose/audience/context",
+                        "audit or intent queue failure",
+                        "request fingerprint conflict",
+                    ),
+                ),
+                events=EventContract(
+                    event_types=("auth.email_verification",),
+                    schema_version=1,
+                    delivery_owner="communications.intents",
+                    compatibility="Intent and Notification bodies are null. Allowlisted descriptor stores UUID, email digest, bounded TTL and purpose; request audit carries safe request IDs and outcome only. Completion stages canonical audit only, with proof kind and request UUIDs; no completion delivery event.",
+                    replay="Worker revalidates exact current address and unverified state before minting and rendering solely in memory. Existing worker owns sensitive transport/outcomes.",
+                ),
+                migration=MigrationContract(
+                    state=AuthorityMigrationState.CUT_OVER,
+                    old_owner="auth_flow.send_email_verification; auth_flow.verify_email",
+                    new_owner="auth.email_verification",
+                    verification="Focused atomicity, replay, materialization and adapter isolation tests; PostgreSQL lock/unique tests require hosted migrated-schema gate.",
+                    cutover_gate="API and portal/reseller resend plus portal profile changes use intent owner. API/web completion use the atomic capability owner; legacy completion writer is retired.",
+                    fallback_retirement="Legacy mobile /me still calls set_subscriber_email and direct compatibility wrapper; retire only with reviewed partial-profile coordinator. S7 remains open; query-token URL remains until browser bridge is implemented.",
+                ),
+                steward="platform security",
+                design_refs=(
+                    "docs/EMAIL_VERIFICATION_EPHEMERAL_DELIVERY.md",
+                    "docs/adr/0002-owner-command-transaction-boundary.md",
+                ),
+                test_refs=(
+                    "tests/test_email_verification_intents.py",
+                    "tests/test_email_verification_completion.py",
+                    "tests/integration/test_email_verification_completion_pg.py",
+                    "tests/integration/test_email_verification_intents_pg.py",
+                ),
+            ),
+        ),
+        SOTService(
+            name="auth.api_key_administration",
+            module="app.services.api_key_administration",
+            owns=(
+                "administrative JSON API-key revocation",
+                "administrative JSON API-key issuance",
+                "administrative JSON API-key update",
+                "administrative web API-key creation revocation and rotation",
+                "local API-key authentication maintenance",
+                "customer hard deletion API-key cleanup",
+            ),
+            depends_on=("observability.audit_log",),
+            notes=(
+                "Named stage_staff_key_deletion is a typed flush-only participant of auth.staff_provisioning inactive deletion. It requires the active parent owner and exact actor/context, locks keys in UUID order and audits only actually deleted IDs; never executes or completes a transaction. Public API-key commands retain owner-managed mode."
+            ),
+            contract=ServiceContract(
+                concerns=(
+                    ConcernContract(
+                        name="customer hard deletion API-key cleanup",
+                        role=OwnerRole.COMMAND_WRITER,
+                        input_names=("exact customer deletion key set",),
+                        canonical_writer="auth.api_key_administration",
+                    ),
+                    ConcernContract(
+                        name="administrative JSON API-key revocation",
+                        role=OwnerRole.COMMAND_WRITER,
+                        input_names=("authorized revocation and ApiKey",),
+                        canonical_writer="auth.api_key_administration",
+                    ),
+                    ConcernContract(
+                        name="administrative JSON API-key issuance",
+                        role=OwnerRole.COMMAND_WRITER,
+                        input_names=("authorized issuance command",),
+                        canonical_writer="auth.api_key_administration",
+                    ),
+                    ConcernContract(
+                        name="administrative JSON API-key update",
+                        role=OwnerRole.COMMAND_WRITER,
+                        input_names=("authorized PATCH command and ApiKey",),
+                        canonical_writer="auth.api_key_administration",
+                    ),
+                    ConcernContract(
+                        name="administrative web API-key creation revocation and rotation",
+                        role=OwnerRole.COMMAND_WRITER,
+                        input_names=(
+                            "authorized web command and caller subscriber scope",
+                        ),
+                        canonical_writer="auth.api_key_administration",
+                    ),
+                    ConcernContract(
+                        name="local API-key authentication maintenance",
+                        role=OwnerRole.COMMAND_WRITER,
+                        input_names=("presented local API key and current standing",),
+                        canonical_writer="auth.api_key_administration",
+                    ),
+                ),
+                authoritative_inputs=(
+                    AuthorityInput(
+                        name="exact customer deletion key set",
+                        owner="customer.account_deletion",
+                        kind=AuthorityKind.CONTROL_INPUT,
+                        source="Exact active delete_customer_account definition, matching trusted actor/context, UUID target and pre-parent locked key IDs; current subscriber binding rechecked in DELETE.",
+                    ),
+                    AuthorityInput(
+                        name="authorized revocation and ApiKey",
+                        owner="auth.api_key_administration",
+                        kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                        source="Immutable UUID target, trusted administrative AuditActor and matching CommandContext; refreshed locked ApiKey row.",
+                    ),
+                    AuthorityInput(
+                        name="authorized issuance command",
+                        owner="auth.api_key_administration",
+                        kind=AuthorityKind.CONTROL_INPUT,
+                        source="Frozen typed issuance command, trusted administrative actor and fixed provenance; subscriber existence and legacy field semantics.",
+                    ),
+                    AuthorityInput(
+                        name="authorized PATCH command and ApiKey",
+                        owner="auth.api_key_administration",
+                        kind=AuthorityKind.CONTROL_INPUT,
+                        source="Frozen typed PATCH command with exact selected field enum set, fixed administrative provenance and matching context; refreshed locked target, existing subscriber existence policy.",
+                    ),
+                    AuthorityInput(
+                        name="authorized web command and caller subscriber scope",
+                        owner="auth.api_key_administration",
+                        kind=AuthorityKind.CONTROL_INPUT,
+                        source="Typed command and trusted system-route actor context; explicit caller subscriber scope, legacy cached auth caps and refreshed locked target.",
+                    ),
+                    AuthorityInput(
+                        name="presented local API key and current standing",
+                        owner="auth.api_key_administration",
+                        kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                        source="Frozen raw-key command with fixed presented-key provenance and GENERAL/AUDIT audience; owner hashes candidates and verifies scalar current ApiKey standing. No claimed key ID or actor input.",
+                    ),
+                ),
+                transaction=TransactionContract(
+                    mode=TransactionMode.OWNER_MANAGED,
+                    boundary="authenticate enters once on a fresh session: hot snapshot has no writes; cold exact-version CAS maintains hash/timestamp and canonical hash-upgrade audit atomically, with post-update refusal rolling back. create/generate/update/revoke/web_create/web_mutate each enter execute_owner_command once on a fresh session; ApiKey and canonical AuditEvent commit or roll back together. Generation rate admission precedes the command. No external effects. stage_customer_key_deletion is flush-only and admitted under the exact customer.account_deletion command; deletes only captured locked IDs still bound to target, never reacquires keys after parent. Named stage_staff_key_deletion joins only the active auth.staff_provisioning deletion transaction and flushes API-key deletion plus per-key canonical audit; it does not enter the executor.",
+                    locking="Authentication uses scalar reads and a single same-ID/hash/standing CAS UPDATE; zero rows permits exactly one fresh same-ID/candidate verification read. No row lock or update on hot authentication. Maintenance has five-second lock_timeout, wall-clock expiry and a timestamp CASE preserving newer touches. Revocation and PATCH: ApiKey FOR UPDATE/populate_existing and PostgreSQL five-second lock timeout. Issuance: new row INSERT, unique hash and subscriber FK backstops; no existing-key lock. Web create: plain subscriber existence lookup and FK backstop; legacy cached cap checks are best-effort and race across concurrent creators or JSON updates. No cap lock or global cap guarantee. Web mutation: exact refreshed key FOR UPDATE, no principal/FK change.",
+                    idempotency="Authentication accepts current snapshots; HMAC upgrade is one-time, timestamp touch at most once per five-minute window. CAS misses never retry maintenance or grant stale projections. Revocation stamps fresh state/audit each invocation. Issuance creates a new key; generated material is returned once after commit. PATCH applies supplied fields and audits every successful invocation, including empty/no-op payloads. Web creation creates a new key; rotation replaces the secret once after commit, repeated revocation stamps again. Missing/out-of-scope targets and inactive/revoked rotation return unchanged outcomes without audit. No durable replay or retry claim.",
+                    retries="No automatic retry; lock timeout maps to 503 Retry-After 5 after rollback. Inspect state after unknown commit outcome.",
+                ),
+                errors=ErrorContract(
+                    domain_codes=owner_command_boundary_error_codes(
+                        "auth.api_key_administration"
+                    )
+                    + (
+                        "auth.api_key_administration.invalid_authentication_command",
+                        "auth.api_key_administration.authentication_busy",
+                        "auth.api_key_administration.authentication_unavailable",
+                        "auth.api_key_administration.invalid_participant",
+                        "auth.api_key_administration.invalid_actor",
+                        "auth.api_key_administration.not_found",
+                        "auth.api_key_administration.invalid_command",
+                        "auth.api_key_administration.subscriber_not_found",
+                        "auth.api_key_administration.storage_unavailable",
+                        "auth.api_key_administration.busy",
+                        "auth.api_key_administration.limit_reached",
+                        "auth.api_key_administration.ttl_exceeded",
+                        "auth.api_key_administration.invalid_scope",
+                    ),
+                    mapping_owner="app.services.auth_dependencies authentication adapter, app.api.auth JSON API-key routes and app.web.admin.system web API-key routes",
+                    fail_closed_on=(
+                        "missing trusted actor",
+                        "active caller transaction",
+                        "canonical audit failure",
+                    ),
+                ),
+                events=EventContract(
+                    event_types=(
+                        "auth.api_key.revoked",
+                        "auth.api_key.created",
+                        "auth.api_key.generated",
+                        "auth.api_key.updated",
+                        "auth.api_key.rotated",
+                        "auth.api_key.deleted",
+                        "auth.api_key.hash_upgraded",
+                    ),
+                    schema_version=1,
+                    delivery_owner="observability.audit_log",
+                    compatibility="Hash upgrade audit contains verified key actor/target IDs, scheme names, fixed scope/reason and command IDs, never hash/raw/label/scope values; timestamp-only maintenance has no per-auth audit. Canonical AuditEvent only: target/actor identifiers, old/new active/revoked state for JSON revocation, active state only for web mutations and issuance, allowlisted requested field names/hash-change boolean for PATCH and command/correlation identifiers. No external event or secret payload.",
+                    replay="Audit records are evidence, not delivery commands; no external dispatch or automatic replay. Database immutability is outside this slice.",
+                ),
+                migration=MigrationContract(
+                    state=AuthorityMigrationState.COMPLETE,
+                    new_owner="auth.api_key_administration",
+                    old_owner="auth_dependencies last-used/hash-upgrade ORM helpers, auth.ApiKeys JSON writers and web_system_api_key_forms/create and web_system_api_key_mutations",
+                    verification="Focused typed behavior, transaction trace and architecture tests; migrated PostgreSQL locking acceptance is hosted-only.",
+                    cutover_gate="Both local authentication branches consume immutable owner projections through fresh command sessions; machine-first general auth remains outside. JSON POST create/generate, PATCH and DELETE use fresh owner command sessions and existing route-local admin guards. Generation preserves Redis admission ordering. Web POST create/revoke/rotate retain inherited admin and route settings-write guards, typed trusted actor context, caller scope and one-time POST rendering.",
+                    fallback_retirement="Legacy issuance/update/revocation writers removed after repository-wide consumer search; limiter retained as admission-only helper. Web writer helpers retired after all consumers migrated; Inactive staff key deletion now delegates to the named participant; customer deletion remains outside this slice. Both legacy authentication mutation helpers are retired with no fallback.",
+                ),
+                steward="platform security",
+                design_refs=(
+                    "docs/designs/API_KEY_REVOCATION.md",
+                    "docs/designs/API_KEY_AUTHENTICATION_MAINTENANCE.md",
+                ),
+                test_refs=(
+                    "tests/test_api_key_authentication_maintenance.py",
+                    "tests/integration/test_api_key_authentication_maintenance_pg.py",
+                    "tests/test_staff_account_deletion.py",
+                    "tests/integration/test_staff_account_deletion_pg.py",
+                    "tests/test_api_key_administration.py",
+                    "tests/test_api_key_issuance.py",
+                    "tests/test_api_key_update.py",
+                    "tests/test_web_api_key_administration.py",
+                    "tests/integration/test_web_api_key_administration_pg.py",
+                    "tests/integration/test_api_key_revocation_concurrency.py",
+                    "tests/integration/test_api_key_issuance_pg.py",
+                    "tests/integration/test_api_key_update_pg.py",
+                    "tests/architecture/test_api_key_administration_boundary.py",
+                ),
+            ),
+        ),
+        *CREDENTIAL_ADMINISTRATION_SERVICES,
+        PERMISSION_MATCHING_SERVICE,
+        STAFF_ADMISSION_SERVICE,
+        SOTService(
+            name="auth.credential_security_inventory",
+            module="app.services.credential_security_inventory",
+            owns=(
+                "credential security aggregate census",
+                "reversible credential recovery prerequisite aggregate",
+            ),
+            depends_on=("auth.password_authentication", "auth.credential_recovery"),
+            contract=ServiceContract(
+                concerns=(
+                    ConcernContract(
+                        name="credential security aggregate census",
+                        role=OwnerRole.RESOLVER,
+                        input_names=("stored user credential security state",),
+                    ),
+                    ConcernContract(
+                        name="reversible credential recovery prerequisite aggregate",
+                        role=OwnerRole.RESOLVER,
+                        input_names=(
+                            "stored user credential security state",
+                            "exact recovery prerequisite interpretation",
+                        ),
+                    ),
+                ),
+                authoritative_inputs=(
+                    AuthorityInput(
+                        name="stored user credential security state",
+                        owner="auth.password_authentication",
+                        kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                        source="user_credentials format prefixes, principal links, provider, activity and timestamps",
+                    ),
+                    AuthorityInput(
+                        name="exact recovery prerequisite interpretation",
+                        owner="auth.credential_recovery",
+                        kind=AuthorityKind.DERIVED_PROJECTION,
+                        source="Typed recovery-owned SQL projection of exact local binding, principal activity/cancellation and contact presence; no delivery or support claim.",
+                    ),
+                ),
+                transaction=TransactionContract(
+                    mode=TransactionMode.READ_ONLY,
+                    boundary="Adapter supplies a clean PostgreSQL REPEATABLE READ READ ONLY snapshot; no writes or transaction completion in query.",
+                    locking="No row locks; one repeatable-read snapshot.",
+                    idempotency="Same snapshot and UTC observation time produce the same bounded counts.",
+                    retries="Retry failed reads with a fresh snapshot.",
+                ),
+                errors=ErrorContract(
+                    domain_codes=(
+                        "auth.credential_security_inventory.read_only_required",
+                    ),
+                    mapping_owner="credential_security_inventory CLI; fixed redacted error output",
+                    fail_closed_on=(
+                        "dirty session",
+                        "non-PostgreSQL database",
+                        "write-capable snapshot",
+                    ),
+                ),
+                migration=MigrationContract(
+                    state=AuthorityMigrationState.NATIVE,
+                    new_owner="auth.credential_security_inventory",
+                ),
+                steward="platform security",
+                design_refs=("docs/runbooks/CREDENTIAL_SECURITY_INVENTORY.md",),
+                test_refs=(
+                    "tests/test_credential_security_inventory.py",
+                    "tests/test_credential_recovery_readiness.py",
+                    "tests/integration/test_credential_recovery_readiness_snapshot.py",
+                    "tests/architecture/test_credential_security_inventory_boundary.py",
+                ),
+            ),
+        ),
+        SOTService(
             name="auth.permission_gate",
             module="app.services.auth_dependencies",
             owns=(
@@ -39,8 +994,10 @@ DOMAIN = DomainSOT(
             depends_on=(
                 "auth.rbac_catalog",
                 "auth.subscriber_assignments",
+                "auth.permission_key_matching",
             ),
         ),
+        _customer_authentication_service(),
         SOTService(
             name="auth.customer_login_identity",
             module="app.services.customer_login_identity",
@@ -333,6 +1290,11 @@ DOMAIN = DomainSOT(
                 "This is the only application and seed writer for roles, "
                 "permissions, and role_permissions. Catalog identities are "
                 "case-normalized and protected by functional unique indexes. "
+                "Permission identifiers have two or three letter-leading "
+                "segments separated by colons or dots; segment characters are "
+                "lowercase letters, numbers, underscores, and hyphens. The "
+                "exact global wildcard retains its existing special case; "
+                "identifier validation never grants access or creates aliases. "
                 "Permission-policy updates preserve an unchanged legacy role "
                 "name, while new and genuinely renamed roles must use the "
                 "canonical lowercase identifier syntax. "
@@ -688,7 +1650,7 @@ DOMAIN = DomainSOT(
                         "commit or roll back together. Audit actor enrichment reads "
                         "the canonical staff Party binding in that transaction. "
                         "Collaborator methods "
-                        "flush but never complete a coordinator transaction."
+                        "flush but never complete a coordinator transaction. Named remove_all_for_system_user requires typed removal input and exact active auth.staff_provisioning context; it preserves the final-active-admin guard and flushes grant cleanup only."
                     ),
                     locking=(
                         "The target principal and existing grants are selected "
@@ -1035,6 +1997,7 @@ DOMAIN = DomainSOT(
                 "password recovery request and delivery intent",
                 "password reset credential transition",
                 "credential recovery session projection invalidation",
+                "exact recovery prerequisite interpretation",
             ),
             depends_on=(
                 "auth.token_signing",
@@ -1054,6 +2017,11 @@ DOMAIN = DomainSOT(
             ),
             contract=ServiceContract(
                 concerns=(
+                    ConcernContract(
+                        name="exact recovery prerequisite interpretation",
+                        role=OwnerRole.RESOLVER,
+                        input_names=("canonical recoverable principal state",),
+                    ),
                     ConcernContract(
                         name="password recovery request and delivery intent",
                         role=OwnerRole.COMMAND_WRITER,
@@ -1265,6 +2233,498 @@ DOMAIN = DomainSOT(
                 test_refs=(
                     "tests/test_credential_recovery.py",
                     "tests/architecture/test_credential_recovery_boundary.py",
+                ),
+            ),
+        ),
+        SOTService(
+            name="auth.session_staging",
+            module="app.services.auth_session_staging",
+            owns=(
+                "authentication session issuance staging",
+                "committed authentication session token encoding",
+            ),
+            depends_on=(
+                "auth.token_signing",
+                "control.settings_spec",
+                "party.staff_authentication_reader",
+                "communications.team_inbox_routing",
+                "observability.audit_log",
+            ),
+            notes=(
+                "The typed flush-only participant inserts sessions, supersedes the same "
+                "device and delegates staff presence inside the authenticating owner's "
+                "transaction. It does not authenticate or complete transactions. "
+                "Memory-only encoding consumes the committed signing snapshot; bearer "
+                "and signing fields are excluded from repr and never enter evidence. "
+                "AuthFlow retains thin observation adapters and legacy test compatibility "
+                "issuance wrappers; their existence is not a whole-AuthFlow cutover or "
+                "a claim that those wrappers stage caller audit. New product calls are "
+                "restricted to password and OIDC coordinators by source inventory."
+            ),
+            contract=ServiceContract(
+                concerns=(
+                    ConcernContract(
+                        name="authentication session issuance staging",
+                        role=OwnerRole.COMMAND_WRITER,
+                        input_names=(
+                            "authenticated session issuance decision",
+                            "canonical staff session context",
+                            "session signing policy",
+                            "session refresh lifetime",
+                        ),
+                        canonical_writer="auth.session_staging",
+                    ),
+                    ConcernContract(
+                        name="committed authentication session token encoding",
+                        role=OwnerRole.TRANSPORT,
+                        input_names=("committed session signing snapshot",),
+                    ),
+                ),
+                authoritative_inputs=(
+                    AuthorityInput(
+                        name="authenticated session issuance decision",
+                        owner="external:auth_session_coordinator",
+                        kind=AuthorityKind.EXTERNAL_OBSERVATION,
+                        source="Typed exact principal UUID, optional staff Party/context pair, normalized client observations and expiry; calling password or OIDC owner retains current standing locks.",
+                    ),
+                    AuthorityInput(
+                        name="canonical staff session context",
+                        owner="party.staff_authentication_reader",
+                        kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                        source="Party-led principal resolution rechecks the supplied staff context before any session mutation.",
+                    ),
+                    AuthorityInput(
+                        name="session signing policy",
+                        owner="auth.token_signing",
+                        kind=AuthorityKind.CONTROL_INPUT,
+                        source="Existing AuthFlow policy adapters resolve process-held signing material, algorithm and access lifetime while the caller transaction is open; their legacy HTTP configuration-error wrapper remains explicit debt.",
+                    ),
+                    AuthorityInput(
+                        name="session refresh lifetime",
+                        owner="control.settings_spec",
+                        kind=AuthorityKind.CONTROL_INPUT,
+                        source="Existing refresh lifetime resolver or the caller's explicit expiry.",
+                    ),
+                    AuthorityInput(
+                        name="committed session signing snapshot",
+                        owner="auth.session_staging",
+                        kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                        source="Immutable in-memory StagedSession returned before owner completion and encoded only after the caller has committed.",
+                    ),
+                ),
+                transaction=TransactionContract(
+                    mode=TransactionMode.PARTICIPANT,
+                    boundary="Flush-only session insertion, same-device supersession and delegated staff presence participate in the calling owner transaction. Token encoding performs no database read or transaction completion.",
+                    locking="Calling coordinators hold principal and credential standing locks before insertion; staff session foreign keys also acquire Party KEY SHARE. The participant does not release those locks or start another owner.",
+                    idempotency="The caller owns command arbitration. Session insertion generates one fresh refresh credential; an aborted attempt rolls back insertion and device supersession together.",
+                    retries="Only the caller retries the whole transition. Never retry insertion or encoding as an independent session owner.",
+                ),
+                errors=ErrorContract(
+                    domain_codes=(
+                        "auth.session_staging.invalid_command",
+                        "staff_projection_missing",
+                        "staff_party_has_no_principal",
+                        "staff_party_owns_multiple_principals",
+                        "staff_projection_conflict",
+                    ),
+                    mapping_owner="Password and OIDC calling owners and their adapters; staff discriminators are StaffProjectionError.refusal.value, not a fabricated code attribute.",
+                    fail_closed_on=(
+                        "invalid canonical session command",
+                        "missing or conflicting staff Party/context pair",
+                        "configuration, database or delegated presence failure",
+                    ),
+                ),
+                events=EventContract(
+                    event_types=(
+                        "auth.login_succeeded",
+                        "auth.oidc_mobile_assertion_admitted",
+                    ),
+                    schema_version=1,
+                    delivery_owner="observability.audit_log",
+                    compatibility="These are actual caller-staged AuditEvent actions, not emissions by the participant. The password and OIDC coordinators stage their success evidence atomically with the session. The OIDC outbox event remains OIDC-owned. Legacy test wrappers provide no caller-audit guarantee.",
+                    replay="Audit rows are durable evidence, not dispatcher delivery. Calling owners own retries and idempotency; a rolled-back transition leaves no successful session or success audit.",
+                ),
+                migration=MigrationContract(
+                    state=AuthorityMigrationState.NATIVE,
+                    new_owner="auth.session_staging",
+                    verification="Focused session, password and OIDC regression tests plus source caller inventory; migrated PostgreSQL acceptance remains required.",
+                ),
+                steward="platform security",
+                design_refs=(
+                    "docs/designs/OIDC_MOBILE_FEDERATION.md",
+                    "docs/SOT_RELATIONSHIP_MAP.md",
+                ),
+                test_refs=(
+                    "tests/test_oidc_mobile_federation.py",
+                    "tests/architecture/test_oidc_mobile_federation_boundary.py",
+                ),
+            ),
+        ),
+        SOTService(
+            name="auth.password_authentication",
+            module="app.services.password_authentication",
+            owns=(
+                "password authentication success transition",
+                "MFA challenge completion",
+                "authentication failure counters",
+                "authenticated password change",
+                "portal authentication source snapshots",
+                "authenticated subscriber MFA enrollment",
+                "principal-specific MFA profile projection",
+            ),
+            depends_on=(
+                "auth.session_staging",
+                "auth.token_signing",
+                "app_sessions.auth",
+                "party.staff_session_projection",
+                "control.settings_spec",
+                "observability.audit_log",
+                "runtime.db_sessions",
+                "events.dispatcher",
+            ),
+            notes=(
+                "Credential standing is version-bound. Password verification "
+                "and eligibility run read-only first; the success transition is "
+                "ONE owner transaction whose first write is a conditional "
+                "UPDATE on user_credentials.credential_version, so a reset that "
+                "commits between verification and session issuance fails the "
+                "gate instead of leaving an unrevoked session. MFA challenges "
+                "carry the credential binding and re-run the gate. PPPoE "
+                "(access credential) authentication never touches "
+                "user_credentials. The hash-representation hook "
+                "replace_password_representation is a dormant non-public participant "
+                "accepting redacted PasswordRepresentationReplacement and returning "
+                "PasswordRepresentationOutcome.REPLACED or CONFLICT. Its exact UUID, "
+                "positive version and hash CAS changes only password_hash, preserves "
+                "password_updated_at and credential_version, and disables autoflush "
+                "throughout the transaction-local marker window. It is not called by "
+                "login. UserCredential verification uses verify_user_password; "
+                "AccessCredential verification uses verify_service_secret and "
+                "retains its existing bcrypt refusal. Reversible user material "
+                "remains compatible until the recovery route and audited "
+                "refusal setting are delivered and approved for cutover. "
+                "Customer portal local password and MFA use the same owner; "
+                "Redis carries auth_session_id and database standing controls every request. "
+                "Read-only portal source lookup returns immutable canonical RADIUS/access "
+                "snapshots before network verification. Known-target denials are typed "
+                "immutable decisions; failure counters "
+                "and failed AuditEvent evidence commit together in a fresh independent "
+                "owner-command session. Unknown targets produce aggregate telemetry only."
+            ),
+            contract=ServiceContract(
+                concerns=(
+                    ConcernContract(
+                        name="principal-specific MFA profile projection",
+                        role=OwnerRole.RESOLVER,
+                        input_names=("credential standing record",),
+                    ),
+                    ConcernContract(
+                        name="authenticated subscriber MFA enrollment",
+                        role=OwnerRole.COMMAND_WRITER,
+                        input_names=(
+                            "authentication command evidence",
+                            "credential standing record",
+                            "canonical authenticating principal state",
+                        ),
+                        canonical_writer="auth.password_authentication",
+                    ),
+                    ConcernContract(
+                        name="password authentication success transition",
+                        role=OwnerRole.COMMAND_WRITER,
+                        input_names=(
+                            "authentication command evidence",
+                            "credential standing record",
+                            "canonical authenticating principal state",
+                            "authentication policy settings",
+                        ),
+                        canonical_writer="auth.password_authentication",
+                    ),
+                    ConcernContract(
+                        name="MFA challenge completion",
+                        role=OwnerRole.COMMAND_WRITER,
+                        input_names=(
+                            "authentication command evidence",
+                            "credential standing record",
+                            "canonical authenticating principal state",
+                            "verified MFA challenge envelope",
+                        ),
+                        canonical_writer="auth.password_authentication",
+                    ),
+                    ConcernContract(
+                        name="authentication failure counters",
+                        role=OwnerRole.COMMAND_WRITER,
+                        input_names=(
+                            "authentication command evidence",
+                            "credential standing record",
+                            "authentication policy settings",
+                        ),
+                        canonical_writer="auth.password_authentication",
+                    ),
+                    ConcernContract(
+                        name="portal authentication source snapshots",
+                        role=OwnerRole.RESOLVER,
+                        input_names=("credential standing record",),
+                    ),
+                    ConcernContract(
+                        name="authenticated password change",
+                        role=OwnerRole.COMMAND_WRITER,
+                        input_names=(
+                            "authentication command evidence",
+                            "credential standing record",
+                            "authentication policy settings",
+                        ),
+                        canonical_writer="auth.password_authentication",
+                    ),
+                ),
+                authoritative_inputs=(
+                    AuthorityInput(
+                        name="authentication command evidence",
+                        owner="auth.password_authentication",
+                        kind=AuthorityKind.CONTROL_INPUT,
+                        source=(
+                            "typed CommandContext carrying the authenticating "
+                            "principal as actor, the authentication scope and "
+                            "a reason; denial evidence uses the distinct system actor "
+                            "auth.password_authentication and never asserts that a "
+                            "resolved target authenticated. Verified phase-A snapshots carry only "
+                            "identifiers and the credential_version, never a "
+                            "password, hash or token"
+                        ),
+                    ),
+                    AuthorityInput(
+                        name="credential standing record",
+                        owner="auth.password_authentication",
+                        kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                        source=(
+                            "user_credentials row: credential_version, "
+                            "is_active, provider, must_change_password, lock "
+                            "window and failure counter; mfa_methods and "
+                            "mfa_recovery_codes rows; access_credentials "
+                            "active flag and update marker for PPPoE sources; "
+                            "radius_users and linked access_credentials active flags, "
+                            "subscriber/linkage and strict updated_at markers"
+                        ),
+                    ),
+                    AuthorityInput(
+                        name="canonical authenticating principal state",
+                        owner="party.staff_session_projection",
+                        kind=AuthorityKind.DERIVED_PROJECTION,
+                        source=(
+                            "active subscriber, reseller user or Party-bound "
+                            "staff principal re-read inside the gate "
+                            "transaction after the principal key-share lock"
+                        ),
+                    ),
+                    AuthorityInput(
+                        name="authentication policy settings",
+                        owner="control.settings_spec",
+                        kind=AuthorityKind.CONTROL_INPUT,
+                        source=(
+                            "failed-login and MFA attempt limits, lockout "
+                            "minutes and password minimum length, resolved in "
+                            "phase A before the owner transaction opens"
+                        ),
+                    ),
+                    AuthorityInput(
+                        name="verified MFA challenge envelope",
+                        owner="auth.token_signing",
+                        kind=AuthorityKind.CONTROL_INPUT,
+                        source=(
+                            "signature and expiry verified version-2 mfa or "
+                            "mfa_enrollment claims binding principal, audience, "
+                            "source and credential id plus version"
+                        ),
+                    ),
+                ),
+                transaction=TransactionContract(
+                    mode=TransactionMode.OWNER_MANAGED,
+                    boundary=(
+                        "Each public command enters execute_owner_command once "
+                        "on a session that phase A has returned transaction-free. "
+                        "The credential gate, session insert, presence, "
+                        "recovery-code spend, method update and success audit "
+                        "commit or roll back together. After a typed denial (and failed "
+                        "owner rollback), failure evidence uses owner_command_session "
+                        "on an independent engine connection, never the request session. "
+                        "The optional atomic counter update and failed AuditEvent commit "
+                        "or roll back together. Session-open, staging, flush, commit, close "
+                        "and telemetry failures preserve the original denial; no counter-only fallback. "
+                        "Pending and flushed request writes are never released to record failure. "
+                        "The dormant representation replacement is a non-public participant "
+                        "in its caller's transaction, never a command or transaction owner. "
+                        "It performs no flush, commit, rollback or savepoint; pending unrelated "
+                        "ORM writes stay pending until after its marker is cleared. Recoverable "
+                        "client failures attempt marker cleanup with autoflush still disabled. "
+                        "An aborted PostgreSQL transaction can refuse cleanup; the original "
+                        "failure propagates unchanged to the owner for rollback."
+                    ),
+                    locking=(
+                        "Authenticated subscriber enrollment locks refreshed Subscriber FOR UPDATE, "
+                        "then exact authenticated AuthSession FOR UPDATE, revalidates active, "
+                        "unrevoked, unexpired matching subscriber proof with no impersonation, "
+                        "then locks all factors in UUID order. Reset uses the same principal "
+                        "order; reset-first invalidates stale setup/confirmation sessions. "
+                        "Subscriber enrollment never releases a caller transaction and uses "
+                        "authentication:mfa:self as an internal proof scope, never RBAC. "
+                        "No lock while hashing. PPPoE "
+                        "gates take FOR SHARE on the access_credentials row "
+                        "after the principal lock so a secret change cannot "
+                        "commit mid-gate. A "
+                        "session-minting command first takes FOR KEY SHARE on "
+                        "the principal row (the lock its session foreign key "
+                        "needs anyway), so its order matches reset: principal, "
+                        "credential. The first write is then a conditional "
+                        "UPDATE on the credential row; it waits on a concurrent "
+                        "reset and PostgreSQL re-evaluates the predicate on the "
+                        "new row version. Order: principal (key share), "
+                        "credential, recovery codes, MFA method, sessions; forced "
+                        "enrollment: principal, credential, MFA method, "
+                        "recovery codes, sessions. "
+                        "RADIUS sources then lock access_credentials followed by "
+                        "radius_users, matching access-owner projection sync order. "
+                        "Portal sessions expire at the initial portal TTL; Redis "
+                        "refresh cannot extend database standing. Redis delivery "
+                        "failure invokes best-effort compensating revocation. "
+                        "lock_timeout is 5s and maps to a retryable refusal."
+                    ),
+                    idempotency=(
+                        "A command is single-shot: a repeat re-verifies "
+                        "against the current credential_version. A spent "
+                        "recovery code or a changed credential fails the gate "
+                        "and consumes nothing. Challenges are bound to "
+                        "credential_version but not yet single use."
+                    ),
+                    retries=(
+                        "A deadlock (40P01) retries the whole phase B once; "
+                        "the gate re-evaluates the version so phase A stays "
+                        "valid. Zero gate rows are never retried or re-verified. "
+                        "Representation CAS loss returns CONFLICT without retry or a "
+                        "secret, hash or version in the outcome. The caller owns all "
+                        "database error rollback and retry."
+                    ),
+                ),
+                errors=ErrorContract(
+                    domain_codes=(
+                        "auth.password_authentication.invalid_mfa_principal",
+                        "auth.password_authentication.mfa_unavailable",
+                        "auth.password_authentication.invalid_mfa_session",
+                        "auth.password_authentication.invalid_mfa_method",
+                        "auth.password_authentication.invalid_credentials",
+                        "auth.password_authentication.locked",
+                        "auth.password_authentication.must_change_password",
+                        "auth.password_authentication.account_disabled",
+                        "auth.password_authentication.admin_required",
+                        "auth.password_authentication.invalid_mfa_token",
+                        "auth.password_authentication.invalid_mfa_code",
+                        "auth.password_authentication.mfa_locked",
+                        "auth.password_authentication.credential_changed",
+                        "auth.password_authentication.lock_timeout",
+                        *owner_command_boundary_error_codes(
+                            "auth.password_authentication"
+                        ),
+                    ),
+                    mapping_owner=(
+                        "app.services.auth_flow and the web or API "
+                        "authentication adapters"
+                    ),
+                    retryable_codes=("auth.password_authentication.lock_timeout",),
+                    fail_closed_on=(
+                        "stale credential_version or changed credential standing",
+                        "challenge without the version-2 credential binding",
+                        "inactive or unresolvable principal at the gate",
+                        "changed PPPoE secret during an MFA window",
+                        "a failure-counter write error (never becomes success)",
+                    ),
+                ),
+                events=EventContract(
+                    event_types=(
+                        "auth.login_succeeded",
+                        "auth.password_step_succeeded",
+                        "auth.password_changed",
+                        "auth.authentication_denied",
+                        "credential_administration.completed",
+                    ),
+                    schema_version=1,
+                    delivery_owner="events.dispatcher",
+                    compatibility=(
+                        "Audit evidence is persisted by observability.audit_log in the owner transaction; "
+                        "(schema_version 1 metadata). Subscriber self enrollment also stages "
+                        "credential_administration.completed with safe principal/method IDs, "
+                        "closed transition/provenance and invalidate_sessions=False; the "
+                        "registered credential-session projection invalidates authentication "
+                        "cache without revoking sessions. Metadata carries identifiers and the "
+                        "credential_version for success only, never a secret, hash, token "
+                        "or raw body. Failed evidence is an AuditEvent with is_success=False, "
+                        "a bounded status, enum reason/surface/phase, canonical target UUID "
+                        "and provenance, fresh attempt UUID, validated-or-generated correlation UUID "
+                        "and normalized trusted client IP. No usernames, versions or Party enrichment. "
+                        "Unknown, ambiguous and invalid unsigned identities produce label-free counters only. "
+                        "EventStore/outbox is not a substitute for required audit evidence."
+                    ),
+                    replay=(
+                        "Audit rows are immutable evidence; credential state "
+                        "stays authoritative and is not rebuilt from them."
+                    ),
+                ),
+                projections=(
+                    ProjectionContract(
+                        name="subscriber MFA enrollment authentication cache",
+                        input_names=("credential standing record",),
+                        writer="auth.password_authentication",
+                        freshness="Factor/audit/event intent commit atomically; credential_session_projection invalidates principal cache after commit.",
+                        stale_behavior="AuthSession and factor rows stay authoritative; failed event handler remains retryable.",
+                        drift_signal="Failed credential_session_projection handler attempt.",
+                        rebuild_operation="Replay credential_administration.completed for the exact subscriber with invalidate_sessions=False.",
+                        repair_owner="auth.password_authentication",
+                    ),
+                ),
+                migration=MigrationContract(
+                    state=AuthorityMigrationState.COMPLETE,
+                    old_owner=(
+                        "app.services.auth_flow.AuthFlow.login, mfa_verify and "
+                        "change_password with adapter-owned commits"
+                    ),
+                    new_owner="auth.password_authentication",
+                    verification=(
+                        "Unit gate, challenge and PPPoE-separation tests plus "
+                        "PostgreSQL concurrency tests against a real database."
+                    ),
+                    cutover_gate=(
+                        "AuthFlow login, MFA and password change call only the "
+                        "owner for credential success, failure counters and "
+                        "password writes. Customer local password/MFA use the same "
+                        "owner and legacy unbound Redis sessions require re-login."
+                    ),
+                    fallback_retirement=(
+                        "The read-modify-write failure counters, the "
+                        "SELECT-then-update recovery-code spend and the "
+                        "unbound MFA challenge are removed from AuthFlow and the "
+                        "customer portal. Impersonation keeps existing authorization "
+                        "and actor audit and now receives database standing; actor "
+                        "session revocation propagation remains a separate follow-up."
+                    ),
+                ),
+                steward="platform security",
+                design_refs=(
+                    "docs/SOT_RELATIONSHIP_MAP.md",
+                    "docs/adr/0002-owner-command-transaction-boundary.md",
+                    "docs/designs/CUSTOMER_PORTAL_CREDENTIAL_STANDING.md",
+                    "docs/security/AUTHENTICATION_DENIAL_AUDIT.md",
+                    "docs/designs/USER_PASSWORD_POLICY_FOUNDATION.md",
+                    "docs/designs/SUBSCRIBER_MFA_ENROLLMENT.md",
+                ),
+                test_refs=(
+                    "tests/test_subscriber_mfa_enrollment.py",
+                    "tests/integration/test_subscriber_mfa_enrollment.py",
+                    "tests/architecture/test_subscriber_mfa_enrollment_boundary.py",
+                    "tests/test_password_authentication.py",
+                    "tests/test_authentication_denial_audit.py",
+                    "tests/test_authentication_denial_adapters.py",
+                    "tests/integration/test_authentication_denial_audit.py",
+                    "tests/architecture/test_authentication_denial_boundary.py",
+                    "tests/test_web_customer_auth.py",
+                    "tests/architecture/test_password_authentication_boundary.py",
+                    "tests/integration/test_password_auth_credential_race.py",
                 ),
             ),
         ),
@@ -1711,6 +3171,7 @@ DOMAIN = DomainSOT(
             module="app.services.staff_provisioning",
             owns=(
                 "staff account provisioning",
+                "inactive staff account deletion",
                 "staff identity bootstrap",
                 "staff identity maintenance",
                 "staff display identity resolution",
@@ -1718,6 +3179,7 @@ DOMAIN = DomainSOT(
                 "staff field technician profile binding",
             ),
             depends_on=(
+                "auth.api_key_administration",
                 "auth.rbac_catalog",
                 "auth.system_user_assignments",
                 "auth.permission_gate",
@@ -1748,6 +3210,11 @@ DOMAIN = DomainSOT(
             ),
             contract=ServiceContract(
                 concerns=(
+                    ConcernContract(
+                        name="inactive staff account deletion",
+                        role=OwnerRole.APPLICATION_COORDINATOR,
+                        input_names=("authorized inactive staff deletion request",),
+                    ),
                     ConcernContract(
                         name="staff account provisioning",
                         role=OwnerRole.APPLICATION_COORDINATOR,
@@ -1801,6 +3268,12 @@ DOMAIN = DomainSOT(
                     ),
                 ),
                 authoritative_inputs=(
+                    AuthorityInput(
+                        name="authorized inactive staff deletion request",
+                        owner="auth.staff_provisioning",
+                        kind=AuthorityKind.CONTROL_INPUT,
+                        source="Frozen single/bulk UUID command, trusted administrative actor and matching RBAC context; refreshed locked SystemUser inactive standing and existing linked-record FK blockers.",
+                    ),
                     AuthorityInput(
                         name="ERP HR staff lifecycle request",
                         owner="external:dotmac_erp",
@@ -1876,7 +3349,7 @@ DOMAIN = DomainSOT(
                         "credentials, profile and login-identity changes, RBAC "
                         "grants, session revocation, audit, "
                         "Person Party identity, and the outbox event commit "
-                        "together before return."
+                        "together before return. Inactive staff single/bulk deletion atomically deletes auth dependents, delegates API-key and RBAC cleanup to named flush-only participants, deletes principals and stages canonical audit; no deletion outbox/external effect."
                     ),
                     locking=(
                         "A PostgreSQL advisory transaction lock serializes "
@@ -1884,7 +3357,7 @@ DOMAIN = DomainSOT(
                         "email in sorted old/new order; existing principals and "
                         "their local credentials "
                         "are selected FOR UPDATE, and database unique constraints "
-                        "arbitrate identity and grant keys."
+                        "arbitrate identity and grant keys. Deletion locks all unique selected principals sorted UUID FOR UPDATE NOWAIT before credentials, MFA, sessions and API keys sorted UUID, then RBAC cleanup with one deletion-only admin Role NOWAIT query. Principal/Role contention refuses immediately to avoid in-flight grantor FK cycles; other child/key waits retain PostgreSQL five-second lock_timeout. No Subscriber, Party or email advisory lock."
                     ),
                     idempotency=(
                         "Email is the provision natural key; managed roles, active "
@@ -1895,7 +3368,7 @@ DOMAIN = DomainSOT(
                         "Party external-reference provenance so an exact replay "
                         "returns the created principal without mutating it. Invite "
                         "expansion deduplicates on the immutable provisioning event "
-                        "id."
+                        "id. Deletion has no replay/retry guarantee: single missing is not found, active is blocked; bulk active/missing/duplicate occurrences are skipped and any late blocker rolls back the entire batch."
                     ),
                     retries=(
                         "Adapters may retry a failed request with the same "
@@ -1908,6 +3381,10 @@ DOMAIN = DomainSOT(
                 errors=ErrorContract(
                     domain_codes=(
                         "auth.staff_provisioning.invalid_command",
+                        "auth.staff_provisioning.active_staff_deletion",
+                        "auth.staff_provisioning.linked_records",
+                        "auth.staff_provisioning.deletion_busy",
+                        "auth.staff_provisioning.deletion_unavailable",
                         "auth.staff_provisioning.unknown_roles",
                         "auth.staff_provisioning.staff_account_not_found",
                         "auth.staff_provisioning.identity_conflict",
@@ -1955,7 +3432,7 @@ DOMAIN = DomainSOT(
                     delivery_owner="events.dispatcher",
                     compatibility=(
                         "Version 1 is additive and PII-safe; breaking payload "
-                        "changes require a new schema version."
+                        "changes require a new schema version. Hard deletion emits canonical AuditEvent only: principal/key IDs and command correlation, never email, display name or credential material. No external deletion dispatch."
                     ),
                     replay=(
                         "State events are immutable evidence. Staff invitation "
@@ -1979,16 +3456,17 @@ DOMAIN = DomainSOT(
                     cutover_gate=(
                         "All staff-sync, administrative identity, self-profile, "
                         "activation, invitation, and password-recovery routes call "
-                        "only typed owner commands for staff identity state."
+                        "only typed owner commands for staff identity state. Inactive single/bulk deletion uses fresh owner sessions with inherited admin and route RBAC assignment guards."
                     ),
                     fallback_retirement=(
                         "Staff sync no longer calls web_system_user_mutations or "
                         "synchronous email delivery; web adapters no longer mutate "
-                        "staff profile or local credential identity directly."
+                        "staff profile or local credential identity directly. Both legacy staff delete helpers and single route post-commit PII audit are retired; customer deletion remains a separate owner migration."
                     ),
                 ),
                 steward="platform security",
                 design_refs=(
+                    "docs/designs/STAFF_ACCOUNT_DELETION.md",
                     "docs/SOT_RELATIONSHIP_MAP.md",
                     "docs/designs/ERP_WORKFORCE_ACCOUNT_PROVISIONING.md",
                     "docs/designs/STAFF_LOGIN_IDENTITY_RECONCILIATION.md",
@@ -1996,6 +3474,8 @@ DOMAIN = DomainSOT(
                     "docs/designs/SOT_CODING_STANDARDS_REFACTOR.md",
                 ),
                 test_refs=(
+                    "tests/test_staff_account_deletion.py",
+                    "tests/integration/test_staff_account_deletion_pg.py",
                     "tests/test_api_staff_sync.py",
                     "tests/test_staff_provisioning_owner.py",
                     "tests/test_staff_login_identity_admin.py",
@@ -2217,6 +3697,7 @@ DOMAIN = DomainSOT(
             owns=(
                 "reseller portal principal onboarding",
                 "reseller portal access revocation",
+                "reseller portal MFA maintenance",
             ),
             depends_on=(
                 "customer.accounts",
@@ -2257,6 +3738,14 @@ DOMAIN = DomainSOT(
                     ),
                     ConcernContract(
                         name="reseller portal access revocation",
+                        role=OwnerRole.APPLICATION_COORDINATOR,
+                        input_names=(
+                            "authorized reseller onboarding principal",
+                            "canonical reseller onboarding state",
+                        ),
+                    ),
+                    ConcernContract(
+                        name="reseller portal MFA maintenance",
                         role=OwnerRole.APPLICATION_COORDINATOR,
                         input_names=(
                             "authorized reseller onboarding principal",
@@ -2417,6 +3906,7 @@ DOMAIN = DomainSOT(
                 "field mobile OIDC assertion admission",
             ),
             depends_on=(
+                "auth.session_staging",
                 "control.feature_registry",
                 "control.settings_spec",
                 "events.dispatcher",
@@ -2430,9 +3920,9 @@ DOMAIN = DomainSOT(
                 "a subject. External roles, groups and authorization scopes "
                 "have no effect: they are not read, stored or projected, so "
                 "there is no path from a token claim to an access decision. "
-                "This owner never mints a session itself — admission and "
-                "session issuance are two commits, in that order, and "
-                "AuthFlow stays the single issuance owner. It never "
+                "This owner coordinates admission and session staging in one "
+                "atomic transaction through auth.session_staging; tokens are "
+                "encoded from the committed snapshot. It never "
                 "provisions: an unbound subject is refused, there is no "
                 "match-by-email and no just-in-time party creation."
             ),
@@ -2458,6 +3948,7 @@ DOMAIN = DomainSOT(
                             "verified identity provider assertion",
                             "installed OIDC verifier binding",
                             "eligible staff principal",
+                            "authentication session staging participant",
                         ),
                         canonical_writer="auth.oidc_mobile_federation",
                     ),
@@ -2525,40 +4016,19 @@ DOMAIN = DomainSOT(
                             "compared as the Sub-owned context assertion"
                         ),
                     ),
+                    AuthorityInput(
+                        name="authentication session staging participant",
+                        owner="auth.session_staging",
+                        kind=AuthorityKind.CONTROL_INPUT,
+                        source="Typed flush-only session insertion, same-device supersession and staff presence, returning an immutable signing snapshot for post-commit encoding.",
+                    ),
                 ),
                 transaction=TransactionContract(
                     mode=TransactionMode.OWNER_MANAGED,
-                    boundary=(
-                        "Each endpoint enters execute_owner_command once on a "
-                        "transaction-free session. Admission burns the "
-                        "ceremony, stamps the credential, stages audit "
-                        "evidence and emits its event in that one "
-                        "transaction; the Sub session is minted AFTERWARDS by "
-                        "AuthFlow, which owns its own commit. A refusal is "
-                        "returned as a value rather than raised, so the burn "
-                        "commits and the ceremony cannot be redeemed again."
-                    ),
-                    locking=(
-                        "The ceremony row is selected FOR UPDATE and its "
-                        "unused/unexpired state re-read under that lock; the "
-                        "matching credential is selected FOR UPDATE in the "
-                        "same transaction. A unique index on the nonce hash "
-                        "and a partial unique index on (binding, subject) "
-                        "arbitrate what the locks cannot."
-                    ),
-                    idempotency=(
-                        "A ceremony is single use by column: a second "
-                        "exchange for the same ceremony finds consumed_at set "
-                        "and is refused as a replay. A repeated start "
-                        "supersedes that device's outstanding ceremony rather "
-                        "than stacking a second redeemable row."
-                    ),
-                    retries=(
-                        "A refused exchange is not retryable — the ceremony "
-                        "is burned and the device must run a fresh one. A "
-                        "bounded JWKS refresh failure is retryable after the "
-                        "configured minimum interval."
-                    ),
+                    boundary="Each endpoint enters execute_owner_command once on a transaction-free session. Successful exchange commits ceremony completion, credential bookkeeping, canonical AuditEvent, admitted outbox event, session, device supersession and staff presence together. Expected admission refusals return values so failed ceremony burns commit without a session. Storage or commit failure rolls back the success transition. Encoding occurs only after commit and cannot undo committed state.",
+                    locking="Ceremony FOR UPDATE precedes immutable candidate discovery. Party-led principal resolution identifies the exact context, then fresh principal, credential, Party FK KEY SHARE and authentication-binding locks follow the reviewed identity dependency order. Exact version, provider, subject, projection and binding timestamp evidence are rechecked; drift is refused without selecting another identity. PostgreSQL lock_timeout is transaction-local five seconds per acquisition, not a total request deadline.",
+                    idempotency="Single-use ceremony consumption serializes concurrent redemption. Expected denials commit a failed burn. A storage rollback leaves the ceremony retryable; a post-commit encoding failure leaves it consumed and requires a fresh ceremony. Same-device replacement participates in the session transaction.",
+                    retries="Lock timeout returns a typed operational error after rollback. Retry requires a fresh request and complete revalidation; no nested session or audit retry. Authentication refusals and consumed ceremonies are not retried.",
                 ),
                 errors=ErrorContract(
                     domain_codes=(
@@ -2569,7 +4039,9 @@ DOMAIN = DomainSOT(
                         "auth.oidc_mobile_federation.nested_owner_command",
                         "auth.oidc_mobile_federation.nested_transaction_completion",
                         "auth.oidc_mobile_federation.refused",
+                        "auth.oidc_mobile_federation.lock_timeout",
                     ),
+                    retryable_codes=("auth.oidc_mobile_federation.lock_timeout",),
                     mapping_owner="app.api.oidc_mobile",
                     fail_closed_on=(
                         "a disabled or unconfigured federation",

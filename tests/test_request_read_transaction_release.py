@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from types import SimpleNamespace
+from uuid import uuid4
 
 from app.api import billing as billing_api
 from app.api import subscribers as subscribers_api
@@ -53,7 +54,12 @@ def test_billing_ledger_detail_releases_read_transaction(monkeypatch) -> None:
 
 def test_permission_fast_path_releases_auth_transaction(monkeypatch) -> None:
     db = object()
-    auth = {"roles": ["admin"], "scopes": []}
+    auth = {
+        "principal_id": str(uuid4()),
+        "principal_type": "system_user",
+        "roles": ["admin"],
+        "scopes": [],
+    }
     calls: list[object] = []
 
     monkeypatch.setattr(

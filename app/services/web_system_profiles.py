@@ -13,9 +13,10 @@ from sqlalchemy.orm import Session
 from app.models.auth import ApiKey, AuthProvider, MFAMethod, UserCredential
 from app.models.rbac import Permission, Role, SystemUserPermission, SystemUserRole
 from app.models.system_user import SystemUser
+from app.services import password_authentication as pa
 from app.services import session_manager as session_manager_service
 from app.services import staff_provisioning
-from app.services.auth_flow import verify_password
+from app.services.auth_flow import verify_user_password
 from app.services.common import coerce_uuid
 
 logger = logging.getLogger(__name__)
@@ -158,8 +159,6 @@ def verify_current_password(
     db: Session, *, system_user_id: str | UUID, password: str
 ) -> bool:
     """Verify the active local portal password for a system user."""
-    if not password:
-        return False
     credential = (
         db.execute(
             select(UserCredential)
@@ -171,7 +170,23 @@ def verify_current_password(
         .scalars()
         .first()
     )
-    return bool(credential and verify_password(password, credential.password_hash))
+    verified = bool(
+        password
+        and credential
+        and verify_user_password(password, credential.password_hash)
+    )
+    if not verified:
+        pa.record_authentication_denial(
+            pa.denial_for_request(
+                reason=pa.DenialReason.INVALID_CREDENTIALS,
+                surface=pa.DenialSurface.PROFILE_STEP_UP,
+                phase=pa.DenialPhase.STEP_UP,
+                target=pa.DenialTarget(pa.DenialTargetKind.CREDENTIAL, credential.id)
+                if credential
+                else None,
+            )
+        )
+    return verified
 
 
 def get_user_detail_data(

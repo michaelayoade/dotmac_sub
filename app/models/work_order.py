@@ -12,7 +12,7 @@ authoritative storage, not a cache.
 import uuid
 from datetime import UTC, datetime
 
-from sqlalchemy import Boolean, ForeignKey, Integer, String, Text, true
+from sqlalchemy import Boolean, CheckConstraint, ForeignKey, Integer, String, Text, true
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 from sqlalchemy.types import JSON, DateTime
@@ -31,6 +31,20 @@ class WorkOrder(Base):
     """A customer job or a shared infrastructure recovery job."""
 
     __tablename__ = "work_order"
+    __table_args__ = (
+        CheckConstraint(
+            "(purpose IS NULL AND access_technology IS NULL AND template_version IS NULL AND classification_source IS NULL) OR "
+            "(purpose IS NOT NULL AND access_technology IS NOT NULL AND template_version IS NOT NULL AND classification_source IS NOT NULL AND "
+            "purpose IN ('repair', 'maintenance', 'customer_deployment', 'infrastructure_rollout', 'upgrade', 'relocation') AND "
+            "access_technology IN ('fiber', 'radio', 'unknown') AND template_version = 1 AND "
+            "classification_source = 'explicit_operator_selection' AND "
+            "work_order_kind IN ('customer', 'infrastructure') AND "
+            "(purpose != 'customer_deployment' OR work_order_kind = 'customer') AND "
+            "(purpose != 'infrastructure_rollout' OR work_order_kind = 'infrastructure') AND "
+            "(access_technology != 'unknown' OR purpose IN ('repair', 'maintenance')))",
+            name="ck_work_order_explicit_classification",
+        ),
+    )
 
     id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
@@ -97,6 +111,10 @@ class WorkOrder(Base):
     # Values are declared by app.services.field.work_order_status.WorkOrderStatus.
     status: Mapped[str] = mapped_column(String(20), nullable=False, default="scheduled")
     work_type: Mapped[str | None] = mapped_column(String(20))
+    purpose: Mapped[str | None] = mapped_column(String(32))
+    access_technology: Mapped[str | None] = mapped_column(String(16))
+    template_version: Mapped[int | None] = mapped_column(Integer)
+    classification_source: Mapped[str | None] = mapped_column(String(40))
     priority: Mapped[str | None] = mapped_column(String(20))
     crm_ticket_id: Mapped[str | None] = mapped_column(String(64), index=True)
     crm_project_id: Mapped[str | None] = mapped_column(String(64), index=True)

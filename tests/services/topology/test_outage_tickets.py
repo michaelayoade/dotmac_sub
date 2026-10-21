@@ -17,7 +17,6 @@ from app.services.topology.outage_tickets import (
     infrastructure_link_for,
     link_complaint_ticket,
     link_infrastructure_ticket,
-    links_for_incident,
     mark_reconciliation,
 )
 
@@ -72,22 +71,17 @@ def test_one_canonical_infrastructure_ticket(db_session, catalog_offer):
     assert found is not None and found.ticket_id == ticket_a.id
 
 
-def test_complaint_links_deduplicate_per_pair(db_session, catalog_offer):
-    node = _node(db_session)
-    incident = declare_outage(db_session, node=node)
-    complaint = _ticket(db_session, "No internet in Garki")
+def test_complaint_link_boundary_requires_reviewed_typed_command():
+    import inspect
 
-    first = link_complaint_ticket(
-        db_session, incident, complaint.id, linked_by="agent@x"
-    )
-    second = link_complaint_ticket(
-        db_session, incident, complaint.id, linked_by="agent@x"
+    from app.services.topology.outage_complaint_contracts import (
+        ComplaintIncidentLinkCommand,
     )
 
-    assert first.id == second.id
-    assert [link.role for link in links_for_incident(db_session, incident.id)] == [
-        "complaint"
-    ]
+    signature = inspect.signature(link_complaint_ticket)
+    assert tuple(signature.parameters) == ("session", "command")
+    assert signature.parameters["command"].kind is inspect.Parameter.KEYWORD_ONLY
+    assert ComplaintIncidentLinkCommand.__dataclass_params__.frozen
 
 
 def test_reconciliation_states_are_typed(db_session, catalog_offer):

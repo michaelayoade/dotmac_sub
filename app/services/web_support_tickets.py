@@ -10,7 +10,7 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime
 from enum import Enum
-from typing import BinaryIO, Protocol
+from typing import BinaryIO, Protocol, runtime_checkable
 from uuid import UUID
 
 from sqlalchemy import select
@@ -76,6 +76,7 @@ from app.services.list_query import (
     PageMeta,
     SortDirection,
 )
+from app.services.object_storage import ObjectNotFoundError
 from app.services.status_presentation import ticket_status_presentation
 
 logger = logging.getLogger(__name__)
@@ -202,6 +203,121 @@ def get_customer_visible_ticket_attachment_file(
     ):
         return record
     return None
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class CustomerTicketAttachmentQuery:
+    subscriber_id: UUID
+    ticket_id: UUID
+    file_id: UUID
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class CustomerTicketAttachmentContent:
+    filename: str
+    content_type: str
+    data: bytes
+
+
+@runtime_checkable
+class _ClosableAttachmentChunks(Protocol):
+    def close(self) -> None: ...
+
+
+class CustomerTicketAttachmentNotFound(DomainError):
+    def __init__(self) -> None:
+        super().__init__(
+            code="customer_ticket_attachment_not_found",
+            message="Attachment not found",
+            retryable=False,
+        )
+
+
+def customer_ticket_attachment_content(
+    db: Session, *, query: CustomerTicketAttachmentQuery
+) -> CustomerTicketAttachmentContent:
+    """Resolve fresh exact customer ownership and publication before opening bytes.
+
+    The authenticated adapter supplies the canonical subscriber principal. Ticket
+    locking serializes ownership/publication changes with this read admission;
+    the existing visibility resolver remains the single attachment policy.
+    """
+    ticket = db.scalar(
+        select(Ticket)
+        .where(Ticket.id == query.ticket_id)
+        .execution_options(populate_existing=True)
+        .with_for_update()
+    )
+    if ticket is None or ticket.subscriber_id != query.subscriber_id:
+        raise CustomerTicketAttachmentNotFound()
+    # Refresh child/file identities too: callers may reuse an ORM identity map
+    # containing comments or files read before a canonical publication change.
+    db.scalars(
+        select(TicketComment)
+        .where(TicketComment.ticket_id == ticket.id)
+        .execution_options(populate_existing=True)
+    ).all()
+    db.expire(ticket, ["comments"])
+    candidate = db.scalar(
+        select(StoredFile)
+        .where(StoredFile.id == query.file_id)
+        .execution_options(populate_existing=True)
+    )
+    if candidate is None:
+        raise CustomerTicketAttachmentNotFound()
+    record = get_customer_visible_ticket_attachment_file(
+        db, ticket_id=query.ticket_id, file_id=query.file_id
+    )
+    if record is None or not 0 <= record.file_size <= MAX_ATTACHMENT_BYTES:
+        raise CustomerTicketAttachmentNotFound()
+    data = bytearray()
+    try:
+        stream = file_uploads.stream_file(record)
+        try:
+            for chunk in stream.chunks:
+                if len(data) + len(chunk) > MAX_ATTACHMENT_BYTES:
+                    raise CustomerTicketAttachmentNotFound()
+                data.extend(chunk)
+        finally:
+            if isinstance(stream.chunks, _ClosableAttachmentChunks):
+                stream.chunks.close()
+    except ObjectNotFoundError as exc:
+        raise CustomerTicketAttachmentNotFound() from exc
+    # Provider I/O may wait. Re-admit the file/reference after reading all bytes;
+    # no provider stream or database lock is delegated to response delivery.
+    ticket = db.scalar(
+        select(Ticket)
+        .where(Ticket.id == query.ticket_id)
+        .execution_options(populate_existing=True)
+        .with_for_update()
+    )
+    record = db.scalar(
+        select(StoredFile)
+        .where(StoredFile.id == query.file_id)
+        .execution_options(populate_existing=True)
+    )
+    if ticket is None or record is None:
+        raise CustomerTicketAttachmentNotFound()
+    db.scalars(
+        select(TicketComment)
+        .where(TicketComment.ticket_id == query.ticket_id)
+        .execution_options(populate_existing=True)
+    ).all()
+    db.expire(ticket, ["comments"])
+    if (
+        ticket.subscriber_id != query.subscriber_id
+        or get_customer_visible_ticket_attachment_file(
+            db, ticket_id=query.ticket_id, file_id=query.file_id
+        )
+        is None
+        or len(data) != record.file_size
+    ):
+        raise CustomerTicketAttachmentNotFound()
+    return CustomerTicketAttachmentContent(
+        filename=record.original_filename,
+        content_type=record.content_type or "application/octet-stream",
+        data=bytes(data),
+    )
 
 
 def _ticket_customer_context(

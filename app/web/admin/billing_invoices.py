@@ -11,7 +11,7 @@ from sqlalchemy.orm import Session
 
 from app.db import get_db
 from app.http_query import OptionalDateQuery
-from app.models.billing import InvoiceStatus
+from app.models.billing import Invoice, InvoiceStatus
 from app.services import web_billing_customers as web_billing_customers_service
 from app.services import web_billing_documents as web_billing_documents_service
 from app.services import (
@@ -21,7 +21,11 @@ from app.services import web_billing_invoice_cache as web_billing_invoice_cache_
 from app.services import web_billing_invoice_forms as web_billing_invoice_forms_service
 from app.services import web_billing_invoices as web_billing_invoices_service
 from app.services import web_billing_overview as web_billing_overview_service
-from app.services.auth_dependencies import has_permission, require_permission
+from app.services.auth_dependencies import (
+    has_permission,
+    require_permission,
+)
+from app.services.billing.invoices import is_controlled_invoice_draft
 from app.services.inclusive_date_range import InclusiveDateRangeError
 from app.services.list_query import ListQuery
 
@@ -456,77 +460,6 @@ def invoice_create(
     )
 
 
-@router.post(
-    "/invoices/generate-from-subscription",
-    response_class=HTMLResponse,
-    dependencies=[Depends(require_permission("billing:invoice:create"))],
-)
-def invoice_generate_from_subscription(
-    request: Request,
-    subscriber_id: str = Form(...),
-    subscription_id: str = Form(...),
-    db: Session = Depends(get_db),
-):
-    """Generate an invoice with line items auto-populated from a subscription's offer."""
-    try:
-        invoice = web_billing_invoices_service.generate_invoice_from_subscription_web(
-            db,
-            request=request,
-            actor_id=_actor_id(request),
-            subscriber_id=subscriber_id,
-            subscription_id=subscription_id,
-        )
-    except Exception as exc:
-        from app.web.admin import get_current_user, get_sidebar_stats
-
-        list_query = web_billing_overview_service.build_invoice_list_query(
-            account_id=None,
-            partner_id=None,
-            status=None,
-            proforma_only=False,
-            customer_ref=None,
-            search=None,
-            start_date=None,
-            end_date=None,
-            sort_by="created_at",
-            sort_dir="desc",
-            page=1,
-            per_page="25",
-        )
-        state = web_billing_overview_service.build_invoices_list_data(
-            db,
-            list_query=list_query,
-        )
-        invoices = state["invoices"]
-        assert isinstance(invoices, list)
-        invoice_bulk_action_contract = (
-            web_billing_invoice_bulk_actions_service.build_invoice_bulk_action_contract(
-                db,
-                auth=getattr(request.state, "auth", None) or {},
-                invoices=invoices,
-            )
-        )
-        status_code = exc.status_code if isinstance(exc, HTTPException) else 400
-        error = str(exc.detail) if isinstance(exc, HTTPException) else str(exc)
-        return templates.TemplateResponse(
-            "admin/billing/invoices.html",
-            {
-                "request": request,
-                **state,
-                "invoice_bulk_action_contract": invoice_bulk_action_contract,
-                "error": error,
-                "active_page": "invoices",
-                "active_menu": "billing",
-                "current_user": get_current_user(request),
-                "sidebar_stats": get_sidebar_stats(db),
-            },
-            status_code=status_code,
-        )
-    return RedirectResponse(
-        url=f"/admin/billing/invoices/{invoice.id}", status_code=303
-    )
-
-
 @router.get(
     "/invoices/{invoice_id}/edit",
     response_class=HTMLResponse,
@@ -543,12 +476,25 @@ def invoice_edit(request: Request, invoice_id: UUID, db: Session = Depends(get_d
             {"request": request, "message": "Invoice not found"},
             status_code=404,
         )
-    if getattr(state["invoice"], "status", None) != InvoiceStatus.draft:
+    invoice = state["invoice"]
+    if not isinstance(invoice, Invoice) or invoice.status != InvoiceStatus.draft:
         return templates.TemplateResponse(
             "admin/errors/409.html",
             {
                 "request": request,
                 "message": "Only draft invoices can be edited.",
+            },
+            status_code=409,
+        )
+    if is_controlled_invoice_draft(invoice):
+        return templates.TemplateResponse(
+            "admin/errors/409.html",
+            {
+                "request": request,
+                "message": (
+                    "This reviewed historical-service draft is sealed. Issue it "
+                    "as reviewed, or void it and create a new preview."
+                ),
             },
             status_code=409,
         )

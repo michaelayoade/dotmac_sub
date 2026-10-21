@@ -19,6 +19,7 @@ EPHEMERAL_ACTION_METADATA_KEY = "ephemeral_action"
 REFERRAL_CREDENTIAL_ENROLLMENT_ACTION = "auth.referral_credential_enrollment"
 STAFF_ACCOUNT_INVITE_ACTION = "auth.staff_account_invite"
 RESELLER_USER_INVITE_ACTION = "auth.reseller_user_invite"
+EMAIL_VERIFICATION_ACTION = "auth.email_verification"
 PASSWORD_RECOVERY_ACTION = "auth.password_recovery"
 _ENVELOPE_KEYS = frozenset({"type", "version", "context"})
 
@@ -121,6 +122,12 @@ def materialize_email(db: Session, notification: Notification) -> EphemeralEmail
             db,
             notification=notification,
             context=context,
+        )
+    elif action_type == EMAIL_VERIFICATION_ACTION and version == 1:
+        from app.services import email_verification
+
+        content = email_verification.materialize_verification_email(
+            db, notification=notification, context=context
         )
     else:
         raise EphemeralActionRejected("unsupported_action")

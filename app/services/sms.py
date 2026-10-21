@@ -35,6 +35,10 @@ from app.models.notification import (
 from app.schemas.notification import NotificationCreate
 from app.services import settings_spec
 from app.services.customer_identity_normalization import normalize_phone_identifier
+from app.services.notification import (
+    CREDENTIAL_EVENT_TYPE,
+    mark_credential_send_terminal,
+)
 from app.services.notification import notifications as notification_records
 from app.services.notification_template_renderer import render_template_text
 
@@ -239,6 +243,8 @@ def send_sms(
     body: str,
     track: bool = True,
     notification_id: str | None = None,
+    stored_body: str | None = None,
+    subscriber_id: str | None = None,
 ) -> bool:
     """Send an SMS message.
 
@@ -247,11 +253,15 @@ def send_sms(
         to_phone: Recipient phone number
         body: Message content
         track: Whether to create notification/delivery records
+        stored_body: Credential-bearing sends only. When given, the message is
+            delivered immediately (never queued, since a queued row must hold
+            the sendable body) and this redacted copy is what the notification
+            and delivery rows persist instead of ``body``.
 
     Returns:
         True if SMS was sent successfully
     """
-    if track and notification_id is None:
+    if track and notification_id is None and stored_body is None:
         queued = notification_records.create_customer_notification(
             db,
             NotificationCreate(
@@ -313,7 +323,10 @@ def send_sms(
             notification_id=notification_id,
             channel=NotificationChannel.sms,
             recipient=normalized_phone,
-            body=body,
+            body=body if stored_body is None else stored_body,
+            commit=stored_body is not None,
+            event_type=(CREDENTIAL_EVENT_TYPE if stored_body is not None else None),
+            subscriber_id=subscriber_id if stored_body is not None else None,
         )
 
     # Send based on provider
@@ -394,6 +407,8 @@ def send_sms(
         )
         notification.sent_at = datetime.now(UTC) if success else None
         notification.last_error = None if success else error_message
+        if stored_body is not None and not success:
+            mark_credential_send_terminal(notification)
 
         if success:
             delivery_status = (
@@ -410,7 +425,8 @@ def send_sms(
             status=delivery_status,
             occurred_at=datetime.now(UTC),
             response_code="sent" if success else "error",
-            response_body=error_message if error_message else body[:2000],
+            # Never copy the message body into the delivery row.
+            response_body=error_message if error_message else "sent",
         )
         db.add(delivery)
         db.commit()
@@ -418,7 +434,10 @@ def send_sms(
     if success:
         logger.info(f"SMS sent to {normalized_phone}")
     else:
-        logger.error(f"SMS failed to {normalized_phone}: {error_message}")
+        if stored_body is not None:
+            logger.error("SMS credential send failed to %s", normalized_phone)
+        else:
+            logger.error(f"SMS failed to {normalized_phone}: {error_message}")
 
     return success
 

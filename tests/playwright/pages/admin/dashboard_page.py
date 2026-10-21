@@ -43,8 +43,8 @@ class AdminDashboardPage(BasePage):
         expect(self.page.get_by_text("Subscribers").first).to_be_visible()
 
     def expect_activity_feed_visible(self) -> None:
-        """Assert activity feed section is visible."""
-        expect(self.page.get_by_text("Recent Events").first).to_be_visible()
+        """Assert the live attention feed is visible."""
+        expect(self.page.get_by_text("Needs attention").first).to_be_visible()
 
     def search(self, query: str) -> None:
         """Use the global search."""

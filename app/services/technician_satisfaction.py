@@ -1,15 +1,8 @@
 """Per-technician satisfaction, derived from the ratings customers already give.
 
-The rating itself is not new: ``customer_work_order_selfcare.rate_technician``
-has always written one per completed visit, and the portal has always collected
-it. Nothing ever read it back. A rating that is captured and never looked at is
-not accountability — it is just storage — so this resolver turns the per-visit
-facts into a per-technician view.
-
-It is a **resolver**: it derives, it does not decide or write. The work order
-keeps the canonical rating (``WorkOrder.technician_rating``, projected from
-typed metadata) and this module never writes one, never adjusts one, and holds
-no state of its own. Recompute it whenever you like.
+Only rating-time native attribution is counted. Historical feedback without
+recorded attribution remains in customer history but is excluded here; current
+assignment never assigns an old score to a person. This resolver never writes.
 """
 
 from __future__ import annotations
@@ -21,13 +14,10 @@ from datetime import UTC, datetime, timedelta
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.models.dispatch import (
-    DispatchQueueStatus,
-    TechnicianProfile,
-    WorkOrderAssignmentQueue,
-)
+from app.models.dispatch import TechnicianProfile
 from app.models.system_user import SystemUser
 from app.models.work_order import WorkOrder
+from app.services.customer_work_order_selfcare import recorded_rating_attribution
 from app.services.field.jobs import _technician_name
 
 #: A visit only carries a rating once it is finished.
@@ -76,26 +66,18 @@ def _rated_at(row: WorkOrder) -> datetime | None:
 def _rated_work_orders(
     db: Session, *, technician_ids: list[uuid.UUID] | None
 ) -> list[tuple[uuid.UUID, WorkOrder]]:
-    """Completed visits paired with the technician who was assigned to them.
-
-    The rating lives in work-order JSON metadata, so the rating filter is
-    applied in Python rather than SQL — portable across the SQLite tests and
-    Postgres, and cheap because only completed visits are considered.
-    """
-    query = (
-        select(WorkOrderAssignmentQueue.assigned_technician_id, WorkOrder)
-        .join(WorkOrder, WorkOrder.id == WorkOrderAssignmentQueue.work_order_mirror_id)
-        .where(
-            WorkOrderAssignmentQueue.status == DispatchQueueStatus.assigned,
-            WorkOrderAssignmentQueue.assigned_technician_id.is_not(None),
-            WorkOrder.status == _RATED_STATUS,
-        )
-    )
-    if technician_ids:
-        query = query.where(
-            WorkOrderAssignmentQueue.assigned_technician_id.in_(technician_ids)
-        )
-    return [(row[0], row[1]) for row in db.execute(query).all()]
+    """Pair each completed visit with its recorded rating-time attribution."""
+    rows = db.scalars(select(WorkOrder).where(WorkOrder.status == _RATED_STATUS)).all()
+    wanted = set(technician_ids) if technician_ids else None
+    result: list[tuple[uuid.UUID, WorkOrder]] = []
+    for row in rows:
+        attribution = recorded_rating_attribution(row)
+        if attribution is None or (
+            wanted is not None and attribution.technician_id not in wanted
+        ):
+            continue
+        result.append((attribution.technician_id, row))
+    return result
 
 
 def scorecards(

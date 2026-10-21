@@ -7,13 +7,19 @@ FastAPI backend in this repo (`app/`, served at `/api/v1`).
 
 | Area | Screens | Backend |
 | --- | --- | --- |
-| **Auth** | Login (local / RADIUS), MFA (TOTP), profile, change password | `POST /auth/login`, `/auth/mfa/verify`, `/auth/refresh`, `/auth/logout`, `GET·PATCH /auth/me`, `POST /auth/me/password` |
+| **Auth** | Customer portal login, MFA (TOTP), profile, change password | `POST /customer/auth/login`, `/customer/auth/mfa/verify`, `/auth/refresh`, `/auth/logout`, `GET·PATCH /auth/me`, `POST /auth/me/password` |
 | **Billing** | Invoice/payment/activity lists and details, PDF invoice and receipt downloads | Self-scoped `GET /me/invoices`, `/me/payments`, `/me/ledger` detail and PDF routes |
 | **Usage** | Data quota buckets with progress, per-period stats | `GET /quota-buckets`, `/radius-accounting-sessions` |
 | **Subscriptions** | Service list on the dashboard | `GET /subscriptions` |
 | **Support** | Ticket list, detail + replies, create ticket | `GET·POST /support/tickets`, `/support/tickets/{id}`, `/support/tickets/{id}/comments` |
 
 ## Tech stack
+
+This app admits customer accounts only. Customer login uses the same backend
+password-step policy as `/portal/auth/login`; the API returns native tokens
+rather than browser cookies. Deploy the customer auth endpoints before updating
+the app. A failure loading the profile after login can retry the profile without
+submitting the password again. Existing staff/reseller sessions are not admitted.
 
 - **State / DI:** `flutter_riverpod`
 - **HTTP:** `dio` with a token-refresh interceptor
@@ -130,6 +136,21 @@ keystore referenced by `android/key.properties`.
    `MOBILE_GLITCHTIP_DSN`. iOS release archiving still needs Apple signing
    credentials wired in (job is stubbed).
 
+   All four `ANDROID_*` signing secrets are mandatory before CI installs or
+   builds anything. Keep using the existing Customer upload keystore and its
+   custody process; Field signing secrets are separate. The workflow refuses
+   stale signing material, invalid/empty keystores, and an invalid key alias.
+   Before upload, `scripts/verify_customer_android_release.py` verifies the
+   selected APK with Android `apksigner`, or the AAB with `jarsigner` and
+   `keytool`. It refuses unsigned/tampered artifacts, unsigned bundle entries,
+   Android debug certificates, and any signer that differs from the restored
+   upload key. The manifest package must equal `io.dotmac.selfcare` (the AAB's
+   protobuf root package is parsed exactly). CI explicitly installs build-tools `36.0.0`; unavailable tools fail
+   closed. Only the selected, verified artifact is uploaded. A missing
+   artifact fails the run, and signing material is removed even after failure.
+   These checks prove build signing and app identity, not Play acceptance or
+   publication. Do not rotate or replace the upload key to bypass a failed check.
+
 The payment return scheme (`dotmacpay`) is registered in the Android manifest
 and iOS Info.plist; for a white-label build, override `BRAND_PAYMENT_SCHEME` in
 the Dart build *and* the matching native entries (Gradle `-PpaymentScheme=`,
@@ -142,9 +163,9 @@ in-memory checkout context required to open `/pay`.
 
 ## How auth works
 
-1. `POST /auth/login` returns either a token pair **or** an MFA challenge
+1. `POST /customer/auth/login` returns either a token pair **or** an MFA challenge
    (`mfa_required: true`, `mfa_token`). The app routes to the MFA screen and
-   completes via `POST /auth/mfa/verify`.
+   completes via `POST /customer/auth/mfa/verify`.
 2. Tokens are stored in the secure store. Every request carries
    `Authorization: Bearer <access_token>`.
 3. On a `401`, `ApiClient` transparently calls `POST /auth/refresh` once and

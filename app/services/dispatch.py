@@ -31,11 +31,15 @@ from app.schemas.dispatch import (
     TechnicianSkillCreate,
     TechnicianSkillUpdate,
     WorkOrderAssignmentQueueCreate,
+    WorkOrderAssignmentQueueRead,
     WorkOrderAssignmentQueueUpdate,
     WorkOrderHeaderCreate,
     WorkOrderHeaderUpdate,
 )
 from app.services.common import apply_ordering, apply_pagination, coerce_uuid
+from app.services.db_session_adapter import db_session_adapter
+from app.services.owner_commands import CommandContext
+from app.services.permission_admission import PermissionAdmission
 from app.services.response import ListResponseMixin
 from app.services.work_order_commands import work_order_commands
 
@@ -450,14 +454,15 @@ class AssignmentQueue(ListResponseMixin):
         db: Session,
         payload: WorkOrderAssignmentQueueCreate,
         *,
-        auth: dict[str, Any] | None = None,
-        request_id: str | None = None,
-    ) -> WorkOrderAssignmentQueue:
+        context: CommandContext,
+        access: PermissionAdmission,
+    ) -> WorkOrderAssignmentQueueRead:
+        db_session_adapter.release_read_transaction(db)
         return work_order_commands.create_queue_entry(
             db,
             payload,
-            auth=auth,
-            request_id=request_id,
+            context=context,
+            access=access,
         )
 
     @staticmethod
@@ -467,6 +472,7 @@ class AssignmentQueue(ListResponseMixin):
         status: str | None = None,
         crm_work_order_id: str | None = None,
         assigned_technician_id: str | None = None,
+        assigned_vendor_id: str | None = None,
         limit: int = 50,
         offset: int = 0,
     ) -> list[WorkOrderAssignmentQueue]:
@@ -487,6 +493,11 @@ class AssignmentQueue(ListResponseMixin):
                 WorkOrderAssignmentQueue.assigned_technician_id
                 == coerce_uuid(assigned_technician_id)
             )
+        if assigned_vendor_id:
+            query = query.filter(
+                WorkOrderAssignmentQueue.assigned_vendor_id
+                == coerce_uuid(assigned_vendor_id)
+            )
         query = query.order_by(WorkOrderAssignmentQueue.created_at.desc())
         return apply_pagination(query, limit, offset).all()
 
@@ -496,15 +507,16 @@ class AssignmentQueue(ListResponseMixin):
         queue_id: str,
         payload: WorkOrderAssignmentQueueUpdate,
         *,
-        auth: dict[str, Any] | None = None,
-        request_id: str | None = None,
-    ) -> WorkOrderAssignmentQueue:
+        context: CommandContext,
+        access: PermissionAdmission,
+    ) -> WorkOrderAssignmentQueueRead:
+        db_session_adapter.release_read_transaction(db)
         return work_order_commands.update_queue_entry(
             db,
             queue_id,
             payload,
-            auth=auth,
-            request_id=request_id,
+            context=context,
+            access=access,
         )
 
 

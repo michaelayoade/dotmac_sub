@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import hashlib
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from uuid import UUID
 
 from sqlalchemy import func, select
@@ -30,7 +30,14 @@ from app.services.events.types import EventType
 from app.services.owner_commands import (
     CommandContext,
     OwnerCommandDefinition,
+    current_command_context,
+    current_command_definition,
     execute_owner_command,
+    owner_command_active,
+)
+from app.services.permission_authorization import (
+    admin_only_grant_permission_ids,
+    guard_admin_only_grants,
 )
 from app.services.session_hooks import run_after_commit
 
@@ -151,11 +158,11 @@ def _active_roles_by_ids(
     return tuple(by_id[role_id] for role_id in ids)
 
 
-def _locked_admin_role(db: Session) -> Role | None:
+def _locked_admin_role(db: Session, *, nowait: bool = False) -> Role | None:
     return db.execute(
         select(Role)
         .where(func.lower(Role.name) == "admin", Role.is_active.is_(True))
-        .with_for_update()
+        .with_for_update(nowait=nowait)
     ).scalar_one_or_none()
 
 
@@ -285,6 +292,14 @@ def _effective_access(
         frozenset(system_user_direct_permission_keys(db, user_id))
         | frozenset(_permission_keys_via_roles(db, user_id)),
     )
+
+
+def effective_access(
+    db: Session, user_id: UUID
+) -> tuple[frozenset[str], frozenset[str]]:
+    """Public read of a user's active role names and effective permission keys."""
+
+    return _effective_access(db, user_id)
 
 
 def _replace_source_roles(
@@ -427,10 +442,12 @@ def ensure_source_role_by_id(
     )
 
 
-def ensure_can_deactivate_system_user(db: Session, user_id: UUID) -> None:
+def ensure_can_deactivate_system_user(
+    db: Session, user_id: UUID, *, nowait: bool = False
+) -> None:
     """Fail closed before deactivating the final active admin principal."""
 
-    admin_role = _locked_admin_role(db)
+    admin_role = _locked_admin_role(db, nowait=nowait)
     if admin_role is None or not _has_role(db, user_id, admin_role.id):
         return
     user = db.get(SystemUser, user_id)
@@ -444,17 +461,42 @@ def ensure_can_deactivate_system_user(db: Session, user_id: UUID) -> None:
         )
 
 
-def remove_all_for_system_user(db: Session, user_id: UUID) -> None:
-    """Remove assignment dependents inside the principal deletion transaction."""
+@dataclass(frozen=True)
+class RemoveSystemUserAssignmentsCommand:
+    context: CommandContext = field(repr=False)
+    user_id: UUID
 
-    ensure_can_deactivate_system_user(db, user_id)
-    db.query(SystemUserRole).filter(SystemUserRole.system_user_id == user_id).delete(
-        synchronize_session=False
-    )
+
+@dataclass(frozen=True)
+class RemovedSystemUserAssignments:
+    user_id: UUID
+
+
+def remove_all_for_system_user(
+    db: Session, *, command: RemoveSystemUserAssignmentsCommand
+) -> RemovedSystemUserAssignments:
+    """Typed flush-only collaborator of inactive staff deletion."""
+    if (
+        not isinstance(command, RemoveSystemUserAssignmentsCommand)
+        or not isinstance(command.user_id, UUID)
+        or not isinstance(command.context, CommandContext)
+        or not owner_command_active(db, owner="auth.staff_provisioning")
+        or current_command_definition(db).concern != "inactive staff account deletion"
+        or current_command_definition(db).name
+        not in {"delete_staff_account", "bulk_delete_staff_accounts"}
+        or current_command_context(db) != command.context
+    ):
+        raise _error("invalid_command", "Trusted staff deletion context required.")
+    _validate_context(command.context)
+    ensure_can_deactivate_system_user(db, command.user_id, nowait=True)
+    db.query(SystemUserRole).filter(
+        SystemUserRole.system_user_id == command.user_id
+    ).delete(synchronize_session=False)
     db.query(SystemUserPermission).filter(
-        SystemUserPermission.system_user_id == user_id
+        SystemUserPermission.system_user_id == command.user_id
     ).delete(synchronize_session=False)
     db.flush()
+    return RemovedSystemUserAssignments(command.user_id)
 
 
 def _validate_context(context: CommandContext) -> tuple[AuditActorType, str]:
@@ -561,6 +603,54 @@ def _audit_actor(
         actor_type=actor_type,
         actor_id=actor_id,
         party_id=party_id,
+    )
+
+
+def _admin_only_touched(
+    db: Session, command: ReplaceSystemUserAssignmentsCommand
+) -> set[UUID]:
+    """Admin-only-grant permission ids this replacement would grant or revoke.
+
+    Covers the direct grant and a role carrying the permission being added to
+    or removed from the user.
+    """
+    gated = admin_only_grant_permission_ids(db)
+    if not gated:
+        return set()
+    existing_direct = set(
+        db.execute(
+            select(SystemUserPermission.permission_id).where(
+                SystemUserPermission.system_user_id == command.user_id
+            )
+        ).scalars()
+    )
+    touched = (existing_direct ^ set(command.direct_permission_ids)) & set(gated)
+    existing_roles = set(
+        db.execute(
+            select(SystemUserRole.role_id).where(
+                SystemUserRole.system_user_id == command.user_id,
+                SystemUserRole.source == LOCAL_ROLE_SOURCE,
+            )
+        ).scalars()
+    )
+    changed_roles = existing_roles ^ set(command.role_ids)
+    if changed_roles:
+        touched |= set(
+            db.execute(
+                select(RolePermission.permission_id).where(
+                    RolePermission.role_id.in_(changed_roles),
+                    RolePermission.permission_id.in_(set(gated)),
+                )
+            ).scalars()
+        )
+    return touched
+
+
+def _admin_required_error(keys: tuple[str, ...]) -> SystemUserAssignmentError:
+    return _error(
+        "admin_role_required",
+        "Only an administrator may grant or revoke this permission.",
+        permission_keys=list(keys),
     )
 
 
@@ -690,5 +780,13 @@ def replace_system_user_assignments(
         db,
         definition=_REPLACE_ASSIGNMENTS,
         context=command.context,
-        operation=operation,
+        operation=guard_admin_only_grants(
+            db,
+            context=command.context,
+            operation_name="replace_system_user_assignments",
+            touched=lambda: _admin_only_touched(db, command),
+            make_error=_admin_required_error,
+            operation=operation,
+            commit=db.commit,
+        ),
     )

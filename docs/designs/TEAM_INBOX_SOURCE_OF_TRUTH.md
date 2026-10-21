@@ -7,6 +7,12 @@ fiber-website inquiry channels
 
 ## Decision
 
+The status owner exposes **Resolve as spam** only for chats with unresolved
+identity and no Customer/Lead link or pending required Lead materialization.
+It validates the same typed eligibility again during the locked transition and
+records `spam_irrelevant` in status evidence without requesting CSAT. See
+`INBOX_CUSTOMER_COMPLETION_GATE.md` for the resolution contract.
+
 Team Inbox is the operational communications workspace. It owns conversation
 identity, message chronology, operator collaboration, and the projections used
 by its list and detail screens. Providers are transports. They do not decide
@@ -42,6 +48,23 @@ combined Inbox/Support workspace.
 
 ## Owner inventory
 
+### Editing existing AI routes
+
+Inbox settings offers a row-level Edit route action, including inactive rows.
+The adapter submits `UpdateAiRouteCommand` and `AiRoutePatch`; the command owner
+enters the owner executor once, and the routing participant locks the existing
+row and flushes explicit changes. Channel, intent and route UUID are immutable.
+The edited row's updated timestamp is checked under that lock; stale forms are
+rejected and must be reloaded. Thresholds outside zero to one are rejected.
+An audit event records the staff actor, route UUID, resulting team and state.
+The helper never creates a replacement route or retroactively reassigns old
+conversations. Repeated same-value edits preserve the route identity.
+
+After deployment, edit the existing WhatsApp `coverage_request` row, select
+Sales (call center), retain the reviewed threshold/priority, set Active and save.
+Verify the resulting row before testing a synthetic inbound enquiry. Do not
+reactivate the old Help Desk target or duplicate the channel/intent pair.
+
 | Concern | Canonical owner | Responsibility |
 | --- | --- | --- |
 | Inbound provider facts, deduplication, and identity-collision quarantine | `communications.team_inbox_observations` | Commits one normalized provider observation before consequences and durably quarantines conflicting SMTP candidates |
@@ -55,7 +78,6 @@ combined Inbox/Support workspace.
 | Customer/Lead resolution readiness and Inbox profile completion | `communications.team_inbox_customer_completion` | Computes the central Customer completion gate, blocks final classified sales candidates until their Sales-owned Lead link exists, and coordinates `customer.canonical_profile_patch` plus `party.registry`; Lead profile completeness is advisory |
 | Classified Inbox Lead materialization and optional form enrichment | `sales.lead_intake` | Consumes the durable confident sales-classification event captured before clarification and routing, atomically creates/links a provisional Party-first Lead independent of form delivery, and optionally enriches that same Lead from the versioned form |
 | Routing, assignment, escalation, and FIFO queue | `communications.team_inbox_routing` | Applies configured team, availability, permission, SLA, durable queue admission, and promotion policy |
-| Inbox automation | `communications.team_inbox_automation` | Matches Inbox-scoped conversation triggers and coordinates ordered assign, auto-assign, and tag actions |
 | Agent introductions | `communications.team_inbox_agent_introduction` | Owns per-agent templates and the chat-widget-only first-pickup auto-send decision |
 | Conversation status | `communications.team_inbox_status` | Owns every status transition and its immutable evidence |
 | Historical lifecycle reconstruction | `communications.team_inbox_audit_reconstruction` | Applies only reviewed, hash-bound, provenance-graded historical evidence |

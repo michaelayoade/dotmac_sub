@@ -4,6 +4,7 @@ Lives above the standalone network package because NAS is catalog-owned.
 This projection never mutates either inventory or subscription state.
 """
 
+from dataclasses import dataclass
 from uuid import UUID
 
 from sqlalchemy import String, literal, or_, select
@@ -127,3 +128,79 @@ def resolve(
     return (
         InfrastructureOption(id=row[0], label=row[1], context=row[2]) if row else None
     )
+
+
+@dataclass(frozen=True, slots=True)
+class LockedInfrastructureScope:
+    target: InfrastructureOption
+    pon_parent_olt_id: UUID | None
+
+
+def lock_reference(
+    db: Session,
+    *,
+    reference: InfrastructureReference,
+    related: tuple[InfrastructureReference, ...] = (),
+) -> LockedInfrastructureScope:
+    """Flush-only stable native inventory locks and exact-role revalidation.
+
+    Include the reviewed POP location in related references to avoid cross-site
+    lock inversions. PON scope also locks its authoritative parent OLT; a parent
+    rebind observed while locking fails closed and requires whole-command retry.
+    """
+    from app.services.domain_errors import DomainError
+
+    models: dict[
+        InfrastructureType,
+        type[NasDevice]
+        | type[PopSite]
+        | type[NetworkDevice]
+        | type[OLTDevice]
+        | type[PonPort]
+        | type[FdhCabinet],
+    ] = {
+        InfrastructureType.nas: NasDevice,
+        InfrastructureType.location: PopSite,
+        InfrastructureType.base_station: PopSite,
+        InfrastructureType.access_point: NetworkDevice,
+        InfrastructureType.olt: OLTDevice,
+        InfrastructureType.pon_port: PonPort,
+        InfrastructureType.cabinet: FdhCabinet,
+    }
+    references = (reference, *related)
+    locks = {
+        (models[item.type].__tablename__, item.id): models[item.type]
+        for item in references
+    }
+    parents: dict[UUID, UUID] = {}
+    for item in references:
+        if item.type == InfrastructureType.pon_port:
+            parent = db.scalar(select(PonPort.olt_id).where(PonPort.id == item.id))
+            if parent is not None:
+                parents[item.id] = parent
+                locks[(OLTDevice.__tablename__, parent)] = OLTDevice
+    for (table, target_id), model in sorted(
+        locks.items(), key=lambda item: (item[0][0], str(item[0][1]))
+    ):
+        db.execute(
+            select(model)
+            .where(model.id == target_id)
+            .with_for_update()
+            .execution_options(populate_existing=True)
+        ).one_or_none()
+    for port_id, parent_id in parents.items():
+        current_parent = db.scalar(select(PonPort.olt_id).where(PonPort.id == port_id))
+        if current_parent != parent_id:
+            raise DomainError(
+                code="network.infrastructure_catalogue.stale_scope",
+                message="PON infrastructure binding changed while locking",
+            )
+    for item in references:
+        if resolve(db, reference=item, active_only=True) is None:
+            raise DomainError(
+                code="network.infrastructure_catalogue.unavailable",
+                message="Infrastructure target is unavailable",
+            )
+    result = resolve(db, reference=reference, active_only=True)
+    assert result is not None
+    return LockedInfrastructureScope(result, parents.get(reference.id))

@@ -177,6 +177,13 @@ from app.tasks.radius_health import run_radius_health_check
 from app.tasks.radius_population import refresh_radius_from_subs, sync_device_login
 from app.tasks.referrals import reconcile_referral_mirror
 from app.tasks.reports import send_scheduled_ncc_report
+from app.tasks.router_health import (
+    observe_router_runtime,
+    reconcile_router_posture,
+    reconcile_service_path,
+    reprobe_coa_canary,
+    run_coa_canary,
+)
 from app.tasks.router_sync import (
     audit_sot_drift,
     capture_scheduled_snapshots,
@@ -243,7 +250,10 @@ from app.tasks.usage import (
     reap_stale_radius_sessions,
     run_usage_rating,
 )
-from app.tasks.vacation_holds import resume_expired_holds
+from app.tasks.vacation_holds import (
+    resume_expired_holds,
+    resume_ticket_resolved_pauses,
+)
 from app.tasks.vpn import run_vpn_control_job, run_vpn_health_scan
 from app.tasks.wireguard import (
     cleanup_connection_logs as cleanup_wireguard_logs,
@@ -404,12 +414,18 @@ __all__ = [
     "sync_inventory_devices_to_monitoring",
     "retired_detect_sla_breaches",
     "resume_expired_holds",
+    "resume_ticket_resolved_pauses",
     # OLT queue processing
     "execute_due_profile_sync_tasks",
     "refresh_monitoring_coverage",
     # Router config sync/snapshot (keystone) — previously unregistered, so the
     # scheduled capture never ran. Importing here registers them with the worker.
     "capture_scheduled_snapshots",
+    "reconcile_router_posture",
+    "reconcile_service_path",
+    "observe_router_runtime",
+    "reprobe_coa_canary",
+    "run_coa_canary",
     "audit_sot_drift",
     "cleanup_idle_tunnels",
     "execute_config_push",

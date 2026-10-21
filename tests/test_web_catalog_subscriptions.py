@@ -71,6 +71,24 @@ from app.services.subscription_lifecycle import (
 )
 
 
+@pytest.fixture(autouse=True)
+def _credential_editor_by_default(monkeypatch):
+    """Legacy tests here exercise non-credential behaviour as a credential editor.
+
+    The permission gate itself is covered in tests/test_pppoe_credential_bridge.py
+    against the real default (``credential_update_allowed=False``).
+    """
+    real = web_catalog_subscriptions_service.update_subscription_with_audit
+
+    def editor(*args, **kwargs):
+        kwargs.setdefault("credential_update_allowed", True)
+        return real(*args, **kwargs)
+
+    monkeypatch.setattr(
+        web_catalog_subscriptions_service, "update_subscription_with_audit", editor
+    )
+
+
 def _public_ip_addon(
     db_session,
     *,
@@ -205,6 +223,7 @@ def test_upsert_access_credential_does_not_clear_password_when_blank_on_edit(
         username="10004167",
         plain_password="InitialPass123",
         radius_profile_id=None,
+        subscription_id=subscription.id,
     )
 
     credential = (
@@ -213,7 +232,7 @@ def test_upsert_access_credential_does_not_clear_password_when_blank_on_edit(
         .one()
     )
     original_hash = credential.secret_hash
-    assert auth_flow_service.verify_password("InitialPass123", original_hash)
+    assert auth_flow_service.verify_service_secret("InitialPass123", original_hash)
 
     web_catalog_subscriptions_service.update_subscription_with_audit(
         db_session,
@@ -229,7 +248,9 @@ def test_upsert_access_credential_does_not_clear_password_when_blank_on_edit(
     db_session.refresh(credential)
     assert credential.username == "10004167"
     assert credential.secret_hash == original_hash
-    assert auth_flow_service.verify_password("InitialPass123", credential.secret_hash)
+    assert auth_flow_service.verify_service_secret(
+        "InitialPass123", credential.secret_hash
+    )
 
 
 def test_generic_edit_preserves_lifecycle_and_commercial_facts(
@@ -321,7 +342,7 @@ def test_upsert_access_credential_prefers_active_matching_username(
     db_session.refresh(inactive_newer_credential)
     assert active_credential.username == "100015322"
     assert active_credential.is_active is True
-    assert auth_flow_service.verify_password(
+    assert auth_flow_service.verify_service_secret(
         "NewPass123", active_credential.secret_hash
     )
     assert inactive_newer_credential.username == "100015322_1"
@@ -379,12 +400,15 @@ def test_upsert_access_credential_stores_service_password_in_reversible_format(
     )
 
     assert credential.secret_hash.startswith(("plain:", "enc:"))
-    assert auth_flow_service.verify_password("InitialPass123", credential.secret_hash)
+    assert auth_flow_service.verify_service_secret(
+        "InitialPass123", credential.secret_hash
+    )
 
 
-def test_subscription_form_context_exposes_current_service_password(
+def test_subscription_form_context_never_exposes_current_service_password(
     db_session,
     subscriber,
+    subscription,
 ):
     web_catalog_subscriptions_service._upsert_access_credential(
         db_session,
@@ -392,12 +416,20 @@ def test_subscription_form_context_exposes_current_service_password(
         username="10004167",
         plain_password="VisiblePass123",
         radius_profile_id=None,
+        subscription_id=subscription.id,
     )
+
+    from app.models.catalog import AccessCredential
+
+    db_session.query(AccessCredential).filter(
+        AccessCredential.subscriber_id == subscriber.id
+    ).update({"subscription_id": subscription.id})
+    db_session.commit()
 
     context = web_catalog_subscriptions_service.subscription_form_context(
         db_session,
         {
-            "id": "sub-1",
+            "id": str(subscription.id),
             "subscriber_id": str(subscriber.id),
             "account_id": str(subscriber.id),
             "login": "10004167",
@@ -406,7 +438,9 @@ def test_subscription_form_context_exposes_current_service_password(
     )
 
     assert context["current_service_login"] == "10004167"
-    assert context["current_service_password"] == "VisiblePass123"
+    assert context["has_current_service_password"] is True
+    assert "current_service_password" not in context
+    assert "VisiblePass123" not in repr(context)
 
 
 def test_subscription_detail_context_resolves_commercial_policy_from_customer_and_globals(
@@ -932,6 +966,7 @@ def test_subscription_detail_context_exposes_events_notifications_and_radius_syn
         username="105000111",
         plain_password="VisiblePass123",
         radius_profile_id=None,
+        subscription_id=subscription.id,
     )
     credential = (
         db_session.query(AccessCredential)
@@ -1094,6 +1129,7 @@ def test_subscription_detail_context_reads_live_external_radius_rows(
         username="105000222",
         plain_password="SecretPass123",
         radius_profile_id=None,
+        subscription_id=subscription.id,
     )
 
     db_path = tmp_path / "radius_external.sqlite"
@@ -1203,7 +1239,7 @@ def test_send_subscription_credentials_uses_email_and_sms_targets(
         sent_emails.append(kwargs["to_email"])
         return True
 
-    def _fake_send_sms(_db, phone, body, track=True):
+    def _fake_send_sms(_db, phone, body, track=True, **_kw):
         sent_sms.append((phone, body, track))
         return True
 
@@ -1592,7 +1628,7 @@ def test_update_subscription_preserves_ipv4_when_assignment_omitted(
     updated = web_catalog_subscriptions_service.update_subscription_with_audit(
         db_session,
         str(subscription.id),
-        {"login": "10004167"},
+        {},
         "",
         [],
         [],

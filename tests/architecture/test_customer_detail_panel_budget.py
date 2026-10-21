@@ -1,3 +1,4 @@
+import ast
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -39,4 +40,28 @@ def test_financial_balance_projection_uses_cohort_owner() -> None:
     assert "profiles = resolve_billing_profiles(db, accounts)" in service
     assert "prepaid_available_balances(db, prepaid_account_ids)" in service
     assert "get_available_balance" not in service
-    assert "if include_network and map_data and primary_address:" in service
+    tree = ast.parse(service)
+    projection_gates = [
+        node
+        for node in ast.walk(tree)
+        if isinstance(node, ast.If)
+        and any(
+            isinstance(statement, ast.Assign)
+            and isinstance(statement.value, ast.Call)
+            and isinstance(statement.value.func, ast.Attribute)
+            and isinstance(statement.value.func.value, ast.Call)
+            and isinstance(statement.value.func.value.func, ast.Name)
+            and statement.value.func.value.func.id == "project_customer_network_map"
+            for statement in node.body
+        )
+    ]
+    assert len(projection_gates) == 1
+    condition = projection_gates[0].test
+    assert isinstance(condition, ast.BoolOp) and isinstance(condition.op, ast.And)
+    assert [ast.unparse(predicate) for predicate in condition.values] == [
+        "include_network",
+        "map_data",
+        "primary_address",
+        "primary_address.latitude is not None",
+        "primary_address.longitude is not None",
+    ]

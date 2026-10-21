@@ -176,6 +176,12 @@ class SOTService:
     depends_on: tuple[str, ...] = ()
     notes: str | None = None
     contract: ServiceContract | None = None
+    # Additional implementation modules share this named owner and contract.
+    implementation_modules: tuple[str, ...] = ()
+
+    @property
+    def owner_modules(self) -> tuple[str, ...]:
+        return (self.module, *self.implementation_modules)
 
     @property
     def is_contracted(self) -> bool:

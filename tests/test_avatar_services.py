@@ -89,6 +89,9 @@ class _Storage:
         assert content_type == "image/png"
         self.objects[key] = data
 
+    def exists(self, key: str) -> bool:
+        return key in self.objects
+
     def stream(self, key: str) -> StreamResult:
         data = self.objects[key]
         return StreamResult(

@@ -36,6 +36,7 @@ class ErpBillingFlow(enum.Enum):
     """Money-path flows Sub may project to ERP."""
 
     invoice = "invoice"
+    accounting_fact = "accounting_fact"
     credit_note = "credit_note"
     payment = "payment"
     refund_or_reversal = "refund_or_reversal"

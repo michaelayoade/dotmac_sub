@@ -622,7 +622,7 @@
                             </td>
                             <td class="px-6 py-4 text-sm text-slate-500 dark:text-slate-400">
                                 {% if assignment.subscription %}
-                                <a href="/admin/catalog/subscriptions/{{ assignment.subscription_id }}" class="text-indigo-600 hover:text-indigo-700 dark:text-indigo-400">{{ assignment.subscription.service_id or 'View' }}</a>
+                                {% if can(request, 'subscription:read') %}<a href="/admin/catalog/subscriptions/{{ assignment.subscription_id }}" class="text-indigo-600 hover:text-indigo-700 dark:text-indigo-400">{{ assignment.subscription.service_id or 'View' }}</a>{% else %}{{ assignment.subscription.service_id or 'View' }}{% endif %}
                                 {% else %}-{% endif %}
                             </td>
                             <td class="px-6 py-4 text-sm text-slate-500 dark:text-slate-400">

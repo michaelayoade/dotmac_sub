@@ -20,6 +20,7 @@ from app.services import (
 )
 from app.services import web_admin_resellers as reseller_svc
 from app.services.auth_dependencies import require_permission
+from app.services.domain_errors import DomainError
 from app.services.owner_commands import CommandContext
 from app.services.web_system_common import humanize_integrity_error
 from app.web.request_parsing import parse_form_data
@@ -685,6 +686,63 @@ def reseller_user_remove(
         "Portal access removed and active sessions revoked."
         if outcome.changed
         else "Portal access was already removed."
+    )
+    return RedirectResponse(
+        url=(
+            f"/admin/resellers/{reseller_id}?page={page}&per_page={per_page}"
+            f"&notice={quote_plus(notice)}#portal-access"
+        ),
+        status_code=303,
+    )
+
+
+@router.post(
+    "/{reseller_id}/users/reseller_user/{principal_id}/disable-mfa",
+    response_class=HTMLResponse,
+)
+def reseller_user_disable_mfa(
+    reseller_id: str,
+    principal_id: str,
+    request: Request,
+    form: FormData = Depends(parse_form_data),
+    auth: dict = Depends(require_permission("reseller:write")),
+    db: Session = Depends(get_db),
+):
+    page = _form_int(form, "page", 1)
+    per_page = _form_int(form, "per_page", 25)
+    try:
+        outcome = reseller_onboarding.remove_reseller_user_mfa(
+            db,
+            reseller_onboarding.RemoveResellerUserMfaCommand(
+                context=_onboarding_context(
+                    auth,
+                    reason="Administrative reseller user MFA removal",
+                    idempotency_key=(
+                        f"reseller-mfa-removal:{reseller_id}:{principal_id}:{uuid4()}"
+                    ),
+                ),
+                reseller_id=UUID(reseller_id),
+                principal_id=UUID(principal_id),
+                removal_reason=_form_str(form, "removal_reason"),
+            ),
+        )
+    except Exception as exc:
+        return _portal_access_error_response(
+            request,
+            db,
+            reseller_id=reseller_id,
+            page=page,
+            per_page=per_page,
+            error=(
+                exc.message
+                if isinstance(exc, DomainError)
+                else "Unable to remove reseller user MFA."
+            ),
+        )
+    notice = (
+        "MFA removed, sessions revoked and the user notified."
+        if outcome.changed
+        else "No active MFA factors were found."
     )
     return RedirectResponse(
         url=(

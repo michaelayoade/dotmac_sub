@@ -287,6 +287,39 @@ def _entry_expires_seconds(interval_seconds: int) -> int:
     return interval_seconds
 
 
+def fanout_child_expires_seconds(
+    db, parent_task_name: str, *, default_interval_seconds: int
+) -> int:
+    """Message expiry for children a periodic parent fans out.
+
+    Children inherit the parent's interval: once the next parent run has fanned
+    out again, an unconsumed child is obsolete. Unbounded children always
+    executed while the minute-cadence tasks queued behind them expired
+    (ingestion RCA 2026-10-19). Reads the parent's enabled interval row, else
+    the documented default.
+    """
+    interval: int | None = None
+    try:
+        row = (
+            db.query(ScheduledTask)
+            .filter(
+                ScheduledTask.task_name == parent_task_name,
+                ScheduledTask.enabled.is_(True),
+                ScheduledTask.schedule_type == ScheduleType.interval,
+            )
+            .order_by(ScheduledTask.created_at.desc())
+            .first()
+        )
+        interval = row.interval_seconds if row else None
+    except Exception:  # noqa: BLE001 - expiry must never block the fan-out
+        logger.warning(
+            "fanout_expiry_lookup_failed parent=%s; using default",
+            parent_task_name,
+            exc_info=True,
+        )
+    return _entry_expires_seconds(max(int(interval or default_interval_seconds), 1))
+
+
 def _interval_to_beat_schedule(
     task_id: UUID | str, interval_seconds: int
 ) -> crontab | timedelta:
@@ -618,15 +651,12 @@ def build_beat_schedule() -> dict:
         _retire_scheduled_task(
             session, "app.tasks.enforcement.reconcile_account_status_drift"
         )
-        # Billing approval is an admission fact, not a runtime bypass. This
-        # permanent owner pass repairs the impossible active + unapproved split
-        # state through the account lifecycle coordinator.
-        _sync_scheduled_task(
-            session,
-            name="billing_approval_reconcile",
-            task_name="app.tasks.enforcement.reconcile_billing_approval_drift",
-            enabled=True,
-            interval_seconds=900,
+        # Retired: the billing-approval drift sweep was an automatic repair
+        # loop over money and access state (ADR 0007). Residual active +
+        # unapproved accounts go to the manual exceptions review. Disabling
+        # the row here is idempotent and sticks, because nothing re-syncs it.
+        _retire_scheduled_task(
+            session, "app.tasks.enforcement.reconcile_billing_approval_drift"
         )
         # The full RADIUS projection writer remains an event-driven transport.
         # This permanent reconciler compares desired-versus-observed state and
@@ -910,6 +940,17 @@ def build_beat_schedule() -> dict:
             enabled=ip_consistency_audit_enabled,
             interval_seconds=ip_consistency_audit_interval_seconds,
         )
+        # IPv4 retention sweep (daily). Shadow mode reports only; `apply` mode
+        # releases through network.ip_assignment_lifecycle.
+        _sync_scheduled_task(
+            session,
+            name="network_ipv4_retention_release",
+            task_name="app.tasks.radius.ipv4_retention_release",
+            enabled=_scheduler_setting_enabled(
+                session, SettingDomain.network, "ipv4_retention_release_enabled"
+            ),
+            interval_seconds=86400,
+        )
         # Connectivity shadow audit (read-only full-base sweep; quantifies
         # desired-vs-actual drift per dimension — the cutover-readiness gauge for
         # the connectivity reconciler). Shares the audit cadence defaults.
@@ -1079,6 +1120,13 @@ def build_beat_schedule() -> dict:
             task_name="app.tasks.vacation_holds.resume_expired_holds",
             enabled=True,
             interval_seconds=vacation_hold_resume_interval,
+        )
+        _sync_scheduled_task(
+            session,
+            name="ticket_pause_auto_resume",
+            task_name="app.tasks.vacation_holds.resume_ticket_resolved_pauses",
+            enabled=True,
+            interval_seconds=max(vacation_hold_resume_interval, 300),
         )
         _sync_scheduled_task(
             session,
@@ -1796,6 +1844,66 @@ def build_beat_schedule() -> dict:
             task_name="router_sync.capture_scheduled_snapshots",
             enabled=True,
             interval_seconds=max(router_backup_hours * 3600, 3600),
+        )
+        # Router health reconciler (network.router_health). Both controls ship
+        # OFF; the tasks re-check their control at run time. Findings are
+        # shadow-mode (visible, non-notifying) until router_health_alert_mode
+        # is set to "alert" through the audited settings path.
+        router_health_posture_hours = resolve_integer(
+            session,
+            SettingDomain.network_monitoring,
+            "router_health_posture_interval_hours",
+        )
+        _sync_scheduled_task(
+            session,
+            name="router_health_posture",
+            task_name="app.tasks.router_health.reconcile_router_posture",
+            enabled=control_registry.is_enabled(
+                session, "network.router_health_posture"
+            ),
+            interval_seconds=max(router_health_posture_hours * 3600, 3600),
+        )
+        router_health_service_minutes = resolve_integer(
+            session,
+            SettingDomain.network_monitoring,
+            "router_health_service_path_interval_minutes",
+        )
+        _sync_scheduled_task(
+            session,
+            name="router_health_service_path",
+            task_name="app.tasks.router_health.reconcile_service_path",
+            enabled=control_registry.is_enabled(
+                session, "network.router_health_posture"
+            ),
+            interval_seconds=max(router_health_service_minutes * 60, 900),
+        )
+        router_health_canary_hours = resolve_integer(
+            session,
+            SettingDomain.network_monitoring,
+            "router_health_coa_canary_interval_hours",
+        )
+        _sync_scheduled_task(
+            session,
+            name="router_health_coa_canary",
+            task_name="app.tasks.router_health.run_coa_canary",
+            enabled=control_registry.is_enabled(
+                session, "network.router_health_coa_canary"
+            ),
+            interval_seconds=max(router_health_canary_hours * 3600, 12 * 3600),
+        )
+        router_health_runtime_minutes = resolve_integer(
+            session,
+            SettingDomain.network_monitoring,
+            "router_health_runtime_interval_minutes",
+        )
+        _sync_scheduled_task(
+            session,
+            name="router_health_runtime",
+            task_name="app.tasks.router_health.observe_router_runtime",
+            enabled=control_registry.is_enabled(
+                session, "network.router_health_runtime_poll"
+            ),
+            interval_seconds=max(router_health_runtime_minutes * 60, 600),
         )
         # NAS config backup orchestrator. The task itself honors each device's
         # backup_enabled + backup_schedule, so this just needs to run often

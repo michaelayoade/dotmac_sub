@@ -41,7 +41,7 @@
 #
 # Procedure:
 #   pull image from GHCR -> verify OCI revision + exact GitHub CI evidence ->
-#   DB backup -> pin APP_IMAGE + GIT_SHA in .env ->
+#   candidate secret readiness -> DB prerequisites + backup -> pin APP_IMAGE + GIT_SHA in .env ->
 #   migrate + verify -> warm candidate -> recreate app+workers ->
 #   web + background-runtime health gates.
 #
@@ -135,19 +135,39 @@ CELERY_INSPECT_TIMEOUT_SECONDS="${CELERY_INSPECT_TIMEOUT_SECONDS:-5}"
 # recreates) freeradius, vmagent and promtail when a checkout file they mount
 # changed after they started. See apply_service_config_changes below and
 # docs/runbooks/SERVICE_CONFIG_MOUNTS.md.
-APP_SERVICES=(app celery-worker celery-worker-bandwidth celery-worker-ingestion \
-  celery-worker-monitoring celery-worker-notifications-immediate \
-  celery-worker-notifications celery-worker-billing \
-  celery-worker-tr069 celery-beat \
-  bandwidth-poller syslog-listener)
+# Derived at deploy time (derive_app_services) from the resolved Compose config:
+# declared services whose image resolves to the release APP_IMAGE that either
+# already have a container in the project or are on the required list in
+# scripts/deploy_app_image_services.py, plus app-image services already running
+# in the project, minus APP_IMAGE_DEPLOY_EXCLUSIONS. It used to be a hand-kept list that omitted
+# team-inbox-smtp, which then stayed on an old image across releases. Profile-
+# gated services (celery-beat on staging, team-inbox-smtp without smtp-inbound)
+# appear only where their profile is active, so absent ones never fail a deploy.
+# INTERIM: per-service desired state/drift will move to Starter
+# dotmac-deployment-control / dotmac-release-catalog.
+APP_SERVICES=()
+# App-image services a deploy must NEVER recreate or create.
+#   app-backup: declared only in the production host override with
+#   privileged/pid:host/docker.sock; it has never run, and a deploy (or the
+#   rollback restore) must not bring up a new privileged container.
+APP_IMAGE_DEPLOY_EXCLUSIONS=(app-backup)
 CELERY_WORKER_SERVICES=(celery-worker celery-worker-bandwidth \
-  celery-worker-ingestion celery-worker-monitoring \
+  celery-worker-ingestion celery-worker-inventory celery-worker-monitoring \
   celery-worker-notifications-immediate celery-worker-notifications \
   celery-worker-billing celery-worker-tr069)
 CELERY_BEAT_SERVICE="celery-beat"
 
 DB_CONTAINER="${DB_CONTAINER:-$(env_value DB_CONTAINER)}"
 DB_CONTAINER="${DB_CONTAINER:-dotmac_pg_local}"
+
+# Compose prefers a DATABASE_URL exported in the shell over .env, so alembic
+# (and the app) could target a different database than the one every .env-based
+# check and backup in this script reads. Refuse before anything is changed.
+# Neither value is printed.
+if [[ -n "${DATABASE_URL+x}" && "${DATABASE_URL}" != "$(env_value DATABASE_URL)" ]]; then
+  echo "DEPLOY REFUSED: DATABASE_URL is exported in the environment and differs from .env; compose would use it instead of .env. Unset it and retry." >&2
+  exit 1
+fi
 
 # --- One deploy at a time -------------------------------------------------
 #
@@ -345,6 +365,48 @@ background_runtime_ready() {
   fi
 }
 
+# Every container of every app-image service must run the release image. A
+# service left on an older image (team-inbox-smtp once stayed a month behind)
+# fails the deploy here instead of surfacing later as a runtime error.
+assert_app_services_on_release_image() {
+  local expected service container actual row bad=0
+  local checked=" "
+  expected="$(docker image inspect "${IMAGE}" --format '{{.Id}}' 2>/dev/null || true)"
+  if [[ -z "${expected}" ]]; then
+    echo "APP IMAGE DRIFT: cannot resolve the image ID of ${IMAGE}." >&2
+    return 1
+  fi
+  check_container() {
+    actual="$(docker inspect "$2" --format '{{.Image}}' 2>/dev/null || true)"
+    if [[ "${actual}" != "${expected}" ]]; then
+      echo "APP IMAGE DRIFT: $1 is not running release image ${IMAGE} (container image ${actual:-unknown}, expected ${expected})." >&2
+      bad=1
+    fi
+  }
+  for service in "${APP_SERVICES[@]}"; do
+    local containers
+    containers="$("${COMPOSE[@]}" ps -q "${service}" 2>/dev/null || true)"
+    if [[ -z "${containers}" ]]; then
+      echo "APP IMAGE DRIFT: ${service} has no container after the deploy." >&2
+      bad=1
+      continue
+    fi
+    while IFS= read -r container; do
+      [[ -n "${container}" ]] || continue
+      checked+="${container} "
+      check_container "${service}" "${container}"
+    done <<<"${containers}"
+  done
+  # Every other running container of this project on a dotmac_sub app image
+  # (including profile-gated services outside APP_SERVICES) must match too.
+  while IFS='|' read -r container service; do
+    [[ -n "${container}" ]] || continue
+    [[ "${checked}" == *" ${container} "* ]] && continue
+    check_container "${service}" "${container}"
+  done < <(project_app_image_containers)
+  return "${bad}"
+}
+
 wait_for_background_runtime() {
   local deadline=$((SECONDS + BACKGROUND_RUNTIME_TIMEOUT_SECONDS))
 
@@ -438,12 +500,89 @@ stop_candidate_gracefully() {
   CANDIDATE_STARTED=0
 }
 
+# --- Migration role ---------------------------------------------------------
+#
+# Migrations run as app_admin, the Starter kernel's permanent LOGIN BYPASSRLS
+# role for offline/migration work (module_database_roles.v1). Backfill
+# migrations (bi_0006..bi_0008, pm_0003/pm_0004) read every tenant's rows under
+# `SET LOCAL row_security = off` and fail closed for any role subject to RLS,
+# so running them as the restricted runtime user is not a supported posture:
+# the 2026-10-20 deploy only passed inside a temporary BYPASSRLS grant window.
+# The credential follows the schema-bootstrap pattern: a passwordless URL, the
+# password only ever read by libpq from a root-owned 0400 pgpass file, mounted
+# into the migration container and nothing else. Runtime containers never see
+# the pgpass, so the bypass credential cannot serve traffic.
+MIGRATION_ADMIN_PGPASS="${MIGRATION_ADMIN_PGPASS:-$(env_value MIGRATION_ADMIN_PGPASS)}"
+MIGRATION_ADMIN_PGPASS="${MIGRATION_ADMIN_PGPASS:-/etc/dotmac/sub/migration-admin.pgpass}"
+MIGRATION_ADMIN_PGPASS_MOUNT="${MIGRATION_ADMIN_PGPASS_MOUNT:-/run/secrets/migration-admin.pgpass}"
+MIGRATION_ADMIN_URL="${MIGRATION_ADMIN_URL:-$(env_value MIGRATION_ADMIN_URL)}"
+MIGRATION_ADMIN_OWNER="${MIGRATION_ADMIN_OWNER:-root}"
+
+migration_admin_credential_available() {
+  local ok=0
+  local authority userinfo user
+
+  if [[ -z "${MIGRATION_ADMIN_URL}" ]]; then
+    echo "MIGRATION ROLE PREFLIGHT: MIGRATION_ADMIN_URL is not set (expected a passwordless postgresql:// URL for the app_admin role)." >&2
+    ok=1
+  else
+    authority="${MIGRATION_ADMIN_URL#*://}"
+    if [[ "${authority}" != *@* ]]; then
+      echo "MIGRATION ROLE PREFLIGHT: MIGRATION_ADMIN_URL names no user; expected the app_admin role." >&2
+      ok=1
+    else
+      userinfo="${authority%%@*}"
+      if [[ "${userinfo}" == *:* ]]; then
+        echo "MIGRATION ROLE PREFLIGHT: MIGRATION_ADMIN_URL carries an inline password; the credential must come from the pgpass file instead." >&2
+        ok=1
+      fi
+      user="${userinfo%%:*}"
+      if [[ "${user}" != "app_admin" ]]; then
+        echo "MIGRATION ROLE PREFLIGHT: MIGRATION_ADMIN_URL connects as ${user}; migrations must run as app_admin (kernel module_database_roles.v1)." >&2
+        ok=1
+      fi
+    fi
+  fi
+
+  if [[ ! -e "${MIGRATION_ADMIN_PGPASS}" ]]; then
+    echo "MIGRATION ROLE PREFLIGHT: credential file ${MIGRATION_ADMIN_PGPASS} does not exist." >&2
+    ok=1
+  elif [[ ! -f "${MIGRATION_ADMIN_PGPASS}" ]]; then
+    echo "MIGRATION ROLE PREFLIGHT: ${MIGRATION_ADMIN_PGPASS} is not a regular file." >&2
+    ok=1
+  else
+    local mode owner
+    mode="$(stat -c '%a' "${MIGRATION_ADMIN_PGPASS}" 2>/dev/null || echo '?')"
+    owner="$(stat -c '%U' "${MIGRATION_ADMIN_PGPASS}" 2>/dev/null || echo '?')"
+    if [[ "${mode}" != "400" ]]; then
+      echo "MIGRATION ROLE PREFLIGHT: ${MIGRATION_ADMIN_PGPASS} has mode ${mode}; expected 400 (libpq refuses a group- or world-readable pgpass)." >&2
+      ok=1
+    fi
+    if [[ "${owner}" != "${MIGRATION_ADMIN_OWNER}" ]]; then
+      echo "MIGRATION ROLE PREFLIGHT: ${MIGRATION_ADMIN_PGPASS} is owned by ${owner}; expected ${MIGRATION_ADMIN_OWNER}." >&2
+      ok=1
+    fi
+    if [[ ! -s "${MIGRATION_ADMIN_PGPASS}" ]]; then
+      echo "MIGRATION ROLE PREFLIGHT: ${MIGRATION_ADMIN_PGPASS} is empty." >&2
+      ok=1
+    fi
+  fi
+
+  return "${ok}"
+}
+
+MIGRATION_RUN_PREFIX=""
 run_migrations() {
   local attempt=1
+  MIGRATION_RUN_PREFIX="dotmac_sub_migrate_${DEPLOY_RUN_ID:-$$}_"
   local output
   local rc
   while ((attempt <= MIGRATION_MAX_ATTEMPTS)); do
-    if output="$("${COMPOSE[@]}" run --rm --no-deps app alembic upgrade heads 2>&1)"; then
+    if output="$("${COMPOSE[@]}" run --rm --no-deps --user 0:0 \
+      -v "${MIGRATION_ADMIN_PGPASS}:${MIGRATION_ADMIN_PGPASS_MOUNT}:ro" \
+      -e PGPASSFILE="${MIGRATION_ADMIN_PGPASS_MOUNT}" \
+      -e MIGRATION_DATABASE_URL="${MIGRATION_ADMIN_URL}" \
+      --name "${MIGRATION_RUN_PREFIX}${attempt}" app alembic upgrade heads 2>&1)"; then
       printf '%s\n' "${output}"
       return 0
     else
@@ -657,6 +796,22 @@ verify_database_prerequisites() {
     'MIGRATION_DATABASE_URL="$DATABASE_URL" python scripts/bootstrap_outbox_dispatcher_roles.py --verify-only'
 }
 
+# Print the database name from a postgres URL, or fail. Never echoes anything
+# that is not a plain identifier, so a malformed URL cannot leak credentials.
+# This is needed by database_heads during the early post-migration resume gate,
+# before the deploy reaches the later pre-swap migration helpers.
+database_name_from_url() {
+  local rest="$1" name
+  [[ "${rest}" == *://* ]] || return 1
+  rest="${rest#*://}"
+  rest="${rest%%\?*}"
+  rest="${rest##*@}"
+  [[ "${rest}" == */* ]] || return 1
+  name="${rest#*/}"
+  [[ "${name}" =~ ^[A-Za-z0-9_.-]+$ ]] || return 1
+  printf '%s\n' "${name}"
+}
+
 database_heads() {
   local backup_db_user
   local backup_db_name
@@ -667,14 +822,17 @@ database_heads() {
   backup_db_name="${DB_BACKUP_DB_NAME:-$(env_value DB_BACKUP_DB_NAME)}"
   if [[ -z "${backup_db_name}" ]]; then
     database_url="$(env_value DATABASE_URL)"
-    backup_db_name="${database_url##*/}"
-    backup_db_name="${backup_db_name%%\?*}"
+    backup_db_name="$(database_name_from_url "${database_url}")" || backup_db_name=""
   fi
-  if [[ -z "${backup_db_name}" || "${backup_db_name}" == "$(env_value DATABASE_URL)" ]]; then
+  if [[ -z "${backup_db_name}" ]]; then
     echo "RESUME POLICY REJECTED: cannot resolve database name for alembic head verification." >&2
     return 1
   fi
-  docker exec "${DB_CONTAINER}" psql -X -A -t -U "${backup_db_user}" \
+  # Bounded so a stuck lock or connection cannot hang the deploy: a timeout is
+  # a non-zero exit, i.e. an unreadable read to every caller.
+  docker exec -e PGCONNECT_TIMEOUT=5 \
+    -e PGOPTIONS='-c lock_timeout=5s -c statement_timeout=15s' \
+    "${DB_CONTAINER}" psql -X -A -t -U "${backup_db_user}" \
     -d "${backup_db_name}" \
     -c 'SELECT version_num FROM alembic_version ORDER BY version_num'
 }
@@ -1023,7 +1181,8 @@ apply_service_config_changes() {
 # 21 services, measured 2026-08-31. (An earlier version of this comment said it
 # had none, which was wrong and is the sort of thing people reason from.) It
 # tunes resources and `command` for postgres-local, redis-local and the workers,
-# and publishes team-inbox-smtp on 127.0.0.1:18001. It declares no `ports:` for
+# and tunes team-inbox-smtp, which docker-compose.yml publishes on
+# 127.0.0.1:2525 by default (TEAM_INBOX_SMTP_BIND / ..._PUBLISH_PORT). It declares no `ports:` for
 # postgres-local, so the base file's binding is what applies there.
 # Set IGNORE_COMPOSE_OVERRIDE=1 to force single-file behaviour.
 RELEASE_COMPOSE_FILE="${REPO_DIR}/docker-compose.yml"
@@ -1244,7 +1403,85 @@ assert_candidate_port_available
 log "Resolving declared Compose services"
 load_declared_services
 assert_required_services_declared app "${CELERY_WORKER_SERVICES[@]}"
-mapfile -t APP_SERVICES < <(declared_subset "${APP_SERVICES[@]}")
+# Compose project of the running app container; empty on a first deploy.
+compose_project_name() {
+  local container
+  if [[ -n "${COMPOSE_PROJECT_NAME:-}" ]]; then
+    printf '%s\n' "${COMPOSE_PROJECT_NAME}"
+    return 0
+  fi
+  container="$("${COMPOSE[@]}" ps -q app 2>/dev/null | tail -n 1 || true)"
+  [[ -n "${container}" ]] || return 0
+  docker inspect "${container}" \
+    --format '{{index .Config.Labels "com.docker.compose.project"}}' 2>/dev/null || true
+}
+
+# Prints "<container-id>|<service>" for every NON-ONE-OFF container that is
+# running or restarting (`docker ps` without -a: exited containers never count,
+# so a long-dead service is neither started by a deploy nor flagged as drift)
+# of this Compose project that runs a dotmac_sub app image, whether or
+# not Compose currently resolves its service: a profile-gated service started by
+# name (team-inbox-smtp on production) is not listed by `config --services`
+# unless COMPOSE_PROFILES activates it, but it runs the app image and must roll
+# with each release.
+#
+# Images are pulled by digest and untagged on production, so `docker ps` shows a
+# short image ID. Match on the container's configured image reference, or on its
+# image ID being one of the local IMAGE_REPO image IDs. One-off containers
+# (`compose run`) and the warm candidate are never part of the set.
+project_app_image_containers() {
+  local project ids row id service config_image image_id name repo_ids
+  project="$(compose_project_name)"
+  [[ -n "${project}" ]] || return 0
+  repo_ids="$(docker image ls --no-trunc -q "${IMAGE_REPO}" 2>/dev/null || true)"
+  ids="$(docker ps -q \
+    --filter "label=com.docker.compose.project=${project}" \
+    --filter "label=com.docker.compose.oneoff=False" 2>/dev/null || true)"
+  while IFS= read -r id; do
+    [[ -n "${id}" ]] || continue
+    row="$(docker inspect "${id}" --format \
+      '{{.Id}}|{{index .Config.Labels "com.docker.compose.service"}}|{{.Config.Image}}|{{.Image}}|{{.Name}}' \
+      2>/dev/null || true)"
+    [[ -n "${row}" ]] || continue
+    IFS='|' read -r id service config_image image_id name <<<"${row}"
+    [[ -n "${service}" ]] || continue
+    [[ "${name#/}" == "${CANDIDATE_CONTAINER}" ]] && continue
+    case "${config_image}" in
+      "${IMAGE_REPO}":* | "${IMAGE_REPO}"@*) printf '%s|%s\n' "${id}" "${service}"; continue ;;
+    esac
+    if [[ -n "${image_id}" ]] && grep -Fxq "${image_id}" <<<"${repo_ids}"; then
+      printf '%s|%s\n' "${id}" "${service}"
+    fi
+  done <<<"${ids}"
+}
+
+derive_app_services() {
+  local derived service existing_service excluded
+  local args=(--image "${IMAGE}")
+  while IFS='|' read -r _ existing_service; do
+    [[ -n "${existing_service}" ]] && args+=(--existing "${existing_service}")
+  done < <(project_app_image_containers)
+  for excluded in ${APP_IMAGE_DEPLOY_EXCLUSIONS[@]+"${APP_IMAGE_DEPLOY_EXCLUSIONS[@]}"}; do
+    args+=(--exclude "${excluded}")
+  done
+  if ! derived="$(
+    APP_IMAGE="${IMAGE}" \
+      "${COMPOSE[@]}" config --format json 2>/dev/null |
+      run_repo_module scripts.deploy_app_image_services "${args[@]}" 2>/dev/null
+  )"; then
+    echo "DEPLOY CONFIG FAILURE: cannot derive app-image services from ${COMPOSE_FILES_DESC}." >&2
+    return 1
+  fi
+  APP_SERVICES=()
+  while IFS= read -r service; do
+    [[ -n "${service}" ]] && APP_SERVICES+=("${service}")
+  done <<<"${derived}"
+}
+derive_app_services || exit 1
+if [[ " ${APP_SERVICES[*]} " != *" app "* ]]; then
+  echo "DEPLOY CONFIG FAILURE: service app does not resolve to ${IMAGE} in ${COMPOSE_FILES_DESC}." >&2
+  exit 1
+fi
 if ((${#APP_SERVICES[@]} == 0)); then
   echo "DEPLOY CONFIG FAILURE: none of the app services are declared in ${COMPOSE_FILES_DESC}." >&2
   exit 1
@@ -1317,6 +1554,68 @@ fi
 log "Checking release-shipped FreeRADIUS configuration"
 if ! preflight_service_config; then
   echo "DEPLOY REFUSED before any database work: fix the FreeRADIUS configuration and redeploy." >&2
+  exit 1
+fi
+
+preflight_feature_secret_requirements() {
+  local phase="${1:-before_migrations}"
+  local args=(--component app)
+  local compose_args=(run --rm --no-deps --entrypoint /opt/venv/bin/python)
+  if [[ "${phase}" == "after_migrations" ]]; then
+    args+=(--require-installed-schema)
+  elif [[ -n "${PRODUCTION_BOOTSTRAP_AUTHORIZATION_FILE:-}" ]]; then
+    [[ "${DEPLOYMENT_TARGET}" == "production" && -f "${PRODUCTION_BOOTSTRAP_AUTHORIZATION_FILE}" ]] || return 1
+    compose_args+=(-v "${PRODUCTION_BOOTSTRAP_AUTHORIZATION_FILE}:/run/deployment-bootstrap-authorization.json:ro")
+    args+=(--bootstrap-authorization /run/deployment-bootstrap-authorization.json
+      --candidate-revision "${FULL_SHA}" --target-server dotmac-sub-prod)
+  fi
+  if ! APP_IMAGE="${IMAGE}" GIT_SHA="${FULL_SHA}" \
+    "${COMPOSE[@]}" "${compose_args[@]}" app \
+    -m scripts.setup.verify_deployment_secret_requirements "${args[@]}" 2>/dev/null; then
+    echo "DEPLOY REFUSED: declared deployment secret requirements are not ready." >&2
+    return 1
+  fi
+}
+
+preflight_deployment_secrets() {
+  local component plan
+  local boot_components=(app "${CELERY_WORKER_SERVICES[@]}")
+  local plan_args=(--image "${IMAGE}")
+  if service_is_declared "${CELERY_BEAT_SERVICE}"; then
+    boot_components+=("${CELERY_BEAT_SERVICE}")
+  fi
+  for component in "${boot_components[@]}"; do
+    plan_args+=(--component "${component}")
+  done
+  # Resolved Compose JSON contains host secrets. Consume it only in the typed
+  # parser; neither raw config nor host-controlled errors reach deploy output.
+  if ! plan="$(
+    APP_IMAGE="${IMAGE}" GIT_SHA="${FULL_SHA}" \
+      "${COMPOSE[@]}" config --format json 2>/dev/null |
+      run_repo_module scripts.deployment_secret_readiness "${plan_args[@]}" 2>/dev/null
+  )"; then
+    echo "DEPLOY REFUSED: candidate secret component graph is unavailable or mismatched." >&2
+    return 1
+  fi
+  while IFS= read -r component; do
+    [[ -n "${component}" ]] || return 1
+    log "Checking candidate boot-secret readiness for ${component}"
+    # Bypass service startup commands: this one-off only evaluates readiness.
+    # --no-deps never starts backing services or a profile-gated scheduler.
+    if ! APP_IMAGE="${IMAGE}" GIT_SHA="${FULL_SHA}" \
+      "${COMPOSE[@]}" run --rm --no-deps --entrypoint /opt/venv/bin/python "${component}" \
+      -m scripts.setup.verify_openbao_boot_secrets --component "${component}" 2>/dev/null; then
+      echo "DEPLOY REFUSED: candidate boot secrets are not ready for ${component}." >&2
+      return 1
+    fi
+  done <<<"${plan}"
+  log "Checking declared feature and enabled-integration secret requirements"
+  preflight_feature_secret_requirements before_migrations
+}
+
+log "Verifying candidate secret readiness before database work"
+if ! preflight_deployment_secrets; then
+  echo "DEPLOY REFUSED before database bootstrap, backup, migrations or service replacement." >&2
   exit 1
 fi
 
@@ -1448,12 +1747,10 @@ trap 'if restore_prev; then echo "Deploy FAILED — previous image restored and 
 # From here on APP_IMAGE may already be pinned, so an interrupt must restore it
 # too -- not just terminate the backup child. Migrations are NOT reverted;
 # installed payment-email floor forbids old-image restoration.
-trap 'cleanup_children; if restore_prev; then echo "Deploy interrupted — previous image restored and healthy" >&2; else report_rollback_outcome; fi; exit 130' INT TERM HUP
-
-log "Verifying mandatory OpenBao boot secrets"
-APP_IMAGE="${IMAGE}" GIT_SHA="${FULL_SHA}" \
-  "${COMPOSE[@]}" run --rm --no-deps app \
-  python -m scripts.setup.verify_openbao_boot_secrets
+install_deploy_interrupt_trap() {
+  trap 'cleanup_children; if restore_prev; then echo "Deploy interrupted — previous image restored and healthy" >&2; else report_rollback_outcome; fi; exit 130' INT TERM HUP
+}
+install_deploy_interrupt_trap
 
 log "Verifying pre-migration service-extension identity state"
 APP_IMAGE="${IMAGE}" GIT_SHA="${FULL_SHA}" \
@@ -1465,17 +1762,145 @@ APP_IMAGE="${IMAGE}" GIT_SHA="${FULL_SHA}" \
   "${COMPOSE[@]}" run --rm --no-deps app \
   python -m scripts.migration.retire_legacy_service_team_sources --check
 
-log "Pinning APP_IMAGE=${IMAGE} and GIT_SHA=${FULL_SHA}"
-set_env_value APP_IMAGE "${IMAGE}"
-set_env_value GIT_SHA "${FULL_SHA}"
+# --- Pre-swap pin and migration ---------------------------------------------
+# The compose one-off migration container reads APP_IMAGE/GIT_SHA from .env, so
+# the candidate pin must be written first. The OLD app and workers keep serving
+# throughout (PRIMARY_REPLACED=0, no candidate started). If the migration fails
+# here nothing new ever served. That is NOT a rollback: restore_prev (the
+# payment-email floor guard) is deliberately not invoked and not bypassed.
+#
+# Alembic normally runs in one transaction, but migrations that use
+# autocommit_block commit earlier revisions, so "nothing committed" is MEASURED,
+# never assumed: the alembic_version heads are read before and after. The pin is
+# put back ONLY when both reads succeed and are equal; otherwise the schema may
+# have advanced, the pin is left untouched and the operator must repair forward.
+read_alembic_heads() {
+  local out url url_db target_db
+  # Alembic connects with the DATABASE_URL the app container receives from
+  # .env (settings.database_url). The heads query goes through the DB
+  # container with DB_BACKUP_DB_NAME, so prove both name the same database;
+  # otherwise two equal reads would prove nothing. Mismatch = unreadable.
+  # Only validated database names are printed, never the URL.
+  url="$(env_value DATABASE_URL)"
+  if [[ -n "${DATABASE_URL+x}" && "${DATABASE_URL}" != "${url}" ]]; then
+    echo "ALEMBIC HEADS UNREADABLE: DATABASE_URL in the environment differs from .env." >&2
+    return 1
+  fi
+  if ! url_db="$(database_name_from_url "${url}")"; then
+    echo "ALEMBIC HEADS UNREADABLE: database name unparseable from DATABASE_URL." >&2
+    return 1
+  fi
+  target_db="${DB_BACKUP_DB_NAME:-$(env_value DB_BACKUP_DB_NAME)}"
+  if [[ -n "${target_db}" && ! "${target_db}" =~ ^[A-Za-z0-9_.-]+$ ]]; then
+    echo "ALEMBIC HEADS UNREADABLE: DB_BACKUP_DB_NAME is not a plain database name." >&2
+    return 1
+  fi
+  if [[ -n "${target_db}" && "${target_db}" != "${url_db}" ]]; then
+    echo "ALEMBIC HEADS UNREADABLE: heads query targets database '${target_db}' but alembic uses '${url_db}'." >&2
+    return 1
+  fi
+  out="$(database_heads 2>/dev/null)" || return 1
+  [[ -n "${out}" ]] || return 1
+  printf '%s\n' "${out}"
+}
+# Shared by a failed migration and an INT/TERM/HUP during it. The pin is put
+# back ONLY when both head reads succeeded and match; never via restore_prev.
+# Always returns 1 (the deploy has failed).
+# Confirm the one-off migration container is gone first (it can outlive a dead
+# compose client). Still running or unknown = unreadable; it is never killed.
+migration_container_gone() {
+  local tries=0 max="${MIGRATION_PS_POLL_ATTEMPTS:-12}" ids
+  [[ -n "${MIGRATION_RUN_PREFIX}" ]] || return 0
+  while :; do
+    if ! ids="$(docker ps -q --filter "name=${MIGRATION_RUN_PREFIX}" 2>/dev/null)"; then
+      return 1
+    fi
+    [[ -z "${ids}" ]] && return 0
+    tries=$((tries + 1))
+    ((tries >= max)) && return 1
+    sleep "${MIGRATION_PS_POLL_SECONDS:-5}"
+  done
+}
+settle_failed_migration() {
+  local heads_after running_image
+  if migration_container_gone; then
+    heads_after="$(read_alembic_heads)" || heads_after=""
+  else
+    echo "Migration container still running or its state is unknown; not trusting a heads read. It was not stopped." >&2
+    heads_after=""
+  fi
+  if [[ -z "${MIGRATION_HEADS_BEFORE}" || -z "${heads_after}" || "${MIGRATION_HEADS_BEFORE}" != "${heads_after}" ]]; then
+    echo "Alembic heads before: ${MIGRATION_HEADS_BEFORE:-<unreadable>}" >&2
+    echo "Alembic heads after:  ${heads_after:-<unreadable>}" >&2
+    echo "Schema may have advanced (or could not be proven unchanged); .env pin left at ${IMAGE}. Do not recreate containers; repair forward." >&2
+    return 1
+  fi
+  running_image="$(docker inspect "${APP_CONTAINER}" --format '{{.Config.Image}}' 2>/dev/null || true)"
+  if repin_prev; then
+    if [[ -z "${PREV_IMAGE}" && -z "${running_image}" ]]; then
+      echo "Restored .env pin to <unset> (GIT_SHA ${PREV_GIT_SHA:-<unset>}): no previous pin and no running ${APP_CONTAINER} container (first deploy)." >&2
+    elif [[ "${running_image}" == "${PREV_IMAGE}" ]]; then
+      echo "Restored .env pin to ${PREV_IMAGE:-<unset>} (GIT_SHA ${PREV_GIT_SHA:-<unset>}), which matches the running ${APP_CONTAINER} image." >&2
+    else
+      echo "WARNING: restored .env pin to ${PREV_IMAGE:-<unset>}, but ${APP_CONTAINER} reports image '${running_image:-unknown}'; verify before recreating containers." >&2
+    fi
+    echo "Alembic heads measured unchanged (${heads_after//$'\n'/ }). No container was restarted or recreated and no rollback path was used. Repair forward and redeploy." >&2
+  else
+    echo "DEPLOY PIN RESTORE FAILED: .env may still pin ${IMAGE}; set APP_IMAGE=${PREV_IMAGE:-<unset>} GIT_SHA=${PREV_GIT_SHA:-<unset>} by hand before any container is recreated." >&2
+  fi
+  return 1
+}
+MIGRATION_HEADS_BEFORE=""
+pin_and_migrate() {
+  MIGRATION_HEADS_BEFORE=""
+  if [[ "${BACKUP_MODE}" != "skip_production_post_migration_resume" ]]; then
+    MIGRATION_HEADS_BEFORE="$(read_alembic_heads)" || MIGRATION_HEADS_BEFORE=""
+  fi
 
-# Multi-head safe: sub has hit multi-head states (e.g. the bundles migration that
-# merged heads), so use `heads` (plural), never `head`.
-log "Applying migrations (alembic upgrade heads)"
-if [[ "${BACKUP_MODE}" == "skip_production_post_migration_resume" ]]; then
-  log "Skipping migrations under verified post-migration resume evidence"
-else
-  run_migrations
+  # Interrupts during the pin/migration window use the same measured-heads
+  # decision as a failure; the guarded restore_prev (which the payment-email
+  # floor would refuse, leaving drift) is not used. Scoped to this function.
+  trap 'trap - ERR; cleanup_children; settle_failed_migration || true; echo "Deploy interrupted during migration; see pin state above" >&2; exit 130' INT TERM HUP
+
+  if [[ "${BACKUP_MODE}" != "skip_production_post_migration_resume" ]] && ! migration_admin_credential_available; then
+    echo "DEPLOY REFUSED before pinning: migrations have no app_admin credential (see MIGRATION ROLE PREFLIGHT above). Nothing was pinned, migrated or recreated." >&2
+    install_deploy_interrupt_trap
+    return 1
+  fi
+
+  log "Pinning APP_IMAGE=${IMAGE} and GIT_SHA=${FULL_SHA}"
+  if ! set_env_value APP_IMAGE "${IMAGE}" || ! set_env_value GIT_SHA "${FULL_SHA}"; then
+    echo "DEPLOY PIN WRITE FAILED: restoring the previous pin; nothing was migrated or recreated." >&2
+    if ! repin_prev; then
+      echo "DEPLOY PIN RESTORE FAILED: .env may be half-updated; set APP_IMAGE=${PREV_IMAGE:-<unset>} GIT_SHA=${PREV_GIT_SHA:-<unset>} by hand before any container is recreated." >&2
+    fi
+    install_deploy_interrupt_trap
+    return 1
+  fi
+
+  # Multi-head safe: sub has hit multi-head states (e.g. the bundles migration that
+  # merged heads), so use `heads` (plural), never `head`.
+  log "Applying migrations (alembic upgrade heads)"
+  if [[ "${BACKUP_MODE}" == "skip_production_post_migration_resume" ]]; then
+    log "Skipping migrations under verified post-migration resume evidence"
+    install_deploy_interrupt_trap
+    return 0
+  fi
+  if run_migrations; then
+    install_deploy_interrupt_trap
+    return 0
+  fi
+  echo "DEPLOY MIGRATION FAILED before any new container served traffic." >&2
+  # Settle BEFORE restoring the original trap: an INT during the settle must
+  # still take the measured-heads path, not restore_prev.
+  settle_failed_migration || true
+  install_deploy_interrupt_trap
+  return 1
+}
+# --- End pre-swap pin and migration -------------------------------------------
+if ! pin_and_migrate; then
+  trap - ERR
+  exit 1
 fi
 
 log "Verifying database schema contracts"
@@ -1485,6 +1910,9 @@ log "Verifying database schema contracts"
 log "Verifying enabled integration manifest pins"
 "${COMPOSE[@]}" run --rm --no-deps app \
   python -m scripts.integrations.verify_manifest_pins
+
+log "Rechecking installed feature secret requirements before service replacement"
+preflight_feature_secret_requirements after_migrations
 
 log "Starting warm candidate on 127.0.0.1:${CANDIDATE_PORT} (health timeout ${CANDIDATE_HEALTH_TIMEOUT_SECONDS}s)"
 docker rm -f "${CANDIDATE_CONTAINER}" >/dev/null 2>&1 || true
@@ -1538,6 +1966,22 @@ if ! wait_for_background_runtime; then
     fi
   else
     log "No previous image recorded — healthy candidate retained. Investigate the Celery containers."
+  fi
+  exit 1
+fi
+
+log "Verifying every app-image service runs ${IMAGE}"
+if ! assert_app_services_on_release_image; then
+  trap - ERR
+  log "App image drift gate FAILED — checking previous-image rollback floor"
+  if [[ -n "${PREV_IMAGE}" ]]; then
+    if restore_prev; then
+      log "Rolled back to ${PREV_IMAGE}. NOTE: migrations from ${TAG} were NOT reverted."
+    else
+      report_rollback_outcome
+    fi
+  else
+    log "No previous image recorded — healthy candidate retained. Investigate the drifted services."
   fi
   exit 1
 fi

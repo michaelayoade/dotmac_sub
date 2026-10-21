@@ -1,19 +1,98 @@
 import logging
+from collections.abc import Mapping
 from dataclasses import asdict, dataclass
+from datetime import date, datetime
+from typing import Literal, cast
 
 from fastapi import HTTPException, Request, Response
-from sqlalchemy import or_, select, text
+from pydantic import JsonValue
+from sqlalchemy import func, or_, select, text
 from sqlalchemy.engine import RowMapping
 from sqlalchemy.orm import Session
 from sqlalchemy.orm.exc import DetachedInstanceError
 
 from app.models.audit import AuditActorType, AuditEvent
-from app.schemas.audit import AuditEventCreate
+from app.schemas.audit import AuditEventCreate, AuditEventRead
 from app.services.common import apply_ordering, apply_pagination
 from app.services.response import ListResponseMixin
 from app.services.session_hooks import run_after_commit
 
 logger = logging.getLogger(__name__)
+
+AuditEventOrderField = Literal[
+    "occurred_at",
+    "action",
+    "entity_type",
+    "status_code",
+]
+AuditEventOrderDirection = Literal["asc", "desc"]
+
+_SENSITIVE_DETAIL_KEY_PARTS = frozenset(
+    {
+        "api_key",
+        "community",
+        "credential",
+        "nin",
+        "password",
+        "private_key",
+        "secret",
+        "token",
+    }
+)
+_MAX_DETAIL_DEPTH = 5
+_MAX_DETAIL_ITEMS = 100
+_MAX_DETAIL_TEXT_LENGTH = 500
+
+
+def _is_sensitive_detail_key(key: str) -> bool:
+    normalized = key.casefold().replace("-", "_")
+    return any(part in normalized for part in _SENSITIVE_DETAIL_KEY_PARTS)
+
+
+def _safe_detail_value(value: object, *, depth: int) -> JsonValue:
+    if depth >= _MAX_DETAIL_DEPTH:
+        return "<truncated>"
+    if value is None or isinstance(value, (bool, int, float)):
+        return value
+    if isinstance(value, str):
+        if len(value) <= _MAX_DETAIL_TEXT_LENGTH:
+            return value
+        return f"{value[:_MAX_DETAIL_TEXT_LENGTH]}…"
+    if isinstance(value, (date, datetime)):
+        return value.isoformat()
+    if isinstance(value, Mapping):
+        result: dict[str, JsonValue] = {}
+        for index, (raw_key, child) in enumerate(value.items()):
+            if index >= _MAX_DETAIL_ITEMS:
+                result["_truncated"] = True
+                break
+            key = str(raw_key)
+            result[key] = (
+                "<redacted>"
+                if _is_sensitive_detail_key(key)
+                else _safe_detail_value(child, depth=depth + 1)
+            )
+        return result
+    if isinstance(value, (list, tuple)):
+        safe_items = [
+            _safe_detail_value(child, depth=depth + 1)
+            for child in value[:_MAX_DETAIL_ITEMS]
+        ]
+        if len(value) > _MAX_DETAIL_ITEMS:
+            safe_items.append("<truncated>")
+        return safe_items
+    return "<unsupported value>"
+
+
+def redact_audit_details(
+    details: Mapping[str, object] | None,
+) -> dict[str, JsonValue]:
+    """Return bounded audit details with sensitive values removed."""
+
+    if not details:
+        return {}
+    safe = _safe_detail_value(details, depth=0)
+    return safe if isinstance(safe, dict) else {}
 
 
 @dataclass(frozen=True)
@@ -93,6 +172,82 @@ class AuditR1ParityReport:
             user_actor_rows_without_party=int(row["user_actor_rows_without_party"]),
             automated_actor_rows_with_party=int(row["automated_actor_rows_with_party"]),
         )
+
+
+@dataclass(frozen=True, slots=True)
+class AuditEventPageQuery:
+    """Typed filters, ordering, and page window for canonical audit reads."""
+
+    actor_id: str | None = None
+    actor_search: str | None = None
+    actor_type: AuditActorType | None = None
+    action: str | None = None
+    entity_type: str | None = None
+    entity_id: str | None = None
+    entity_id_missing: bool = False
+    request_id: str | None = None
+    request_id_missing: bool = False
+    is_success: bool | None = None
+    status_code: int | None = None
+    is_active: bool | None = None
+    occurred_from: datetime | None = None
+    occurred_before: datetime | None = None
+    order_by: AuditEventOrderField = "occurred_at"
+    order_dir: AuditEventOrderDirection = "desc"
+    limit: int = 100
+    offset: int = 0
+
+    def __post_init__(self) -> None:
+        if self.order_by not in {
+            "occurred_at",
+            "action",
+            "entity_type",
+            "status_code",
+        }:
+            raise ValueError("unsupported audit order field")
+        if self.order_dir not in {"asc", "desc"}:
+            raise ValueError("audit order direction must be asc or desc")
+        if self.limit < 1:
+            raise ValueError("audit query limit must be positive")
+        if self.offset < 0:
+            raise ValueError("audit query offset cannot be negative")
+        if self.entity_id and self.entity_id_missing:
+            raise ValueError("entity ID and missing-entity-ID filters conflict")
+        if self.request_id and self.request_id_missing:
+            raise ValueError("request ID and missing-request-ID filters conflict")
+        if (
+            self.occurred_from
+            and self.occurred_before
+            and self.occurred_from >= self.occurred_before
+        ):
+            raise ValueError("audit date range must end after it starts")
+
+
+@dataclass(frozen=True, slots=True)
+class AuditEventPage:
+    """Stable audit read model with a total from the identical filter scope."""
+
+    events: tuple[AuditEventRead, ...]
+    total: int
+
+
+@dataclass(frozen=True, slots=True)
+class AuditEventFilterOptionsQuery:
+    """Bound for distinct values offered by the audit filter UI."""
+
+    limit: int = 500
+
+    def __post_init__(self) -> None:
+        if self.limit < 1 or self.limit > 1000:
+            raise ValueError("audit filter option limit must be between 1 and 1000")
+
+
+@dataclass(frozen=True, slots=True)
+class AuditEventFilterOptions:
+    """Distinct values observed in active audit records."""
+
+    actions: tuple[str, ...]
+    entity_types: tuple[str, ...]
 
 
 _AUDIT_R1_PARITY_QUERY = text(
@@ -273,6 +428,114 @@ class AuditEvents(ListResponseMixin):
         return event
 
     @staticmethod
+    def _filtered_statement(query: AuditEventPageQuery):
+        """Build the one filter scope shared by audit rows and their total."""
+
+        stmt = select(AuditEvent)
+        if query.actor_id:
+            stmt = stmt.where(AuditEvent.actor_id == query.actor_id)
+        if query.actor_search:
+            term = query.actor_search.strip()
+            if term:
+                stmt = stmt.where(
+                    or_(
+                        AuditEvent.actor_label.ilike(f"%{term}%"),
+                        AuditEvent.actor_id == term,
+                    )
+                )
+        if query.actor_type:
+            stmt = stmt.where(AuditEvent.actor_type == query.actor_type)
+        if query.action:
+            stmt = stmt.where(AuditEvent.action == query.action)
+        if query.entity_type:
+            stmt = stmt.where(AuditEvent.entity_type == query.entity_type)
+        if query.entity_id:
+            stmt = stmt.where(AuditEvent.entity_id == query.entity_id)
+        elif query.entity_id_missing:
+            stmt = stmt.where(
+                or_(AuditEvent.entity_id.is_(None), AuditEvent.entity_id == "")
+            )
+        if query.request_id:
+            stmt = stmt.where(AuditEvent.request_id == query.request_id)
+        elif query.request_id_missing:
+            stmt = stmt.where(
+                or_(AuditEvent.request_id.is_(None), AuditEvent.request_id == "")
+            )
+        if query.is_success is not None:
+            stmt = stmt.where(AuditEvent.is_success == query.is_success)
+        if query.status_code is not None:
+            stmt = stmt.where(AuditEvent.status_code == query.status_code)
+        if query.is_active is None:
+            stmt = stmt.where(AuditEvent.is_active.is_(True))
+        else:
+            stmt = stmt.where(AuditEvent.is_active == query.is_active)
+        if query.occurred_from:
+            stmt = stmt.where(AuditEvent.occurred_at >= query.occurred_from)
+        if query.occurred_before:
+            stmt = stmt.where(AuditEvent.occurred_at < query.occurred_before)
+        return stmt
+
+    @classmethod
+    def query_page(cls, db: Session, query: AuditEventPageQuery) -> AuditEventPage:
+        """Return rows and total from one canonical filtered audit scope."""
+
+        filtered = cls._filtered_statement(query)
+        total = int(
+            db.scalar(select(func.count()).select_from(filtered.subquery())) or 0
+        )
+        ordered = apply_ordering(
+            filtered,
+            query.order_by,
+            query.order_dir,
+            {
+                "occurred_at": AuditEvent.occurred_at,
+                "action": AuditEvent.action,
+                "entity_type": AuditEvent.entity_type,
+                "status_code": AuditEvent.status_code,
+            },
+        )
+        rows = db.scalars(apply_pagination(ordered, query.limit, query.offset)).all()
+        return AuditEventPage(
+            events=tuple(AuditEventRead.model_validate(row) for row in rows),
+            total=total,
+        )
+
+    @staticmethod
+    def filter_options(
+        db: Session,
+        query: AuditEventFilterOptionsQuery,
+    ) -> AuditEventFilterOptions:
+        """Return bounded filter suggestions from values present in audit rows."""
+
+        actions = tuple(
+            str(value)
+            for value in db.scalars(
+                select(AuditEvent.action)
+                .where(
+                    AuditEvent.is_active.is_(True),
+                    AuditEvent.action != "",
+                )
+                .distinct()
+                .order_by(AuditEvent.action)
+                .limit(query.limit)
+            ).all()
+        )
+        entity_types = tuple(
+            str(value)
+            for value in db.scalars(
+                select(AuditEvent.entity_type)
+                .where(
+                    AuditEvent.is_active.is_(True),
+                    AuditEvent.entity_type != "",
+                )
+                .distinct()
+                .order_by(AuditEvent.entity_type)
+                .limit(query.limit)
+            ).all()
+        )
+        return AuditEventFilterOptions(actions=actions, entity_types=entity_types)
+
+    @staticmethod
     def list(
         db: Session,
         actor_id: str | None = None,
@@ -290,42 +553,29 @@ class AuditEvents(ListResponseMixin):
         limit: int = 100,
         offset: int = 0,
     ):
-        stmt = select(AuditEvent)
-        if actor_id:
-            stmt = stmt.where(AuditEvent.actor_id == actor_id)
-        if actor_search:
-            # Search by the resolved person/key label. Also matches an exact
-            # actor_id so the field accepts either a name or a pasted uuid.
-            term = actor_search.strip()
-            if term:
-                stmt = stmt.where(
-                    or_(
-                        AuditEvent.actor_label.ilike(f"%{term}%"),
-                        AuditEvent.actor_id == term,
-                    )
-                )
-        if actor_type:
-            stmt = stmt.where(AuditEvent.actor_type == actor_type)
-        if action:
-            stmt = stmt.where(AuditEvent.action == action)
-        if entity_type:
-            stmt = stmt.where(AuditEvent.entity_type == entity_type)
-        if entity_id:
-            stmt = stmt.where(AuditEvent.entity_id == entity_id)
-        if request_id:
-            stmt = stmt.where(AuditEvent.request_id == request_id)
-        if is_success is not None:
-            stmt = stmt.where(AuditEvent.is_success == is_success)
-        if status_code is not None:
-            stmt = stmt.where(AuditEvent.status_code == status_code)
-        if is_active is None:
-            stmt = stmt.where(AuditEvent.is_active.is_(True))
-        else:
-            stmt = stmt.where(AuditEvent.is_active == is_active)
+        query = AuditEventPageQuery(
+            actor_id=actor_id,
+            actor_search=actor_search,
+            actor_type=actor_type,
+            action=action,
+            entity_type=entity_type,
+            entity_id=entity_id,
+            entity_id_missing=False,
+            request_id=request_id,
+            request_id_missing=False,
+            is_success=is_success,
+            status_code=status_code,
+            is_active=is_active,
+            order_by=cast(AuditEventOrderField, order_by),
+            order_dir=cast(AuditEventOrderDirection, order_dir),
+            limit=limit,
+            offset=offset,
+        )
+        stmt = AuditEvents._filtered_statement(query)
         stmt = apply_ordering(
             stmt,
-            order_by,
-            order_dir,
+            query.order_by,
+            query.order_dir,
             {
                 "occurred_at": AuditEvent.occurred_at,
                 "action": AuditEvent.action,
@@ -333,7 +583,7 @@ class AuditEvents(ListResponseMixin):
                 "status_code": AuditEvent.status_code,
             },
         )
-        return list(db.scalars(apply_pagination(stmt, limit, offset)).all())
+        return list(db.scalars(apply_pagination(stmt, query.limit, query.offset)).all())
 
     @staticmethod
     def log_request(db: Session, request: Request, response: Response):
@@ -408,14 +658,6 @@ class AuditEvents(ListResponseMixin):
             metadata_=metadata,
         )
         return payload
-
-    @staticmethod
-    def delete(db: Session, event_id: str):
-        event = db.get(AuditEvent, event_id)
-        if not event:
-            raise HTTPException(status_code=404, detail="Audit event not found")
-        event.is_active = False
-        db.commit()
 
 
 audit_events = AuditEvents()

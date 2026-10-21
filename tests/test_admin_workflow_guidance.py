@@ -90,6 +90,16 @@ def test_network_guidance_explains_independent_map_proposal_review() -> None:
     assert "canonical asset change" in content
 
 
+def test_network_guidance_explains_map_layer_visibility_controls() -> None:
+    guide = guidance_for_path("/admin/network/map")
+
+    assert guide is not None
+    content = " ".join((*guide.steps, *guide.notes)).lower()
+    assert "all layers or none" in content
+    assert "individual layer checkbox" in content
+    assert "do not modify canonical network data" in content
+
+
 def test_specific_workflow_routes_override_or_reject_broad_sections() -> None:
     expected = {
         "/admin/dashboard": "admin-workspace",
@@ -260,6 +270,16 @@ def test_workflow_change_without_guidance_update_fails_gate() -> None:
     )
 
 
+def test_regional_performance_guidance_explains_blank_region_scope() -> None:
+    guide = guidance_for_path("/admin/reports/regional-performance")
+
+    assert guide is not None
+    assert guide.id == "regional-performance-report"
+    content = " ".join(guide.steps).lower()
+    assert "leave region blank" in content
+    assert "all configured regions" in content
+
+
 def test_project_infrastructure_guide_is_linked_and_searchable() -> None:
     for path in ("/admin/projects", "/admin/projects/new", "/admin/projects/123/edit"):
         guide = guidance_for_path(path)
@@ -399,7 +419,7 @@ def test_period_review_guidance_explains_manual_approval_and_reserved_cash() -> 
 
 def test_every_help_guide_has_complete_action_sections() -> None:
     guides = (*WORKFLOW_GUIDANCE, *HELP_ONLY_GUIDANCE)
-    assert len(guides) == 59
+    assert len(guides) == 66
     for guide in guides:
         actions = help_actions_for(guide)
         assert actions, guide.id
@@ -464,3 +484,86 @@ def test_olt_guidance_explains_canonical_status_and_evidence_freshness() -> None
     assert "fresh successful native olt poll" in content
     assert "linked monitoring record" in content
     assert "active" in content and "current" in content
+
+
+def test_walled_garden_page_has_its_own_guide() -> None:
+    guide = guidance_for_path("/admin/system/config/walled-garden")
+    assert guide is not None
+    assert guide.id == "walled-garden"
+    settings = guidance_for_path("/admin/system/config/radius")
+    assert settings is not None
+    assert settings.id == "settings"
+
+
+def test_customer_connection_types_page_has_its_own_guide() -> None:
+    guide = guidance_for_path("/admin/system/customer-connection-types")
+
+    assert guide is not None
+    assert guide.id == "customer-connection-types"
+    content = " ".join((*guide.steps, *guide.notes)).lower()
+    assert "deactivation preserves existing customer assignments" in content
+    actions = {action.id: action for action in help_actions_for(guide)}
+    assert (
+        actions["save-customer-connection-type"].permission == "system:settings:write"
+    )
+    assert (
+        actions["deactivate-customer-connection-type"].permission
+        == "system:settings:write"
+    )
+
+
+def test_subledger_opening_correction_pages_have_their_own_guide() -> None:
+    base = "/admin/billing/accounts/11111111-1111-1111-1111-111111111111"
+    for suffix in ("", "/preview", "/confirm"):
+        path = f"{base}/subledger-opening/NGN/correction{suffix}"
+        guide = guidance_for_path(path)
+        assert guide is not None, path
+        assert guide.id == "subledger-opening-correction", path
+    account = guidance_for_path(base)
+    assert account is not None
+    assert account.id == "billing-accounts"
+
+
+def test_mfa_removal_guides_state_the_controls() -> None:
+    staff = guidance_for_path("/admin/system/users/abc")
+    assert staff is not None and staff.id == "system-user-mfa-removal"
+    staff_text = " ".join((*staff.steps, *staff.notes)).lower()
+    for phrase in ("reason", "admin role", "your own mfa", "emailed", "break-glass"):
+        assert phrase in staff_text
+    reseller = guidance_for_path("/admin/resellers/abc")
+    assert reseller is not None and reseller.id == "reseller-user-mfa-removal"
+    assert "portal access" in " ".join(reseller.steps).lower()
+
+
+def test_router_health_guidance_covers_badge_shadow_and_read_only_boundary() -> None:
+    guide = guidance_for_path("/admin/network/routers")
+
+    assert guide is not None
+    assert guide.id == "router-health"
+    content = " ".join((*guide.steps, *guide.notes)).lower()
+    for phrase in (
+        "health column",
+        "no data",
+        "shadow",
+        "impact",
+        "evidence",
+        "fix",
+        "never changes a router",
+        "router:read",
+    ):
+        assert phrase in content
+    assert guidance_for_path("/admin/network/routers/some-id") == guide
+    drift = guidance_for_path("/admin/drift")
+    assert drift is not None
+    assert drift.id == "cross-app-drift"
+    assert "router posture" in " ".join(drift.steps).lower()
+
+
+def test_installed_talk_guide_explains_save_validation_and_unchanged_delivery():
+    guide = guidance_for_path("/admin/integrations/nextcloud-talk/installation-id")
+    assert guide is not None and guide.id == "integrations"
+    content = " ".join((*guide.steps, *guide.notes))
+    assert "existing notifier username and app password" in content
+    assert "both settings and secrets write access" in content
+    assert "without sending a notification" in content
+    assert "global notification setting unchanged" in content

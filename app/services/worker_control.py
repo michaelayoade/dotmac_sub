@@ -25,6 +25,7 @@ _DEFAULT_RESTART_CONTAINERS = {
     "celery-worker-tr069": "dotmac_sub_celery_worker_tr069",
     "celery-worker-bandwidth": "dotmac_sub_celery_worker_bandwidth",
     "celery-worker-monitoring": "dotmac_sub_celery_worker_monitoring",
+    "celery-worker-inventory": "dotmac_sub_celery_worker_inventory",
     "celery-worker-billing": "dotmac_sub_celery_worker_billing",
 }
 
@@ -76,7 +77,10 @@ class _DockerUnixHTTPConnection(http.client.HTTPConnection):
         self.socket_path = socket_path
 
     def connect(self) -> None:
-        sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        address_family = getattr(socket, "AF_UNIX", None)
+        if address_family is None:
+            raise OSError("Unix-domain sockets are unavailable on this host")
+        sock = socket.socket(address_family, socket.SOCK_STREAM)
         sock.connect(self.socket_path)
         self.sock = sock
 

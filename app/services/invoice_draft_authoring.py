@@ -22,12 +22,11 @@ from app.models.billing import (
     TaxRate,
 )
 from app.models.catalog import BillingMode, Subscription
-from app.models.domain_settings import SettingDomain
 from app.models.idempotency import IdempotencyKey
 from app.models.subscriber import Subscriber
 from app.schemas.audit import AuditEventCreate
 from app.schemas.billing import InvoiceCreate, InvoiceLineCreate, InvoiceUpdate
-from app.services import invoice_discounts, numbering
+from app.services import invoice_discounts
 from app.services.audit import AuditEvents
 from app.services.billing._common import (
     _validate_invoice_line_amount,
@@ -40,6 +39,7 @@ from app.services.billing.invoices import (
     InvoiceOwnerError,
     Invoices,
     ProformaConversionInput,
+    next_invoice_number,
 )
 from app.services.common import round_money
 from app.services.customer_tax_policies import get_customer_vat_exemption_policy
@@ -858,14 +858,7 @@ def _convert_proforma_invoice(
 
     invoice_number = (invoice.invoice_number or "").strip() or None
     if invoice_number and invoice_number.upper().startswith(PROFORMA_PREFIX):
-        invoice_number = numbering.generate_required_number(
-            db,
-            SettingDomain.billing,
-            "invoice_number",
-            "invoice_number_prefix",
-            "invoice_number_padding",
-            "invoice_number_start",
-        )
+        invoice_number = next_invoice_number(db)
     _, cleaned_memo = apply_proforma_form_values(
         invoice_number=invoice_number,
         memo=invoice.memo,

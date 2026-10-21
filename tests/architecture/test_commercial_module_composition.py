@@ -1,4 +1,4 @@
-"""Static boundary for Billing and Collections tenant-plane shadow composition."""
+"""Path-bound commercial shadow imports and released Payments read observation."""
 
 from __future__ import annotations
 
@@ -17,6 +17,153 @@ PYPROJECT = ROOT / "pyproject.toml"
 
 
 _SHADOW_IMPORTS = {
+    "app/services/payment_intent_module_shadow.py": {
+        ("dotmac_payments", "GetPaymentIntentV1"),
+        ("dotmac_payments", "PaymentPurpose"),
+        ("dotmac_payments", "get_payment_intent_v1"),
+    },
+    # Thin-client adoption (ADR 0020): invoice checkout opens the module
+    # intent at creation. This is the first registered runtime writer
+    # import; it is exact and path-bound like the shadow reads above.
+    "app/services/gateway_topup_intents.py": {
+        ("dotmac_payments", "OpenPaymentIntent"),
+        ("dotmac_payments", "PaymentError"),
+        ("dotmac_payments", "PaymentPurpose"),
+        ("dotmac_payments", "open_payment_intent"),
+    },
+    # Thin-client issuance (ADR 0031, Slice 6a): eligible admin drafts are
+    # issued by dotmac-billing as sole ledger writer; numbering imports are
+    # outside this gate's prefixes.
+    "app/services/billing/starter_issuance.py": {
+        ("dotmac_billing", "AcceptRatedObligationV1"),
+        ("dotmac_billing", "AppliedFxSnapshotV1"),
+        ("dotmac_billing", "AppliedTaxSnapshotV1"),
+        ("dotmac_billing", "DueDateBasisV1"),
+        ("dotmac_billing", "GetInvoiceDocumentFactV1"),
+        ("dotmac_billing", "IssueRatedInvoiceV1"),
+        ("dotmac_billing", "PartyDocumentSnapshotV1"),
+        ("dotmac_billing", "PaymentInstructionsSnapshotV1"),
+        ("dotmac_billing", "PostalAddressSnapshotV1"),
+        ("dotmac_billing", "PresentationAssetReferenceV1"),
+        ("dotmac_billing", "ServicePeriodEvidenceV1"),
+        ("dotmac_billing.service", "create_billing_account"),
+        ("dotmac_billing", "get_invoice_document_fact"),
+        ("dotmac_billing", "issue_rated_invoice"),
+        ("dotmac_billing.contracts", "DueDateBasisStatus"),
+        ("dotmac_billing.contracts", "ServicePeriodStatus"),
+        ("dotmac_billing.errors", "BillingError"),
+        # Multi-line lane: accept-per-line plus draft-document composition.
+        ("dotmac_billing.commands", "CreateMultiLineDraftDocument"),
+        ("dotmac_billing.commands", "DraftDocumentLine"),
+        ("dotmac_billing.commands", "IssueDocument"),
+        ("dotmac_billing.service", "accept_rated_obligation"),
+        ("dotmac_billing.service", "create_multi_line_draft_document"),
+        ("dotmac_billing.service", "issue_document"),
+    },
+    # Step 5 opening rehearsal assembly (ADR 0020/0031): pure census-to-
+    # observation translation onto the pinned rehearsal contracts; it
+    # verifies nothing and writes no money state.
+    "app/services/billing/opening_rehearsal_assembly.py": {
+        ("dotmac_billing", "OpeningBlockerV1"),
+        ("dotmac_billing", "OpeningObservedControlV1"),
+        ("dotmac_billing", "OpeningObservedInvoiceV1"),
+        ("dotmac_billing", "OpeningObservedLaneV1"),
+        ("dotmac_billing", "OpeningObservedPopulationV1"),
+        ("dotmac_billing", "OpeningObservedPrecisionV1"),
+        ("dotmac_billing", "OpeningObservedSettlementV1"),
+        ("dotmac_billing", "OpeningSubObservationV2"),
+    },
+    # Thin-client settlement back-half (ADR 0031): provider evidence is
+    # confirmed in dotmac-payments and discharged in dotmac-billing for
+    # Starter-issued invoices; Sub mirrors from the Starter position.
+    "app/services/billing/starter_settlement.py": {
+        ("dotmac_billing", "AcceptSettlementV1"),
+        ("dotmac_billing", "GetCurrentReceivablePositionV1"),
+        ("dotmac_billing", "get_current_receivable_position"),
+        ("dotmac_billing.commands", "AllocationCommand"),
+        ("dotmac_billing.contracts", "SettlementFundingLane"),
+        ("dotmac_billing.errors", "BillingError"),
+        ("dotmac_billing.service", "accept_settlement"),
+        ("dotmac_billing.service", "allocate_settlement"),
+        ("dotmac_payments", "ConfirmationSource"),
+        ("dotmac_payments", "GetConfirmedCashV1"),
+        ("dotmac_payments", "GetPaymentIntentV1"),
+        ("dotmac_payments", "PaymentError"),
+        ("dotmac_payments", "PaymentPurpose"),
+        ("dotmac_payments", "RecordConfirmation"),
+        ("dotmac_payments", "get_confirmed_cash_v1"),
+        ("dotmac_payments", "get_payment_intent_v1"),
+        ("dotmac_payments", "record_confirmation"),
+    },
+    # Thin-client credit notes (ADR 0031): fully-applied credits against
+    # Starter-issued invoices are issued by dotmac-billing as sole ledger
+    # writer; Sub mirrors the credit document and invoice balance.
+    "app/services/billing/starter_credit_notes.py": {
+        ("dotmac_billing", "AppliedTaxSnapshotV1"),
+        ("dotmac_billing", "GetCurrentReceivablePositionV1"),
+        ("dotmac_billing", "get_current_receivable_position"),
+        ("dotmac_billing.commands", "IssueCreditNote"),
+        ("dotmac_billing.errors", "BillingError"),
+        ("dotmac_billing.service", "issue_credit_note"),
+    },
+    # Thin-client prepaid funding (ADR 0031): confirmed purchase-
+    # funding purchases earmark period targets in dotmac-billing and
+    # settle funded period invoices from those earmarks.
+    "app/services/billing/starter_prepaid.py": {
+        ("dotmac_billing", "AcceptSettlementV1"),
+        ("dotmac_billing", "GetCurrentReceivablePositionV1"),
+        ("dotmac_billing", "get_current_receivable_position"),
+        ("dotmac_billing.commands", "AllocationCommand"),
+        ("dotmac_billing.contracts", "SettlementFundingLane"),
+        ("dotmac_billing.earmark_contracts", "EarmarkSettlementV1"),
+        ("dotmac_billing.earmark_contracts", "SettlementEarmarkTargetV1"),
+        ("dotmac_billing.earmarks", "earmark_settlement"),
+        ("dotmac_billing.errors", "BillingError"),
+        ("dotmac_billing.service", "accept_settlement"),
+        ("dotmac_billing.service", "allocate_settlement"),
+        ("dotmac_billing.service", "create_billing_account"),
+        ("dotmac_payments", "ConfirmationSource"),
+        ("dotmac_payments", "GetConfirmedCashV1"),
+        ("dotmac_payments", "GetPaymentIntentV1"),
+        ("dotmac_payments", "PaymentError"),
+        ("dotmac_payments", "PaymentPurpose"),
+        ("dotmac_payments", "RecordConfirmation"),
+        ("dotmac_payments", "get_confirmed_cash_v1"),
+        ("dotmac_payments", "get_payment_intent_v1"),
+        ("dotmac_payments", "record_confirmation"),
+    },
+    # Thin-client manual settlement (ADR 0031): staff-recorded payments
+    # against Starter-issued invoices open a bound dotmac-payments
+    # intent and discharge through the shared settlement owner.
+    "app/services/billing/starter_manual_settlement.py": {
+        ("dotmac_payments", "ConfirmationSource"),
+        ("dotmac_payments", "OpenPaymentIntent"),
+        ("dotmac_payments", "PaymentError"),
+        ("dotmac_payments", "PaymentPurpose"),
+        ("dotmac_payments", "open_payment_intent"),
+    },
+    # Thin-client readers (ADR 0031): Starter-linked invoices read their
+    # frozen document fact and account collectible position from
+    # dotmac-billing; no writes.
+    "app/services/billing/starter_positions.py": {
+        ("dotmac_billing", "GetCurrentReceivablePositionV1"),
+        ("dotmac_billing", "GetInvoiceDocumentFactV1"),
+        ("dotmac_billing", "InvoiceDocumentFactV1"),
+        ("dotmac_billing", "get_current_receivable_position"),
+        ("dotmac_billing", "get_invoice_document_fact"),
+        ("dotmac_billing.errors", "BillingError"),
+    },
+    "app/services/dotmac_erp/billing_adapter.py": {
+        ("dotmac_billing", "AccountingFactV1"),
+    },
+    "app/services/dotmac_erp/billing_accounting_fact.py": {
+        ("dotmac_billing", "AccountingAllocationEffectV1"),
+        ("dotmac_billing", "AccountingEffectV1"),
+        ("dotmac_billing", "AccountingFactV1"),
+        ("dotmac_billing", "AppliedFxSnapshotV1"),
+        ("dotmac_billing", "AppliedTaxSnapshotV1"),
+        ("dotmac_billing.contracts", "ACCOUNTING_FACT_CONTRACT"),
+    },
     "app/services/collections_module_shadow.py": {
         ("dotmac_collections", "ReceivableObservationV1"),
     },
@@ -25,10 +172,44 @@ _SHADOW_IMPORTS = {
 
 def _external_commercial_imports_under_app(root: Path = ROOT) -> list[str]:
     offenders: list[str] = []
-    prefixes = ("dotmac_billing", "dotmac_collections", "dotmac_subscriptions")
+    prefixes = (
+        "dotmac_billing",
+        "dotmac_collections",
+        "dotmac_subscriptions",
+        "dotmac_payments",
+    )
     for path in (root / "app").rglob("*.py"):
         tree = ast.parse(path.read_text(encoding="utf-8"))
+        dynamic_names = {"__import__"}
         for node in ast.walk(tree):
+            if isinstance(node, ast.ImportFrom) and node.module == "importlib":
+                dynamic_names.update(
+                    alias.asname or alias.name
+                    for alias in node.names
+                    if alias.name == "import_module"
+                )
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Call) and node.args:
+                function = node.func
+                dynamic = (
+                    isinstance(function, ast.Name) and function.id in dynamic_names
+                ) or (
+                    isinstance(function, ast.Attribute)
+                    and function.attr == "import_module"
+                )
+                target = node.args[0]
+                if (
+                    dynamic
+                    and isinstance(target, ast.Constant)
+                    and isinstance(target.value, str)
+                ):
+                    if any(
+                        target.value == prefix or target.value.startswith(f"{prefix}.")
+                        for prefix in prefixes
+                    ):
+                        offenders.append(
+                            f"{path.relative_to(root)}:{node.lineno}:{target.value}:dynamic"
+                        )
             if isinstance(node, ast.Import):
                 imports = [(alias.name, "*") for alias in node.names]
             elif isinstance(node, ast.ImportFrom):
@@ -51,18 +232,18 @@ def _external_commercial_imports_under_app(root: Path = ROOT) -> list[str]:
 def test_exact_tagged_commercial_dependencies_are_supply_pins() -> None:
     data = tomllib.loads(PYPROJECT.read_text(encoding="utf-8"))
     project_dependencies = data["project"]["dependencies"]
-    assert "dotmac-billing==0.1.0a1" in project_dependencies
+    assert "dotmac-billing==0.1.0a8" in project_dependencies
     assert "dotmac-collections==0.1.0a1" in project_dependencies
     poetry_dependencies = data["tool"]["poetry"]["dependencies"]
     assert poetry_dependencies["dotmac-billing"] == {
-        "version": "0.1.0a1",
+        "version": "0.1.0a8",
         "source": "forgejo",
     }
     assert poetry_dependencies["dotmac-collections"] == {
         "version": "0.1.0a1",
         "source": "forgejo",
     }
-    assert billing_module.version == "0.1.0a1"
+    assert billing_module.version == "0.1.0a8"
     assert collections_module.version == "0.1.0a1"
 
 
@@ -70,26 +251,32 @@ def test_lock_carries_the_exact_billing_and_collections_artifacts() -> None:
     lock = tomllib.loads((ROOT / "poetry.lock").read_text(encoding="utf-8"))
     packages = {package["name"]: package for package in lock["package"]}
     expected = {
-        "dotmac-billing": {
-            "dotmac_billing-0.1.0a1-py3-none-any.whl": (
-                "sha256:ec1f50c2e30b29c4f9e2427fe6c11d0fe98c1042920825efa50bf204c01dd50b"
-            ),
-            "dotmac_billing-0.1.0a1.tar.gz": (
-                "sha256:c0ff6e1257a00ba09e62b832e471cffe3945504d1c2ad59a799baae77c0d0eef"
-            ),
-        },
-        "dotmac-collections": {
-            "dotmac_collections-0.1.0a1-py3-none-any.whl": (
-                "sha256:f1ef5a38f70557a29e310f62e576983c3b971ce3ece5d778a702c619536e766b"
-            ),
-            "dotmac_collections-0.1.0a1.tar.gz": (
-                "sha256:f3f298fbf7fa5ef05e5fa52369ac5d151a42b065d6be1eb81b644358be561aa1"
-            ),
-        },
+        "dotmac-billing": (
+            "0.1.0a8",
+            {
+                "dotmac_billing-0.1.0a8-py3-none-any.whl": (
+                    "sha256:a1d76c5a3244777a60854078991fbbfa1e6c4bfc6de03d26c581cbe23de5e537"
+                ),
+                "dotmac_billing-0.1.0a8.tar.gz": (
+                    "sha256:ff3926bcec8c857a4fbbce17f84958178c1e21700c4ec52d606e41de331146ff"
+                ),
+            },
+        ),
+        "dotmac-collections": (
+            "0.1.0a1",
+            {
+                "dotmac_collections-0.1.0a1-py3-none-any.whl": (
+                    "sha256:f1ef5a38f70557a29e310f62e576983c3b971ce3ece5d778a702c619536e766b"
+                ),
+                "dotmac_collections-0.1.0a1.tar.gz": (
+                    "sha256:f3f298fbf7fa5ef05e5fa52369ac5d151a42b065d6be1eb81b644358be561aa1"
+                ),
+            },
+        ),
     }
-    for name, expected_hashes in expected.items():
+    for name, (expected_version, expected_hashes) in expected.items():
         package = packages[name]
-        assert package["version"] == "0.1.0a1"
+        assert package["version"] == expected_version
         assert package["source"] == {
             "type": "legacy",
             "url": "https://registry.dotmac.io/api/packages/dotmac/pypi/simple",
@@ -106,7 +293,7 @@ def test_both_dual_plane_modules_select_tenant_only() -> None:
     assert tuple(selections["collections"].planes) == (ModulePlane.TENANT,)
 
 
-def test_shadow_storage_adds_no_runtime_import_or_provider_switch() -> None:
+def test_shadow_runtime_imports_are_path_bound_without_provider_switch() -> None:
     assert _external_commercial_imports_under_app() == []
 
     from app.composition import DEDICATED_ISP_PROFILE
@@ -147,3 +334,102 @@ def test_shadow_adapter_has_no_write_or_stateful_reader_surface() -> None:
     assert "report-local" in source
     assert "blocker_pairs" in source
     assert "observe_at" in source
+
+
+def test_accounting_transport_dto_allowlist_is_exact_and_path_bound(
+    tmp_path: Path,
+) -> None:
+    owner = tmp_path / "app/services/dotmac_erp/billing_accounting_fact.py"
+    owner.parent.mkdir(parents=True)
+    owner.write_text("from dotmac_billing import AccountingFactV1 as ReleasedFact\n")
+    assert _external_commercial_imports_under_app(tmp_path) == []
+    owner.write_text("from dotmac_billing.service import accept_settlement\n")
+    assert _external_commercial_imports_under_app(tmp_path)
+    owner.write_text(
+        'from importlib import import_module as load\nload("dotmac_billing.service")\n'
+    )
+    assert _external_commercial_imports_under_app(tmp_path)
+    owner.unlink()
+    (owner.parent / "wrong_owner.py").write_text(
+        "from dotmac_billing import AccountingFactV1\n"
+    )
+    assert _external_commercial_imports_under_app(tmp_path)
+
+
+def _committed_fact_runtime_activation(root: Path) -> tuple[str, ...]:
+    offenders: list[str] = []
+    for directory in (root / "app", root / "scripts"):
+        for path in directory.rglob("*.py"):
+            tree = ast.parse(path.read_text())
+            for node in ast.walk(tree):
+                if isinstance(node, ast.ImportFrom) and any(
+                    alias.name == "stage_committed_billing_fact" for alias in node.names
+                ):
+                    offenders.append(f"{path.relative_to(root)}:{node.lineno}")
+                elif isinstance(node, ast.Call):
+                    function = node.func
+                    if (
+                        isinstance(function, ast.Attribute)
+                        and function.attr == "stage_committed_billing_fact"
+                    ) or (
+                        isinstance(function, ast.Name)
+                        and function.id == "stage_committed_billing_fact"
+                    ):
+                        offenders.append(f"{path.relative_to(root)}:{node.lineno}")
+    return tuple(offenders)
+
+
+def test_committed_billing_fact_transport_has_no_live_consumer() -> None:
+    assert _committed_fact_runtime_activation(ROOT) == ()
+
+
+def test_pending_consumer_guard_rejects_planted_activation(tmp_path: Path) -> None:
+    consumer = tmp_path / "app/services/accidental_fact_consumer.py"
+    consumer.parent.mkdir(parents=True)
+    consumer.write_text(
+        "from app.services.dotmac_erp.billing_adapter import stage_committed_billing_fact as stage\n"
+        "stage(db, command, context=context)\n"
+    )
+    assert _committed_fact_runtime_activation(tmp_path)
+
+
+def test_payments_getter_allowlist_is_exact_and_path_bound(tmp_path: Path) -> None:
+    owner = tmp_path / "app/services/payment_intent_module_shadow.py"
+    owner.parent.mkdir(parents=True)
+    owner.write_text(
+        "from dotmac_payments import GetPaymentIntentV1, get_payment_intent_v1\n"
+    )
+    assert _external_commercial_imports_under_app(tmp_path) == []
+    owner.write_text("from dotmac_payments import record_confirmation\n")
+    assert _external_commercial_imports_under_app(tmp_path)
+    owner.write_text(
+        'from importlib import import_module\nimport_module("dotmac_payments.service")\n'
+    )
+    assert _external_commercial_imports_under_app(tmp_path)
+    owner.unlink()
+    (owner.parent / "wrong_owner.py").write_text(
+        "from dotmac_payments import get_payment_intent_v1\n"
+    )
+    assert _external_commercial_imports_under_app(tmp_path)
+
+
+def test_payments_released_getter_supply_pin() -> None:
+    project = tomllib.loads(PYPROJECT.read_text())
+    assert "dotmac-payments==0.1.0a3" in project["project"]["dependencies"]
+    assert project["tool"]["poetry"]["dependencies"]["dotmac-payments"] == {
+        "version": "0.1.0a3",
+        "source": "forgejo",
+    }
+    lock = tomllib.loads((ROOT / "poetry.lock").read_text())
+    package = next(
+        item for item in lock["package"] if item["name"] == "dotmac-payments"
+    )
+    assert package["version"] == "0.1.0a3"
+    assert {entry["file"]: entry["hash"] for entry in package["files"]} == {
+        "dotmac_payments-0.1.0a3-py3-none-any.whl": (
+            "sha256:6ce2d846218931f568183e0814e376597ec03f836c502302dfefd0bd4264a8eb"
+        ),
+        "dotmac_payments-0.1.0a3.tar.gz": (
+            "sha256:ea957bdf6553a6503b3be43a92ba49d21f243fa5c367349ed41e1c9e6343d729"
+        ),
+    }

@@ -2,6 +2,7 @@ from datetime import UTC, datetime, timedelta
 
 from sqlalchemy import select
 
+from app.models.catalog import Subscription, SubscriptionStatus
 from app.models.subscriber import Subscriber, SubscriberStatus, UserType
 from app.services import customer_account_visibility
 from app.services import subscriber as subscriber_service
@@ -111,7 +112,7 @@ def test_count_stats_excludes_splynx_deleted_imports(db_session):
     }
 
 
-def test_dashboard_stats_ignore_splynx_deleted_import_churn(db_session):
+def test_dashboard_stats_ignore_splynx_deleted_import_churn(db_session, catalog_offer):
     now = datetime.now(UTC)
     active = Subscriber(
         first_name="Current",
@@ -145,20 +146,95 @@ def test_dashboard_stats_ignore_splynx_deleted_import_churn(db_session):
         created_at=now - timedelta(days=2),
         updated_at=now - timedelta(days=2),
     )
-    db_session.add_all([active, canceled, imported_deleted])
+    blocked = Subscriber(
+        first_name="Blocked",
+        last_name="Customer",
+        email="blocked-customer@example.com",
+        status=SubscriberStatus.blocked,
+        is_active=True,
+        user_type=UserType.customer,
+        created_at=now - timedelta(days=60),
+    )
+    subscriptionless = Subscriber(
+        first_name="No",
+        last_name="Subscription",
+        email="no-subscription@example.com",
+        status=SubscriberStatus.active,
+        is_active=True,
+        user_type=UserType.customer,
+        created_at=now - timedelta(days=60),
+    )
+    db_session.add_all([active, blocked, subscriptionless, canceled, imported_deleted])
+    db_session.flush()
+    db_session.add_all(
+        [
+            Subscription(
+                subscriber_id=active.id,
+                offer_id=catalog_offer.id,
+                status=SubscriptionStatus.active,
+            ),
+            Subscription(
+                subscriber_id=blocked.id,
+                offer_id=catalog_offer.id,
+                status=SubscriptionStatus.active,
+            ),
+        ]
+    )
     db_session.commit()
 
     stats = subscriber_service.subscribers.get_dashboard_stats(db_session)
 
-    assert stats["total_count"] == 2
+    assert stats["total_count"] == 4
     assert stats["active_count"] == 1
     assert stats["new_this_month"] == 1
-    assert stats["subscriber_status_chart"]["values"] == [1, 0, 1, 1]
+    assert stats["subscriber_status_chart"]["values"] == [1, 0, 1, 3]
     assert stats["churn_rate"] == 50.0
     assert all(
         row.email != "imported-deleted@example.com"
         for row in stats["recent_subscribers"]
     )
+
+
+def test_onboarding_attention_counts_visible_new_accounts_past_boundary(db_session):
+    observed_at = datetime(2026, 10, 13, 12, 0, tzinfo=UTC)
+    old_new = Subscriber(
+        first_name="Waiting",
+        last_name="Customer",
+        email="waiting-customer@example.com",
+        status=SubscriberStatus.new,
+        is_active=True,
+        user_type=UserType.customer,
+        created_at=observed_at - timedelta(hours=73),
+    )
+    recent_new = Subscriber(
+        first_name="Recent",
+        last_name="Customer",
+        email="recent-customer@example.com",
+        status=SubscriberStatus.new,
+        is_active=True,
+        user_type=UserType.customer,
+        created_at=observed_at - timedelta(hours=12),
+    )
+    blocked = Subscriber(
+        first_name="Blocked",
+        last_name="Onboarding",
+        email="blocked-onboarding@example.com",
+        status=SubscriberStatus.blocked,
+        is_active=True,
+        user_type=UserType.customer,
+        created_at=observed_at - timedelta(days=10),
+    )
+    db_session.add_all([old_new, recent_new, blocked])
+    db_session.commit()
+
+    summary = subscriber_service.onboarding_attention_summary(
+        db_session,
+        query=subscriber_service.OnboardingAttentionQuery(as_of=observed_at),
+    )
+
+    assert summary.waiting_too_long_count == 1
+    assert summary.waiting_before == observed_at - timedelta(hours=72)
+    assert summary.observed_at == observed_at
 
 
 def test_effective_dates_prefer_splynx_source_metadata(db_session):

@@ -44,18 +44,14 @@ because only one of the two decides. The verifier's refusals arrive as typed
 exception CLASSES and are mapped to Sub's closed vocabulary by class alone;
 their message text never reaches a log, a metric, an event or a caller.
 
-## Two transactions, in this order, deliberately
+## One atomic success transition
 
-The ceremony is burned and the principal resolved in ONE owner command, which
-commits. Only then is the session minted, through
-``auth_flow.issue_session_tokens`` — the one issuance owner, which commits its
-own session row.
-
-They are not merged, because ``_issue_tokens`` owns its own commit and an owner
-command refuses a helper commit inside its boundary. The ordering that falls
-out is the safe one: if minting fails after the ceremony committed, the
-ceremony is still burned and the device must run a fresh one. The failure mode
-is "log in again", never "the assertion is still redeemable".
+Admission stages the ceremony completion, credential bookkeeping, canonical
+AuditEvent, domain event and session through AuthFlow's existing flush-only
+staging participant. The owner commits them together. Expected admission refusals
+commit a failed ceremony burn without a session. Storage failures roll the
+whole success transition back. Tokens are encoded from the staged snapshot
+only after commit; encoding failure cannot undo committed evidence.
 
 ## Never provisioned, never guessed
 
@@ -81,7 +77,7 @@ from __future__ import annotations
 import logging
 import secrets
 import uuid
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from uuid import UUID
 
@@ -95,7 +91,9 @@ from dotmac_auth_oidc.errors import (
 )
 from dotmac_auth_oidc.native import NonceBinding
 from fastapi import Request
-from sqlalchemy import select
+from sqlalchemy import select, text
+from sqlalchemy.engine import Connection
+from sqlalchemy.exc import OperationalError
 from sqlalchemy.orm import Session
 
 from app.metrics import (
@@ -109,6 +107,8 @@ from app.metrics import (
 )
 from app.models.auth import AuthenticationBinding, AuthProvider, UserCredential
 from app.models.oidc_mobile import OidcCeremonyOutcome, OidcMobileCeremony
+from app.models.party import Party
+from app.models.system_user import SystemUser
 from app.services import auth_flow as auth_flow_service
 from app.services import staff_party_authentication
 from app.services.audit_adapter import AuditActor, stage_audit_event
@@ -244,13 +244,52 @@ class ExchangeMobileAssertionCommand:
 
 @dataclass(frozen=True, slots=True)
 class AdmittedFederatedPrincipal:
-    """The committed admission: who, on which ceremony. No token material."""
+    """The staged admission: who, on which ceremony. No token material."""
 
     ceremony_id: UUID
     principal_type: str
     principal_id: UUID
     party_id: UUID
     credential_id: UUID
+
+
+@dataclass(frozen=True, slots=True)
+class _CredentialCandidate:
+    credential_id: UUID
+    credential_version: int
+    party_id: UUID | None
+    principal_id: UUID | None
+    tenant_id: UUID | None
+    provider: AuthProvider
+
+
+@dataclass(frozen=True, slots=True)
+class _BindingCandidate:
+    binding_id: UUID
+    binding_key: str
+    mechanism_code: str
+    updated_at: datetime
+
+
+@dataclass(frozen=True, slots=True)
+class _StagedFederatedSession:
+    admission: AdmittedFederatedPrincipal
+    session: auth_flow_service.StagedSession = field(repr=False)
+
+
+class OidcFederationUnavailable(DomainError):
+    """Operational failure distinct from a credential or ceremony denial."""
+
+    def __init__(self, *, active_caller: bool = False) -> None:
+        super().__init__(
+            code=(
+                "auth.oidc_mobile_federation.active_caller_transaction"
+                if active_caller
+                else "auth.oidc_mobile_federation.lock_timeout"
+            ),
+            message="Authentication is temporarily unavailable.",
+            retryable=not active_caller,
+        )
 
 
 @dataclass(frozen=True, slots=True)
@@ -549,37 +588,109 @@ def _verified_subject(
 
 
 def _matching_credential(
-    db: Session, *, binding: AuthenticationBinding, subject: str
-) -> UserCredential | None:
-    """The ONE active credential for this subject at this verifier, or None.
+    db: Session, *, binding_id: UUID, subject: str
+) -> _CredentialCandidate | None:
+    """Discover immutable evidence; locking must start at its principal.
 
-    One query, one exact match, locked for update. There is no second lookup
-    and in particular no match-by-email: an email is a routing address the
-    identity provider may reassign, and treating it as an identity is how one
-    person inherits another's account.
-
-    A multi-row result is impossible under
-    ``ux_user_credentials_external_subject`` and is still refused here, because
-    a resolver that would pick arbitrarily if the index were ever dropped is a
-    resolver that picks arbitrarily.
+    Subject resolution happens once. The locked gate reloads this exact UUID
+    and refuses drift instead of switching to another identity.
     """
-
-    rows = (
-        db.scalars(
-            select(UserCredential)
-            .where(UserCredential.authentication_binding_id == binding.id)
-            .where(UserCredential.username == subject)
-            .where(UserCredential.is_active.is_(True))
-            .where(UserCredential.provider != AuthProvider.local)
-            .with_for_update()
-            .execution_options(populate_existing=True)
+    rows = db.execute(
+        select(
+            UserCredential.id,
+            UserCredential.credential_version,
+            UserCredential.party_id,
+            UserCredential.system_user_id,
+            UserCredential.tenant_id,
+            UserCredential.provider,
         )
-        .unique()
-        .all()
-    )
+        .where(UserCredential.authentication_binding_id == binding_id)
+        .where(UserCredential.username == subject)
+        .where(UserCredential.is_active.is_(True))
+        .where(UserCredential.provider != AuthProvider.local)
+    ).all()
     if len(rows) != 1:
         return None
-    return rows[0]
+    row = rows[0]
+    return _CredentialCandidate(*row)
+
+
+def _locked_admission_identity(
+    db: Session,
+    *,
+    candidate: _CredentialCandidate,
+    binding: _BindingCandidate,
+    subject: str,
+) -> tuple[SystemUser, UserCredential] | None:
+    """Principal → credential → Party → binding, held through session commit."""
+    if candidate.party_id is None or candidate.principal_id is None:
+        return None
+    try:
+        resolved = staff_party_authentication.resolve_staff_principal_by_party(
+            db,
+            candidate.party_id,
+            candidate.principal_id,
+            reference=candidate.credential_id,
+        )
+    except staff_party_authentication.StaffProjectionError:
+        return None
+    principal = db.scalar(
+        select(SystemUser)
+        .where(SystemUser.id == resolved.id)
+        .with_for_update()
+        .execution_options(populate_existing=True)
+    )
+    if (
+        principal is None
+        or not principal.is_active
+        or principal.person_party_id != candidate.party_id
+    ):
+        return None
+    credential = db.scalar(
+        select(UserCredential)
+        .where(UserCredential.id == candidate.credential_id)
+        .with_for_update()
+        .execution_options(populate_existing=True)
+    )
+    if (
+        credential is None
+        or not credential.is_active
+        or credential.credential_version != candidate.credential_version
+        or credential.party_id != candidate.party_id
+        or credential.system_user_id != candidate.principal_id
+        or credential.subscriber_id is not None
+        or credential.reseller_user_id is not None
+        or credential.tenant_id != candidate.tenant_id
+        or credential.provider != candidate.provider
+        or credential.provider == AuthProvider.local
+        or credential.username != subject
+        or credential.authentication_binding_id != binding.binding_id
+    ):
+        return None
+    # Session insertion takes this FK lock implicitly. Acquire it explicitly
+    # before the binding lock, consistently with the projection writer.
+    party_id = db.scalar(
+        select(Party.id)
+        .where(Party.id == candidate.party_id)
+        .with_for_update(read=True, key_share=True)
+    )
+    if party_id is None:
+        return None
+    current_binding = db.scalar(
+        select(AuthenticationBinding)
+        .where(AuthenticationBinding.id == binding.binding_id)
+        .with_for_update()
+        .execution_options(populate_existing=True)
+    )
+    if (
+        current_binding is None
+        or not current_binding.is_active
+        or current_binding.binding_key != binding.binding_key
+        or current_binding.mechanism_code != binding.mechanism_code
+        or _as_utc(current_binding.updated_at) != _as_utc(binding.updated_at)
+    ):
+        return None
+    return principal, credential
 
 
 def _admit(
@@ -659,6 +770,7 @@ def _admit(
             == require_declared_mechanism(OIDC_MECHANISM_CODE)
         )
         .where(AuthenticationBinding.is_active.is_(True))
+        .execution_options(populate_existing=True)
     ).first()
     if binding is None:
         # The verifier was uninstalled or deactivated. A disabled client cannot
@@ -667,13 +779,16 @@ def _admit(
         _burn(ceremony, now, OidcCeremonyOutcome.failed, "verifier_unavailable")
         raise _refuse("verifier_unavailable")
 
-    credential = _matching_credential(db, binding=binding, subject=subject)
-    if credential is None or credential.party_id is None:
+    binding_candidate = _BindingCandidate(
+        binding.id, binding.binding_key, binding.mechanism_code, binding.updated_at
+    )
+    candidate = _matching_credential(db, binding_id=binding.id, subject=subject)
+    if candidate is None or candidate.party_id is None:
         # Refused, never provisioned. Binding a subject to a party is an
         # operator action with its own evidence; a login does not invent one.
         _burn(ceremony, now, OidcCeremonyOutcome.failed, "subject_not_bound")
         raise _refuse("subject_not_bound")
-    if credential.system_user_id is None:
+    if candidate.principal_id is None:
         # Field federation admits staff principals only. A subscriber or
         # reseller credential bound to an OIDC verifier is a configuration
         # error, and guessing which session to mint for it is exactly the
@@ -681,19 +796,13 @@ def _admit(
         _burn(ceremony, now, OidcCeremonyOutcome.failed, "principal_not_eligible")
         raise _refuse("principal_not_eligible")
 
-    try:
-        principal = staff_party_authentication.resolve_staff_principal_by_party(
-            db,
-            credential.party_id,
-            credential.system_user_id,
-            reference=credential.id,
-        )
-    except staff_party_authentication.StaffProjectionError:
-        _burn(ceremony, now, OidcCeremonyOutcome.failed, "principal_not_eligible")
-        raise _refuse("principal_not_eligible") from None
-    if not principal.is_active:
+    identity = _locked_admission_identity(
+        db, candidate=candidate, binding=binding_candidate, subject=subject
+    )
+    if identity is None:
         _burn(ceremony, now, OidcCeremonyOutcome.failed, "principal_not_eligible")
         raise _refuse("principal_not_eligible")
+    principal, credential = identity
 
     credential.last_login_at = now
     credential.failed_login_attempts = 0
@@ -734,7 +843,7 @@ def _admit(
         ceremony_id=ceremony.id,
         principal_type="system_user",
         principal_id=principal.id,
-        party_id=credential.party_id,
+        party_id=candidate.party_id,
         credential_id=credential.id,
     )
 
@@ -763,66 +872,75 @@ def exchange_mobile_assertion(
     *,
     request: Request,
 ) -> FederatedSessionIssued:
-    """Admit one assertion and return the normal Sub access/refresh pair.
+    """Commit admission evidence and its session once, then encode tokens.
 
-    The configuration read, the assertion verification and the admission all
-    run inside ONE owner command, for the same reason the start does: a
-    settings read opens a transaction, and ``execute_owner_command`` requires a
-    transaction-free session at entry.
-
-    A refusal comes back as a VALUE rather than an exception so the command
-    still commits — the ceremony must stay burned after a refused exchange, and
-    an exception would roll that back and leave the row redeemable.
-
-    The session is minted afterwards, outside the command, by the one issuance
-    owner: ``_issue_tokens`` commits its own session row, and an owner command
-    refuses a helper commit inside its boundary.
+    Expected admission refusals are values so failed ceremony burns commit.
+    Session, audit, event or commit failures roll back the success transition.
+    Each PostgreSQL row-lock acquisition waits at most five seconds.
     """
 
-    def operation() -> AdmittedFederatedPrincipal | _Refused:
+    bind = db.get_bind()
+    if db.in_transaction() or (isinstance(bind, Connection) and bind.in_transaction()):
+        # Do not let the shared executor discard pending or flushed caller work.
+        # A released SAVEPOINT also cannot authorize tokens before an external
+        # Connection owner commits its root transaction.
+        raise OidcFederationUnavailable(active_caller=True)
+
+    def operation() -> _StagedFederatedSession | _Refused:
+        if db.get_bind().dialect.name == "postgresql":
+            db.execute(text("SELECT set_config('lock_timeout', '5s', true)"))
         try:
             if not federation_enabled(db):
                 return _refuse("federation_disabled")
             config = require_federation_config(db)
-            return _admit(db, command, config)
+            admission = _admit(db, command, config)
         except _Refused as refused:
             return refused
+        staged = auth_flow_service.stage_session_issue(
+            db,
+            principal_type=admission.principal_type,
+            principal_id=str(admission.principal_id),
+            request=request,
+            staff_binding=staff_party_authentication.StaffSessionBinding(
+                party_id=admission.party_id,
+                system_user_id=admission.principal_id,
+            ),
+        )
+        return _StagedFederatedSession(admission, staged)
 
-    result = execute_owner_command(
-        db,
-        definition=_EXCHANGE_COMMAND,
-        context=command.context,
-        operation=operation,
-    )
+    try:
+        result = execute_owner_command(
+            db,
+            definition=_EXCHANGE_COMMAND,
+            context=command.context,
+            operation=operation,
+        )
+    except OperationalError as exc:
+        if (
+            getattr(exc.orig, "sqlstate", None) or getattr(exc.orig, "pgcode", None)
+        ) == "55P03":
+            raise OidcFederationUnavailable() from None
+        raise
     if isinstance(result, _Refused):
         raise _report(result.reason)
 
-    # The ceremony is committed and burned. Only now is a session minted, by
-    # the ONE issuance owner — never a second one written here.
-    tokens = auth_flow_service.issue_session_tokens(
-        db,
-        principal_type=result.principal_type,
-        principal_id=str(result.principal_id),
-        request=request,
-        staff_binding=staff_party_authentication.StaffSessionBinding(
-            party_id=result.party_id,
-            system_user_id=result.principal_id,
-        ),
-    )
+    # Signing uses only the staged snapshot, after the complete owner commit.
+    tokens = auth_flow_service.tokens_for_staged_session(result.session)
+    admission = result.admission
     OIDC_MOBILE_CEREMONY_COMPLETED.inc()
     logger.info(
         "oidc_mobile_ceremony_completed",
         extra={
             "event": "oidc_mobile_ceremony_completed",
-            "ceremony_id": str(result.ceremony_id),
-            "principal_type": result.principal_type,
+            "ceremony_id": str(admission.ceremony_id),
+            "principal_type": admission.principal_type,
         },
     )
     return FederatedSessionIssued(
         access_token=tokens["access_token"],
         refresh_token=tokens["refresh_token"],
         token_type="bearer",  # noqa: S106 - OAuth token type label, not a credential
-        principal_type=result.principal_type,
-        principal_id=result.principal_id,
-        ceremony_id=result.ceremony_id,
+        principal_type=admission.principal_type,
+        principal_id=admission.principal_id,
+        ceremony_id=admission.ceremony_id,
     )

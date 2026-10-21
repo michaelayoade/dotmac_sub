@@ -44,7 +44,10 @@ from app.services.control_plane_intent import (
     DesiredValueProvenance,
     has_executable_desired_provenance,
 )
-from app.services.credential_crypto import encrypt_credential
+from app.services.credential_crypto import (
+    encrypt_credential,
+    is_secret_reference_value,
+)
 from app.services.network.acs_resolution import resolve_acs_for_ont
 from app.services.network.effective_ont_config import resolve_effective_ont_config
 from app.services.network.ont_provisioning_defaults import (
@@ -487,7 +490,9 @@ def apply_proposed_change(
     # Configuration knobs that live in desired_config JSON sections
     if changed("wan_pppoe_username"):
         ont.pppoe_username = target.wan_pppoe_username
-    if changed("wan_pppoe_password_ref"):
+    if changed("wan_pppoe_password_ref") and not is_secret_reference_value(
+        target.wan_pppoe_password_ref
+    ):
         ont.pppoe_password = target.wan_pppoe_password_ref
 
     if changed("mgmt_ip") and hasattr(ont, "mgmt_ip_address"):

@@ -8,6 +8,8 @@ import 'package:url_launcher/url_launcher.dart';
 import '../../app/theme.dart';
 import '../../core/offline/sync_service.dart';
 import '../execution/execution_controller.dart';
+import '../execution/completion_review_screen.dart';
+import 'job_brief_panel.dart';
 import 'job_models.dart';
 import 'jobs_providers.dart';
 import 'location_pin_screen.dart';
@@ -81,12 +83,10 @@ class _JobDetailViewState extends ConsumerState<_JobDetailView> {
 
   @override
   Widget build(BuildContext context) {
+    final capabilities = ref.watch(fieldCapabilitiesProvider);
     final detail = widget.detail;
     final job = detail.job;
-    final recordedEvents = detail.history
-        .map((entry) => entry['event']?.toString())
-        .whereType<String>()
-        .toSet();
+    final recordedEvents = detail.events.map((entry) => entry.event).toSet();
     final actions = switch (job.status) {
       'scheduled' ||
       'dispatched' when !recordedEvents.contains('en_route') => ['en_route'],
@@ -119,24 +119,26 @@ class _JobDetailViewState extends ConsumerState<_JobDetailView> {
       appBar: AppBar(
         title: Text(job.workType.toUpperCase()),
         actions: [
-          IconButton(
-            tooltip: 'Request materials',
-            onPressed: () => context.push(
-              '/materials/new?workOrderId=${Uri.encodeComponent(job.id)}'
-              '&workOrderLabel=${Uri.encodeComponent(job.title)}'
-              '$linkedContext',
+          if (capabilities.materials.available)
+            IconButton(
+              tooltip: 'Request materials',
+              onPressed: () => context.push(
+                '/materials/new?workOrderId=${Uri.encodeComponent(job.id)}'
+                '&workOrderLabel=${Uri.encodeComponent(job.title)}'
+                '$linkedContext',
+              ),
+              icon: const Icon(Icons.inventory_2_outlined),
             ),
-            icon: const Icon(Icons.inventory_2_outlined),
-          ),
-          IconButton(
-            tooltip: 'Request expense',
-            onPressed: () => context.push(
-              '/expenses/new?workOrderId=${Uri.encodeComponent(job.id)}'
-              '&workOrderLabel=${Uri.encodeComponent(job.title)}'
-              '$linkedContext',
+          if (capabilities.expenses.available)
+            IconButton(
+              tooltip: 'Request expense',
+              onPressed: () => context.push(
+                '/expenses/new?workOrderId=${Uri.encodeComponent(job.id)}'
+                '&workOrderLabel=${Uri.encodeComponent(job.title)}'
+                '$linkedContext',
+              ),
+              icon: const Icon(Icons.receipt_long_outlined),
             ),
-            icon: const Icon(Icons.receipt_long_outlined),
-          ),
           Padding(
             padding: const EdgeInsets.only(right: 16),
             child: Center(
@@ -173,6 +175,8 @@ class _JobDetailViewState extends ConsumerState<_JobDetailView> {
               _ReferenceChips(detail: detail),
             ],
             const SizedBox(height: 16),
+            JobBriefPanel(jobId: job.id),
+            const SizedBox(height: 12),
             _LocationCard(jobId: job.id, location: detail.location),
             _DestinationsCard(jobId: job.id),
             if (detail.customer != null) ...[
@@ -180,34 +184,36 @@ class _JobDetailViewState extends ConsumerState<_JobDetailView> {
               _CustomerCard(jobId: job.id, customer: detail.customer!),
             ],
             const SizedBox(height: 12),
-            Card(
-              child: Padding(
-                padding: const EdgeInsets.all(16),
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.stretch,
-                  children: [
-                    Text(
-                      'Fiber evidence',
-                      style: Theme.of(context).textTheme.titleSmall,
-                    ),
-                    const SizedBox(height: 6),
-                    const Text(
-                      'View only the exact fiber features backed by immutable '
-                      'observations for this job.',
-                    ),
-                    const SizedBox(height: 10),
-                    OutlinedButton.icon(
-                      key: const Key('open-fiber-evidence-map'),
-                      onPressed: () => context.push(
-                        '/jobs/${Uri.encodeComponent(job.id)}/fiber-evidence',
+            CompletionReviewPanel(jobId: job.id),
+            if (capabilities.fiberEvidence.available)
+              Card(
+                child: Padding(
+                  padding: const EdgeInsets.all(16),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      Text(
+                        'Fiber evidence',
+                        style: Theme.of(context).textTheme.titleSmall,
                       ),
-                      icon: const Icon(Icons.layers_outlined),
-                      label: const Text('Open evidence map'),
-                    ),
-                  ],
+                      const SizedBox(height: 6),
+                      const Text(
+                        'View only the exact fiber features backed by immutable '
+                        'observations for this job.',
+                      ),
+                      const SizedBox(height: 10),
+                      OutlinedButton.icon(
+                        key: const Key('open-fiber-evidence-map'),
+                        onPressed: () => context.push(
+                          '/jobs/${Uri.encodeComponent(job.id)}/fiber-evidence',
+                        ),
+                        icon: const Icon(Icons.layers_outlined),
+                        label: const Text('Open evidence map'),
+                      ),
+                    ],
+                  ),
                 ),
               ),
-            ),
             if (_hasJobContext(detail)) ...[
               const SizedBox(height: 12),
               _JobContextCard(detail: detail),
@@ -256,7 +262,8 @@ class _JobDetailViewState extends ConsumerState<_JobDetailView> {
                 ),
               ),
             ],
-            if (detail.materialRequests.isNotEmpty) ...[
+            if (capabilities.materials.available &&
+                detail.materialRequests.isNotEmpty) ...[
               const SizedBox(height: 12),
               Card(
                 child: Padding(
@@ -378,7 +385,8 @@ class _JobDetailViewState extends ConsumerState<_JobDetailView> {
                 ),
               ),
             ],
-            if (detail.materials.isNotEmpty) ...[
+            if (capabilities.materials.available &&
+                detail.materials.isNotEmpty) ...[
               const SizedBox(height: 12),
               Card(
                 child: Padding(
@@ -491,6 +499,12 @@ class _JobDetailViewState extends ConsumerState<_JobDetailView> {
   }
 
   Future<void> _runWorkAction(String jobId, String action) async {
+    final assignmentGeneration = ref
+        .read(jobDetailProvider(jobId))
+        .asData
+        ?.value
+        .job
+        .assignmentGeneration;
     String? travelEventId;
     if (action == 'complete') {
       final completed = await context.push<bool>('/jobs/$jobId/complete');
@@ -510,6 +524,7 @@ class _JobDetailViewState extends ConsumerState<_JobDetailView> {
           .transition(
             jobId,
             action,
+            assignmentGeneration: assignmentGeneration,
             payload: destination.toTransitionPayload(),
           );
     } else if (action == 'arrived') {
@@ -521,12 +536,17 @@ class _JobDetailViewState extends ConsumerState<_JobDetailView> {
           .transition(
             jobId,
             action,
+            assignmentGeneration: assignmentGeneration,
             payload: destination.toTransitionPayload(),
           );
     } else {
       await ref
           .read(executionControllerProvider.notifier)
-          .transition(jobId, action);
+          .transition(
+            jobId,
+            action,
+            assignmentGeneration: assignmentGeneration,
+          );
     }
     if (!mounted) return;
     ref.invalidate(jobDetailProvider(jobId));
@@ -1056,9 +1076,19 @@ Future<void> promptUnableToComplete(
   );
   if (reason == null) return;
   if (!context.mounted) return;
+  final assignmentGeneration = ref
+      .read(jobDetailProvider(jobId))
+      .asData
+      ?.value
+      .job
+      .assignmentGeneration;
   await ref
       .read(executionControllerProvider.notifier)
-      .unableToComplete(jobId, reason: reason);
+      .unableToComplete(
+        jobId,
+        reason: reason,
+        assignmentGeneration: assignmentGeneration,
+      );
   if (!context.mounted) return;
   ref.invalidate(jobDetailProvider(jobId));
   Navigator.of(context).maybePop();
@@ -1403,12 +1433,13 @@ class _CustomerCard extends ConsumerWidget {
                       icon: const Icon(Icons.call_outlined),
                       label: const Text('Call'),
                     ),
-                  OutlinedButton.icon(
-                    key: const Key('field-chat-button'),
-                    onPressed: () => context.push('/jobs/$jobId/chat'),
-                    icon: const Icon(Icons.forum_outlined),
-                    label: const Text('Chat'),
-                  ),
+                  if (ref.watch(fieldCapabilitiesProvider).chat.available)
+                    OutlinedButton.icon(
+                      key: const Key('field-chat-button'),
+                      onPressed: () => context.push('/jobs/$jobId/chat'),
+                      icon: const Icon(Icons.forum_outlined),
+                      label: const Text('Chat'),
+                    ),
                   if (emailUri != null)
                     OutlinedButton.icon(
                       key: const Key('email-customer-button'),

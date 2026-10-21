@@ -78,6 +78,18 @@ status owner asks the completion owner for one authoritative verdict:
   enrichment fields are not Lead-resolution requirements.
 - Unresolved or ambiguous: identification must be completed before resolution when the active identity guard is enabled. If an administrator disables the guard, these classifications no longer block resolution; identified Customers still follow their snapshotted required-field policy.
 
+An authorized human operator may explicitly choose **Resolve as spam** when
+the transaction-current classification is unresolved and the only blocker is
+missing identity (or there are no blockers). This narrow status-owner exception
+does not disable the identity guard for ordinary resolution. Linked Customers,
+linked Leads, ambiguous identities, and sales candidates awaiting required Lead
+materialization cannot use it. The same typed readiness property supplies the
+UI action and backend enforcement; stale UI eligibility cannot bypass a new link.
+The existing `spam_irrelevant` reason is recorded on the immutable status event
+and compatibility history. Queue settlement follows ordinary resolution, but no
+CSAT request is created for spam. Retrying an already-resolved chat is a no-op.
+No Customer, Lead, or contact link is created, and no global sender block is added.
+
 WhatsApp expiry is a controlled channel-state exception, not a new identity
 classification. An expired, unresolved thread may be internally resolved by an
 authorized operator without assignment and with an explicit resolution reason,

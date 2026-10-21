@@ -34,6 +34,43 @@ _BOUNDARY_COMMIT_KEY = "_dotmac_owner_boundary_commit"
 _HELPER_ROLLBACK_KEY = "_dotmac_owner_helper_rollback"
 _AUTHORIZED_SAVEPOINT_KEY = "_dotmac_authorized_owner_savepoint"
 _ACTIVE_SAVEPOINT_KEY = "_dotmac_active_owner_savepoint"
+_OWNER_ROOT_KEY = "_dotmac_owner_root"
+_SAVEPOINT_RELEASE_KEY = "_dotmac_owner_savepoint_release"
+# Participant savepoint semantics, registered by composition. The boundary
+# itself stays free of participant runtime imports: a composed module whose
+# services run expected-conflict savepoints inside owner commands registers
+# how its exact savepoint release is claimed and how its recovered rollbacks
+# are classified. Unregistered, every non-boundary completion still fails
+# closed exactly as before.
+_SavepointReleaseClaim = Callable[[Session, SessionTransaction], bool]
+_RecoveredRollbackClassifier = Callable[[Session, SessionTransaction], bool]
+_savepoint_release_claim: _SavepointReleaseClaim | None = None
+_recovered_rollback_classifier: _RecoveredRollbackClassifier | None = None
+
+
+def register_savepoint_participant_hooks(
+    *,
+    claim_release: _SavepointReleaseClaim,
+    is_recovered_rollback: _RecoveredRollbackClassifier,
+) -> None:
+    """Register participant savepoint semantics once per process."""
+    global _recovered_rollback_classifier, _savepoint_release_claim
+    if _savepoint_release_claim is not None and (
+        _savepoint_release_claim is not claim_release
+        or _recovered_rollback_classifier is not is_recovered_rollback
+    ):
+        raise RuntimeError("Savepoint participant hooks are already registered")
+    _savepoint_release_claim = claim_release
+    _recovered_rollback_classifier = is_recovered_rollback
+
+
+def _ensure_savepoint_participant_hooks() -> None:
+    if _savepoint_release_claim is None:
+        from app.services import kernel_savepoint_guard
+
+        kernel_savepoint_guard.install()
+
+
 _OWNER_ROLES = {
     OwnerRole.AUTHORITATIVE_RECORD,
     OwnerRole.OBSERVATION_COLLECTOR,
@@ -243,14 +280,49 @@ def _validate_manifest(definition: OwnerCommandDefinition) -> None:
 @event.listens_for(Session, "before_commit")
 def _reject_helper_commit(session: Session) -> None:
     definition = session.info.get(_ACTIVE_COMMAND_KEY)
-    if definition is None or session.info.get(_BOUNDARY_COMMIT_KEY):
+    if definition is None:
         return
-    authorized_savepoint = session.info.get(_AUTHORIZED_SAVEPOINT_KEY)
+    root = session.info.get(_OWNER_ROOT_KEY)
     if (
-        authorized_savepoint is not None
-        and session.get_nested_transaction() is authorized_savepoint
+        not isinstance(root, SessionTransaction)
+        or session.get_transaction() is not root
+        or not root.is_active
+        or session.info.get(_HELPER_ROLLBACK_KEY)
+    ):
+        session.info[_HELPER_ROLLBACK_KEY] = True
+        raise _error(
+            definition,
+            "nested_transaction_completion",
+            "The exact owner transaction must remain active before completion.",
+        )
+    # Claims are consumed before returning to SQLAlchemy's listener dispatch.
+    # A later/reentrant listener must never inherit completion authority.
+    if (
+        session.info.get(_BOUNDARY_COMMIT_KEY) is root
+        and not session.in_nested_transaction()
+    ):
+        session.info.pop(_BOUNDARY_COMMIT_KEY, None)
+        return
+    release = session.info.pop(_SAVEPOINT_RELEASE_KEY, None)
+    if (
+        isinstance(release, SessionTransaction)
+        and release is session.info.get(_ACTIVE_SAVEPOINT_KEY)
+        and session.get_nested_transaction() is release
+        and release.is_active
     ):
         return
+    # A composed participant's expected-conflict savepoint RELEASE is a
+    # savepoint commit, not a boundary completion. The registered claim
+    # consumes permission for exactly that release against this command's
+    # stored root; every other shape still fails closed below.
+    _ensure_savepoint_participant_hooks()
+    if (
+        _savepoint_release_claim is not None
+        and isinstance(root, SessionTransaction)
+        and _savepoint_release_claim(session, root)
+    ):
+        return
+    session.info[_HELPER_ROLLBACK_KEY] = True
     raise _error(
         definition,
         "nested_transaction_completion",
@@ -261,6 +333,17 @@ def _reject_helper_commit(session: Session) -> None:
 @event.listens_for(Session, "after_soft_rollback")
 def _record_helper_rollback(session: Session, previous_transaction: object) -> None:
     if session.info.get(_AUTHORIZED_SAVEPOINT_KEY) is previous_transaction:
+        return
+    # A participant savepoint that recovers exactly to its enclosing
+    # transaction is an expected-conflict outcome, not a participant
+    # completing the owner transaction; the registered classifier names
+    # that exact shape and nothing else.
+    _ensure_savepoint_participant_hooks()
+    if (
+        _recovered_rollback_classifier is not None
+        and isinstance(previous_transaction, SessionTransaction)
+        and _recovered_rollback_classifier(session, previous_transaction)
+    ):
         return
     active_savepoint = session.info.get(_ACTIVE_SAVEPOINT_KEY)
     if (
@@ -292,6 +375,19 @@ def execute_owner_savepoint(
     definition = db.info.get(_ACTIVE_COMMAND_KEY)
     if definition is None:
         raise RuntimeError("Owner savepoints require an active owner command")
+    root = db.info.get(_OWNER_ROOT_KEY)
+    if (
+        not isinstance(root, SessionTransaction)
+        or db.get_transaction() is not root
+        or not root.is_active
+        or db.info.get(_HELPER_ROLLBACK_KEY)
+    ):
+        db.info[_HELPER_ROLLBACK_KEY] = True
+        raise _error(
+            definition,
+            "nested_transaction_completion",
+            "Owner savepoints require the exact active owner transaction.",
+        )
     if db.in_nested_transaction():
         raise _error(
             definition,
@@ -303,23 +399,64 @@ def execute_owner_savepoint(
     db.info[_ACTIVE_SAVEPOINT_KEY] = savepoint
     try:
         result = operation()
-        if db.get_nested_transaction() is not savepoint or not savepoint.is_active:
+        if (
+            db.get_transaction() is not root
+            or not root.is_active
+            or db.info.get(_HELPER_ROLLBACK_KEY)
+            or db.get_nested_transaction() is not savepoint
+            or not savepoint.is_active
+        ):
             raise _error(
                 definition,
                 "nested_transaction_completion",
                 "A command helper completed the authorized owner savepoint.",
             )
-        db.info[_AUTHORIZED_SAVEPOINT_KEY] = savepoint
+        db.info[_SAVEPOINT_RELEASE_KEY] = savepoint
         savepoint.commit()
+        if (
+            db.get_transaction() is not root
+            or not root.is_active
+            or db.in_nested_transaction()
+            or db.info.get(_HELPER_ROLLBACK_KEY)
+        ):
+            raise _error(
+                definition,
+                "nested_transaction_completion",
+                "Optional release did not preserve the exact active owner transaction.",
+            )
         return result
-    except BaseException:
+    except BaseException as first:
+        db.info.pop(_SAVEPOINT_RELEASE_KEY, None)
         # A flush failure leaves the nested transaction inactive but still
-        # attached. It must be explicitly rolled back to restore the parent.
+        # attached. Isolation is proven only by a successful exact rollback.
+        isolated = False
         if db.get_nested_transaction() is savepoint:
             db.info[_AUTHORIZED_SAVEPOINT_KEY] = savepoint
-            savepoint.rollback()
+            try:
+                savepoint.rollback()
+                isolated = (
+                    db.get_transaction() is root
+                    and root.is_active
+                    and not db.in_nested_transaction()
+                )
+            except BaseException as cleanup:
+                first.add_note(
+                    f"Optional savepoint rollback failed ({type(cleanup).__name__})."
+                )
+        if not isolated:
+            db.info[_HELPER_ROLLBACK_KEY] = True
+            # Never complete the participant's root to repair an ambiguous
+            # child. Closing only this exact child is best-effort cleanup.
+            if db.get_nested_transaction() is savepoint:
+                try:
+                    savepoint.close()
+                except BaseException as cleanup:
+                    first.add_note(
+                        f"Optional savepoint close failed ({type(cleanup).__name__})."
+                    )
         raise
     finally:
+        db.info.pop(_SAVEPOINT_RELEASE_KEY, None)
         db.info.pop(_AUTHORIZED_SAVEPOINT_KEY, None)
         db.info.pop(_ACTIVE_SAVEPOINT_KEY, None)
 
@@ -340,6 +477,17 @@ def current_command_context(db: Session) -> CommandContext:
             message="No active owner command context on this session.",
         )
     return context
+
+
+def current_command_definition(db: Session) -> OwnerCommandDefinition:
+    """Return the active typed definition for narrowly authorized participants."""
+    definition = db.info.get(_ACTIVE_COMMAND_KEY)
+    if not isinstance(definition, OwnerCommandDefinition):
+        raise OwnerCommandError(
+            code="owner_command.no_active_definition",
+            message="No active owner command definition on this session.",
+        )
+    return definition
 
 
 def owner_command_active(db: Session, *, owner: str | None = None) -> bool:
@@ -402,6 +550,7 @@ def execute_owner_command(
     transaction = db.begin()
     db.info[_ACTIVE_COMMAND_KEY] = definition
     db.info[_ACTIVE_COMMAND_CONTEXT_KEY] = context
+    db.info[_OWNER_ROOT_KEY] = transaction
     try:
         result = operation()
         if db.info.get(_HELPER_ROLLBACK_KEY):
@@ -423,22 +572,35 @@ def execute_owner_command(
                 "A command helper completed the owner transaction.",
             )
 
-        db.info[_BOUNDARY_COMMIT_KEY] = True
+        db.info[_BOUNDARY_COMMIT_KEY] = transaction
         transaction.commit()
         if external_guard is not None and external_guard.is_active:
             external_guard.commit()
         return result
-    except BaseException:
-        if transaction.is_active:
-            transaction.rollback()
-        elif db.in_transaction():
-            db.rollback()
-        if external_guard is not None and external_guard.is_active:
-            external_guard.rollback()
+    except BaseException as first:
+        try:
+            if transaction.is_active:
+                transaction.rollback()
+            elif db.in_transaction():
+                db.rollback()
+        except BaseException as cleanup:
+            first.add_note(
+                f"Owner transaction rollback failed ({type(cleanup).__name__})."
+            )
+        try:
+            if external_guard is not None and external_guard.is_active:
+                external_guard.rollback()
+        except BaseException as cleanup:
+            first.add_note(
+                f"Owner external guard rollback failed ({type(cleanup).__name__})."
+            )
         raise
     finally:
         db.info.pop(_BOUNDARY_COMMIT_KEY, None)
         db.info.pop(_HELPER_ROLLBACK_KEY, None)
         db.info.pop(_AUTHORIZED_SAVEPOINT_KEY, None)
+        db.info.pop(_ACTIVE_SAVEPOINT_KEY, None)
+        db.info.pop(_SAVEPOINT_RELEASE_KEY, None)
+        db.info.pop(_OWNER_ROOT_KEY, None)
         db.info.pop(_ACTIVE_COMMAND_KEY, None)
         db.info.pop(_ACTIVE_COMMAND_CONTEXT_KEY, None)

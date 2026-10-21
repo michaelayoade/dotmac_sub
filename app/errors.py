@@ -8,13 +8,15 @@ from fastapi import HTTPException, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
-from starlette.datastructures import MutableHeaders, UploadFile
+from starlette.datastructures import MutableHeaders
 from starlette.exceptions import HTTPException as StarletteHTTPException
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
+from app.schemas.error import ErrorResponse as WebErrorResponse
 from app.services.application_exception_observability import (
     record_unhandled_http_exception,
 )
+from app.services.credential_crypto import CredentialReferenceRefused
 from app.services.domain_errors import DomainError
 from app.services.ticket_work_order_handoff import TicketWorkOrderHandoffError
 from app.services.unit_of_work import ConcurrencyConflict
@@ -271,6 +273,22 @@ def register_error_handlers(app) -> None:
             ),
         )
 
+    @app.exception_handler(CredentialReferenceRefused)
+    async def credential_reference_refused_handler(
+        request: Request, exc: CredentialReferenceRefused
+    ):
+        """A refused secret-reference write is a client error with fixed text."""
+
+        message = "Secret references are not accepted in this credential field."
+        status_code = 400 if _is_html_request(request) else 422
+        return await _handle_http_exception(
+            request,
+            status_code,
+            message
+            if _is_html_request(request)
+            else {"code": "credential_reference_refused", "message": message},
+        )
+
     @app.exception_handler(VendorPortalOperationError)
     async def vendor_portal_operation_error_handler(
         request: Request, exc: VendorPortalOperationError
@@ -379,7 +397,16 @@ def register_error_handlers(app) -> None:
 
     @app.exception_handler(AuthenticationRequired)
     async def auth_required_handler(request: Request, exc: AuthenticationRequired):
-        """Redirect to login page when authentication is required."""
+        """Return an API error or redirect a browser when authentication is required."""
+        if not _is_html_request(request):
+            return JSONResponse(
+                status_code=401,
+                content=WebErrorResponse(
+                    code="authentication_required",
+                    message="Sign in again to continue.",
+                    request_id=_request_id(request),
+                ).model_dump(mode="json"),
+            )
         return RedirectResponse(url=exc.redirect_url, status_code=303)
 
     async def _handle_http_exception(
@@ -443,6 +470,7 @@ def register_error_handlers(app) -> None:
         return JSONResponse(
             status_code=status_code,
             content=_error_payload(code, message, details, _request_id(request)),
+            headers=headers if isinstance(headers, dict) else None,
         )
 
     @app.exception_handler(HTTPException)
@@ -485,25 +513,9 @@ def register_error_handlers(app) -> None:
             )
 
         # Convert errors to JSON-serializable format.
-        def _sanitize_input(value):
-            if isinstance(value, bytes):
-                return value.decode("utf-8", errors="replace")
-            if isinstance(value, UploadFile):
-                return value.filename or "upload"
-            if isinstance(value, dict):
-                return {key: _sanitize_input(val) for key, val in value.items()}
-            if isinstance(value, (list, tuple, set)):
-                return [_sanitize_input(item) for item in value]
-            if isinstance(value, (str, int, float, bool)) or value is None:
-                return value
-            return str(value)
-
-        # Sanitize the WHOLE error dict, not just "input": a custom
-        # @model_validator that raises ValueError puts the raw exception in
-        # ctx["error"], which is not JSON-serializable and would otherwise make
-        # JSONResponse raise — turning a 422 into a 500. _sanitize_input recurses
-        # into ctx and coerces any non-JSON-native value (e.g. the exception) to str.
-        errors = [_sanitize_input(dict(error)) for error in exc.errors()]
+        # Validation inputs may include passwords, hashes, or bearer material.
+        # Return only bounded location/type/message evidence, never input or ctx.
+        errors = _validation_error_summary(exc)
         return JSONResponse(
             status_code=422,
             content=_error_payload(

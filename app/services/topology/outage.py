@@ -14,13 +14,16 @@ consequences after commit (docs/designs/NETWORK_OUTAGE_RESPONSE_LIFECYCLE.md).
 
 from __future__ import annotations
 
+import hashlib
+import json
 import logging
 from datetime import UTC, datetime, timedelta
-from enum import StrEnum
+from uuid import UUID
 
-from sqlalchemy import and_, or_
+from sqlalchemy import and_, or_, select
 from sqlalchemy.orm import Session
 
+from app.models.catalog import Subscription
 from app.models.network import FdhCabinet
 from app.models.network_monitoring import (
     NetworkDevice,
@@ -30,11 +33,56 @@ from app.models.network_monitoring import (
     OutageScopeRevisionMember,
     PopSite,
 )
+from app.models.outage_complaint_correlation import OutageComplaintCorrelationReceipt
+from app.models.rbac import Role, SystemUserRole
+from app.models.subscriber import Subscriber
+from app.models.support import Ticket, canonical_ticket_status_value
+from app.services.action_readiness import (
+    ActionableBlocker,
+    ActionReadiness,
+    BlockerEvidence,
+    ReadinessState,
+)
+from app.services.audit_adapter import AuditActor, AuditRecord, audit_adapter
+from app.services.domain_errors import DomainError
+from app.services.erp_staff_access import active_leave_restriction
+from app.services.events import emit_event
+from app.services.events.types import EventType
+from app.services.owner_commands import OwnerCommandDefinition, execute_owner_command
+from app.services.permission_admission import PermissionAdmission
+from app.services.permission_authorization import (
+    PermissionPrincipal,
+    PermissionPrincipalKind,
+    has_permission,
+)
+from app.services.staff_permission_admission import (
+    AuthorizedStaffPerson,
+    revalidate_staff_admission,
+)
 from app.services.topology.affected import (
     _dist_to_core,
     downstream_nodes,
     forwarding_graph_projection,
 )
+from app.services.topology.outage_complaint_contracts import (
+    CONCERN,
+    MONITORING_READ,
+    MONITORING_WRITE,
+    OWNER,
+    SUPPORT_READ,
+    SUPPORT_WRITE,
+    ComplaintIncidentCandidate,
+    ComplaintIncidentCandidates,
+    ComplaintIncidentCandidatesQuery,
+    ComplaintIncidentLinkCommand,
+    ComplaintIncidentLinkedEvent,
+    ComplaintIncidentLinkOutcome,
+    ComplaintIncidentReceipt,
+    OutageScopeRevisionRecorded,
+    OutageStatus,
+    RecordOutageScopeRevision,
+)
+from app.services.topology.outage_scope_facts import revision_audience_subscription_ids
 
 logger = logging.getLogger(__name__)
 
@@ -42,13 +90,6 @@ logger = logging.getLogger(__name__)
 # Status remains a free-form String column (not a DB enum — the enum migration
 # collided in #876). This code-native vocabulary is the lifecycle source of
 # truth for validation, filters, and read projections.
-class OutageStatus(StrEnum):
-    open = "open"
-    suspected = "suspected"
-    confirmed = "confirmed"
-    clearing = "clearing"
-    resolved = "resolved"
-    discarded = "discarded"
 
 
 OUTAGE_STATUS_VALUES = tuple(status.value for status in OutageStatus)
@@ -249,24 +290,11 @@ def list_scope_revisions(session: Session, incident_id) -> list[OutageScopeRevis
     )
 
 
-def revision_audience_subscription_ids(revision: OutageScopeRevision) -> set[str]:
-    """The exact audience at one revision: entered + retained members."""
-
-    return {
-        str(member.subscription_id)
-        for member in revision.members
-        if member.membership in ("entered", "retained")
-    }
-
-
 def record_scope_revision(
     session: Session,
-    incident: OutageIncident,
     *,
-    reason: str,
-    actor: str | None = None,
-    effective_at: datetime | None = None,
-) -> OutageScopeRevision | None:
+    command: RecordOutageScopeRevision,
+) -> OutageScopeRevisionRecorded | None:
     """Append the incident's current scope + exact audience as a revision.
 
     Idempotent by content: when neither the scope nor the exact audience
@@ -276,6 +304,15 @@ def record_scope_revision(
     (OUTAGE_SLA_SPINE §3).
     """
 
+    incident = session.scalar(
+        select(OutageIncident)
+        .where(OutageIncident.id == command.incident_id)
+        .with_for_update()
+        .execution_options(populate_existing=True)
+    )
+    if incident is None:
+        raise _complaint_error("not_found", "Incident unavailable.")
+    reason, actor, effective_at = command.reason, command.actor, command.effective_at
     from app.services.bulk_actions import membership_scope_token
     from app.services.topology.affected import affected_customers
 
@@ -335,7 +372,13 @@ def record_scope_revision(
             )
         )
     session.flush()
-    return revision
+    return OutageScopeRevisionRecorded(
+        revision_id=revision.id,
+        incident_id=incident.id,
+        sequence=revision.sequence,
+        membership_token=revision.membership_token,
+        appended=True,
+    )
 
 
 def declare_outage(
@@ -387,7 +430,10 @@ def declare_outage(
     # The initial immutable scope revision snapshots the exact audience the
     # incident opened against (OUTAGE_SLA_SPINE §3).
     record_scope_revision(
-        session, incident, reason="declared", effective_at=incident.started_at
+        session,
+        command=RecordOutageScopeRevision(
+            incident_id=incident.id, reason="declared", effective_at=incident.started_at
+        ),
     )
     # Operational owners/watchers and escalation planning are applied by the
     # outage lifecycle projection handler consuming this committed output.
@@ -451,7 +497,12 @@ def open_classifier_incident(
     )
     session.add(incident)
     session.flush()
-    record_scope_revision(session, incident, reason="suspected", effective_at=now)
+    record_scope_revision(
+        session,
+        command=RecordOutageScopeRevision(
+            incident_id=incident.id, reason="suspected", effective_at=now
+        ),
+    )
     _emit_outage_event(session, incident, "outage.suspected")
     return incident
 
@@ -532,7 +583,10 @@ def repoint_root(
         return False
     incident.root_node_id = new_id
     session.flush()
-    record_scope_revision(session, incident, reason="rerooted")
+    record_scope_revision(
+        session,
+        command=RecordOutageScopeRevision(incident_id=incident.id, reason="rerooted"),
+    )
     _emit_outage_event(session, incident, "outage.rerooted")
     return True
 
@@ -861,38 +915,607 @@ def link_infrastructure_ticket(
     return link
 
 
-def link_complaint_ticket(
-    session: Session,
-    incident: OutageIncident,
-    ticket_id,
-    *,
-    linked_by: str | None,
-    source: str = "operator",
-) -> OutageIncidentTicketLink:
-    """Attach one customer complaint ticket; the pair is deduplicated."""
+def _complaint_error(suffix: str, message: str) -> DomainError:
+    return DomainError(code=f"outage.complaint.{suffix}", message=message)
 
-    existing = (
-        session.query(OutageIncidentTicketLink)
-        .filter(
-            OutageIncidentTicketLink.incident_id == incident.id,
-            OutageIncidentTicketLink.ticket_id == ticket_id,
+
+def _complaint_staff(
+    session: Session,
+    *,
+    support: PermissionAdmission,
+    monitoring: PermissionAdmission,
+    write: bool,
+) -> AuthorizedStaffPerson:
+    actor = revalidate_staff_admission(
+        session,
+        admission=support,
+        permission=SUPPORT_WRITE if write else SUPPORT_READ,
+        write=write,
+    )
+    other = revalidate_staff_admission(
+        session,
+        admission=monitoring,
+        permission=MONITORING_WRITE if write else MONITORING_READ,
+        write=write,
+    )
+    if actor != other:
+        raise _complaint_error(
+            "denied", "Both permissions must belong to the same current staff member."
         )
-        .first()
+    if write:
+        roles = session.scalars(
+            select(Role.name)
+            .join(SystemUserRole, SystemUserRole.role_id == Role.id)
+            .where(
+                SystemUserRole.system_user_id == actor.system_user_id,
+                Role.is_active.is_(True),
+            )
+        ).all()
+        principal = PermissionPrincipal(
+            actor.system_user_id,
+            PermissionPrincipalKind.system_user,
+            frozenset(roles),
+            frozenset(),
+        )
+        if not all(
+            has_permission(principal, session, permission)
+            for permission in (SUPPORT_READ, MONITORING_READ)
+        ):
+            raise _complaint_error(
+                "denied",
+                "Current support and monitoring read permissions are required for this reviewed change.",
+            )
+    return actor
+
+
+def _complaint_ticket_subscriber(ticket: Ticket | None) -> UUID:
+    if ticket is None:
+        raise _complaint_error("not_found", "Ticket unavailable.")
+    if (
+        not ticket.is_active
+        or ticket.merged_into_ticket_id is not None
+        or canonical_ticket_status_value(ticket.status)
+        in {"closed", "resolved", "canceled"}
+    ):
+        raise _complaint_error(
+            "ticket_ineligible",
+            "Select an active, unmerged, nonterminal customer ticket.",
+        )
+    ids = {
+        value
+        for value in (
+            ticket.subscriber_id,
+            ticket.customer_account_id,
+            ticket.customer_person_id,
+        )
+        if value is not None
+    }
+    if len(ids) != 1:
+        raise _complaint_error(
+            "customer_ambiguous", "Ticket must identify exactly one native subscriber."
+        )
+    return ids.pop()
+
+
+def _require_original_complaint_service(
+    session: Session, *, existing: OutageIncidentTicketLink, subscription_id: UUID
+) -> None:
+    original_services = set(
+        session.scalars(
+            select(OutageComplaintCorrelationReceipt.subscription_id).where(
+                OutageComplaintCorrelationReceipt.incident_id == existing.incident_id,
+                OutageComplaintCorrelationReceipt.link_id == existing.id,
+            )
+        ).all()
     )
+    if not original_services:
+        raise _complaint_error(
+            "provenance_unavailable",
+            "This historical complaint link has no native proof of its selected service. Review its history separately.",
+        )
+    if original_services != {subscription_id}:
+        raise _complaint_error(
+            "provenance_conflict",
+            "The selected service differs from the original native complaint service proof.",
+        )
+
+
+def complaint_incident_candidates(
+    session: Session, *, query: ComplaintIncidentCandidatesQuery
+) -> ComplaintIncidentCandidates:
+    actor = _complaint_staff(
+        session,
+        support=query.support_access,
+        monitoring=query.monitoring_access,
+        write=False,
+    )
+    roles = session.scalars(
+        select(Role.name)
+        .join(SystemUserRole, SystemUserRole.role_id == Role.id)
+        .where(
+            SystemUserRole.system_user_id == actor.system_user_id,
+            Role.is_active.is_(True),
+        )
+    ).all()
+    principal = PermissionPrincipal(
+        actor.system_user_id,
+        PermissionPrincipalKind.system_user,
+        frozenset(roles),
+        frozenset(),
+    )
+    can_write = (
+        has_permission(principal, session, SUPPORT_WRITE)
+        and has_permission(principal, session, MONITORING_WRITE)
+        and active_leave_restriction(session, system_user_id=actor.system_user_id)
+        is None
+    )
+    ticket = session.get(Ticket, query.ticket_id)
+    subscriber_id = _complaint_ticket_subscriber(ticket)
+    if (
+        session.scalar(select(Subscriber.id).where(Subscriber.id == subscriber_id))
+        is None
+    ):
+        raise _complaint_error("customer_ambiguous", "Native subscriber unavailable.")
+    if not 1 <= query.limit <= 100:
+        raise _complaint_error(
+            "invalid_request", "Page size must be between 1 and 100."
+        )
+    statement = (
+        select(OutageIncident).order_by(OutageIncident.id).limit(query.limit + 1)
+    )
+    if query.after_incident_id is not None:
+        statement = statement.where(OutageIncident.id > query.after_incident_id)
+    incidents = session.scalars(statement).all()
+    rows = []
+    for incident in incidents[: query.limit]:
+        revision = latest_scope_revision(session, incident.id)
+        if revision is None:
+            continue
+        members = session.execute(
+            select(Subscription, OutageScopeRevisionMember.membership)
+            .join(
+                OutageScopeRevisionMember,
+                OutageScopeRevisionMember.subscription_id == Subscription.id,
+            )
+            .where(
+                Subscription.subscriber_id == subscriber_id,
+                OutageScopeRevisionMember.revision_id == revision.id,
+                OutageScopeRevisionMember.membership.in_(("entered", "retained")),
+            )
+        ).all()
+        existing = session.scalar(
+            select(OutageIncidentTicketLink).where(
+                OutageIncidentTicketLink.incident_id == incident.id,
+                OutageIncidentTicketLink.ticket_id == query.ticket_id,
+            )
+        )
+        for subscription, membership in members:
+            needs_legacy_review = False
+            reason = (
+                None
+                if can_write
+                else "Current support update and monitoring write permissions, without active leave, are required to link."
+            )
+            if existing is not None and existing.role != COMPLAINT_ROLE:
+                reason = (
+                    "This ticket already has an infrastructure role for this incident."
+                )
+            elif existing is None and incident.status not in ("open", "confirmed"):
+                reason = "New complaint links require an open or confirmed incident."
+            if existing is not None and existing.role == COMPLAINT_ROLE:
+                try:
+                    _require_original_complaint_service(
+                        session, existing=existing, subscription_id=subscription.id
+                    )
+                except DomainError as exc:
+                    if exc.code.endswith("provenance_unavailable"):
+                        needs_legacy_review = True
+                    else:
+                        reason = str(exc)
+            readiness = ActionReadiness(
+                action_key="link_complaint",
+                subject_type="outage_incident",
+                subject_id=str(incident.id),
+                owner=OWNER,
+                state=ReadinessState.blocked if reason else ReadinessState.ready,
+                evaluated_at=datetime.now(UTC),
+                blockers=()
+                if reason is None
+                else (
+                    ActionableBlocker(
+                        code="outage.complaint.ineligible",
+                        owner=OWNER,
+                        customer_message=reason,
+                        staff_detail=reason,
+                        evidence=BlockerEvidence(summary=reason),
+                    ),
+                ),
+            )
+            rows.append(
+                ComplaintIncidentCandidate(
+                    incident_id=incident.id,
+                    incident_status=OutageStatus(incident.status),
+                    incident_label=incident.note or f"Incident {incident.id}",
+                    reviewed_revision_id=revision.id,
+                    reviewed_revision_sequence=revision.sequence,
+                    membership_token=revision.membership_token,
+                    subscription_id=subscription.id,
+                    subscription_label=subscription.service_description
+                    or f"Service {subscription.id}",
+                    membership=membership,
+                    readiness=readiness,
+                    needs_legacy_review=needs_legacy_review,
+                )
+            )
+    assert ticket is not None
+    return ComplaintIncidentCandidates(
+        ticket_id=ticket.id,
+        ticket_label=ticket.number or ticket.title or str(ticket.id),
+        rows=tuple(rows),
+        next_incident_id=incidents[query.limit - 1].id
+        if len(incidents) > query.limit
+        else None,
+    )
+
+
+def link_complaint_ticket(
+    session: Session, *, command: ComplaintIncidentLinkCommand
+) -> ComplaintIncidentLinkOutcome:
+    return execute_owner_command(
+        session,
+        definition=OwnerCommandDefinition(
+            owner=OWNER, concern=CONCERN, name="link_complaint_ticket"
+        ),
+        context=command.context,
+        operation=lambda: _stage_complaint_ticket(session, command=command),
+    )
+
+
+def _stage_complaint_ticket(
+    session: Session, *, command: ComplaintIncidentLinkCommand
+) -> ComplaintIncidentLinkOutcome:
+    actor = _complaint_staff(
+        session,
+        support=command.support_access,
+        monitoring=command.monitoring_access,
+        write=True,
+    )
+    context = command.context
+    try:
+        intent_key = str(UUID(context.idempotency_key or ""))
+    except ValueError as exc:
+        raise _complaint_error(
+            "invalid_request", "A stable UUID intent key is required."
+        ) from exc
+    if (
+        context.actor != str(actor.system_user_id)
+        or context.scope != SUPPORT_WRITE
+        or not command.reason.strip()
+        or len(command.reason) > 500
+        or context.reason != command.reason
+    ):
+        raise _complaint_error(
+            "invalid_request", "Actor, scope, and review reason must match the command."
+        )
+    material = {
+        "v": 1,
+        "actor": context.actor,
+        "scope": context.scope,
+        "reason": command.reason,
+        "adopt_legacy": command.adopt_legacy,
+        "ticket_id": str(command.ticket_id),
+        "incident_id": str(command.incident_id),
+        "subscription_id": str(command.subscription_id),
+        "revision_id": str(command.expected_revision_id),
+        "membership_token": command.expected_membership_token,
+    }
+    digest = hashlib.sha256(
+        json.dumps(material, sort_keys=True, separators=(",", ":")).encode()
+    ).hexdigest()
+    incident = session.scalar(
+        select(OutageIncident)
+        .where(OutageIncident.id == command.incident_id)
+        .with_for_update()
+        .execution_options(populate_existing=True)
+    )
+    if incident is None:
+        raise _complaint_error("not_found", "Incident unavailable.")
+    ticket = session.scalar(
+        select(Ticket)
+        .where(Ticket.id == command.ticket_id)
+        .with_for_update()
+        .execution_options(populate_existing=True)
+    )
+    if (
+        _complaint_staff(
+            session,
+            support=command.support_access,
+            monitoring=command.monitoring_access,
+            write=True,
+        )
+        != actor
+    ):
+        raise _complaint_error(
+            "denied", "Staff identity changed while waiting for incident locks."
+        )
+    receipt = session.scalar(
+        select(OutageComplaintCorrelationReceipt).where(
+            OutageComplaintCorrelationReceipt.incident_id == command.incident_id,
+            OutageComplaintCorrelationReceipt.intent_id == UUID(intent_key),
+        )
+    )
+    if receipt is not None:
+        try:
+            proof = ComplaintIncidentReceipt.decode(receipt.ref_id or "")
+        except ValueError as exc:
+            raise _complaint_error(
+                "receipt_invalid", "Recorded complaint receipt is inconsistent."
+            ) from exc
+        if (
+            proof.fingerprint != digest
+            or receipt.fingerprint != digest
+            or receipt.link_id != proof.link_id
+            or receipt.actor_user_id != actor.system_user_id
+            or receipt.reason != command.reason
+            or proof.subscription_id != command.subscription_id
+        ):
+            raise _complaint_error(
+                "idempotency_conflict",
+                "This intent key was already used for different reviewed input.",
+            )
+        link = session.get(OutageIncidentTicketLink, proof.link_id)
+        if (
+            link is None
+            or link.role != COMPLAINT_ROLE
+            or link.ticket_id != command.ticket_id
+            or link.incident_id != command.incident_id
+        ):
+            raise _complaint_error(
+                "receipt_invalid", "Recorded complaint receipt is inconsistent."
+            )
+        return _complaint_outcome(
+            session,
+            link=link,
+            subscription_id=proof.subscription_id,
+            replayed=True,
+            already_linked=True,
+        )
+    subscriber_id = _complaint_ticket_subscriber(ticket)
+    subscription = session.scalar(
+        select(Subscription)
+        .where(Subscription.id == command.subscription_id)
+        .with_for_update()
+        .execution_options(populate_existing=True)
+    )
+    if (
+        session.scalar(select(Subscriber.id).where(Subscriber.id == subscriber_id))
+        is None
+        or subscription is None
+        or subscription.subscriber_id != subscriber_id
+    ):
+        raise _complaint_error(
+            "scope_mismatch",
+            "Select a service belonging to this ticket's exact subscriber.",
+        )
+    if (
+        _complaint_staff(
+            session,
+            support=command.support_access,
+            monitoring=command.monitoring_access,
+            write=True,
+        )
+        != actor
+    ):
+        raise _complaint_error(
+            "denied", "Staff identity changed while waiting for the selected service."
+        )
+    existing = session.scalar(
+        select(OutageIncidentTicketLink).where(
+            OutageIncidentTicketLink.incident_id == incident.id,
+            OutageIncidentTicketLink.ticket_id == command.ticket_id,
+        )
+    )
+    if existing is not None and existing.role != COMPLAINT_ROLE:
+        raise _complaint_error(
+            "role_collision", "An infrastructure ticket cannot become a complaint link."
+        )
+    revision = latest_scope_revision(session, incident.id)
+    if (
+        revision is None
+        or revision.id != command.expected_revision_id
+        or revision.membership_token != command.expected_membership_token
+    ):
+        raise _complaint_error(
+            "stale_revision",
+            "Incident evidence changed. Reload current evidence before submitting a new intent.",
+        )
+    membership = session.scalar(
+        select(OutageScopeRevisionMember.id).where(
+            OutageScopeRevisionMember.revision_id == revision.id,
+            OutageScopeRevisionMember.subscription_id == subscription.id,
+            OutageScopeRevisionMember.membership.in_(("entered", "retained")),
+        )
+    )
+    if membership is None:
+        raise _complaint_error(
+            "scope_mismatch",
+            "Selected service is absent from the reviewed persisted audience.",
+        )
+    if existing is None and incident.status not in ("open", "confirmed"):
+        raise _complaint_error(
+            "incident_ineligible",
+            "New complaint links require an open or confirmed incident.",
+        )
+    adopted = False
     if existing is not None:
-        return existing
-    link = OutageIncidentTicketLink(
-        incident_id=incident.id,
-        ticket_id=ticket_id,
-        role=COMPLAINT_ROLE,
-        linked_at=datetime.now(UTC),
-        linked_by=linked_by,
-        source=source,
-        scope_revision_sequence=_current_revision_sequence(session, incident),
+        try:
+            _require_original_complaint_service(
+                session, existing=existing, subscription_id=subscription.id
+            )
+        except DomainError as exc:
+            if not command.adopt_legacy or not exc.code.endswith(
+                "provenance_unavailable"
+            ):
+                raise
+            adopted = True
+    elif command.adopt_legacy:
+        raise _complaint_error(
+            "invalid_request",
+            "Legacy review requires an existing historical complaint link.",
+        )
+    link = existing
+    if link is None:
+        link = OutageIncidentTicketLink(
+            incident_id=incident.id,
+            ticket_id=command.ticket_id,
+            role=COMPLAINT_ROLE,
+            linked_by=str(actor.system_user_id),
+            source="operator",
+            scope_revision_sequence=revision.sequence,
+        )
+        session.add(link)
+        session.flush()
+        event = ComplaintIncidentLinkedEvent(
+            link_id=link.id,
+            ticket_id=link.ticket_id,
+            incident_id=incident.id,
+            subscription_id=subscription.id,
+            reviewed_revision_id=revision.id,
+            reviewed_revision_sequence=revision.sequence,
+            membership_token=revision.membership_token,
+        )
+        audit_adapter.stage(
+            session,
+            AuditRecord(
+                action="outage.complaint_linked",
+                entity_type="outage_incident_ticket_link",
+                entity_id=str(link.id),
+                actor=AuditActor.user(
+                    str(actor.system_user_id), party_id=actor.person_id
+                ),
+                details={"reason": command.reason, **event.payload()},
+            ),
+        )
+        emit_event(
+            session,
+            EventType.outage_complaint_linked,
+            event.payload(),
+            actor=context.actor,
+            record_only=True,
+        )
+    if adopted:
+        review_payload = {
+            "schema_version": 1,
+            "link_id": str(link.id),
+            "ticket_id": str(link.ticket_id),
+            "incident_id": str(link.incident_id),
+            "subscription_id": str(subscription.id),
+            "reviewed_revision_id": str(revision.id),
+            "reviewed_revision_sequence": revision.sequence,
+            "membership_token": revision.membership_token,
+            "proof_origin": "reviewed_adoption",
+        }
+        audit_adapter.stage(
+            session,
+            AuditRecord(
+                action="outage.complaint_reviewed",
+                entity_type="outage_incident_ticket_link",
+                entity_id=str(link.id),
+                actor=AuditActor.user(
+                    str(actor.system_user_id), party_id=actor.person_id
+                ),
+                details={"reason": command.reason, **review_payload},
+            ),
+        )
+        emit_event(
+            session,
+            EventType.outage_complaint_reviewed,
+            review_payload,
+            actor=context.actor,
+            record_only=True,
+        )
+    original_proof = session.scalar(
+        select(OutageComplaintCorrelationReceipt)
+        .where(OutageComplaintCorrelationReceipt.link_id == link.id)
+        .order_by(
+            OutageComplaintCorrelationReceipt.created_at,
+            OutageComplaintCorrelationReceipt.id,
+        )
     )
-    session.add(link)
+    session.add(
+        OutageComplaintCorrelationReceipt(
+            incident_id=command.incident_id,
+            intent_id=UUID(intent_key),
+            fingerprint=digest,
+            link_id=link.id,
+            subscription_id=subscription.id,
+            proof_origin=original_proof.proof_origin
+            if original_proof
+            else "reviewed_adoption"
+            if adopted
+            else "new_link",
+            original_revision_id=original_proof.original_revision_id
+            if original_proof
+            else revision.id
+            if adopted
+            else session.scalar(
+                select(OutageScopeRevision.id).where(
+                    OutageScopeRevision.incident_id == link.incident_id,
+                    OutageScopeRevision.sequence == link.scope_revision_sequence,
+                )
+            ),
+            actor_user_id=actor.system_user_id,
+            reason=command.reason,
+            ref_id=ComplaintIncidentReceipt(
+                fingerprint=digest, link_id=link.id, subscription_id=subscription.id
+            ).encode(),
+        )
+    )
     session.flush()
-    return link
+    return _complaint_outcome(
+        session,
+        link=link,
+        subscription_id=subscription.id,
+        replayed=False,
+        already_linked=existing is not None,
+    )
+
+
+def _complaint_outcome(
+    session: Session,
+    *,
+    link: OutageIncidentTicketLink,
+    subscription_id: UUID,
+    replayed: bool,
+    already_linked: bool,
+) -> ComplaintIncidentLinkOutcome:
+    native = session.scalar(
+        select(OutageComplaintCorrelationReceipt)
+        .where(OutageComplaintCorrelationReceipt.link_id == link.id)
+        .order_by(
+            OutageComplaintCorrelationReceipt.created_at,
+            OutageComplaintCorrelationReceipt.id,
+        )
+    )
+    revision = (
+        session.get(OutageScopeRevision, native.original_revision_id)
+        if native
+        else None
+    )
+    if revision is None:
+        raise _complaint_error(
+            "receipt_invalid", "Reviewed revision provenance is unavailable."
+        )
+    return ComplaintIncidentLinkOutcome(
+        link_id=link.id,
+        ticket_id=link.ticket_id,
+        incident_id=link.incident_id,
+        reviewed_revision_id=revision.id,
+        reviewed_revision_sequence=revision.sequence,
+        subscription_id=subscription_id,
+        replayed=replayed,
+        already_linked=already_linked,
+    )
 
 
 def mark_reconciliation(

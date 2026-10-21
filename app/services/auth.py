@@ -1,14 +1,15 @@
 import hashlib
 import hmac
 import logging
-import secrets
 import time
+import uuid
 from datetime import UTC, datetime
-from typing import cast
+from typing import TYPE_CHECKING, cast
 
 import redis
 from fastapi import HTTPException, Request
-from sqlalchemy.exc import IntegrityError
+from sqlalchemy import select
+from sqlalchemy.exc import OperationalError
 from sqlalchemy.orm import Session
 
 from app.models.auth import (
@@ -16,6 +17,7 @@ from app.models.auth import (
     AuthProvider,
     MFAMethod,
     MFAMethodType,
+    MFARecoveryCode,
     SessionStatus,
     UserCredential,
 )
@@ -25,26 +27,19 @@ from app.models.auth import (
 from app.models.domain_settings import DomainSetting, SettingDomain
 from app.models.radius import RadiusServer
 from app.models.subscriber import Subscriber
-from app.schemas.auth import (
-    ApiKeyCreate,
-    ApiKeyGenerateRequest,
-    ApiKeyUpdate,
-    MFAMethodCreate,
-    MFAMethodUpdate,
-    SessionCreate,
-    SessionUpdate,
-    UserCredentialCreate,
-    UserCredentialUpdate,
-)
-from app.services import auth_cache, settings_spec
+from app.services.audit_adapter import AuditActor, stage_audit_event
 from app.services.common import (
     apply_ordering,
     apply_pagination,
     coerce_uuid,
     validate_enum,
 )
+from app.services.owner_commands import CommandContext
 from app.services.redis_client import get_redis
 from app.services.response import ListResponseMixin
+
+if TYPE_CHECKING:
+    from app.services.session_manager import SessionRevocationOutcome
 
 logger = logging.getLogger(__name__)
 
@@ -170,38 +165,6 @@ def _ensure_radius_server(db: Session, server_id: str):
 
 class UserCredentials(ListResponseMixin):
     @staticmethod
-    def create(db: Session, payload: UserCredentialCreate):
-        _ensure_subscriber(db, str(payload.subscriber_id))
-        if payload.radius_server_id:
-            _ensure_radius_server(db, str(payload.radius_server_id))
-        data = payload.model_dump()
-        fields_set = payload.model_fields_set
-        if "provider" not in fields_set:
-            default_provider = settings_spec.resolve_value(
-                db, SettingDomain.auth, "default_auth_provider"
-            )
-            if default_provider:
-                data["provider"] = validate_enum(
-                    default_provider, AuthProvider, "provider"
-                )
-        credential = UserCredential(**data)
-        db.add(credential)
-        try:
-            db.commit()
-        except IntegrityError as exc:
-            # `username` is unique per local provider. Without this the
-            # constraint escaped as an unhandled 500, so a caller supplying an
-            # already-taken username got a server error instead of being told
-            # which input was the problem.
-            db.rollback()
-            raise HTTPException(
-                status_code=409,
-                detail="That username is already in use",
-            ) from exc
-        db.refresh(credential)
-        return credential
-
-    @staticmethod
     def get(db: Session, credential_id: str):
         credential = db.get(UserCredential, coerce_uuid(credential_id))
         if not credential:
@@ -247,53 +210,8 @@ class UserCredentials(ListResponseMixin):
         )
         return apply_pagination(query, limit, offset).all()
 
-    @staticmethod
-    def update(db: Session, credential_id: str, payload: UserCredentialUpdate):
-        credential = db.get(UserCredential, coerce_uuid(credential_id))
-        if not credential:
-            raise HTTPException(status_code=404, detail="User credential not found")
-        data = payload.model_dump(exclude_unset=True)
-        if "subscriber_id" in data:
-            _ensure_subscriber(db, str(data["subscriber_id"]))
-        if "radius_server_id" in data and data["radius_server_id"]:
-            _ensure_radius_server(db, str(data["radius_server_id"]))
-        for key, value in data.items():
-            setattr(credential, key, value)
-        db.commit()
-        db.refresh(credential)
-        return credential
-
-    @staticmethod
-    def delete(db: Session, credential_id: str):
-        credential = db.get(UserCredential, coerce_uuid(credential_id))
-        if not credential:
-            raise HTTPException(status_code=404, detail="User credential not found")
-        credential.is_active = False
-        db.commit()
-
 
 class MFAMethods(ListResponseMixin):
-    @staticmethod
-    def create(db: Session, payload: MFAMethodCreate):
-        _ensure_subscriber(db, str(payload.subscriber_id))
-        if payload.is_primary:
-            db.query(MFAMethod).filter(
-                MFAMethod.subscriber_id == payload.subscriber_id,
-                MFAMethod.is_primary.is_(True),
-            ).update({"is_primary": False})
-        method = MFAMethod(**payload.model_dump())
-        db.add(method)
-        try:
-            db.commit()
-        except IntegrityError as exc:
-            db.rollback()
-            raise HTTPException(
-                status_code=409,
-                detail="Primary MFA method already exists for this user",
-            ) from exc
-        db.refresh(method)
-        return method
-
     @staticmethod
     def get(db: Session, method_id: str):
         method = db.get(MFAMethod, coerce_uuid(method_id))
@@ -347,62 +265,146 @@ class MFAMethods(ListResponseMixin):
         return apply_pagination(query, limit, offset).all()
 
     @staticmethod
-    def update(db: Session, method_id: str, payload: MFAMethodUpdate):
-        method = db.get(MFAMethod, coerce_uuid(method_id))
-        if not method:
-            raise HTTPException(status_code=404, detail="MFA method not found")
-        data = payload.model_dump(exclude_unset=True)
-        if "subscriber_id" in data:
-            _ensure_subscriber(db, str(data["subscriber_id"]))
-        if data.get("is_primary"):
-            subscriber_id = data.get("subscriber_id", method.subscriber_id)
-            db.query(MFAMethod).filter(
-                MFAMethod.subscriber_id == subscriber_id,
-                MFAMethod.id != method.id,
-                MFAMethod.is_primary.is_(True),
-            ).update({"is_primary": False})
-        for key, value in data.items():
-            setattr(method, key, value)
-        try:
-            db.commit()
-        except IntegrityError as exc:
-            db.rollback()
-            raise HTTPException(
-                status_code=409,
-                detail="Primary MFA method already exists for this user",
-            ) from exc
-        db.refresh(method)
-        return method
+    def delete(db: Session, method_id: str, *, actor_id: str, reason: str):
+        """Disable one MFA method, its recovery codes and the audit atomically.
 
-    @staticmethod
-    def delete(db: Session, method_id: str):
-        method = db.get(MFAMethod, coerce_uuid(method_id))
-        if not method:
+        Recovery codes are keyed to a method (``mfa_method_id``), so disabling a
+        method also deactivates that method's unused codes: they cannot be
+        redeemed while the method is off, and must not revive if an enrollment
+        later re-enables the same row. All state changes and the audit event
+        are staged and committed in one transaction; any failure rolls back.
+        """
+
+        if not actor_id or not actor_id.strip():
+            raise HTTPException(status_code=403, detail="Administrator is required")
+        from app.services import mfa_removal
+
+        cleaned_reason = mfa_removal.normalize_reason(reason)
+        if cleaned_reason is None:
+            raise HTTPException(
+                status_code=422, detail=mfa_removal.REASON_REQUIRED_MESSAGE
+            )
+        from app.models.auth import Session as _AuthSession
+        from app.services.credential_administration import (
+            PrincipalType,
+            _lock_principal,
+        )
+        from app.services.events import emit_event
+        from app.services.events.types import EventType
+
+        def principal_of(row: MFAMethod) -> tuple[PrincipalType, uuid.UUID]:
+            for kind, value in (
+                (PrincipalType.subscriber, row.subscriber_id),
+                (PrincipalType.system_user, row.system_user_id),
+                (PrincipalType.reseller_user, row.reseller_user_id),
+            ):
+                if value is not None:
+                    return kind, value
             raise HTTPException(status_code=404, detail="MFA method not found")
-        method.is_active = False
-        method.enabled = False
-        method.is_primary = False
-        db.commit()
+
+        try:
+            probe = db.get(MFAMethod, coerce_uuid(method_id))
+            if not probe:
+                raise HTTPException(status_code=404, detail="MFA method not found")
+            kind, principal_id = principal_of(probe)
+            if kind is not PrincipalType.subscriber:
+                # Staff and reseller factors are removed by their owners
+                # (staff provisioning / reseller management), which hold the
+                # matching permission model. Refuse before any lock or write.
+                raise HTTPException(
+                    status_code=422,
+                    detail=(
+                        "Staff and reseller MFA factors are managed by their "
+                        "own provisioning flows (staff provisioning, reseller "
+                        "management)."
+                    ),
+                )
+            # Lock order matches login/complete_mfa: principal, then method,
+            # then recovery codes. State is re-read after the locks.
+            _lock_principal(db, kind, principal_id)
+            method = db.scalar(
+                select(MFAMethod)
+                .where(MFAMethod.id == probe.id)
+                .with_for_update()
+                .execution_options(populate_existing=True)
+            )
+            if not method or principal_of(method) != (kind, principal_id):
+                raise HTTPException(status_code=404, detail="MFA method not found")
+            if method.is_active or method.enabled or method.is_primary:
+                codes_deactivated = (
+                    db.query(MFARecoveryCode)
+                    .filter(
+                        MFARecoveryCode.mfa_method_id == method.id,
+                        MFARecoveryCode.is_active.is_(True),
+                    )
+                    .update({"is_active": False}, synchronize_session=False)
+                )
+                method.is_active = False
+                method.enabled = False
+                method.is_primary = False
+                # Drop the seed so a holder of the old secret cannot re-confirm.
+                method.secret = None
+                sessions_revoked = (
+                    db.query(_AuthSession)
+                    .filter(
+                        getattr(_AuthSession, f"{kind.value}_id") == principal_id,
+                        _AuthSession.status == SessionStatus.active,
+                    )
+                    .update(
+                        {
+                            "status": SessionStatus.revoked,
+                            "revoked_at": datetime.now(UTC),
+                        },
+                        synchronize_session=False,
+                    )
+                )
+                db.flush()
+                evidence: dict[str, object] = {
+                    "principal_type": kind.value,
+                    "principal_id": str(principal_id),
+                    "method_type": method.method_type.value,
+                    "recovery_codes_deactivated": int(codes_deactivated),
+                    "sessions_revoked": int(sessions_revoked),
+                    "removal_reason": cleaned_reason,
+                }
+                stage_audit_event(
+                    db,
+                    action="auth.mfa_method.disabled",
+                    entity_type="mfa_method",
+                    entity_id=str(method.id),
+                    actor=AuditActor.user(actor_id.strip()),
+                    metadata=evidence,
+                )
+                emit_event(
+                    db,
+                    EventType.credential_administration_completed,
+                    {
+                        **{k: v for k, v in evidence.items() if k != "removal_reason"},
+                        "schema_version": 1,
+                        "aggregate_type": "mfa_method",
+                        "aggregate_id": str(method.id),
+                        "transition": "mfa_method_disabled",
+                        "invalidate_sessions": True,
+                        "removed_at": datetime.now(UTC).isoformat(),
+                        "notify_mfa_removal": True,
+                    },
+                    actor=actor_id.strip(),
+                    subscriber_id=method.subscriber_id,
+                )
+            db.commit()
+        except OperationalError as exc:
+            db.rollback()
+            if mfa_removal.is_lock_timeout(exc):
+                raise HTTPException(
+                    status_code=503, detail=mfa_removal.LOCK_TIMEOUT_MESSAGE
+                ) from exc
+            raise
+        except BaseException:
+            db.rollback()
+            raise
 
 
 class Sessions(ListResponseMixin):
-    @staticmethod
-    def create(db: Session, payload: SessionCreate):
-        _ensure_subscriber(db, str(payload.subscriber_id))
-        data = payload.model_dump()
-        fields_set = payload.model_fields_set
-        if "status" not in fields_set:
-            default_status = settings_spec.resolve_value(
-                db, SettingDomain.auth, "default_session_status"
-            )
-            if default_status:
-                data["status"] = validate_enum(default_status, SessionStatus, "status")
-        session = AuthSession(**data)
-        db.add(session)
-        db.commit()
-        db.refresh(session)
-        return session
-
     @staticmethod
     def get(db: Session, session_id: str):
         session = db.get(AuthSession, coerce_uuid(session_id))
@@ -444,41 +446,29 @@ class Sessions(ListResponseMixin):
         return apply_pagination(query, limit, offset).all()
 
     @staticmethod
-    def update(db: Session, session_id: str, payload: SessionUpdate):
-        session = db.get(AuthSession, coerce_uuid(session_id))
-        if not session:
-            raise HTTPException(status_code=404, detail="Session not found")
-        data = payload.model_dump(exclude_unset=True)
-        if "subscriber_id" in data:
-            _ensure_subscriber(db, str(data["subscriber_id"]))
-        for key, value in data.items():
-            setattr(session, key, value)
-        db.commit()
-        db.refresh(session)
-        return session
+    def delete(
+        db: Session, session_id: str, *, actor: AuditActor
+    ) -> "SessionRevocationOutcome":
+        from app.services import session_manager
 
-    @staticmethod
-    def delete(db: Session, session_id: str):
-        session = db.get(AuthSession, coerce_uuid(session_id))
-        if not session:
-            raise HTTPException(status_code=404, detail="Session not found")
-        principal_type = "system_user" if session.system_user_id else "subscriber"
-        principal_id = str(session.system_user_id or session.subscriber_id)
-        session.status = SessionStatus.revoked
-        session.revoked_at = datetime.now(UTC)
-        db.commit()
-        auth_cache.invalidate_session_context(
-            str(session.id),
-            principal_type=principal_type,
-            principal_id=principal_id,
+        return session_manager.revoke_authentication_sessions(
+            db,
+            session_manager.RevokeSessionsCommand(
+                context=CommandContext.system(
+                    actor=actor.actor_id or "system",
+                    scope="administrative_sessions",
+                    reason="administrative_session_revocation",
+                ),
+                intent=session_manager.RevocationIntent.ADMIN,
+                actor=actor,
+                session_id=session_manager.target_session_uuid(session_id),
+            ),
         )
 
 
 class ApiKeys(ListResponseMixin):
     @staticmethod
-    def generate_with_rate_limit(
-        db: Session, payload: ApiKeyGenerateRequest, request: Request | None
-    ):
+    def enforce_generation_rate_limit(db: Session, request: Request | None) -> None:
         client_ip = "unknown"
         if request is not None and request.client:
             client_ip = request.client.host
@@ -508,34 +498,6 @@ class ApiKeys(ListResponseMixin):
                 status_code=503,
                 detail="Rate limiting unavailable (Redis error)",
             ) from exc
-        api_key, raw_key = ApiKeys.generate(db, payload)
-        return {"key": raw_key, "api_key": api_key}
-
-    @staticmethod
-    def generate(db: Session, payload: ApiKeyGenerateRequest):
-        raw_key = secrets.token_urlsafe(32)
-        data = payload.model_dump()
-        data["key_hash"] = hash_api_key(raw_key)
-        data.setdefault("is_active", True)
-        if data.get("subscriber_id"):
-            _ensure_subscriber(db, str(data["subscriber_id"]))
-        api_key = ApiKey(**data)
-        db.add(api_key)
-        db.commit()
-        db.refresh(api_key)
-        return api_key, raw_key
-
-    @staticmethod
-    def create(db: Session, payload: ApiKeyCreate):
-        if payload.subscriber_id:
-            _ensure_subscriber(db, str(payload.subscriber_id))
-        data = payload.model_dump()
-        data["key_hash"] = hash_api_key(data["key_hash"])
-        api_key = ApiKey(**data)
-        db.add(api_key)
-        db.commit()
-        db.refresh(api_key)
-        return api_key
 
     @staticmethod
     def get(db: Session, key_id: str):
@@ -572,35 +534,6 @@ class ApiKeys(ListResponseMixin):
             {"created_at": ApiKey.created_at, "label": ApiKey.label},
         )
         return apply_pagination(query, limit, offset).all()
-
-    @staticmethod
-    def update(db: Session, key_id: str, payload: ApiKeyUpdate):
-        api_key = db.get(ApiKey, coerce_uuid(key_id))
-        if not api_key:
-            raise HTTPException(status_code=404, detail="API key not found")
-        data = payload.model_dump(exclude_unset=True)
-        if "subscriber_id" in data and data["subscriber_id"] is not None:
-            _ensure_subscriber(db, str(data["subscriber_id"]))
-        if "key_hash" in data and data["key_hash"]:
-            data["key_hash"] = hash_api_key(data["key_hash"])
-        for key, value in data.items():
-            setattr(api_key, key, value)
-        db.commit()
-        db.refresh(api_key)
-        return api_key
-
-    @staticmethod
-    def delete(db: Session, key_id: str):
-        api_key = db.get(ApiKey, coerce_uuid(key_id))
-        if not api_key:
-            raise HTTPException(status_code=404, detail="API key not found")
-        api_key.is_active = False
-        api_key.revoked_at = datetime.now(UTC)
-        db.commit()
-
-    @staticmethod
-    def revoke(db: Session, key_id: str):
-        ApiKeys.delete(db, key_id)
 
 
 user_credentials = UserCredentials()

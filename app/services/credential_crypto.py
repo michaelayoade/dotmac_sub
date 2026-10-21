@@ -11,6 +11,13 @@ from __future__ import annotations
 
 import logging
 import os
+import re
+from collections.abc import Iterator, Mapping
+from contextlib import contextmanager
+from contextvars import ContextVar
+from types import MappingProxyType
+from typing import Any
+from urllib.parse import urlparse
 
 from cryptography.fernet import Fernet, InvalidToken
 
@@ -281,8 +288,308 @@ def _is_secret_reference(value: str | None) -> bool:
         return False
 
 
+_RESERVED_SERVICE_PASSWORD_PREFIXES = ("enc:", "plain:", "cleartext:")
+RESERVED_SERVICE_PASSWORD_MESSAGE = (
+    "A service password cannot be a secret reference (env://, bao://, "
+    "openbao://, vault://) or start with enc:, plain: or cleartext:."
+)
+UNUSABLE_STORED_SECRET_MESSAGE = (
+    "The stored service password is a secret reference and is not used. "
+    "Set a new service password."
+)
+
+
+def is_secret_reference_value(value: object) -> bool:
+    """True for a stored/typed value the secret resolver would dereference.
+
+    Uses the resolver's own predicate (``secrets.is_secret_ref``) on a value
+    that is stripped and lower-cased, so a padded or differently-cased spelling
+    is refused too. Never raises, never resolves.
+
+    This is the single stored-secret-reference predicate; the PPPoE access
+    credential module re-exports it and ``is_reference_text`` delegates to it.
+    """
+    if not isinstance(value, str):
+        return False
+    from app.services.secrets import is_secret_ref
+
+    return is_secret_ref(value.strip().lower())
+
+
+def reject_reserved_service_password(value: str | None) -> None:
+    """Refuse a typed service password that would be stored as a secret
+    reference or as an at-rest wrapper. Raises ``ValueError`` with a
+    staff-safe message that never echoes the value."""
+    text = str(value or "").strip().lower()
+    if is_secret_reference_value(text) or text.startswith(
+        _RESERVED_SERVICE_PASSWORD_PREFIXES
+    ):
+        raise ValueError(RESERVED_SERVICE_PASSWORD_MESSAGE)
+
+
+def decrypt_stored_secret_or_none(value: object) -> str | None:
+    """Decrypt a stored device credential for pushing; fail closed.
+
+    Never resolves a stored secret reference, never returns one that decrypts
+    out of a wrapper, and returns ``None`` (not the stored text) when
+    decryption fails, so ciphertext is never pushed as a password. Callers
+    treat ``None`` as "not configured". Logs only that a refusal happened.
+    """
+    if value in (None, ""):
+        return None
+    if is_secret_reference_value(value):
+        _logger.warning("Refusing to resolve a stored secret reference")
+        return None
+    try:
+        decrypted = decrypt_credential(str(value))
+    except Exception:
+        _logger.warning("Stored credential could not be decrypted; not pushing it")
+        return None
+    if is_secret_reference_value(decrypted):
+        _logger.warning("Refusing to push a decrypted secret reference")
+        return None
+    return decrypted or None
+
+
+# ── F3: secret references in infrastructure credential columns ─────────
+# env:// is never resolved from a stored value; bao:// only for an allowlisted
+# (model, field) under its prefix; writes also need system:secrets:write.
+# Refusals never carry the value or path. App config uses secrets.py directly.
+
+#: Narrowest existing admin-level secrets permission.
+REFERENCE_WRITE_PERMISSION = "system:secrets:write"
+
+#: (model, field) -> required ``mount/path`` prefix for a ``bao://`` reference.
+#: Matches the production references; nothing else holds references.
+ALLOWED_BAO_REFERENCES: Mapping[tuple[str, str], str] = MappingProxyType(
+    {
+        ("OLTDevice", "ssh_password"): "secret/network/olts/",
+        ("Tr069AcsServer", "cwmp_password"): "secret/network/acs/",
+    }
+)
+
+#: Models whose credential columns are staff-writable infrastructure secrets.
+INFRASTRUCTURE_MODELS = frozenset(
+    {"NasDevice", "NetworkDevice", "OLTDevice", "Tr069AcsServer", "Router", "JumpHost"}
+)
+
+_REFERENCE_SCHEMES = ("bao://", "openbao://", "vault://", "env://")
+_FIELD_RE = re.compile(r"^[A-Za-z0-9_]+$")
+_SEGMENT_RE = re.compile(r"^[A-Za-z0-9_.@=+-]+$")
+
+_REFERENCE_WRITE_AUTHORIZED: ContextVar[bool] = ContextVar(
+    "credential_reference_write_authorized", default=False
+)
+
+
+class CredentialReferenceRefused(ValueError):
+    """A stored or typed secret reference was refused by policy."""
+
+
+def is_reference_text(value: object) -> bool:
+    """True for text the resolver might dereference (case/space-insensitive)."""
+    return is_secret_reference_value(value)
+
+
+def _scheme(value: str) -> str:
+    text = value.strip().lower()
+    for scheme in _REFERENCE_SCHEMES:
+        if text.startswith(scheme):
+            return scheme[:-3]
+    return "unknown"
+
+
+def _refuse(
+    reason: str, *, model: str | None, field: str | None, value: str, action: str
+) -> CredentialReferenceRefused:
+    _logger.warning(
+        "credential reference refused",
+        extra={
+            "event": "credential.reference_refused",
+            "action": action,
+            "model": model or "unknown",
+            "field": field or "unknown",
+            "scheme": _scheme(value),
+            "reason": reason,
+        },
+    )
+    return CredentialReferenceRefused(
+        f"Secret reference refused for {model or 'this credential'}"
+        f"{'.' + field if field else ''} ({reason})."
+    )
+
+
+def _path_is_allowed(value: str, prefix: str) -> bool:
+    if not value.startswith("bao://") or "?" in value or "%" in value:
+        return False
+    if any(ch.isspace() or ord(ch) < 32 for ch in value):
+        return False
+    parsed = urlparse(value)
+    if parsed.params or parsed.query or parsed.username or parsed.port:
+        return False
+    full = f"{parsed.netloc}/{parsed.path.lstrip('/')}"
+    if not full.startswith(prefix):
+        return False
+    remainder = full[len(prefix) :]
+    if not remainder:
+        return False
+    segments = remainder.split("/")
+    if any(seg in ("", ".", "..") or not _SEGMENT_RE.match(seg) for seg in segments):
+        return False
+    field = parsed.fragment
+    return not field or bool(_FIELD_RE.match(field))
+
+
+def check_reference(
+    value: str, *, model: str | None, field: str | None, action: str = "read"
+) -> None:
+    """Raise ``CredentialReferenceRefused`` unless ``value`` is allowlisted.
+
+    ``env://`` and the non-``bao`` aliases are never allowed. Fails closed when
+    the caller gave no ``(model, field)`` context.
+    """
+    text = str(value)
+    if text.startswith("env://") or _scheme(text) == "env":
+        raise _refuse(
+            "env references are never resolved from stored values",
+            model=model,
+            field=field,
+            value=text,
+            action=action,
+        )
+    if not model or not field:
+        raise _refuse(
+            "no allowlisted credential context",
+            model=model,
+            field=field,
+            value=text,
+            action=action,
+        )
+    prefix = ALLOWED_BAO_REFERENCES.get((model, field))
+    if prefix is None:
+        raise _refuse(
+            "field is not allowlisted for references",
+            model=model,
+            field=field,
+            value=text,
+            action=action,
+        )
+    if text != text.strip() or not _path_is_allowed(text, prefix):
+        raise _refuse(
+            "reference is not under the system-owned prefix",
+            model=model,
+            field=field,
+            value=text,
+            action=action,
+        )
+
+
+def reference_write_authorized() -> bool:
+    return _REFERENCE_WRITE_AUTHORIZED.get()
+
+
+@contextmanager
+def authorize_reference_writes(
+    permission_keys: Any,
+) -> Iterator[None]:
+    """Open a scope in which allowlisted reference writes are permitted.
+
+    ``permission_keys`` is the actor's effective permission set (``"*"`` for
+    admin). Raises ``CredentialReferenceRefused`` without it. The scope still
+    requires each written value to match the allowlist and prefix.
+    """
+    keys = set(permission_keys or ())
+    if "*" not in keys and REFERENCE_WRITE_PERMISSION not in keys:
+        raise CredentialReferenceRefused(
+            f"Writing a secret reference needs {REFERENCE_WRITE_PERMISSION}."
+        )
+    token = _REFERENCE_WRITE_AUTHORIZED.set(True)
+    try:
+        yield
+    finally:
+        _REFERENCE_WRITE_AUTHORIZED.reset(token)
+
+
+def check_reference_write(value: object, *, model: str, field: str) -> None:
+    """Write-side gate: refuse a reference unless allowlisted AND authorised."""
+    if not is_reference_text(value):
+        return
+    text = str(value)
+    if not _REFERENCE_WRITE_AUTHORIZED.get():
+        raise _refuse(
+            "writing references needs system:secrets:write",
+            model=model,
+            field=field,
+            value=text,
+            action="write",
+        )
+    check_reference(text, model=model, field=field, action="write")
+
+
+_listeners_installed = False
+
+
+def install_write_guards() -> None:
+    """ORM ``set`` guard on infrastructure credential columns (unchanged ok)."""
+    global _listeners_installed
+    if _listeners_installed:
+        return
+    from sqlalchemy import event
+
+    from app.models.catalog import NasDevice
+    from app.models.network import OLTDevice
+    from app.models.network_monitoring import NetworkDevice
+    from app.models.router_management import JumpHost, Router
+    from app.models.tr069 import Tr069AcsServer
+
+    registry = {
+        cls.__name__: cls
+        for cls in (
+            NasDevice,
+            NetworkDevice,
+            OLTDevice,
+            Tr069AcsServer,
+            Router,
+            JumpHost,
+        )
+    }
+    for model_name, fields in ENCRYPTED_MODEL_FIELDS.items():
+        cls = registry.get(model_name)
+        if cls is None:
+            continue
+        for field in fields:
+            _listen(event, cls, model_name, field)
+    _listeners_installed = True
+
+
+def _listen(event: Any, cls: Any, model_name: str, field: str) -> None:
+    attr = getattr(cls, field)
+
+    @event.listens_for(attr, "set", retval=False, active_history=True)
+    def _guard(target, value, oldvalue, initiator):  # noqa: ANN001, ARG001
+        if value is not None and value == oldvalue:
+            return
+        check_reference_write(value, model=model_name, field=field)
+
+
+def non_reference_or_none(
+    value: str | None, *, label: str = "credential"
+) -> str | None:
+    """The decrypted credential, or None when it is a secret reference."""
+    if value and is_secret_reference_value(value):
+        _logger.warning("Refusing to resolve a secret reference in %s", label)
+        return None
+    return value
+
+
 def encrypt_credential(value: str | None) -> str | None:
     """Encrypt a credential for storage at rest.
+
+    A secret reference is passed through opaquely, because edit forms hand an
+    unchanged stored value back through here. Whether a reference may be
+    WRITTEN is decided where the value lands on the model:
+    ``credential_crypto.install_write_guards`` refuses any changed
+    reference on an infrastructure credential column.
 
     If no encryption key is configured, returns the credential unchanged
     but prefixed with "plain:" for identification.
@@ -344,38 +651,36 @@ def encrypt_credential_with_key(
     return f"enc:{encrypted.decode('ascii')}"
 
 
-def decrypt_credential(value: str | None) -> str | None:
-    """Decrypt a credential from storage.
+def _resolve_stored_reference(
+    value: str, *, model: str | None, field: str | None
+) -> str | None:
+    """Resolve a DB-stored reference under the F3 policy (never env://)."""
+    from app.services.secrets import resolve_openbao_ref
 
-    Handles encrypted (enc:), plain (plain:), and legacy (no prefix) formats.
+    check_reference(value, model=model, field=field, action="read")
+    try:
+        return resolve_openbao_ref(value)
+    except Exception as e:
+        raise ValueError(
+            f"Failed to resolve credential secret reference ({type(e).__name__})"
+        ) from e
 
-    Args:
-        value: Stored credential with prefix
 
-    Returns:
-        Decrypted/plain credential value, or None if input is None/empty
+def decrypt_credential(
+    value: str | None, *, model: str | None = None, field: str | None = None
+) -> str | None:
+    """Decrypt a stored credential (enc:, plain: or legacy plaintext).
 
-    Raises:
-        ValueError: If decryption fails
+    A stored reference resolves only for an allowlisted ``model``/``field``;
+    ``env://`` and every other reference raise ``CredentialReferenceRefused``.
     """
     if not value:
         return value
 
     if _is_secret_reference(value):
-        try:
-            from app.services.secrets import resolve_secret
-
-            resolved = resolve_secret(value)
-        except Exception as e:
-            raise ValueError(
-                f"Failed to resolve credential secret reference: {e}"
-            ) from e
-        # A credential can be both encryption-at-rest wrapped (``enc:``/``plain:``)
-        # *and* stored behind a secret reference — the resolved value is then
-        # still an at-rest blob, not the plaintext. Peel that inner layer too,
-        # otherwise callers (config masking, outbound auth headers) receive
-        # ciphertext. The ``resolved != value`` guard avoids re-resolving a
-        # reference that resolves to itself.
+        resolved = _resolve_stored_reference(value, model=model, field=field)
+        # An at-rest wrapper behind the reference is peeled; the inner decrypt
+        # carries no allowlist context, so a reference chain is refused.
         if resolved and resolved != value and is_encrypted(resolved):
             return decrypt_credential(resolved)
         return resolved

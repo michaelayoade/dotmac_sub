@@ -19,6 +19,8 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
+from app import subscriber_mfa_enrollment_http as subscriber_mfa_adapter
+from app.csrf import require_browser_csrf_header
 from app.db import get_db
 from app.schemas.billing import (
     BillingAccountCreditAllocationConfirm,
@@ -48,7 +50,10 @@ from app.services import (
     reseller_ticket_projection,
     team_inbox_widget,
 )
+from app.services import password_authentication as subscriber_mfa_owner
 from app.services.auth_dependencies import require_user_auth
+from app.services.db_session_adapter import db_session_adapter
+from app.services.owner_commands import CommandContext
 
 router = APIRouter(prefix="/reseller", tags=["reseller"])
 
@@ -308,7 +313,7 @@ def my_reseller_dashboard(
 @router.get("/accounts")
 def my_reseller_accounts(
     search: str | None = None,
-    status: str | None = Query(default=None, pattern="^(overdue|suspended)$"),
+    status: reseller_portal.ResellerAccountListStatusFilter | None = None,
     order_by: str = Query(
         default="created_at", pattern="^(created_at|balance|overdue|name)$"
     ),
@@ -320,20 +325,21 @@ def my_reseller_accounts(
 ) -> dict:
     """The reseller's managed customer accounts (paginated, filter+sortable)."""
     reseller_id = _reseller_id(db, principal)
-    return {
-        "items": reseller_portal.list_accounts(
-            db,
-            reseller_id,
-            limit,
-            offset,
-            search,
+    result = reseller_portal.query_reseller_account_list(
+        db,
+        reseller_portal.ResellerAccountListQuery(
+            reseller_id=UUID(reseller_id),
+            limit=limit,
+            offset=offset,
+            search=search,
             status_filter=status,
-            order_by=order_by,
-            order_dir=order_dir,
+            order_by=reseller_portal.ResellerAccountListOrder(order_by),
+            order_dir=reseller_portal.ResellerAccountListDirection(order_dir),
         ),
-        "count": reseller_portal.count_accounts(
-            db, reseller_id, search, status_filter=status
-        ),
+    )
+    return {
+        "items": list(result.items),
+        "count": result.total,
         "limit": limit,
         "offset": offset,
     }
@@ -370,12 +376,17 @@ def reseller_work_order_technician_location(
     if account is None:
         raise HTTPException(status_code=404, detail="Account not found")
     return customer_work_order_selfcare.technician_location(
-        db, str(account.id), work_order_id
+        db,
+        query=customer_work_order_selfcare.TechnicianLocationQuery(
+            subscriber_id=account.id,
+            work_order_public_id=work_order_id,
+        ),
     )
 
 
 @router.post(
     "/accounts/{account_id}/work-orders/{work_order_id}/rate-technician",
+    dependencies=[Depends(require_browser_csrf_header)],
     response_model=TechnicianRatingResponse,
 )
 def reseller_rate_technician(
@@ -390,20 +401,43 @@ def reseller_rate_technician(
     account = reseller_portal.owned_account(db, reseller_id, account_id)
     if account is None:
         raise HTTPException(status_code=404, detail="Account not found")
+    command = customer_work_order_selfcare.RateTechnicianCommand(
+        context=CommandContext.system(
+            actor=f"reseller:{reseller_id}:principal:{principal.get('principal_id') or principal.get('subscriber_id')}",
+            scope="customer:work_order:rating",
+            reason="Authorized reseller customer feedback",
+        ),
+        representative=customer_work_order_selfcare.ResellerRatingScope(
+            reseller_id=UUID(reseller_id),
+            principal_id=UUID(
+                str(principal.get("principal_id") or principal.get("subscriber_id"))
+            ),
+            principal_kind=customer_work_order_selfcare.RatingRepresentativeKind(
+                principal["principal_type"]
+            ),
+        ),
+        subscriber_id=account.id,
+        work_order_public_id=work_order_id,
+        rating=payload.rating,
+        comment=payload.comment,
+    )
+    db_session_adapter.release_read_transaction(db)
     try:
-        return customer_work_order_selfcare.rate_technician(
-            db,
-            str(account.id),
-            work_order_id,
-            rating=payload.rating,
-            comment=payload.comment,
-        )
-    except LookupError as exc:
-        raise HTTPException(status_code=404, detail="Work order not found") from exc
-    except ValueError as exc:
+        result = customer_work_order_selfcare.rate_technician(db, command=command)
+    except customer_work_order_selfcare.TechnicianRatingError as exc:
         raise HTTPException(
-            status_code=409, detail="Work order is not completed"
+            status_code=404
+            if exc.code.endswith("work_order_not_found")
+            else 422
+            if exc.code.endswith("invalid_rating")
+            else 409,
+            detail=exc.message,
         ) from exc
+    return TechnicianRatingResponse(
+        work_order_id=result.work_order_id,
+        rating=result.rating,
+        already_rated=result.already_rated,
+    )
 
 
 @router.get("/profile")
@@ -454,13 +488,38 @@ def my_reseller_mfa_setup(
     _reseller_id(db, principal)  # 403 unless the caller is a reseller
     from app.services import auth_flow as auth_flow_service
 
-    setup = auth_flow_service.auth_flow.mfa_setup(
-        db, str(principal["subscriber_id"]), "Authenticator app"
+    if principal.get("principal_type") == "reseller_user":
+        setup = auth_flow_service.auth_flow.reseller_mfa_setup(
+            db=db,
+            reseller_user_id=str(principal["principal_id"]),
+            label="Authenticator app",
+        )
+        return {
+            "method_id": str(setup["method_id"]),
+            "secret": setup["secret"],
+            "otpauth_uri": setup["otpauth_uri"],
+        }
+    proof = subscriber_mfa_adapter.session_proof(
+        principal_type=str(principal.get("principal_type")),
+        principal_id=str(principal.get("principal_id")),
+        session_id=str(principal.get("session_id")),
+        is_impersonation=bool(principal.get("impersonated_by")),
+    )
+    setup = subscriber_mfa_adapter.setup(
+        command=subscriber_mfa_owner.SetupSubscriberMfaCommand(
+            context=subscriber_mfa_adapter.command_context(
+                proof=proof, reason="Reseller MFA setup"
+            ),
+            subscriber_id=proof.subscriber_id,
+            label="Authenticator app",
+            provenance=subscriber_mfa_owner.SubscriberMfaProvenance.RESELLER_API,
+            session=proof,
+        )
     )
     return {
-        "method_id": str(setup["method_id"]),
-        "secret": setup["secret"],
-        "otpauth_uri": setup["otpauth_uri"],
+        "method_id": str(setup.method_id),
+        "secret": setup.secret,
+        "otpauth_uri": setup.otpauth_uri,
     }
 
 
@@ -475,17 +534,62 @@ def my_reseller_mfa_confirm(
     reseller_id = _reseller_id(db, principal)
     from app.services import auth_flow as auth_flow_service
 
-    try:
-        auth_flow_service.auth_flow.mfa_confirm(
-            db, payload.method_id, payload.code.strip(), str(principal["subscriber_id"])
+    if principal.get("principal_type") == "reseller_user":
+        auth_flow_service.auth_flow.reseller_mfa_confirm(
+            db=db,
+            method_id=str(payload.method_id),
+            code=payload.code.strip(),
+            reseller_user_id=str(principal["principal_id"]),
         )
-    except Exception:
-        raise HTTPException(
-            status_code=400, detail="Invalid verification code"
-        ) from None
-    return reseller_portal.get_profile(
-        db, reseller_id, str(principal["subscriber_id"])
-    ) or {"mfa_enabled": True}
+    else:
+        proof = subscriber_mfa_adapter.session_proof(
+            principal_type=str(principal.get("principal_type")),
+            principal_id=str(principal.get("principal_id")),
+            session_id=str(principal.get("session_id")),
+            is_impersonation=bool(principal.get("impersonated_by")),
+        )
+        try:
+            method_id = UUID(str(payload.method_id))
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail="Invalid MFA method") from exc
+        subscriber_mfa_adapter.confirm(
+            command=subscriber_mfa_owner.ConfirmSubscriberMfaCommand(
+                context=subscriber_mfa_adapter.command_context(
+                    proof=proof, reason="Reseller MFA confirmation"
+                ),
+                subscriber_id=proof.subscriber_id,
+                method_id=method_id,
+                code=payload.code.strip(),
+                provenance=subscriber_mfa_owner.SubscriberMfaProvenance.RESELLER_API,
+                session=proof,
+                recovery_delivery=subscriber_mfa_owner.RecoveryCodeDelivery.NONE,
+            )
+        )
+    profile = (
+        reseller_portal.get_profile(db, reseller_id, str(principal["principal_id"]))
+        or {}
+    )
+    summary = subscriber_mfa_owner.query_principal_mfa(
+        db,
+        query=subscriber_mfa_owner.PrincipalMfaQuery(
+            principal=subscriber_mfa_owner.MfaProfilePrincipal(
+                str(principal["principal_type"])
+            ),
+            principal_id=UUID(str(principal["principal_id"])),
+        ),
+    )
+    profile["mfa_enabled"] = summary.enabled
+    profile["mfa_methods"] = [
+        {
+            "id": str(method.id),
+            "label": method.label,
+            "method_type": method.method_type.value,
+            "verified_at": method.verified_at,
+            "enabled": method.enabled,
+        }
+        for method in summary.methods
+    ]
+    return profile
 
 
 @router.get("/billing")

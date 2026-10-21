@@ -4,15 +4,25 @@ from datetime import UTC, datetime, timedelta
 from uuid import uuid4
 
 import pytest
-from fastapi import HTTPException
+from sqlalchemy.orm import Session
 
 from app.models.dispatch import TechnicianProfile
 from app.models.field_movement import FieldWorkOrderMovement
 from app.models.subscriber import Subscriber, UserType
 from app.models.system_user import SystemUser
 from app.models.work_order import WorkOrder
+from app.schemas.field import FieldTransitionResponse
+from app.services.db_session_adapter import db_session_adapter
+from app.services.field.execution_contracts import (
+    ApplyFieldTransition,
+    FieldEvent,
+    FieldJobQuery,
+    FieldTransitionPayload,
+)
 from app.services.field.jobs import field_jobs
 from app.services.field.transitions import field_transitions
+from app.services.field.work_order_access import FieldAccessError
+from app.services.owner_commands import CommandContext
 
 
 def _with_utc(value: datetime) -> datetime:
@@ -97,22 +107,32 @@ def test_en_route_and_arrived_manage_movement_session(db_session):
     arrived_at = datetime.now(UTC)
     db_session.commit()
 
-    field_transitions.apply(
-        db_session,
-        _auth(user),
-        "wo-move-flow",
-        event="en_route",
-        client_event_id=uuid4(),
-        occurred_at=started,
-        latitude=9.0,
-        longitude=7.4,
-        payload={
-            "destination_type": "fdh",
-            "destination_id": "FDH-12",
-            "destination_label": "FDH 12",
-            "destination_latitude": 9.0712,
-            "destination_longitude": 7.4512,
-        },
+    _transitions_apply(
+        db=db_session,
+        command=ApplyFieldTransition(
+            requester_system_user_id=user.id,
+            public_id="wo-move-flow",
+            event=FieldEvent("en_route"),
+            client_event_id=uuid4(),
+            occurred_at=started,
+            latitude=9.0,
+            longitude=7.4,
+            payload=FieldTransitionPayload(
+                **{
+                    "destination_type": "fdh",
+                    "destination_id": "FDH-12",
+                    "destination_label": "FDH 12",
+                    "destination_latitude": 9.0712,
+                    "destination_longitude": 7.4512,
+                }
+            ),
+            context=CommandContext.system(
+                actor=f"user:{user.id}",
+                scope="field:test",
+                reason="test_field_execution",
+                idempotency_key=str(uuid4()),
+            ),
+        ),
     )
     movement = db_session.query(FieldWorkOrderMovement).one()
     assert movement.status == "en_route"
@@ -120,16 +140,24 @@ def test_en_route_and_arrived_manage_movement_session(db_session):
     assert movement.destination_label == "FDH 12"
     assert movement.start_latitude == 9.0
 
-    field_transitions.apply(
-        db_session,
-        _auth(user),
-        "wo-move-flow",
-        event="arrived",
-        client_event_id=uuid4(),
-        occurred_at=arrived_at,
-        latitude=9.0712,
-        longitude=7.4512,
-        payload={"movement_session_id": str(movement.id)},
+    _transitions_apply(
+        db=db_session,
+        command=ApplyFieldTransition(
+            requester_system_user_id=user.id,
+            public_id="wo-move-flow",
+            event=FieldEvent("arrived"),
+            client_event_id=uuid4(),
+            occurred_at=arrived_at,
+            latitude=9.0712,
+            longitude=7.4512,
+            payload=FieldTransitionPayload(**{"movement_session_id": movement.id}),
+            context=CommandContext.system(
+                actor=f"user:{user.id}",
+                scope="field:test",
+                reason="test_field_execution",
+                idempotency_key=str(uuid4()),
+            ),
+        ),
     )
 
     db_session.refresh(movement)
@@ -137,7 +165,10 @@ def test_en_route_and_arrived_manage_movement_session(db_session):
     assert _with_utc(movement.arrived_at) == arrived_at
     assert movement.arrival_latitude == 9.0712
 
-    detail = field_jobs.get_detail(db_session, _auth(user), "wo-move-flow")
+    detail = field_jobs.get_detail(
+        db=db_session,
+        query=FieldJobQuery(requester_system_user_id=user.id, public_id="wo-move-flow"),
+    )
     assert len(detail.movements) == 1
     assert detail.movements[0].status == "arrived"
 
@@ -149,15 +180,30 @@ def test_movement_rejects_invalid_destination(db_session):
     _work_order(db_session, subscriber, crm_work_order_id="wo-move-invalid")
     db_session.commit()
 
-    with pytest.raises(HTTPException) as exc:
-        field_transitions.apply(
-            db_session,
-            _auth(user),
-            "wo-move-invalid",
-            event="en_route",
-            client_event_id=uuid4(),
-            payload={"destination_type": "not-real"},
+    with pytest.raises(FieldAccessError) as exc:
+        _transitions_apply(
+            db=db_session,
+            command=ApplyFieldTransition(
+                requester_system_user_id=user.id,
+                public_id="wo-move-invalid",
+                event=FieldEvent("en_route"),
+                client_event_id=uuid4(),
+                payload=FieldTransitionPayload(**{"destination_type": "not-real"}),
+                context=CommandContext.system(
+                    actor=f"user:{user.id}",
+                    scope="field:test",
+                    reason="test_field_execution",
+                    idempotency_key=str(uuid4()),
+                ),
+            ),
         )
 
-    assert exc.value.status_code == 422
+    assert exc.value.code.endswith("invalid_request")
     assert db_session.query(FieldWorkOrderMovement).count() == 0
+
+
+def _transitions_apply(
+    db: Session, command: ApplyFieldTransition
+) -> FieldTransitionResponse:
+    db_session_adapter.release_read_transaction(db)
+    return field_transitions.apply(db=db, command=command)

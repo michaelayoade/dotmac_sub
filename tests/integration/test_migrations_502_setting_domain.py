@@ -192,7 +192,11 @@ def test_the_enum_becomes_open_text_and_keeps_every_row(
     monkeypatch.setattr(
         app_config,
         "settings",
-        replace(app_config.settings, database_url=_render_url(database_url)),
+        replace(
+            app_config.settings,
+            database_url=_render_url(database_url),
+            migration_database_url=_render_url(database_url),
+        ),
     )
     config = _alembic_config()
 
@@ -241,12 +245,25 @@ def test_the_downgrade_restores_the_enum(
     monkeypatch.setattr(
         app_config,
         "settings",
-        replace(app_config.settings, database_url=_render_url(database_url)),
+        replace(
+            app_config.settings,
+            database_url=_render_url(database_url),
+            migration_database_url=_render_url(database_url),
+        ),
     )
     config = _alembic_config()
 
-    command.upgrade(config, "heads")
-    _insert(database_url, RETIRED_DOMAIN, "legacy_member", cast_enum=False)
+    # Exercise 502's supported rollback without reversing later migrations
+    # whose completion and audit history is deliberately forward-only.
+    command.upgrade(config, REVISION_501)
+    assert _enum_exists(database_url)
+    assert _column_type(database_url) == "USER-DEFINED"
+    _insert(database_url, RETIRED_DOMAIN, "legacy_member", cast_enum=True)
+
+    command.upgrade(config, REVISION_502)
+    assert not _enum_exists(database_url)
+    assert _column_type(database_url) == "character varying"
+    assert _domain(database_url, "legacy_member") == RETIRED_DOMAIN
 
     command.downgrade(config, REVISION_501)
 

@@ -151,7 +151,14 @@
 
         const debtorCtx = document.getElementById('top-debtors-chart');
         if (debtorCtx) {
-            const debtors = {{ top_debtors | tojson }};
+            const debtors = [
+                {% for debtor in top_debtors %}
+                {
+                    account_label: {{ debtor.account_label | tojson }},
+                    amount: {{ debtor.amount | tojson }}
+                }{% if not loop.last %},{% endif %}
+                {% endfor %}
+            ];
             if (debtors.length > 0) {
                 const debtorChartData = {
                     labels: debtors.map(item => item.account_label),

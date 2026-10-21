@@ -38,6 +38,15 @@
   ],
   "typed_contract_surfaces": [
     {
+      "surface_id": "deployment-candidate-material-probe-adapter",
+      "paths": [
+        "scripts/setup/verify_candidate_materials.py"
+      ],
+      "require_public_annotations": true,
+      "forbid_any": true,
+      "require_immutable_records": true
+    },
+    {
       "surface_id": "source-of-truth-service-contracts",
       "paths": [
         "app/services/sot_manifest.py"
@@ -146,6 +155,12 @@
         "fingerprint": "d081abb25b5f09a8dc4658709a0103d25b9d866728c1dc80594621e32fb3a582"
       },
       {
+        "path": "tests/test_nextcloud_talk_credential_setup.py",
+        "symbol": "<module>",
+        "category": "outbound_transport",
+        "fingerprint": "c31304ba674a0781dc6e33990d28f68e19dda55814387eb4f4ed5929c6c59346"
+      },
+      {
         "path": "tests/test_nextcloud_talk_staff_notifications.py",
         "symbol": "<module>",
         "category": "delivery_retry",
@@ -173,7 +188,7 @@
         "path": "tests/test_team_inbox_whatsapp_webhook.py",
         "symbol": "<module>",
         "category": "provider_credential",
-        "fingerprint": "6b5ec793e3c6236cda3fd4a2acac14846cc9c8970a068551ed3b3bb8bfb2c3fc"
+        "fingerprint": "065610eb62693ff22caf0bca689fe3af7d9790efd43bf2566e83c923e86947c8"
       }
     ]
   }

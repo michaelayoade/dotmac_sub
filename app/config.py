@@ -1,5 +1,5 @@
 import os
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 from dotenv import load_dotenv
 
@@ -26,12 +26,20 @@ def _env_bool(name: str, default: bool) -> bool:
 @dataclass(frozen=True)
 class Settings:
     app_env: str = os.getenv("APP_ENV", os.getenv("ENVIRONMENT", "development")).lower()
+    # Bootstrap-only local IPC override, shared by listener and probe processes.
+    # None leaves the private per-UID default and path admission to syslog.health.
+    syslog_health_socket: str | None = os.getenv("SYSLOG_HEALTH_SOCKET")
     # Explicit peer attribution gate for the standalone machine issuance CLI.
     # Empty means no peer is accepted; there is no inferred identity.
     accepted_source_applications: str = os.getenv("ACCEPTED_SOURCE_APPLICATIONS", "")
     database_url: str = os.getenv(
         "DATABASE_URL",
         "postgresql+psycopg://postgres:postgres@localhost:5434/dotmac_sub",
+    )
+    # Migration-only owner material. None preserves the local/developer fallback;
+    # a supplied blank value must never silently select runtime credentials.
+    migration_database_url: str | None = field(
+        default=os.getenv("MIGRATION_DATABASE_URL"), repr=False
     )
     # Legacy/developer fallback for stable, non-reversible marketing subject
     # identifiers. Deployed environments hold this value from OpenBao at boot.
@@ -73,6 +81,8 @@ class Settings:
     db_pool_timeout: int = int(os.getenv("DB_POOL_TIMEOUT", "20"))
     db_pool_recycle: int = int(os.getenv("DB_POOL_RECYCLE", "1800"))
     db_statement_timeout_ms: int = int(os.getenv("DB_STATEMENT_TIMEOUT_MS", "120000"))
+    # Per-process Postgres application_name (pg_stat_activity attribution).
+    db_application_name: str = os.getenv("DB_APPLICATION_NAME", "")
     db_lock_timeout_ms: int = int(os.getenv("DB_LOCK_TIMEOUT_MS", "10000"))
     # Prompt timeout for OLT SSH session-setup reads (enable/screen-length);
     # floor 5s — see app/services/network/olt_ssh.py:_setup_prompt_timeout.
@@ -297,6 +307,10 @@ class Settings:
         os.getenv("TR069_PERIODIC_INFORM_INTERVAL", "300")
     )  # seconds, default 5 minutes
     tr069_auth_shared_secret: str = os.getenv("TR069_AUTH_SHARED_SECRET", "")
+    # Shared token GenieACS sends in X-Dotmac-Genieacs-Token. Holds a secret
+    # reference (bao://... or env://...) or, failing that, is read from the
+    # OpenBao path secret/tr069#webhook_token. Never put the value in compose.
+    tr069_webhook_token: str = os.getenv("TR069_WEBHOOK_TOKEN", "")
     # SMS provider credentials are HELD, not resolved (ADR-0009): materialised
     # once at boot and never read from `domain_settings`, where they previously
     # lived as a row nothing could write and a lookup that could never find one.
@@ -370,6 +384,15 @@ class Settings:
     # automation from the admin UI mid-incident instead of waiting for a
     # deploy. Their env vars are materialized into the database by settings
     # bootstrap, which keeps one owner for the value.
+
+    @property
+    def alembic_database_url(self) -> str:
+        """Select migration material without changing runtime database authority."""
+        if self.migration_database_url is None:
+            return self.database_url
+        if not self.migration_database_url.strip():
+            raise ValueError("MIGRATION_DATABASE_URL must not be blank when supplied")
+        return self.migration_database_url
 
 
 settings = Settings()

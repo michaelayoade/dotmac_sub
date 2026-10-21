@@ -7,7 +7,7 @@ import re
 from base64 import b64encode
 from datetime import UTC, datetime
 from io import BytesIO
-from typing import cast
+from typing import Literal, cast
 from urllib.parse import quote_plus
 from uuid import UUID, uuid4
 
@@ -39,6 +39,7 @@ from app.models.domain_settings import SettingDomain
 from app.models.subscriber import Subscriber
 from app.models.subscription_engine import SettingValueType
 from app.schemas.settings import DomainSettingUpdate
+from app.services import api_key_administration as api_key_admin
 from app.services import (
     billing as billing_service,
 )
@@ -60,19 +61,16 @@ from app.services import staff_provisioning as staff_provisioning_service
 from app.services import support as support_service
 from app.services import support_ticket_settings as support_ticket_settings_service
 from app.services import system_user_assignments as assignment_service
+from app.services import web_admin_dashboard as web_admin_dashboard_service
 from app.services import web_control_plane as web_control_plane_service
 from app.services import web_system_about as web_system_about_service
 from app.services import web_system_api_key_forms as web_system_api_key_forms_service
-from app.services import (
-    web_system_api_key_mutations as web_system_api_key_mutations_service,
-)
 from app.services import web_system_api_keys as web_system_api_keys_service
 from app.services import web_system_audit as web_system_audit_service
 from app.services import web_system_billing_forms as web_system_billing_forms_service
 from app.services import web_system_common as web_system_common_service
 from app.services import web_system_company_info as web_system_company_info_service
 from app.services import web_system_config as web_system_config_service
-from app.services import web_system_db_inspector as web_system_db_inspector_service
 from app.services import web_system_export_tool as web_system_export_tool_service
 from app.services import web_system_form_views as web_system_form_views_service
 from app.services import web_system_geocode_tool as web_system_geocode_tool_service
@@ -94,12 +92,18 @@ from app.services import web_system_settings_views as web_system_settings_views_
 from app.services import web_system_user_edit as web_system_user_edit_service
 from app.services import web_system_user_mutations as web_system_user_mutations_service
 from app.services import web_system_users as web_system_users_service
+from app.services import web_walled_garden_settings as walled_garden_settings_service
+from app.services.audit_adapter import AuditActor
 from app.services.audit_helpers import (
     build_audit_activities,
     build_audit_activities_for_types,
     log_audit_event,
 )
-from app.services.auth_dependencies import load_permission_keys, require_permission
+from app.services.auth_dependencies import (
+    can,
+    load_permission_keys,
+    require_permission,
+)
 from app.services.brand_theme import (
     DEFAULT_HEX,
     DEFAULT_SECONDARY_HEX,
@@ -126,7 +130,6 @@ from app.web.request_parsing import (
 
 templates = Jinja2Templates(directory="templates")
 router = APIRouter(prefix="/system", tags=["web-admin-system"])
-DB_INSPECTOR_COOKIE = "dbi_confirm"
 
 
 def _system_page_context(request: Request, db: Session, title: str, active_page: str):
@@ -144,18 +147,6 @@ def _system_page_context(request: Request, db: Session, title: str, active_page:
         "empty_title": f"No {title.lower()} yet",
         "empty_message": "No records are available for this section.",
     }
-
-
-def _dbi_principal_id(request: Request) -> str:
-    from app.web.admin import get_current_user
-
-    current_user = get_current_user(request) or {}
-    principal = str(
-        current_user.get("subscriber_id") or current_user.get("id") or ""
-    ).strip()
-    if not principal:
-        raise HTTPException(status_code=401, detail="Unable to resolve current user")
-    return principal
 
 
 def _require_system_user_principal(request: Request) -> dict:
@@ -198,6 +189,52 @@ def _system_command_context(
         scope=scope,
         reason=reason,
         idempotency_key=idempotency_key,
+    )
+
+
+def _system_command_actor(context: CommandContext) -> AuditActor:
+    actor_type, actor_id = context.actor.split(":", 1)
+    return (
+        AuditActor.api_key(actor_id)
+        if actor_type == "api_key"
+        else AuditActor.user(actor_id)
+    )
+
+
+def _web_api_key_scope(person_id: str | None) -> api_key_admin.WebApiKeyCallerScope:
+    # Preserve the legacy empty staff UUID failure only for subscriber targets.
+    try:
+        return api_key_admin.WebApiKeyCallerScope(
+            UUID(person_id) if person_id else None, person_id == ""
+        )
+    except ValueError:
+        return api_key_admin.WebApiKeyCallerScope(None, True)
+
+
+def _web_api_key_http_error(exc: DomainError) -> HTTPException:
+    busy = exc.code.endswith(".busy")
+    return HTTPException(
+        status_code=503 if busy else 500,
+        detail=exc.message,
+        headers={"Retry-After": "5"} if busy else None,
+    )
+
+
+def _staff_deletion_http_error(exc: DomainError) -> HTTPException:
+    busy = exc.code.endswith(".deletion_busy")
+    status = (
+        404
+        if exc.code.endswith(".staff_account_not_found")
+        else 409
+        if exc.code.endswith(".linked_records")
+        else 503
+        if busy
+        else 500
+    )
+    return HTTPException(
+        status_code=status,
+        detail=exc.message,
+        headers={"Retry-After": "5"} if busy else None,
     )
 
 
@@ -354,6 +391,19 @@ def system_overview(request: Request, db: Session = Depends(get_db)):
 
 
 @router.get(
+    "/infrastructure",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("system:settings:read"))],
+)
+def system_infrastructure_partial(
+    request: Request, db: Session = Depends(get_db)
+) -> HTMLResponse:
+    """Refresh the infrastructure work surface on the System overview."""
+
+    return web_admin_dashboard_service.dashboard_server_health_partial(request, db)
+
+
+@router.get(
     "/modules",
     response_class=HTMLResponse,
     dependencies=[Depends(require_permission("system:settings:read"))],
@@ -491,7 +541,6 @@ def system_import_wizard(request: Request, db: Session = Depends(get_db)):
 def system_import_template_csv(
     module: str = Query(...),
 ):
-    from fastapi.responses import StreamingResponse
 
     content = web_system_import_wizard_service.csv_template(module)
     return StreamingResponse(
@@ -999,7 +1048,6 @@ def system_export_tool(
     dependencies=[Depends(require_permission("system:settings:read"))],
 )
 def system_export_download(request: Request, db: Session = Depends(get_db)):
-    from fastapi.responses import StreamingResponse
 
     from app.web.admin import get_current_user
 
@@ -1522,6 +1570,8 @@ def user_profile(request: Request, db: Session = Depends(get_db)):
         success = "Two-factor authentication enabled successfully."
     elif request.query_params.get("sessions") == "signed-out":
         success = "Other active sessions signed out."
+    elif request.query_params.get("sessions") == "unchanged":
+        success = "There were no other active sessions to sign out."
     elif request.query_params.get("device_login") == "updated":
         success = "Router device login updated."
     state = web_system_profiles_service.build_profile_page_state(
@@ -1772,14 +1822,36 @@ def user_profile_sign_out_other_sessions(
     if not principal_id:
         return RedirectResponse(url="/admin/system/users/profile", status_code=303)
 
-    session_manager_service.revoke_all_other_sessions(
-        db,
-        coerce_uuid(principal_id),
-        str(auth.get("session_id") or ""),
-        principal_type="system_user",
-    )
+    from fastapi import HTTPException
+    from sqlalchemy.exc import OperationalError
+
+    from app.services.db_session_adapter import db_session_adapter
+
+    with db_session_adapter.owner_command_session() as command_db:
+        try:
+            result = session_manager_service.revoke_all_other_sessions(
+                command_db,
+                subscriber_id=coerce_uuid(principal_id),
+                current_session_id=str(auth.get("session_id") or ""),
+                principal_type="system_user",
+            )
+        except session_manager_service.SessionRevocationError as exc:
+            raise HTTPException(status_code=401, detail=exc.message) from exc
+        except OperationalError as exc:
+            if (
+                getattr(exc.orig, "sqlstate", None) == "55P03"
+                or getattr(exc.orig, "pgcode", None) == "55P03"
+            ):
+                raise HTTPException(
+                    status_code=503,
+                    detail="Session revocation busy",
+                    headers={"Retry-After": "5"},
+                ) from exc
+            raise
     return RedirectResponse(
-        url="/admin/system/users/profile?sessions=signed-out", status_code=303
+        url="/admin/system/users/profile?sessions="
+        + ("signed-out" if result.revoked_count else "unchanged"),
+        status_code=303,
     )
 
 
@@ -1912,6 +1984,7 @@ def users_bulk_set_user_type(
     "/users/bulk/delete", dependencies=[Depends(require_permission("rbac:assign"))]
 )
 def users_bulk_delete(
+    request: Request,
     data: dict = Depends(parse_json_body),
     db: Session = Depends(get_db),
 ):
@@ -1919,10 +1992,22 @@ def users_bulk_delete(
     if not user_ids or not isinstance(user_ids, list):
         raise HTTPException(status_code=400, detail="user_ids is required")
 
-    deleted, skipped = web_system_user_mutations_service.bulk_delete_user_records(
-        db,
-        user_ids=[str(item) for item in user_ids],
+    context = _system_command_context(
+        request, reason="Delete inactive staff accounts", idempotency_key=str(uuid4())
     )
+    try:
+        command = staff_provisioning_service.BulkDeleteStaffAccountsCommand(
+            context=context,
+            actor=_system_command_actor(context),
+            user_ids=tuple(UUID(str(value)) for value in user_ids),
+        )
+        with db_session_adapter.owner_command_session() as command_db:
+            outcome = staff_provisioning_service.bulk_delete_staff_accounts(
+                command_db, command=command
+            )
+    except DomainError as exc:
+        raise _staff_deletion_http_error(exc) from None
+    deleted, skipped = len(outcome.deleted_user_ids), outcome.skipped_count
     return {
         "message": f"Deleted {deleted} users. Skipped {skipped}.",
         "deleted_count": deleted,
@@ -2397,10 +2482,28 @@ def user_deactivate(request: Request, user_id: str, db: Session = Depends(get_db
     response_class=HTMLResponse,
     dependencies=[Depends(require_permission("rbac:assign"))],
 )
-def user_disable_mfa(request: Request, user_id: str, db: Session = Depends(get_db)):
-    web_system_user_mutations_service.disable_user_mfa(
-        db, user_id=user_id, actor_id=_system_actor_id(request)
-    )
+def user_disable_mfa(
+    request: Request,
+    user_id: str,
+    removal_reason: str = Form(""),
+    db: Session = Depends(get_db),
+):
+    try:
+        web_system_user_mutations_service.disable_user_mfa(
+            db,
+            command=staff_provisioning_service.RemoveStaffMfaCommand(
+                context=_system_command_context(
+                    request,
+                    reason="Administrative staff MFA removal",
+                    idempotency_key=f"staff-mfa-removal:{user_id}:{uuid4()}",
+                ),
+                user_id=UUID(user_id),
+                removal_reason=removal_reason or request.headers.get("HX-Prompt", ""),
+            ),
+        )
+    except (DomainError, ValueError) as exc:
+        message = exc.message if isinstance(exc, DomainError) else str(exc)
+        return web_system_common_service.error_banner(message)
     return Response(status_code=204)
 
 
@@ -2682,32 +2785,21 @@ def user_create(
     dependencies=[Depends(require_permission("rbac:assign"))],
 )
 def user_delete(request: Request, user_id: str, db: Session = Depends(get_db)):
-    system_user = web_system_user_edit_service.get_subscriber_or_none(db, user_id)
-    if not system_user:
-        raise HTTPException(status_code=404, detail="User not found")
-    if system_user.is_active:
-        return web_system_common_service.blocked_delete_response(
-            request, [], detail="Deactivate user before deleting."
-        )
-    deleted_metadata = {
-        "email": system_user.email,
-        "display_name": system_user.display_name
-        or f"{system_user.first_name or ''} {system_user.last_name or ''}".strip(),
-    }
+    context = _system_command_context(
+        request, reason="Delete inactive staff account", idempotency_key=str(uuid4())
+    )
+    command = staff_provisioning_service.DeleteStaffAccountCommand(
+        context=context, actor=_system_command_actor(context), user_id=UUID(user_id)
+    )
     try:
-        web_system_user_mutations_service.delete_user_records(db, user_id=user_id)
-        _log_system_user_event(
-            db,
-            request,
-            action="delete",
-            user_id=user_id,
-            metadata=deleted_metadata,
-        )
-    except IntegrityError:
-        db.rollback()
-        return web_system_common_service.blocked_delete_response(
-            request, [], detail="User cannot be deleted due to linked records."
-        )
+        with db_session_adapter.owner_command_session() as command_db:
+            staff_provisioning_service.delete_staff_account(command_db, command=command)
+    except DomainError as exc:
+        if exc.code.endswith((".active_staff_deletion", ".linked_records")):
+            return web_system_common_service.blocked_delete_response(
+                request, [], detail=exc.message
+            )
+        raise _staff_deletion_http_error(exc) from None
     if request.headers.get("HX-Request"):
         return Response(status_code=200, headers={"HX-Redirect": "/admin/system/users"})
     return RedirectResponse(url="/admin/system/users", status_code=303)
@@ -3250,13 +3342,23 @@ def api_key_create(
         return RedirectResponse(url="/admin/system/api-keys", status_code=303)
 
     try:
-        raw_key = web_system_api_key_forms_service.create_api_key(
-            db,
-            subscriber_id=owner_id,
-            label=label,
-            expires_in=expires_in,
-            scopes=web_system_api_key_forms_service.parse_scopes(scopes),
+        command_context = _system_command_context(
+            request,
+            reason="Create API key",
+            idempotency_key=str(uuid4()),
+            scope=api_key_admin.WEB_CREATE_SCOPE,
         )
+        command = api_key_admin.WebCreateApiKeyCommand(
+            context=command_context,
+            actor=_system_command_actor(command_context),
+            subscriber_id=UUID(owner_id) if owner_id else None,
+            label=label,
+            expires_in_days=int(expires_in) if expires_in else None,
+            scopes=tuple(web_system_api_key_forms_service.parse_scopes(scopes)),
+        )
+        with db_session_adapter.owner_command_session() as command_db:
+            outcome = api_key_admin.web_create(command_db, command=command)
+        raw_key = outcome.secret
 
         # Show the raw secret exactly once, in the POST response body — NOT in a
         # redirect URL (which leaks into access logs / history / Referer and
@@ -3277,15 +3379,16 @@ def api_key_create(
                 "now": datetime.now(UTC),
             },
         )
-    except Exception as e:
-        db.rollback()
+    except (DomainError, ValueError, OverflowError) as e:
         context = {
             "request": request,
             "active_page": "api-keys",
             "active_menu": "system",
             "current_user": current_user,
             "sidebar_stats": get_sidebar_stats(db),
-            "error": str(e),
+            "error": e.message
+            if isinstance(e, DomainError)
+            else "Invalid API-key creation input.",
         }
         return templates.TemplateResponse("admin/system/api_key_form.html", context)
 
@@ -3302,9 +3405,24 @@ def api_key_revoke(request: Request, key_id: str, db: Session = Depends(get_db))
     person_id = current_user.get("person_id") if current_user else None
     # Scope the revoke to the caller's own keys so a staffer can't revoke another
     # principal's key by guessing/enumerating ids.
-    web_system_api_key_mutations_service.revoke_api_key(
-        db, key_id=key_id, subscriber_id=person_id
+    command_context = _system_command_context(
+        request,
+        reason="Revoke API key",
+        idempotency_key=str(uuid4()),
+        scope=api_key_admin.WEB_REVOKE_SCOPE,
     )
+    command = api_key_admin.WebMutateApiKeyCommand(
+        context=command_context,
+        actor=_system_command_actor(command_context),
+        key_id=UUID(key_id),
+        caller_scope=_web_api_key_scope(person_id),
+        action=api_key_admin.WebApiKeyAction.REVOKE,
+    )
+    try:
+        with db_session_adapter.owner_command_session() as command_db:
+            api_key_admin.web_mutate(command_db, command=command)
+    except DomainError as exc:
+        raise _web_api_key_http_error(exc) from None
     # No secret to surface on a revoke, so use PRG + a query flag the list page
     # renders as a "revoked" banner (create/rotate keep the secret out of URLs).
     return RedirectResponse(url="/admin/system/api-keys?revoked=1", status_code=303)
@@ -3320,9 +3438,25 @@ def api_key_rotate(request: Request, key_id: str, db: Session = Depends(get_db))
 
     current_user = get_current_user(request)
     person_id = current_user.get("person_id") if current_user else None
-    raw_key = web_system_api_key_mutations_service.rotate_api_key(
-        db, key_id=key_id, subscriber_id=person_id
+    command_context = _system_command_context(
+        request,
+        reason="Rotate API key",
+        idempotency_key=str(uuid4()),
+        scope=api_key_admin.WEB_ROTATE_SCOPE,
     )
+    command = api_key_admin.WebMutateApiKeyCommand(
+        context=command_context,
+        actor=_system_command_actor(command_context),
+        key_id=UUID(key_id),
+        caller_scope=_web_api_key_scope(person_id),
+        action=api_key_admin.WebApiKeyAction.ROTATE,
+    )
+    try:
+        with db_session_adapter.owner_command_session() as command_db:
+            outcome = api_key_admin.web_mutate(command_db, command=command)
+    except DomainError as exc:
+        raise _web_api_key_http_error(exc) from None
+    raw_key = outcome.secret
     api_keys = web_system_api_keys_service.list_api_keys_for_subscriber(db, person_id)
     if not raw_key:
         # Missing / out-of-scope / already-revoked key: no secret to show.
@@ -3353,8 +3487,17 @@ def api_key_rotate(request: Request, key_id: str, db: Session = Depends(get_db))
 def audit_log(
     request: Request,
     actor_id: str | None = None,
+    actor_type: str | None = None,
     action: str | None = None,
     entity_type: str | None = None,
+    result: str | None = None,
+    period: str | None = None,
+    date_from: str | None = None,
+    date_to: str | None = None,
+    entity_id: str | None = None,
+    entity_id_missing: bool = False,
+    request_id: str | None = None,
+    request_id_missing: bool = False,
     sort_by: str | None = None,
     sort_dir: str | None = None,
     page: int = Query(1, ge=1),
@@ -3365,17 +3508,37 @@ def audit_log(
     try:
         list_query = web_system_audit_service.build_audit_list_query(
             actor_id=actor_id,
+            actor_type=actor_type,
             action=action,
             entity_type=entity_type,
+            result=result,
+            period=period,
+            date_from=date_from,
+            date_to=date_to,
+            entity_id=entity_id,
+            entity_id_missing=entity_id_missing,
+            request_id=request_id,
+            request_id_missing=request_id_missing,
             sort_by=sort_by,
             sort_dir=sort_dir,
             page=page,
             per_page=per_page,
         )
-    except ValueError:
-        # Out-of-contract sort/page params (e.g. hand-edited URL) fall back to
-        # the contract defaults rather than erroring the page.
-        list_query = web_system_audit_service.build_audit_list_query(page=page)
+    except web_system_audit_service.AuditFilterValidationError as exc:
+        if request.headers.get("HX-Request"):
+            response = templates.TemplateResponse(
+                "admin/system/_audit_filter_error.html",
+                {"request": request, "filter_error": str(exc)},
+            )
+            response.headers["HX-Retarget"] = "#audit-filter-feedback"
+            response.headers["HX-Reswap"] = "innerHTML"
+            return response
+        # Keep the page usable on a hand-edited invalid URL while making the
+        # reason visible instead of silently pretending the filters applied.
+        list_query = web_system_audit_service.build_audit_list_query()
+        filter_error = str(exc)
+    else:
+        filter_error = None
 
     page_data = web_system_audit_service.get_audit_page_data(db, list_query)
 
@@ -3384,25 +3547,88 @@ def audit_log(
             "admin/system/_audit_table.html",
             {
                 "request": request,
+                "clear_filter_error": True,
                 **page_data,
             },
         )
 
     from app.web.admin import get_current_user, get_sidebar_stats
 
+    filter_options = web_system_audit_service.get_audit_filter_options(
+        db,
+        selected_entity_type=list_query.filter_value("entity_type"),
+        selected_action=list_query.filter_value("action"),
+    )
     return templates.TemplateResponse(
         "admin/system/audit.html",
         {
             "request": request,
+            "filter_error": filter_error,
             **page_data,
-            "actor_id": actor_id,
-            "action": action,
-            "entity_type": entity_type,
+            **filter_options,
             "active_page": "audit",
             "active_menu": "system",
             "current_user": get_current_user(request),
             "sidebar_stats": get_sidebar_stats(db),
         },
+    )
+
+
+@router.get(
+    "/audit/export/{export_format}",
+    dependencies=[Depends(require_permission("audit:read"))],
+)
+def export_audit_log(
+    export_format: Literal["csv", "json"],
+    actor_id: str | None = None,
+    actor_type: str | None = None,
+    action: str | None = None,
+    entity_type: str | None = None,
+    result: str | None = None,
+    period: str | None = None,
+    date_from: str | None = None,
+    date_to: str | None = None,
+    entity_id: str | None = None,
+    entity_id_missing: bool = False,
+    request_id: str | None = None,
+    request_id_missing: bool = False,
+    sort_by: str | None = None,
+    sort_dir: str | None = None,
+    db: Session = Depends(get_db),
+) -> Response:
+    """Download the redacted audit rows matching the current filters."""
+
+    try:
+        query = web_system_audit_service.build_audit_list_query(
+            actor_id=actor_id,
+            actor_type=actor_type,
+            action=action,
+            entity_type=entity_type,
+            result=result,
+            period=period,
+            date_from=date_from,
+            date_to=date_to,
+            entity_id=entity_id,
+            entity_id_missing=entity_id_missing,
+            request_id=request_id,
+            request_id_missing=request_id_missing,
+            sort_by=sort_by,
+            sort_dir=sort_dir,
+        )
+        document = web_system_audit_service.build_audit_export(
+            db,
+            query=query,
+            export_format=export_format,
+        )
+    except (
+        web_system_audit_service.AuditFilterValidationError,
+        web_system_audit_service.AuditExportTooLargeError,
+    ) as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return Response(
+        content=document.content,
+        media_type=document.media_type,
+        headers={"Content-Disposition": f'attachment; filename="{document.filename}"'},
     )
 
 
@@ -3656,6 +3882,46 @@ def settings_update(
         "admin/system/settings.html",
         context,
         status_code=400 if errors else 200,
+    )
+
+
+@router.post(
+    "/settings/starter-ledger-live",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("system:settings:write"))],
+)
+def settings_starter_ledger_live_update(
+    request: Request,
+    enabled: str | None = Form(None),
+    db: Session = Depends(get_db),
+):
+    """Dedicated D1 switch form. The owner command enforces and audits the
+    dedicated ``billing:starter_ledger_live:write`` grant (strict: no admin
+    bypass, no wildcard) before and inside its transaction."""
+    errors = web_system_settings_forms_service.set_starter_ledger_live_switch(
+        db=db,
+        enabled=web_system_settings_forms_service.form_bool(enabled),
+        context=_system_command_context(
+            request,
+            reason="Change the Starter ledger live (D1) switch",
+            idempotency_key=f"starter-ledger-live:{uuid4()}",
+            scope=domain_settings_service.ADMIN_SETTINGS_FORM_WRITE_SCOPE,
+        ),
+    )
+    if not errors:
+        return RedirectResponse(
+            url="/admin/system/settings?domain=billing", status_code=303
+        )
+    context = web_system_settings_views_service.build_settings_page_context(
+        request,
+        db,
+        settings_context=web_system_settings_views_service.build_settings_context(
+            db, "billing"
+        ),
+        extra={"errors": list(errors), "saved": False},
+    )
+    return templates.TemplateResponse(
+        "admin/system/settings.html", context, status_code=403
     )
 
 
@@ -4384,244 +4650,6 @@ def restore_tool_settings(
     return RedirectResponse(
         url=f"/admin/system/tools/restore?q={quote_plus(request.query_params.get('q', ''))}&selected_id={quote_plus(request.query_params.get('selected_id', ''))}&retention={value}",
         status_code=303,
-    )
-
-
-@router.get(
-    "/tools/db-inspector",
-    response_class=HTMLResponse,
-    dependencies=[Depends(require_permission("system:db_admin"))],
-)
-def db_inspector_page(
-    request: Request,
-    table: str | None = Query(default=None),
-    db: Session = Depends(get_db),
-):
-    from app.web.admin import get_current_user, get_sidebar_stats
-
-    principal_id = _dbi_principal_id(request)
-    confirmed = web_system_db_inspector_service.validate_confirmation_token(
-        principal_id=principal_id,
-        token=request.cookies.get(DB_INSPECTOR_COOKIE),
-    )
-    overview = (
-        web_system_db_inspector_service.build_overview(db, selected_table=table)
-        if confirmed
-        else {
-            "dialect": db.bind.dialect.name if db.bind is not None else "unknown",
-            "table_stats": [],
-            "index_usage": [],
-            "slow_queries": [],
-            "slow_query_note": None,
-            "table_schema": [],
-            "selected_table": (table or "").strip(),
-        }
-    )
-    return templates.TemplateResponse(
-        "admin/system/db_inspector.html",
-        {
-            "request": request,
-            "active_page": "system-db-inspector",
-            "active_menu": "system",
-            "current_user": get_current_user(request),
-            "sidebar_stats": get_sidebar_stats(db),
-            "confirmed": confirmed,
-            "query_result": None,
-            "query_text": "",
-            "row_limit": web_system_db_inspector_service.DEFAULT_ROWS,
-            "error": request.query_params.get("error"),
-            "notice": request.query_params.get("notice"),
-            **overview,
-        },
-    )
-
-
-@router.post(
-    "/tools/db-inspector/confirm",
-    dependencies=[Depends(require_permission("system:db_admin"))],
-)
-def db_inspector_confirm(
-    request: Request,
-    db: Session = Depends(get_db),
-):
-    form = parse_form_data_sync(request)
-    password = str(form.get("password") or "")
-    table = str(form.get("table") or "").strip()
-    try:
-        token = web_system_db_inspector_service.confirm_access(
-            db,
-            principal_id=_dbi_principal_id(request),
-            password=password,
-        )
-    except HTTPException as exc:
-        return RedirectResponse(
-            url=f"/admin/system/tools/db-inspector?table={quote_plus(table)}&error={quote_plus(str(exc.detail))}",
-            status_code=303,
-        )
-
-    response = RedirectResponse(
-        url=f"/admin/system/tools/db-inspector?table={quote_plus(table)}&notice={quote_plus('Password confirmed. DB inspector unlocked for 3 minutes.')}",
-        status_code=303,
-    )
-    response.set_cookie(
-        DB_INSPECTOR_COOKIE,
-        token,
-        max_age=web_system_db_inspector_service.CONFIRM_TTL_SECONDS,
-        httponly=True,
-        samesite="strict",
-        secure=True,
-        path="/admin/system/tools/db-inspector",
-    )
-    return response
-
-
-@router.post(
-    "/tools/db-inspector/revoke",
-    dependencies=[Depends(require_permission("system:db_admin"))],
-)
-def db_inspector_revoke():
-    response = RedirectResponse(
-        url="/admin/system/tools/db-inspector?notice=Access%20revoked",
-        status_code=303,
-    )
-    response.delete_cookie(DB_INSPECTOR_COOKIE, path="/admin/system/tools/db-inspector")
-    return response
-
-
-@router.post(
-    "/tools/db-inspector/query",
-    response_class=HTMLResponse,
-    dependencies=[Depends(require_permission("system:db_admin"))],
-)
-def db_inspector_query(
-    request: Request,
-    db: Session = Depends(get_db),
-):
-    from app.web.admin import get_current_user, get_sidebar_stats
-
-    principal_id = _dbi_principal_id(request)
-    confirmed = web_system_db_inspector_service.validate_confirmation_token(
-        principal_id=principal_id,
-        token=request.cookies.get(DB_INSPECTOR_COOKIE),
-    )
-    if not confirmed:
-        return RedirectResponse(
-            url="/admin/system/tools/db-inspector?error=Confirm%20password%20to%20unlock%20DB%20Inspector",
-            status_code=303,
-        )
-
-    form = parse_form_data_sync(request)
-    query_text = str(form.get("query_text") or "")
-    table = str(form.get("table") or "").strip()
-    row_limit_raw = str(form.get("row_limit") or "").strip()
-    try:
-        row_limit = (
-            int(row_limit_raw)
-            if row_limit_raw
-            else web_system_db_inspector_service.DEFAULT_ROWS
-        )
-    except ValueError:
-        row_limit = web_system_db_inspector_service.DEFAULT_ROWS
-
-    query_result = None
-    error = None
-    try:
-        query_result = web_system_db_inspector_service.run_select_query(
-            db,
-            query_text,
-            row_limit=row_limit,
-        )
-        log_audit_event(
-            db=db,
-            request=request,
-            action="db_inspector_query",
-            entity_type="db_inspector",
-            entity_id=None,
-            actor_id=principal_id,
-            metadata={
-                "query": query_result["query"],
-                "row_count": query_result["row_count"],
-                "row_limit": query_result["row_limit"],
-            },
-        )
-    except Exception as exc:
-        error = str(exc.detail) if isinstance(exc, HTTPException) else str(exc)
-
-    overview = web_system_db_inspector_service.build_overview(db, selected_table=table)
-    return templates.TemplateResponse(
-        "admin/system/db_inspector.html",
-        {
-            "request": request,
-            "active_page": "system-db-inspector",
-            "active_menu": "system",
-            "current_user": get_current_user(request),
-            "sidebar_stats": get_sidebar_stats(db),
-            "confirmed": True,
-            "query_result": query_result,
-            "query_text": query_text,
-            "row_limit": row_limit,
-            "error": error,
-            "notice": None,
-            **overview,
-        },
-    )
-
-
-@router.post(
-    "/tools/db-inspector/export.csv",
-    dependencies=[Depends(require_permission("system:db_admin"))],
-)
-def db_inspector_export_csv(
-    request: Request,
-    db: Session = Depends(get_db),
-):
-    principal_id = _dbi_principal_id(request)
-    confirmed = web_system_db_inspector_service.validate_confirmation_token(
-        principal_id=principal_id,
-        token=request.cookies.get(DB_INSPECTOR_COOKIE),
-    )
-    if not confirmed:
-        return RedirectResponse(
-            url="/admin/system/tools/db-inspector?error=Confirm%20password%20to%20unlock%20DB%20Inspector",
-            status_code=303,
-        )
-
-    form = parse_form_data_sync(request)
-    query_text = str(form.get("query_text") or "")
-    row_limit_raw = str(form.get("row_limit") or "").strip()
-    try:
-        row_limit = (
-            int(row_limit_raw)
-            if row_limit_raw
-            else web_system_db_inspector_service.DEFAULT_ROWS
-        )
-    except ValueError:
-        row_limit = web_system_db_inspector_service.DEFAULT_ROWS
-    result_payload = web_system_db_inspector_service.run_select_query(
-        db,
-        query_text,
-        row_limit=row_limit,
-    )
-    csv_content = web_system_db_inspector_service.query_result_to_csv(result_payload)
-    log_audit_event(
-        db=db,
-        request=request,
-        action="db_inspector_export_csv",
-        entity_type="db_inspector",
-        entity_id=None,
-        actor_id=principal_id,
-        metadata={
-            "query": result_payload["query"],
-            "row_count": result_payload["row_count"],
-            "row_limit": result_payload["row_limit"],
-        },
-    )
-    return StreamingResponse(
-        iter([csv_content]),
-        media_type="text/csv",
-        headers={
-            "Content-Disposition": 'attachment; filename="db_inspector_query.csv"'
-        },
     )
 
 
@@ -5650,6 +5678,239 @@ def config_radius_push_reject_rules(request: Request, db: Session = Depends(get_
     )
 
 
+# --- 8.21 Walled-garden allowed resources ---
+_WALLED_GARDEN_PATH = "/admin/system/config/walled-garden"
+_WALLED_GARDEN_NOTICES = frozenset(
+    action.value for action in walled_garden_settings_service.WalledGardenEditAction
+)
+
+
+def _walled_garden_page_response(
+    request: Request,
+    db: Session,
+    *,
+    edit_key: str | None = None,
+    form: walled_garden_settings_service.WalledGardenEntryFormState | None = None,
+    notice: str | None = None,
+    notice_key: str | None = None,
+    page_error: str | None = None,
+    status_code: int = 200,
+) -> HTMLResponse:
+    page = walled_garden_settings_service.build_walled_garden_settings_page(
+        db, edit_key=edit_key, form=form
+    )
+    return templates.TemplateResponse(
+        request,
+        "admin/system/config/walled_garden.html",
+        _config_context(
+            request,
+            db,
+            {
+                "active_page": "config-walled-garden",
+                "page": page,
+                "can_edit": can(request, "system:settings:write"),
+                "notice": notice if notice in _WALLED_GARDEN_NOTICES else None,
+                "notice_key": notice_key,
+                "page_error": page_error,
+            },
+        ),
+        status_code=status_code,
+    )
+
+
+def _walled_garden_redirect(
+    outcome: walled_garden_settings_service.WalledGardenEditOutcome,
+) -> RedirectResponse:
+    return RedirectResponse(
+        url=(
+            f"{_WALLED_GARDEN_PATH}?notice={outcome.action.value}"
+            f"&entry={quote_plus(outcome.entry_key)}"
+        ),
+        status_code=303,
+    )
+
+
+def _walled_garden_context(request: Request, *, reason: str) -> CommandContext:
+    return _system_command_context(
+        request,
+        reason=reason,
+        idempotency_key=f"walled-garden-settings:{uuid4()}",
+        scope=domain_settings_service.ADMIN_SETTINGS_FORM_WRITE_SCOPE,
+    )
+
+
+def _walled_garden_error_status(
+    error: walled_garden_settings_service.WalledGardenEditError,
+) -> int:
+    codes = walled_garden_settings_service.WalledGardenEditErrorCode
+    if error.error_code in {codes.STALE, codes.ENTRY_NOT_FOUND}:
+        return 409
+    return 400
+
+
+@router.get(
+    "/config/walled-garden",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("system:settings:read"))],
+)
+def config_walled_garden_page(
+    request: Request,
+    edit: str | None = None,
+    notice: str | None = None,
+    entry: str | None = None,
+    db: Session = Depends(get_db),
+):
+    """Allowed resources reachable while captive, plus router readiness."""
+    return _walled_garden_page_response(
+        request, db, edit_key=edit, notice=notice, notice_key=entry
+    )
+
+
+@router.post(
+    "/config/walled-garden/entries",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("system:settings:write"))],
+)
+def config_walled_garden_save_entry(
+    request: Request,
+    expected_fingerprint: str = Form(...),
+    label: str = Form(""),
+    kind: str = Form(""),
+    hosts: str = Form(""),
+    key: str = Form(""),
+    original_key: str | None = Form(None),
+    enabled: str | None = Form(None),
+    db: Session = Depends(get_db),
+):
+    """Add an entry, or change an existing entry's label, kind, and hosts."""
+    service = walled_garden_settings_service
+    editing = bool(original_key and original_key.strip())
+    draft = service.WalledGardenEntryDraft(
+        label=label,
+        kind=kind,
+        hosts=service.parse_hosts_text(hosts),
+        key=key,
+        enabled=enabled == "true",
+    )
+    entry_ref = original_key.strip() if editing and original_key else key.strip()
+    try:
+        outcome = service.save_walled_garden_entry(
+            db,
+            command=service.SaveWalledGardenEntryCommand(
+                context=_walled_garden_context(
+                    request,
+                    reason=(
+                        f"Walled garden: {'update' if editing else 'add'} "
+                        f"allowed resource {entry_ref or 'new'}"
+                    ),
+                ),
+                expected_fingerprint=expected_fingerprint,
+                draft=draft,
+                original_key=original_key.strip() if editing and original_key else None,
+            ),
+        )
+    except service.WalledGardenEditError as exc:
+        form = service.WalledGardenEntryFormState(
+            mode=(
+                service.WalledGardenFormMode.edit
+                if editing
+                else service.WalledGardenFormMode.add
+            ),
+            original_key=original_key.strip() if editing and original_key else None,
+            key=key,
+            label=label,
+            kind=kind,
+            hosts_text=hosts,
+            enabled=draft.enabled,
+            field_errors={
+                item.value: message for item, message in exc.field_errors.items()
+            },
+            form_error=exc.message,
+        )
+        return _walled_garden_page_response(
+            request, db, form=form, status_code=_walled_garden_error_status(exc)
+        )
+    return _walled_garden_redirect(outcome)
+
+
+@router.post(
+    "/config/walled-garden/entries/{entry_key}/enabled",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("system:settings:write"))],
+)
+def config_walled_garden_set_enabled(
+    request: Request,
+    entry_key: str,
+    expected_fingerprint: str = Form(...),
+    enabled: str = Form(...),
+    db: Session = Depends(get_db),
+):
+    """Enable or disable one allowed resource."""
+    service = walled_garden_settings_service
+    if enabled not in {"true", "false"}:
+        raise HTTPException(status_code=400, detail="enabled must be true or false")
+    turn_on = enabled == "true"
+    try:
+        outcome = service.set_walled_garden_entry_enabled(
+            db,
+            command=service.SetWalledGardenEntryEnabledCommand(
+                context=_walled_garden_context(
+                    request,
+                    reason=(
+                        f"Walled garden: {'enable' if turn_on else 'disable'} "
+                        f"allowed resource {entry_key}"
+                    ),
+                ),
+                expected_fingerprint=expected_fingerprint,
+                key=entry_key,
+                enabled=turn_on,
+            ),
+        )
+    except service.WalledGardenEditError as exc:
+        return _walled_garden_page_response(
+            request,
+            db,
+            page_error=exc.message,
+            status_code=_walled_garden_error_status(exc),
+        )
+    return _walled_garden_redirect(outcome)
+
+
+@router.post(
+    "/config/walled-garden/entries/{entry_key}/remove",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("system:settings:write"))],
+)
+def config_walled_garden_remove_entry(
+    request: Request,
+    entry_key: str,
+    expected_fingerprint: str = Form(...),
+    db: Session = Depends(get_db),
+):
+    """Remove one allowed resource from the setting."""
+    service = walled_garden_settings_service
+    try:
+        outcome = service.remove_walled_garden_entry(
+            db,
+            command=service.RemoveWalledGardenEntryCommand(
+                context=_walled_garden_context(
+                    request,
+                    reason=f"Walled garden: remove allowed resource {entry_key}",
+                ),
+                expected_fingerprint=expected_fingerprint,
+                key=entry_key,
+            ),
+        )
+    except service.WalledGardenEditError as exc:
+        return _walled_garden_page_response(
+            request,
+            db,
+            page_error=exc.message,
+            status_code=_walled_garden_error_status(exc),
+        )
+    return _walled_garden_redirect(outcome)
+
+
 # --- 8.22 CPE Configuration: REMOVED (inert/dead config; no active consumer) ---
 
 
@@ -5753,7 +6014,11 @@ def secrets_edit(request: Request, path: str, db: Session = Depends(get_db)):
 def secrets_save(request: Request, path: str, db: Session = Depends(get_db)):
     """Save updated secret fields."""
     form = parse_form_data_sync(request)
-    result = web_system_secrets_service.save_secret(path, form)
+    result = web_system_secrets_service.save_secret(
+        path,
+        form,
+        audit=web_system_secrets_service.secret_write_auditor(db, request),
+    )
     if result.get("ok"):
         return RedirectResponse(str(result["redirect_url"]), status_code=303)
     ctx = _system_page_context(request, db, "Secrets", "secrets")
@@ -5781,7 +6046,10 @@ def secrets_new(request: Request, db: Session = Depends(get_db)):
 def secrets_create(request: Request, db: Session = Depends(get_db)):
     """Create a new secret path with fields."""
     form = parse_form_data_sync(request)
-    result = web_system_secrets_service.create_secret(form)
+    result = web_system_secrets_service.create_secret(
+        form,
+        audit=web_system_secrets_service.secret_write_auditor(db, request),
+    )
     if result.get("ok"):
         return RedirectResponse(str(result["redirect_url"]), status_code=303)
     if result.get("error"):
@@ -5801,7 +6069,10 @@ def secrets_create(request: Request, db: Session = Depends(get_db)):
 def secrets_delete(request: Request, path: str, db: Session = Depends(get_db)):
     """Delete a secret."""
     return RedirectResponse(
-        web_system_secrets_service.delete_secret_path(path),
+        web_system_secrets_service.delete_secret_path(
+            path,
+            audit=web_system_secrets_service.secret_write_auditor(db, request),
+        ),
         status_code=303,
     )
 

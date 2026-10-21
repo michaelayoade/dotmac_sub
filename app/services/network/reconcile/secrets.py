@@ -1,9 +1,9 @@
 """Secret resolution for the reconciler.
 
 Plugs ``app.services.secrets.resolve_secret`` into the reconciler's
-``SecretResolver`` slot so production reconciles pull OLT CR passwords,
-PPPoE passwords, and WiFi PSKs from OpenBao instead of trusting
-plaintext refs.
+``SecretResolver`` slot so production reconciles pull OLT CR and
+ACS passwords from OpenBao. PPPoE and WiFi passwords are stored
+encrypted (``enc:``) and the applier refuses secret references for them.
 
 Three layers in order of preference, controlled by the
 ``OPENBAO_ADDR`` environment variable:
@@ -76,14 +76,20 @@ def openbao_secret_resolver(ref: str) -> str:
     return resolved
 
 
-def credential_secret_resolver(ref: str) -> str:
-    """Resolve OpenBao refs and local encryption-at-rest wrappers."""
+def credential_secret_resolver(
+    ref: str, *, model: str | None = None, field: str | None = None
+) -> str:
+    """Resolve OpenBao refs and local encryption-at-rest wrappers.
+
+    A stored reference resolves only when the caller names an allowlisted
+    ``(model, field)`` (F3); with no context it is refused.
+    """
     if not ref:
         return ""
     try:
-        return decrypt_credential(ref) or ""
+        return decrypt_credential(ref, model=model, field=field) or ""
     except Exception as exc:  # noqa: BLE001 - translate to reconciler failure
-        raise SecretResolutionError(ref, str(exc)) from exc
+        raise SecretResolutionError("[reference]", str(exc)) from exc
 
 
 def default_secret_resolver_from_env() -> SecretResolver:

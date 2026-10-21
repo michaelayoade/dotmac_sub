@@ -136,7 +136,11 @@ def test_postgres_drops_the_obsolete_column_and_keeps_501_resolvable(
     monkeypatch.setattr(
         app_config,
         "settings",
-        replace(app_config.settings, database_url=_render_url(database_url)),
+        replace(
+            app_config.settings,
+            database_url=_render_url(database_url),
+            migration_database_url=_render_url(database_url),
+        ),
     )
     config = _alembic_config()
 
@@ -169,10 +173,46 @@ def test_postgres_drops_the_obsolete_column_and_keeps_501_resolvable(
     # marker backward for compatibility checks does not recreate old data.
     command.upgrade(config, "heads")
     assert _revision_rows(database_url) == expected_heads
+    assert not _column_exists(database_url)
+
+
+def test_501_downgrade_preserves_obsolete_column_removal(
+    isolated_migration_database: URL,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    database_url = isolated_migration_database
+    monkeypatch.setattr(
+        app_config,
+        "settings",
+        replace(
+            app_config.settings,
+            database_url=_render_url(database_url),
+            migration_database_url=_render_url(database_url),
+        ),
+    )
+    config = _alembic_config()
+
+    command.upgrade(config, REVISION_500)
+    assert _revision_rows(database_url) == {REVISION_500}
+
+    with psycopg.connect(_psycopg_url(database_url), autocommit=True) as connection:
+        connection.execute(
+            sql.SQL("ALTER TABLE {} ADD COLUMN IF NOT EXISTS {} INTEGER").format(
+                sql.Identifier(TABLE),
+                sql.Identifier(COLUMN),
+            )
+        )
+    assert _column_exists(database_url)
+
+    command.upgrade(config, REVISION_501)
+    assert _revision_rows(database_url) == {REVISION_501}
+    assert not _column_exists(database_url)
+
     command.downgrade(config, REVISION_500)
     assert _revision_rows(database_url) == {REVISION_500}
     assert not _column_exists(database_url)
 
     command.upgrade(config, "heads")
-    assert _revision_rows(database_url) == expected_heads
+    script = ScriptDirectory.from_config(config)
+    assert _revision_rows(database_url) == set(effective_heads(script))
     assert not _column_exists(database_url)

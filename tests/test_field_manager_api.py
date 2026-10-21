@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import UTC, date, datetime
+from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
 from unittest.mock import patch
 from uuid import uuid4
@@ -19,13 +19,16 @@ from app.models.field_erp_sync import (
 )
 from app.models.field_expense import FieldExpenseRequest
 from app.models.field_location import FieldTechPresence
+from app.models.field_vendor import FieldVendor, FieldVendorUser
 from app.models.subscriber import Subscriber, UserType
 from app.models.system_user import SystemUser
+from app.models.vendor_routes import Vendor
 from app.models.work_order import WorkOrder
-from app.schemas.field import FieldManagerTechniciansQuery
+from app.schemas.field import FieldManagerJobAssignRequest, FieldManagerTechniciansQuery
 from app.schemas.geocoding import ReverseGeocodeResult
 from app.services.auth_dependencies import require_user_auth
 from app.services.field import expense_categories as expense_categories_module
+from app.services.field.execution_contracts import FieldJobQuery, FieldJobsQuery
 from app.services.field.expense_recovery import ExpensePaymentDeliveryRecoveryPreview
 from app.services.field.expense_requests import (
     ApproveFieldExpenseRequest,
@@ -44,6 +47,8 @@ from app.services.field.expense_requests import (
 from app.services.field.jobs import field_jobs
 from app.services.field.manager import field_manager
 from app.services.owner_commands import CommandContext
+from app.services.permission_admission import PermissionAdmission
+from app.services.work_order_errors import WorkOrderCommandError
 
 
 @pytest.fixture(autouse=True)
@@ -69,10 +74,19 @@ def _user(db_session, name: str = "Manager") -> SystemUser:
         display_name=f"{name} Staff",
         email=f"{name.lower()}-{uuid4().hex[:8]}@example.com",
         user_type=UserType.system_user,
+        is_active=True,
     )
     db_session.add(user)
     db_session.flush()
     return user
+
+
+def _dispatch_access(user: SystemUser) -> PermissionAdmission:
+    return PermissionAdmission(
+        principal_id=user.id,
+        principal_type="system_user",
+        admitted_permissions=frozenset({"operations:dispatch:assign"}),
+    )
 
 
 def _auth(user: SystemUser, roles: list[str] | None = None) -> dict:
@@ -300,6 +314,7 @@ def test_manager_me_summary_and_technicians(db_session):
 
 
 def test_manager_jobs_and_assign_flow(db_session):
+    manager = _user(db_session, "Dispatcher")
     tech_user = _user(db_session, "Tech")
     profile = _profile(db_session, tech_user, crm_person_id="crm-assign-tech")
     subscriber = _subscriber(db_session)
@@ -315,11 +330,17 @@ def test_manager_jobs_and_assign_flow(db_session):
     assigned = field_manager.assign_job(
         db_session,
         "wo-assign",
-        person_id=str(profile.person_id),
+        access=_dispatch_access(manager),
+        payload=FieldManagerJobAssignRequest(person_id=str(profile.person_id)),
+        context=CommandContext.system(
+            actor=str(manager.id),
+            scope="operations:dispatch:assign",
+            reason="test assignment",
+        ),
     )
-    assert assigned["assigned_to_person_id"] == profile.person_id
-    assert assigned["assigned_to_label"] == "Tech Staff"
-    assert assigned["status"] == "dispatched"
+    assert assigned.assigned_to_person_id == profile.person_id
+    assert assigned.assigned_to_label == "Tech Staff"
+    assert assigned.status == "dispatched"
 
     db_session.refresh(row)
     assert row.assigned_to_crm_person_id == "crm-assign-tech"
@@ -334,9 +355,24 @@ def test_manager_jobs_and_assign_flow(db_session):
     )
     assert queue.assigned_technician_id == profile.id
     assert queue.status == "assigned"
+    assert queue.assignment_generation is not None
+    assert assigned.assignment_generation == queue.assignment_generation
+    projected = next(
+        job for job in field_manager.list_jobs(db_session) if job["id"] == row.public_id
+    )
+    assert projected["assignment_generation"] == queue.assignment_generation
+    detail = field_jobs.get_detail(
+        db_session,
+        query=FieldJobQuery(
+            requester_system_user_id=tech_user.id, public_id=row.public_id
+        ),
+    )
+    assert detail.job.assignment_generation == queue.assignment_generation
 
     # The technician now sees the job in their scoped list.
-    mine = field_jobs.list(db_session, _auth(tech_user, roles=[]))
+    mine = field_jobs.list(
+        db=db_session, query=FieldJobsQuery(requester_system_user_id=tech_user.id)
+    )
     assert "wo-assign" in [job.id for job in mine]
 
     # Filtering the manager board by the technician works both ways.
@@ -348,6 +384,7 @@ def test_manager_jobs_and_assign_flow(db_session):
 
 def test_manager_assign_queue_only_technician(db_session):
     """A technician profile without crm_person_id is scoped via the queue."""
+    manager = _user(db_session, "Dispatcher")
     tech_user = _user(db_session, "Native")
     profile = _profile(db_session, tech_user, crm_person_id=None)
     subscriber = _subscriber(db_session)
@@ -355,38 +392,76 @@ def test_manager_assign_queue_only_technician(db_session):
     db_session.commit()
 
     assigned = field_manager.assign_job(
-        db_session, "wo-native-assign", person_id=str(profile.person_id)
+        db_session,
+        "wo-native-assign",
+        access=_dispatch_access(manager),
+        payload=FieldManagerJobAssignRequest(person_id=str(profile.person_id)),
+        context=CommandContext.system(
+            actor=str(manager.id),
+            scope="operations:dispatch:assign",
+            reason="test assignment",
+        ),
     )
-    assert assigned["assigned_to_person_id"] == profile.person_id
+    assert assigned.assigned_to_person_id == profile.person_id
 
-    mine = field_jobs.list(db_session, _auth(tech_user, roles=[]))
+    mine = field_jobs.list(
+        db=db_session, query=FieldJobsQuery(requester_system_user_id=tech_user.id)
+    )
     assert "wo-native-assign" in [job.id for job in mine]
 
 
 def test_manager_assign_validation(db_session):
+    manager = _user(db_session, "Dispatcher")
     subscriber = _subscriber(db_session)
     _work_order(db_session, subscriber, crm_work_order_id="wo-assign-bad")
     db_session.commit()
 
     with pytest.raises(HTTPException) as missing_job:
-        field_manager.assign_job(db_session, "wo-nope", person_id=str(uuid4()))
+        field_manager.assign_job(
+            db_session,
+            "wo-nope",
+            access=_dispatch_access(manager),
+            payload=FieldManagerJobAssignRequest(person_id=str(uuid4())),
+            context=CommandContext.system(
+                actor=str(manager.id),
+                scope="operations:dispatch:assign",
+                reason="test assignment",
+            ),
+        )
     assert missing_job.value.status_code == 404
 
     with pytest.raises(HTTPException) as missing_tech:
-        field_manager.assign_job(db_session, "wo-assign-bad", person_id=str(uuid4()))
+        field_manager.assign_job(
+            db_session,
+            "wo-assign-bad",
+            access=_dispatch_access(manager),
+            payload=FieldManagerJobAssignRequest(person_id=str(uuid4())),
+            context=CommandContext.system(
+                actor=str(manager.id),
+                scope="operations:dispatch:assign",
+                reason="test assignment",
+            ),
+        )
     assert missing_tech.value.status_code == 404
 
     tech_user = _user(db_session, "Tech")
     profile = _profile(db_session, tech_user)
     db_session.commit()
-    with pytest.raises(HTTPException) as bad_status:
+    with pytest.raises(WorkOrderCommandError) as bad_status:
         field_manager.assign_job(
             db_session,
             "wo-assign-bad",
-            person_id=str(profile.person_id),
-            status="completed",
+            access=_dispatch_access(manager),
+            payload=FieldManagerJobAssignRequest(
+                person_id=str(profile.person_id), status="completed"
+            ),
+            context=CommandContext.system(
+                actor=str(manager.id),
+                scope="operations:dispatch:assign",
+                reason="test assignment",
+            ),
         )
-    assert bad_status.value.status_code == 422
+    assert bad_status.value.kind == "invalid"
 
 
 def test_manager_expense_approve_and_reject(db_session):
@@ -746,6 +821,19 @@ def test_manager_api(db_session):
     assigned_body = assigned.json()
     assert assigned_body["status"] == "in_progress"
     assert assigned_body["assignment_queue_id"] is not None
+    queue = (
+        db_session.query(WorkOrderAssignmentQueue)
+        .filter_by(work_order_mirror_id=work_order.id, status="assigned")
+        .one()
+    )
+    assert queue.assignment_generation is not None
+    assert assigned_body["assignment_generation"] == str(queue.assignment_generation)
+    projected = next(
+        job
+        for job in client.get("/api/v1/field/manager/jobs").json()["items"]
+        if job["id"] == work_order.public_id
+    )
+    assert projected["assignment_generation"] == str(queue.assignment_generation)
 
     unassigned = client.post(
         "/api/v1/field/manager/assignments/"
@@ -759,6 +847,7 @@ def test_manager_api(db_session):
         entry for entry in refreshed_jobs if entry["id"] == "wo-mgr-api"
     )
     assert refreshed_job["assignment_queue_id"] is None
+    assert refreshed_job["assignment_generation"] is None
     assert refreshed_job["assigned_to_person_id"] is None
     assert refreshed_job["assigned_to_label"] is None
     assert refreshed_job["status"] == "in_progress"
@@ -841,3 +930,72 @@ def test_payment_recovery_preview_requires_exact_pay_scope(db_session):
             f"{event_id}/recovery-preview"
         )
     assert allowed.status_code == 200
+
+
+@pytest.mark.parametrize("stale_input", ["revision", "generation"])
+def test_manager_vendor_assignment_rejects_stale_confirmation_without_rotation(
+    db_session, stale_input
+):
+    manager = _user(db_session, "Dispatcher")
+    crew = _user(db_session, "Attending")
+    crew.user_type = UserType.vendor
+    vendor = Vendor(name="Synthetic manager assignment contractor", is_active=True)
+    db_session.add(vendor)
+    db_session.flush()
+    bridge = FieldVendor(name=vendor.name, native_vendor_id=vendor.id, is_active=True)
+    db_session.add(bridge)
+    db_session.flush()
+    member = FieldVendorUser(
+        vendor_id=bridge.id, system_user_id=crew.id, role="field", is_active=True
+    )
+    db_session.add(member)
+    subscriber = _subscriber(db_session)
+    row = _work_order(db_session, subscriber)
+    db_session.commit()
+    payload = FieldManagerJobAssignRequest(
+        vendor_id=vendor.id, vendor_user_id=member.id, expected_revision=row.updated_at
+    )
+    first = field_manager.assign_job(
+        db_session,
+        row.public_id,
+        payload=payload,
+        access=_dispatch_access(manager),
+        context=CommandContext.system(
+            actor=str(manager.id),
+            scope="operations:dispatch:assign",
+            reason="Synthetic native vendor selection",
+        ),
+    )
+    assert first.assignment_generation is not None
+    stale = payload.model_copy(
+        update={
+            "command_id": uuid4(),
+            "expected_revision": first.revision - timedelta(seconds=1)
+            if stale_input == "revision"
+            else first.revision,
+            "expected_assignment_generation": uuid4()
+            if stale_input == "generation"
+            else first.assignment_generation,
+        }
+    )
+    with pytest.raises(WorkOrderCommandError) as raised:
+        field_manager.assign_job(
+            db_session,
+            row.public_id,
+            payload=stale,
+            access=_dispatch_access(manager),
+            context=CommandContext.system(
+                actor=str(manager.id),
+                scope="operations:dispatch:assign",
+                reason="Synthetic stale confirmation",
+            ),
+        )
+    assert raised.value.code == "stale_assignment"
+    queue = (
+        db_session.query(WorkOrderAssignmentQueue)
+        .filter_by(work_order_mirror_id=row.id, status="assigned")
+        .one()
+    )
+    assert queue.id == first.assignment_queue_id
+    assert queue.assignment_generation == first.assignment_generation
+    assert queue.assigned_vendor_user_id == member.id

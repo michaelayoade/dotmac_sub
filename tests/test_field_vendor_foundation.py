@@ -5,6 +5,7 @@ from uuid import uuid4
 import pytest
 from fastapi import FastAPI, HTTPException
 from fastapi.testclient import TestClient
+from sqlalchemy.orm import Session
 
 from app.api.field import router
 from app.db import get_db
@@ -107,7 +108,9 @@ def test_vendor_device_registration_upserts_token(db_session):
     assert db_session.query(FieldVendorDeviceToken).count() == 1
 
 
-def test_vendor_routes_register_device_and_read_nearby_map(db_session):
+def test_vendor_device_registration_remains_available_but_global_plant_is_denied(
+    db_session: Session,
+) -> None:
     user = _user(db_session)
     _vendor_user(db_session, user)
     db_session.add(
@@ -138,25 +141,38 @@ def test_vendor_routes_register_device_and_read_nearby_map(db_session):
         "/api/v1/field/vendor/map-assets/nearby",
         params={"lat": 9.071, "lng": 7.451, "types": "fdh_cabinet"},
     )
-    assert nearby.status_code == 200
-    assert nearby.json()["items"][0]["title"] == "FDH Jabi"
+    assert nearby.status_code == 403
+    assert (
+        nearby.json()["detail"]["code"] == "operations.field_work_order_access.denied"
+    )
+    assert "FDH Jabi" not in nearby.text
 
     unsupported_type = client.get(
         "/api/v1/field/vendor/map-assets/nearby",
         params={"lat": 9.071, "lng": 7.451, "types": "olt_device"},
     )
-    assert unsupported_type.status_code == 400
-    assert "Unsupported vendor map asset type" in unsupported_type.text
+    assert unsupported_type.status_code == 403
+    assert (
+        unsupported_type.json()["detail"]["code"]
+        == "operations.field_work_order_access.denied"
+    )
 
     empty_type = client.get(
         "/api/v1/field/vendor/map-assets/search",
         params={"q": "FDH", "types": ","},
     )
-    assert empty_type.status_code == 422
-    assert "Select at least one vendor map asset type" in empty_type.text
+    assert empty_type.status_code == 403
+    assert (
+        empty_type.json()["detail"]["code"]
+        == "operations.field_work_order_access.denied"
+    )
 
     invalid_radius = client.get(
         "/api/v1/field/vendor/map-assets/nearby",
         params={"lat": 9.071, "lng": 7.451, "radius_m": 50001},
     )
-    assert invalid_radius.status_code == 422
+    assert invalid_radius.status_code == 403
+    assert (
+        invalid_radius.json()["detail"]["code"]
+        == "operations.field_work_order_access.denied"
+    )

@@ -133,7 +133,11 @@ DOMAIN = DomainSOT(
                 "field-location ping ingest",
                 "field-location sharing preference",
             ),
-            depends_on=("auth.staff_provisioning",),
+            depends_on=(
+                "auth.staff_provisioning",
+                "operations.field_work_order_access",
+                "operations.work_order_commands",
+            ),
             notes=(
                 "Single-ping and batched ping submission each enter their own "
                 "owner command; a batch additionally isolates every ping in "
@@ -172,7 +176,9 @@ DOMAIN = DomainSOT(
                         name="authenticated field technician principal",
                         owner="auth.staff_provisioning",
                         kind=AuthorityKind.AUTHORITATIVE_RECORD,
-                        source=("active SystemUser login bound to a TechnicianProfile"),
+                        source=(
+                            "Typed LocationRequester with native SystemUser UUID resolved through operations.field_work_order_access to an active TechnicianProfile"
+                        ),
                     ),
                     AuthorityInput(
                         name="submitted field-location ping",
@@ -181,7 +187,7 @@ DOMAIN = DomainSOT(
                         source=(
                             "mobile/API-submitted latitude, longitude, "
                             "accuracy, captured_at, optional tagged "
-                            "work-order, and presence status"
+                            "work-order, assignment_generation UUID, and presence status; generated assignments require exact generation equality"
                         ),
                     ),
                     AuthorityInput(
@@ -189,8 +195,7 @@ DOMAIN = DomainSOT(
                         owner="operations.field_location_ingest",
                         kind=AuthorityKind.CONTROL_INPUT,
                         source=(
-                            "API-submitted location-sharing enabled flag and "
-                            "optional presence status"
+                            "Typed LocationSharingCommand enabled flag and optional presence status; presence initialization uses the same owner concern"
                         ),
                     ),
                 ),
@@ -207,17 +212,10 @@ DOMAIN = DomainSOT(
                         "succeeded."
                     ),
                     locking=(
-                        "Each command operates on the calling technician's "
-                        "own FieldTechPresence row; no cross-technician "
-                        "locking is required."
+                        "Tagged pings lock the WorkOrder before current assignment validation; presence updates operate on the calling technician only."
                     ),
                     idempotency=(
-                        "A ping has no dedup identity in this contract today; "
-                        "each accepted row is a new observation. A future "
-                        "duplicate-submission identity constraint surfaces as "
-                        "an IntegrityError at the per-row flush, which this "
-                        "owner already maps to a typed per-row rejection "
-                        "instead of a whole-batch failure."
+                        "Client observation UUID dedupes a technician observation. Exact replay preserves original job/generation evidence; changed generation conflicts. Missing observation IDs retain legacy append behavior."
                     ),
                     retries=(
                         "Adapters retry a whole ping, sharing change, or "
@@ -229,6 +227,10 @@ DOMAIN = DomainSOT(
                 errors=ErrorContract(
                     domain_codes=(
                         "work_order_not_found",
+                        "assignment_generation_mismatch",
+                        "observation_assignment_conflict",
+                        "invalid_presence_status",
+                        "batch_too_large",
                         "work_order_not_trackable",
                         "technician_not_assigned",
                         "captured_at_in_future",

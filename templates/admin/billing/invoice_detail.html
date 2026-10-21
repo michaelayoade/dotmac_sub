@@ -14,6 +14,7 @@
 {% set status = invoice.status|default('draft') %}
 {% set status_val = status.value if status is not string else status %}
 {% set invoice_currency = invoice.currency or 'NGN' %}
+{% set controlled_draft = invoice.metadata_ and invoice.metadata_.get('controlled_draft') %}
 
 <div class="relative space-y-8">
     {# ── Detail Header ── #}
@@ -48,7 +49,7 @@
                  x-transition
                  @click.outside="open = false"
                  class="absolute right-0 z-50 mt-2 w-56 overflow-hidden rounded-xl border border-slate-200 bg-white py-1 shadow-xl dark:border-slate-700 dark:bg-slate-800">
-                {% if status_val == 'draft' %}
+                {% if status_val == 'draft' and not controlled_draft %}
                 <a href="/admin/billing/invoices/{{ invoice.id }}/edit"
                    class="flex items-center gap-3 px-3 py-2 text-sm font-medium text-slate-700 transition hover:bg-slate-50 dark:text-slate-200 dark:hover:bg-slate-700">
                     <svg class="h-4 w-4 text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5M18.5 2.5a2.121 2.121 0 013 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>
@@ -158,6 +159,14 @@
     </div>
     {% endif %}
 
+    {% if controlled_draft %}
+    <div class="rounded-lg border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-800 dark:border-emerald-900/40 dark:bg-emerald-950/30 dark:text-emerald-200">
+        This reviewed historical-service draft is sealed against ordinary edits.
+        Issue it as reviewed, or void it if any document detail needs to change.
+        Creating replacement historical-service drafts is no longer available.
+    </div>
+    {% endif %}
+
     {% if prepaid_draft_issue_notice %}
     <div id="prepaid-reconciliation" class="rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800 dark:border-amber-900/40 dark:bg-amber-900/20 dark:text-amber-200">
         <p>{{ prepaid_draft_issue_notice }}</p>
@@ -224,7 +233,7 @@
                     {% endcall %}
                     {% if invoice.subscription_id %}
                     {% call info_row("Subscription") %}
-                        <a href="/admin/catalog/subscriptions/{{ invoice.subscription_id }}" class="font-mono text-emerald-600 hover:text-emerald-700 dark:text-emerald-400 transition-colors">{{ invoice.subscription_id | string | truncate(8, True, '') }}</a>
+                        {% if can(request, 'subscription:read') %}<a href="/admin/catalog/subscriptions/{{ invoice.subscription_id }}" class="font-mono text-emerald-600 hover:text-emerald-700 dark:text-emerald-400 transition-colors">{{ invoice.subscription_id | string | truncate(8, True, '') }}</a>{% else %}{{ invoice.subscription_id | string | truncate(8, True, '') }}{% endif %}
                     {% endcall %}
                     {% endif %}
                     {% call info_row("Dates") %}

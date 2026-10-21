@@ -12,6 +12,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.models.event_store import EventHandlerAttempt, EventStatus, EventStore
+from app.models.prepaid_funding import PrepaidFundingTriggerExecution
 from app.services.events.types import Event, EventType
 
 
@@ -273,10 +274,19 @@ def list_retryable_failed_events(
 
 def cleanup_completed_events(db: Session, *, retention_days: int) -> dict[str, int]:
     cutoff = datetime.now(UTC) - timedelta(days=retention_days)
+    protected_event_ids = select(PrepaidFundingTriggerExecution.event_store_id)
+    skipped_referenced_count = (
+        db.query(EventStore.id)
+        .filter(EventStore.status == EventStatus.completed)
+        .filter(EventStore.created_at < cutoff)
+        .filter(EventStore.id.in_(protected_event_ids))
+        .count()
+    )
     old_completed_event_ids = (
         db.query(EventStore.id)
         .filter(EventStore.status == EventStatus.completed)
         .filter(EventStore.created_at < cutoff)
+        .filter(~EventStore.id.in_(protected_event_ids))
         .scalar_subquery()
     )
     deleted_attempt_count = (
@@ -292,6 +302,7 @@ def cleanup_completed_events(db: Session, *, retention_days: int) -> dict[str, i
     return {
         "deleted": int(deleted_count or 0),
         "handler_attempts_deleted": int(deleted_attempt_count or 0),
+        "skipped_referenced": int(skipped_referenced_count or 0),
     }
 
 

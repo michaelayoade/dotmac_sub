@@ -115,13 +115,15 @@ def test_repository_heads_match_alembics_effective_dependency_heads() -> None:
     # effective branch heads in its version table.
     assert repository_heads() == frozenset(
         {
-            "664_purge_retired_splynx_metadata_keys",
-            "bi_0001_billing",
+            "698_credential_deactivation_reason",
+            "bi_0011_settlement_earmarks",
             "cl_0001_collections",
             "ib_0001_conversations",
-            "pm_0001_payment_intents",
+            "nu_0001_numbering",
+            "pm_0006_cash_qualification",
             "so_0001_service_delivery_orders",
             "su_0003_billing_treatments",
             "ts_0002_notify_identity",
+            "tx_0003_result_fingerprint",
         }
     )
