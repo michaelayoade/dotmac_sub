@@ -396,9 +396,7 @@ def settle_reseller_consolidated(
                 invoice.status = InvoiceStatus.paid
                 if invoice.paid_at is None:
                     invoice.paid_at = occurred_at
-                if not _access_signal_already_emitted(
-                    db, invoice.id, confirmation.id
-                ):
+                if not _access_signal_already_emitted(db, invoice.id, confirmation.id):
                     emit_event(
                         db,
                         EventType.payment_received,
