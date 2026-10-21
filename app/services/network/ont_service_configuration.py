@@ -1783,7 +1783,8 @@ def _radius_proof_state(
         desired_mode=desired.wan_mode,
         desired_login=desired.wan_pppoe_username,
         subscription_id=assignment.subscription_id,
-        applied_at=_parse_ts(payload.get("applied_at")) or operation.created_at,
+        ppp_write_issued_at=_parse_ts(payload.get("ppp_write_issued_at")),
+        ont_mac=ont.mac_address,
         waiting_since=_parse_ts(payload["first_clean_readback_at"]),
         attempt=attempt,
     )
@@ -1880,11 +1881,7 @@ def _execution_locked(
     readback_only = command.verification_attempt > 0 or command.force_readback_only
     if not readback_only and revision.section == OntConfigurationSection.wan.value:
         _ensure_wan_service_port(db, ont)
-    if not readback_only:
-        # Sessions that began before this write pass cannot prove it (G9).
-        applied_payload = dict(operation.input_payload or {})
-        applied_payload["applied_at"] = datetime.now(UTC).isoformat()
-        operation.input_payload = applied_payload
+    pass_started_at = datetime.now(UTC)
     result = reconcile_ont(
         db,
         ont.id,
@@ -1924,6 +1921,13 @@ def _execution_locked(
         and wifi_scope is not None
         and "wifi_password_ref" in wifi_scope.changed_fields
     )
+    if _turnup.ppp_write_applied(result):
+        # Recorded ONCE per revision (never overwritten, carried across
+        # retries/resumes): the Reset may run during a later queue drain.
+        issued = dict(operation.input_payload or {})
+        if "ppp_write_issued_at" not in issued:
+            issued["ppp_write_issued_at"] = pass_started_at.isoformat()
+            operation.input_payload = issued
     _turnup.mark_wan_service_port_provisioned(db, ont, result)
     radius_state = _radius_proof_state(
         db,
@@ -1971,12 +1975,11 @@ def _execution_locked(
         )
         phase = OntServiceConfigurationPhase.readback_pending
         message = "Configuration applied; awaiting a live RADIUS session."
-    elif radius_state in {"timeout", "login_mismatch"}:
-        radius_code = (
-            "pppoe_login_mismatch"
-            if radius_state == "login_mismatch"
-            else "radius_session_not_observed"
-        )
+    elif radius_state in {"timeout", "login_mismatch", "credential_ambiguous"}:
+        radius_code = {
+            "login_mismatch": "pppoe_login_mismatch",
+            "credential_ambiguous": "canonical_credential_ambiguous",
+        }.get(radius_state, "radius_session_not_observed")
         head.phase = OntServiceConfigurationPhase.delivered_unverified
         revision.phase = OntServiceConfigurationPhase.delivered_unverified
         head.waiting_reason = None
@@ -1985,6 +1988,9 @@ def _execution_locked(
             "The ONT PPPoE username is not the subscription's canonical "
             "access-credential login, so no RADIUS session can prove it."
             if radius_state == "login_mismatch"
+            else "The subscription has several active PPPoE credentials; the "
+            "canonical login cannot be determined."
+            if radius_state == "credential_ambiguous"
             else "The WAN configuration read back correctly but no live RADIUS "
             "session appeared for the PPPoE login within the allowed time."
         )
@@ -2476,9 +2482,17 @@ def _retry_locked(
             retry_fingerprint=retry_fingerprint,
         ),
     )
-    if command.resume_count:
+    carried = (
+        (latest_configuration_operation.input_payload or {}).get("ppp_write_issued_at")
+        if latest_configuration_operation is not None
+        else None
+    )
+    if command.resume_count or carried:
         retry_payload = dict(operation.input_payload or {})
-        retry_payload["resume_count"] = command.resume_count
+        if command.resume_count:
+            retry_payload["resume_count"] = command.resume_count
+        if carried:
+            retry_payload["ppp_write_issued_at"] = carried
         operation.input_payload = retry_payload
     revision.operation_id = operation.id
     revision.phase = OntServiceConfigurationPhase.queued
@@ -2762,6 +2776,13 @@ def _verify_locked(
         ),
     )
     if not replayed:
+        carried_issue = (failed_operation.input_payload or {}).get(
+            "ppp_write_issued_at"
+        )
+        if carried_issue:
+            verify_payload = dict(operation.input_payload or {})
+            verify_payload["ppp_write_issued_at"] = carried_issue
+            operation.input_payload = verify_payload
         # Preserve the original failed operation exactly as it is: only the
         # pointers (head.latest_operation_id / revision.operation_id) move to
         # the new redrive-linked attempt, mirroring ``_retry_locked``. The

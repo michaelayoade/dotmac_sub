@@ -446,20 +446,38 @@ def _queue_resume_apply_after_inform(
     """Inform hot path: cheap read, then a delayed task (no NBI, no locks)."""
     if ont_id is None:
         return False
+    from sqlalchemy import and_, or_
+
     from app.models.ont_service_configuration import (
         OntServiceConfigurationHead,
         OntServiceConfigurationPhase,
+        OntServiceConfigurationRevision,
     )
     from app.services.db_session_adapter import db_session_adapter
 
     candidate = db.scalar(
-        select(OntServiceConfigurationHead.id).where(
+        select(OntServiceConfigurationHead.id)
+        .join(
+            OntServiceConfigurationRevision,
+            (OntServiceConfigurationRevision.head_id == OntServiceConfigurationHead.id)
+            & (
+                OntServiceConfigurationRevision.revision
+                == OntServiceConfigurationHead.current_revision
+            ),
+        )
+        .where(
             OntServiceConfigurationHead.ont_unit_id == ont_id,
-            OntServiceConfigurationHead.phase.in_(
-                (
-                    OntServiceConfigurationPhase.readback_pending,
-                    OntServiceConfigurationPhase.failed,
-                )
+            or_(
+                OntServiceConfigurationHead.phase
+                == OntServiceConfigurationPhase.readback_pending,
+                and_(
+                    OntServiceConfigurationHead.phase
+                    == OntServiceConfigurationPhase.failed,
+                    OntServiceConfigurationHead.failure_code.in_(
+                        ("acs_cr_failed", "verification_mismatch")
+                    ),
+                    OntServiceConfigurationRevision.section == "wan",
+                ),
             ),
         )
     )

@@ -190,11 +190,20 @@ def has_pending_create_marker(ont: OntUnit, now: datetime | None = None) -> bool
     return False
 
 
-def canonical_ppp_credential(db: Session, subscription_id: UUID | None) -> Any:
-    """Exactly one active access credential for the subscription, else None."""
+PPP_WRITE_FIELDS = frozenset({"acs_pppoe", "omci_pppoe", "ont_reset"})
+
+
+def canonical_ppp_credential(
+    db: Session, subscription_id: UUID | None
+) -> tuple[Any, str]:
+    """``(credential, status)``; status is ``ok``, ``missing`` or ``ambiguous``.
+
+    PPPoE-typed active credentials win; untyped ones are used only when no
+    PPPoE-typed credential exists. More than one candidate is ambiguous.
+    """
     if subscription_id is None:
-        return None
-    from app.models.catalog import AccessCredential
+        return None, "missing"
+    from app.models.catalog import AccessCredential, ConnectionType
 
     rows = list(
         db.scalars(
@@ -204,16 +213,38 @@ def canonical_ppp_credential(db: Session, subscription_id: UUID | None) -> Any:
             )
         )
     )
-    return rows[0] if len(rows) == 1 else None
+    typed = [r for r in rows if r.connection_type == ConnectionType.pppoe]
+    candidates = typed or [r for r in rows if r.connection_type is None]
+    if not candidates:
+        return None, "missing"
+    if len(candidates) > 1:
+        return None, "ambiguous"
+    return candidates[0], "ok"
+
+
+def _mac_family(value: str | None) -> str | None:
+    """First five octets of a MAC (the ONT's WAN MACs differ in the last)."""
+    digits = "".join(ch for ch in str(value or "").lower() if ch in "0123456789abcdef")
+    return digits[:10] if len(digits) >= 12 else None
 
 
 def radius_session_live(
-    db: Session, credential: Any, *, started_after: datetime | None
+    db: Session,
+    credential: Any,
+    *,
+    ppp_write_issued_at: datetime | None,
+    ont_mac: str | None,
 ) -> bool:
-    """A live session for the canonical credential that started after the apply."""
+    """A live session for the canonical credential that can prove this revision.
+
+    If this revision issued a PPP write/Reset, the session must have started
+    after it. Otherwise (no-op re-apply) an existing session is accepted, but
+    when the ONT's WAN MAC is known its calling-station MAC must be in the
+    same family, so an old CPE cannot prove a no-op apply.
+    """
     from sqlalchemy import and_, or_
 
-    stmt = select(RadiusActiveSession.id).where(
+    stmt = select(RadiusActiveSession).where(
         or_(
             RadiusActiveSession.access_credential_id == credential.id,
             and_(
@@ -222,9 +253,15 @@ def radius_session_live(
             ),
         )
     )
-    if started_after is not None:
-        stmt = stmt.where(RadiusActiveSession.session_start >= started_after)
-    return db.scalars(stmt.limit(1)).first() is not None
+    if ppp_write_issued_at is not None:
+        stmt = stmt.where(RadiusActiveSession.session_start >= ppp_write_issued_at)
+    sessions = list(db.scalars(stmt.limit(20)))
+    if ppp_write_issued_at is not None:
+        return bool(sessions)
+    family = _mac_family(ont_mac)
+    if family is None:
+        return bool(sessions)
+    return any(_mac_family(s.calling_station_id) == family for s in sessions)
 
 
 def radius_gate(
@@ -233,24 +270,31 @@ def radius_gate(
     desired_mode: str | None,
     desired_login: str | None,
     subscription_id: UUID | None,
-    applied_at: datetime | None,
+    ppp_write_issued_at: datetime | None,
+    ont_mac: str | None,
     waiting_since: datetime | None,
     attempt: int,
     now: datetime | None = None,
 ) -> str:
-    """``ok`` | ``waiting`` | ``timeout`` | ``login_mismatch`` for the WAN proof.
+    """``ok`` | ``waiting`` | ``timeout`` | ``login_mismatch`` |
+    ``credential_ambiguous`` for the WAN RADIUS proof.
 
-    The session must belong to the subscription's canonical credential and
-    have started after the apply, so an old CPE's session cannot verify it.
     ACS ConnectionStatus is a known false negative on HG8546M and is not
     consulted.
     """
     if desired_mode != "pppoe":
         return "ok"
-    credential = canonical_ppp_credential(db, subscription_id)
+    credential, status = canonical_ppp_credential(db, subscription_id)
+    if status == "ambiguous":
+        return "credential_ambiguous"
     if credential is None or not desired_login or desired_login != credential.username:
         return "login_mismatch"
-    if radius_session_live(db, credential, started_after=applied_at):
+    if radius_session_live(
+        db,
+        credential,
+        ppp_write_issued_at=ppp_write_issued_at,
+        ont_mac=ont_mac,
+    ):
         return "ok"
     now = now or datetime.now(UTC)
     if waiting_since is not None:
@@ -261,6 +305,14 @@ def radius_gate(
     if attempt >= RADIUS_SESSION_MAX_ATTEMPTS:
         return "timeout"
     return "waiting"
+
+
+def ppp_write_applied(result: Any) -> bool:
+    """Whether the pass actually issued a PPP write or Reset (applied evidence)."""
+    return any(
+        str(getattr(a, "field", "")) in PPP_WRITE_FIELDS
+        for a in getattr(result, "actions_applied", ()) or ()
+    )
 
 
 def mark_wan_service_port_provisioned(db: Session, ont: OntUnit, result: Any) -> None:

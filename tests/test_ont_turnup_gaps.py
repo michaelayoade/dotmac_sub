@@ -10,7 +10,7 @@ from types import SimpleNamespace
 
 from sqlalchemy import select
 
-from app.models.catalog import AccessCredential
+from app.models.catalog import AccessCredential, ConnectionType
 from app.models.network import OLTDevice, OntAssignment, OntUnit
 from app.models.network_operation import (
     NetworkOperationDispatch,
@@ -580,24 +580,32 @@ def test_wan_only_pass_repairs_cr_settings_but_never_acs_endpoint():
     mgmt = [a for a in plan.actions if isinstance(a, AcsSetManagementServer)]
     assert len(mgmt) == 1
     assert mgmt[0].acs_url is None and mgmt[0].acs_password_ref is None
+    assert mgmt[0].acs_username is None
 
 
 # ── G9 / B3 ─────────────────────────────────────────────────────────────────
 
+MAC = "AA:BB:CC:DD:EE:01"
 
-def _radius_exec(
+
+def _seed(
     db_session,
-    monkeypatch,
     subscriber,
     subscription,
     *,
-    session_age_min=None,
-    attempt=0,
+    issued_min=None,
     first_clean_min=None,
-    onu_login="100000001",
-    applied_min=10,
+    session=None,
+    extra_cred=False,
+    ont_mac=MAC,
 ):
-    ont = OntUnit(serial_number=f"RAD-{uuid.uuid4().hex[:8]}", is_active=True)
+    """ONT + assignment + canonical credential + WAN head/op (+ RADIUS session).
+
+    ``session`` is ``(age_minutes, calling_station_id)`` or None.
+    """
+    ont = OntUnit(
+        serial_number=f"RAD-{uuid.uuid4().hex[:8]}", is_active=True, mac_address=ont_mac
+    )
     db_session.add(ont)
     db_session.flush()
     assignment = OntAssignment(
@@ -613,8 +621,19 @@ def _radius_exec(
         subscription_id=subscription.id,
         username="100000001",
         is_active=True,
+        connection_type=ConnectionType.pppoe,
     )
     db_session.add(cred)
+    if extra_cred:
+        db_session.add(
+            AccessCredential(
+                subscriber_id=subscriber.id,
+                subscription_id=subscription.id,
+                username="100000002",
+                is_active=True,
+                connection_type=ConnectionType.pppoe,
+            )
+        )
     db_session.flush()
     head, revision, operation = _lifecycle(
         db_session,
@@ -629,64 +648,97 @@ def _radius_exec(
         "ont_id": str(ont.id),
         "configuration_head_id": str(head.id),
         "configuration_revision": revision.revision,
-        "applied_at": (now - timedelta(minutes=applied_min)).isoformat(),
     }
+    if issued_min is not None:
+        payload["ppp_write_issued_at"] = (
+            now - timedelta(minutes=issued_min)
+        ).isoformat()
     if first_clean_min is not None:
         payload["first_clean_readback_at"] = (
             now - timedelta(minutes=first_clean_min)
         ).isoformat()
     operation.input_payload = payload
-    if session_age_min is not None:
+    if session is not None:
+        age, station = session
         db_session.add(
             RadiusActiveSession(
                 access_credential_id=cred.id,
                 subscription_id=subscription.id,
                 username="100000001",
                 acct_session_id=uuid.uuid4().hex,
-                session_start=now - timedelta(minutes=session_age_min),
+                calling_station_id=station,
+                session_start=now - timedelta(minutes=age),
             )
         )
     db_session.commit()
-    monkeypatch.setattr(
-        "app.services.network.reconcile.core.reconcile_ont",
-        lambda *_a, **_k: SimpleNamespace(
-            success=True,
-            sync_status="synced",
-            drift_after=(),
-            failure=None,
-            actions_applied=(),
-        ),
-    )
+    monkey_ids = (ont.id, operation.id, head.id, revision.revision)
+    db_session_adapter.release_read_transaction(db_session)
+    return head, operation, monkey_ids
+
+
+def _patch_pppoe(monkeypatch, reconcile, login="100000001"):
+    monkeypatch.setattr("app.services.network.reconcile.core.reconcile_ont", reconcile)
     monkeypatch.setattr(
         "app.services.network.reconcile.adapters.desired_from_ont_unit",
         lambda *_a, **_k: SimpleNamespace(
             wan_mode="pppoe",
-            wan_pppoe_username=onu_login,
+            wan_pppoe_username=login,
             wan_service_port_index=7,
             wan_vlan=203,
             wan_gem_index=1,
         ),
     )
-    ids = (ont.id, operation.id, head.id, revision.revision)
-    db_session_adapter.release_read_transaction(db_session)
-    return head, operation, _execute(db_session, ids, attempt=attempt)
+
+
+def _clean(applied=()):
+    return lambda *_a, **_k: SimpleNamespace(
+        success=True,
+        sync_status="synced",
+        drift_after=(),
+        failure=None,
+        actions_applied=applied,
+    )
+
+
+def _radius(
+    db_session,
+    monkeypatch,
+    subscriber,
+    subscription,
+    *,
+    attempt=1,
+    login="100000001",
+    **seed,
+):
+    head, op, ids = _seed(db_session, subscriber, subscription, **seed)
+    _patch_pppoe(monkeypatch, _clean(), login=login)
+    return head, op, _execute(db_session, ids, attempt=attempt)
 
 
 def test_wan_verified_only_with_live_radius_session(
     db_session, monkeypatch, subscriber, subscription
 ):
-    # attempt>0 = readback-only pass, so the seeded applied_at stays in force.
-    head, _op, outcome = _radius_exec(
-        db_session, monkeypatch, subscriber, subscription, session_age_min=1, attempt=1
+    head, _op, outcome = _radius(
+        db_session,
+        monkeypatch,
+        subscriber,
+        subscription,
+        issued_min=10,
+        session=(1, MAC),
     )
     assert outcome.phase is OntServiceConfigurationPhase.verified
 
 
-def test_radius_session_older_than_the_apply_cannot_verify(
+def test_session_older_than_ppp_write_cannot_verify(
     db_session, monkeypatch, subscriber, subscription
 ):
-    head, op, outcome = _radius_exec(
-        db_session, monkeypatch, subscriber, subscription, session_age_min=60, attempt=1
+    head, op, outcome = _radius(
+        db_session,
+        monkeypatch,
+        subscriber,
+        subscription,
+        issued_min=10,
+        session=(60, MAC),
     )
     assert outcome.phase is OntServiceConfigurationPhase.readback_pending
     assert head.waiting_reason == "awaiting_radius_session"
@@ -699,17 +751,61 @@ def test_radius_session_older_than_the_apply_cannot_verify(
     assert staged.command_name == "ont_service_config_verify.v1"
 
 
-def test_onu_username_not_canonical_login_holds_with_explicit_code(
+def test_noop_reapply_verifies_via_existing_session_with_matching_mac(
     db_session, monkeypatch, subscriber, subscription
 ):
-    head, _op, outcome = _radius_exec(
+    # No PPP write/Reset this revision: an older session is acceptable if the
+    # calling-station MAC is in the ONT's WAN MAC family (last octet differs).
+    head, _op, outcome = _radius(
         db_session,
         monkeypatch,
         subscriber,
         subscription,
-        session_age_min=1,
-        attempt=1,
-        onu_login="someone-else",
+        session=(600, "AA-BB-CC-DD-EE-02"),
+    )
+    assert outcome.phase is OntServiceConfigurationPhase.verified
+
+
+def test_noop_reapply_rejects_old_cpe_with_different_mac(
+    db_session, monkeypatch, subscriber, subscription
+):
+    head, _op, outcome = _radius(
+        db_session,
+        monkeypatch,
+        subscriber,
+        subscription,
+        session=(600, "11:22:33:44:55:66"),
+    )
+    assert outcome.phase is OntServiceConfigurationPhase.readback_pending
+
+
+def test_ambiguous_canonical_credential_has_its_own_code(
+    db_session, monkeypatch, subscriber, subscription
+):
+    head, _op, outcome = _radius(
+        db_session,
+        monkeypatch,
+        subscriber,
+        subscription,
+        issued_min=10,
+        session=(1, MAC),
+        extra_cred=True,
+    )
+    assert outcome.phase is OntServiceConfigurationPhase.delivered_unverified
+    assert head.failure_code == "canonical_credential_ambiguous"
+
+
+def test_onu_username_not_canonical_login_holds_with_explicit_code(
+    db_session, monkeypatch, subscriber, subscription
+):
+    head, _op, outcome = _radius(
+        db_session,
+        monkeypatch,
+        subscriber,
+        subscription,
+        issued_min=10,
+        session=(1, MAC),
+        login="someone-else",
     )
     assert outcome.phase is OntServiceConfigurationPhase.delivered_unverified
     assert head.failure_code == "pppoe_login_mismatch"
@@ -718,9 +814,13 @@ def test_onu_username_not_canonical_login_holds_with_explicit_code(
 def test_radius_wait_is_anchored_on_first_clean_readback(
     db_session, monkeypatch, subscriber, subscription
 ):
-    # The operation is old, but the first clean readback was only 1 minute ago.
-    head, _op, outcome = _radius_exec(
-        db_session, monkeypatch, subscriber, subscription, attempt=1, first_clean_min=1
+    head, _op, outcome = _radius(
+        db_session,
+        monkeypatch,
+        subscriber,
+        subscription,
+        issued_min=10,
+        first_clean_min=1,
     )
     assert outcome.phase is OntServiceConfigurationPhase.readback_pending
 
@@ -728,11 +828,99 @@ def test_radius_wait_is_anchored_on_first_clean_readback(
 def test_radius_wait_times_out_after_first_clean_readback_window(
     db_session, monkeypatch, subscriber, subscription
 ):
-    head, _op, outcome = _radius_exec(
-        db_session, monkeypatch, subscriber, subscription, attempt=1, first_clean_min=30
+    head, _op, outcome = _radius(
+        db_session,
+        monkeypatch,
+        subscriber,
+        subscription,
+        issued_min=10,
+        first_clean_min=30,
     )
     assert outcome.phase is OntServiceConfigurationPhase.delivered_unverified
     assert head.failure_code == "radius_session_not_observed"
+
+
+def test_ppp_write_issued_at_is_set_once_and_never_overwritten(
+    db_session, monkeypatch, subscriber, subscription
+):
+    head, op, ids = _seed(db_session, subscriber, subscription)
+    applied = (SimpleNamespace(field="acs_pppoe"),)
+    _patch_pppoe(monkeypatch, _clean(applied))
+    _execute(db_session, ids, attempt=0)
+    first = op.input_payload["ppp_write_issued_at"]
+    assert first
+    db_session.commit()
+    db_session_adapter.release_read_transaction(db_session)
+    # A resumed/second write pass that again applies a PPP write keeps it.
+    _patch_pppoe(monkeypatch, _clean(applied))
+    _execute(db_session, ids, attempt=0)
+    assert op.input_payload["ppp_write_issued_at"] == first
+
+
+def test_pppoe_readback_pending_then_verified_with_session(
+    db_session, monkeypatch, subscriber, subscription
+):
+    head, op, ids = _seed(
+        db_session, subscriber, subscription, issued_min=10, session=(1, MAC)
+    )
+    _patch_pppoe(
+        monkeypatch,
+        lambda *_a, **_k: SimpleNamespace(
+            success=False,
+            sync_status="out_of_sync",
+            drift_after=("wan.mode",),
+            failure=SimpleNamespace(
+                reason="verification_mismatch",
+                message="queued",
+                evidence={"readback_pending": True},
+            ),
+            actions_applied=(),
+        ),
+    )
+    pending = _execute(db_session, ids, attempt=0)
+    assert pending.phase is OntServiceConfigurationPhase.readback_pending
+    _patch_pppoe(monkeypatch, _clean())
+    verified = _execute(db_session, ids, attempt=1)
+    assert verified.phase is OntServiceConfigurationPhase.verified
+
+
+def test_inform_hot_path_query_is_narrowed(db_session, monkeypatch):
+    from app.services.tr069 import _queue_resume_apply_after_inform
+
+    head, operation, ids = _park(db_session, monkeypatch, queued=0)
+    sent = []
+    monkeypatch.setattr(
+        "app.services.queue_adapter.enqueue_task",
+        lambda name, **kw: sent.append(name) or SimpleNamespace(queued=True),
+    )
+    ont_id = ids[0]
+    # An unrelated old failed head (other failure code): no task.
+    head.phase = OntServiceConfigurationPhase.failed
+    head.failure_code = "something_else"
+    db_session.commit()
+    assert not _queue_resume_apply_after_inform(
+        db_session, ont_id=ont_id, inform_at=datetime.now(UTC)
+    )
+    # Failed WAN head with verification_mismatch: task.
+    head.failure_code = "verification_mismatch"
+    db_session.commit()
+    assert _queue_resume_apply_after_inform(
+        db_session, ont_id=ont_id, inform_at=datetime.now(UTC)
+    )
+    # Failed NON-WAN head: no task.
+    from app.models.ont_service_configuration import OntServiceConfigurationRevision
+
+    rev = db_session.scalar(
+        select(OntServiceConfigurationRevision).where(
+            OntServiceConfigurationRevision.head_id == head.id
+        )
+    )
+    rev.section = "lan"
+    db_session.commit()
+    assert not _queue_resume_apply_after_inform(
+        db_session, ont_id=ont_id, inform_at=datetime.now(UTC)
+    )
+    assert len(sent) == 1
 
 
 def test_wan_allocation_marked_provisioned_only_after_applied_create_and_readback(
