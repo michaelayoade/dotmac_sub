@@ -29,7 +29,6 @@ from collections.abc import Callable
 from typing import Any, cast
 
 from sqlalchemy.orm import Session
-from sqlalchemy.orm.attributes import flag_modified
 
 from app.models.network import OntUnit
 from app.services.genieacs_client import GenieACSDeliveryCode
@@ -646,35 +645,6 @@ def _resolve_igd_pppoe_wcd_index(
     return None
 
 
-def _mark_ppp_wan_requires_precreated(ont: OntUnit) -> None:
-    snapshot = getattr(ont, "tr069_last_snapshot", None)
-    if not isinstance(snapshot, dict):
-        return
-    snapshot = dict(snapshot)
-    capabilities = snapshot.get("capabilities")
-    if not isinstance(capabilities, dict):
-        return
-    capabilities = dict(capabilities)
-    pending = capabilities.get("pending_actions")
-    if isinstance(pending, dict):
-        pending = dict(pending)
-        pending.pop("add_ppp_wan", None)
-        if pending:
-            capabilities["pending_actions"] = pending
-        else:
-            capabilities.pop("pending_actions", None)
-    wan_caps = capabilities.get("wan")
-    if isinstance(wan_caps, dict):
-        wan_caps = dict(wan_caps)
-        wan_caps["supports_tr069_add_ppp_wan"] = False
-        wan_caps["supports_tr069_set_ppp_credentials"] = False
-        wan_caps["requires_precreated_ppp_wan"] = True
-        capabilities["wan"] = wan_caps
-    snapshot["capabilities"] = capabilities
-    ont.tr069_last_snapshot = snapshot
-    flag_modified(ont, "tr069_last_snapshot")
-
-
 def _provision_wan_service_instances(
     db: Session,
     ont_id: str,
@@ -735,7 +705,11 @@ def _provision_wan_service_instances(
             }
         )
         return steps, needs_input, hard_failures
-    if instance_index is None:
+    igd_pppoe = (
+        wan_mode == "pppoe"
+        and getattr(ont, "tr069_data_model", None) == "InternetGatewayDevice"
+    )
+    if instance_index is None and not igd_pppoe:
         needs_input.append(
             "WAN instance index is not configured in desired_config or OLT config pack."
         )
@@ -876,21 +850,10 @@ def _provision_wan_service_instances(
         detected_index = _resolve_igd_pppoe_wcd_index(
             ont, effective_values, wan_vlan_int
         )
-        if detected_index is None:
-            message = (
-                f"No safe WANConnectionDevice exists for PPPoE VLAN {wan_vlan_int}. "
-                "The ONT must expose or precreate an internet PPP WAN container before TR-069 can push credentials."
-            )
-            steps.append(
-                {
-                    "step": "provision_wan_desired_config",
-                    "success": False,
-                    "message": message,
-                }
-            )
-            hard_failures.append(f"provision_wan_desired_config: {message}")
-            _mark_ppp_wan_requires_precreated(ont)
-            return steps, needs_input, hard_failures
+        # ``None`` means no internet container is configured or exposed:
+        # hand ``None`` to the action, which selects a non-management
+        # container or creates one. Only an explicitly configured index that
+        # is the management container is refused (in the action).
 
     if wan_mode == "pppoe":
         pppoe_username = effective_values.get("pppoe_username")

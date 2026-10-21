@@ -680,3 +680,15 @@ def test_absent_ont_with_real_profiles_still_authorizes():
     assert authorize[0].service_profile_id == 42
     presence = [d for d in plan.drifts if d.field == "olt_present"]
     assert presence[0].repairable is True
+
+
+def test_unset_wcd_index_with_vlan_plans_select_or_create_not_a_fixed_index():
+    from app.services.network.reconcile.actions import SELECT_OR_CREATE_WCD
+
+    plan = compute_plan(
+        _desired(wan_pppoe_wcd_index=None),
+        _observed(olt=_present_olt(), acs=_informed_acs_observed()),
+        "sweep",
+    )
+    adds = [a for a in plan.actions if isinstance(a, AcsAddObject)]
+    assert adds and all(a.wcd_index == SELECT_OR_CREATE_WCD for a in adds)

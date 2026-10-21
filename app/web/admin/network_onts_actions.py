@@ -1688,7 +1688,9 @@ def ont_set_pppoe_credentials(
             ont_id=ont_id,
         )
 
-    instance_index = int(instance_index_raw) if instance_index_raw.isdigit() else 1
+    # Blank means "no WCD configured": select or create, never default to the
+    # management container at index 1.
+    instance_index = int(instance_index_raw) if instance_index_raw.isdigit() else None
     wan_vlan = int(wan_vlan_raw) if wan_vlan_raw.isdigit() else None
     timeout_sec = int(timeout_sec_raw) if timeout_sec_raw.isdigit() else None
 

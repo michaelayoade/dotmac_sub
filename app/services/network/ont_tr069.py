@@ -46,6 +46,23 @@ _HOSTS_PATH_DEV = "Device.Hosts.Host."
 _HOST_FIELDS = ["HostName", "IPAddress", "MACAddress", "InterfaceType", "Active"]
 
 
+#: Reconcile markers that must survive a runtime snapshot rebuild.
+_CARRIED_CAPABILITY_KEYS = (
+    "pending_wcd_add",
+    "ppp_credential_revision",
+    "created_wcd_index",
+    # ont_action_wan path: pending addObject markers (WCD parent / PPP child).
+    "pending_actions",
+)
+
+
+def _carried_capabilities(previous: Any) -> dict[str, Any]:
+    caps = previous.get("capabilities") if isinstance(previous, dict) else None
+    if not isinstance(caps, dict):
+        return {}
+    return {k: caps[k] for k in _CARRIED_CAPABILITY_KEYS if caps.get(k)}
+
+
 @dataclass
 class TR069Summary:
     """Structured TR-069 data grouped by section."""
@@ -816,7 +833,15 @@ class OntTR069:
             ont.observed_lan_hosts = lan_hosts_count
         observed_at = summary.fetched_at or datetime.now(UTC)
         ont.observed_runtime_updated_at = observed_at
-        ont.tr069_last_snapshot = OntTR069._snapshot_payload(summary)
+        previous = ont.tr069_last_snapshot
+        refreshed = OntTR069._snapshot_payload(summary)
+        # Carry the reconcile markers forward: the periodic refresh rebuilds
+        # the snapshot and would otherwise wipe a pending WCD creation and the
+        # PPP credential revision, causing duplicate addObject / Reset.
+        kept = _carried_capabilities(previous)
+        if kept:
+            refreshed["capabilities"] = kept
+        ont.tr069_last_snapshot = refreshed
         ont.tr069_last_snapshot_at = observed_at
         from app.models.tr069 import Tr069CpeDevice
         from app.services.network.ont_status import (

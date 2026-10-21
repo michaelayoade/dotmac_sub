@@ -135,6 +135,28 @@ def _widen_idle_in_transaction_timeout(db: Session, timeout_sec: int) -> None:
     )
 
 
+def _ont_capability_get(ont: Any, key: str) -> Any:
+    snapshot = getattr(ont, "tr069_last_snapshot", None)
+    caps = snapshot.get("capabilities") if isinstance(snapshot, dict) else None
+    return caps.get(key) if isinstance(caps, dict) else None
+
+
+def _ont_capability_set(ont: Any, key: str, value: Any) -> None:
+    """Persist a non-secret marker in the ONT snapshot capabilities."""
+    from sqlalchemy.orm.attributes import flag_modified
+
+    snapshot = getattr(ont, "tr069_last_snapshot", None)
+    snapshot = dict(snapshot) if isinstance(snapshot, dict) else {}
+    caps = dict(snapshot.get("capabilities") or {})
+    if value is None:
+        caps.pop(key, None)
+    else:
+        caps[key] = value
+    snapshot["capabilities"] = caps
+    ont.tr069_last_snapshot = snapshot
+    flag_modified(ont, "tr069_last_snapshot")
+
+
 def reconcile_ont(
     db: Session,
     ont_unit_id: str | uuid.UUID,
@@ -595,6 +617,8 @@ def reconcile_ont(
                 resolve_secret=secret_resolver,
                 ppp_authorization=ppp_ruling,
                 ppp_scope=ppp_scope,
+                state_get=lambda key: _ont_capability_get(ont, key),
+                state_set=lambda key, value: _ont_capability_set(ont, key, value),
             )
             apply_outcome = apply_plan(plan, ctx, deadline=deadline)
 

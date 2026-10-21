@@ -139,8 +139,9 @@ def test_set_pppoe_credentials_names_internet_ppp_slot(monkeypatch) -> None:
     )
 
     def fake_set_and_verify(client, device_id, params, *, expected=None, **kwargs):
-        calls["params"] = params
-        calls["expected"] = expected
+        # First write is the credential set; later ones are NAT / Reset.
+        calls.setdefault("params", params)
+        calls.setdefault("expected", expected)
         return {"_id": "task-1"}
 
     monkeypatch.setattr(ont_action_wan, "set_and_verify", fake_set_and_verify)
@@ -272,8 +273,9 @@ def test_set_pppoe_credentials_creates_missing_igd_ppp_object(monkeypatch) -> No
     monkeypatch.setattr(ont_action_wan.time, "sleep", lambda *_: None)
 
     def fake_set_and_verify(client, device_id, params, *, expected=None, **kwargs):
-        calls["params"] = params
-        calls["expected"] = expected
+        # First write is the credential set; later ones are NAT / Reset.
+        calls.setdefault("params", params)
+        calls.setdefault("expected", expected)
         return {"_id": "task-1"}
 
     monkeypatch.setattr(ont_action_wan, "set_and_verify", fake_set_and_verify)
@@ -364,8 +366,9 @@ def test_set_pppoe_credentials_prefers_existing_primary_igd_ppp_child(
     )
 
     def fake_set_and_verify(client, device_id, params, *, expected=None, **kwargs):
-        calls["params"] = params
-        calls["expected"] = expected
+        # First write is the credential set; later ones are NAT / Reset.
+        calls.setdefault("params", params)
+        calls.setdefault("expected", expected)
         return {"_id": "task-1"}
 
     monkeypatch.setattr(ont_action_wan, "set_and_verify", fake_set_and_verify)

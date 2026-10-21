@@ -274,12 +274,20 @@ class OltReset:
 
 # ── ACS-side actions ────────────────────────────────────────────────────────
 
+#: Typed "no WCD index configured: select a non-management WANConnectionDevice
+#: or create one" marker for ``wcd_index``. WCD instance numbers start at 1, so
+#: 0 can never be a real index. The applier resolves it (parent ``AcsAddObject``
+#: arm) and refuses any downstream action still carrying it.
+SELECT_OR_CREATE_WCD = 0
+
 
 @dataclass(frozen=True)
 class AcsAddObject:
     """``POST /devices/<id>/tasks {addObject: path}``.
 
-    Creates a WANPPPConnection instance on the device. Required before
+    Creates a WANPPPConnection instance on the device, or, when the path is
+    the ``WANConnectionDevice`` parent, selects/creates the WCD container with
+    index readback (never the TR-069 management WCD). Required before
     ``AcsSetPppoe`` writes can land — setting parameters on a non-existent
     object silently queues forever.
     """
@@ -327,6 +335,11 @@ class AcsSetPppoe:
     username: str
     password_ref: str  # OpenBao path
     vlan: int
+    #: The planner saw a new child or a username change, so the applier must
+    #: queue ``WANPPPConnection.N.Reset`` after the write (a credential change
+    #: on an enabled connection does not redial). The applier also resets when
+    #: the keyed, non-secret credential revision changed (password-only).
+    reset_on_apply: bool = False
 
 
 @dataclass(frozen=True)
@@ -564,6 +577,7 @@ Action = OltAction | AcsAction
 
 
 __all__ = (
+    "SELECT_OR_CREATE_WCD",
     "AcsAction",
     "Action",
     "OltAction",

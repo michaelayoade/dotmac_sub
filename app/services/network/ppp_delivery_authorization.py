@@ -298,7 +298,9 @@ def _enum_value(value: Any) -> str:
 
 def _ppp_object_path(path: Any) -> bool:
     """Whether a TR-069 object path targets the PPP connection object."""
-    return "wanpppconnection" in str(path or "").strip().lower()
+    text = str(path or "").strip().lower().rstrip(".")
+    # The WANConnectionDevice parent is created only to host the PPP child.
+    return "wanpppconnection" in text or text.endswith(".wanconnectiondevice")
 
 
 def classify_action(action: Any) -> PppActionPurpose:

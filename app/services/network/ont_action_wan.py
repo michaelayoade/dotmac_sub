@@ -34,14 +34,17 @@ from typing import Any
 from sqlalchemy.orm import Session
 from sqlalchemy.orm.attributes import flag_modified
 
-from app.services.genieacs_client import GenieACSError
+from app.services.genieacs_client import GenieACSError, GenieACSTaskQueuedError
 from app.services.network.ont_action_common import (
     ActionResult,
     detect_data_model_root,
     genieacs_error_result,
     get_ont_client_or_error,
+    get_ppp_credential_revision,
     persist_data_model_root,
+    ppp_credential_revision,
     set_and_verify,
+    set_ppp_credential_revision,
 )
 
 logger = logging.getLogger(__name__)
@@ -361,36 +364,153 @@ def _igd_ppp_container_conflict(
     return None
 
 
-def _resolve_igd_wcd_index(device: dict[str, Any], requested_index: int) -> int:
-    """Use the requested WCD when present, otherwise use ACS's live WCD.
+def _igd_wcd_nodes(device: dict[str, Any], root: str) -> dict[int, dict[str, Any]]:
+    """Return the WANConnectionDevice instances present in the ACS document."""
+    node: Any = device
+    for segment in (root, "WANDevice", "1", "WANConnectionDevice"):
+        if not isinstance(node, dict):
+            return {}
+        node = node.get(segment)
+    if not isinstance(node, dict):
+        return {}
+    return {
+        int(key): value
+        for key, value in node.items()
+        if str(key).isdigit() and isinstance(value, dict)
+    }
 
-    Huawei config packs describe the intended layout, but the ONT's GenieACS
-    document is authoritative for the object path that can receive a write.
-    This matters when a device exposes management and Internet objects under a
-    different WCD index than the OLT profile default.
+
+def _igd_children(wcd: dict[str, Any], kind: str) -> list[dict[str, Any]]:
+    children = wcd.get(kind)
+    if not isinstance(children, dict):
+        return []
+    return [v for k, v in children.items() if str(k).isdigit() and isinstance(v, dict)]
+
+
+def _igd_wcd_is_management(wcd: dict[str, Any]) -> bool:
+    """True when any connection under the WCD carries the TR-069 service."""
+    for kind in ("WANIPConnection", "WANPPPConnection"):
+        for child in _igd_children(wcd, kind):
+            service = child.get("X_HW_SERVICELIST")
+            value = service.get("_value") if isinstance(service, dict) else service
+            if "TR069" in str(value or "").upper():
+                return True
+    return False
+
+
+def _select_igd_ppp_wcd(
+    device: dict[str, Any], root: str, requested_index: int | None
+) -> int | None:
+    """Pick the WANConnectionDevice that may receive the internet PPP child.
+
+    The requested index wins when it exists (downstream guards still refuse it
+    if it is the management container). Otherwise adopt an existing
+    non-management container that already holds a PPP child, then a blank one.
+    Returns ``None`` when the parent object must be created. The management
+    container is never adopted and an arbitrary lowest index is never used.
     """
-    wan_device = (
-        device.get("InternetGatewayDevice", {}).get("WANDevice", {})
-        if isinstance(device.get("InternetGatewayDevice"), dict)
-        else {}
+    wcds = _igd_wcd_nodes(device, root)
+    if requested_index is not None and requested_index in wcds:
+        return requested_index
+    usable = {i: n for i, n in sorted(wcds.items()) if not _igd_wcd_is_management(n)}
+    for index, node in usable.items():
+        if _igd_children(node, "WANPPPConnection"):
+            return index
+    for index, node in usable.items():
+        if not _igd_children(node, "WANIPConnection") and not _igd_children(
+            node, "WANPPPConnection"
+        ):
+            return index
+    return None
+
+
+def _create_igd_wcd_parent(
+    *,
+    ont: Any,
+    client: Any,
+    device_id: str,
+    root: str,
+    requested_index: int | None,
+    wan_vlan: int | None,
+) -> tuple[int | None, ActionResult | None]:
+    """addObject on the WANConnectionDevice parent and read back the new index."""
+    parent_path = f"{root}.WANDevice.1.WANConnectionDevice."
+    refresh = getattr(client, "refresh_object", None)
+
+    def _refresh() -> None:
+        if not callable(refresh):
+            return
+        try:
+            refresh(device_id, parent_path, allow_when_pending=True)
+        except GenieACSError:
+            logger.debug("WCD parent refresh failed for %s", device_id, exc_info=True)
+
+    def _waiting(message: str) -> tuple[None, ActionResult]:
+        return None, ActionResult(
+            success=False,
+            waiting=True,
+            message=message,
+            data={
+                "failure_reason": "wcd_add_object_not_visible",
+                "retry_after_seconds": _WAN_ADD_OBJECT_VERIFY_DELAY_SECONDS,
+                "missing_ppp_wan_service": True,
+                "required_step": "verify_wcd_add_object",
+                "wan_vlan": wan_vlan,
+            },
+        )
+
+    if _pending_wan_add_object(ont, requested_index or 0, "wcd", wan_vlan):
+        _refresh()
+        return _waiting(
+            "A WANConnectionDevice creation task is already pending for this ONT."
+        )
+
+    before = set(_igd_wcd_nodes(client.get_device(device_id), root))
+    try:
+        client.add_object(device_id, parent_path)
+        _mark_wan_add_object_pending(
+            ont,
+            wan_type="wcd",
+            root=root,
+            instance_index=requested_index or 0,
+            wan_vlan=wan_vlan,
+            object_path=parent_path,
+        )
+    except GenieACSError as exc:
+        return None, ActionResult(
+            success=False,
+            message=f"Failed to create WANConnectionDevice on ONT: {exc}",
+            data={
+                "missing_ppp_wan_service": True,
+                "required_step": "provision_wan_service_instance",
+                "wan_vlan": wan_vlan,
+            },
+        )
+    for attempt in range(4):
+        _refresh()
+        nodes = _igd_wcd_nodes(client.get_device(device_id), root)
+        created = sorted(
+            i for i in set(nodes) - before if not _igd_wcd_is_management(nodes[i])
+        )
+        if len(created) == 1:
+            _clear_wan_add_object_pending(ont, "wcd", success=True)
+            return created[0], None
+        if len(created) > 1:
+            _clear_wan_add_object_pending(ont, "wcd", success=False)
+            return None, ActionResult(
+                success=False,
+                message=(
+                    "Several new WANConnectionDevice instances appeared; refusing "
+                    "to guess which one is the internet container."
+                ),
+                data={"missing_ppp_wan_service": True, "wan_vlan": wan_vlan},
+            )
+        if attempt < 3:
+            time.sleep(2)
+    return _waiting(
+        "GenieACS accepted the WANConnectionDevice creation task, but the new "
+        "instance was not visible after refresh. Retry once the ONT has informed."
     )
-    if not isinstance(wan_device, dict):
-        return requested_index
-    wcd_indexes: list[int] = []
-    for wan_device_value in wan_device.values():
-        if not isinstance(wan_device_value, dict):
-            continue
-        wcd = wan_device_value.get("WANConnectionDevice", {})
-        if not isinstance(wcd, dict):
-            continue
-        for key, value in wcd.items():
-            if not str(key).isdigit() or not isinstance(value, dict):
-                continue
-            if value.get("_object") is True or "WANPPPConnection" in value:
-                wcd_indexes.append(int(key))
-    if requested_index in wcd_indexes:
-        return requested_index
-    return min(wcd_indexes) if wcd_indexes else requested_index
 
 
 def _igd_wan_container_is_blank(
@@ -551,6 +671,26 @@ def _ensure_igd_ppp_wan_service(
         )
 
     object_path = _get_wan_object_container(root, "ppp", wcd_index)
+    if _pending_wan_add_object(ont, wcd_index, "ppp", wan_vlan):
+        refresh = getattr(client, "refresh_object", None)
+        if callable(refresh):
+            try:
+                refresh(device_id, object_path, allow_when_pending=True)
+            except GenieACSError:
+                logger.debug("PPP WAN pending refresh failed", exc_info=True)
+        return None, ActionResult(
+            success=False,
+            waiting=True,
+            message="A PPPoE WAN creation task is already pending for this ONT.",
+            data={
+                "failure_reason": "ppp_wan_add_object_not_visible",
+                "retry_after_seconds": _WAN_ADD_OBJECT_VERIFY_DELAY_SECONDS,
+                "missing_ppp_wan_service": True,
+                "required_step": "verify_ppp_wan_add_object",
+                "wan_connection_device_index": wcd_index,
+                "wan_vlan": wan_vlan,
+            },
+        )
     try:
         client.add_object(device_id, object_path)
         _mark_wan_add_object_pending(
@@ -597,9 +737,11 @@ def _ensure_igd_ppp_wan_service(
         if attempt < 3:
             time.sleep(2)
 
-    _clear_wan_add_object_pending(ont, "ppp", success=False)
+    # Leave the pending marker in place so a later inform does not queue a
+    # duplicate addObject; it expires after the TTL.
     return None, ActionResult(
         success=False,
+        waiting=True,
         message=(
             "GenieACS accepted the PPPoE WAN service creation task, but the "
             "new WANPPPConnection was not visible after refresh. Retry "
@@ -627,7 +769,7 @@ def set_pppoe_credentials(
     *,
     username: str,
     password: str,
-    instance_index: int = 1,
+    instance_index: int | None = 1,
     wan_vlan: int | None = None,
     connection_name: str = INTERNET_PPP_CONNECTION_NAME,
 ) -> ActionResult:
@@ -638,7 +780,9 @@ def set_pppoe_credentials(
         ont_id: OntUnit primary key.
         username: PPPoE username.
         password: PPPoE password.
-        instance_index: WAN instance index (default 1).
+        instance_index: WANConnectionDevice index; ``None`` selects an existing
+            non-management container or creates one. Only an explicitly
+            configured index that is the management container is refused.
         wan_vlan: Optional VLAN for service tagging.
 
     Returns:
@@ -661,11 +805,55 @@ def set_pppoe_credentials(
 
     params: dict[str, str] = {}
 
+    nat_params: dict[str, str] = {}
+    reset_path: str | None = None
+    credential_revision = ppp_credential_revision(username, password)
     if root == "InternetGatewayDevice":
-        if hasattr(client, "get_device"):
-            instance_index = _resolve_igd_wcd_index(
-                client.get_device(device_id), instance_index
-            )
+        device = client.get_device(device_id) if hasattr(client, "get_device") else None
+        if device is None and instance_index is None:
+            instance_index = 1
+        if device is not None:
+            wcds = _igd_wcd_nodes(device, root)
+            if (
+                instance_index is not None
+                and instance_index in wcds
+                and _igd_wcd_is_management(wcds[instance_index])
+            ):
+                return ActionResult(
+                    success=False,
+                    message=(
+                        "Refusing to push PPPoE credentials because the selected "
+                        "WANConnectionDevice is the TR-069 management WAN."
+                    ),
+                    data={
+                        "missing_ppp_wan_service": False,
+                        "wan_connection_device_index": instance_index,
+                    },
+                )
+            selected = _select_igd_ppp_wcd(device, root, instance_index)
+            if selected is None:
+                selected, create_error = _create_igd_wcd_parent(
+                    ont=ont,
+                    client=client,
+                    device_id=device_id,
+                    root=root,
+                    requested_index=instance_index,
+                    wan_vlan=wan_vlan,
+                )
+                if create_error is not None or selected is None:
+                    return create_error or ActionResult(
+                        success=False,
+                        message="No WANConnectionDevice available for PPPoE.",
+                    )
+            instance_index = selected
+            device = client.get_device(device_id)
+        if instance_index is None:
+            instance_index = 1
+        existing_ppp = (
+            _get_existing_igd_ppp_instance_index(device, root, instance_index)
+            if device is not None
+            else None
+        )
         ppp_child_index, ensure_error = _ensure_igd_ppp_wan_service(
             ont=ont,
             client=client,
@@ -685,9 +873,10 @@ def set_pppoe_credentials(
             f"{ppp_base}.Username": username,
             f"{ppp_base}.Password": password,
             f"{ppp_base}.Enable": "true",
-            f"{ppp_base}.NATEnabled": "true",
             f"{ppp_base}.ConnectionType": "IP_Routed",
         }
+        # NAT is a separate small write (Huawei CWMP parameter limits).
+        nat_params = {f"{ppp_base}.NATEnabled": "true"}
 
         if wan_vlan is not None:
             params[f"{ppp_base}.X_HW_VLAN"] = str(wan_vlan)
@@ -695,8 +884,32 @@ def set_pppoe_credentials(
 
         if connection_name:
             params[f"{ppp_base}.Name"] = connection_name
+
+        # A credential change on an already-enabled connection does not
+        # redial; Reset does. Reset when the child is new, the username
+        # changed, or the (keyed, non-secret) credential revision changed.
+        # Never keyed off ConnectionStatus: HG8546M reports a false
+        # Disconnected while the PPP session is up.
+        old_username = (
+            client.extract_parameter_value(device, f"{ppp_base}.Username")
+            if device is not None and existing_ppp is not None
+            else None
+        )
+        stored_revision = get_ppp_credential_revision(ont)
+        secret_changed = (
+            credential_revision is not None
+            and stored_revision is not None
+            and credential_revision != stored_revision
+        )
+        if device is not None and (
+            existing_ppp is None
+            or str(old_username or "") != username
+            or secret_changed
+        ):
+            reset_path = f"{ppp_base}.Reset"
     else:
         # Build TR-181 parameter paths
+        instance_index = instance_index or 1
         username_path = _resolve_wan_path(root, "ppp.username", instance_index)
         password_path = _resolve_wan_path(root, "ppp.password", instance_index)
         enable_path = _resolve_wan_path(root, "ppp.enable", instance_index)
@@ -711,8 +924,43 @@ def set_pppoe_credentials(
         path: value for path, value in params.items() if not path.endswith(".Password")
     }
 
+    reset_issued = False
+
+    def _mark_reset_done() -> None:
+        nonlocal reset_issued
+        reset_issued = True
+        set_ppp_credential_revision(ont, credential_revision)
+
     try:
         result = set_and_verify(client, device_id, params, expected=expected)
+        if nat_params:
+            set_and_verify(client, device_id, nat_params)
+        if reset_path:
+            # Only after params were delivered and read back above.
+            try:
+                set_and_verify(
+                    client,
+                    device_id,
+                    {reset_path: "true"},
+                    skip_verification=True,
+                )
+            except GenieACSTaskQueuedError:
+                _mark_reset_done()  # task is queued; it will run on next inform
+                raise
+            except GenieACSError as exc:
+                logger.error(
+                    "PPP Reset failed for ONT %s after credentials were applied: %s",
+                    ont.serial_number,
+                    exc,
+                )
+                return genieacs_error_result(
+                    exc, "PPPoE credentials were applied but the PPP Reset failed"
+                )
+            _mark_reset_done()
+        elif root == "InternetGatewayDevice":
+            # Baseline the revision so a later password-only change is seen.
+            if get_ppp_credential_revision(ont) is None:
+                set_ppp_credential_revision(ont, credential_revision)
         logger.info(
             "PPPoE credentials set on ONT %s (user: %s, instance: %d, root: %s)",
             ont.serial_number,
@@ -732,9 +980,26 @@ def set_pppoe_credentials(
                 ),
                 "root": root,
                 "task": result,
+                "reset_issued": reset_issued,
             },
         )
     except GenieACSError as exc:
+        if isinstance(exc, GenieACSTaskQueuedError) and reset_path and not reset_issued:
+            # The params task is queued (Connection Request failed or timed
+            # out). Queue the Reset behind it with no Connection Request so it
+            # is not lost: on retry the username already matches and nothing
+            # would trigger a redial.
+            try:
+                client.set_parameter_values(
+                    device_id, {reset_path: "true"}, connection_request=False
+                )
+                _mark_reset_done()
+            except Exception:  # noqa: BLE001 - best effort, reported below
+                logger.warning(
+                    "Could not queue PPP Reset behind queued credentials for %s",
+                    ont.serial_number,
+                    exc_info=True,
+                )
         logger.error(
             "Set PPPoE credentials failed for ONT %s: %s",
             ont.serial_number,

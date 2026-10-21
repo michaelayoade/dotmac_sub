@@ -76,7 +76,7 @@ What the planner doesn't do
 from __future__ import annotations
 
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
 from app.services.control_plane_intent import (
     DesiredValueProvenance,
@@ -84,6 +84,7 @@ from app.services.control_plane_intent import (
 )
 
 from .actions import (
+    SELECT_OR_CREATE_WCD,
     AcsAddObject,
     AcsDeleteObject,
     AcsSetDhcpServer,
@@ -1194,6 +1195,22 @@ def _plan_acs_side(
 
     # TR-069 WAN PPP — skipped when OMCI owns the WAN.
     narrow_feature_change = wifi_only_change or remote_only_change
+    if desired.wan_mode == "pppoe" and desired.wan_pppoe_wcd_index is None:
+        # No pppoe_wcd_index configured: reuse the WCD that already holds the
+        # PPP child, else ask the applier to select or create one. The
+        # management/TR-069 WCD is never chosen (applier enforces it).
+        existing = _primary_observed_wan_ppp_location(observed)
+        locations = _observed_wan_ppp_locations(observed)
+        desired = replace(
+            desired,
+            wan_pppoe_wcd_index=(
+                existing[0]
+                if existing
+                else min(w for w, _ in locations)
+                if locations
+                else SELECT_OR_CREATE_WCD
+            ),
+        )
     if (
         not narrow_feature_change
         and desired.wan_mode == "pppoe"
@@ -1520,6 +1537,16 @@ def _plan_acs_wan_ppp(
     # If ACS doesn't have a WAN PPP instance, addObject first.
     created = target_inst is None
     if target_inst is None:
+        # The WCD itself may not exist (management-only HG8546M). The applier
+        # selects the desired WCD if present and not management, else creates
+        # the parent and remaps the index for every downstream action.
+        actions.append(
+            AcsAddObject(
+                device_id=device_id,
+                object_path=("InternetGatewayDevice.WANDevice.1.WANConnectionDevice"),
+                wcd_index=desired.wan_pppoe_wcd_index,
+            )
+        )
         actions.append(
             AcsAddObject(
                 device_id=device_id,
@@ -1569,6 +1596,11 @@ def _plan_acs_wan_ppp(
                 username=desired.wan_pppoe_username or "",
                 password_ref=desired.wan_pppoe_password_ref or "",
                 vlan=desired.wan_vlan,
+                reset_on_apply=created
+                or _observed_differs(
+                    observed.acs.acs_observed_pppoe_username,
+                    desired.wan_pppoe_username,
+                ),
             )
         )
         drifts.append(

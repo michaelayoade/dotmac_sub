@@ -70,6 +70,7 @@ from app.services.credential_crypto import is_secret_reference_value
 from app.services.network.huawei_cli_response import project_huawei_result_evidence
 
 from .actions import (
+    SELECT_OR_CREATE_WCD,
     AcsAction,
     AcsAddObject,
     AcsArmDiagnostic,
@@ -147,6 +148,16 @@ class ApplyContext:
     acs_client: Any
     resolve_secret: SecretResolver = passthrough_secret
     wan_ppp_instances: dict[int, int] = field(default_factory=dict)
+    #: Desired WCD index -> WCD index actually used this apply pass. Filled by
+    #: the WANConnectionDevice-parent ``AcsAddObject`` arm (selected or newly
+    #: created, never the TR-069 management WCD) and read by every downstream
+    #: WAN PPP arm so they are pinned to the created instance.
+    wan_wcd_indexes: dict[int, int] = field(default_factory=dict)
+    #: Durable per-ONT state for non-secret markers (pending WCD addObject,
+    #: PPP credential revision). ``None`` disables both: no dedupe, and no
+    #: password-only Reset.
+    state_get: Callable[[str], Any] | None = None
+    state_set: Callable[[str, Any], None] | None = None
     #: Delivery-time PPP authorization, resolved by
     #: ``network.ppp_delivery_authorization`` from the owner-managed service
     #: intent. ``None`` means the caller never asked, which is treated as a
@@ -604,7 +615,27 @@ def _execute(action: Action, ctx: ApplyContext) -> AppliedAction:
 
         # ── ACS actions ───────────────────────────────────────────────────
         case AcsAddObject():
+            if _is_wcd_parent_path(action.object_path):
+                return _apply_wcd_parent(action, ctx, started)
             wcd_index = _require_add_object_layout(action)
+            if wcd_index is not None:
+                wcd_index = _mapped_wcd(action, ctx, wcd_index)
+            if wcd_index is not None and wcd_index != action.wcd_index:
+                existing_child = _existing_ppp_child(ctx, action.device_id, wcd_index)
+                if existing_child is not None:
+                    # Adopted WCD already holds the PPP child: do not add another.
+                    ctx.wan_ppp_instances[wcd_index] = existing_child
+                    return _ok(
+                        action, "ppp_child_present", None, str(existing_child), started
+                    )
+                action = AcsAddObject(
+                    device_id=action.device_id,
+                    object_path=(
+                        "InternetGatewayDevice.WANDevice.1."
+                        f"WANConnectionDevice.{wcd_index}.WANPPPConnection"
+                    ),
+                    wcd_index=wcd_index,
+                )
             try:
                 ctx.acs_client.add_object(action.device_id, action.object_path)
             except Exception as exc:  # noqa: BLE001 — translate to ApplyError
@@ -663,17 +694,49 @@ def _execute(action: Action, ctx: ApplyContext) -> AppliedAction:
             password = _resolve_or_fail(
                 ctx, action, action.password_ref, refuse_reference=True
             )
-            inst = ctx.wan_ppp_instances.get(action.wcd_index, action.instance_index)
+            wcd = _mapped_wcd(action, ctx, action.wcd_index)
+            inst = ctx.wan_ppp_instances.get(wcd, action.instance_index)
+            base = (
+                "InternetGatewayDevice.WANDevice.1.WANConnectionDevice."
+                f"{wcd}.WANPPPConnection.{inst}"
+            )
             params = {
-                f"InternetGatewayDevice.WANDevice.1.WANConnectionDevice.{action.wcd_index}.WANPPPConnection.{inst}.Username": action.username,
-                f"InternetGatewayDevice.WANDevice.1.WANConnectionDevice.{action.wcd_index}.WANPPPConnection.{inst}.Password": password,
-                f"InternetGatewayDevice.WANDevice.1.WANConnectionDevice.{action.wcd_index}.WANPPPConnection.{inst}.Enable": True,
-                f"InternetGatewayDevice.WANDevice.1.WANConnectionDevice.{action.wcd_index}.WANPPPConnection.{inst}.ConnectionType": "IP_Routed",
-                f"InternetGatewayDevice.WANDevice.1.WANConnectionDevice.{action.wcd_index}.WANPPPConnection.{inst}.X_HW_VLAN": action.vlan,
-                f"InternetGatewayDevice.WANDevice.1.WANConnectionDevice.{action.wcd_index}.WANPPPConnection.{inst}.X_HW_SERVICELIST": "INTERNET",
+                f"{base}.Username": action.username,
+                f"{base}.Password": password,
+                f"{base}.Enable": True,
+                f"{base}.ConnectionType": "IP_Routed",
+                f"{base}.X_HW_VLAN": action.vlan,
+                f"{base}.X_HW_SERVICELIST": "INTERNET",
             }
-            _acs_set(action, ctx, params)
-            return _ok(action, "acs_pppoe", None, action.username, started)
+            revision = _ppp_revision(action.username, password)
+            stored = ctx.state_get("ppp_credential_revision") if ctx.state_get else None
+            reset_needed = action.reset_on_apply or bool(
+                revision and stored and revision != stored
+            )
+            reset_queued = False
+            try:
+                _acs_set(action, ctx, params)
+            except ApplyError as exc:
+                if reset_needed and exc.reason == ReconcileFailureReason.ACS_CR_FAILED:
+                    # Params are queued behind a failed Connection Request.
+                    # Queue the Reset after them now; on retry the username
+                    # already matches and nothing else would redial.
+                    _queue_ppp_reset(action, ctx, f"{base}.Reset", cr=False)
+                    _remember_revision(ctx, revision)
+                raise
+            if reset_needed:
+                _queue_ppp_reset(action, ctx, f"{base}.Reset", cr=True)
+                reset_queued = True
+            if revision and (reset_queued or not stored):
+                _remember_revision(ctx, revision)
+            return _ok(
+                action,
+                "acs_pppoe",
+                None,
+                action.username,
+                started,
+                evidence={"ppp_reset_queued": reset_queued},
+            )
 
         case AcsSetWifiSsid():
             _refuse_unset(action, ("wifi_ssid", action.ssid))
@@ -796,9 +859,10 @@ def _execute(action: Action, ctx: ApplyContext) -> AppliedAction:
 
         case AcsSetNatEnabled():
             _refuse_unset(action, ("wan_pppoe_wcd_index", action.wcd_index))
-            inst = ctx.wan_ppp_instances.get(action.wcd_index, action.instance_index)
+            nat_wcd = _mapped_wcd(action, ctx, action.wcd_index)
+            inst = ctx.wan_ppp_instances.get(nat_wcd, action.instance_index)
             params = {
-                f"InternetGatewayDevice.WANDevice.1.WANConnectionDevice.{action.wcd_index}.WANPPPConnection.{inst}.NATEnabled": action.enabled
+                f"InternetGatewayDevice.WANDevice.1.WANConnectionDevice.{nat_wcd}.WANPPPConnection.{inst}.NATEnabled": action.enabled
             }
             _acs_set(action, ctx, params)
             return _ok(action, "acs_nat_enabled", None, action.enabled, started)
@@ -992,6 +1056,205 @@ def _refuse_unknown_provenance(
         ReconcileFailureReason.INVALID_CHANGE,
         f"refusing to write provenance-unknown {field}",
     )
+
+
+_WCD_PARENT_RE = re.compile(r"WANDevice\.1\.WANConnectionDevice\.?$")
+_WCD_PENDING_TTL_SECONDS = 10 * 60
+
+
+def _mapped_wcd(action: Action, ctx: ApplyContext, wcd: int) -> int:
+    """WCD index actually used this pass; refuses an unresolved select marker."""
+    mapped = ctx.wan_wcd_indexes.get(wcd, wcd)
+    if mapped == SELECT_OR_CREATE_WCD:
+        raise ApplyError(
+            action,
+            ReconcileFailureReason.INVALID_CHANGE,
+            "WANConnectionDevice was not selected or created before this write",
+        )
+    return mapped
+
+
+def _existing_ppp_child(ctx: ApplyContext, device_id: str, wcd: int) -> int | None:
+    nodes = _wcd_nodes(
+        ctx, device_id, "InternetGatewayDevice.WANDevice.1.WANConnectionDevice"
+    )
+    node = (nodes or {}).get(wcd)
+    children = node.get("WANPPPConnection") if isinstance(node, dict) else None
+    keys = (
+        [int(k) for k in children if str(k).isdigit()]
+        if isinstance(children, dict)
+        else []
+    )
+    return min(keys) if keys else None
+
+
+def _is_wcd_parent_path(object_path: str) -> bool:
+    return bool(_WCD_PARENT_RE.search(object_path))
+
+
+def _ppp_revision(username: str, password: str) -> str | None:
+    from app.services.network.ont_action_common import ppp_credential_revision
+
+    return ppp_credential_revision(username, password)
+
+
+def _remember_revision(ctx: ApplyContext, revision: str | None) -> None:
+    if revision and ctx.state_set is not None:
+        ctx.state_set("ppp_credential_revision", revision)
+
+
+def _queue_ppp_reset(
+    action: AcsSetPppoe, ctx: ApplyContext, reset_path: str, *, cr: bool
+) -> None:
+    """Queue ``WANPPPConnection.N.Reset=true`` (redials the PPP session).
+
+    A Connection Request failure on the Reset itself is fine: the task stays
+    queued for the next Inform. Anything else is a typed apply failure.
+    """
+    try:
+        task = ctx.acs_client.set_parameter_values(
+            action.device_id, {reset_path: True}, connection_request=cr
+        )
+    except Exception as exc:  # noqa: BLE001
+        raise ApplyError(
+            action,
+            ReconcileFailureReason.ACS_WRITE_FAULTED,
+            f"PPP Reset failed to queue: {exc}",
+        ) from exc
+    fault = task.get("fault") if isinstance(task, dict) else None
+    if isinstance(fault, dict):
+        raise ApplyError(
+            action,
+            ReconcileFailureReason.ACS_WRITE_FAULTED,
+            f"CWMP fault {fault.get('code')} on PPP Reset",
+        )
+
+
+def _wcd_nodes(ctx: ApplyContext, device_id: str, parent: str) -> dict[int, Any] | None:
+    try:
+        devices = ctx.acs_client.list_devices(
+            query={"_id": device_id}, projection=parent
+        )
+    except Exception:  # noqa: BLE001
+        return None
+    if not devices:
+        return None
+    node = _node_at_path(devices[0], parent)
+    if node is None:
+        return {}
+    if not isinstance(node, dict):
+        return None
+    return {int(k): v for k, v in node.items() if k.isdigit() and isinstance(v, dict)}
+
+
+def _apply_wcd_parent(action: AcsAddObject, ctx: ApplyContext, started: float):
+    """Select or create the internet WANConnectionDevice; index read back.
+
+    Never selects or modifies the TR-069 management WCD. Fails closed when
+    the layout cannot be read or the new index cannot be identified.
+    """
+    from app.services.network.ont_action_wan import (
+        _igd_children,
+        _igd_wcd_is_management,
+    )
+
+    _refuse_unset(action, ("wan_pppoe_wcd_index", action.wcd_index))
+    desired = int(action.wcd_index)  # type: ignore[arg-type]
+    parent = "InternetGatewayDevice.WANDevice.1.WANConnectionDevice"
+    before = _wcd_nodes(ctx, action.device_id, parent)
+    if before is None:
+        raise ApplyError(
+            action,
+            ReconcileFailureReason.ACS_WRITE_FAULTED,
+            "cannot read WANConnectionDevice layout; refusing to create one blind",
+        )
+    if desired != SELECT_OR_CREATE_WCD and desired in before:
+        if _igd_wcd_is_management(before[desired]):
+            raise ApplyError(
+                action,
+                ReconcileFailureReason.INVALID_CHANGE,
+                f"WANConnectionDevice {desired} is the TR-069 management WAN",
+            )
+        ctx.wan_wcd_indexes[desired] = desired
+        return _ok(action, "wcd_parent_present", None, str(desired), started)
+    # An index created by an earlier pass whose child/params did not finish:
+    # adopt it rather than creating another WCD.
+    remembered = ctx.state_get("created_wcd_index") if ctx.state_get else None
+    if (
+        isinstance(remembered, int)
+        and remembered in before
+        and not _igd_wcd_is_management(before[remembered])
+    ):
+        ctx.wan_wcd_indexes[desired] = remembered
+        return _ok(action, "wcd_parent_adopted", None, str(remembered), started)
+    blank = [
+        i
+        for i, n in sorted(before.items())
+        if not _igd_wcd_is_management(n)
+        and not _igd_children(n, "WANIPConnection")
+        and not _igd_children(n, "WANPPPConnection")
+    ]
+    if blank:
+        ctx.wan_wcd_indexes[desired] = blank[0]
+        return _ok(action, "wcd_parent_adopted", None, str(blank[0]), started)
+
+    if ctx.state_get is not None:
+        pending = _parse_pending_ts(ctx.state_get("pending_wcd_add"))
+        if pending and (datetime.now(UTC) - pending).total_seconds() < (
+            _WCD_PENDING_TTL_SECONDS
+        ):
+            _refresh_quiet(ctx, action.device_id, parent)
+            # Waiting state (same recovery as a queued CR failure), not a
+            # terminal fault: resumes on the next inform.
+            raise ApplyError(
+                action,
+                ReconcileFailureReason.ACS_CR_FAILED,
+                "WANConnectionDevice creation already pending; waiting for the "
+                "next Inform",
+            )
+    try:
+        ctx.acs_client.add_object(action.device_id, parent)
+    except Exception as exc:  # noqa: BLE001
+        raise ApplyError(
+            action,
+            ReconcileFailureReason.ACS_WRITE_FAULTED,
+            f"addObject failed: {exc}",
+        ) from exc
+    if ctx.state_set is not None:
+        ctx.state_set("pending_wcd_add", datetime.now(UTC).isoformat())
+    _refresh_quiet(ctx, action.device_id, parent)
+    after = _wcd_nodes(ctx, action.device_id, parent) or {}
+    created = sorted(
+        i for i in set(after) - set(before) if not _igd_wcd_is_management(after[i])
+    )
+    if len(created) != 1:
+        raise ApplyError(
+            action,
+            ReconcileFailureReason.ACS_CR_FAILED,
+            "WANConnectionDevice creation queued but the new index is not "
+            "identifiable yet; waiting for the next Inform, then it is adopted",
+        )
+    if ctx.state_set is not None:
+        ctx.state_set("pending_wcd_add", None)
+        ctx.state_set("created_wcd_index", created[0])
+    ctx.wan_wcd_indexes[desired] = created[0]
+    return _ok(action, "wcd_parent_created", None, str(created[0]), started)
+
+
+def _parse_pending_ts(value: Any) -> datetime | None:
+    try:
+        return datetime.fromisoformat(str(value)) if value else None
+    except ValueError:
+        return None
+
+
+def _refresh_quiet(ctx: ApplyContext, device_id: str, path: str) -> None:
+    refresh = getattr(ctx.acs_client, "refresh_object", None)
+    if callable(refresh):
+        try:
+            refresh(device_id, path, allow_when_pending=True)
+        except Exception:  # noqa: BLE001
+            logger.info("applier_wcd_refresh_failed", extra={"device_id": device_id})
 
 
 def _require_add_object_layout(action: AcsAddObject) -> int | None:
