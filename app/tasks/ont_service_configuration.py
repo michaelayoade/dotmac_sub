@@ -85,13 +85,15 @@ def verify_readback(
     configuration_head_id: str,
     revision: int,
     *,
+    verification_attempt: int = 0,
     _network_dispatch_id: str | None = None,
 ) -> dict[str, Any]:
     """Execute a readback-only verification of a previously failed revision.
 
-    ``force_readback_only=True`` is fixed HERE and accepts no override from
-    the caller or the dispatch payload — this task can only observe device
-    state through ``reconcile_ont``'s readback-only path, which returns
+    ``verification_attempt`` only bounds delayed observations.
+    ``force_readback_only=True`` and repair mode are fixed HERE and accept no
+    override from the caller or operation payload — this task can only observe
+    device state through ``reconcile_ont``'s readback-only path, which returns
     before ever reaching ``apply_plan``. It never calls ``setParameterValues``
     or any OLT write function.
     """
@@ -106,7 +108,9 @@ def verify_readback(
         command_id=command_id,
         correlation_id=UUID(operation_id),
         causation_id=command_id,
-        idempotency_key=f"ont-service-config-verify:{operation_id}",
+        idempotency_key=(
+            f"ont-service-config-verify:{operation_id}:{verification_attempt}"
+        ),
     )
     with db_session_adapter.owner_command_session() as db:
         outcome = execute_ont_service_configuration(
@@ -117,7 +121,7 @@ def verify_readback(
                 operation_id=UUID(operation_id),
                 configuration_head_id=UUID(configuration_head_id),
                 revision=int(revision),
-                verification_attempt=0,
+                verification_attempt=int(verification_attempt),
                 explicit_repair=True,
                 force_readback_only=True,
             ),

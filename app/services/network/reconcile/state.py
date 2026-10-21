@@ -100,6 +100,11 @@ class OntWanProposedChange:
     wan_static_dns: str | None
     wan_static_ip_is_public: bool | None
     ipv6_enabled: bool
+    # Subset of ``changed_fields`` this revision actually changed. ``None``
+    # means every field in ``changed_fields`` (legacy callers). Fields outside
+    # the subset keep the WAN scope but are pushed only on observed drift, so
+    # an unrelated WAN edit does not re-dial a live PPPoE session.
+    forced_fields: frozenset[OntWanProposedField] | None = None
 
     def as_mapping(self) -> dict[str, Any]:
         """Serialize only explicitly submitted fields for the legacy core.
@@ -297,6 +302,10 @@ class OntDesiredState:
     # actions at all — see ``planner.resolve_acs_device_id``.
     acs_device_id: str | None = None
 
+    # Internet (WAN) service-port traffic tables from the OLT config pack.
+    wan_traffic_table_inbound: int | None = None
+    wan_traffic_table_outbound: int | None = None
+
 
 # ── Observed state ──────────────────────────────────────────────────────────
 
@@ -427,6 +436,8 @@ class AcsObservedFields:
     # device has not informed; ``>1`` means the identity is ambiguous and no
     # write may be targeted at any of them.
     acs_observed_device_match_count: int = 0
+    # WANPPPConnection.MACAddress as the CPE reports it (RADIUS proof).
+    acs_observed_wan_ppp_mac: str | None = None
 
 
 @dataclass(frozen=True)

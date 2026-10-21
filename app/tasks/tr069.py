@@ -334,6 +334,29 @@ def wait_for_ont_bootstrap(
         db.close()
 
 
+@celery_app.task(name="app.tasks.tr069.resume_ont_service_apply_after_inform")
+def resume_ont_service_apply_after_inform(
+    ont_id: str, inform_at: str
+) -> dict[str, object]:
+    """Delayed (~60s) resume of a CR/pending-create head after an Inform."""
+    from datetime import datetime
+    from uuid import UUID
+
+    from app.services.tr069 import _resume_apply_after_inform
+
+    try:
+        with db_session_adapter.owner_command_session() as db:
+            resumed = _resume_apply_after_inform(
+                db,
+                ont_id=UUID(ont_id),
+                inform_at=datetime.fromisoformat(inform_at),
+            )
+    except Exception:
+        logger.exception("ONT service resume after inform failed for %s", ont_id)
+        raise
+    return {"ont_id": ont_id, "resumed": resumed}
+
+
 @celery_app.task(name="app.tasks.tr069.apply_saved_ont_service_config")
 @idempotent_task(
     key_func=lambda ont_id, reason="inform_reconnect", **kw: f"{ont_id}:{reason}"

@@ -2,7 +2,9 @@ from __future__ import annotations
 
 from contextlib import contextmanager
 from datetime import UTC, datetime, timedelta
+from types import SimpleNamespace
 from unittest.mock import Mock
+from uuid import uuid4
 
 import pytest
 
@@ -84,6 +86,32 @@ def test_stage_dispatch_rejects_arbitrary_or_mismatched_commands(db_session):
 
     assert arbitrary.value.code == "unsupported_command"
     assert mismatch.value.code == "operation_command_mismatch"
+
+
+def test_service_configuration_verify_invocation_carries_only_attempt_counter():
+    ont_id = uuid4()
+    operation_id = uuid4()
+    head_id = uuid4()
+    operation = SimpleNamespace(
+        id=operation_id,
+        target_id=ont_id,
+        input_payload={
+            "ont_id": str(ont_id),
+            "configuration_head_id": str(head_id),
+            "configuration_revision": 4,
+            "explicit_repair": False,
+        },
+    )
+
+    invocation = dispatch_owner._ont_service_config_verify_invocation(
+        operation, "verify:2"
+    )
+
+    assert invocation.args == [str(ont_id), str(operation_id), str(head_id), 4]
+    assert invocation.kwargs == {"verification_attempt": 2}
+
+    primary = dispatch_owner._ont_service_config_verify_invocation(operation, "primary")
+    assert primary.kwargs == {}
 
 
 @pytest.mark.parametrize(
@@ -331,3 +359,21 @@ def test_dispatch_health_snapshot_initializes_all_states(db_session):
     assert snapshot["dispatches_pending"] == 1
     assert snapshot["dispatches_reconciliation_needed"] == 0
     assert snapshot["dispatch_oldest_pending_age_seconds"] >= 0
+
+
+def test_ont_service_verify_key_parser_is_strict():
+    import pytest
+
+    from app.services.network_operation_dispatch import (
+        NetworkOperationDispatchError,
+        ont_service_config_verify_key,
+        parse_ont_service_config_verify_key,
+    )
+
+    assert parse_ont_service_config_verify_key("verify:1") == 1
+    assert parse_ont_service_config_verify_key("verify:3@r2") == 3
+    assert ont_service_config_verify_key(2) == "verify:2"
+    assert ont_service_config_verify_key(2, 1) == "verify:2@r1"
+    for bad in ("verify:1@x", "verify:0@r1", "verify:1@r0", "verify:0", "verify:x"):
+        with pytest.raises(NetworkOperationDispatchError):
+            parse_ont_service_config_verify_key(bad)
