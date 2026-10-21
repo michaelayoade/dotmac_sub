@@ -112,7 +112,8 @@ def test_confirmation_and_reconfirmation_are_atomic(
     )
     assert command.code not in repr(command)
     assert not result.recovery_codes or result.recovery_codes[0] not in repr(result)
-    repeated = owner.confirm_subscriber_mfa(db_session, command=command)
+    reconfirmation = confirmation(enrollment, setup, delivery=delivery)
+    repeated = owner.confirm_subscriber_mfa(db_session, command=reconfirmation)
     assert repeated.method.id == result.method.id
 
 
