@@ -14,6 +14,10 @@ from functools import cache
 from typing import TypeVar
 from uuid import UUID, uuid4
 
+from dotmac_kernel.transactions import (
+    claim_conflict_savepoint_commit,
+    current_conflict_savepoint,
+)
 from sqlalchemy import event
 from sqlalchemy.engine import Connection
 from sqlalchemy.orm import Session, SessionTransaction
@@ -276,6 +280,15 @@ def _reject_helper_commit(session: Session) -> None:
         and release.is_active
     ):
         return
+    # Starter kernel services run expected-conflict mutations inside
+    # conflict_savepoint(); its RELEASE is a savepoint commit, not a
+    # boundary completion. Claim exactly that release against this
+    # command's stored root — the kernel refuses every other shape
+    # (wrong phase, wrong root, arbitrary nested transactions).
+    if isinstance(root, SessionTransaction) and claim_conflict_savepoint_commit(
+        session, expected_root=root
+    ):
+        return
     session.info[_HELPER_ROLLBACK_KEY] = True
     raise _error(
         definition,
@@ -288,6 +301,21 @@ def _reject_helper_commit(session: Session) -> None:
 def _record_helper_rollback(session: Session, previous_transaction: object) -> None:
     if session.info.get(_AUTHORIZED_SAVEPOINT_KEY) is previous_transaction:
         return
+    # A kernel conflict savepoint that recovers exactly to its enclosing
+    # transaction is an expected-conflict outcome, not a participant
+    # completing the owner transaction. Its identity stays observable
+    # during rollback precisely so this classification is possible; a
+    # failed recovery latches the kernel's own failed-root instead and
+    # still fails closed at completion.
+    kernel_state = current_conflict_savepoint(session)
+    if kernel_state is not None and isinstance(
+        previous_transaction, SessionTransaction
+    ):
+        if previous_transaction is kernel_state.savepoint or (
+            previous_transaction.parent is kernel_state.savepoint
+            and not previous_transaction.nested
+        ):
+            return
     active_savepoint = session.info.get(_ACTIVE_SAVEPOINT_KEY)
     if (
         isinstance(active_savepoint, SessionTransaction)

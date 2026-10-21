@@ -374,3 +374,57 @@ def test_optional_failure_preserves_exception_identity_and_cause(
     assert set(db_session.scalars(select(DeviceProjection.source_id))) == {
         "retained-diagnostic-evidence"
     }
+
+
+def test_kernel_conflict_savepoint_release_is_claimed(db_session) -> None:
+    """A Starter kernel expected-conflict savepoint may release inside a command."""
+    from dotmac_kernel.transactions import conflict_savepoint
+
+    def operation() -> None:
+        with conflict_savepoint(db_session):
+            db_session.add(_projection("kernel-savepoint-write"))
+            db_session.flush()
+
+    execute_owner_command(
+        db_session,
+        definition=_DEFINITION,
+        context=_context(),
+        operation=operation,
+    )
+
+    assert _count(db_session) == 1
+
+
+def test_kernel_conflict_savepoint_recovery_inside_owner_savepoint(
+    db_session: Session,
+) -> None:
+    """Recovered kernel conflicts do not poison the owner boundary.
+
+    This is the gateway prepaid composition: Starter money services run
+    inside execute_owner_savepoint (purchase staging) and their
+    expected-conflict rollback must be classified as recovered, while
+    the surrounding command still completes exactly once.
+    """
+    from dotmac_kernel.transactions import conflict_savepoint
+
+    def participant() -> None:
+        db_session.add(_projection("kernel-duplicate"))
+        db_session.flush()
+        with pytest.raises(IntegrityError):
+            with conflict_savepoint(db_session):
+                db_session.add(_projection("kernel-duplicate"))
+                db_session.flush()
+        db_session.add(_projection("after-kernel-conflict"))
+
+    def operation() -> None:
+        execute_owner_savepoint(db_session, participant)
+
+    execute_owner_command(
+        db_session, definition=_DEFINITION, context=_context(), operation=operation
+    )
+
+    assert not db_session.in_transaction()
+    assert set(db_session.scalars(select(DeviceProjection.source_id))) == {
+        "kernel-duplicate",
+        "after-kernel-conflict",
+    }
