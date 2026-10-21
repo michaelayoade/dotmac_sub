@@ -9,16 +9,30 @@ but unused until a later increment.
 
 ```sh
 export OPENBAO_ADDR=https://<openbao-host>   # loopback HTTP also accepted
-deploy/openbao/apply.sh --dry-run            # review the exact writes
+deploy/openbao/apply.sh --dry-run            # review the conditional writes
 export OPENBAO_TOKEN=<admin token>           # never committed, never in CI
 deploy/openbao/apply.sh                      # idempotent converge
 ```
 
-`apply.sh` verifies KV-v2 at `secret/` before writing any policy (D4),
-refuses non-loopback plain HTTP (ERP `_validated_openbao_address` rules),
-then writes JWT config (`default_role` empty), the three policies, the
-three roles in `roles.json`, and seeds both canaries if absent. Canary
-values are generated locally and never printed — only `sha256:` digests
+`apply.sh` performs a read-only preflight before any mutation: it requires
+KV-v2 at `secret/` (D4), an already enabled JWT auth mount of type `jwt`,
+and an absent or compatible JWT configuration. It compares discovery URL,
+bound issuer, and default role with `roles.json`; drift, denied reads, unknown
+statuses, and malformed responses refuse all writes. It does not enable mounts
+or offer a drift override. Compatible shared JWT configuration is preserved;
+only a confirmed 404 permits configuration initialization. Non-loopback plain
+HTTP is refused (ERP `_validated_openbao_address` rules).
+
+Both canaries must be read before any write: only 404 means absent; a valid
+200 preserves the existing value, while other statuses or malformed values
+refuse the apply. After preflight, the tool initializes missing JWT config,
+converges the three policies and roles, and creates absent canaries using KV-v2
+`options.cas=0`. A concurrent create or any seed failure stops the apply with
+no overwrite fallback. Writes are not a transaction: a later failure may leave
+prior policy/role writes or a prior canary create applied; rerun preflight after
+operator review. Shared configuration must remain stable during the governed
+apply because its API does not provide a compare-and-swap transaction.
+Canary values are generated locally and never printed — only `sha256:` digests
 appear in output. Copy the staging canary digest into the repository
 variable `GATE0_CANARY_SHA256` (a digest of a random canary, not a
 secret), and store `OPENBAO_ADDR` as a repository **secret** (never a
@@ -27,7 +41,11 @@ variable: variable values appear unmasked in public Actions logs).
 `apply.sh` mutates OpenBao (JWT config, ACL policies, roles, canaries,
 written with an admin token). It is never run by CI and needs its own
 governed apply packet plus an explicit Lane 3 acknowledgement before it is
-run.
+run. The packet must name the exact reviewed source revision, target, JWT
+mount/config compatibility evidence, canary read outcomes, and rollback/stop
+owner. Source tests and a dry-run do not prove live permissions or identity;
+those checks remain part of the separately authorized human-run apply and
+subsequent proof. No source change grants that authorization.
 
 ## Canaries
 
