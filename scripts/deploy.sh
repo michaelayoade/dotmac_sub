@@ -500,6 +500,77 @@ stop_candidate_gracefully() {
   CANDIDATE_STARTED=0
 }
 
+# --- Migration role ---------------------------------------------------------
+#
+# Migrations run as app_admin, the Starter kernel's permanent LOGIN BYPASSRLS
+# role for offline/migration work (module_database_roles.v1). Backfill
+# migrations (bi_0006..bi_0008, pm_0003/pm_0004) read every tenant's rows under
+# `SET LOCAL row_security = off` and fail closed for any role subject to RLS,
+# so running them as the restricted runtime user is not a supported posture:
+# the 2026-10-20 deploy only passed inside a temporary BYPASSRLS grant window.
+# The credential follows the schema-bootstrap pattern: a passwordless URL, the
+# password only ever read by libpq from a root-owned 0400 pgpass file, mounted
+# into the migration container and nothing else. Runtime containers never see
+# the pgpass, so the bypass credential cannot serve traffic.
+MIGRATION_ADMIN_PGPASS="${MIGRATION_ADMIN_PGPASS:-$(env_value MIGRATION_ADMIN_PGPASS)}"
+MIGRATION_ADMIN_PGPASS="${MIGRATION_ADMIN_PGPASS:-/etc/dotmac/sub/migration-admin.pgpass}"
+MIGRATION_ADMIN_PGPASS_MOUNT="${MIGRATION_ADMIN_PGPASS_MOUNT:-/run/secrets/migration-admin.pgpass}"
+MIGRATION_ADMIN_URL="${MIGRATION_ADMIN_URL:-$(env_value MIGRATION_ADMIN_URL)}"
+MIGRATION_ADMIN_OWNER="${MIGRATION_ADMIN_OWNER:-root}"
+
+migration_admin_credential_available() {
+  local ok=0
+  local authority userinfo user
+
+  if [[ -z "${MIGRATION_ADMIN_URL}" ]]; then
+    echo "MIGRATION ROLE PREFLIGHT: MIGRATION_ADMIN_URL is not set (expected a passwordless postgresql:// URL for the app_admin role)." >&2
+    ok=1
+  else
+    authority="${MIGRATION_ADMIN_URL#*://}"
+    if [[ "${authority}" != *@* ]]; then
+      echo "MIGRATION ROLE PREFLIGHT: MIGRATION_ADMIN_URL names no user; expected the app_admin role." >&2
+      ok=1
+    else
+      userinfo="${authority%%@*}"
+      if [[ "${userinfo}" == *:* ]]; then
+        echo "MIGRATION ROLE PREFLIGHT: MIGRATION_ADMIN_URL carries an inline password; the credential must come from the pgpass file instead." >&2
+        ok=1
+      fi
+      user="${userinfo%%:*}"
+      if [[ "${user}" != "app_admin" ]]; then
+        echo "MIGRATION ROLE PREFLIGHT: MIGRATION_ADMIN_URL connects as ${user}; migrations must run as app_admin (kernel module_database_roles.v1)." >&2
+        ok=1
+      fi
+    fi
+  fi
+
+  if [[ ! -e "${MIGRATION_ADMIN_PGPASS}" ]]; then
+    echo "MIGRATION ROLE PREFLIGHT: credential file ${MIGRATION_ADMIN_PGPASS} does not exist." >&2
+    ok=1
+  elif [[ ! -f "${MIGRATION_ADMIN_PGPASS}" ]]; then
+    echo "MIGRATION ROLE PREFLIGHT: ${MIGRATION_ADMIN_PGPASS} is not a regular file." >&2
+    ok=1
+  else
+    local mode owner
+    mode="$(stat -c '%a' "${MIGRATION_ADMIN_PGPASS}" 2>/dev/null || echo '?')"
+    owner="$(stat -c '%U' "${MIGRATION_ADMIN_PGPASS}" 2>/dev/null || echo '?')"
+    if [[ "${mode}" != "400" ]]; then
+      echo "MIGRATION ROLE PREFLIGHT: ${MIGRATION_ADMIN_PGPASS} has mode ${mode}; expected 400 (libpq refuses a group- or world-readable pgpass)." >&2
+      ok=1
+    fi
+    if [[ "${owner}" != "${MIGRATION_ADMIN_OWNER}" ]]; then
+      echo "MIGRATION ROLE PREFLIGHT: ${MIGRATION_ADMIN_PGPASS} is owned by ${owner}; expected ${MIGRATION_ADMIN_OWNER}." >&2
+      ok=1
+    fi
+    if [[ ! -s "${MIGRATION_ADMIN_PGPASS}" ]]; then
+      echo "MIGRATION ROLE PREFLIGHT: ${MIGRATION_ADMIN_PGPASS} is empty." >&2
+      ok=1
+    fi
+  fi
+
+  return "${ok}"
+}
+
 MIGRATION_RUN_PREFIX=""
 run_migrations() {
   local attempt=1
@@ -507,7 +578,10 @@ run_migrations() {
   local output
   local rc
   while ((attempt <= MIGRATION_MAX_ATTEMPTS)); do
-    if output="$("${COMPOSE[@]}" run --rm --no-deps \
+    if output="$("${COMPOSE[@]}" run --rm --no-deps --user 0:0 \
+      -v "${MIGRATION_ADMIN_PGPASS}:${MIGRATION_ADMIN_PGPASS_MOUNT}:ro" \
+      -e PGPASSFILE="${MIGRATION_ADMIN_PGPASS_MOUNT}" \
+      -e MIGRATION_DATABASE_URL="${MIGRATION_ADMIN_URL}" \
       --name "${MIGRATION_RUN_PREFIX}${attempt}" app alembic upgrade heads 2>&1)"; then
       printf '%s\n' "${output}"
       return 0
@@ -1787,6 +1861,12 @@ pin_and_migrate() {
   # decision as a failure; the guarded restore_prev (which the payment-email
   # floor would refuse, leaving drift) is not used. Scoped to this function.
   trap 'trap - ERR; cleanup_children; settle_failed_migration || true; echo "Deploy interrupted during migration; see pin state above" >&2; exit 130' INT TERM HUP
+
+  if [[ "${BACKUP_MODE}" != "skip_production_post_migration_resume" ]] && ! migration_admin_credential_available; then
+    echo "DEPLOY REFUSED before pinning: migrations have no app_admin credential (see MIGRATION ROLE PREFLIGHT above). Nothing was pinned, migrated or recreated." >&2
+    install_deploy_interrupt_trap
+    return 1
+  fi
 
   log "Pinning APP_IMAGE=${IMAGE} and GIT_SHA=${FULL_SHA}"
   if ! set_env_value APP_IMAGE "${IMAGE}" || ! set_env_value GIT_SHA "${FULL_SHA}"; then
