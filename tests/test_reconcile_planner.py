@@ -854,6 +854,36 @@ def test_wan_only_change_preserves_service_ports_and_excludes_unrelated_drift():
         assert AcsSetManagementServer not in _types(plan)
 
 
+def test_forced_fields_limit_the_pppoe_push_to_fields_that_changed():
+    """The WAN scope stays WAN-only, but an unchanged PPPoE object is left alone."""
+    desired = _desired()
+    observed = _synced_observed(desired)
+    scope = frozenset({"wan_mode", "wan_static_dns"})
+
+    unforced = compute_plan(
+        desired,
+        observed,
+        "sync",
+        proposed_fields=scope,
+        forced_fields=frozenset({"wan_static_dns"}),
+    )
+    forced = compute_plan(
+        desired,
+        observed,
+        "sync",
+        proposed_fields=scope,
+        forced_fields=frozenset({"wan_mode"}),
+    )
+    legacy = compute_plan(desired, observed, "sync", proposed_fields=scope)
+
+    assert AcsSetPppoe not in _types(unforced)
+    assert AcsSetWanIp not in _types(unforced)
+    assert AcsSetPppoe in _types(forced)
+    assert AcsSetPppoe in _types(legacy)
+    for plan in (unforced, forced, legacy):
+        assert not any(action.surface == "olt" for action in plan.actions)
+
+
 def test_wan_only_change_creates_only_the_missing_wan_service_port():
     desired = _desired()
     observed = _synced_observed(desired)

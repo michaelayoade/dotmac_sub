@@ -55,7 +55,12 @@ from app.services.domain_errors import DomainError
 from app.services.events import emit_event
 from app.services.events.types import EventType
 from app.services.network.effective_ont_config import resolve_effective_ont_config
-from app.services.network.ont_desired_config import set_desired_config_values
+from app.services.network.ont_desired_config import (
+    desired_config,
+    get_desired_config_value,
+    resolve_field_path,
+    set_desired_config_values,
+)
 from app.services.network.ont_lan_block_choices import OPERATOR_LAN_BLOCK_PREFIXES
 from app.services.network.ont_management_ipam import (
     allocate_ont_management_ip,
@@ -143,6 +148,8 @@ _REPAIR = OwnerCommandDefinition(
 
 _MAX_IDEMPOTENCY_LENGTH = 160
 _MAX_READBACK_ATTEMPTS = 3
+# Evidence key listing the WAN keys a revision actually changed.
+_WAN_CHANGED_KEYS = "wan.changed_keys"
 SERVICE_CONFIGURATION_RECONCILE_TIMEOUT_SECONDS = 120
 
 
@@ -508,6 +515,16 @@ def _ip(value: str | None, field: str) -> str | None:
         raise _error(
             "invalid_change", f"{field} is not a valid IP address.", field=field
         ) from exc
+
+
+def _desired_values_for(ont: OntUnit, updates: dict[str, object]) -> dict[str, object]:
+    """Stored desired values for the given keys, as the reconciler would see them."""
+
+    config = desired_config(ont)
+    return {
+        key: get_desired_config_value(config, *resolve_field_path(key))
+        for key in updates
+    }
 
 
 def _change_updates(
@@ -1308,7 +1325,13 @@ def _admit(
             revision=head.current_revision,
         )
 
+    before_values = _desired_values_for(ont, updates)
     set_desired_config_values(ont, updates)
+    if section is OntConfigurationSection.wan:
+        after_values = _desired_values_for(ont, updates)
+        evidence[_WAN_CHANGED_KEYS] = sorted(
+            key for key in updates if before_values[key] != after_values[key]
+        )
     wan_intent_id: uuid.UUID | None = None
     effective_vlan: int | None = None
     vlan_source: WanVlanSource | None = None
@@ -1614,7 +1637,7 @@ def _wifi_delivery_scope(
     changed_fields = frozenset(
         field
         for evidence_key, field in field_by_evidence_key.items()
-        if evidence_key in evidence
+        if evidence.get(evidence_key) is not None
     )
     return OntWifiDeliveryScope(changed_fields=changed_fields)
 
@@ -1644,14 +1667,28 @@ def _wan_delivery_scope(
         "wan.static_dns": ("wan_static_dns",),
         "wan.pppoe_wcd_index": ("wan_pppoe_wcd_index",),
     }
+    # Presence is not enough: ``_change_updates`` records every submitted WAN
+    # key, including blanks. Only a submitted (non-None) value is in scope.
     changed_fields = frozenset(
         field
         for evidence_key, fields in field_by_evidence_key.items()
-        if evidence_key in evidence
+        if evidence.get(evidence_key) is not None
         for field in fields
     )
     if not changed_fields:
         return None
+    # Of those, only fields this revision actually changed may force a
+    # PPPoE / WAN-IP push; the rest are delivered on observed drift only.
+    # Revisions admitted before this record carry no list: keep all forced.
+    changed_keys = evidence.get(_WAN_CHANGED_KEYS)
+    forced_fields: frozenset[OntWanProposedField] | None = None
+    if isinstance(changed_keys, list):
+        forced_fields = frozenset(
+            field
+            for evidence_key in changed_keys
+            for field in field_by_evidence_key.get(str(evidence_key), ())
+            if field in changed_fields
+        )
 
     desired = desired_from_ont_unit(db, ont)
     return OntWanProposedChange(
@@ -1666,6 +1703,7 @@ def _wan_delivery_scope(
         wan_static_dns=desired.wan_static_dns,
         wan_static_ip_is_public=desired.wan_static_ip_is_public,
         ipv6_enabled=desired.ipv6_enabled,
+        forced_fields=forced_fields,
     )
 
 
@@ -1691,6 +1729,26 @@ def _only_ppp_delivery_residual_drift(result: ReconcileResult) -> bool:
         str(getattr(drift, "field", "") or "").startswith("ppp_delivery[")
         for drift in result.drift_after
     )
+
+
+def _readback_converged(result: ReconcileResult, scoped_readback: bool) -> bool:
+    if not result.success or result.drift_after:
+        return False
+    if result.sync_status == "synced":
+        return True
+    return scoped_readback and result.sync_status == "out_of_sync"
+
+
+def _readback_drift_fields(failure: object) -> list[str]:
+    """Drift field names carried by a verification failure, names only."""
+
+    evidence = getattr(failure, "evidence", None)
+    if not isinstance(evidence, dict):
+        return []
+    raw = evidence.get("drift_fields")
+    if not isinstance(raw, (list, tuple)):
+        return []
+    return [item for item in raw if isinstance(item, str)]
 
 
 def _connection_request_queued_pending(result: ReconcileResult) -> bool:
@@ -1837,6 +1895,13 @@ def _execution_locked(
     # task and ``_ont_service_config_verify_invocation`` for why no caller
     # input can flip this back to a write.
     readback_only = command.verification_attempt > 0 or command.force_readback_only
+    # A WAN- or Wi-Fi-scoped readback proves only its own surface, so the
+    # reconciler leaves a foreign out_of_sync status alone; "converged" for
+    # the lifecycle then means success with no residual drift, whichever
+    # sync_status the ONT keeps.
+    scoped_readback = readback_only and (
+        wan_scope is not None or wifi_scope is not None
+    )
     result = reconcile_ont(
         db,
         ont.id,
@@ -1875,9 +1940,7 @@ def _execution_locked(
     # promote that gap to ``verified``.
     wifi_password_unverifiable_on_readback = (
         readback_only
-        and result.success
-        and result.sync_status == "synced"
-        and not result.drift_after
+        and _readback_converged(result, scoped_readback)
         and wifi_scope is not None
         and "wifi_password_ref" in wifi_scope.changed_fields
     )
@@ -1949,7 +2012,7 @@ def _execution_locked(
             "Readable configuration verified; WiFi password cannot be "
             "confirmed by readback."
         )
-    elif result.success and result.sync_status == "synced" and not result.drift_after:
+    elif _readback_converged(result, scoped_readback):
         now = datetime.now(UTC)
         head.phase = OntServiceConfigurationPhase.verified
         revision.phase = OntServiceConfigurationPhase.verified
@@ -2089,16 +2152,22 @@ def _execution_locked(
             head.failure_code = failure_code
             head.failure_message = failure_message
             head.waiting_reason = None
+            # Field names only (never values) so the exhausted diagnosis says
+            # which readback fields still diverge.
+            drift_fields = _readback_drift_fields(failure)
+            failed_payload: dict[str, Any] = {
+                "configuration_head_id": str(head.id),
+                "configuration_revision": revision.revision,
+                "phase": OntServiceConfigurationPhase.failed.value,
+                "failure_code": failure_code,
+            }
+            if drift_fields:
+                failed_payload["drift_fields"] = drift_fields
             network_operations.mark_failed(
                 db,
                 str(operation.id),
                 failure_message,
-                output_payload={
-                    "configuration_head_id": str(head.id),
-                    "configuration_revision": revision.revision,
-                    "phase": OntServiceConfigurationPhase.failed.value,
-                    "failure_code": failure_code,
-                },
+                output_payload=failed_payload,
             )
             _record_execution_event(
                 db,
@@ -2110,6 +2179,7 @@ def _execution_locked(
                 phase=OntServiceConfigurationPhase.failed,
                 message=failure_message,
                 success=False,
+                extra_data={"drift_fields": drift_fields} if drift_fields else None,
             )
             phase = OntServiceConfigurationPhase.failed
             message = failure_message

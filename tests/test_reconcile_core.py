@@ -2817,3 +2817,358 @@ def test_surfaces_observed_excludes_acs_for_a_cached_substitution():
         acs_read_attempted=False,
     )
     assert both_skipped == frozenset()
+
+
+# ── Scoped readback must not touch foreign sync state (PR #3773 review F1) ──
+
+_FOREIGN_ERROR = "OLT service-port 101 rejected"
+
+
+def _wan_change(**overrides) -> OntWanProposedChange:
+    values = dict(
+        changed_fields=frozenset({"wan_mode"}),
+        wan_mode="pppoe",
+        wan_pppoe_username="100024456",
+        wan_pppoe_password_ref="bao://pppoe",
+        wan_pppoe_wcd_index=1,
+        wan_static_ip=None,
+        wan_static_subnet=None,
+        wan_static_gateway=None,
+        wan_static_dns=None,
+        wan_static_ip_is_public=None,
+        ipv6_enabled=False,
+    )
+    values.update(overrides)
+    return OntWanProposedChange(**values)
+
+
+def _binding(db_session, ont):
+    """A binding backed by real lifecycle rows (the projection columns are FKs)."""
+    from app.models.network import OntAssignment
+    from app.models.network_operation import (
+        NetworkOperation,
+        NetworkOperationStatus,
+        NetworkOperationTargetType,
+        NetworkOperationType,
+    )
+    from app.models.ont_service_configuration import (
+        OntServiceConfigurationHead,
+        OntServiceConfigurationPhase,
+        OntServiceConfigurationRevision,
+    )
+    from app.services.network.reconcile.lifecycle import ReconcileLifecycleBinding
+
+    assignment = OntAssignment(ont_unit_id=ont.id, active=True)
+    operation = NetworkOperation(
+        operation_type=NetworkOperationType.ont_service_config,
+        target_type=NetworkOperationTargetType.ont,
+        target_id=ont.id,
+        status=NetworkOperationStatus.pending,
+        correlation_key=f"core-binding:{uuid.uuid4()}",
+        input_payload={},
+        initiated_by="test",
+    )
+    db_session.add_all([assignment, operation])
+    db_session.flush()
+    head = OntServiceConfigurationHead(
+        ont_unit_id=ont.id,
+        assignment_id=assignment.id,
+        current_revision=3,
+        latest_operation_id=operation.id,
+        phase=OntServiceConfigurationPhase.readback_pending,
+    )
+    db_session.add(head)
+    db_session.flush()
+    db_session.add(
+        OntServiceConfigurationRevision(
+            head_id=head.id,
+            assignment_id=assignment.id,
+            revision=3,
+            section="wan",
+            command_fingerprint="b" * 64,
+            idempotency_key=f"core-binding-{uuid.uuid4()}",
+            desired_change_evidence={},
+            operation_id=operation.id,
+            phase=OntServiceConfigurationPhase.readback_pending,
+        )
+    )
+    db_session.flush()
+    return ReconcileLifecycleBinding(
+        ont_unit_id=ont.id,
+        assignment_id=assignment.id,
+        configuration_head_id=head.id,
+        desired_revision=3,
+        operation_id=operation.id,
+    )
+
+
+def _bind_ont(db_session, ont, binding):
+    ont.reconcile_configuration_head_id = binding.configuration_head_id
+    ont.reconcile_assignment_id = binding.assignment_id
+    ont.reconcile_desired_revision = binding.desired_revision
+    ont.reconcile_operation_id = binding.operation_id
+    db_session.commit()
+
+
+def _seed_cached_olt(db_session, ont, desired):
+    _seed_observation_row(
+        db_session,
+        ont,
+        olt=_cached_present_olt(desired),
+        olt_read_status="present",
+        at=datetime(2026, 1, 1, tzinfo=UTC),
+    )
+
+
+def _mark_out_of_sync(db_session, ont, message=_FOREIGN_ERROR):
+    ont.sync_status = OntSyncStatus.out_of_sync
+    ont.last_error = message
+    db_session.commit()
+
+
+def test_wan_scoped_readback_keeps_foreign_out_of_sync_and_error(
+    db_session, ont, stub_desired, stub_ont_status
+):
+    _mark_out_of_sync(db_session, ont)
+    acs = _StubAcsClient(device=_synced_acs_device(ont))
+
+    result = reconcile_ont(
+        db_session,
+        ont.id,
+        mode="sweep",
+        proposed_change=_wan_change(),
+        olt_adapter=_StubOltAdapter(present=True),
+        acs_client=acs,
+        readback_only=True,
+    )
+
+    assert result.success is True
+    assert not result.drift_after
+    assert acs.spv_calls == []
+    db_session.refresh(ont)
+    assert ont.sync_status == OntSyncStatus.out_of_sync
+    assert ont.last_error == _FOREIGN_ERROR
+    assert result.sync_status == "out_of_sync"
+
+
+def test_wifi_scoped_readback_keeps_foreign_out_of_sync_and_error(
+    db_session, ont, stub_desired, stub_ont_status
+):
+    _seed_cached_olt(db_session, ont, stub_desired)
+    _mark_out_of_sync(db_session, ont)
+
+    result = reconcile_ont(
+        db_session,
+        ont.id,
+        mode="sweep",
+        wifi_delivery_scope=OntWifiDeliveryScope(
+            changed_fields=frozenset({"wifi_ssid"})
+        ),
+        acs_client=_StubAcsClient(device=_synced_acs_device(ont)),
+        readback_only=True,
+    )
+
+    assert result.success is True
+    db_session.refresh(ont)
+    assert ont.sync_status == OntSyncStatus.out_of_sync
+    assert ont.last_error == _FOREIGN_ERROR
+
+
+def test_scoped_readback_failure_does_not_replace_foreign_error(
+    db_session, ont, stub_desired, stub_ont_status
+):
+    _seed_cached_olt(db_session, ont, stub_desired)
+    _mark_out_of_sync(db_session, ont)
+    device = _synced_acs_device(ont)
+    device["InternetGatewayDevice"]["LANDevice"]["1"]["WLANConfiguration"]["1"][
+        "SSID"
+    ] = {"_value": "WRONG-SSID", "_object": False, "_writable": True}
+
+    result = reconcile_ont(
+        db_session,
+        ont.id,
+        mode="sweep",
+        wifi_delivery_scope=OntWifiDeliveryScope(
+            changed_fields=frozenset({"wifi_ssid"})
+        ),
+        acs_client=_StubAcsClient(device=device),
+        readback_only=True,
+    )
+
+    assert result.success is False
+    db_session.refresh(ont)
+    assert ont.sync_status == OntSyncStatus.out_of_sync
+    assert ont.last_error == _FOREIGN_ERROR
+
+
+def test_scoped_readback_clears_its_own_readback_pending_marker(
+    db_session, ont, stub_desired, stub_ont_status
+):
+    binding = _binding(db_session, ont)
+    _mark_out_of_sync(db_session, ont, reconcile_core.READBACK_PENDING_MESSAGE)
+    _bind_ont(db_session, ont, binding)
+
+    result = reconcile_ont(
+        db_session,
+        ont.id,
+        mode="sweep",
+        proposed_change=_wan_change(),
+        olt_adapter=_StubOltAdapter(present=True),
+        acs_client=_StubAcsClient(device=_synced_acs_device(ont)),
+        lifecycle_binding=binding,
+        readback_only=True,
+    )
+
+    assert result.success is True
+    db_session.refresh(ont)
+    assert ont.sync_status == OntSyncStatus.synced
+    assert ont.last_error is None
+
+
+def test_scoped_readback_does_not_clear_foreign_error_under_a_stale_binding(
+    db_session, ont, stub_desired, stub_ont_status
+):
+    """The binding matching is not enough: a sweep error written after the
+    lifecycle's last pass is not the lifecycle's marker."""
+    binding = _binding(db_session, ont)
+    _mark_out_of_sync(db_session, ont)
+    _bind_ont(db_session, ont, binding)
+
+    result = reconcile_ont(
+        db_session,
+        ont.id,
+        mode="sweep",
+        proposed_change=_wan_change(),
+        olt_adapter=_StubOltAdapter(present=True),
+        acs_client=_StubAcsClient(device=_synced_acs_device(ont)),
+        lifecycle_binding=binding,
+        readback_only=True,
+    )
+
+    assert result.success is True
+    db_session.refresh(ont)
+    assert ont.sync_status == OntSyncStatus.out_of_sync
+    assert ont.last_error == _FOREIGN_ERROR
+
+
+def test_unscoped_sweep_still_clears_out_of_sync(
+    db_session, ont, stub_desired, stub_ont_status
+):
+    """A full-device pass proves everything, so it keeps clearing the error."""
+    _mark_out_of_sync(db_session, ont)
+
+    result = reconcile_ont(
+        db_session,
+        ont.id,
+        mode="sweep",
+        olt_adapter=_StubOltAdapter(present=True),
+        acs_client=_StubAcsClient(device=_synced_acs_device(ont)),
+        readback_only=True,
+    )
+
+    assert result.success is True
+    db_session.refresh(ont)
+    assert ont.sync_status == OntSyncStatus.synced
+    assert ont.last_error is None
+
+
+# ── Real out-of-sync guard on the readback path (F5) ───────────────────────
+
+
+def test_real_guard_blocks_sync_but_lets_bound_readback_sweep_through(
+    db_session, ont, stub_desired, stub_ont_status
+):
+    """No ``reconcile_ont`` mock: the lifecycle-bound hard error blocks a
+    ``sync`` pass but a ``sweep`` readback reaches the plan and reports its own
+    diagnosis instead of BLOCKED_OUT_OF_SYNC."""
+    binding = _binding(db_session, ont)
+    _mark_out_of_sync(db_session, ont, reconcile_core.READBACK_PENDING_MESSAGE)
+    _bind_ont(db_session, ont, binding)
+    device = _synced_acs_device(ont)
+    device["InternetGatewayDevice"]["LANDevice"]["1"]["WLANConfiguration"]["1"][
+        "SSID"
+    ] = {"_value": "WRONG-SSID", "_object": False, "_writable": True}
+    scope = OntWifiDeliveryScope(changed_fields=frozenset({"wifi_ssid"}))
+
+    blocked = reconcile_ont(
+        db_session,
+        ont.id,
+        mode="sync",
+        wifi_delivery_scope=scope,
+        acs_client=_StubAcsClient(device=device),
+        lifecycle_binding=binding,
+        readback_only=True,
+    )
+    assert blocked.failure.reason is ReconcileFailureReason.BLOCKED_OUT_OF_SYNC
+
+    diagnosed = reconcile_ont(
+        db_session,
+        ont.id,
+        mode="sweep",
+        wifi_delivery_scope=scope,
+        acs_client=_StubAcsClient(device=device),
+        lifecycle_binding=binding,
+        readback_only=True,
+    )
+    assert diagnosed.failure.reason is ReconcileFailureReason.VERIFICATION_MISMATCH
+    assert diagnosed.failure.evidence["readback_pending"] is True
+
+
+# ── WAN apply forces PPPoE only for fields the revision changed (F2) ───────
+
+
+def _planned_action_names(monkeypatch) -> list[str]:
+    """Record the action types of every plan reaching ``apply_plan``."""
+    names: list[str] = []
+    real = reconcile_core.apply_plan
+
+    def _spy(plan, ctx, *, deadline=None):
+        names.extend(type(action).__name__ for action in plan.actions)
+        return real(plan, ctx, deadline=deadline)
+
+    monkeypatch.setattr("app.services.network.reconcile.core.apply_plan", _spy)
+    return names
+
+
+def test_sync_wan_apply_without_pppoe_field_change_does_not_push_pppoe(
+    db_session, ont, stub_desired, stub_ont_status, monkeypatch
+):
+    planned = _planned_action_names(monkeypatch)
+    acs = _StubAcsClient(device=_synced_acs_device(ont))
+
+    result = reconcile_ont(
+        db_session,
+        ont.id,
+        mode="sync",
+        proposed_change=_wan_change(
+            changed_fields=frozenset({"wan_mode", "wan_static_dns"}),
+            forced_fields=frozenset({"wan_static_dns"}),
+        ),
+        olt_adapter=_StubOltAdapter(present=True),
+        acs_client=acs,
+    )
+
+    assert result.success is True
+    assert "AcsSetPppoe" not in planned
+    assert "AcsSetWanIp" not in planned
+
+
+def test_sync_wan_apply_with_pppoe_field_change_pushes_pppoe(
+    db_session, ont, stub_desired, stub_ont_status, monkeypatch
+):
+    planned = _planned_action_names(monkeypatch)
+    acs = _StubAcsClient(device=_synced_acs_device(ont))
+
+    result = reconcile_ont(
+        db_session,
+        ont.id,
+        mode="sync",
+        proposed_change=_wan_change(
+            changed_fields=frozenset({"wan_mode", "wan_static_dns"}),
+            forced_fields=frozenset({"wan_mode"}),
+        ),
+        olt_adapter=_StubOltAdapter(present=True),
+        acs_client=acs,
+    )
+
+    assert "AcsSetPppoe" in planned

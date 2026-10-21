@@ -100,6 +100,11 @@ class OntWanProposedChange:
     wan_static_dns: str | None
     wan_static_ip_is_public: bool | None
     ipv6_enabled: bool
+    # Subset of ``changed_fields`` this revision actually changed. ``None``
+    # means every field in ``changed_fields`` (legacy callers). Fields outside
+    # the subset keep the WAN scope but are pushed only on observed drift, so
+    # an unrelated WAN edit does not re-dial a live PPPoE session.
+    forced_fields: frozenset[OntWanProposedField] | None = None
 
     def as_mapping(self) -> dict[str, Any]:
         """Serialize only explicitly submitted fields for the legacy core.
