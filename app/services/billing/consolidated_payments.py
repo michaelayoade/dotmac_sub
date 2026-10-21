@@ -1155,6 +1155,39 @@ class ConsolidatedPaymentSettlements:
         replay = cls._replay(db, key=key, fingerprint=command.preview_fingerprint)
         if replay is not None:
             return replay
+        # Starter reseller lane: route is decided pre-write from the
+        # preview's own effects. A consolidated payment touching any
+        # Starter-issued invoice settles entirely in Starter or is
+        # refused; it never falls back to the legacy allocation writer.
+        from app.services.billing import starter_reseller_settlement
+
+        reseller_slices = tuple(
+            starter_reseller_settlement.ResellerSettlementSlice(
+                invoice_id=effect.invoice_id,
+                subscriber_id=effect.account_id,
+                amount=effect.allocation_amount,
+            )
+            for effect in preview.allocation_effects
+        )
+        starter_route = starter_reseller_settlement.touches_starter_invoices(
+            db, [slice_.invoice_id for slice_ in reseller_slices]
+        )
+        if starter_route:
+            reason = starter_reseller_settlement.reseller_settlement_eligibility_reason(
+                db,
+                account=account,
+                slices=reseller_slices,
+                total=preview.amount,
+                external_reference=command.external_id,
+            )
+            if reason is not None:
+                raise HTTPException(
+                    status_code=409,
+                    detail=(
+                        "Consolidated payment touches Starter invoices but "
+                        f"cannot settle in Starter: {reason}"
+                    ),
+                )
         reservation = IdempotencyKey(scope=_IDEMPOTENCY_SCOPE, key=key)
         db.add(reservation)
         try:
@@ -1252,8 +1285,18 @@ class ConsolidatedPaymentSettlements:
                 )
                 db.add(payment)
             db.flush()
+            if starter_route:
+                starter_reseller_settlement.settle_reseller_consolidated(
+                    db,
+                    account=account,
+                    payment_id=payment.id,
+                    slices=reseller_slices,
+                    external_reference=str(command.external_id or ""),
+                    confirmed_amount=preview.amount,
+                    occurred_at=payment.paid_at or datetime.now(UTC),
+                )
             allocations: list[PaymentAllocation] = []
-            for effect in preview.allocation_effects:
+            for effect in [] if starter_route else preview.allocation_effects:
                 invoice = get_by_id(db, Invoice, effect.invoice_id)
                 if invoice is None:
                     raise HTTPException(status_code=404, detail="Invoice not found")
@@ -1268,7 +1311,7 @@ class ConsolidatedPaymentSettlements:
                 allocation.preview_fingerprint = preview.fingerprint
                 allocations.append(allocation)
             billing_entry: BillingAccountLedgerEntry | None = None
-            if preview.unallocated_amount > Decimal("0.00"):
+            if not starter_route and preview.unallocated_amount > Decimal("0.00"):
                 account.balance = round_money(
                     to_decimal(account.balance) + preview.unallocated_amount
                 )
@@ -1345,7 +1388,8 @@ class ConsolidatedPaymentSettlements:
                 ),
             )
             reservation.ref_id = str(payment.id)
-            _emit_consolidated_payment_events(db, payment, allocations)
+            if not starter_route:
+                _emit_consolidated_payment_events(db, payment, allocations)
             db.flush()
             if complete_transaction:
                 db.commit()
