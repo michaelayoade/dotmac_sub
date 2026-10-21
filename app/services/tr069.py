@@ -437,6 +437,200 @@ def _queue_saved_service_apply_after_stale_inform(
     return dispatch.queued
 
 
+def _queue_resume_apply_after_inform(
+    db: Session,
+    *,
+    ont_id: uuid.UUID | None,
+    inform_at: datetime,
+) -> bool:
+    """Inform hot path: cheap read, then a delayed task (no NBI, no locks)."""
+    if ont_id is None:
+        return False
+    from sqlalchemy import and_, or_
+
+    from app.models.ont_service_configuration import (
+        OntServiceConfigurationHead,
+        OntServiceConfigurationPhase,
+        OntServiceConfigurationRevision,
+    )
+    from app.services.db_session_adapter import db_session_adapter
+
+    candidate = db.scalar(
+        select(OntServiceConfigurationHead.id)
+        .join(
+            OntServiceConfigurationRevision,
+            (OntServiceConfigurationRevision.head_id == OntServiceConfigurationHead.id)
+            & (
+                OntServiceConfigurationRevision.revision
+                == OntServiceConfigurationHead.current_revision
+            ),
+        )
+        .where(
+            OntServiceConfigurationHead.ont_unit_id == ont_id,
+            or_(
+                OntServiceConfigurationHead.phase
+                == OntServiceConfigurationPhase.readback_pending,
+                and_(
+                    OntServiceConfigurationHead.phase
+                    == OntServiceConfigurationPhase.failed,
+                    OntServiceConfigurationHead.failure_code.in_(
+                        ("acs_cr_failed", "verification_mismatch")
+                    ),
+                    OntServiceConfigurationRevision.section == "wan",
+                ),
+            ),
+        )
+    )
+    db_session_adapter.release_read_transaction(db)
+    if candidate is None:
+        return False
+
+    from app.services.queue_adapter import enqueue_task
+
+    stamp = int(inform_at.timestamp())
+    dispatch = enqueue_task(
+        "app.tasks.tr069.resume_ont_service_apply_after_inform",
+        args=[str(ont_id), inform_at.isoformat()],
+        correlation_id=f"ont_service_resume:{ont_id}:{stamp}",
+        source="tr069_inform",
+        countdown=60,
+    )
+    return dispatch.queued
+
+
+def _resume_apply_after_inform(
+    db: Session,
+    *,
+    ont_id: uuid.UUID | None,
+    inform_at: datetime,
+) -> bool:
+    """Run the NEXT APPLY step (a write pass, not only a verify) for a head
+    parked on a Connection Request failure or on a pending WCD/PPP-child
+    creation (the #3758 pending markers). Runs in the delayed task.
+
+    * waiting head: owner resume command.
+    * failed head (``acs_cr_failed``/``verification_mismatch``) of a WAN
+      revision with a fresh pending-create marker: the owner's retry command.
+
+    The GenieACS queue is read BEFORE any row lock is taken and the owner
+    re-checks all state under its locks. Resumes are capped per revision.
+    """
+    if ont_id is None:
+        return False
+
+    from app.models.network_operation import NetworkOperation
+    from app.models.ont_service_configuration import (
+        OntServiceConfigurationHead,
+        OntServiceConfigurationPhase,
+        OntServiceConfigurationRevision,
+    )
+    from app.services.db_session_adapter import db_session_adapter
+    from app.services.network import ont_turnup_gaps
+    from app.services.network.ont_service_configuration import (
+        OntServiceConfigurationError,
+        ResumeOntServiceConfigurationCommand,
+        RetryOntServiceConfigurationCommand,
+        resume_ont_service_configuration_after_inform,
+        retry_ont_service_configuration,
+    )
+    from app.services.owner_commands import CommandContext
+
+    head = db.scalar(
+        select(OntServiceConfigurationHead).where(
+            OntServiceConfigurationHead.ont_unit_id == ont_id,
+            OntServiceConfigurationHead.phase.in_(
+                (
+                    OntServiceConfigurationPhase.readback_pending,
+                    OntServiceConfigurationPhase.failed,
+                )
+            ),
+        )
+    )
+    if head is None or head.latest_operation_id is None:
+        db_session_adapter.release_read_transaction(db)
+        return False
+    ont = db.get(OntUnit, ont_id)
+    operation = db.get(NetworkOperation, head.latest_operation_id)
+    waiting = head.phase is OntServiceConfigurationPhase.readback_pending
+    revision_row = db.scalar(
+        select(OntServiceConfigurationRevision).where(
+            OntServiceConfigurationRevision.head_id == head.id,
+            OntServiceConfigurationRevision.revision == head.current_revision,
+        )
+    )
+    is_wan = revision_row is not None and revision_row.section == "wan"
+    prior_resumes = int(
+        ((operation.input_payload if operation else None) or {}).get("resume_count")
+        or 0
+    )
+    completed_at = (
+        _normalize_utc_timestamp(operation.completed_at)
+        if operation is not None and not waiting
+        else None
+    )
+    normalized_inform_at = _normalize_utc_timestamp(inform_at)
+    eligible = ont is not None and (
+        waiting
+        or (
+            is_wan
+            and head.failure_code in {"acs_cr_failed", "verification_mismatch"}
+            and ont_turnup_gaps.has_pending_create_marker(ont)
+            and prior_resumes < ont_turnup_gaps.MAX_RESUMES_PER_REVISION
+            and completed_at is not None
+            and normalized_inform_at is not None
+            and completed_at < normalized_inform_at
+        )
+    )
+    # NBI read happens here: before any lock, no write transaction open.
+    queue_empty = bool(
+        eligible
+        and ont is not None
+        and ont_turnup_gaps.acs_queued_task_count(db, ont) == 0
+    )
+    head_id = head.id
+    revision = head.current_revision
+    operation_id = head.latest_operation_id
+    db_session_adapter.release_read_transaction(db)
+    if not eligible or not queue_empty:
+        return False
+
+    stamp = int(normalized_inform_at.timestamp()) if normalized_inform_at else 0
+    key = f"ont-service-config-inform-resume:{head_id}:{operation_id}:{stamp}"
+    context = CommandContext.system(
+        actor="system:tr069_inform_handler",
+        scope="network:ont:write",
+        reason="Resume apply after a fresh ACS Inform (CR failure / pending create)",
+        command_id=uuid.uuid4(),
+        idempotency_key=key,
+    )
+    try:
+        if waiting:
+            outcome = resume_ont_service_configuration_after_inform(
+                db,
+                ResumeOntServiceConfigurationCommand(
+                    context=context,
+                    ont_unit_id=ont_id,
+                    expected_head_id=head_id,
+                    expected_revision=revision,
+                    acs_queue_empty=True,
+                ),
+            )
+            return outcome.message.startswith("Apply resumed")
+        retry_ont_service_configuration(
+            db,
+            RetryOntServiceConfigurationCommand(
+                context=context,
+                ont_unit_id=ont_id,
+                expected_head_id=head_id,
+                expected_revision=revision,
+                resume_count=prior_resumes + 1,
+            ),
+        )
+    except OntServiceConfigurationError:
+        return False
+    return True
+
+
 def _trigger_acs_cr_failure_readback_after_inform(
     db: Session,
     *,
@@ -1850,6 +2044,20 @@ def receive_inform(
 
     cr_failure_readback_triggered = False
     try:
+        _queue_resume_apply_after_inform(
+            db, ont_id=ont_id_for_service_apply, inform_at=now
+        )
+    except Exception:
+        if db.in_transaction():
+            db.rollback()
+        logger.warning(
+            "Failed to resume ONT service apply after inform for ONT %s",
+            ont_id_for_service_apply,
+            exc_info=True,
+        )
+    try:
+        # The delayed resume (above) re-checks state under locks, so the
+        # plain readback trigger can still run for failed heads.
         cr_failure_readback_triggered = _trigger_acs_cr_failure_readback_after_inform(
             db,
             ont_id=ont_id_for_service_apply,

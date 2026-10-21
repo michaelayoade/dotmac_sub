@@ -596,9 +596,11 @@ TASK_RELIABILITY_CONTRACTS: dict[str, TaskReliabilityContract] = {
         "readback-only branch and never calls setParameterValues or any "
         "other OLT write function -- repeated execution against the same "
         "operation is inherently safe, unlike the sibling apply task it "
-        "otherwise mirrors. The dispatch outbox still admits the queued "
-        "verification operation once; an operator queues a fresh attempt "
-        "through verify_ont_service_configuration_readback, which is itself "
+        "otherwise mirrors. The dispatch outbox carries only a bounded "
+        "verification-attempt counter; readback-pending execution stages the "
+        "next delayed verification on the same operation, while an Inform "
+        "may queue a fresh attempt through "
+        "verify_ont_service_configuration_readback, which is itself "
         "gated on a fresh ACS Inform since the original failure.",
     ),
     "app.tasks.ont_reconcile.run_ont_reconcile_sweep": _c(
@@ -1004,6 +1006,20 @@ TASK_RELIABILITY_CONTRACTS: dict[str, TaskReliabilityContract] = {
     ),
     "app.tasks.tr069.refresh_ont_runtime_data": _c("tr069", SWEEP, IDEMP, HEALTH),
     "app.tasks.tr069.refresh_single_ont_runtime": _c("tr069", MANUAL, IDEMP, STATUS),
+    "app.tasks.tr069.resume_ont_service_apply_after_inform": _c(
+        "tr069",
+        STATE,
+        GUARDED,
+        STATUS,
+        "Delayed (~60s) after an ACS Inform; no autoretry_for. Eligibility, the "
+        "GenieACS queue read and the Inform-freshness check run before any lock; "
+        "the owner resume/retry command re-checks head, revision and operation "
+        "under row locks, caps resumes per revision (MAX_RESUMES_PER_REVISION), "
+        "and only stages ont_service_config_apply.v1 through the dispatch outbox. "
+        "A duplicate or late run finds the head no longer waiting/failed and is a "
+        "no-op; a lost run is re-enqueued by the device's next Inform. Outcome is "
+        "visible as the configuration head phase/waiting_reason/failure_code.",
+    ),
     "app.tasks.tr069.scrape_genieacs_metrics": _c("tr069", SWEEP, IDEMP, HEALTH),
     "app.tasks.tr069.setup_genieacs": _c("tr069", MANUAL, GUARDED, STATUS),
     "app.tasks.tr069.sync_all_acs_devices": _c(

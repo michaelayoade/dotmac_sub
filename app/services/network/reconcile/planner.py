@@ -281,8 +281,13 @@ def _is_remote_access_only_change(
 
 
 def _is_wan_only_change(mode: ReconcileMode, proposed_fields: frozenset[str]) -> bool:
+    # The configuration lifecycle retains the exact WAN field scope while its
+    # delayed readback worker uses sweep mode to observe an out-of-sync ONT.
+    # Periodic sweeps carry no proposed fields and therefore remain full-device.
     return (
-        mode == "sync" and bool(proposed_fields) and proposed_fields <= _WAN_ONLY_FIELDS
+        mode in ("sync", "sweep")
+        and bool(proposed_fields)
+        and proposed_fields <= _WAN_ONLY_FIELDS
     )
 
 
@@ -296,6 +301,20 @@ def _is_tr069_profile_only_change(
     )
 
 
+def is_scoped_plan(mode: ReconcileMode, proposed_fields: frozenset[str]) -> bool:
+    """Whether these proposed fields restrict the plan to one device surface.
+
+    A scoped plan never computes drift for the rest of the device, so its
+    outcome says nothing about unrelated drift.
+    """
+    return (
+        _is_wifi_only_change(mode, proposed_fields)
+        or _is_remote_access_only_change(mode, proposed_fields)
+        or _is_wan_only_change(mode, proposed_fields)
+        or _is_tr069_profile_only_change(mode, proposed_fields)
+    )
+
+
 def compute_plan(
     desired: OntDesiredState,
     observed: OntObservedState,
@@ -303,6 +322,7 @@ def compute_plan(
     *,
     proposed_fields: frozenset[str] | None = None,
     force_proposed_writes: bool = True,
+    forced_fields: frozenset[str] | None = None,
 ) -> Plan:
     """Diff desired vs observed; emit the ordered action list.
 
@@ -313,7 +333,10 @@ def compute_plan(
     For narrow WiFi edits, it scopes the plan to the relevant ACS writes so
     unrelated drift does not block the UI action. ``force_proposed_writes`` is
     used for write-only values, where observed state cannot prove drift; verify
-    calls keep the scope but disable the force.
+    calls keep the scope but disable the force. ``forced_fields`` narrows which
+    of the proposed fields force a WAN push (PPPoE / WAN IP): ``None`` means all
+    of them; a narrower set lets a scoped WAN apply leave unchanged, undrifted
+    WAN objects alone so a live session is not re-dialled.
     """
     actions: list[Action] = []
     drifts: list[Drift] = []
@@ -362,6 +385,7 @@ def compute_plan(
             omci_wan_planned,
             proposed_fields,
             force_proposed_writes,
+            forced_fields=forced_fields,
         )
 
     olt_wait_detail = ""
@@ -1026,6 +1050,16 @@ def _plan_service_port_create(
             vlan=vlan,
             gem_index=gem_index,
             slot=slot,
+            **(
+                {
+                    "traffic_table_inbound": desired.wan_traffic_table_inbound,
+                    "traffic_table_outbound": desired.wan_traffic_table_outbound,
+                }
+                if slot == "wan"
+                and desired.wan_traffic_table_inbound is not None
+                and desired.wan_traffic_table_outbound is not None
+                else {}
+            ),
         )
     )
     debt = Drift(
@@ -1068,12 +1102,46 @@ def _plan_wan_service_port(
         )
         return
     if (
-        desired.wan_service_port_index is not None
-        and desired.wan_vlan is not None
+        desired.wan_vlan is not None
         and is_deliverable("wan_vlan", desired.wan_vlan)
         and desired.wan_mode == "pppoe"
     ):
         gem_index = desired.wan_gem_index or 1
+        # Judge "missing" by what the OLT shows for THIS ONT at the internet
+        # VLAN+GEM, not by the index alone. Existing ports are never altered.
+        matching = [
+            sp
+            for sp in observed.olt.olt_service_ports
+            if _sp_int(sp, "vlan", "vlan_id") == desired.wan_vlan
+            and _sp_int(sp, "gem_index", "gem") == gem_index
+        ]
+        if len(matching) > 1:
+            # Ambiguous: fail closed, no create, no delete.
+            drifts.append(
+                Drift(
+                    field="olt_service_ports[wan]",
+                    surface="olt",
+                    desired={"vlan": desired.wan_vlan, "gem": gem_index},
+                    observed=f"ambiguous:{len(matching)}_matching_ports",
+                    repairable=False,
+                )
+            )
+            return
+        if matching:
+            return
+        if desired.wan_service_port_index is None:
+            # The lifecycle allocates and persists the index before reconcile;
+            # reaching here means that has not happened. Report, don't guess.
+            drifts.append(
+                Drift(
+                    field="olt_service_ports[wan]",
+                    surface="olt",
+                    desired={"vlan": desired.wan_vlan, "gem": gem_index},
+                    observed=None,
+                    repairable=False,
+                )
+            )
+            return
         # A create is planned only when NOTHING occupies the index —
         # matched or mismatched. A mismatched occupant is a live customer
         # port and is flagged as unrepairable drift by the main per-port
@@ -1173,6 +1241,8 @@ def _plan_acs_side(
     omci_wan_planned: bool,
     proposed_fields: frozenset[str],
     force_proposed_writes: bool,
+    *,
+    forced_fields: frozenset[str] | None = None,
 ) -> AcsIdentity:
     if not desired.acs_server_id:
         # Without an ACS server bound, no ACS actions to plan. Reconciler
@@ -1192,6 +1262,21 @@ def _plan_acs_side(
     wifi_only_change = _is_wifi_only_change(mode, proposed_fields)
     remote_only_change = _is_remote_access_only_change(mode, proposed_fields)
     wan_only_change = _is_wan_only_change(mode, proposed_fields)
+
+    # CR-credential repair is planned before every other ACS write (G3).
+    if not (wifi_only_change or remote_only_change):
+        _plan_acs_management_server(
+            desired,
+            observed,
+            device_id,
+            actions,
+            drifts,
+            proposed_fields=proposed_fields,
+            force_proposed_writes=force_proposed_writes,
+            # A WAN-only pass may repair the CR settings but never the ACS
+            # URL or ACS credentials.
+            cr_only=wan_only_change,
+        )
 
     # TR-069 WAN PPP — skipped when OMCI owns the WAN.
     narrow_feature_change = wifi_only_change or remote_only_change
@@ -1224,6 +1309,7 @@ def _plan_acs_side(
             drifts,
             proposed_fields=proposed_fields,
             force_proposed_writes=force_proposed_writes,
+            forced_fields=forced_fields,
         )
 
     # Bring-up pushes below key off ``olt_present`` (the authorization), not
@@ -1241,7 +1327,7 @@ def _plan_acs_side(
         and is_deliverable("wan_vlan", wan_vlan)
     ):
         force_wan_ip_write = force_proposed_writes and bool(
-            proposed_fields
+            (proposed_fields if forced_fields is None else forced_fields)
             & {
                 "wan_mode",
                 "wan_pppoe_wcd_index",
@@ -1461,11 +1547,31 @@ def _plan_acs_side(
             )
         )
 
-    # ManagementServer (CR creds + inform interval) — last in the ACS
-    # sequence. Critical for the next reconcile's NBI calls to deliver
-    # synchronously.
-    force_endpoint_write = bool(proposed_fields & _ACS_ENDPOINT_FIELDS) and (
-        force_proposed_writes
+    return identity
+
+
+def _plan_acs_management_server(
+    desired: OntDesiredState,
+    observed: OntObservedState,
+    device_id: str,
+    actions: list[Action],
+    drifts: list[Drift],
+    *,
+    proposed_fields: frozenset[str],
+    force_proposed_writes: bool,
+    cr_only: bool = False,
+) -> None:
+    """Plan the ManagementServer (CR credentials + inform interval) write.
+
+    Planned FIRST in the ACS sequence: GenieACS executes queued tasks in
+    order, so when the Connection Request credentials are what is failing,
+    the repair must precede every other write or those writes queue behind
+    a CR that can never succeed. Credentials come from the config pack.
+    """
+    force_endpoint_write = (
+        not cr_only
+        and bool(proposed_fields & _ACS_ENDPOINT_FIELDS)
+        and force_proposed_writes
     )
     cr_username = desired.cr_username
     cr_password_ref = desired.cr_password_ref
@@ -1476,7 +1582,9 @@ def _plan_acs_side(
         and is_deliverable("cr_password_ref", cr_password_ref)
     )
     if cr_credentials_ready and (
-        force_endpoint_write or _management_server_differs(desired, observed)
+        force_endpoint_write
+        or (cr_only and _cr_settings_differ(desired, observed))
+        or (not cr_only and _management_server_differs(desired, observed))
     ):
         assert isinstance(cr_username, str)
         assert isinstance(cr_password_ref, str)
@@ -1491,9 +1599,9 @@ def _plan_acs_side(
                     or desired.tr069_data_model_root
                     or "InternetGatewayDevice"
                 ),
-                acs_url=desired.acs_url,
-                acs_username=desired.acs_username,
-                acs_password_ref=desired.acs_password_ref,
+                acs_url=None if cr_only else desired.acs_url,
+                acs_username=None if cr_only else desired.acs_username,
+                acs_password_ref=None if cr_only else desired.acs_password_ref,
             )
         )
         drifts.append(
@@ -1506,8 +1614,6 @@ def _plan_acs_side(
             )
         )
 
-    return identity
-
 
 def _plan_acs_wan_ppp(
     desired: OntDesiredState,
@@ -1518,6 +1624,7 @@ def _plan_acs_wan_ppp(
     *,
     proposed_fields: frozenset[str],
     force_proposed_writes: bool,
+    forced_fields: frozenset[str] | None = None,
 ) -> None:
     """Plan WAN PPP via TR-069 — addObject if missing, then PPPoE params.
 
@@ -1574,7 +1681,7 @@ def _plan_acs_wan_ppp(
     # used to ride on ``_wan_ppp_differs``'s "ACS has nothing yet" shortcut,
     # which only ever fired for devices the ACS could not deliver to at all.
     force_pppoe_write = force_proposed_writes and bool(
-        proposed_fields
+        (proposed_fields if forced_fields is None else forced_fields)
         & {
             "wan_mode",
             "wan_pppoe_username",
@@ -2069,6 +2176,17 @@ def _dhcp_differs(desired: OntDesiredState, observed: OntObservedState) -> bool:
     ):
         return True
     return not observed.olt.olt_present
+
+
+def _cr_settings_differ(desired: OntDesiredState, observed: OntObservedState) -> bool:
+    """ConnectionRequest username/password and inform interval only."""
+    acs = observed.acs
+    return (
+        acs.acs_observed_periodic_inform_interval_sec
+        != desired.periodic_inform_interval_sec
+        or acs.acs_observed_cr_username != desired.cr_username
+        or not acs.acs_observed_cr_password_set
+    )
 
 
 def _management_server_differs(

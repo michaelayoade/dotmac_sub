@@ -178,6 +178,9 @@ class OltCreateServicePort:
     vlan: int
     gem_index: int
     slot: str  # "mgmt" or "wan" — informational, not CLI-emitted
+    # Config-pack OLT traffic-table indices (WAN slot); both or neither.
+    traffic_table_inbound: int | None = None
+    traffic_table_outbound: int | None = None
 
 
 @dataclass(frozen=True)

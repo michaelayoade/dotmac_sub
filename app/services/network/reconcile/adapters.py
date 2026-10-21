@@ -73,6 +73,13 @@ _FSP_RE = re.compile(r"^\d+/\d+/\d+$")
 # ── Desired state ───────────────────────────────────────────────────────────
 
 
+def _pack_int(effective: Any, key: str) -> int | None:
+    """Read an integer field from the effective config pack (object or dict)."""
+    pack = effective.get("config_pack") if isinstance(effective, dict) else None
+    raw = pack.get(key) if isinstance(pack, dict) else getattr(pack, key, None)
+    return _int_or_none(raw)
+
+
 def desired_from_ont_unit(db: Session, ont: OntUnit) -> OntDesiredState:
     """Materialise the current ``OntDesiredState`` for one ONT.
 
@@ -171,6 +178,12 @@ def desired_from_ont_unit(db: Session, ont: OntUnit) -> OntDesiredState:
         wan_mode=wan_mode,
         wan_vlan=_int_or_none(values.get("wan_vlan")),
         wan_gem_index=_int_or_none(values.get("wan_gem_index")),
+        wan_traffic_table_inbound=_pack_int(
+            effective, "internet_traffic_table_inbound"
+        ),
+        wan_traffic_table_outbound=_pack_int(
+            effective, "internet_traffic_table_outbound"
+        ),
         wan_pppoe_username=values.get("pppoe_username"),
         wan_pppoe_password_ref=values.get("pppoe_password"),
         # DEFAULT: provisioning method comes from a global domain_settings
