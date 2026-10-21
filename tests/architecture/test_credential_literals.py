@@ -340,6 +340,7 @@ def test_every_python_entry_point_family_is_scanned() -> None:
         "scripts",
         "alembic",
         "alembic_kernel_adoption",
+        "deploy",
     }
     for root in SCANNED_ROOTS:
         assert Path(root).is_dir(), f"scanned root {root} no longer exists"

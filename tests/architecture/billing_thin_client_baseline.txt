@@ -3,7 +3,7 @@
 # surface must net-shrink. The file inventory is exact and the
 # total is two-directional — shrink the code and lower this
 # baseline in the same change; growth requires Michael's explicit
-# exception recorded in docs/feature_freeze_exceptions.json.
+# approval from Michael.
 # Regenerate with tests.architecture.billing_thin_client_inventory
 # .render_baseline(<repo root>).
 TOTAL 96784
