@@ -225,7 +225,7 @@ def test_proof_workflow_uses_secret_for_openbao_addr_never_a_variable() -> None:
     assert source.count("secrets.OPENBAO_ADDR") == 7
     readme = (OPENBAO / "README.md").read_text(encoding="utf-8")
     assert "repository variable `OPENBAO_ADDR`" not in readme
-    assert "repository secret" in readme
+    assert "repository **secret**" in readme
 
 
 def test_public_docs_do_not_describe_openbao_listener_posture() -> None:
