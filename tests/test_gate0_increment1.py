@@ -88,6 +88,22 @@ def test_proof_workflow_id_token_only_on_minting_jobs() -> None:
     assert doc["jobs"]["row3-no-environment"].get("environment") is None
 
 
+def test_proof_openbao_jobs_run_on_staging_self_hosted_runner() -> None:
+    # D3: OpenBao is plaintext HTTP, not internet-reachable for hosted
+    # runners; only the verdict job (no OpenBao contact) stays hosted.
+    doc = _load(PROOF)
+    for name, job in doc["jobs"].items():
+        if name == "verdict":
+            assert job["runs-on"] == "ubuntu-latest"
+        else:
+            assert job["runs-on"] == [
+                "self-hosted",
+                "linux",
+                "x64",
+                "dotmac-sub-staging",
+            ], name
+
+
 def test_proof_workflow_is_dispatch_only_with_pass_verdict() -> None:
     source = PROOF.read_text(encoding="utf-8")
     triggers = _load(PROOF).get(True) or _load(PROOF).get("on")

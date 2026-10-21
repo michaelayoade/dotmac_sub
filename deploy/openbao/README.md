@@ -37,9 +37,13 @@ from `main`. The verdict job prints `GATE0 PROOF 1: PASS` iff rows 1–9 of
 design §3.4 hold (row 4, wrong ref, is exercised only by also dispatching
 from a feature branch; row 10, JWT replay, is accepted residual risk per
 D5 and is never asserted). Row 6 sleeps ~11 minutes to expire a real JWT.
-If hosted runners cannot reach OpenBao, that is a network-placement
-finding (D3): run the proof on the staging runner instead — never add IP
-or CIDR conditions to roles.
+D3 placement (amended 2026-10-21): the OpenBao listener is plaintext
+HTTP and currently not reachable from arbitrary internet (probe timed
+out), so every OpenBao-contacting proof job runs on the staging
+self-hosted runner (`dotmac-sub-staging`), which reaches OpenBao over
+the existing app path. `OPENBAO_ADDR` must be the staging host's
+existing app-path value. Move jobs to hosted runners only after a TLS
+OpenBao endpoint exists — never add IP or CIDR conditions to roles.
 
 ## Deliberately NOT in Increment 1
 
