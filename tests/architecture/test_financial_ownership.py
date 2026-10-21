@@ -151,6 +151,10 @@ APPROVED_INVOICE_LIFECYCLE_WRITERS = {
     # balance from the Starter collectible position after an earmarked
     # Starter allocation; writes no Sub ledger state.
     Path("app/services/billing/starter_prepaid.py"),
+    # Reseller lane (ADR 0031): mirrors paid status and balance from the
+    # Starter collectible position after a per-subscriber slice
+    # allocation; writes no Sub ledger state.
+    Path("app/services/billing/starter_reseller_settlement.py"),
 }
 
 
