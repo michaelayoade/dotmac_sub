@@ -29,6 +29,27 @@ Measured at `d021e33c9`.
 retirement at step 6. `scripts/deploy.sh` and `scripts/deploy_staging.sh`
 alongside it. `scripts/deploy_shared_architecture.sh` also runs compose.
 
+The executor accepts an optional process-environment predecessor precondition,
+`DEPLOY_EXPECTED_FROM_IMAGE`. Its owner is the existing locked `deploy.sh`
+executor; the pure typed policy is `scripts/deploy_transition_gate.py`
+(`PredecessorQuery` → `PredecessorOutcome`). Unset preserves existing callers.
+When set, it must be the executor's fixed image repository followed by
+`@sha256:` and 64 lowercase hexadecimal characters; empty or malformed input
+refuses with `invalid_from_image_precondition`. The executor never reads this
+option from `.env`.
+
+After host selection, while its existing fd9 deploy lock remains held, the
+executor requires the app's live `State.Running=true`, exact `Config.Image`,
+and saved `PREV_IMAGE` rollback pin to match that predecessor. Unreadable,
+stopped, or changed observations refuse with `from_image_mismatch`, including
+a competing deployment that already reached the desired image. Refusal is
+nonzero before deploy-token lookup, candidate cleanup, pull, backup, pin
+updates, or migrations, and activates no rollback. The lock stays held through
+the existing engine's exit. `tests/test_deploy_transition_gate.py` exercises
+the real CLI with inert transports and real file locks. Source approval of
+this narrow optional guard does not authorize live activation or retire any
+entrypoint.
+
 `scripts/deploy.sh` carries real operational knowledge worth preserving into
 the controller rather than losing: an orphaned-`pg_dump` guard that refuses to
 deploy while a dump is running (lines 137-144, after a dump drove load to 52 on
