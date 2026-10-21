@@ -187,11 +187,19 @@ class ScratchPostgres:
     def __init__(self, image: str) -> None:
         self.image = image
         self.name = scratch_container_name()
+        self._ownership_label = uuid.uuid4().hex
         refusal = refuse_target(self.name, what="container")
         if refusal:  # generated name must always pass; guard anyway
             raise RuntimeError(refusal)
 
     def __enter__(self) -> ScratchPostgres:
+        try:
+            return self._start()
+        except BaseException:
+            self._cleanup()
+            raise
+
+    def _start(self) -> ScratchPostgres:
         result = run(
             [
                 "docker",
@@ -199,6 +207,8 @@ class ScratchPostgres:
                 "-d",
                 "--name",
                 self.name,
+                "--label",
+                f"dotmac.restore-drill.run={self._ownership_label}",
                 "--network",
                 "none",
                 "--tmpfs",
@@ -212,9 +222,7 @@ class ScratchPostgres:
             timeout=120,
         )
         if result.returncode != 0:
-            raise RuntimeError(
-                f"docker run failed: {result.stderr.decode(errors='replace')[:500]}"
-            )
+            raise RuntimeError("scratch container startup failed")
         deadline = time.time() + 90
         while time.time() < deadline:
             probe = self.psql("SELECT 1", db=SCRATCH_DB, tuples_only=True)
@@ -224,7 +232,51 @@ class ScratchPostgres:
         raise RuntimeError("scratch postgres did not become ready")
 
     def __exit__(self, *exc: object) -> None:
-        run(["docker", "rm", "-f", self.name], timeout=60)
+        self._cleanup()
+
+    def _container_record(self) -> str:
+        try:
+            result = run(
+                [
+                    "docker",
+                    "container",
+                    "ls",
+                    "--all",
+                    "--no-trunc",
+                    "--filter",
+                    f"name=^/{self.name}$",
+                    "--format",
+                    '{{.ID}}|{{.Label "dotmac.restore-drill.run"}}',
+                ],
+                timeout=60,
+            )
+        except (OSError, subprocess.SubprocessError):
+            raise RuntimeError("scratch presence query failed") from None
+        if result.returncode != 0:
+            raise RuntimeError("scratch presence query failed")
+        return result.stdout.decode().strip()
+
+    def _cleanup(self) -> None:
+        record = self._container_record()
+        if not record:
+            return
+        container_id, separator, label = record.partition("|")
+        if (
+            not separator
+            or not re.fullmatch(r"[0-9a-f]{64}", container_id)
+            or label != self._ownership_label
+        ):
+            raise RuntimeError("scratch ownership unproved; removal refused")
+        removed = False
+        try:
+            removed = (
+                run(["docker", "rm", "-f", container_id], timeout=60).returncode == 0
+            )
+        except (OSError, subprocess.SubprocessError):
+            pass
+        absent = not self._container_record()
+        if not removed or not absent:
+            raise RuntimeError("scratch cleanup failed")
 
     def psql(
         self,
