@@ -1414,6 +1414,13 @@ def settle_prepaid_period_purchase(
                     balance_due=row.total,
                     billing_period_start=row.starts_at,
                     billing_period_end=row.ends_at,
+                    # Same verified due evidence the legacy issuance input
+                    # carries below; Starter issuance reads it from the
+                    # draft itself, and only the invoice owner assigns it.
+                    due_at=observed_at,
+                    due_date_basis=InvoiceDueDateBasis.prepaid_service_period,
+                    due_date_basis_ref=f"prepaid_period_purchases:{purchase.id}:{row.ordinal}",
+                    due_date_policy_version="prepaid-period-purchases-v1",
                     memo=f"Prepaid service period {row.ordinal} of {purchase.period_count}",
                 ),
                 reason="prepaid_period_purchase",
@@ -1476,9 +1483,6 @@ def settle_prepaid_period_purchase(
             links_by_key = {link.billing_line_key: link for link in funding.links}
         for row, invoice, line in staged_periods:
             if starter_route:
-                # Legacy issuance receives due_at as an issuance input;
-                # Starter eligibility reads it from the draft itself.
-                invoice.due_at = observed_at
                 starter_prepaid.settle_prepaid_period_invoice(
                     db,
                     invoice=invoice,
