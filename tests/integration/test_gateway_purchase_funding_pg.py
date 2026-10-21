@@ -237,9 +237,30 @@ def test_verified_purchase_settles_through_starter_funding(
     db_session.commit()
 
     db_session_adapter.release_read_transaction(db_session)
-    result = purchases.settle_verified_prepaid_period_purchase(
-        db_session, settle, context=purchase_context()
-    )
+    # TEMP-PROBE: name the participant whose soft rollback poisons the
+    # owner boundary; remove once the composition gap is fixed.
+    import traceback
+
+    from sqlalchemy import event
+    from sqlalchemy.orm import Session as _Session
+
+    _stacks: list[str] = []
+
+    def _probe(session, previous_transaction):
+        _stacks.append("".join(traceback.format_stack(limit=18)))
+
+    event.listen(_Session, "after_soft_rollback", _probe)
+    try:
+        result = purchases.settle_verified_prepaid_period_purchase(
+            db_session, settle, context=purchase_context()
+        )
+    except Exception as exc:
+        raise AssertionError(
+            f"{type(exc).__name__}: {exc}\nSOFT-ROLLBACK STACKS:\n"
+            + "\n---\n".join(_stacks[-4:])
+        ) from exc
+    finally:
+        event.remove(_Session, "after_soft_rollback", _probe)
     db_session.commit()
 
     assert result.status is PrepaidPeriodPurchaseStatus.completed
