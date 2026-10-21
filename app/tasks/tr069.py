@@ -344,19 +344,17 @@ def resume_ont_service_apply_after_inform(
 
     from app.services.tr069 import _resume_apply_after_inform
 
-    db = db_session_adapter.create_session()
     try:
-        resumed = _resume_apply_after_inform(
-            db, ont_id=UUID(ont_id), inform_at=datetime.fromisoformat(inform_at)
-        )
-        db.commit()
-        return {"ont_id": ont_id, "resumed": resumed}
+        with db_session_adapter.owner_command_session() as db:
+            resumed = _resume_apply_after_inform(
+                db,
+                ont_id=UUID(ont_id),
+                inform_at=datetime.fromisoformat(inform_at),
+            )
     except Exception:
-        db.rollback()
         logger.exception("ONT service resume after inform failed for %s", ont_id)
         raise
-    finally:
-        db.close()
+    return {"ont_id": ont_id, "resumed": resumed}
 
 
 @celery_app.task(name="app.tasks.tr069.apply_saved_ont_service_config")

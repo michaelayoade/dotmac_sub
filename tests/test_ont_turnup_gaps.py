@@ -22,6 +22,8 @@ from app.services.db_session_adapter import db_session_adapter
 from app.services.network import ont_turnup_gaps
 from app.services.network.ont_service_configuration import (
     ExecuteOntServiceConfigurationCommand,
+    _ensure_wan_service_port_index,
+    _mark_wan_service_port_provisioned,
     execute_ont_service_configuration,
 )
 from app.services.network.reconcile import (
@@ -90,9 +92,7 @@ def test_wan_service_port_index_is_allocated_and_persisted(db_session):
 
     _olt, ont = _olt_and_ont(db_session)
 
-    index = ont_turnup_gaps.ensure_wan_service_port_index(
-        db_session, ont, wan_vlan=203, gem_index=1
-    )
+    index = _ensure_wan_service_port_index(db_session, ont, wan_vlan=203, gem_index=1)
 
     assert index is not None
     assert ont.desired_config["olt"]["wan_service_port_index"] == index
@@ -102,9 +102,7 @@ def test_wan_service_port_index_is_allocated_and_persisted(db_session):
     ]
     # Recorded index is returned unchanged, no second allocation.
     assert (
-        ont_turnup_gaps.ensure_wan_service_port_index(
-            db_session, ont, wan_vlan=203, gem_index=1
-        )
+        _ensure_wan_service_port_index(db_session, ont, wan_vlan=203, gem_index=1)
         == index
     )
     assert len(get_allocations_for_ont(db_session, ont.id)) == 1
@@ -125,9 +123,7 @@ def test_wan_service_port_allocation_fails_closed_when_ambiguous(db_session):
         )
 
     assert (
-        ont_turnup_gaps.ensure_wan_service_port_index(
-            db_session, ont, wan_vlan=203, gem_index=1
-        )
+        _ensure_wan_service_port_index(db_session, ont, wan_vlan=203, gem_index=1)
         is None
     )
     assert "olt" not in (ont.desired_config or {})
@@ -807,6 +803,47 @@ def test_ambiguous_canonical_credential_has_its_own_code(
     assert head.failure_code == "canonical_credential_ambiguous"
 
 
+def test_mixed_type_active_credentials_are_ambiguous_for_the_gate(
+    db_session, subscriber, subscription
+):
+    """One PPPoE-typed and one untyped active credential: the credential owner
+    refuses to pick either, so the RADIUS gate does too (no typed preference)."""
+    from app.services.cpe_dialer_credential_reconcile import (
+        DialerCredentialRefusal,
+        authoritative_dialer_login,
+    )
+
+    for name, ctype in (("100000001", ConnectionType.pppoe), ("100000002", None)):
+        db_session.add(
+            AccessCredential(
+                subscriber_id=subscriber.id,
+                subscription_id=subscription.id,
+                username=name,
+                is_active=True,
+                connection_type=ctype,
+            )
+        )
+    db_session.flush()
+
+    ruling = authoritative_dialer_login(
+        db_session, subscription_id=subscription.id, login="100000001"
+    )
+    assert ruling.refusal is DialerCredentialRefusal.ambiguous
+    assert ruling.credential_id is None and ruling.login_matches is False
+    assert not hasattr(ruling, "username")
+    gate = ont_turnup_gaps.radius_gate(
+        db_session,
+        desired_mode="pppoe",
+        desired_login="100000001",
+        subscription_id=subscription.id,
+        ppp_write_issued_at=None,
+        ont_mac=MAC,
+        waiting_since=None,
+        attempt=1,
+    )
+    assert gate == "credential_ambiguous"
+
+
 def test_onu_username_not_canonical_login_holds_with_explicit_code(
     db_session, monkeypatch, subscriber, subscription
 ):
@@ -941,9 +978,7 @@ def test_wan_allocation_marked_provisioned_only_after_applied_create_and_readbac
     from app.services.network.service_port_allocator import get_allocations_for_ont
 
     _olt, ont = _olt_and_ont(db_session)
-    ont_turnup_gaps.ensure_wan_service_port_index(
-        db_session, ont, wan_vlan=203, gem_index=1
-    )
+    _ensure_wan_service_port_index(db_session, ont, wan_vlan=203, gem_index=1)
     applied = (SimpleNamespace(field="service_port[wan]"),)
 
     def result(**kw):
@@ -952,11 +987,11 @@ def test_wan_allocation_marked_provisioned_only_after_applied_create_and_readbac
         )
         return SimpleNamespace(**{**base, **kw})
 
-    ont_turnup_gaps.mark_wan_service_port_provisioned(
+    _mark_wan_service_port_provisioned(
         db_session, ont, result(drift_after=("olt_service_ports[wan]",))
     )
     assert get_allocations_for_ont(db_session, ont.id)[0].provisioned_at is None
-    ont_turnup_gaps.mark_wan_service_port_provisioned(db_session, ont, result())
+    _mark_wan_service_port_provisioned(db_session, ont, result())
     assert get_allocations_for_ont(db_session, ont.id)[0].provisioned_at is not None
 
 

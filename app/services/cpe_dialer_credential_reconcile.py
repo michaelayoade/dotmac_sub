@@ -458,6 +458,49 @@ def authoritative_dialer_fingerprint(
     )
 
 
+@dataclass(frozen=True, slots=True)
+class DialerLoginRuling:
+    """Read-only ruling on whether a login is the authoritative dialer login.
+
+    Carries no credential value: only the credential id, whether the supplied
+    login equals the authoritative username, and the refusal (if any).
+    """
+
+    credential_id: UUID | None = None
+    login_matches: bool = False
+    refusal: DialerCredentialRefusal | None = None
+
+
+def authoritative_dialer_login(
+    db: Session,
+    *,
+    subscription_id: UUID | None,
+    login: str | None,
+) -> DialerLoginRuling:
+    """Whether ``login`` is the one authoritative dialer login of the service.
+
+    Same single-credential rule as the projection: exactly one active
+    credential per exact subscription; none is ``missing``, several is
+    ``ambiguous``. Read-only, no row lock, no credential value returned.
+    """
+    if subscription_id is None:
+        return DialerLoginRuling(refusal=DialerCredentialRefusal.missing)
+    credentials, ambiguous = _authoritative_credentials(
+        db, [subscription_id], for_update=False
+    )
+    if subscription_id in ambiguous:
+        return DialerLoginRuling(refusal=DialerCredentialRefusal.ambiguous)
+    credential = credentials.get(subscription_id)
+    if credential is None:
+        return DialerLoginRuling(refusal=DialerCredentialRefusal.missing)
+    username = (credential.username or "").strip()
+    wanted = (login or "").strip()
+    return DialerLoginRuling(
+        credential_id=credential.id,
+        login_matches=bool(wanted) and wanted == username,
+    )
+
+
 def projected_dialer_fingerprint(ont: Any) -> str | None:
     """The fingerprint recorded on the ONT's staged projection, if any."""
     config = desired_config(ont) if ont is not None else {}

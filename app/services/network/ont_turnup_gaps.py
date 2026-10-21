@@ -1,9 +1,9 @@
-"""Read-only helpers for the ONT turn-up gaps (G1 / G3 / G9).
+"""Read-only helpers for the ONT turn-up gaps (G3 / G9).
 
-Owner: ``network.ont_service_configuration``. This module has NO device
-writers: it allocates a service-port index in the database (existing
-``service_port_allocator``), and it reads ACS queue state, RADIUS sessions and
-pending-create markers. Every device write still goes lifecycle -> planner ->
+Owner: ``network.ont_service_configuration``. This module has NO writers of
+any kind: it reads ACS queue state, RADIUS sessions, pending-create markers and
+the credential owner's login ruling. The WAN service-port allocation (G1) lives
+in the owner module. Every device write still goes lifecycle -> planner ->
 applier.
 """
 
@@ -39,79 +39,6 @@ RADIUS_SESSION_RECHECK_SECONDS = 60
 
 class WanServicePortAmbiguous(Exception):
     """More than one candidate WAN service-port allocation exists."""
-
-
-def ensure_wan_service_port_index(
-    db: Session, ont: OntUnit, *, wan_vlan: int, gem_index: int
-) -> int | None:
-    """Return the WAN service-port index, allocating and persisting if unset.
-
-    Uses the existing DB-backed ``service_port_allocator``. Never touches or
-    renumbers existing ports; when several internet allocations already exist
-    for this ONT/VLAN/GEM it fails closed (returns ``None``) and the planner
-    reports the drift instead of guessing.
-    """
-    from app.services.network.ont_desired_config import (
-        desired_config,
-        get_desired_config_value,
-        set_desired_config_values,
-    )
-    from app.services.network.service_port_allocator import (
-        AllocationError,
-        allocate_service_port,
-        find_allocation_by_correlation_key,
-        get_allocations_for_ont,
-    )
-
-    olt_id = getattr(ont, "olt_device_id", None)
-    if olt_id is None:
-        return None
-    recorded = get_desired_config_value(
-        desired_config(ont), "olt", "wan_service_port_index"
-    )
-    if recorded not in (None, ""):
-        return int(recorded)
-
-    candidates = [
-        a
-        for a in get_allocations_for_ont(db, ont.id)
-        if a.service_type == "internet"
-        and a.vlan_id == wan_vlan
-        and a.gem_index == gem_index
-    ]
-    if len(candidates) > 1:
-        logger.warning(
-            "wan_service_port_ambiguous",
-            extra={"ont_id": str(ont.id), "candidates": len(candidates)},
-        )
-        return None
-    if candidates:
-        index = int(candidates[0].port_index)
-    else:
-        key = f"ont-wan-service-port:{ont.id}:{wan_vlan}:{gem_index}"
-        allocation = find_allocation_by_correlation_key(db, key)
-        try:
-            if allocation is None:
-                allocation = allocate_service_port(
-                    db,
-                    olt_id,
-                    ont.id,
-                    service_type="internet",
-                    vlan_id=wan_vlan,
-                    gem_index=gem_index,
-                    correlation_key=key,
-                )
-        except AllocationError:
-            logger.warning(
-                "wan_service_port_allocation_failed",
-                extra={"ont_id": str(ont.id)},
-                exc_info=True,
-            )
-            return None
-        index = int(allocation.port_index)
-    set_desired_config_values(ont, {"olt.wan_service_port_index": index})
-    db.flush()
-    return index
 
 
 def _linked_cpe(db: Session, ont_id: UUID) -> Any:
@@ -193,35 +120,6 @@ def has_pending_create_marker(ont: OntUnit, now: datetime | None = None) -> bool
 PPP_WRITE_FIELDS = frozenset({"acs_pppoe", "omci_pppoe", "ont_reset"})
 
 
-def canonical_ppp_credential(
-    db: Session, subscription_id: UUID | None
-) -> tuple[Any, str]:
-    """``(credential, status)``; status is ``ok``, ``missing`` or ``ambiguous``.
-
-    PPPoE-typed active credentials win; untyped ones are used only when no
-    PPPoE-typed credential exists. More than one candidate is ambiguous.
-    """
-    if subscription_id is None:
-        return None, "missing"
-    from app.models.catalog import AccessCredential, ConnectionType
-
-    rows = list(
-        db.scalars(
-            select(AccessCredential).where(
-                AccessCredential.subscription_id == subscription_id,
-                AccessCredential.is_active.is_(True),
-            )
-        )
-    )
-    typed = [r for r in rows if r.connection_type == ConnectionType.pppoe]
-    candidates = typed or [r for r in rows if r.connection_type is None]
-    if not candidates:
-        return None, "missing"
-    if len(candidates) > 1:
-        return None, "ambiguous"
-    return candidates[0], "ok"
-
-
 MAX_MAC_OFFSET = 8
 
 
@@ -248,8 +146,10 @@ def mac_matches(
 
 def radius_session_live(
     db: Session,
-    credential: Any,
     *,
+    credential_id: UUID,
+    subscription_id: UUID,
+    username: str,
     ppp_write_issued_at: datetime | None,
     ont_mac: str | None,
     observed_wan_mac: str | None = None,
@@ -265,10 +165,10 @@ def radius_session_live(
 
     stmt = select(RadiusActiveSession).where(
         or_(
-            RadiusActiveSession.access_credential_id == credential.id,
+            RadiusActiveSession.access_credential_id == credential_id,
             and_(
-                RadiusActiveSession.subscription_id == credential.subscription_id,
-                RadiusActiveSession.username == credential.username,
+                RadiusActiveSession.subscription_id == subscription_id,
+                RadiusActiveSession.username == username,
             ),
         )
     )
@@ -303,14 +203,29 @@ def radius_gate(
     """
     if desired_mode != "pppoe":
         return "ok"
-    credential, status = canonical_ppp_credential(db, subscription_id)
-    if status == "ambiguous":
+    from app.services.cpe_dialer_credential_reconcile import (
+        DialerCredentialRefusal,
+        authoritative_dialer_login,
+    )
+
+    ruling = authoritative_dialer_login(
+        db, subscription_id=subscription_id, login=desired_login
+    )
+    if ruling.refusal is DialerCredentialRefusal.ambiguous:
         return "credential_ambiguous"
-    if credential is None or not desired_login or desired_login != credential.username:
+    if (
+        ruling.refusal is not None
+        or not ruling.login_matches
+        or ruling.credential_id is None
+        or subscription_id is None
+        or not desired_login
+    ):
         return "login_mismatch"
     if radius_session_live(
         db,
-        credential,
+        credential_id=ruling.credential_id,
+        subscription_id=subscription_id,
+        username=desired_login.strip(),
         ppp_write_issued_at=ppp_write_issued_at,
         ont_mac=ont_mac,
         observed_wan_mac=observed_wan_mac,
@@ -333,30 +248,3 @@ def ppp_write_applied(result: Any) -> bool:
         str(getattr(a, "field", "")) in PPP_WRITE_FIELDS
         for a in getattr(result, "actions_applied", ()) or ()
     )
-
-
-def mark_wan_service_port_provisioned(db: Session, ont: OntUnit, result: Any) -> None:
-    """Mark the WAN allocation provisioned once the create applied and read back.
-
-    Called by the owner lifecycle only for a clean pass whose applied actions
-    include the WAN service-port create; the applier stays device-only.
-    """
-    from app.services.network.service_port_allocator import (
-        get_allocations_for_ont,
-        mark_provisioned,
-    )
-
-    applied = any(
-        str(getattr(a, "field", "")) == "service_port[wan]"
-        for a in getattr(result, "actions_applied", ()) or ()
-    )
-    if not (
-        applied
-        and result.success
-        and result.sync_status == "synced"
-        and not result.drift_after
-    ):
-        return
-    for allocation in get_allocations_for_ont(db, ont.id):
-        if allocation.service_type == "internet" and allocation.provisioned_at is None:
-            mark_provisioned(db, allocation.id)

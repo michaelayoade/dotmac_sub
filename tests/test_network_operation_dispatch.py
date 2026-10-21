@@ -359,3 +359,21 @@ def test_dispatch_health_snapshot_initializes_all_states(db_session):
     assert snapshot["dispatches_pending"] == 1
     assert snapshot["dispatches_reconciliation_needed"] == 0
     assert snapshot["dispatch_oldest_pending_age_seconds"] >= 0
+
+
+def test_ont_service_verify_key_parser_is_strict():
+    import pytest
+
+    from app.services.network_operation_dispatch import (
+        NetworkOperationDispatchError,
+        ont_service_config_verify_key,
+        parse_ont_service_config_verify_key,
+    )
+
+    assert parse_ont_service_config_verify_key("verify:1") == 1
+    assert parse_ont_service_config_verify_key("verify:3@r2") == 3
+    assert ont_service_config_verify_key(2) == "verify:2"
+    assert ont_service_config_verify_key(2, 1) == "verify:2@r1"
+    for bad in ("verify:1@x", "verify:0@r1", "verify:1@r0", "verify:0", "verify:x"):
+        with pytest.raises(NetworkOperationDispatchError):
+            parse_ont_service_config_verify_key(bad)

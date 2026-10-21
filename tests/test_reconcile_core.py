@@ -3257,7 +3257,7 @@ def _cr_chain_setup(db_session, monkeypatch, ont, stub_desired, *, queued_tasks)
     return head, operation, ids
 
 
-def _run_hop(db_session, ids, attempt):
+def _run_hop(db_session, ids, attempt, *, explicit_repair=False):
     from app.services.db_session_adapter import db_session_adapter
     from app.services.network.ont_service_configuration import (
         ExecuteOntServiceConfigurationCommand,
@@ -3284,6 +3284,9 @@ def _run_hop(db_session, ids, attempt):
             configuration_head_id=head_id,
             revision=rev,
             verification_attempt=attempt,
+            # Same flags as the real verify task for delayed readback hops.
+            explicit_repair=explicit_repair or attempt > 0,
+            force_readback_only=attempt > 0,
         ),
     )
 
@@ -3357,3 +3360,56 @@ def test_cr_failure_without_queued_task_exhausts_as_acs_cr_failed(
         outcome = _run_hop(db_session, ids, attempt)
     assert outcome.phase is OntServiceConfigurationPhase.failed
     assert head.failure_code == "acs_cr_failed"
+
+
+def test_inform_resume_chain_gets_fresh_verify_dispatch_keys(
+    db_session, ont, stub_desired, stub_ont_status, monkeypatch
+):
+    """R1: after an Inform resume re-runs the apply, its delayed readback hops
+    must not collide with the verify:N keys of the first cycle (the outbox
+    returns the old row for a seen key, so nothing would be scheduled)."""
+    from datetime import timedelta
+
+    from sqlalchemy import select
+
+    from app.models.network_operation import (
+        NetworkOperationDispatch,
+        NetworkOperationDispatchStatus,
+    )
+    from app.services.network import ont_turnup_gaps
+    from app.services.tr069 import _resume_apply_after_inform
+
+    head, operation, ids = _cr_chain_setup(
+        db_session, monkeypatch, ont, stub_desired, queued_tasks=2
+    )
+    for attempt in (0, 1, 2, 3):
+        _run_hop(db_session, ids, attempt)
+    assert head.waiting_reason == ont_turnup_gaps.WAITING_INFORM_CR_FAILED
+
+    # Every first-cycle hop has been delivered by now.
+    for row in db_session.scalars(
+        select(NetworkOperationDispatch).where(
+            NetworkOperationDispatch.operation_id == ids[1]
+        )
+    ):
+        row.status = NetworkOperationDispatchStatus.completed
+    monkeypatch.setattr(ont_turnup_gaps, "acs_queued_task_count", lambda *_a, **_k: 0)
+    now = datetime.now(UTC)
+    operation.updated_at = now - timedelta(minutes=5)
+    ont.acs_last_inform_at = now
+    db_session.commit()
+    assert _resume_apply_after_inform(db_session, ont_id=ids[0], inform_at=now)
+
+    # The resumed apply (write pass, CR still failing) schedules its own hops.
+    monkeypatch.setattr(ont_turnup_gaps, "acs_queued_task_count", lambda *_a, **_k: 2)
+    _run_hop(db_session, ids, 0, explicit_repair=True)
+    keys = {
+        row.dispatch_key: row.status
+        for row in db_session.scalars(
+            select(NetworkOperationDispatch).where(
+                NetworkOperationDispatch.operation_id == ids[1]
+            )
+        )
+    }
+    assert keys["verify:1@r1"] is NetworkOperationDispatchStatus.pending
+    assert keys["verify:1"] is NetworkOperationDispatchStatus.completed

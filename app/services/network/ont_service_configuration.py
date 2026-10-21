@@ -10,6 +10,7 @@ import hashlib
 import hmac
 import ipaddress
 import json
+import logging
 import uuid
 from dataclasses import asdict, dataclass
 from datetime import UTC, datetime, timedelta
@@ -81,6 +82,7 @@ from app.services.network.subscriber_wan_ipam import ensure_wan_static_ip_availa
 from app.services.network_catalog_ip_block_bridge import IpBlockPrefix
 from app.services.network_operation_dispatch import (
     NetworkOperationCommand,
+    ont_service_config_verify_key,
     stage_dispatch,
 )
 from app.services.network_operations import (
@@ -106,6 +108,8 @@ if TYPE_CHECKING:
         OntWifiDeliveryScope,
         ReconcileResult,
     )
+
+logger = logging.getLogger(__name__)
 
 OWNER = "network.ont_service_configuration"
 _COORDINATION_CONCERN = "atomic ONT service configuration coordination"
@@ -1840,6 +1844,111 @@ def _lan_exact_readback_available(
     return True
 
 
+def _resume_generation(operation: NetworkOperation) -> int:
+    """How many Inform resumes this operation has had (0 for the first cycle)."""
+    return int((operation.input_payload or {}).get("resume_count") or 0)
+
+
+def _ensure_wan_service_port_index(
+    db: Session, ont: OntUnit, *, wan_vlan: int, gem_index: int
+) -> int | None:
+    """Return the WAN service-port index, allocating and persisting if unset.
+
+    Uses the existing DB-backed ``service_port_allocator``. Never touches or
+    renumbers existing ports; when several internet allocations already exist
+    for this ONT/VLAN/GEM it fails closed (returns ``None``) and the planner
+    reports the drift instead of guessing.
+    """
+    from app.services.network.ont_desired_config import (
+        desired_config,
+        get_desired_config_value,
+        set_desired_config_values,
+    )
+    from app.services.network.service_port_allocator import (
+        AllocationError,
+        allocate_service_port,
+        find_allocation_by_correlation_key,
+        get_allocations_for_ont,
+    )
+
+    olt_id = getattr(ont, "olt_device_id", None)
+    if olt_id is None:
+        return None
+    recorded = get_desired_config_value(
+        desired_config(ont), "olt", "wan_service_port_index"
+    )
+    if recorded not in (None, ""):
+        return int(recorded)
+
+    candidates = [
+        a
+        for a in get_allocations_for_ont(db, ont.id)
+        if a.service_type == "internet"
+        and a.vlan_id == wan_vlan
+        and a.gem_index == gem_index
+    ]
+    if len(candidates) > 1:
+        logger.warning(
+            "wan_service_port_ambiguous",
+            extra={"ont_id": str(ont.id), "candidates": len(candidates)},
+        )
+        return None
+    if candidates:
+        index = int(candidates[0].port_index)
+    else:
+        key = f"ont-wan-service-port:{ont.id}:{wan_vlan}:{gem_index}"
+        allocation = find_allocation_by_correlation_key(db, key)
+        try:
+            if allocation is None:
+                allocation = allocate_service_port(
+                    db,
+                    olt_id,
+                    ont.id,
+                    service_type="internet",
+                    vlan_id=wan_vlan,
+                    gem_index=gem_index,
+                    correlation_key=key,
+                )
+        except AllocationError:
+            logger.warning(
+                "wan_service_port_allocation_failed",
+                extra={"ont_id": str(ont.id)},
+                exc_info=True,
+            )
+            return None
+        index = int(allocation.port_index)
+    set_desired_config_values(ont, {"olt.wan_service_port_index": index})
+    db.flush()
+    return index
+
+
+def _mark_wan_service_port_provisioned(db: Session, ont: OntUnit, result: Any) -> None:
+    """Mark the WAN allocation provisioned once the create applied and read back.
+
+    Called by the owner lifecycle only for a clean pass whose applied actions
+    include the WAN service-port create; the applier stays device-only.
+    """
+    from app.services.network.service_port_allocator import (
+        get_allocations_for_ont,
+        mark_provisioned,
+    )
+
+    applied = any(
+        str(getattr(a, "field", "")) == "service_port[wan]"
+        for a in getattr(result, "actions_applied", ()) or ()
+    )
+    if not (
+        applied
+        and result.success
+        and result.sync_status == "synced"
+        and not result.drift_after
+    ):
+        return
+    for allocation in get_allocations_for_ont(db, ont.id):
+        if allocation.service_type == "internet" and allocation.provisioned_at is None:
+            mark_provisioned(db, allocation.id)
+
+
 def _ensure_wan_service_port(db: Session, ont: OntUnit) -> None:
     """G1: allocate and persist the WAN service-port index when none is recorded.
 
@@ -1855,7 +1964,7 @@ def _ensure_wan_service_port(db: Session, ont: OntUnit) -> None:
         or desired.wan_service_port_index is not None
     ):
         return
-    _turnup.ensure_wan_service_port_index(
+    _ensure_wan_service_port_index(
         db, ont, wan_vlan=desired.wan_vlan, gem_index=desired.wan_gem_index or 1
     )
 
@@ -2057,7 +2166,7 @@ def _execution_locked(
         if "ppp_write_issued_at" not in issued:
             issued["ppp_write_issued_at"] = pass_started_at.isoformat()
             operation.input_payload = issued
-    _turnup.mark_wan_service_port_provisioned(db, ont, result)
+    _mark_wan_service_port_provisioned(db, ont, result)
     radius_state = _radius_proof_state(
         db,
         ont,
@@ -2088,7 +2197,9 @@ def _execution_locked(
             db,
             operation,
             NetworkOperationCommand.ont_service_config_verify_v1,
-            dispatch_key=f"verify:{next_attempt}",
+            dispatch_key=ont_service_config_verify_key(
+                next_attempt, _resume_generation(operation)
+            ),
             not_before=datetime.now(UTC)
             + timedelta(seconds=_turnup.RADIUS_SESSION_RECHECK_SECONDS),
         )
@@ -2291,7 +2402,9 @@ def _execution_locked(
                 db,
                 operation,
                 NetworkOperationCommand.ont_service_config_verify_v1,
-                dispatch_key=f"verify:{next_attempt}",
+                dispatch_key=ont_service_config_verify_key(
+                    next_attempt, _resume_generation(operation)
+                ),
                 not_before=datetime.now(UTC) + timedelta(seconds=30 * next_attempt),
             )
             _record_execution_event(
@@ -2328,7 +2441,9 @@ def _execution_locked(
                 db,
                 operation,
                 NetworkOperationCommand.ont_service_config_verify_v1,
-                dispatch_key=f"verify:{next_attempt}",
+                dispatch_key=ont_service_config_verify_key(
+                    next_attempt, _resume_generation(operation)
+                ),
                 not_before=datetime.now(UTC) + timedelta(seconds=30 * next_attempt),
             )
             _record_execution_event(
