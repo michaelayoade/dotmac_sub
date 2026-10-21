@@ -481,8 +481,8 @@ WORKFLOW_GUIDANCE: tuple[AdminWorkflowGuidance, ...] = (
         "Use Force-Push WiFi Password when the customer reports the change did not take effect (for example, after a factory reset wiped the device's saved settings) and it needs to apply right away.",
         "Use Force Resync only after a previous attempt failed and you have checked it is safe to retry — this re-attempts the whole reconcile against the device, not just the one field you changed.",
         "If the device is on a known-slow OLT shelf, ask for the longer wait-time option so a slow OLT does not cut the change off partway through.",
-        "When setting PPPoE, leave the WAN connection index blank unless you know it: Sub then selects an existing internet WAN container on the ONT or creates one, and never uses the management container. Creating one can take several minutes (until the ONT's next check-in); the change then resumes on its own.",
         notes=(
+            "When setting PPPoE, leave the WAN connection index blank unless you know it: Sub then selects an existing internet WAN container on the ONT or creates one, and never uses the management container. Creating one can take several minutes (until the ONT's next check-in); the change then resumes on its own.",
             "Force Resync is refused on purpose when the last attempt left the ONT out of sync — that is a deliberate checkpoint asking you to confirm it is safe before retrying, not a bug.",
             "A failed push does not necessarily mean nothing happened on the device; check the ONT's actual status before assuming it is still on the old settings.",
             "Retry current configuration works directly from the ONT detail page's Configuration tab. Each page view issues a fresh one-time retry key, so a retry is accepted once, and a second submission of the same page is ignored as a duplicate; reload the page to get a new key.",
