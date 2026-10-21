@@ -18,13 +18,15 @@ for tool in cosign gh; do
 done
 [ "${REF##*@}" = "$EXPECTED" ] || { echo "ARTIFACT VERIFY: FAIL (digest mismatch)"; exit 1; }
 IDENTITY='^https://github\.com/michaelayoade/dotmac_sub/\.github/workflows/release-candidate\.yml@refs/heads/main$'
+CERT_IDENTITY='https://github.com/michaelayoade/dotmac_sub/.github/workflows/release-candidate.yml@refs/heads/main'
 ISSUER='https://token.actions.githubusercontent.com'
 cosign verify --certificate-identity-regexp "$IDENTITY" \
   --certificate-oidc-issuer "$ISSUER" --output json "$REF" >/dev/null 2>&1 || {
   echo "ARTIFACT VERIFY: FAIL (cosign signature)"; exit 1; }
 gh attestation verify "oci://$REF" \
   --repo michaelayoade/dotmac_sub \
-  --signer-workflow michaelayoade/dotmac_sub/.github/workflows/release-candidate.yml \
-  --source-ref refs/heads/main >/dev/null 2>&1 || {
+  --cert-identity "$CERT_IDENTITY" \
+  --source-ref refs/heads/main \
+  --deny-self-hosted-runners >/dev/null 2>&1 || {
   echo "ARTIFACT VERIFY: FAIL (GitHub build provenance)"; exit 1; }
 echo "ARTIFACT VERIFY: PASS"

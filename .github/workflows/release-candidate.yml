@@ -407,6 +407,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           IMAGE_DIGEST: ${{ steps.accepted.outputs.image_digest }}
           MODE: ${{ steps.reconcile.outputs.mode }}
+          SOURCE_REVISION: ${{ steps.candidate.outputs.sha }}
         run: |
           set -euo pipefail
           if ! printf '%s' "$IMAGE_DIGEST" | grep -Eq '^sha256:[0-9a-f]{64}$'; then
@@ -415,8 +416,9 @@ jobs:
           fi
           ref="${REGISTRY}/${IMAGE_NAME}@${IMAGE_DIGEST}"
           identity='^https://github\.com/michaelayoade/dotmac_sub/\.github/workflows/release-candidate\.yml@refs/heads/main$'
+          cert_identity='https://github.com/michaelayoade/dotmac_sub/.github/workflows/release-candidate.yml@refs/heads/main'
           fail() {
-            echo "Candidate verification failed ($1, mode=$MODE); refusing to accept this digest (a reused candidate must be rebuilt)." >&2
+            echo "Candidate verification failed ($1, mode=$MODE); refusing to accept this digest. Recovery is a new commit (new candidate) or manually deleting this GHCR package version so the next run rebuilds." >&2
             exit 1
           }
           cosign verify --certificate-identity-regexp "$identity" \
@@ -427,8 +429,9 @@ jobs:
           attempt=1
           until gh attestation verify "oci://$ref" \
             --repo michaelayoade/dotmac_sub \
-            --signer-workflow michaelayoade/dotmac_sub/.github/workflows/release-candidate.yml \
-            --source-ref refs/heads/main >/dev/null; do
+            --cert-identity "$cert_identity" \
+            --source-ref refs/heads/main \
+            --source-digest "$SOURCE_REVISION" >/dev/null; do
             if [ "$attempt" -ge 3 ]; then
               fail "GitHub build provenance"
             fi

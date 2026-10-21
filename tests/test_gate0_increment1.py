@@ -29,8 +29,12 @@ NETWORK_CLAIMS = {"ip", "cidr", "source_ip", "remote_addr", "client_ip"}
 
 GH_VERIFY_PINS = (
     "--repo michaelayoade/dotmac_sub",
-    "--signer-workflow michaelayoade/dotmac_sub/.github/workflows/release-candidate.yml",
+    "--cert-identity",
     "--source-ref refs/heads/main",
+)
+CERT_IDENTITY = (
+    "https://github.com/michaelayoade/dotmac_sub/.github/workflows/"
+    "release-candidate.yml@refs/heads/main"
 )
 IDENTITY_PIN = (
     r"^https://github\.com/michaelayoade/dotmac_sub/\.github/workflows/"
@@ -483,3 +487,25 @@ def test_proof_negative_is_not_a_pass_for_unrelated_errors(
     result = _run_proof_negative(tmp_path, code, body)
     assert result.returncode == 1, (code, body, result.stdout)
     assert "negative OK" not in result.stdout
+
+
+def test_provenance_verify_uses_exact_cert_identity_and_source_digest() -> None:
+    workflow = RC.read_text(encoding="utf-8")
+    script = (ROOT / "deploy/gate0/verify_artifact.sh").read_text(encoding="utf-8")
+    for text in (workflow, script):
+        assert f"'{CERT_IDENTITY}'" in text
+        assert "--signer-workflow" not in text
+        assert "--predicate-type" not in text  # default is SLSA provenance v1
+    assert '--cert-identity "$cert_identity"' in workflow
+    assert '--source-digest "$SOURCE_REVISION"' in workflow
+    assert "SOURCE_REVISION: ${{ steps.candidate.outputs.sha }}" in workflow
+    assert "--deny-self-hosted-runners" not in workflow
+    assert "--deny-self-hosted-runners" in script
+    assert '--cert-identity "$CERT_IDENTITY"' in script
+    assert "deleting this GHCR package version" in workflow
+
+
+def test_proof_script_login_temp_file_is_under_runner_temp() -> None:
+    text = (ROOT / "deploy/gate0/proof1_oidc_openbao.sh").read_text(encoding="utf-8")
+    assert "RUNNER_TEMP" in text and "mktemp -d" in text
+    assert "LOGIN_BODY=$(mktemp)" not in text
