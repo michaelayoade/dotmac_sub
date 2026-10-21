@@ -18,6 +18,8 @@ from pathlib import Path
 import pytest
 import yaml
 
+from deploy.openbao import apply as apply_cli
+
 ROOT = Path(__file__).resolve().parents[1]
 RC = ROOT / ".github/workflows/release-candidate.yml"
 PROOF = ROOT / ".github/workflows/openbao-jwt-proof.yml"
@@ -207,7 +209,7 @@ def test_apply_dry_run_prints_exact_writes_and_no_secret_values() -> None:
     )
     assert result.returncode == 0, result.stderr
     out = result.stdout
-    assert "WRITE PUT /v1/auth/jwt/config" in out
+    assert "INITIALIZE-IF-ABSENT PUT /v1/auth/jwt/config" in out
     for name in POLICIES:
         assert f"WRITE PUT /v1/sys/policies/acl/{name}" in out
         assert f"WRITE PUT /v1/auth/jwt/role/{name}" in out
@@ -509,3 +511,233 @@ def test_proof_script_login_temp_file_is_under_runner_temp() -> None:
     text = (ROOT / "deploy/gate0/proof1_oidc_openbao.sh").read_text(encoding="utf-8")
     assert "RUNNER_TEMP" in text and "mktemp -d" in text
     assert "LOGIN_BODY=$(mktemp)" not in text
+
+
+class ApplyTransport:
+    """Mock HTTP only; real typed apply plan and preflight outcomes stay in use."""
+
+    def __init__(self) -> None:
+        module = apply_cli
+        self.calls: list[tuple[str, str, dict[str, object] | None]] = []
+        config = module.planned_writes(
+            json.loads((OPENBAO / "roles.json").read_text(encoding="utf-8"))
+        ).config
+        self.responses: dict[str, apply_cli.HttpResponse] = {
+            "/v1/sys/internal/ui/mounts/secret": module.HttpResponse(
+                200, {"data": {"type": "kv", "options": {"version": "2"}}}
+            ),
+            "/v1/sys/auth": module.HttpResponse(
+                200, {"data": {"jwt/": {"type": "jwt"}}}
+            ),
+            "/v1/auth/jwt/config": module.HttpResponse(200, {"data": config.body()}),
+        }
+        for leaf in module.CANARIES:
+            self.responses[f"/v1/{leaf}"] = module.HttpResponse(404, {})
+        self.seed_status = 200
+
+    def request(
+        self,
+        addr: str,
+        token: str,
+        method: str,
+        path: str,
+        body: dict[str, object] | None,
+    ) -> apply_cli.HttpResponse:
+        self.calls.append((method, path, body))
+        if method == "GET":
+            return self.responses[path]
+        return apply_cli.HttpResponse(self.seed_status if method == "POST" else 204, {})
+
+    def install(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr(apply_cli, "_request", self.request)
+        # Deliberately empty: the mock never authenticates or contacts a service.
+        monkeypatch.setenv("OPENBAO_TOKEN", "test-only-placeholder")
+
+    def run(self) -> int:
+        return apply_cli.main(["--addr", "http://127.0.0.1:8200"])
+
+
+@pytest.mark.parametrize(
+    "field", ["oidc_discovery_url", "bound_issuer", "default_role"]
+)
+def test_apply_config_drift_refuses_before_all_writes(
+    monkeypatch: pytest.MonkeyPatch, field: str
+) -> None:
+    module = apply_cli
+    transport = ApplyTransport()
+    config = module.planned_writes(
+        json.loads((OPENBAO / "roles.json").read_text(encoding="utf-8"))
+    ).config.body()
+    config[field] = "different"
+    transport.responses["/v1/auth/jwt/config"] = module.HttpResponse(
+        200, {"data": config}
+    )
+    transport.install(monkeypatch)
+    assert transport.run() == 1
+    assert all(method == "GET" for method, _, _ in transport.calls)
+
+
+@pytest.mark.parametrize(
+    ("status", "payload"),
+    [
+        (403, {}),
+        (500, {}),
+        (302, {}),
+        (204, {}),
+        (200, {}),
+        (200, {"data": {"data": {"value": ""}}}),
+        (200, {"data": {"data": {"value": 3}}}),
+        (200, {"data": []}),
+    ],
+)
+def test_apply_uncertain_second_canary_refuses_before_all_writes(
+    monkeypatch: pytest.MonkeyPatch, status: int, payload: object
+) -> None:
+    module = apply_cli
+    transport = ApplyTransport()
+    transport.responses[f"/v1/{module.CANARIES[1]}"] = module.HttpResponse(
+        status, payload
+    )
+    transport.install(monkeypatch)
+    assert transport.run() == 1
+    assert all(method == "GET" for method, _, _ in transport.calls)
+    assert all(
+        f"/v1/{leaf}" in [p for _, p, _ in transport.calls] for leaf in module.CANARIES
+    )
+
+
+@pytest.mark.parametrize(
+    ("path", "status", "payload"),
+    [
+        ("/v1/sys/auth", 200, {"data": {}}),
+        ("/v1/sys/auth", 200, {"data": {"jwt/": {"type": "oidc"}}}),
+        ("/v1/sys/auth", 403, {}),
+        ("/v1/auth/jwt/config", 403, {}),
+        ("/v1/auth/jwt/config", 503, {}),
+        ("/v1/auth/jwt/config", 200, {"data": {}}),
+        (
+            "/v1/sys/internal/ui/mounts/secret",
+            200,
+            {"data": {"type": "kv", "options": {"version": "1"}}},
+        ),
+    ],
+)
+def test_apply_mount_or_config_uncertainty_refuses_before_all_writes(
+    monkeypatch: pytest.MonkeyPatch, path: str, status: int, payload: object
+) -> None:
+    module = apply_cli
+    transport = ApplyTransport()
+    transport.responses[path] = module.HttpResponse(status, payload)
+    transport.install(monkeypatch)
+    assert transport.run() == 1
+    assert all(method == "GET" for method, _, _ in transport.calls)
+
+
+def test_apply_preserves_existing_config_and_canary_creates_only_absent_with_cas(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    module = apply_cli
+    transport = ApplyTransport()
+    existing = "existing-test-canary"
+    transport.responses[f"/v1/{module.CANARIES[0]}"] = module.HttpResponse(
+        200, {"data": {"data": {"value": existing}}}
+    )
+    transport.install(monkeypatch)
+    assert transport.run() == 0
+    reads = [path for method, path, _ in transport.calls if method == "GET"]
+    assert reads[-2:] == [f"/v1/{leaf}" for leaf in module.CANARIES]
+    assert all(method == "GET" for method, _, _ in transport.calls[:5])
+    writes = [
+        (method, path, body)
+        for method, path, body in transport.calls
+        if method != "GET"
+    ]
+    assert len(writes) == 7
+    assert all(path != "/v1/auth/jwt/config" for _, path, _ in writes)
+    seeds = [(path, body) for method, path, body in writes if method == "POST"]
+    assert len(seeds) == 1
+    path, body = seeds[0]
+    assert path == f"/v1/{module.CANARIES[1]}"
+    assert body is not None and body["options"] == {"cas": 0}
+    output = capsys.readouterr().out
+    assert existing not in output
+    assert "canary present (unchanged)" in output
+
+
+def test_apply_absent_config_initializes_only_after_preflight(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    module = apply_cli
+    transport = ApplyTransport()
+    transport.responses["/v1/auth/jwt/config"] = module.HttpResponse(404, {})
+    transport.install(monkeypatch)
+    assert transport.run() == 0
+    assert transport.calls[5][:2] == ("PUT", "/v1/auth/jwt/config")
+    assert all(method == "GET" for method, _, _ in transport.calls[:5])
+
+
+def test_apply_canary_cas_conflict_has_no_overwrite_fallback(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    module = apply_cli
+    transport = ApplyTransport()
+    transport.seed_status = 400
+    transport.install(monkeypatch)
+    assert transport.run() == 1
+    seeds = [(path, body) for method, path, body in transport.calls if method == "POST"]
+    assert len(seeds) == 1
+    assert seeds[0][1] is not None and seeds[0][1]["options"] == {"cas": 0}
+
+
+def test_apply_dry_run_never_calls_transport(monkeypatch: pytest.MonkeyPatch) -> None:
+    module = apply_cli
+    transport = ApplyTransport()
+    transport.install(monkeypatch)
+    assert module.main(["--dry-run", "--addr", "http://127.0.0.1:8200"]) == 0
+    assert transport.calls == []
+
+
+@pytest.mark.parametrize("status", [301, 302, 303, 307, 308])
+def test_apply_transport_refuses_redirect_without_following(
+    monkeypatch: pytest.MonkeyPatch, status: int
+) -> None:
+    """Exercise the real opener/error pipeline with an in-memory HTTP handler."""
+    import io
+    import urllib.request
+    from email.message import Message
+    from urllib.response import addinfourl
+
+    requests: list[urllib.request.Request] = []
+
+    class RedirectResponse(urllib.request.HTTPHandler):
+        def http_open(self, req: urllib.request.Request) -> addinfourl:
+            requests.append(req)
+            assert (
+                req.full_url == "http://127.0.0.1:8200/v1/sys/internal/ui/mounts/secret"
+            )
+            headers = Message()
+            headers["Location"] = "http://different-host.example/redirect-target"
+            response = addinfourl(io.BytesIO(b""), headers, req.full_url, code=status)
+            response.msg = "Redirect"
+            return response
+
+    original_builder = urllib.request.build_opener
+
+    def in_memory_opener(
+        *handlers: urllib.request.BaseHandler,
+    ) -> urllib.request.OpenerDirector:
+        assert any(
+            isinstance(handler, apply_cli.NoRedirectHandler) for handler in handlers
+        )
+        return original_builder(*handlers, RedirectResponse())
+
+    monkeypatch.setattr(urllib.request, "build_opener", in_memory_opener)
+    monkeypatch.setenv("OPENBAO_TOKEN", "test-only-placeholder")
+    response = apply_cli._request(
+        "http://127.0.0.1:8200", "", "GET", "/v1/sys/internal/ui/mounts/secret", None
+    )
+    assert response == apply_cli.HttpResponse(status, {})
+    assert apply_cli.main(["--addr", "http://127.0.0.1:8200"]) == 1
+    # One initial request per call above; neither call follows Location.
+    assert len(requests) == 2
+    assert all(req.get_method() == "GET" for req in requests)
