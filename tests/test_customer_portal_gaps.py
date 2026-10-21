@@ -23,17 +23,8 @@ from tests.customer_profile_owner_support import (
 
 
 class TestCustomerEventTypes:
-    def test_customer_login_event(self) -> None:
-        assert EventType.customer_login.value == "customer.login"
-
-    def test_customer_logout_event(self) -> None:
-        assert EventType.customer_logout.value == "customer.logout"
-
     def test_customer_ticket_created_event(self) -> None:
         assert EventType.customer_ticket_created.value == "customer.ticket_created"
-
-    def test_customer_password_changed_event(self) -> None:
-        assert EventType.customer_password_changed.value == "customer.password_changed"
 
 
 # ---------------------------------------------------------------------------
@@ -265,7 +256,9 @@ class TestEventEmissionHelper:
         with patch("app.web.customer.routes.emit_event", create=True):
             from app.web.customer.routes import _emit_customer_event
 
-            _emit_customer_event(db, "customer_login", {"subscriber_id": "test"})
+            _emit_customer_event(
+                db, "customer_ticket_created", {"subscriber_id": "test"}
+            )
 
 
 # ---------------------------------------------------------------------------

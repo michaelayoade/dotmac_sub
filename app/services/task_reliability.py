@@ -312,11 +312,10 @@ TASK_RELIABILITY_CONTRACTS: dict[str, TaskReliabilityContract] = {
     "app.tasks.enforcement.reconcile_billing_approval_drift": _c(
         "enforcement",
         SWEEP,
-        PER_ITEM,
+        IDEMP,
         LOG,
-        "Permanent drift sweep; each account is locked and recomputed by the "
-        "billing-approval owner, failures are isolated, and the next beat pass "
-        "reselects any remaining active/unapproved account.",
+        "Retired no-op kept for one release so queued beat messages resolve; "
+        "writes nothing.",
     ),
     "app.tasks.enforcement.detect_stale_overdue_locks": _c(
         "enforcement", SWEEP, IDEMP, STATUS, "Dry-run detector; writes nothing."

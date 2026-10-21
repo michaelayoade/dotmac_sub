@@ -307,6 +307,10 @@ class Settings:
         os.getenv("TR069_PERIODIC_INFORM_INTERVAL", "300")
     )  # seconds, default 5 minutes
     tr069_auth_shared_secret: str = os.getenv("TR069_AUTH_SHARED_SECRET", "")
+    # Shared token GenieACS sends in X-Dotmac-Genieacs-Token. Holds a secret
+    # reference (bao://... or env://...) or, failing that, is read from the
+    # OpenBao path secret/tr069#webhook_token. Never put the value in compose.
+    tr069_webhook_token: str = os.getenv("TR069_WEBHOOK_TOKEN", "")
     # SMS provider credentials are HELD, not resolved (ADR-0009): materialised
     # once at boot and never read from `domain_settings`, where they previously
     # lived as a row nothing could write and a lookup that could never find one.

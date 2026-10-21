@@ -3553,53 +3553,6 @@ DOMAIN = DomainSOT(
             ),
         ),
         SOTService(
-            name="communications.team_inbox_automation",
-            module="app.services.team_inbox_automation",
-            owns=(
-                "Team Inbox automation trigger matching",
-                "ordered Inbox automation action execution",
-            ),
-            depends_on=(
-                "communications.team_inbox_threads",
-                "communications.team_inbox_routing",
-                "communications.team_inbox_commands",
-                "ai.intake",
-            ),
-            contract=_team_inbox_contract(
-                service_name="communications.team_inbox_automation",
-                concerns=(
-                    ("Team Inbox automation trigger matching", OwnerRole.POLICY),
-                    (
-                        "ordered Inbox automation action execution",
-                        OwnerRole.APPLICATION_COORDINATOR,
-                    ),
-                ),
-                inputs=(
-                    AuthorityInput(
-                        name="active AI conversation ownership",
-                        owner="ai.intake",
-                        kind=AuthorityKind.DERIVED_PROJECTION,
-                        source="Active AI sessions suppress generic automation actions.",
-                    ),
-                    AuthorityInput(
-                        name="conversation trigger facts",
-                        owner="communications.team_inbox_threads",
-                        kind=AuthorityKind.AUTHORITATIVE_RECORD,
-                        source="Typed conversation channel, status, priority, team and contact-resolution state.",
-                    ),
-                    AuthorityInput(
-                        name="routing and collaboration commands",
-                        owner="communications.team_inbox_routing",
-                        kind=AuthorityKind.CONTROL_INPUT,
-                        source="Validated assign, auto-assign and label participant operations.",
-                    ),
-                ),
-                transaction_mode=TransactionMode.COORDINATOR_MANAGED,
-                event_types=("team_inbox.automation_executed.v1",),
-                test_refs=("tests/test_team_inbox_automation.py",),
-            ),
-        ),
-        SOTService(
             name="communications.team_inbox_agent_introduction",
             module="app.services.team_inbox_agent_introduction",
             owns=(
@@ -5535,13 +5488,6 @@ DOMAIN = DomainSOT(
                 group="Team Inbox",
                 state=AutomationCatalogState.unavailable,
                 explanation="Inbound messages use fixed identity, safety, and routing checks that are not rule steps yet.",
-            ),
-            AutomationCatalogItem(
-                key="communications.inbox_automation_rules",
-                label="Inbox automation rules",
-                group="Team Inbox",
-                state=AutomationCatalogState.unavailable,
-                explanation="The existing Inbox rule engine is not connected to the Automation Center's audited run history.",
             ),
             AutomationCatalogItem(
                 key="communications.fifo_queue_promotion",

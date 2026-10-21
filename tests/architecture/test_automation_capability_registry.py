@@ -320,9 +320,6 @@ def test_support_and_communications_catalogue_shows_readiness_and_existing_owner
     assert items["support.ticket.assignment_rules"].state is (
         AutomationCatalogState.managed_elsewhere
     )
-    assert items["communications.inbox_automation_rules"].state is (
-        AutomationCatalogState.unavailable
-    )
     assert items["communications.retired_stale_auto_resolution"].state is (
         AutomationCatalogState.retired
     )

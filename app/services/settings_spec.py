@@ -2012,6 +2012,40 @@ SETTINGS_SPECS: list[SettingSpec] = [
         label="PPPoE Auto-Generated Password Length",
     ),
     SettingSpec(
+        domain=SettingDomain.radius,
+        key="pppoe_credential_on_new_service",
+        env_var=None,
+        value_type=SettingValueType.string,
+        default="new",
+        # "ask" is reserved for the Starter access-credentials owner and is
+        # deliberately not accepted here.
+        allowed={"new", "inherit"},
+        string_normalization=SettingStringNormalization.LOWERCASE,
+        label="PPPoE credential on a replacement service (new | inherit)",
+    ),
+    SettingSpec(
+        domain=SettingDomain.radius,
+        key="pppoe_credential_inherit_from_statuses",
+        env_var=None,
+        value_type=SettingValueType.string,
+        default="disabled,canceled,expired",
+        string_normalization=SettingStringNormalization.LOWERCASE,
+        label=(
+            "Ended service statuses whose PPPoE credential a replacement may "
+            "inherit (comma-separated subset of disabled, canceled, expired)"
+        ),
+    ),
+    SettingSpec(
+        domain=SettingDomain.radius,
+        key="pppoe_credential_change_disconnect",
+        env_var=None,
+        value_type=SettingValueType.string,
+        default="immediate_after_projection",
+        allowed={"immediate_after_projection", "none"},
+        string_normalization=SettingStringNormalization.LOWERCASE,
+        label="Disconnect live session after a PPPoE credential edit",
+    ),
+    SettingSpec(
         domain=SettingDomain.billing,
         key="default_currency",
         env_var="BILLING_DEFAULT_CURRENCY",
@@ -5039,6 +5073,32 @@ SETTINGS_SPECS: list[SettingSpec] = [
         label="Default TR-069 ACS Server ID",
     ),
     SettingSpec(
+        domain=SettingDomain.tr069,
+        key="tr069_webhook_auth_mode",
+        env_var=None,
+        value_type=SettingValueType.string,
+        default="log_only",
+        allowed={"log_only", "enforce"},
+        label="GenieACS webhook token check (log_only | enforce)",
+        inherits=False,
+        owner_command_only=True,
+    ),
+    SettingSpec(
+        domain=SettingDomain.tr069,
+        key="tr069_webhook_allowed_sources",
+        env_var=None,
+        value_type=SettingValueType.string,
+        default=None,
+        label=(
+            "GenieACS webhook allowed source addresses (comma-separated IPs/CIDRs; "
+            "empty = token only). nginx and GenieACS can share a source address "
+            "(the bridge gateway), so this only keeps out sibling containers; "
+            "the token is the real control"
+        ),
+        inherits=False,
+        owner_command_only=True,
+    ),
+    SettingSpec(
         domain=SettingDomain.network,
         key="tr069_pending_resolution_timeout_seconds",
         env_var="TR069_PENDING_RESOLUTION_TIMEOUT_SECONDS",
@@ -5660,21 +5720,14 @@ SETTINGS_SPECS: list[SettingSpec] = [
         default=True,
         label="Cross-application drift detection",
     ),
-    # The request-audit middleware's five controls. They were writable through
+    # The request-audit middleware's four controls (the former `enabled` switch
+    # was removed: request auditing cannot be turned off by configuration). They were writable through
     # `settings_api_custom` with NO spec at all — the custom handler validates
     # against its own `_AUDIT_SETTING_*` sets, so nothing required a
     # declaration. Declared here at their EXACT current shape (seed:
     # `seed_audit_settings`; runtime defaults: `app.main._default_audit_settings`)
     # so the two agree before the handler is routed through the spec.
     # `tests/architecture/test_audit_setting_defaults.py` pins that agreement.
-    SettingSpec(
-        domain=SettingDomain.audit,
-        key="enabled",
-        env_var=None,
-        value_type=SettingValueType.boolean,
-        default=True,
-        label="Request audit logging",
-    ),
     SettingSpec(
         domain=SettingDomain.audit,
         key="methods",

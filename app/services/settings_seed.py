@@ -211,13 +211,6 @@ def seed_auth_settings(db: Session) -> None:
 def seed_audit_settings(db: Session) -> None:
     audit_settings.ensure_by_key(
         db,
-        key="enabled",
-        value_type=SettingValueType.boolean,
-        value_text="true",
-        value_json=True,
-    )
-    audit_settings.ensure_by_key(
-        db,
         key="methods",
         value_type=SettingValueType.json,
         value_json=["POST", "PUT", "PATCH", "DELETE"],

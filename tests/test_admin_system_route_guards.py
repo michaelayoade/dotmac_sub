@@ -49,16 +49,6 @@ def test_require_system_user_principal_rejects_subscriber():
     assert exc.value.status_code == 403
 
 
-def test_dbi_principal_id_prefers_stable_actor_id(monkeypatch):
-    request = SimpleNamespace()
-    monkeypatch.setattr(
-        "app.web.admin.get_current_user",
-        lambda _request: {"subscriber_id": "system-user-1", "id": "system-user-1"},
-    )
-
-    assert admin_system._dbi_principal_id(request) == "system-user-1"
-
-
 def test_profile_state_prefers_system_user_id_for_mfa_status(db_session):
     current_user_record = SystemUser(
         first_name="Current",

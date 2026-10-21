@@ -94,7 +94,11 @@ def main() -> None:
     server = _active_server()
     cwmp_username = str(server.cwmp_username or "").strip()
     cwmp_password = (
-        decrypt_credential(server.cwmp_password) if server.cwmp_password else ""
+        decrypt_credential(
+            server.cwmp_password, model="Tr069AcsServer", field="cwmp_password"
+        )
+        if server.cwmp_password
+        else ""
     )
     cr_username = str(server.connection_request_username or "").strip()
     cr_password = (

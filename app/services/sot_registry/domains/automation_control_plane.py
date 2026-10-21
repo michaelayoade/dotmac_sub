@@ -154,7 +154,6 @@ DOMAIN = DomainSOT(
                 "automation.capability_registry",
                 "customer.search",
                 "support.ticket_assignment_rule_configuration",
-                "support.ticket_automation_rule_configuration",
             ),
             contract=ServiceContract(
                 concerns=(
@@ -167,7 +166,6 @@ DOMAIN = DomainSOT(
                             "tenant-scoped automation rule records",
                             "company-wide or selected-customer rule scope",
                             "active ticket assignment rules",
-                            "active ticket-creation automation rules",
                             "active Automation Center rules for the same trigger and action",
                         ),
                         canonical_writer="automation.rule_definitions",
@@ -214,15 +212,6 @@ DOMAIN = DomainSOT(
                         source=(
                             "current active TicketAssignmentRule rows used to reject an "
                             "overlapping Support Ticket assignment publication"
-                        ),
-                    ),
-                    AuthorityInput(
-                        name="active ticket-creation automation rules",
-                        owner="support.ticket_automation_rule_configuration",
-                        kind=AuthorityKind.AUTHORITATIVE_RECORD,
-                        source=(
-                            "current active TicketAutomationRule rows used to reject an "
-                            "overlapping Support Ticket action publication"
                         ),
                     ),
                     AuthorityInput(

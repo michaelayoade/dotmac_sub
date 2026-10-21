@@ -1434,7 +1434,7 @@ DOMAIN = DomainSOT(
                             "canonical customer chargeability",
                         ),
                         writer="customer.billing_approval",
-                        freshness="Reconciled every fifteen minutes.",
+                        freshness="No scheduled reconciliation; residual cases are reviewed manually.",
                         stale_behavior=(
                             "An unapproved active service is fail-safe drift: an "
                             "effective treatment or genuinely free catalog evidence "
@@ -1446,8 +1446,8 @@ DOMAIN = DomainSOT(
                             "Subscription, including billing-owned disabled rows."
                         ),
                         rebuild_operation=(
-                            "reconcile_account_billing_approval for the bounded "
-                            "drift cohort"
+                            "reconcile_account_billing_approval, operator-invoked per "
+                            "account"
                         ),
                         repair_owner="customer.billing_approval",
                     ),

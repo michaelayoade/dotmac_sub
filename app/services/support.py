@@ -27,7 +27,6 @@ from app.models.service_team import ServiceTeam
 from app.models.stored_file import StoredFile
 from app.models.subscriber import Subscriber
 from app.models.support import (
-    AutomationTrigger,
     SupportResolutionAttempt,
     SupportResolutionBasis,
     SupportResolutionEffectiveBasis,
@@ -2344,56 +2343,6 @@ class Tickets:
         return Tickets._apply_region_auto_assignment(ticket, db)
 
     @staticmethod
-    def _apply_automation_rules(
-        db: Session,
-        ticket: Ticket,
-        trigger: AutomationTrigger,
-        *,
-        preserve_service_team: bool = False,
-    ) -> tuple[str, ...]:
-        """Apply policy proposals inside the canonical Ticket writer."""
-        from app.models.support import AutomationActionType
-        from app.services import support_automation
-
-        if support_automation.identity_review_blocks_automation(ticket):
-            support_automation.mark_identity_automation_suppressed(ticket)
-            return ()
-
-        applied: list[str] = []
-        for proposal in support_automation.evaluate_rules(db, ticket, trigger):
-            if proposal.action_type == AutomationActionType.assign_team:
-                if preserve_service_team:
-                    continue
-                ticket.service_team_id = proposal.service_team_id
-            elif proposal.action_type == AutomationActionType.assign_technician:
-                ticket.technician_person_id = proposal.technician_person_id
-            elif proposal.action_type == AutomationActionType.set_priority:
-                ticket.priority = proposal.priority or ticket.priority
-            elif proposal.action_type == AutomationActionType.set_status:
-                if proposal.status:
-                    try:
-                        transition_ticket_status(
-                            ticket, proposal.status, source="automation"
-                        )
-                    except ValueError:
-                        logger.warning(
-                            "automation set_status ignored invalid status %r",
-                            proposal.status,
-                        )
-                        continue
-            elif proposal.action_type == AutomationActionType.set_due_in_hours:
-                if proposal.due_in_hours is not None:
-                    ticket.due_at = _now() + timedelta(hours=proposal.due_in_hours)
-            elif proposal.action_type == AutomationActionType.add_tag:
-                if proposal.tag:
-                    tags = list(ticket.tags or [])
-                    if proposal.tag not in tags:
-                        tags.append(proposal.tag)
-                        ticket.tags = tags
-            applied.append(proposal.rule_name)
-        return tuple(applied)
-
-    @staticmethod
     def _queue_notifications_for_assignments(
         db: Session,
         ticket: Ticket,
@@ -3210,17 +3159,6 @@ class Tickets:
 
             sla_assignment.create_sla_clock_for_ticket(db, ticket)
             Tickets._apply_ncc_categorisation(ticket, data)
-
-            from app.models.support import AutomationTrigger
-
-            Tickets._apply_automation_rules(
-                db,
-                ticket,
-                AutomationTrigger.ticket_created,
-                preserve_service_team=(
-                    routing_mode is TicketCreationRoutingMode.preserve_requested_team
-                ),
-            )
 
             Tickets._queue_tag_notifications(
                 db,
@@ -4713,14 +4651,6 @@ class Tickets:
                 actor_id=actor_id,
                 metadata={"from": before["status"], "to": after["status"]},
             )
-            from app.models.support import AutomationTrigger
-
-            Tickets._apply_automation_rules(
-                db,
-                ticket,
-                AutomationTrigger.status_changed,
-                preserve_service_team=preserve_service_team,
-            )
             from app.services import sla_operational_notifications
 
             sla_operational_notifications.emit_ticket_status_changed(
@@ -4746,14 +4676,6 @@ class Tickets:
                 entity_id=str(ticket.id),
                 actor_id=actor_id,
                 metadata={"from": before["priority"], "to": after["priority"]},
-            )
-            from app.models.support import AutomationTrigger
-
-            Tickets._apply_automation_rules(
-                db,
-                ticket,
-                AutomationTrigger.priority_changed,
-                preserve_service_team=preserve_service_team,
             )
 
         Tickets._queue_tag_notifications(

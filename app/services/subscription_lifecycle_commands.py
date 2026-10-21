@@ -24,7 +24,11 @@ from app.models.audit import AuditActorType
 from app.models.catalog import Subscription, SubscriptionStatus
 from app.models.enforcement_lock import EnforcementReason
 from app.models.idempotency import IdempotencyKey
-from app.services.audit_adapter import record_audit_event
+from app.services.audit_adapter import (
+    AuditActor,
+    record_audit_event,
+    stage_audit_event,
+)
 from app.services.common import coerce_uuid
 from app.services.owner_commands import CommandContext
 from app.services.subscription_lifecycle import (
@@ -84,6 +88,18 @@ class SubscriptionCommandBatchResult:
                 for outcome in self.outcomes
             ],
         }
+
+
+# Commands that impose or tighten access. Their applied outcome is audited
+# atomically with the change (S12); a failed audit write rolls the change back.
+_ACCESS_IMPOSING_KINDS = frozenset(
+    {
+        SubscriptionCommandKind.suspend,
+        SubscriptionCommandKind.pause,
+        SubscriptionCommandKind.vacation_hold,
+        SubscriptionCommandKind.disable,
+    }
+)
 
 
 def execute_subscription_command(
@@ -162,6 +178,7 @@ def execute_subscription_command(
         return outcome
 
     _reserve_idempotency(db, subscription, command)
+    audit_staged = False
     try:
         status, artifact_ids, message = _dispatch_command(
             db,
@@ -172,6 +189,31 @@ def execute_subscription_command(
             actor_type=actor_type,
             requested_by_subscriber_id=requested_by_subscriber_id,
         )
+        if (
+            command.kind in _ACCESS_IMPOSING_KINDS
+            and status is SubscriptionCommandOutcomeStatus.applied
+        ):
+            # Required evidence: the audit row is staged in the SAME transaction
+            # as the access change and is not swallowed. If it cannot be written
+            # the whole command rolls back (fail closed) instead of imposing
+            # access with no audit trail.
+            staged_head = resolve_subscription_lifecycle(
+                db, command.subscription_id
+            ).head
+            _stage_outcome_audit(
+                db,
+                SubscriptionCommandOutcome(
+                    command=command,
+                    status=status,
+                    message=message,
+                    previous_head=current.head,
+                    current_head=staged_head,
+                    artifact_ids=artifact_ids,
+                ),
+                actor_id=actor_id,
+                actor_type=actor_type,
+            )
+            audit_staged = True
         # Account lifecycle commands intentionally flush so callers can compose
         # them. Catalog and scheduler owners currently commit internally; this is
         # harmless in those paths and completes the transaction in the former.
@@ -215,7 +257,8 @@ def execute_subscription_command(
         current_head=updated.head,
         artifact_ids=artifact_ids,
     )
-    _record_outcome(db, outcome, actor_id=actor_id, actor_type=actor_type)
+    if not audit_staged:
+        _record_outcome(db, outcome, actor_id=actor_id, actor_type=actor_type)
     return outcome
 
 
@@ -1164,6 +1207,66 @@ def subscription_command_fingerprint(command: SubscriptionLifecycleCommand) -> s
     return hashlib.sha256(encoded.encode("utf-8")).hexdigest()
 
 
+def _outcome_succeeded(outcome: SubscriptionCommandOutcome) -> bool:
+    return outcome.status in {
+        SubscriptionCommandOutcomeStatus.applied,
+        SubscriptionCommandOutcomeStatus.scheduled,
+        SubscriptionCommandOutcomeStatus.skipped,
+    }
+
+
+def _outcome_status_code(outcome: SubscriptionCommandOutcome) -> int:
+    if _outcome_succeeded(outcome):
+        return 200
+    if outcome.status in {
+        SubscriptionCommandOutcomeStatus.rejected,
+        SubscriptionCommandOutcomeStatus.superseded,
+    }:
+        return 409
+    return 500
+
+
+def _outcome_metadata(outcome: SubscriptionCommandOutcome) -> dict[str, object]:
+    return {
+        "kind": outcome.command.kind.value,
+        "source": outcome.command.source,
+        "status": outcome.status.value,
+        "previous_head": outcome.previous_head,
+        "current_head": outcome.current_head,
+        "artifact_ids": list(outcome.artifact_ids),
+        "error_code": outcome.error_code,
+        "replayed": outcome.replayed,
+    }
+
+
+def _typed_actor(actor_type: AuditActorType, actor_id: str | None) -> AuditActor:
+    """Typed principal for staged evidence; an anonymous caller is the system."""
+    if actor_type is AuditActorType.system or not actor_id:
+        return AuditActor.system(actor_id)
+    return AuditActor(actor_type=actor_type, actor_id=actor_id)
+
+
+def _stage_outcome_audit(
+    db: Session,
+    outcome: SubscriptionCommandOutcome,
+    *,
+    actor_id: str | None,
+    actor_type: AuditActorType,
+) -> None:
+    """Stage the outcome audit row in the caller's transaction; never swallow."""
+    stage_audit_event(
+        db,
+        action=f"subscription_{outcome.command.kind.value}",
+        entity_type="subscription_lifecycle_command",
+        entity_id=outcome.command.subscription_id,
+        actor=_typed_actor(actor_type, actor_id),
+        request_id=_audit_request_id(outcome.command.idempotency_key),
+        is_success=_outcome_succeeded(outcome),
+        status_code=_outcome_status_code(outcome),
+        metadata=_outcome_metadata(outcome),
+    )
+
+
 def _record_outcome(
     db: Session,
     outcome: SubscriptionCommandOutcome,
@@ -1180,38 +1283,9 @@ def _record_outcome(
             actor_type=actor_type,
             actor_id=actor_id,
             request_id=_audit_request_id(outcome.command.idempotency_key),
-            is_success=outcome.status
-            in {
-                SubscriptionCommandOutcomeStatus.applied,
-                SubscriptionCommandOutcomeStatus.scheduled,
-                SubscriptionCommandOutcomeStatus.skipped,
-            },
-            status_code=(
-                200
-                if outcome.status
-                in {
-                    SubscriptionCommandOutcomeStatus.applied,
-                    SubscriptionCommandOutcomeStatus.scheduled,
-                    SubscriptionCommandOutcomeStatus.skipped,
-                }
-                else 409
-                if outcome.status
-                in {
-                    SubscriptionCommandOutcomeStatus.rejected,
-                    SubscriptionCommandOutcomeStatus.superseded,
-                }
-                else 500
-            ),
-            metadata={
-                "kind": outcome.command.kind.value,
-                "source": outcome.command.source,
-                "status": outcome.status.value,
-                "previous_head": outcome.previous_head,
-                "current_head": outcome.current_head,
-                "artifact_ids": list(outcome.artifact_ids),
-                "error_code": outcome.error_code,
-                "replayed": outcome.replayed,
-            },
+            is_success=_outcome_succeeded(outcome),
+            status_code=_outcome_status_code(outcome),
+            metadata=_outcome_metadata(outcome),
         )
     except Exception:
         db.rollback()

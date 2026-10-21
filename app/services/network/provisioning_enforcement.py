@@ -763,6 +763,10 @@ def _resolve_access_credential_password(
 
     if cred is None or not cred.secret_hash:
         return ""
+    from app.services.access_credential_secret import is_secret_reference_value
+
+    if is_secret_reference_value(cred.secret_hash):
+        return ""
 
     try:
         from app.services.credential_crypto import decrypt_stored_secret_or_none

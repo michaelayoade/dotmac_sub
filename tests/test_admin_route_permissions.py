@@ -24,7 +24,6 @@ from app.web.admin import notifications as admin_notifications
 from app.web.admin import reports as admin_reports
 from app.web.admin import resellers as admin_resellers
 from app.web.admin import support_assignment_rules as admin_support_assignment_rules
-from app.web.admin import support_automation as admin_support_automation
 from app.web.admin import support_tickets as admin_support_tickets
 from app.web.admin import system as admin_system
 from app.web.admin import system_whats_new as admin_system_whats_new
@@ -473,33 +472,6 @@ def test_device_group_api_routes_require_network_permissions():
         "/network/device-groups/{group_id}/actions",
         "POST",
         "network:device:write",
-    )
-
-
-def test_support_automation_routes_require_automation_permissions():
-    assert _route_has_permission(
-        admin_support_automation.router,
-        "/support/automation",
-        "GET",
-        "support:automation:read",
-    )
-    assert _route_has_permission(
-        admin_support_automation.router,
-        "/support/automation",
-        "POST",
-        "support:automation:write",
-    )
-    assert _route_has_permission(
-        admin_support_automation.router,
-        "/support/automation/{rule_id}/edit",
-        "GET",
-        "support:automation:write",
-    )
-    assert _route_has_permission(
-        admin_support_automation.router,
-        "/support/automation/{rule_id}/toggle",
-        "POST",
-        "support:automation:write",
     )
 
 

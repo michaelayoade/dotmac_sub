@@ -25,7 +25,6 @@ REQUIRED_PERMANENT_TASKS = {
     "app.tasks.collections.prepaid_balance_sweep",
     "app.tasks.autopay.charge_due_invoices",
     "app.tasks.catalog.expire_subscriptions",
-    "app.tasks.enforcement.reconcile_billing_approval_drift",
     "app.tasks.notifications.deliver_notification_queue",
     "app.tasks.events.dispatch_pending_events",
     "app.tasks.radius.run_enforcement_reconciler",
@@ -43,6 +42,14 @@ def test_financial_lifecycle_controls_are_absent_from_registry():
 
 def test_core_lifecycle_tasks_are_declared_permanent():
     assert REQUIRED_PERMANENT_TASKS <= PERMANENT_LIFECYCLE_TASKS
+
+
+def test_billing_approval_drift_sweep_is_not_a_permanent_task():
+    # Retired drift-repair loop (ADR 0007): it must not return as permanent.
+    assert (
+        "app.tasks.enforcement.reconcile_billing_approval_drift"
+        not in PERMANENT_LIFECYCLE_TASKS
+    )
 
 
 def test_only_shared_enforcement_time_window_remains():

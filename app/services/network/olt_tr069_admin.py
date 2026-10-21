@@ -80,7 +80,13 @@ def linked_acs_profile_payload(olt: OLTDevice) -> dict[str, str] | None:
     server = getattr(olt, "tr069_acs_server", None)
     if not server or not server.cwmp_url:
         return None
-    password = decrypt_credential(server.cwmp_password) if server.cwmp_password else ""
+    password = (
+        decrypt_credential(
+            server.cwmp_password, model="Tr069AcsServer", field="cwmp_password"
+        )
+        if server.cwmp_password
+        else ""
+    )
     raw_name = str(getattr(server, "name", "") or "ACS")
     profile_suffix = re.sub(r"[^A-Za-z0-9 ._-]+", " ", raw_name).strip()
     profile_suffix = re.sub(r"\s+", " ", profile_suffix) or "ACS"
@@ -377,7 +383,12 @@ def handle_create_tr069_profile(
         acs_url = str(acs.cwmp_url or "").strip()
         username = username or str(acs.cwmp_username or "").strip()
         if not password and acs.cwmp_password:
-            password = decrypt_credential(acs.cwmp_password) or ""
+            password = (
+                decrypt_credential(
+                    acs.cwmp_password, model="Tr069AcsServer", field="cwmp_password"
+                )
+                or ""
+            )
 
     return olt_ssh_service.create_tr069_server_profile(
         olt,
