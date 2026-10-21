@@ -16,7 +16,9 @@ from sqlalchemy.orm import Session
 
 from app.models.audit import AuditActorType
 from app.models.billing import (
+    Invoice,
     InvoiceDueDateBasis,
+    InvoiceLine,
     InvoiceStatus,
     Payment,
     PaymentProvider,
@@ -218,6 +220,8 @@ class SettlePrepaidPeriodPurchaseCommand:
     effective_at: datetime
     evidence_ref: str
     provider_paid_at: datetime | None = None
+    intent_reference: str | None = None
+    external_reference: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -1118,6 +1122,8 @@ def stage_verified_prepaid_period_purchase(
                 effective_at=command.effective_at,
                 evidence_ref=f"provider:{provider.id}:{external_id}",
                 provider_paid_at=command.provider_paid_at,
+                intent_reference=intent.reference,
+                external_reference=external_id,
             ),
         )
         stage_topup_intent_completion(
@@ -1327,8 +1333,33 @@ def settle_prepaid_period_purchase(
             "payment_mismatch",
             "Verified payment must exactly and exclusively fund this purchase.",
         )
+    # Starter prepaid lane (ADR 0031): route selection is read-only and
+    # pre-write. A purchase whose checkout opened a bound PURCHASE_FUNDING
+    # intent funds and settles entirely in Starter; the legacy Payment
+    # remains provider evidence only and is never applied. Absence of the
+    # intent is the exact legacy path; a mismatched intent refuses.
+    from app.services.billing import starter_prepaid
+
+    intent_reference = command.intent_reference
+    if intent_reference is None and purchase.topup_intent_id is not None:
+        topup_intent = db.get(TopupIntent, purchase.topup_intent_id)
+        intent_reference = topup_intent.reference if topup_intent else None
+    from app.services.service_entitlements import (
+        ensure_prepaid_entitlements_for_paid_invoice,
+    )
+
+    starter_route = intent_reference is not None and (
+        starter_prepaid.purchase_has_funding_intent(
+            db,
+            intent_reference=intent_reference,
+            purchase_ref=str(purchase.id),
+            subscriber_id=purchase.account_id,
+        )
+    )
+
     invoice_ids: list[UUID] = []
     entitlement_ids: list[UUID] = []
+    staged_periods: list[tuple[PrepaidPeriodPurchasePeriod, Invoice, InvoiceLine]] = []
     try:
         for row in rows:
             tax_facts = (
@@ -1419,28 +1450,62 @@ def settle_prepaid_period_purchase(
                 "prepaid_period_purchase_id": str(purchase.id),
             }
             db.flush()
-            Invoices.issue_draft_for_owner(
+            staged_periods.append((row, invoice, line))
+        if starter_route:
+            assert intent_reference is not None  # route probe proved it
+            funding = starter_prepaid.fund_prepaid_purchase(
                 db,
-                str(invoice.id),
-                issuance=InvoiceIssuanceInput(
-                    issued_at=observed_at,
-                    due_at=observed_at,
-                    due_date_basis=InvoiceDueDateBasis.prepaid_service_period,
-                    due_date_basis_ref=f"prepaid_period_purchases:{purchase.id}:{row.ordinal}",
-                    due_date_policy_version="prepaid-period-purchases-v1",
-                    reason="prepaid_period_purchase",
+                subscriber_id=purchase.account_id,
+                purchase_ref=str(purchase.id),
+                intent_reference=intent_reference,
+                external_reference=(
+                    command.external_reference or payment.external_id or evidence
                 ),
-                apply_available_credit=False,
+                confirmed_amount=purchase.total,
+                currency_code=purchase.currency,
+                targets=tuple(
+                    starter_prepaid.PrepaidPeriodTarget(
+                        subscription_id=purchase.subscription_id,
+                        billing_line_key=line.billing_line_key or "",
+                        amount=row.total,
+                    )
+                    for row, _invoice, line in staged_periods
+                ),
+                occurred_at=paid_at,
             )
-            AccountCreditApplications.apply_invoice_from_selected_payment_fully(
-                db,
-                invoice,
-                payment_id=payment.id,
-                expected_amount=row.total,
-            )
-            finalize_invoice_application_for_owner(
-                db, invoice, effective_at=observed_at
-            )
+            links_by_key = {link.billing_line_key: link for link in funding.links}
+        for row, invoice, line in staged_periods:
+            if starter_route:
+                starter_prepaid.settle_prepaid_period_invoice(
+                    db,
+                    invoice=invoice,
+                    link=links_by_key[line.billing_line_key or ""],
+                    issued_at=observed_at,
+                )
+                ensure_prepaid_entitlements_for_paid_invoice(db, invoice)
+            else:
+                Invoices.issue_draft_for_owner(
+                    db,
+                    str(invoice.id),
+                    issuance=InvoiceIssuanceInput(
+                        issued_at=observed_at,
+                        due_at=observed_at,
+                        due_date_basis=InvoiceDueDateBasis.prepaid_service_period,
+                        due_date_basis_ref=f"prepaid_period_purchases:{purchase.id}:{row.ordinal}",
+                        due_date_policy_version="prepaid-period-purchases-v1",
+                        reason="prepaid_period_purchase",
+                    ),
+                    apply_available_credit=False,
+                )
+                AccountCreditApplications.apply_invoice_from_selected_payment_fully(
+                    db,
+                    invoice,
+                    payment_id=payment.id,
+                    expected_amount=row.total,
+                )
+                finalize_invoice_application_for_owner(
+                    db, invoice, effective_at=observed_at
+                )
             entitlement = db.scalar(
                 select(ServiceEntitlement).where(
                     ServiceEntitlement.source_invoice_line_id == line.id
@@ -1462,7 +1527,11 @@ def settle_prepaid_period_purchase(
             row.entitlement_id = entitlement.id
             invoice_ids.append(invoice.id)
             entitlement_ids.append(entitlement.id)
-    except (InvoiceOwnerError, AccountCreditApplicationError) as exc:
+    except (
+        InvoiceOwnerError,
+        AccountCreditApplicationError,
+        starter_prepaid.StarterPrepaidError,
+    ) as exc:
         raise _error(
             "settlement_rejected",
             "Purchase settlement did not produce exactly paid period invoices.",
