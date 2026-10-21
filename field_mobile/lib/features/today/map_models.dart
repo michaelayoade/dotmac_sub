@@ -114,8 +114,7 @@ class MapPlaceSearchResult {
 }
 
 const mapAssetTypeLabels = {
-  'olt': 'OLT',
-  'fdh': 'FDH',
+  'fdh_cabinet': 'FDH',
   'fiber_access_point': 'FAP',
   'splice_closure': 'Closure',
   'wireless_mast': 'Mast',
@@ -123,8 +122,7 @@ const mapAssetTypeLabels = {
 };
 
 const defaultMapAssetTypes = {
-  'olt',
-  'fdh',
+  'fdh_cabinet',
   'fiber_access_point',
   'splice_closure',
   'wireless_mast',

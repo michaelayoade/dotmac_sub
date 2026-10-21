@@ -112,7 +112,7 @@
             <tbody>
             {% for row in gaps.subscription_gaps %}
                 <tr class="border-t border-slate-100 dark:border-slate-700">
-                    <td class="py-2"><a class="font-mono text-indigo-600 hover:underline dark:text-indigo-400" href="/admin/catalog/subscriptions/{{ row.id }}">{{ row.id | string | truncate(8, True, '') }}</a></td>
+                    <td class="py-2">{% if can(request, 'subscription:read') %}<a class="font-mono text-indigo-600 hover:underline dark:text-indigo-400" href="/admin/catalog/subscriptions/{{ row.id }}">{{ row.id | string | truncate(8, True, '') }}</a>{% else %}{{ row.id | string | truncate(8, True, '') }}{% endif %}</td>
                     <td class="text-slate-500">{{ row.gap }}</td>
                 </tr>
             {% else %}

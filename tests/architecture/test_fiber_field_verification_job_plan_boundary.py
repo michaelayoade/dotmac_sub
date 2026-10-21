@@ -29,16 +29,22 @@ def test_job_plan_owner_composes_evidence_and_delegates_every_job_write():
     source = PLANNER.read_text(encoding="utf-8")
     imported = _imports(PLANNER)
 
-    assert "reconcile_fiber_field_worklist" in imported
+    assert "select_fiber_field_worklist_evidence" in imported
     assert "work_order_commands" in imported
     assert "stage_audit_event" in imported
-    assert "work_order_commands.create(" in source
-    assert "work_order_commands.assign(" in source
-    assert "work_order_commands.validate_subscriber_target(" in source
-    assert "commit=False" in source
+    assert "work_order_commands.stage_native_create(" in source
+    assert "work_order_commands._stage_assignment(" in source
+    assert "work_order_commands.assign(" not in source
+    assert (
+        "commit=False"
+        not in source.split("work_order_commands._stage_assignment(", 1)[1].split(
+            ")", 1
+        )[0]
+    )
+    assert "work_order_commands.validate_native_subscriber(" in source
     assert "expected_plan_sha256" in source
     assert "expected_worklist_report_sha256" in source
-    assert "WorkOrder(" not in source
+    assert "WorkOrder" not in imported
     assert "WorkOrderAssignmentQueue(" not in source
     assert "FiberTopologyStagedFeature(" not in source
 
@@ -98,4 +104,54 @@ def test_only_job_plan_owner_supplies_protected_work_order_metadata():
             callers.append(str(path.relative_to(PROJECT_ROOT)))
 
     assert callers == []
-    assert "owner_metadata=metadata" in PLANNER.read_text(encoding="utf-8")
+    assert "provenance=FiberVerificationPlanProvenance(" in PLANNER.read_text(
+        encoding="utf-8"
+    )
+
+
+def test_plan_owner_has_one_typed_executor_and_no_transport_or_completion():
+    source = PLANNER.read_text(encoding="utf-8")
+    tree = ast.parse(source)
+    assert source.count("return execute_owner_command(") == 1
+    assert "db.commit(" not in source and "db.rollback(" not in source
+    assert "HTTPException" not in source and "Any" not in _imports(PLANNER)
+    for node in ast.walk(tree):
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name in {
+            "preview_fiber_field_verification_job_plan",
+            "execute_fiber_field_verification_job_plan",
+        }:
+            assert node.args.kwarg is None
+            assert len(node.args.kwonlyargs) == 1
+            assert node.returns is not None
+    assert source.index(
+        'db.connection(execution_options={"isolation_level": "REPEATABLE READ"})'
+    ) < source.index("_authorize(db, command)")
+    assert source.index("work_order_commands.prepare_assignment(") < source.index(
+        "work_order_commands.stage_native_create("
+    )
+    assert "assignment_replay_snapshot(" in source
+
+
+def test_plan_values_are_immutable_and_selected_member_is_hash_input():
+    contracts = (
+        PROJECT_ROOT
+        / "app/services/network/fiber_field_verification_job_plan_contracts.py"
+    )
+    tree = ast.parse(contracts.read_text(encoding="utf-8"))
+    for node in ast.walk(tree):
+        if isinstance(node, ast.ClassDef):
+            assert any(
+                isinstance(decorator, ast.Call)
+                and any(
+                    keyword.arg == "frozen"
+                    and isinstance(keyword.value, ast.Constant)
+                    and keyword.value.value is True
+                    for keyword in decorator.keywords
+                )
+                for decorator in node.decorator_list
+            )
+    assert "Any" not in _imports(contracts)
+    assert (
+        'result["assigned_vendor_user_id"] = str(target.vendor_user_id)'
+        in PLANNER.read_text(encoding="utf-8")
+    )

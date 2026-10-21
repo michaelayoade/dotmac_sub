@@ -14,13 +14,15 @@ from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from enum import StrEnum
+from types import SimpleNamespace
+from typing import cast
 from uuid import UUID
 
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.models.audit import AuditActorType
-from app.models.billing import Payment, PaymentStatus
+from app.models.billing import Invoice, Payment, PaymentStatus, StarterInvoiceLink
 from app.models.payment_proof import PaymentProof, PaymentProofStatus
 from app.schemas.audit import AuditEventCreate
 from app.schemas.billing import (
@@ -30,6 +32,7 @@ from app.schemas.billing import (
     PaymentCreationConfirm,
 )
 from app.services.audit import AuditEvents
+from app.services.billing import starter_manual_settlement
 from app.services.billing._common import lock_account
 from app.services.billing.payments import (
     PaymentCreationPreview,
@@ -40,6 +43,7 @@ from app.services.common import round_money, to_decimal
 from app.services.domain_errors import DomainError
 from app.services.events import emit_event
 from app.services.events.types import EventType
+from app.services.locking import lock_for_update
 from app.services.owner_commands import (
     CommandContext,
     OwnerCommandDefinition,
@@ -343,6 +347,107 @@ def _validate_command(
         )
 
 
+def _starter_manual_target(
+    db: Session,
+    preview: ManualPaymentRecordingPreview,
+    request: ManualPaymentRecordingConfirm,
+) -> tuple[Invoice, StarterInvoiceLink] | None:
+    """Resolve the Starter manual-settlement target from a confirmed preview.
+
+    Returns ``None`` when no allocation effect touches a Starter-linked
+    invoice (pure legacy recording). Any Starter-touching shape outside
+    the eligible slice — one succeeded payment allocated in full to one
+    Starter-linked invoice of the same account and currency, with no
+    prepaid-funding or account-credit movement — is refused here before
+    any legacy money writer can allocate against a Starter document.
+    """
+    payment_preview = preview.payment_preview
+    effects = payment_preview.allocation_effects
+    if not effects:
+        return None
+    links = {
+        link.invoice_id: link
+        for link in db.execute(
+            select(StarterInvoiceLink).where(
+                StarterInvoiceLink.invoice_id.in_([e.invoice_id for e in effects])
+            )
+        ).scalars()
+    }
+    if not links:
+        return None
+
+    def _unsupported() -> ManualPaymentRecordingError:
+        return _error(
+            "starter_manual_shape_unsupported",
+            "This manual payment touches a Starter-issued invoice in a "
+            "shape the Starter manual lane cannot settle; record it as "
+            "one succeeded payment allocated in full to that invoice.",
+        )
+
+    if (
+        request.status != PaymentStatus.succeeded
+        or request.billing_account_id is not None
+        or len(effects) != 1
+        or effects[0].invoice_id not in links
+        or effects[0].allocation_amount != request.amount
+        or payment_preview.unallocated_amount != 0
+        or payment_preview.prepaid_funding_before
+        != payment_preview.prepaid_funding_after
+        or payment_preview.account_credit_before != payment_preview.account_credit_after
+    ):
+        raise _unsupported()
+    invoice = lock_for_update(db, Invoice, effects[0].invoice_id)
+    if (
+        invoice is None
+        or invoice.account_id != request.account_id
+        or invoice.currency.upper() != request.currency.upper()
+    ):
+        raise _unsupported()
+    return invoice, links[effects[0].invoice_id]
+
+
+def _starter_payment_result(
+    request: ManualPaymentRecordingConfirm,
+    manual: starter_manual_settlement.StarterManualSettlement,
+    *,
+    occurred_at: datetime,
+    preview: ManualPaymentRecordingPreview,
+) -> PaymentCreationResult:
+    """Payment-shaped projection of a Starter manual confirmation.
+
+    No legacy ``Payment`` row exists for a Starter settlement; this
+    projection carries the Starter confirmation identity in the shape
+    existing manual-payment consumers already read.
+    """
+    now = datetime.now(UTC)
+    projection = SimpleNamespace(
+        id=manual.settlement.confirmation_id,
+        account_id=request.account_id,
+        billing_account_id=None,
+        payment_method_id=request.payment_method_id,
+        payment_channel_id=request.payment_channel_id,
+        collection_account_id=request.collection_account_id,
+        provider_id=request.provider_id,
+        provider_fee=request.provider_fee,
+        amount=request.amount,
+        currency=request.currency,
+        status=PaymentStatus.succeeded,
+        paid_at=occurred_at,
+        external_id=request.external_id,
+        memo=request.memo,
+        is_active=True,
+        created_at=now,
+        updated_at=now,
+        refunded_amount=Decimal("0"),
+        allocations=[],
+    )
+    return PaymentCreationResult(
+        payment=cast(Payment, projection),
+        settlement=None,
+        preview=preview.payment_preview,
+    )
+
+
 def confirm_manual_payment_recording(
     db: Session,
     *,
@@ -388,15 +493,36 @@ def confirm_manual_payment_recording(
                 risk_count=len(preview.duplicate_risks),
             )
 
-        payment_result = Payments.stage_confirm_creation(
-            db,
-            PaymentCreationConfirm(
-                **payment_payload.model_dump(),
-                auto_allocate=request.auto_allocate,
-                preview_fingerprint=preview.payment_preview.fingerprint,
+        starter_target = _starter_manual_target(db, preview, request)
+        if starter_target is not None:
+            # Starter lane (ADR 0031): pay-then-record through
+            # dotmac-payments confirmation into dotmac-billing. No
+            # legacy Payment or ledger entry is written; consumers
+            # receive the confirmation-shaped payment projection.
+            invoice, link = starter_target
+            occurred_at = request.paid_at or datetime.now(UTC)
+            manual = starter_manual_settlement.record_manual_starter_payment(
+                db,
+                invoice=invoice,
+                link=link,
+                amount=request.amount,
+                external_reference=request.external_id or request.idempotency_key,
+                occurred_at=occurred_at,
                 idempotency_key=request.idempotency_key,
-            ),
-        )
+            )
+            payment_result = _starter_payment_result(
+                request, manual, occurred_at=occurred_at, preview=preview
+            )
+        else:
+            payment_result = Payments.stage_confirm_creation(
+                db,
+                PaymentCreationConfirm(
+                    **payment_payload.model_dump(),
+                    auto_allocate=request.auto_allocate,
+                    preview_fingerprint=preview.payment_preview.fingerprint,
+                    idempotency_key=request.idempotency_key,
+                ),
+            )
         actor_type, actor_id = _audit_actor(context)
         risk_ids = [str(risk.evidence_id) for risk in preview.duplicate_risks]
         AuditEvents.stage(

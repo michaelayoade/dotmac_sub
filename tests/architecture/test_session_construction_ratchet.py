@@ -116,7 +116,190 @@ BASELINE = Path("tests/architecture/session_construction_baseline.txt")
 #: migration and serialized subscription activation. Production remains unchanged.
 #: +1 from test_support_ticket_comment_idempotency_concurrency.py: an independent
 #: worker session proves ticket-scoped duplicate submissions serialize correctly.
-TEST_FIXTURE_BASELINE_TOTAL = 173
+#: +12 from tests/integration/test_vendor_work_order_execution.py: disposable
+#: migrated engines and independent sessions prove assignment, revocation and
+#: actor lock-order concurrency; no production construction allowance is added.
+#: +1 from test_prepaid_paid_invoice_period_repair_concurrency.py: independent
+#: worker sessions prove concurrent four-eyes period-repair approvals serialize.
+#: +2 from test_prepaid_renewal_origin_correction_concurrency.py and
+#: test_legacy_over_allocation_correction_concurrency.py: independent worker
+#: sessions prove concurrent reviewed corrections serialize and converge.
+#: +1 from tests/integration/test_password_auth_credential_race.py: independent
+#: worker sessions prove the credential-version gate, MFA completion and
+#: recovery-code spend serialize against a concurrent reset.
+#: +2 from tests/test_credential_administration.py: independent read/write
+#: sessions prove retained ORM objects are refreshed by locked owner admission.
+#: Production preparation uses app.db.SessionLocal, adding no construction debt.
+#: +1 from tests/integration/test_email_verification_intents_pg.py: independent
+#: migrated PostgreSQL sessions prove exact Subscriber locking, request replay,
+#: and the existing dedupe unique constraint. No production site is added.
+#: +1 from tests/customer_profile_owner_support.py: canonical profile tests use
+#: a fresh Session within fixture isolation, preserving the caller Session.
+#: This is fast-unit evidence only; no production construction site is added.
+#: +8 from authentication-denial proofs: tests/test_authentication_denial_audit.py
+#: adds one disposable file-SQLite Engine and six explicit Session sites for
+#: independent lifecycle, observation, cleanup-failure, lock preservation and
+#: pending/flushed request-write isolation. tests/authentication_denial_unit.py
+#: adds one explicitly logic-only savepoint Session factory. PostgreSQL denial
+#: proofs reuse the existing migrated factory. No runtime baseline grows.
+#: +6 from tests/integration/test_identity_lock_order_concurrency.py: one
+#: disposable migrated test-engine factory, one setup Session and four explicit
+#: independent sessionmaker sites prove implicit FK blocking, incumbent lock
+#: inversion, tuple arbitration and stale principal-reference refusal. These
+#: are reviewed test fixtures; the production construction baseline is unchanged.
+#: +10 from tests/integration/test_oidc_atomic_session_concurrency.py: one
+#: migrated test-engine factory and nine explicitly isolated Session sites
+#: pin backend identities while testing admission/reset serialization, binding
+#: drift, ceremony replay and device supersession. No runtime allowance grows.
+#: +3 from the OIDC commit-capable unit lane: tests/oidc_atomic_unit.py owns
+#: one disposable Engine and one engine-bound Session per test; the external
+#: root refusal regression adds one Connection-bound Session. These fixtures
+#: exercise real root completion without bypassing the production entry guard.
+#: +2 from tests/test_tx_trace.py: explicit helper Session counterexamples
+#: reject independent state/audit root attribution.
+#: +10 from atomic session-revocation proofs: eight independent PostgreSQL
+#: Session sites force exact lock interleavings; two SQLite Session sites prove
+#: caller-flushed-write preservation and independent committed observation.
+#: Test-only additions; production construction allowance is unchanged.
+#: +2 from reseller standing PostgreSQL cases: isolated Session constructors
+#: prove first-class reseller and historical subscriber-link standing. These
+#: test fixtures do not expand the production construction allowance.
+# Six explicit fixture constructions in test_anonymous_recovery_adapter.py
+# exercise fresh lifecycle rollback and independent file-SQLite connections.
+# The production constructor inventory remains unchanged.
+#: +2 from tests/test_credential_security_inventory.py:52,99: disposable SQLite
+#: engines prove bounded SQL aggregates and shared UTC age-band cutoffs. These
+#: are fast unit fixtures, not PostgreSQL acceptance or production construction.
+#: +1 from tests/test_argon2id_benchmark.py: a disposable SQLite engine proves
+#: the benchmark report path without adding a production construction site.
+#: +2 from tests/test_auth_flow_helpers.py and
+#: tests/test_admin_system_route_guards.py: fresh owner-command Sessions prove
+#: logout and administrative session revocation commit independently of the
+#: adapter's request Session. These are test-only transaction-boundary fixtures.
+#: Recovery readiness adds one synthetic engine and one isolated PostgreSQL
+#: Session fixture. These two test sites do not expand production allowances.
+#: Five isolated PostgreSQL Session constructions in
+#: test_api_key_revocation_concurrency.py exercise administrative key revocation
+#: locking and rollback. Production construction allowances are unchanged.
+#: Subscriber-backed reseller MFA API composition adds one Connection-bound
+#: owner Session in a fast unit fixture. Production allowances are unchanged.
+#: Customer MFA reset races add one migrated-PostgreSQL sessionmaker fixture.
+#: Subscriber enrollment adds one file-backed SQLite engine and four unit
+#: Sessions to prove independent denial evidence survives owner rollback.
+#: JSON API-key issuance adds five migrated-PostgreSQL Session sites for
+#: independent atomicity and uniqueness observers; production is unchanged.
+#: JSON API-key PATCH adds five migrated-PostgreSQL Session sites for exact-key
+#: locking, null/constraint rollback and independent observers; production is unchanged.
+#: Web API-key rotation/rollback tests add three migrated-PostgreSQL Session
+#: sites (worker, lock blocker and audit rollback); production is unchanged.
+#: Accepted router-health test helpers add a private SQLite engine and
+#: sessionmaker for out-of-band evidence rollback tests (ADR 0018).
+#: +18 from four disposable, real-migration PostgreSQL acceptance harnesses:
+#: identity locking +4; customer-rating concurrency/transfer +9; fiber owner
+#: isolation/replay +2; vendor attending-person concurrency +3. These private
+#: cloned-database engines and independent sessions establish lock ordering,
+#: atomicity and stale-scope denial; no production allowance is added.
+#: +18 from test_project_engineering_plan_acceptance.py: one migrated private
+#: engine and seventeen independent setup/worker/verification Session sites
+#: exercise approval provenance, atomicity, revocation and concurrency.
+#: These are disposable test fixtures, not production construction allowances.
+#: +19 from tests/integration/test_project_work_order_issuance_acceptance.py:
+#: independently committed sessions for duplicate issuance, rollback, immutable
+#: receipt, revocation/supersession and Project-before-task lock races.
+#: +31 from migrated completion-review acceptance: independently committed
+#: sessions prove duplicate intent, retention/deletion races and current access.
+#: +2 fast completion-review unit sessions exercise stale authorization refresh.
+#: +6 fast engineering adapter/read/participant sessions exercise typed read
+#: permissions and rendering; these are test-only, not production allowances.
+#: +55 net from the final universal-completion/support slice: issuance PG
+#: 19->16 (-3), completion PG 31->51 (+20), completion participant +1,
+#: completion adapter +7, engineering-plan unit +1, issuance unit +2 and
+#: support PG +27. All construct disposable test sessions; the 17 production
+#: sites and their exact baseline are unchanged. Case counts are not site counts.
+#: +113 from reviewed recovery and accountable follow-up fixtures: native
+#: replacement PG +34, engineering replacement PG +47, follow-up PG +17,
+#: incident correlation PG +14 and replacement adapter +1. Independently
+#: committing disposable sessions exercise provenance and lock races; no
+#: production allowance changes.
+#: +94 from shared-outage/project completion acceptance: shared PG +34,
+#: shared committed-session helpers +9, project PG +49, project unit +2.
+#: These exercise SQL guards and races against migrated disposable schemas.
+#: Production construction allowance remains unchanged.
+#: +18 from savepoint-safe completion evidence: four truthful terminal-history
+#: sessions, five project outer-transaction regression sessions, and nine
+#: dedicated full-XID/savepoint proof sessions. No production allowance grows.
+#: +9 completes the savepoint proof: three independently committing replacement
+#: lineage sessions and six enrollment/submission/review outer-transaction sites.
+#: +10 from canonical fiber/radio project entry acceptance: independent setup,
+#: issue/review and verification sessions. No production allowance grows.
+#: +5 from the default-evidence radio regression: independent photo/signoff
+#: gate and recorded evidence checks; production remains unchanged.
+#: Reconciliation with current main preserves its recovery-readiness and API-key
+#: revocation fixtures alongside the lifecycle acceptance fixtures above. The
+#: canonical AST inventory is 657 sites across 143 test files: latest main adds
+#: seven subscriber-MFA fixture sites to the lifecycle inventory of 650. Production
+#: remains 17 sites; its exact per-file baseline is unchanged.
+#: +5 from engineering-plan acceptance: independent Sessions prove native
+#: held/blocked/done tasks refuse issuance after approval. The canonical AST
+#: inventory is now 662 sites across 143 test files; production remains 17.
+#: Reconciliation with main a287 preserves fifteen additional fixture sites:
+#: JSON issuance +5, JSON PATCH +5, web key administration +3, and accepted
+#: router-health evidence +2. The canonical AST inventory is 677 sites across
+#: 147 test files; production remains 17 with its exact baseline unchanged.
+#: Staff deletion adds fourteen migrated-PostgreSQL Session sites for pinned
+#: workers, FK/lock blockers and independent rollback observers; production is unchanged.
+#: API-key authentication maintenance adds ten migrated-PG Session sites
+#: and four unit-only construction sites for fresh-owner and bounded-pool tests.
+#: Customer hard-delete characterization adds one migrated-clone engine and
+#: one Session; production construction allowances remain unchanged.
+#: Customer atomic deletion adds ten migrated-PostgreSQL Session sites for
+#: physical lock/confirmation interleavings, six network participant fixtures,
+#: and two additional characterization Session sites for fresh owner isolation.
+#: These eighteen test-only sites do not expand production construction allowances.
+#: Reconciliation with main 81c4b4ccd preserves these 48 additional fixture
+#: sites alongside the lifecycle acceptance fixtures. Main b69f1b4a6 adds
+#: one migrated-clone engine and two Session constructions for location-read
+#: preservation: the canonical scanner measures 728 sites across 154 files.
+#: Production remains 17 sites across 15 files with its baseline unchanged.
+#: Numbering composition adds eight reviewed migrated-PostgreSQL fixture sites:
+#: one disposable engine and seven Sessions for tenant configuration, allocation
+#: and exact replay, caller rollback, post-rollback retry, incumbent-role parity,
+#: repeated upgrade/preview, and populated-table tenant isolation. The canonical
+#: scanner previously measured 736 sites across 155 test files. This test-only
+#: fixture growth does not allow production debt to grow: production remains
+#: exactly 17 sites across 15 files, with its per-file baseline unchanged.
+#: +2 from the read-only numbering census: one unbound fast-unit Session and
+#: one migrated-PostgreSQL session factory using the existing migrated engine. These
+#: observe snapshots and forbidden writes; production remains 17 sites/15 files.
+#: +7 from ERP fact export canaries: three disposable engines, two session
+#: factories and two predecessor-upgrade setup/verification Sessions. All are test-only;
+#: production remains 17 sites across 15 files with its baseline unchanged.
+#: +4 from Tax composition: one disposable clone engine and three caller-owned
+#: Sessions for released API exact retry, caller rollback, and post-rollback retry.
+#: Production remains 17 sites across 15 files; no production allowance changes.
+#: Deployment secret readiness adds 20 test-only sites: 14 isolated requirements
+#: fixtures, two schema classification fixtures, two migrated PostgreSQL
+#: session factories and two isolated empty-bootstrap Engine/Session sites.
+#: Production construction allowances remain unchanged.
+# The migrated Nextcloud Talk race/recovery fixture adds one disposable
+# migrated PostgreSQL engine and one independent session factory.
+#: +1 from the opening evidence census: one sessionmaker over the existing
+#: migrated PostgreSQL engine for an independent committed writer and the
+#: canonical read-only snapshot seam. No production construction allowance changes.
+#: +1 from optional owner-savepoint hardening: an engine-bound Session over
+#: the existing migrated PostgreSQL fixture proves real root completion and
+#: independent visibility. Production construction allowances are unchanged.
+#: +3 from the read-only V2 invoice numbering proof: two session factories
+#: over migrated PostgreSQL fixtures and one clone-bound observer engine.
+#: Production construction allowances are unchanged.
+#: The deferred legacy-numbering canaries add two test-only database
+#: constructions; Numbering activation fixtures are not part of this change.
+#: Production construction remains unchanged.
+#: +2 from tests/integration/test_kernel_lineage_entry.py: one disposable
+#: migrated clone engine and one Session for the existing owner to seed canaries.
+#: Party import reuses that fixture and adds no constructor. These are reviewed
+#: test-only constructions; the production construction baseline is unchanged.
+TEST_FIXTURE_BASELINE_TOTAL = 790
 
 
 def _baseline() -> dict[str, int]:

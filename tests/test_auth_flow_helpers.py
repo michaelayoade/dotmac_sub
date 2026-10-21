@@ -1,5 +1,6 @@
 import uuid
 import warnings
+from contextlib import contextmanager
 from datetime import UTC, datetime
 
 import pyotp
@@ -7,6 +8,7 @@ import pytest
 from cryptography.fernet import Fernet
 from fastapi import HTTPException
 from jose import jwt
+from sqlalchemy.orm import Session
 from starlette.requests import Request
 
 from app.models.auth import AuthProvider, MFAMethod, MFAMethodType, UserCredential
@@ -14,6 +16,15 @@ from app.models.domain_settings import DomainSetting, SettingDomain
 from app.models.subscription_engine import SettingValueType
 from app.schemas.auth_flow import LogoutResponse, TokenResponse
 from app.services import auth_flow as auth_flow_service
+from app.services.db_session_adapter import db_session_adapter
+from app.services.password_authentication import PasswordAuthenticationError
+from tests.authentication_denial_unit import (
+    authentication_denial_unit_session as authentication_denial_unit_session,
+)
+from tests.subscriber_mfa_fixtures import seed_enabled_subscriber_mfa
+from tests.subscriber_mfa_owner_support import authenticated_subscriber_enrollment
+
+pytestmark = pytest.mark.usefixtures("authentication_denial_unit_session")
 
 
 def _make_request(cookies: str | None = None):
@@ -28,6 +39,17 @@ def _make_request(cookies: str | None = None):
         "client": ("127.0.0.1", 12345),
     }
     return Request(scope)
+
+
+def _use_test_owner_session(db_session, monkeypatch):
+    @contextmanager
+    def fresh():
+        with Session(
+            bind=db_session.get_bind(), join_transaction_mode="create_savepoint"
+        ) as command_db:
+            yield command_db
+
+    monkeypatch.setattr(db_session_adapter, "owner_command_session", fresh)
 
 
 def test_env_helpers(monkeypatch):
@@ -269,8 +291,8 @@ def test_load_rbac_claims_none():
     assert permissions == []
 
 
-def test_verify_password_none():
-    assert auth_flow_service.verify_password("secret", None) is False
+def test_verify_user_password_none():
+    assert auth_flow_service.verify_user_password("secret", None) is False
 
 
 def test_refresh_and_logout_responses_missing_token(monkeypatch):
@@ -319,10 +341,11 @@ def test_mfa_confirm_and_verify_errors(db_session, person, monkeypatch):
     db_session.add(method)
     db_session.commit()
 
-    with pytest.raises(HTTPException):
-        auth_flow_service.AuthFlow.mfa_confirm(
-            db_session, str(method.id), "123456", str(person.id)
-        )
+    enrollment = authenticated_subscriber_enrollment(
+        db_session, subscriber_id=person.id
+    )
+    with pytest.raises(PasswordAuthenticationError):
+        enrollment.confirm(method_id=method.id, code="123456")
 
     with pytest.raises(HTTPException):
         auth_flow_service.AuthFlow.mfa_verify(
@@ -348,10 +371,12 @@ def test_mfa_confirm_invalid_code(db_session, person, monkeypatch):
     )
     db_session.add(method)
     db_session.commit()
-    with pytest.raises(HTTPException):
-        auth_flow_service.AuthFlow.mfa_confirm(
-            db_session, str(method.id), "000000", str(person.id)
-        )
+    enrollment = authenticated_subscriber_enrollment(
+        db_session, subscriber_id=person.id
+    )
+    monkeypatch.setattr(pyotp.TOTP, "verify", lambda *args, **kwargs: False)
+    with pytest.raises(PasswordAuthenticationError):
+        enrollment.confirm(method_id=method.id, code="000000")
 
 
 def test_mfa_confirm_person_mismatch(db_session, person, monkeypatch):
@@ -368,45 +393,105 @@ def test_mfa_confirm_person_mismatch(db_session, person, monkeypatch):
     )
     db_session.add(method)
     db_session.commit()
-    with pytest.raises(HTTPException):
-        auth_flow_service.AuthFlow.mfa_confirm(
-            db_session, str(method.id), "000000", "other-person"
+    enrollment = authenticated_subscriber_enrollment(
+        db_session, subscriber_id=person.id
+    )
+    with pytest.raises(PasswordAuthenticationError):
+        enrollment.confirm(
+            method_id=method.id, code="000000", subscriber_id=uuid.uuid4()
         )
 
 
-def test_mfa_confirm_not_found(db_session):
-    with pytest.raises(HTTPException):
-        auth_flow_service.AuthFlow.mfa_confirm(
-            db_session, str(uuid.uuid4()), "000000", str(uuid.uuid4())
-        )
+def test_mfa_confirm_not_found(db_session, person):
+    enrollment = authenticated_subscriber_enrollment(
+        db_session, subscriber_id=person.id
+    )
+    with pytest.raises(PasswordAuthenticationError):
+        enrollment.confirm(method_id=uuid.uuid4(), code="000000")
 
 
 def test_mfa_confirm_commit_error(db_session, person, monkeypatch):
+    from sqlalchemy import event
+
     key = Fernet.generate_key().decode("utf-8")
     monkeypatch.setenv("TOTP_ENCRYPTION_KEY", key)
-    setup = auth_flow_service.AuthFlow.mfa_setup(
-        db_session, str(person.id), label="device"
+    enrollment = authenticated_subscriber_enrollment(
+        db_session, subscriber_id=person.id
     )
-    code = pyotp.TOTP(setup["secret"]).now()
+    setup = enrollment.setup(label="device")
+    code = pyotp.TOTP(setup.secret).now()
 
-    def _boom():
+    def _boom(_session):
         raise auth_flow_service.IntegrityError("stmt", "params", "orig")
 
-    monkeypatch.setattr(db_session, "commit", _boom)
-    monkeypatch.setattr(db_session, "rollback", lambda: None)
-    with pytest.raises(HTTPException):
-        auth_flow_service.AuthFlow.mfa_confirm(
-            db_session, str(setup["method_id"]), code, str(person.id)
-        )
+    event.listen(db_session, "before_commit", _boom)
+    try:
+        with pytest.raises(auth_flow_service.IntegrityError):
+            enrollment.confirm(method_id=setup.method_id, code=code)
+    finally:
+        event.remove(db_session, "before_commit", _boom)
+    db_session.expire_all()
+    method = db_session.get(MFAMethod, setup.method_id)
+    assert method.enabled is False
+    assert method.verified_at is None
+
+
+def _v2_mfa_token(db_session, person, *, with_credential=True):
+    """A genuine v2 challenge for ``person``'s local credential."""
+    from app.services import password_authentication
+
+    credential = UserCredential(
+        person_id=person.id,
+        provider=AuthProvider.local,
+        username=f"{person.id}@example.com",
+        password_hash=auth_flow_service.hash_password("secret"),
+        is_active=True,
+    )
+    db_session.add(credential)
+    db_session.commit()
+    verified = password_authentication.VerifiedCredential(
+        src=password_authentication.SRC_USER_CREDENTIAL,
+        principal_type="subscriber",
+        principal_id=str(person.id),
+        audience="general",
+        staff_binding=None,
+        mfa_required=True,
+        enrollment_required=False,
+        credential_id=credential.id,
+        credential_version=1,
+        provider=AuthProvider.local,
+    )
+    payload = password_authentication._challenge_payload(  # noqa: SLF001
+        verified,
+        typ="mfa",
+        credential_version=1,
+        now=datetime.now(UTC),
+    )
+    return auth_flow_service._jwt_encode_token(  # noqa: SLF001
+        payload, "test-secret", "HS256"
+    )
 
 
 def test_mfa_verify_missing_method(db_session, person, monkeypatch):
     monkeypatch.setenv("JWT_SECRET", "test-secret")
-    mfa_token = auth_flow_service._issue_mfa_token(None, str(person.id))
-    with pytest.raises(HTTPException):
+    mfa_token = _v2_mfa_token(db_session, person)
+    with pytest.raises(HTTPException) as excinfo:
         auth_flow_service.AuthFlow.mfa_verify(
             db_session, mfa_token, "123456", _make_request()
         )
+    assert excinfo.value.status_code == 404
+
+
+def test_mfa_verify_rejects_legacy_unbound_token(db_session, person, monkeypatch):
+    """No legacy fallback: a challenge without the v2 binding is refused."""
+    monkeypatch.setenv("JWT_SECRET", "test-secret")
+    legacy = auth_flow_service._issue_mfa_token(None, str(person.id))  # noqa: SLF001
+    with pytest.raises(HTTPException) as excinfo:
+        auth_flow_service.AuthFlow.mfa_verify(
+            db_session, legacy, "123456", _make_request()
+        )
+    assert excinfo.value.status_code == 401
+    assert excinfo.value.detail == "Invalid MFA token"
 
 
 def test_mfa_verify_missing_sub(monkeypatch, db_session):
@@ -426,18 +511,16 @@ def test_mfa_verify_invalid_code(db_session, person, monkeypatch):
     key = Fernet.generate_key().decode("utf-8")
     monkeypatch.setenv("TOTP_ENCRYPTION_KEY", key)
     monkeypatch.setenv("JWT_SECRET", "test-secret")
-    setup = auth_flow_service.AuthFlow.mfa_setup(
-        db_session, str(person.id), label="device"
+    setup = seed_enabled_subscriber_mfa(
+        db_session, subscriber_id=person.id, label="device"
     )
-    code = pyotp.TOTP(setup["secret"]).now()
-    auth_flow_service.AuthFlow.mfa_confirm(
-        db_session, str(setup["method_id"]), code, str(person.id)
-    )
-    mfa_token = auth_flow_service._issue_mfa_token(None, str(person.id))
-    with pytest.raises(HTTPException):
+    mfa_token = _v2_mfa_token(db_session, person)
+    with pytest.raises(HTTPException) as excinfo:
         auth_flow_service.AuthFlow.mfa_verify(
             db_session, mfa_token, "000000", _make_request()
         )
+    assert excinfo.value.status_code == 401
+    assert excinfo.value.detail == "Invalid MFA code"
 
 
 def test_mfa_verify_response_success(db_session, person, monkeypatch):
@@ -453,21 +536,21 @@ def test_mfa_verify_response_success(db_session, person, monkeypatch):
     )
     db_session.add(credential)
     db_session.commit()
-    setup = auth_flow_service.AuthFlow.mfa_setup(
-        db_session, str(person.id), label="device"
+    setup = seed_enabled_subscriber_mfa(
+        db_session, subscriber_id=person.id, label="device"
     )
-    code = pyotp.TOTP(setup["secret"]).now()
-    auth_flow_service.AuthFlow.mfa_confirm(
-        db_session, str(setup["method_id"]), code, str(person.id)
+    login_result = auth_flow_service.AuthFlow.login(
+        db_session, "mfa@example.com", "secret", _make_request(), None
     )
-    mfa_token = auth_flow_service._issue_mfa_token(None, str(person.id))
+    mfa_token = login_result["mfa_token"]
     response = auth_flow_service.AuthFlow.mfa_verify_response(
-        db_session, mfa_token, pyotp.TOTP(setup["secret"]).now(), _make_request()
+        db_session, mfa_token, pyotp.TOTP(setup.secret).now(), _make_request()
     )
     assert response.status_code == 200
 
 
-def test_refresh_logout_invalid_token(db_session):
+def test_refresh_logout_invalid_token(db_session, monkeypatch):
+    _use_test_owner_session(db_session, monkeypatch)
     with pytest.raises(HTTPException):
         auth_flow_service.AuthFlow.refresh(db_session, "invalid", _make_request())
     with pytest.raises(HTTPException):
@@ -475,6 +558,7 @@ def test_refresh_logout_invalid_token(db_session):
 
 
 def test_refresh_and_logout_responses_success(db_session, person, monkeypatch):
+    _use_test_owner_session(db_session, monkeypatch)
     monkeypatch.setenv("JWT_SECRET", "test-secret")
     credential = UserCredential(
         person_id=person.id,
@@ -516,12 +600,8 @@ def test_login_response_mfa_required(db_session, person, monkeypatch):
     )
     db_session.add(credential)
     db_session.commit()
-    setup = auth_flow_service.AuthFlow.mfa_setup(
-        db_session, str(person.id), label="device"
-    )
-    code = pyotp.TOTP(setup["secret"]).now()
-    auth_flow_service.AuthFlow.mfa_confirm(
-        db_session, str(setup["method_id"]), code, str(person.id)
+    setup = seed_enabled_subscriber_mfa(
+        db_session, subscriber_id=person.id, label="device"
     )
 
     result = auth_flow_service.AuthFlow.login_response(

@@ -46,6 +46,9 @@ from app.models.system_user import SystemUser
 from app.models.usage import AccountingStatus, RadiusAccountingSession
 from app.services import crm_api
 from app.services.auth import hash_api_key
+from tests.test_api_key_authentication_maintenance import (
+    local_auth_owner_session,  # noqa: F401
+)
 
 TOKEN = "crm-test-token"
 

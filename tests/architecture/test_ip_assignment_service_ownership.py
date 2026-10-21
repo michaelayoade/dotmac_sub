@@ -45,16 +45,17 @@ _IP_ASSIGNMENT_WRITERS = {
 }
 
 # Modules that retire an allocation (`assignment.is_active = False`). This set
-# is LARGER than the constructor set and only partly overlaps it: four modules
+# is LARGER than the constructor set and only partly overlaps it: three modules
 # retire an address without ever creating one. Pinning constructors alone would
 # have left retirement -- reclaiming a live customer address -- unguarded.
 _IP_ASSIGNMENT_DEACTIVATORS = {
+    "app/services/connectivity_backup.py",  # debt: snapshot restore (assign.is_active)
     "app/services/ip_assignment_lifecycle.py",  # the owner
     "app/services/ip_lifecycle.py",  # debt: terminal lifecycle release
     "app/services/network/ip.py",  # debt: provisioning allocation/reactivation
+    "app/services/network/ont_inventory.py",  # debt: ONT inventory WAN release
     "app/services/network/subscriber_wan_ipam.py",  # debt: ONT WAN claims
     "app/services/provisioning_helpers.py",  # debt: provisioning reclaim
-    "app/services/subscriber.py",  # debt: subscriber deletion cleanup
     "app/services/web_system_restore_tool.py",  # debt: restore tooling
 }
 
@@ -66,9 +67,39 @@ def test_ipam_ownership_owner_has_complete_transaction_contract() -> None:
     assert service.contract is not None
     assert service.contract.transaction.mode is TransactionMode.OWNER_MANAGED
     assert service.contract.migration.state is AuthorityMigrationState.SHADOWING
-    assert service.contract.concerns[0].role is OwnerRole.RECONCILER
-    assert service.contract.concerns[1].role is OwnerRole.COMMAND_WRITER
-    assert service.contract.concerns[2].role is OwnerRole.COMMAND_WRITER
+    concerns = {concern.name: concern for concern in service.contract.concerns}
+    assert set(concerns) == {
+        "exact service ownership of active IPv4 assignments",
+        "reviewed exact-service IPv4 assignment lifecycle repair",
+        "reviewed exact-service IPv4 served projection repair",
+        "subscriber hard-delete IPv4 and IPv6 assignment release",
+    }
+    assert (
+        concerns["exact service ownership of active IPv4 assignments"].role
+        is OwnerRole.RECONCILER
+    )
+    for name in (
+        "reviewed exact-service IPv4 assignment lifecycle repair",
+        "reviewed exact-service IPv4 served projection repair",
+        "subscriber hard-delete IPv4 and IPv6 assignment release",
+    ):
+        assert concerns[name].role is OwnerRole.COMMAND_WRITER
+        assert concerns[name].canonical_writer == "network.ip_assignment_lifecycle"
+    deletion = concerns["subscriber hard-delete IPv4 and IPv6 assignment release"]
+    assert deletion.input_names == (
+        "canonical subscriber IP assignments",
+        "exact customer hard-delete command",
+    )
+    inputs = {value.name: value for value in service.contract.authoritative_inputs}
+    assert (
+        inputs["exact customer hard-delete command"].owner
+        == "customer.account_deletion"
+    )
+    assert "FOR UPDATE NOWAIT" in service.contract.transaction.locking
+    assert (
+        "network.ip_assignment_lifecycle.invalid_customer_deletion_participant"
+        in service.contract.errors.domain_codes
+    )
 
 
 def test_legacy_projection_authority_and_partial_commit_paths_are_retired() -> None:
@@ -142,9 +173,12 @@ def test_admin_ipv4_replacement_is_owner_backed_and_billing_isolated() -> None:
     )
     replacement_source = ast.unparse(replacement)
     assert "preview_service_ipv4_assignment_repair(" in replacement_source
-    assert "repair_service_ipv4_assignment(" in replacement_source
     assert "preview_service_ipv4_projection_repair(" in replacement_source
-    assert "repair_service_ipv4_projection(" in replacement_source
+    # One owner transaction (assignment + projection participants) so a
+    # projection refusal cannot leave IPAM moved; no separate commits.
+    assert "replace_service_ipv4(" in replacement_source
+    assert "repair_service_ipv4_assignment(" not in replacement_source
+    assert "repair_service_ipv4_projection(" not in replacement_source
     assert "sync_public_ip_addon_for_subscription(" not in replacement_source
     assert "update_subscription(" not in replacement_source
 
@@ -240,12 +274,25 @@ def test_ip_assignment_writers_are_pinned_during_shadowing() -> None:
     assert writers == _IP_ASSIGNMENT_WRITERS
 
 
+def _is_assignment_like(node: ast.AST) -> bool:
+    """`assignment`, `assign`, `record.assignment`: anything named like one.
+
+    The earlier exact-word match missed ``assign.is_active = ...`` in
+    ``connectivity_backup`` (snapshot restore).
+    """
+    if isinstance(node, ast.Name):
+        return "assign" in node.id.lower()
+    if isinstance(node, ast.Attribute):
+        return "assign" in node.attr.lower()
+    return False
+
+
 def test_ip_assignment_deactivators_are_pinned_during_shadowing() -> None:
     """`is_active = False` retires an allocation, so pin it separately.
 
     Creation and retirement are different consequences with different blast
     radii: a parallel deactivator silently reclaims a live customer address
-    without entering the fingerprint-gated command. Seven modules retire an
+    without entering the fingerprint-gated command. Six modules retire an
     allocation against four that create one, so pinning constructors alone
     would have left the larger surface unguarded.
     """
@@ -256,19 +303,33 @@ def test_ip_assignment_deactivators_are_pinned_during_shadowing() -> None:
             continue
         source = path.read_text(encoding="utf-8")
         # Name-based AST matching cannot tell an IPAssignment from a team-inbox
-        # assignment, so require the module to reference the model at all.
-        if "IPAssignment" not in source:
+        # assignment, so require the module to reference the IPAM models at all.
+        # ``IPv4Address`` counts too: ``ont_inventory`` retires allocations via
+        # ``IPv4Address.assignment`` without ever naming ``IPAssignment``.
+        if "IPAssignment" not in source and "IPv4Address" not in source:
             continue
         tree = ast.parse(source, filename=str(path))
         for node in ast.walk(tree):
+            if isinstance(node, ast.Call):
+                # setattr(assignment, "is_active", ...) / {"is_active": ...}
+                # dict-driven retirement of an allocation.
+                if (
+                    isinstance(node.func, ast.Name)
+                    and node.func.id == "setattr"
+                    and len(node.args) >= 2
+                    and _is_assignment_like(node.args[0])
+                    and isinstance(node.args[1], ast.Constant)
+                    and node.args[1].value == "is_active"
+                ):
+                    deactivators.add(relative)
+                continue
             if not isinstance(node, ast.Assign):
                 continue
             for target in node.targets:
                 if (
                     isinstance(target, ast.Attribute)
                     and target.attr == "is_active"
-                    and isinstance(target.value, ast.Name)
-                    and "assignment" in target.value.id.lower()
+                    and _is_assignment_like(target.value)
                 ):
                     deactivators.add(relative)
 

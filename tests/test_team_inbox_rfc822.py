@@ -156,6 +156,9 @@ def test_smtp_intake_stores_attachment_content_and_exposes_authenticated_url(
         def upload(self, key: str, data: bytes, content_type: str) -> None:
             objects[key] = (data, content_type)
 
+        def exists(self, key: str) -> bool:
+            return key in objects
+
         def stream(self, key: str) -> StreamResult:
             data, content_type = objects[key]
             return StreamResult(

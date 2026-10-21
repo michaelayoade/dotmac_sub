@@ -202,8 +202,9 @@ class SyncService {
             id: item['id'] as String,
             title: item['title'] as String,
             status: item['status'] as String,
-            workType: item['work_type'] as String,
-            priority: item['priority'] as String,
+            // Match JobSummary's display defaults for nullable server fields.
+            workType: item['work_type']?.toString() ?? 'other',
+            priority: item['priority']?.toString() ?? 'normal',
             scheduledStart: Value(
               item['scheduled_start'] != null
                   ? DateTime.parse(item['scheduled_start'] as String)

@@ -41,3 +41,33 @@ def test_projection_task_only_owns_session_lifecycle() -> None:
     assert "execute_owner_command" not in calls
     assert ".commit(" not in source
     assert ".rollback(" not in source
+
+
+def test_existing_owner_boundary_has_no_kernel_runtime_authority() -> None:
+    boundary = PROJECT_ROOT / "app" / "services" / "owner_commands.py"
+    tree = ast.parse(boundary.read_text(encoding="utf-8"))
+    imports = {
+        node.module
+        for node in ast.walk(tree)
+        if isinstance(node, ast.ImportFrom) and node.module
+    }
+    imports.update(
+        alias.name
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Import)
+        for alias in node.names
+    )
+    assert not any(name.startswith("dotmac_kernel") for name in imports)
+
+
+def test_optional_rollback_authorization_cannot_grant_commit_authority() -> None:
+    boundary = PROJECT_ROOT / "app" / "services" / "owner_commands.py"
+    tree = ast.parse(boundary.read_text(encoding="utf-8"))
+    guard = next(
+        node
+        for node in tree.body
+        if isinstance(node, ast.FunctionDef) and node.name == "_reject_helper_commit"
+    )
+    names = {node.id for node in ast.walk(guard) if isinstance(node, ast.Name)}
+    assert "_AUTHORIZED_SAVEPOINT_KEY" not in names
+    assert "_OWNER_ROOT_KEY" in names

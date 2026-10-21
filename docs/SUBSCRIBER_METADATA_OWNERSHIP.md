@@ -163,10 +163,40 @@ only. They are the one class where remaining in a JSON blob is the correct
 answer — but they belong in a clearly named provenance column, not mixed with
 live state.
 
-`web_subscriber_details` also still reads four undeclared import keys as
-display fallbacks — `splynx_last_online`, `splynx_gps`, `splynx_location_id`
-and `splynx_billing_email` — so they remain on the rows that carry them until
-that reader is retired.
+`web_subscriber_details` also still reads three undeclared import keys as
+display fallbacks — `splynx_last_online`, `splynx_gps` and
+`splynx_location_id` — so they remain on the rows that carry them until that
+reader is retired.
+
+### Moved — `splynx_billing_email`, now read-only provenance
+
+The Splynx billing address has a typed home: a `subscriber_contacts` row
+flagged `is_billing_contact`, which is what `communication_intents` narrows
+billing mail to (the account's own `subscribers.email` is always included, and
+is what invoices and receipts address). Migration
+`665_backfill_splynx_billing_email_contacts` re-derives each row at apply time
+with the contact owner's normalisation and:
+
+- **backfills** a billing contact (`receives_notifications = false`, so no
+  delivery changes) when the account has no billing contact, then removes the
+  key;
+- **removes** the key when it already equals the account email or one of the
+  account's billing-contact emails;
+- **leaves untouched** rows where it conflicts with a different, non-empty
+  billing-contact email, and rows whose value is not one valid address.
+
+One `audit_events` row (`subscriber.splynx_billing_email_moved`) records the
+counts (`backfilled`, `removed`, `conflicts`, `invalid`) and the subscriber
+ids of conflict and invalid rows for human review — no email addresses.
+
+The detail-page reader now uses `customer_portal_contacts.account_billing_email`
+only. Because conflict and invalid rows may still carry the key, it is not
+retired: `PROVENANCE_ONLY_SPLYNX_KEYS` in
+`scripts/architecture/subscriber_metadata_census.py` declares it as frozen,
+read-only provenance. It is not in the writable registry, and
+`test_subscriber_metadata_ownership.py` fails if product code reads or writes
+it again. Once the reviewed rows are resolved and no row carries it, move it to
+`RETIRED_SPLYNX_KEYS` with a purge migration.
 
 ### Retired — purged from every row
 

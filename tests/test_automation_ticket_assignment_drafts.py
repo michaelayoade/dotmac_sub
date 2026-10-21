@@ -297,6 +297,49 @@ def test_historical_sla_suspend_key_executes_canonical_pause(monkeypatch) -> Non
     pause_command = observed["command"]
     assert outcome.outcome_code == "support_ticket_service_paused"
     assert pause_command.selection_policy.value == "unique_active_subscription"
-    assert pause_command.resume_policy.value == "manual_after_ticket_resolution"
+    assert pause_command.resume_policy.value == "auto_on_ticket_resolution"
     assert pause_command.billing_policy.value == "extend_by_effective_pause_duration"
     assert pause_command.step_index == 1
+
+
+def test_pause_key_accepts_auto_on_ticket_resolution_input(monkeypatch) -> None:
+    observed = {}
+
+    def capture(_db, command):
+        observed["command"] = command
+        return SimpleNamespace(replayed=False)
+
+    monkeypatch.setattr(
+        ticket_sla_service_automation,
+        "pause_unique_active_service_for_ticket_sla_breach",
+        capture,
+    )
+    command = automation_actions.ExecuteAutomationActionCommand(
+        tenant_id=UUID("182a8f9e-52aa-4eb0-9912-85f830002a94"),
+        event_id=UUID("76a79707-c896-4db8-a802-6bce97cb0981"),
+        rule_id=UUID("98ce8c4d-71ca-42fa-9bb0-6a76d35c95e1"),
+        rule_version_id=UUID("53c2d409-5f53-4c74-9b8c-2af4284bd731"),
+        step_index=0,
+        target=automation_actions.AutomationTargetReference(
+            entity_type="support.ticket",
+            entity_id=UUID("d7fac8aa-dce2-4447-91d8-94d46ab3c976"),
+        ),
+        inputs=(
+            automation_actions.AutomationActionInputValue(
+                "service_selection_policy", "unique_active_subscription"
+            ),
+            automation_actions.AutomationActionInputValue(
+                "resume_policy", "auto_on_ticket_resolution"
+            ),
+            automation_actions.AutomationActionInputValue(
+                "billing_policy", "extend_by_effective_pause_duration"
+            ),
+        ),
+        context=SimpleNamespace(),
+    )
+
+    automation_actions.action_executor("support.ticket.pause_unique_active_service")(
+        SimpleNamespace(), command
+    )
+
+    assert observed["command"].resume_policy.value == "auto_on_ticket_resolution"

@@ -4,7 +4,7 @@ from datetime import UTC, datetime, timedelta
 from uuid import uuid4
 
 import pytest
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from app.api.field import router
@@ -14,7 +14,9 @@ from app.models.subscriber import Subscriber, UserType
 from app.models.system_user import SystemUser
 from app.models.work_order import WorkOrder
 from app.services.auth_dependencies import require_user_auth
+from app.services.field.execution_contracts import FieldJobsQuery
 from app.services.field.schedule import field_schedule
+from app.services.field.work_order_access import FieldAccessError
 
 
 def _user(db_session, name: str = "Ade") -> SystemUser:
@@ -114,11 +116,14 @@ def test_timeline_merges_dispatch_and_mirror_jobs(db_session):
     )
     db_session.commit()
 
-    timeline = field_schedule.timeline(db_session, _auth(user), date_from=now)
+    timeline = field_schedule.timeline(
+        db=db_session,
+        query=FieldJobsQuery(requester_system_user_id=user.id, date_from=now),
+    )
 
-    assert [entry["type"] for entry in timeline] == ["shift", "job", "availability"]
-    assert timeline[1]["reference_id"] == "wo-schedule"
-    assert timeline[2]["title"] == "Training"
+    assert [entry.type for entry in timeline] == ["shift", "job", "availability"]
+    assert timeline[1].reference_id == "wo-schedule"
+    assert timeline[2].title == "Training"
 
 
 def test_window_clamped_to_31_days(db_session):
@@ -135,10 +140,12 @@ def test_window_clamped_to_31_days(db_session):
     db_session.commit()
 
     timeline = field_schedule.timeline(
-        db_session,
-        _auth(user),
-        date_from=now,
-        date_to=now + timedelta(days=90),
+        db=db_session,
+        query=FieldJobsQuery(
+            requester_system_user_id=user.id,
+            date_from=now,
+            date_to=now + timedelta(days=90),
+        ),
     )
 
     assert timeline == []
@@ -149,15 +156,17 @@ def test_invalid_window_rejected(db_session):
     user = _user(db_session)
     _profile(db_session, user)
 
-    with pytest.raises(HTTPException) as exc:
+    with pytest.raises(FieldAccessError) as exc:
         field_schedule.timeline(
-            db_session,
-            _auth(user),
-            date_from=now,
-            date_to=now - timedelta(days=1),
+            db=db_session,
+            query=FieldJobsQuery(
+                requester_system_user_id=user.id,
+                date_from=now,
+                date_to=now - timedelta(days=1),
+            ),
         )
 
-    assert exc.value.status_code == 422
+    assert exc.value.code.endswith("invalid_request")
 
 
 def test_other_technicians_jobs_not_visible(db_session):
@@ -174,7 +183,13 @@ def test_other_technicians_jobs_not_visible(db_session):
     )
     db_session.commit()
 
-    assert field_schedule.timeline(db_session, _auth(user), date_from=now) == []
+    assert (
+        field_schedule.timeline(
+            db=db_session,
+            query=FieldJobsQuery(requester_system_user_id=user.id, date_from=now),
+        )
+        == []
+    )
 
 
 def test_schedule_api_returns_entries(db_session):

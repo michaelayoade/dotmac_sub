@@ -7,7 +7,77 @@ Date: 2026-08-21
 Decision owner: Michael Ayoade
 
 Affected systems and domains: party_identity, customer_context, the
-cohort-isp-01 persistence surface, and the future `asm-dotmac-isp` assembly
+cohort-isp-01 persistence surface, and Sub in-place module composition
+
+## Implementation alignment with accepted Governance — 2026-10-13
+
+This section implements the already accepted
+[Governance conversion amendment](https://github.com/michaelayoade/dotmac_governance/blob/dbd9cec107ee5125a8d41f75065d3823f69d6b8e/docs/adr/0012-dotmac-isp-replacement-programme.md#L246),
+not an independent architecture acceptance. The authoritative programme is
+`programmes/dotmac-isp-replacement.json` at Governance
+`dbd9cec107ee5125a8d41f75065d3823f69d6b8e`. Source
+`asm-dotmac-sub-legacy-domains` and target `asm-dotmac-sub-composed` both name
+`dotmac_sub`, with database boundary `shared-in-process`. Sub retains its
+product, runtime and API. The separate ISP walking skeleton is frozen.
+
+This implementation alignment supersedes the earlier separate-application and
+separate-database assumptions and destination-owner prerequisites below. The original decision and amendments
+are retained as historical source-tooling evidence, including their historical
+counts, assembly IDs and pins; they are not current operational instructions.
+The six cohort components remain Addresses, Brand Profiles, Customers, Kernel,
+Party and UI. No programme decisions remain open. `dec-isp-002` and controls
+002/005/007/008 are superseded. `ctl-isp-001` is verified; controls
+003/004/006/009/010/011/012 and cohort 1 remain blocked.
+
+Sub's read-only source snapshot, digest, typed contracts, census and ratchets
+remain useful preparation. `SourceReadinessClaim` still cannot claim adoption
+or cutover. New source revisions default to the current assembly and Governance
+pin; explicit historical `SourceRevision` values remain parseable with their
+original canonical digest interpretation. Existing snapshots/digests prove
+source tooling and historical provenance, not an actual in-place adoption. The
+comparator rejects different source assembly IDs or Governance revisions as
+`unsupported-version`; historical golden fixtures preserve the old aggregate.
+
+The current sequence is exact verified graph selection and selected-module
+capability mapping, real Sub/module lineage rehearsal on hosted disposable
+production-shaped PostgreSQL/PostGIS (`ctl-isp-010`), idempotent row dispositions
+and backfill/quarantine (`ctl-isp-006`), same-database read-only in-process shadow
+(`ctl-isp-011`), and operator-approved per-domain one-writer config switch with
+safe rollback (`ctl-isp-012`). No local Docker/PostgreSQL rehearsal is permitted.
+See `docs/ISP_COHORT1_MIGRATION_READINESS.md` for evidence and ordering.
+
+Retire each selected module's displaced writers and fallbacks in the same
+authority-switch slice. The fifteen parallel paths are retirement ledger
+entries, not fifteen prerequisite cleanup PRs. Earlier edits require an evidenced
+backfill/shadow/switch blocker, a path deliberately remaining live, or an
+immediate security/data-loss defect. Independent modules whose own contracts and
+dependencies are complete do not wait for full cohort closure. `ctl-isp-009`
+requires zero displaced writers before the applicable rollback window closes.
+Safe config rollback must preserve one writer and interpret post-switch data;
+it must never restore parallel authority or a stale database.
+
+Artifact verification remains a concrete gap, not an adoption claim. Committed
+kernel a104 records give the same wheel filename two SHA256 values:
+`183e0aa003db22fc2cfd8a846df14589027e34a9632180b018222d5eac0d6076` in the
+kernel receipt and
+`54562973a659427aed067a504aa0eaaa427fda8e13d184e8401d72d234ec2534` in the
+module dependency ledger. Source tracing distinguishes the module workflow's
+local smoke build (without CSS generation) from the kernel release build
+(generated CSS included). The documented build inputs can explain different
+bytes under the same filename; exact retained-file contents remain unverified.
+Do not substitute the smoke hash for the release receipt or infer a registry
+defect. Verify the exact released dependency and its compatibility; neither
+this finding nor unknown smoke-artifact retention permits rebuilding the tag.
+See the runbook's build-provenance references. Party/Brand/Customers a1
+are historical legacy-unverified/non-pinnable; Addresses has no tracked owner
+package, with registry availability unknown. Select a compatible verified graph
+for the chosen slice rather than requiring an unrelated unreleased dependency.
+
+**No authority moved and no operation is authorized by this alignment.** No
+module install, migration, backfill, shadow, retirement or switch is performed.
+Only Governance can advance controls with immutable accepted evidence.
+
+## Historical decision — 2026-08-21
 
 ## Context
 
@@ -217,7 +287,11 @@ destination; and per-export audit carrying contract version, checkpoint and
 requesting principal. `docs/ISP_COHORT1_MIGRATION_READINESS.md` § "Why there
 is no online export endpoint" is the operative statement.
 
-## Review and retirement
+## Historical review and retirement criteria
+
+The current alignment above supersedes the open-decision triggers and the
+post-switch-only retirement ordering in this historical section.
+
 
 - Review date: when `dec-isp-002` and `dec-isp-003` are decided in Governance,
   or when the cohort-1 component releases are pinned, whichever is first.

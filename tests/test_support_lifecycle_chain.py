@@ -17,7 +17,7 @@ from sqlalchemy import select
 from app.models.durable_timer import DurableTimer
 from app.models.owner_output import OwnerOutputReceipt
 from app.models.subscriber import Subscriber
-from app.models.support import Ticket, TicketStatus
+from app.models.support import SupportResolutionRequest, Ticket, TicketStatus
 from app.models.team_inbox import InboxConversation
 from app.services import team_inbox_commands
 from app.services.owner_commands import CommandContext
@@ -72,7 +72,9 @@ def test_resolution_grace_timer_auto_confirms_through_receipt(db_session):
             DurableTimer.purpose == "resolution_confirmation_due"
         )
     ).scalar_one()
-    assert str(timer.entity_id) == str(ticket.id)
+    resolution_request = db_session.query(SupportResolutionRequest).one()
+    assert timer.entity_kind == "support_resolution_request"
+    assert timer.entity_id == resolution_request.id
 
     fired = _fire(db_session, datetime.now(UTC) + timedelta(seconds=1))
     assert len(fired) == 1

@@ -27,9 +27,6 @@ class TestNasEventTypes:
     def test_nas_backup_completed_event(self) -> None:
         assert EventType.nas_backup_completed.value == "nas_backup.completed"
 
-    def test_nas_backup_failed_event(self) -> None:
-        assert EventType.nas_backup_failed.value == "nas_backup.failed"
-
     def test_nas_provisioning_completed_event(self) -> None:
         assert (
             EventType.nas_provisioning_completed.value == "nas_provisioning.completed"

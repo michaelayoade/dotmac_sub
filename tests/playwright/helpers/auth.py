@@ -7,7 +7,6 @@ from typing import Any, cast
 import pytest
 from playwright._impl._errors import Error as PlaywrightError
 
-from app.services.auth_flow import hash_password
 from tests.playwright.helpers.api import (
     api_get,
     api_post_json,
@@ -147,9 +146,7 @@ def ensure_user_credential(
         {
             "subscriber_id": person_id,
             "username": username,
-            "password_hash": hash_password(password),
-            "must_change_password": False,
-            "is_active": True,
+            "password": password,
         },
         headers=headers,
     )

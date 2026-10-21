@@ -1,17 +1,18 @@
 import uuid
+from datetime import UTC, datetime
 
 import pytest
 from fastapi import HTTPException
-from sqlalchemy.exc import IntegrityError
 from starlette.requests import Request
 
 from app.models.auth import (
     ApiKey,
     AuthProvider,
+    MFAMethod,
     MFAMethodType,
-    SessionStatus,
     UserCredential,
 )
+from app.models.auth import Session as AuthSession
 from app.models.domain_settings import DomainSetting, SettingDomain
 from app.models.radius import RadiusServer
 from app.models.subscription_engine import SettingValueType
@@ -19,15 +20,17 @@ from app.schemas.auth import (
     ApiKeyCreate,
     ApiKeyGenerateRequest,
     ApiKeyUpdate,
-    MFAMethodCreate,
-    MFAMethodUpdate,
-    SessionCreate,
-    SessionUpdate,
     UserCredentialCreate,
     UserCredentialUpdate,
 )
 from app.services import auth as auth_service
+from app.services import credential_administration as credential_admin
+from app.services import session_manager
+from app.services.audit_adapter import AuditActor
 from app.services.common import apply_ordering, apply_pagination, validate_enum
+from tests import api_key_issuance_fixtures as issuance_commands
+from tests import api_key_update_fixtures as update_commands
+from tests import credential_administration_fixtures as credential_commands
 
 
 class _FakeRedisClient:
@@ -151,8 +154,8 @@ def test_get_redis_client_error(monkeypatch):
 def test_user_credentials_get_list_delete_errors(db_session):
     with pytest.raises(HTTPException):
         auth_service.user_credentials.get(db_session, str(uuid.uuid4()))
-    with pytest.raises(HTTPException):
-        auth_service.user_credentials.delete(db_session, str(uuid.uuid4()))
+    with pytest.raises(credential_admin.CredentialAdministrationError):
+        credential_commands.deactivate(db_session, str(uuid.uuid4()))
 
 
 def test_user_credentials_update_and_list(db_session, person):
@@ -164,10 +167,9 @@ def test_user_credentials_update_and_list(db_session, person):
         person_id=person.id,
         provider=AuthProvider.radius,
         username="radius-user",
-        password_hash="hash",
         radius_server_id=server.id,
     )
-    credential = auth_service.user_credentials.create(db_session, payload)
+    credential = credential_commands.create(db_session, payload)
 
     listed = auth_service.user_credentials.list(
         db_session,
@@ -179,9 +181,9 @@ def test_user_credentials_update_and_list(db_session, person):
         limit=10,
         offset=0,
     )
-    assert credential in listed
+    assert credential.id in [row.id for row in listed]
 
-    updated = auth_service.user_credentials.update(
+    updated = credential_commands.update(
         db_session,
         str(credential.id),
         UserCredentialUpdate(username="new-radius"),
@@ -193,8 +195,8 @@ def test_user_credentials_update_and_list(db_session, person):
 
 
 def test_user_credentials_update_not_found(db_session):
-    with pytest.raises(HTTPException):
-        auth_service.user_credentials.update(
+    with pytest.raises(credential_admin.CredentialAdministrationError):
+        credential_commands.update(
             db_session, str(uuid.uuid4()), UserCredentialUpdate(username="missing")
         )
 
@@ -203,21 +205,25 @@ def test_mfa_get_delete_errors(db_session):
     with pytest.raises(HTTPException):
         auth_service.mfa_methods.get(db_session, str(uuid.uuid4()))
     with pytest.raises(HTTPException):
-        auth_service.mfa_methods.delete(db_session, str(uuid.uuid4()))
+        auth_service.mfa_methods.delete(
+            db_session,
+            str(uuid.uuid4()),
+            actor_id="admin-test",
+            reason="unit test reason",
+        )
 
 
-def test_mfa_list_update_delete(db_session, person):
-    method = auth_service.mfa_methods.create(
-        db_session,
-        MFAMethodCreate(
-            person_id=person.id,
-            method_type=MFAMethodType.totp,
-            label="primary",
-            secret="encrypted",
-            is_primary=True,
-            enabled=True,
-        ),
+def test_mfa_list_delete(db_session, person):
+    method = MFAMethod(
+        subscriber_id=person.id,
+        method_type=MFAMethodType.totp,
+        label="primary",
+        secret="unit-fixture-secret",
+        is_primary=True,
+        enabled=True,
     )
+    db_session.add(method)
+    db_session.commit()
     listed = auth_service.mfa_methods.list(
         db_session,
         person_id=str(person.id),
@@ -232,14 +238,9 @@ def test_mfa_list_update_delete(db_session, person):
     )
     assert method in listed
 
-    updated = auth_service.mfa_methods.update(
-        db_session,
-        str(method.id),
-        MFAMethodUpdate(label="updated", is_primary=True),
+    auth_service.mfa_methods.delete(
+        db_session, str(method.id), actor_id="admin-test", reason="unit test reason"
     )
-    assert updated.label == "updated"
-
-    auth_service.mfa_methods.delete(db_session, str(method.id))
     db_session.refresh(method)
     assert method.is_active is False
 
@@ -247,69 +248,27 @@ def test_mfa_list_update_delete(db_session, person):
     assert fetched.id == method.id
 
 
-def test_mfa_update_not_found(db_session):
-    with pytest.raises(HTTPException):
-        auth_service.mfa_methods.update(
-            db_session, str(uuid.uuid4()), MFAMethodUpdate(label="x")
-        )
-
-
-def test_mfa_create_commit_error(db_session, person, monkeypatch):
-    def _boom():
-        raise IntegrityError("stmt", "params", "orig")
-
-    monkeypatch.setattr(db_session, "commit", _boom)
-    monkeypatch.setattr(db_session, "rollback", lambda: None)
-    with pytest.raises(HTTPException):
-        auth_service.mfa_methods.create(
-            db_session,
-            MFAMethodCreate(
-                person_id=person.id,
-                method_type=MFAMethodType.totp,
-                label="primary",
-                secret="encrypted",
-                is_primary=True,
-                enabled=True,
-            ),
-        )
-
-
-def test_mfa_update_commit_error(db_session, person, monkeypatch):
-    method = auth_service.mfa_methods.create(
-        db_session,
-        MFAMethodCreate(
-            person_id=person.id,
-            method_type=MFAMethodType.totp,
-            label="primary",
-            secret="encrypted",
-            is_primary=True,
-            enabled=True,
-        ),
-    )
-
-    def _boom():
-        raise IntegrityError("stmt", "params", "orig")
-
-    monkeypatch.setattr(db_session, "commit", _boom)
-    monkeypatch.setattr(db_session, "rollback", lambda: None)
-    with pytest.raises(HTTPException):
-        auth_service.mfa_methods.update(
-            db_session, str(method.id), MFAMethodUpdate(is_primary=True)
-        )
-
-
 def test_sessions_get_delete_errors(db_session):
     with pytest.raises(HTTPException):
         auth_service.sessions.get(db_session, str(uuid.uuid4()))
-    with pytest.raises(HTTPException):
-        auth_service.sessions.delete(db_session, str(uuid.uuid4()))
+    db_session.rollback()
+    with pytest.raises(session_manager.SessionRevocationError):
+        auth_service.sessions.delete(
+            db_session,
+            str(uuid.uuid4()),
+            actor=AuditActor.system("auth-helper-test"),
+        )
 
 
 def test_api_keys_get_delete_errors(db_session):
     with pytest.raises(HTTPException):
         auth_service.api_keys.get(db_session, str(uuid.uuid4()))
-    with pytest.raises(HTTPException):
-        auth_service.api_keys.delete(db_session, str(uuid.uuid4()))
+    from app.services import api_key_administration
+    from tests.test_api_key_administration import command
+
+    db_session.commit()
+    with pytest.raises(api_key_administration.ApiKeyRevocationError):
+        api_key_administration.revoke(db_session, command=command(uuid.uuid4()))
 
 
 def test_api_key_list_filters(db_session, person):
@@ -351,16 +310,14 @@ def test_api_key_list_filters(db_session, person):
     assert len(all_keys) == 1
 
 
-def test_sessions_create_list_update(db_session, person):
-    session = auth_service.sessions.create(
-        db_session,
-        SessionCreate(
-            person_id=person.id,
-            status=SessionStatus.active,
-            token_hash="hash",
-            expires_at="2099-01-01T00:00:00+00:00",
-        ),
+def test_sessions_list_get(db_session, person):
+    session = AuthSession(
+        subscriber_id=person.id,
+        token_hash="unit-fixture-hash",
+        expires_at=datetime(2099, 1, 1, tzinfo=UTC),
     )
+    db_session.add(session)
+    db_session.commit()
     listed = auth_service.sessions.list(
         db_session,
         person_id=str(person.id),
@@ -372,42 +329,13 @@ def test_sessions_create_list_update(db_session, person):
     )
     assert session in listed
 
-    updated = auth_service.sessions.update(
-        db_session,
-        str(session.id),
-        SessionUpdate(status=SessionStatus.revoked, person_id=person.id),
-    )
-    assert updated.status == SessionStatus.revoked
-
     fetched = auth_service.sessions.get(db_session, str(session.id))
     assert fetched.id == session.id
 
 
-def test_sessions_create_default_status(db_session, person, monkeypatch):
-    monkeypatch.setattr(
-        auth_service.settings_spec, "resolve_value", lambda *args, **kwargs: "revoked"
-    )
-    session = auth_service.sessions.create(
-        db_session,
-        SessionCreate(
-            person_id=person.id,
-            token_hash="hash",
-            expires_at="2099-01-01T00:00:00+00:00",
-        ),
-    )
-    assert session.status == SessionStatus.revoked
-
-
-def test_sessions_update_not_found(db_session):
-    with pytest.raises(HTTPException):
-        auth_service.sessions.update(
-            db_session, str(uuid.uuid4()), SessionUpdate(status=SessionStatus.revoked)
-        )
-
-
 def test_api_key_generate_with_person(db_session, person):
     payload = ApiKeyGenerateRequest(person_id=person.id, label="test")
-    api_key, raw = auth_service.api_keys.generate(db_session, payload)
+    api_key, raw = issuance_commands.generate(db_session, payload)
     assert api_key.person_id == person.id
     assert auth_service.hash_api_key(raw) == api_key.key_hash
 
@@ -419,7 +347,7 @@ def test_api_key_generate_rate_limit_redis_error(monkeypatch, db_session):
 
     monkeypatch.setattr(auth_service, "_get_redis_client", lambda: _BoomRedis())
     with pytest.raises(HTTPException):
-        auth_service.api_keys.generate_with_rate_limit(
+        issuance_commands.generate_with_rate_limit(
             db_session, ApiKeyGenerateRequest(label="test"), None
         )
 
@@ -440,14 +368,14 @@ def test_api_key_generate_rate_limit_with_request(monkeypatch, db_session):
             "client": ("127.0.0.1", 12345),
         }
     )
-    result = auth_service.api_keys.generate_with_rate_limit(
+    result = issuance_commands.generate_with_rate_limit(
         db_session, ApiKeyGenerateRequest(label="test"), request
     )
-    assert "key" in result
+    assert result.key
 
 
 def test_api_keys_get_and_update_person(db_session, person):
-    api_key = auth_service.api_keys.create(
+    api_key = issuance_commands.create(
         db_session,
         ApiKeyCreate(
             person_id=person.id,
@@ -458,22 +386,21 @@ def test_api_keys_get_and_update_person(db_session, person):
     fetched = auth_service.api_keys.get(db_session, str(api_key.id))
     assert fetched.id == api_key.id
 
-    updated = auth_service.api_keys.update(
+    updated = update_commands.update(
         db_session,
         str(api_key.id),
         ApiKeyUpdate(person_id=person.id),
     )
-    assert updated.person_id == person.id
+    assert updated.subscriber_id == person.id
 
 
 def test_user_credentials_default_provider(monkeypatch, db_session, person):
     monkeypatch.setattr(
-        auth_service.settings_spec, "resolve_value", lambda *args, **kwargs: "radius"
+        credential_admin, "resolve_value", lambda *args, **kwargs: "radius"
     )
     payload = UserCredentialCreate(
         person_id=person.id,
         username="radius@example.com",
-        password_hash="hash",
     )
-    credential = auth_service.user_credentials.create(db_session, payload)
+    credential = credential_commands.create(db_session, payload)
     assert credential.provider == AuthProvider.radius

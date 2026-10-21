@@ -1,6 +1,6 @@
 """Sub's binding to the accepted Governance ISP-replacement programme.
 
-Sub is `asm-dotmac-sub-legacy`, the **source-authoritative** assembly of
+Sub is `asm-dotmac-sub-legacy-domains`, the **source-authoritative** assembly of
 `pgm-dotmac-isp-replacement`. This module records which immutable Governance
 revision that claim comes from, so nothing downstream has to re-derive the
 cohort, invent its membership, or reorder it.
@@ -26,8 +26,12 @@ no `open` member and `SourceReadinessClaim` has no member that spells adoption
 or cutover, so neither can be recorded here even by mistake — a structural
 property, not a convention a later edit could quietly drop.
 
-The readiness work this repository performs produces *inputs* to `ctl-isp-006`
-and `ctl-isp-009`. Producing an input is not verifying a control: a `verified`
+Sub converts in place to `asm-dotmac-sub-composed`: the product, runtime and
+database remain Sub's. The target-construction track composes modules here;
+it does not build an independent ISP application or database.
+
+The readiness work produces *inputs* to the current in-place controls.
+Producing an input is not verifying a control: a `verified`
 control requires an immutable controlled-source reference that only Governance
 can record.
 """
@@ -44,14 +48,10 @@ from pydantic import BaseModel, ConfigDict, model_validator
 #: reader can find the record; Sub never writes to it.
 GOVERNANCE_REPOSITORY: Final[str] = "https://github.com/michaelayoade/dotmac_governance"
 
-#: `feat(programme): record resolved decisions and answer dec-isp-003 through
-#: dec-isp-007 (#25)`. Pinned as a literal because the whole point of this file
-#: is that the pin cannot move without a reviewed diff.
-#:
-#: Repinned 2026-08-22 from `68c7a62e…`, which accepted the programme. That
-#: revision predates five answered decisions and a sixth cohort-1 component, so
-#: a binding still pointing at it described a cohort that no longer exists.
-ACCEPTED_REVISION: Final[str] = "d91a87f6823bfd2afa6c2025bdb1af644331fa39"
+#: Current controlled programme, including ADR 0012's conversion amendment.
+#: A reviewed literal pin, never a moving branch or tag. Historical snapshot
+#: revisions remain artifact provenance and are not rewritten by this repin.
+ACCEPTED_REVISION: Final[str] = "dbd9cec107ee5125a8d41f75065d3823f69d6b8e"
 
 PROGRAMME_ID: Final[str] = "pgm-dotmac-isp-replacement"
 PROGRAMME_RECORD_PATH: Final[str] = "programmes/dotmac-isp-replacement.json"
@@ -59,12 +59,11 @@ GOVERNING_DECISION_PATH: Final[str] = (
     "docs/adr/0012-dotmac-isp-replacement-programme.md"
 )
 
-SOURCE_ASSEMBLY_ID: Final[str] = "asm-dotmac-sub-legacy"
-TARGET_ASSEMBLY_ID: Final[str] = "asm-dotmac-isp"
+SOURCE_ASSEMBLY_ID: Final[str] = "asm-dotmac-sub-legacy-domains"
+TARGET_ASSEMBLY_ID: Final[str] = "asm-dotmac-sub-composed"
 
 #: The track this repository's readiness work belongs to. The other track,
-#: `track-isp-target-build`, is not Sub's and is named here only so a reader
-#: does not mistake one for the other.
+#: `track-isp-target-build`, composes modules inside this same Sub product.
 SOURCE_TRACK_ID: Final[str] = "track-isp-sub-cutover"
 
 _COMMIT_RE: Final[re.Pattern[str]] = re.compile(r"^[0-9a-f]{40}$")
@@ -91,7 +90,7 @@ class SourceReadinessClaim(StrEnum):
     """What source-readiness work is entitled to claim about itself.
 
     Note what is absent: composed, adopted, backfilled, shadowed, cut over,
-    retired. Those are target-track or post-cutover states, and none of them
+    retired. Those require separate composition or cutover evidence; none
     can be reached by characterising a source. Keeping them out of the
     vocabulary is what stops "we built the export" from being read later as
     "the data moved".
@@ -150,6 +149,8 @@ class GovernanceBinding(BaseModel):
     #: previously only say what was still open, so an answered decision left no
     #: trace here and the binding read as though nothing had been settled.
     resolved_decision_ids: tuple[str, ...] = ()
+    #: Superseded questions are closed without claiming they were answered.
+    superseded_decision_ids: tuple[str, ...] = ()
 
     @model_validator(mode="after")
     def _check(self) -> GovernanceBinding:
@@ -174,10 +175,14 @@ class GovernanceBinding(BaseModel):
                 "no control names Sub as an evidence producer, so this binding "
                 "cannot explain why source-readiness work exists at all"
             )
-        both = set(self.unresolved_decision_ids) & set(self.resolved_decision_ids)
+        opened = set(self.unresolved_decision_ids)
+        resolved = set(self.resolved_decision_ids)
+        superseded = set(self.superseded_decision_ids)
+        both = (opened & resolved) | (opened & superseded) | (resolved & superseded)
         if both:
             raise GovernanceBindingError(
-                "a decision is open or answered, never both; " + ", ".join(sorted(both))
+                "a decision is open, answered or superseded, never more than one; "
+                + ", ".join(sorted(both))
             )
         return self
 
@@ -198,10 +203,8 @@ class GovernanceBinding(BaseModel):
 #: `dotmac-brand-profiles` (adopt), `dotmac-customers` (build) and
 #: `dotmac-addresses` (build).
 #:
-#: `dotmac-addresses` joined on 2026-08-21 by dec-isp-007, which gave customer
-#: addresses a named owner for the first time — they had none on either side,
-#: which is why `addresses` is the one cohort-1 table Sub still cannot route
-#: through an owner.
+#: dec-isp-007 names the reusable address owner. Sub's existing local address
+#: command owners remain authoritative until that module's evidenced switch.
 COHORT_ID: Final[str] = "cohort-isp-01"
 COHORT_SEQUENCE: Final[int] = 1
 COHORT_NAME: Final[str] = "Foundation party and customer"
@@ -222,60 +225,79 @@ BINDING: Final[GovernanceBinding] = GovernanceBinding(
     controls=(
         CutoverControl(
             control_id="ctl-isp-001",
-            name=(
-                "Coordinated target-build and Sub-cutover programme receives "
-                "attributable human approval"
-            ),
+            name="Coordinated target-build and Sub-cutover programme receives attributable human approval",
             state="verified",
             sub_supplies_evidence=False,
         ),
         CutoverControl(
             control_id="ctl-isp-002",
-            name=(
-                "Target assembly repository runtime database and production "
-                "deployment owner are named"
-            ),
-            state="blocked",
+            name="Target assembly repository runtime database and production deployment owner are named",
+            state="superseded",
             sub_supplies_evidence=False,
         ),
         CutoverControl(
             control_id="ctl-isp-003",
-            name=(
-                "Legacy Sub transition rule permits only bounded cutover work "
-                "and justified local-writer retirement"
-            ),
+            name="Legacy Sub transition rule permits only bounded cutover work and justified local-writer retirement",
             state="blocked",
+            sub_supplies_evidence=True,
+        ),
+        CutoverControl(
+            control_id="ctl-isp-004",
+            name="Cohort components have immutable releases exact pins and one composed migration graph",
+            state="blocked",
+            sub_supplies_evidence=True,
+        ),
+        CutoverControl(
+            control_id="ctl-isp-005",
+            name="Target database catalog RLS grants runtime and migration rehearsal pass on exact pins",
+            state="superseded",
             sub_supplies_evidence=False,
         ),
         CutoverControl(
             control_id="ctl-isp-006",
-            name=(
-                "Every source row has an accepted quarantine or "
-                "evidenced-retirement disposition and replay is idempotent"
-            ),
+            name="Every source row has an accepted quarantine or evidenced-retirement disposition and replay is idempotent",
             state="blocked",
             sub_supplies_evidence=True,
         ),
         CutoverControl(
             control_id="ctl-isp-007",
-            name=(
-                "Complete cohort shadow reaches zero unexplained drift at an "
-                "immutable source watermark"
-            ),
+            name="Complete cohort shadow reaches zero unexplained drift at an immutable source watermark",
+            state="superseded",
+            sub_supplies_evidence=False,
+        ),
+        CutoverControl(
+            control_id="ctl-isp-008",
+            name="One sealed authority switch has delta capture rollback conditions and operator approval",
+            state="superseded",
+            sub_supplies_evidence=False,
+        ),
+        CutoverControl(
+            control_id="ctl-isp-009",
+            name="Displaced writers and fallbacks reach a bidirectional ratchet of zero before rollback closure",
             state="blocked",
             sub_supplies_evidence=True,
         ),
         CutoverControl(
-            control_id="ctl-isp-009",
-            name=(
-                "Displaced writers and fallbacks reach a bidirectional ratchet "
-                "of zero before rollback closure"
-            ),
+            control_id="ctl-isp-010",
+            name="Sub's own database admits the cohort's module schemas and lineages rehearsed on a production-shaped copy",
+            state="blocked",
+            sub_supplies_evidence=True,
+        ),
+        CutoverControl(
+            control_id="ctl-isp-011",
+            name="In-process shadow proves the module path and the legacy path agree on the same database before either is switched",
+            state="blocked",
+            sub_supplies_evidence=True,
+        ),
+        CutoverControl(
+            control_id="ctl-isp-012",
+            name="One in-place authority switch per domain leaves exactly one writer with a configuration rollback and operator approval",
             state="blocked",
             sub_supplies_evidence=True,
         ),
     ),
-    unresolved_decision_ids=("dec-isp-002",),
+    unresolved_decision_ids=(),
+    superseded_decision_ids=("dec-isp-002",),
     resolved_decision_ids=(
         "dec-isp-003",
         "dec-isp-004",

@@ -51,6 +51,7 @@ from app.services.prepaid_service_renewals import (
     resolve_prepaid_monthly_charge_detail,
 )
 from app.services.system_user_assignments import system_user_role_names
+from scripts.billing._mutation_policy import refuse_apply
 
 
 def _uuid(value: str) -> UUID:
@@ -211,6 +212,7 @@ def main() -> int:
     parser.add_argument("--actor-system-user-id", type=_uuid)
     parser.add_argument("--reason")
     args = parser.parse_args()
+    refuse_apply(args.apply)
 
     if args.apply:
         required = [

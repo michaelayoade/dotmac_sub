@@ -1613,12 +1613,86 @@ SERVICES: tuple[SOTService, ...] = (
             "fiber field-verification work-order scope metadata contract",
             "exact planned staged-feature observation boundary",
         ),
+        depends_on=("network.fiber_source_staging",),
         notes=(
             "Legacy jobs without an explicit plan retain their existing "
             "observation behavior. Once a plan is present, observations "
             "must name one of its exact staged feature IDs with unchanged "
             "content; names, labels, geometry, and proximity never expand "
             "the scope."
+        ),
+        contract=ServiceContract(
+            concerns=(
+                ConcernContract(
+                    name="fiber field-verification work-order scope metadata contract",
+                    role=OwnerRole.RESOLVER,
+                    input_names=("persisted exact source scope",),
+                ),
+                ConcernContract(
+                    name="exact planned staged-feature observation boundary",
+                    role=OwnerRole.POLICY,
+                    input_names=(
+                        "persisted exact source scope",
+                        "staged source content",
+                    ),
+                ),
+            ),
+            authoritative_inputs=(
+                AuthorityInput(
+                    name="persisted exact source scope",
+                    owner="network.fiber_field_verification_job_scope",
+                    kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                    source="Version-1 digest-bound fiber_field_verification_plan native WorkOrder metadata; legacy JSON normalized only after validating its original digest.",
+                ),
+                AuthorityInput(
+                    name="staged source content",
+                    owner="network.fiber_source_staging",
+                    kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                    source="Exact FiberTopologyStagedFeature UUID and content digest.",
+                ),
+            ),
+            transaction=TransactionContract(
+                mode=TransactionMode.READ_ONLY,
+                boundary="Pure scope construction, serialization and persisted JSON resolution; never starts or completes a transaction.",
+                locking="No locks; observation command owns its transaction and exact staged-content validation.",
+                idempotency="Version-1 source serialization and SHA-256 interpretation remain unchanged; no attending person is inferred for historical plans.",
+                retries="Read-only resolution can repeat; malformed or mismatched stored scope fails closed.",
+            ),
+            errors=ErrorContract(
+                domain_codes=("FiberFieldVerificationJobScopeError",),
+                mapping_owner="network.fiber_field_observations and dispatch adapters",
+                fail_closed_on=(
+                    "unknown scope version",
+                    "digest or count mismatch",
+                    "outside selected feature scope",
+                    "changed staged content",
+                ),
+            ),
+            projections=(
+                ProjectionContract(
+                    name="typed exact persisted source scope",
+                    input_names=("persisted exact source scope",),
+                    writer="network.fiber_field_verification_job_scope",
+                    freshness="Immutable recorded plan; source content checked on each observation.",
+                    stale_behavior="Reject changed content or invalid persisted digests.",
+                    drift_signal="Stored count, scope digest or staged-content mismatch.",
+                    rebuild_operation="planned_feature_scope validates original persisted JSON then returns immutable typed evidence.",
+                    repair_owner="network.fiber_field_verification_job_scope",
+                ),
+            ),
+            migration=MigrationContract(
+                state=AuthorityMigrationState.NATIVE,
+                new_owner="network.fiber_field_verification_job_scope",
+            ),
+            steward="network operations",
+            design_refs=(
+                "docs/designs/FIBER_TOPOLOGY_SOT.md",
+                "docs/SOT_RELATIONSHIP_MAP.md",
+            ),
+            test_refs=(
+                "tests/test_fiber_field_verification_job_plans.py",
+                "tests/architecture/test_fiber_field_verification_job_plan_boundary.py",
+            ),
         ),
     ),
     SOTService(
@@ -1641,6 +1715,90 @@ SERVICES: tuple[SOTService, ...] = (
             "observations, infer identity/endpoints, generate decisions, "
             "mutate topology, or establish cutover eligibility."
         ),
+        contract=ServiceContract(
+            concerns=(
+                ConcernContract(
+                    name="exhaustive latest-source fiber field-verification worklist",
+                    role=OwnerRole.RESOLVER,
+                    input_names=(
+                        "latest staged source features",
+                        "exact field observation projection",
+                    ),
+                ),
+                ConcernContract(
+                    name="deterministic field-evidence triage priority projection",
+                    role=OwnerRole.RESOLVER,
+                    input_names=("exact field observation projection",),
+                ),
+                ConcernContract(
+                    name="exact field-worklist row and report evidence digests",
+                    role=OwnerRole.RESOLVER,
+                    input_names=(
+                        "latest staged source features",
+                        "exact field observation projection",
+                    ),
+                ),
+            ),
+            authoritative_inputs=(
+                AuthorityInput(
+                    name="latest staged source features",
+                    owner="network.fiber_source_staging",
+                    kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                    source="Exhaustive latest immutable source batch/feature cohort, exact UUIDs and content/geometry hashes.",
+                ),
+                AuthorityInput(
+                    name="exact field observation projection",
+                    owner="network.fiber_field_observations",
+                    kind=AuthorityKind.DERIVED_PROJECTION,
+                    source="Exact current/superseded field evidence and native work-order references; no label or proximity inference.",
+                ),
+            ),
+            transaction=TransactionContract(
+                mode=TransactionMode.READ_ONLY,
+                boundary="A complete PostgreSQL REPEATABLE READ snapshot is opened before the first SQL; typed selected-evidence query consumes the same exhaustive report.",
+                locking="No mutation or row locks; caller-owned snapshot must already be REPEATABLE READ or SERIALIZABLE.",
+                idempotency="Identical authoritative rows produce ordered identical row/report digests and immutable selected evidence.",
+                retries="Repeat read-only query on a fresh snapshot; stale expected report/selection requires fresh plan review.",
+            ),
+            errors=ErrorContract(
+                domain_codes=("FiberTopologyFieldWorklistError",),
+                mapping_owner="network.fiber_field_verification_jobs and network map adapters",
+                fail_closed_on=(
+                    "insufficient isolation",
+                    "stale report digest",
+                    "missing selected feature",
+                    "invalid work-order references",
+                ),
+            ),
+            projections=(
+                ProjectionContract(
+                    name="exact selected field evidence",
+                    input_names=(
+                        "latest staged source features",
+                        "exact field observation projection",
+                    ),
+                    writer="network.fiber_field_verification_worklist",
+                    freshness="Rebuilt from complete authoritative cohort in each consistent snapshot.",
+                    stale_behavior="Reject stale expected report and missing exact UUID selection.",
+                    drift_signal="Row/report SHA-256 or selected membership changes.",
+                    rebuild_operation="reconcile_fiber_field_worklist and select_fiber_field_worklist_evidence are write-free deterministic rebuilds.",
+                    repair_owner="network.fiber_field_verification_worklist",
+                ),
+            ),
+            migration=MigrationContract(
+                state=AuthorityMigrationState.NATIVE,
+                new_owner="network.fiber_field_verification_worklist",
+            ),
+            steward="network operations",
+            design_refs=(
+                "docs/designs/FIBER_TOPOLOGY_SOT.md",
+                "docs/SOT_RELATIONSHIP_MAP.md",
+            ),
+            test_refs=(
+                "tests/test_fiber_field_verification_job_plans.py",
+                "tests/architecture/test_fiber_field_verification_job_plan_boundary.py",
+            ),
+        ),
     ),
     SOTService(
         name="network.fiber_field_verification_jobs",
@@ -1655,6 +1813,7 @@ SERVICES: tuple[SOTService, ...] = (
             "network.fiber_field_verification_job_scope",
             "operations.work_order_commands",
             "observability.audit_log",
+            "auth.permission_gate",
         ),
         notes=(
             "The owner binds at most 100 explicitly selected current "
@@ -1664,6 +1823,124 @@ SERVICES: tuple[SOTService, ...] = (
             "optional assignment to operations.work_order_commands in one "
             "transaction. It never writes work-order tables directly and "
             "does not add actions to the read-only worklist or map."
+        ),
+        contract=ServiceContract(
+            concerns=(
+                ConcernContract(
+                    name="exact fiber field-verification job-plan previews",
+                    role=OwnerRole.RESOLVER,
+                    input_names=(
+                        "selected field evidence",
+                        "native job targets",
+                        "exact source scope",
+                    ),
+                ),
+                ConcernContract(
+                    name="confirmed staged-source-to-native-job plan execution",
+                    role=OwnerRole.APPLICATION_COORDINATOR,
+                    input_names=(
+                        "selected field evidence",
+                        "native job targets",
+                        "exact source scope",
+                        "canonical staff permission admission",
+                    ),
+                ),
+                ConcernContract(
+                    name="fiber field-verification job-plan audit evidence",
+                    role=OwnerRole.APPLICATION_COORDINATOR,
+                    input_names=(
+                        "selected field evidence",
+                        "canonical staff permission admission",
+                    ),
+                ),
+            ),
+            authoritative_inputs=(
+                AuthorityInput(
+                    name="selected field evidence",
+                    owner="network.fiber_field_verification_worklist",
+                    kind=AuthorityKind.DERIVED_PROJECTION,
+                    source="Typed exact feature UUID selection with whole-report and row/content/geometry hashes plus current/superseded native job references.",
+                ),
+                AuthorityInput(
+                    name="native job targets",
+                    owner="operations.work_order_commands",
+                    kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                    source="Typed native subscriber, technician/vendor and explicit active attending FieldVendorUser selection; native idempotent creation/assignment receipts.",
+                ),
+                AuthorityInput(
+                    name="exact source scope",
+                    owner="network.fiber_field_verification_job_scope",
+                    kind=AuthorityKind.DERIVED_PROJECTION,
+                    source="Version-1 immutable typed source scope and historical stable serialization/digest interpretation.",
+                ),
+                AuthorityInput(
+                    name="canonical staff permission admission",
+                    owner="auth.permission_gate",
+                    kind=AuthorityKind.CONTROL_INPUT,
+                    source="PermissionAdmission produced by actual canonical guard, binding active nonvendor staff/context/audit principal to dispatch assign/write and fiber read; never UI/context scope inference.",
+                ),
+            ),
+            transaction=TransactionContract(
+                mode=TransactionMode.COORDINATOR_MANAGED,
+                boundary="execute_fiber_field_verification_job_plan enters execute_owner_command exactly once on a transaction-free session. First operation selects physical REPEATABLE READ before SQL/auth/discovery; native creation, prepared assignment and audit stage flush-only. Executor alone commits or rolls back.",
+                locking="Native participant prepares/locks selected and current SystemUsers before native creation can lock existing WorkOrder; prepared assignment revalidates under native visit lock without new principal locks.",
+                idempotency="Exact re-preview digest binds normalized header/schedule, selected feature evidence and explicit vendor member. Deterministic public/assignment command IDs plus native receipts preserve original expected revision and assignment generation on exact replay; historical membership is never inferred.",
+                retries="Serialization/deadlock retries rerun the complete fresh owner command. Stale report/plan, revoked membership or permission, and conflicting receipts fail closed without partial creation.",
+            ),
+            errors=ErrorContract(
+                domain_codes=owner_command_boundary_error_codes(
+                    "network.fiber_field_verification_jobs"
+                )
+                + (
+                    "network.fiber_field_verification_jobs.invalid_plan",
+                    "network.fiber_field_verification_jobs.stale_worklist",
+                    "network.fiber_field_verification_jobs.stale_plan",
+                    "network.fiber_field_verification_jobs.forbidden",
+                ),
+                mapping_owner="app.api.dispatch",
+                fail_closed_on=(
+                    "stale exact worklist or plan",
+                    "inactive or ambiguous native target/member",
+                    "missing canonical staff admission",
+                    "receipt conflict",
+                ),
+            ),
+            events=EventContract(
+                event_types=("work_order.created", "work_order.assigned"),
+                schema_version=1,
+                delivery_owner="events.dispatcher",
+                compatibility="Only existing native work-order event contracts are staged by canonical native participants; coordinator adds no new event envelope.",
+                replay="Native exact creation/assignment receipts suppress repeated events and preserve the original assignment generation; plan audit stages once.",
+            ),
+            projections=(
+                ProjectionContract(
+                    name="immutable exact fiber plan preview",
+                    input_names=(
+                        "selected field evidence",
+                        "native job targets",
+                        "exact source scope",
+                    ),
+                    writer="network.fiber_field_verification_jobs",
+                    freshness="Write-free preview at one snapshot; execute always re-previews before native staging.",
+                    stale_behavior="Reject changed whole-report or plan hash and revoked target membership before creation.",
+                    drift_signal="Exact report/scope/plan digest or attending member changes.",
+                    rebuild_operation="preview_fiber_field_verification_job_plan with typed query; never repairs source observations or topology.",
+                    repair_owner="network.fiber_field_verification_jobs",
+                ),
+            ),
+            migration=MigrationContract(
+                state=AuthorityMigrationState.NATIVE,
+                new_owner="network.fiber_field_verification_jobs",
+            ),
+            steward="network operations",
+            design_refs=(
+                "docs/designs/FIBER_TOPOLOGY_SOT.md",
+                "docs/SOT_RELATIONSHIP_MAP.md",
+            ),
+            test_refs=(
+                "tests/test_fiber_field_verification_job_plans.py",
+                "tests/architecture/test_fiber_field_verification_job_plan_boundary.py",
+            ),
         ),
     ),
     SOTService(

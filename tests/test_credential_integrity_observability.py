@@ -6,7 +6,7 @@ from datetime import UTC, datetime
 
 import pytest
 from cryptography.fernet import Fernet
-from sqlalchemy import event
+from sqlalchemy import event, update
 
 from app.models.catalog import AccessCredential, NasDevice
 from app.models.subscriber import Subscriber
@@ -56,10 +56,18 @@ def test_integrity_scan_classifies_without_exposing_values(db_session, monkeypat
         shared_secret=encrypt_credential_with_key("radius-secret", key),
         ssh_password="plain:ssh-secret",
         api_password="enc:not-valid",
-        snmp_community="bao://secret/network#community",
     )
     db_session.add(row)
     db_session.commit()
+    # A legacy reference row: written by core SQL because the ORM write guard
+    # (F3) refuses references on infrastructure credential columns.
+    db_session.execute(
+        update(NasDevice)
+        .where(NasDevice.id == row.id)
+        .values(snmp_community="bao://secret/network#community")
+    )
+    db_session.commit()
+    db_session.refresh(row)
     monkeypatch.setattr(key_rotation, "get_encryption_key", lambda: key)
     monkeypatch.setattr(key_rotation, "get_previous_encryption_key", lambda: None)
 

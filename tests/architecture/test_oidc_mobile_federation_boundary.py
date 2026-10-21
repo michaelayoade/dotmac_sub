@@ -48,7 +48,7 @@ def test_the_adapter_issues_no_query_and_owns_no_decision() -> None:
 
 
 def test_the_owner_never_writes_a_second_session_issuer() -> None:
-    """`AuthFlow` is the one issuance owner; this owner delegates to it.
+    """The registered session staging participant owns issuance mechanics.
 
     A second issuer would not fail any behaviour test — it would mint a
     perfectly good token — while quietly diverging on device supersession,
@@ -56,11 +56,13 @@ def test_the_owner_never_writes_a_second_session_issuer() -> None:
     """
 
     source = _source(SERVICE)
-    assert "issue_session_tokens" in source
+    assert "stage_session_issue" in source
+    assert "tokens_for_staged_session" in source
+    assert "issue_session_tokens" not in source
     for forbidden in ("AuthSession(", "secrets.token_urlsafe(48)", "jwt.encode("):
         assert forbidden not in source, (
             f"{SERVICE.name} mints session material itself ({forbidden!r}); "
-            "delegate to app.services.auth_flow.issue_session_tokens"
+            "delegate to the registered auth.session_staging participant through AuthFlow"
         )
 
 

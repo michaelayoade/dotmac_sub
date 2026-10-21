@@ -47,6 +47,8 @@ import sys
 
 from sqlalchemy import create_engine, text
 
+from scripts.billing._mutation_policy import refuse_apply
+
 # Anything imported on/before this date is a migrated row; later rows are native
 # (their created_at is the real date and must stay NULL -> created_at).
 _CUTOVER = "2026-03-16"
@@ -161,6 +163,7 @@ WHERE l.source <> 'adjustment'
 
 
 def main(execute: bool) -> None:
+    refuse_apply(execute)
     url = os.environ["DATABASE_URL"]
     engine = create_engine(url)
     with engine.begin() as conn:

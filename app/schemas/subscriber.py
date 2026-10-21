@@ -18,7 +18,6 @@ from app.models.subscriber import (
     AddressType,
     ChannelType,
     ContactMethod,
-    CustomerConnectionType,
     Gender,
     SubscriberCategory,
     SubscriberStatus,
@@ -154,7 +153,7 @@ class SubscriberBase(BaseModel):
 
     # Service location (POP site determines NAS/IP pool for provisioning)
     pop_site_id: UUID | None = None
-    connection_type: CustomerConnectionType | None = None
+    connection_type: str | None = Field(default=None, max_length=64)
 
     # Account fields
     subscriber_number: str | None = Field(default=None, max_length=80)
@@ -171,7 +170,6 @@ class SubscriberBase(BaseModel):
     # Billing fields
     tax_rate_id: UUID | None = None
     billing_enabled: bool = True
-    captive_redirect_enabled: bool = False
     billing_name: str | None = Field(default=None, max_length=160)
     billing_address_line1: str | None = Field(default=None, max_length=160)
     billing_address_line2: str | None = Field(default=None, max_length=120)
@@ -278,7 +276,7 @@ class SubscriberUpdate(BaseModel):
 
     # Service location
     pop_site_id: UUID | None = None
-    connection_type: CustomerConnectionType | None = None
+    connection_type: str | None = Field(default=None, max_length=64)
 
     # Account fields
     subscriber_number: str | None = Field(default=None, max_length=80)
@@ -293,7 +291,6 @@ class SubscriberUpdate(BaseModel):
     # Billing fields
     tax_rate_id: UUID | None = None
     billing_enabled: bool | None = None
-    captive_redirect_enabled: bool | None = None
     billing_name: str | None = Field(default=None, max_length=160)
     billing_address_line1: str | None = Field(default=None, max_length=160)
     billing_address_line2: str | None = Field(default=None, max_length=120)
@@ -397,6 +394,9 @@ class SubscriberRead(SubscriberBase):
     email: str
 
     id: UUID
+    # Retired decision input, readable during the captive-policy transition:
+    # access.captive_access_policy rules decide captive access. Not writable.
+    captive_redirect_enabled: bool = False
     lifecycle_override_status: SubscriberStatus | None = None
     lifecycle_override_reason: str | None = None
     lifecycle_override_source: str | None = None

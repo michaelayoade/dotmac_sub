@@ -1,7 +1,7 @@
 """Two-directional ratchet on the cohort-isp-01 source writer surface.
 
 Governance cohort 1 — party, customers and brand profiles — will eventually
-move to `asm-dotmac-isp`. Before that can be considered, the set of Sub code
+move to `asm-dotmac-sub-composed`. Before that can be considered, the set of Sub code
 that writes those facts has to be known and has to stop growing. This guard
 does exactly that and nothing more: it records today's writers and fails on
 movement in either direction.
@@ -365,14 +365,57 @@ def test_detector_sees_an_adapter_bypassing_its_owner(tmp_path: Path) -> None:
     assert counts.get("api_route|app/api/customers.py") == 1
 
 
-def test_detector_sees_raw_sql_against_a_cohort_table(tmp_path: Path) -> None:
+@pytest.mark.parametrize(
+    ("path", "family"),
+    [
+        ("scripts/one_off/repair.py", "cli_script"),
+        ("alembic/versions/repair.py", "migration"),
+        ("alembic_kernel_adoption/versions/repair.py", "migration"),
+    ],
+)
+def test_detector_sees_raw_sql_against_a_cohort_table(
+    tmp_path: Path, path: str, family: str
+) -> None:
     _synthetic_tree(
         tmp_path,
-        "scripts/one_off/repair.py",
+        path,
         "SQL = 'UPDATE subscribers SET billing_mode = :mode WHERE id = :id'\n",
     )
     counts = _counts(tmp_path)
-    assert counts.get("cli_script|scripts/one_off/repair.py") == 1
+    assert counts == {f"{family}|{path}": 1}
+
+
+@pytest.mark.parametrize(
+    "source",
+    [
+        "def remove(db):\n    row = db.get(Subscriber, 'id')\n    db.delete(row)\n",
+        "def remove(db):\n    row = db.query(Subscriber).first()\n    db.delete(row)\n",
+        "def remove(db, row: Subscriber):\n    db.delete(instance=row)\n",
+        "def remove(db):\n    row: Subscriber | None = db.scalars(select(Subscriber)).first()\n    db.delete(row)\n",
+    ],
+)
+def test_detector_sees_tracked_orm_instance_deletion(
+    tmp_path: Path, source: str
+) -> None:
+    _synthetic_tree(
+        tmp_path,
+        "app/services/deletion.py",
+        "from app.models.subscriber import Subscriber\n" + source,
+    )
+    assert _counts(tmp_path) == {"service|app/services/deletion.py": 1}
+
+
+@pytest.mark.parametrize(
+    "source",
+    [
+        "def remove(db, row):\n    db.delete(row)\n",
+        "def remove(db):\n    row = db.get(Ticket, 'id')\n    db.delete(row)\n",
+        "def remove(cache, row: Subscriber):\n    cache.delete(row)\n",
+    ],
+)
+def test_detector_ignores_unproven_orm_deletion(tmp_path: Path, source: str) -> None:
+    _synthetic_tree(tmp_path, "app/services/unrelated.py", source)
+    assert _counts(tmp_path) == {}
 
 
 def test_detector_ignores_a_same_named_attribute_on_another_entity(

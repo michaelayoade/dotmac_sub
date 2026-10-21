@@ -201,6 +201,12 @@ HANDLER_CONTROLS: dict[str, HandlerControl] = {
     "EnforcementHandler": HandlerControl(
         "EnforcementHandler", HandlerStage.state, 50, ("service_enforcement",)
     ),
+    "SessionRevocationProjectionHandler": HandlerControl(
+        "SessionRevocationProjectionHandler",
+        HandlerStage.state,
+        61,
+        ("exact_session_revocation_projection",),
+    ),
     "CredentialSessionProjectionHandler": HandlerControl(
         "CredentialSessionProjectionHandler",
         HandlerStage.state,
@@ -267,6 +273,12 @@ HANDLER_CONTROLS: dict[str, HandlerControl] = {
         40,
         ("password_recovery_intents",),
     ),
+    "MfaRemovalNoticeHandler": HandlerControl(
+        "MfaRemovalNoticeHandler",
+        HandlerStage.communication,
+        50,
+        ("mfa_removal_notice_intents",),
+    ),
     "WebhookHandler": HandlerControl(
         "WebhookHandler", HandlerStage.external, 10, ("external_webhooks",)
     ),
@@ -323,6 +335,12 @@ def handler_event_types(handler_name: str) -> frozenset[str] | None:
         from app.services.events.handlers.automation import HANDLED_EVENT_TYPES
 
         return frozenset(item.value for item in HANDLED_EVENT_TYPES)
+    if handler_name == "SessionRevocationProjectionHandler":
+        from app.services.events.handlers.session_revocation_projection import (
+            HANDLED_EVENT_TYPES,
+        )
+
+        return frozenset(item.value for item in HANDLED_EVENT_TYPES)
     if handler_name == "CredentialSessionProjectionHandler":
         from app.services.events.handlers.credential_session_projection import (
             HANDLED_EVENT_TYPES,
@@ -353,6 +371,12 @@ def handler_event_types(handler_name: str) -> frozenset[str] | None:
         return frozenset(item.value for item in HANDLED_EVENT_TYPES)
     if handler_name == "ResellerInviteHandler":
         from app.services.events.handlers.reseller_invite import HANDLED_EVENT_TYPES
+
+        return frozenset(item.value for item in HANDLED_EVENT_TYPES)
+    if handler_name == "MfaRemovalNoticeHandler":
+        from app.services.events.handlers.mfa_removal_notice import (
+            HANDLED_EVENT_TYPES,
+        )
 
         return frozenset(item.value for item in HANDLED_EVENT_TYPES)
     if handler_name == "PasswordRecoveryHandler":

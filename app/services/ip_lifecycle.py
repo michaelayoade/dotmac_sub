@@ -16,11 +16,14 @@ docs/POST_CUTOVER_HARDENING.md.
 
 from __future__ import annotations
 
+import json
 import logging
+import uuid
 from collections import defaultdict
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
-from sqlalchemy import func, select
+from sqlalchemy import func, literal, select, tuple_
 from sqlalchemy.orm import Session
 
 from app.models.catalog import Subscription, SubscriptionStatus
@@ -319,3 +322,263 @@ def reactivate_assignments(db: Session, assignment_ids: list[str]) -> int:
     if n:
         db.commit()
     return n
+
+
+# --- Retention sweep (per-subscription IPv4 retention policy) ----------------
+#
+# READ side + dispatcher only. Every write goes through
+# ``network.ip_assignment_lifecycle.repair_service_ipv4_assignment``; nothing in
+# this section touches ``IPAssignment`` or ``Subscription`` columns.
+
+RETENTION_STATUSES = (
+    SubscriptionStatus.disabled,
+    SubscriptionStatus.hidden,
+    SubscriptionStatus.archived,
+    SubscriptionStatus.canceled,
+    SubscriptionStatus.expired,
+)
+RETENTION_MODES = ("shadow", "apply")
+RETENTION_CLASSES = (
+    "would_release",
+    "rebind_to_sibling",
+    "skipped_live_conflict",
+    "skipped_other",
+)
+
+
+def parse_retention_cursor(raw: Any) -> tuple[str, str] | None:
+    """Validate a stored keyset cursor; ``None`` (restart) if malformed."""
+    try:
+        value = json.loads(raw)
+        if isinstance(value, list) and len(value) == 2:
+            datetime.fromisoformat(value[0])
+            uuid.UUID(str(value[1]))
+            return (str(value[0]), str(value[1]))
+    except (TypeError, ValueError):
+        pass
+    logger.warning("ipv4 retention: malformed stored cursor reset")
+    return None
+
+
+def _eligible_filter(cutoff: datetime):
+    """Retention statuses past cutoff on ``updated_at`` with an exact active v4.
+
+    ``updated_at`` is the age evidence for every status: ``canceled_at`` and
+    ``end_at`` can predate the status change, and disabled/hidden/archived have
+    no timestamp. Later edits only DELAY a release.
+    """
+    has_exact_v4 = (
+        select(IPAssignment.id)
+        .where(
+            IPAssignment.subscription_id == Subscription.id,
+            IPAssignment.is_active.is_(True),
+            IPAssignment.ip_version == IPVersion.ipv4,
+        )
+        .exists()
+    )
+    return (
+        Subscription.status.in_(RETENTION_STATUSES),
+        Subscription.updated_at <= cutoff,
+        has_exact_v4,
+    )
+
+
+def run_ipv4_retention_release(
+    db: Session,
+    *,
+    mode: str,
+    retention_days: int,
+    limit: int,
+    now: datetime | None = None,
+    after: tuple[str, str] | None = None,
+) -> dict[str, Any]:
+    """Classify (shadow) or release (apply) retention-expired IPv4 holds.
+
+    ``shadow`` computes and reports only. ``apply`` releases ``would_release``
+    subscriptions one at a time through the canonical owner command; sibling
+    rebinds and live conflicts are never written (rebind is report-only in v1).
+    Active, blocked, suspended, pending, paused and stopped subscriptions are
+    never candidates.
+
+    Each run examines at most ``limit`` rows after the ``after`` keyset cursor
+    ``(updated_at iso, id)`` and returns ``next_cursor`` so always-skipped rows
+    cannot starve later ones; ``None`` means the end was reached (wrap).
+    """
+    from app.services import ip_assignment_lifecycle as owner
+    from app.services.owner_commands import CommandContext
+
+    if mode not in RETENTION_MODES:
+        raise ValueError(f"unknown retention mode: {mode}")
+    now = now or datetime.now(UTC)
+    cutoff = now - timedelta(days=retention_days)
+    counts = dict.fromkeys(RETENTION_CLASSES, 0)
+    counts.update(released=0, apply_failed=0, post_commit_conflict=0, skipped_locked=0)
+    samples: dict[str, list[str]] = {c: [] for c in RETENTION_CLASSES}
+    skipped_other: dict[str, int] = {}
+
+    def _note(klass: str, subscription_id: Any) -> None:
+        counts[klass] += 1
+        if len(samples[klass]) < SAMPLE_LIMIT:
+            samples[klass].append(str(subscription_id))
+
+    eligible = _eligible_filter(cutoff)
+    query = select(Subscription.id, Subscription.subscriber_id, Subscription.status)
+    query = query.where(*eligible)
+    if after is not None:
+        query = query.where(
+            tuple_(Subscription.updated_at, Subscription.id)
+            > tuple_(
+                literal(datetime.fromisoformat(after[0])),
+                literal(coerce_uuid(after[1])),
+            )
+        )
+    rows = db.execute(
+        query.add_columns(Subscription.updated_at)
+        .order_by(Subscription.updated_at, Subscription.id)
+        .limit(limit)
+    ).all()
+    eligible_total = db.scalar(
+        select(func.count()).select_from(Subscription).where(*eligible)
+    )
+    legacy_unlinked = db.scalar(
+        select(func.count())
+        .select_from(IPAssignment)
+        .where(
+            IPAssignment.subscription_id.is_(None),
+            IPAssignment.is_active.is_(True),
+            IPAssignment.ip_version == IPVersion.ipv4,
+        )
+    )
+    # Plain values only: the owner command refuses a caller-owned transaction,
+    # and the shadow read transaction is released after every subscription.
+    candidates = [(r[0], r[1], r[2]) for r in rows]
+    next_cursor = (
+        (rows[-1][3].isoformat(), str(rows[-1][0])) if len(rows) >= limit else None
+    )
+    db.rollback()
+    for sub_id, subscriber_id, status in candidates:
+        exact = [
+            item
+            for item in owner._active_assignment_evidence(
+                db, subscriber_id=subscriber_id, desired_address_id=None
+            )
+            if item.subscription_id == sub_id
+        ]
+        addresses = {item.address for item in exact}
+        preview = owner.preview_service_ipv4_assignment_repair(
+            db,
+            subscription_id=sub_id,
+            desired_address_id=None,
+            deactivate_assignment_ids=tuple(item.assignment_id for item in exact),
+            retention_cutoff=cutoff,
+        )
+        decision = preview.decision
+        live = None
+        if decision is owner.IPv4AssignmentRepairDecision.address_in_live_use:
+            live = owner.find_ipv4_live_use(
+                db, subscription_id=sub_id, addresses=addresses
+            )
+
+        if (
+            decision
+            is owner.IPv4AssignmentRepairDecision.ready_release_retention_expired
+        ):
+            _note("would_release", sub_id)
+            if mode == "apply":
+                released_ok = False
+                try:
+                    db.rollback()
+                    outcome = owner.repair_service_ipv4_assignment(
+                        db,
+                        owner.RepairServiceIPv4AssignmentCommand(
+                            context=CommandContext.system(
+                                actor="service:ipv4-retention-sweep",
+                                scope="ip_assignment_lifecycle_repair",
+                                reason=(
+                                    f"IPv4 retention expired ({retention_days}d) "
+                                    f"for {status.value} subscription"
+                                ),
+                                command_id=uuid.uuid4(),
+                                idempotency_key=(
+                                    f"ipv4-retention:{sub_id}:{preview.fingerprint[:32]}"
+                                ),
+                            ),
+                            subscription_id=sub_id,
+                            desired_address_id=None,
+                            deactivate_assignment_ids=preview.deactivate_assignment_ids,
+                            preview_fingerprint=preview.fingerprint,
+                            retention_cutoff=cutoff,
+                        ),
+                    )
+                    counts["released"] += outcome.deactivated_count
+                    released_ok = True
+                except Exception as exc:  # noqa: BLE001 - one failure must not stop the sweep
+                    db.rollback()
+                    if str(getattr(exc, "code", "")).endswith(
+                        "address_lock_unavailable"
+                    ):
+                        counts["skipped_locked"] += 1
+                    else:
+                        counts["apply_failed"] += 1
+                    logger.warning(
+                        "ipv4 retention release refused for %s: %s",
+                        sub_id,
+                        getattr(exc, "code", type(exc).__name__),
+                    )
+                if released_ok:
+                    # Residual: some column writers do not lock the address.
+                    # Re-check after commit and alert (metric class) on
+                    # conflict; a failure here never undoes the release.
+                    try:
+                        db.rollback()
+                        if owner.find_ipv4_live_use(
+                            db, subscription_id=sub_id, addresses=addresses
+                        ).in_use:
+                            counts["post_commit_conflict"] += 1
+                            logger.error(
+                                "ipv4 retention: released address now in live use "
+                                "(subscription %s)",
+                                sub_id,
+                            )
+                    except Exception:  # noqa: BLE001
+                        db.rollback()
+                        logger.warning(
+                            "ipv4 retention post-commit re-check failed for %s",
+                            sub_id,
+                            exc_info=True,
+                        )
+        elif decision is owner.IPv4AssignmentRepairDecision.address_in_live_use:
+            sibling_live = False
+            if live is not None and live.sibling_subscription_ids:
+                sibling_live = bool(
+                    db.scalar(
+                        select(func.count())
+                        .select_from(Subscription)
+                        .where(
+                            Subscription.id.in_(live.sibling_subscription_ids),
+                            Subscription.subscriber_id == subscriber_id,
+                            Subscription.status == SubscriptionStatus.active,
+                        )
+                    )
+                )
+            _note(
+                "rebind_to_sibling" if sibling_live else "skipped_live_conflict", sub_id
+            )
+        else:
+            _note("skipped_other", sub_id)
+            skipped_other[decision.value] = skipped_other.get(decision.value, 0) + 1
+        db.rollback()  # keep the read transaction per-subscription short
+
+    return {
+        "mode": mode,
+        "retention_days": retention_days,
+        "cutoff": cutoff.isoformat(),
+        "examined": len(candidates),
+        "limit": limit,
+        "eligible_total": eligible_total,
+        "legacy_unlinked_active_v4_assignments": legacy_unlinked,
+        "next_cursor": next_cursor,
+        "counts": counts,
+        "skipped_other_by_decision": skipped_other,
+        "samples": samples,
+    }

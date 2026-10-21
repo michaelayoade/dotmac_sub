@@ -93,3 +93,24 @@ class CSRFValidationError(HTTPException):
             status_code=403,
             detail="CSRF token validation failed. Please refresh the page and try again.",
         )
+
+
+def require_browser_csrf_header(request: Request) -> None:
+    """Require double-submit headers for cookie-authenticated API mutations.
+
+    Authentication still validates bearer credentials independently.
+    """
+    authorization = request.headers.get("authorization", "")
+    bearer = authorization.lower().startswith("bearer ") and bool(
+        authorization[7:].strip()
+    )
+    if request.method not in {"POST", "PUT", "PATCH", "DELETE"} or bearer:
+        return
+    cookie = request.cookies.get(CSRF_COOKIE_NAME)
+    header = request.headers.get(CSRF_HEADER_NAME)
+    if (
+        not cookie
+        or not header
+        or not secrets.compare_digest(cookie.encode("utf-8"), header.encode("utf-8"))
+    ):
+        raise HTTPException(status_code=403, detail="CSRF validation failed")

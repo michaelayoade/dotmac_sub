@@ -42,7 +42,7 @@ from app.models.radius import RadiusClient
 from app.models.usage import AccountingStatus, RadiusAccountingSession
 from app.services import control_registry, settings_spec
 from app.services.common import coerce_uuid
-from app.services.credential_crypto import decrypt_credential
+from app.services.credential_crypto import decrypt_credential, non_reference_or_none
 from app.services.domain_errors import DomainError
 from app.services.enforcement_evidence import (
     EnforcementOutcome,
@@ -52,7 +52,8 @@ from app.services.enforcement_evidence import (
 )
 from app.services.nas import DeviceProvisioner
 from app.services.radius_address_lists import suspended_address_list
-from app.services.secrets import resolve_secret
+from app.services.router_health import coa_evidence as _coa_evidence
+from app.services.router_health.contracts import CoaKind
 
 logger = logging.getLogger(__name__)
 
@@ -387,7 +388,7 @@ def _resolve_coa_secret(db: Session, nas_device: NasDevice) -> str | None:
         try:
             decrypted = decrypt_credential(nas_device.shared_secret)
             if decrypted:
-                resolved = resolve_secret(decrypted)
+                resolved = non_reference_or_none(decrypted, label="NAS shared secret")
                 if resolved:
                     return resolved
         except Exception as exc:
@@ -454,7 +455,127 @@ def _resolve_coa_secret(db: Session, nas_device: NasDevice) -> str | None:
     return None
 
 
-def _send_coa_disconnect(
+def _exchange_coa_disconnect(
+    *,
+    host: str,
+    secret: bytes,
+    dictionary: Dictionary,
+    port: int,
+    retries: int,
+    timeout: int | float,
+    username: str | None,
+    framed_ip: str | None,
+    session_id: str | None,
+    log_ref: object,
+) -> CoADisconnectDisposition:
+    """Send one RADIUS Disconnect-Request and classify the reply.
+
+    Pure transport: no negative-cache read or write and no database access, and
+    nothing secret is logged. ``_send_coa_disconnect`` layers the negative cache
+    and evidence recording on top; the router-health canary calls this directly
+    so a synthetic probe can never poison real enforcement.
+    """
+    client = Client(
+        server=host,
+        secret=secret,
+        dict=dictionary,
+        coaport=port,
+    )
+    client.retries = retries
+    client.timeout = timeout
+    req = client.CreateCoAPacket(code=DisconnectRequest)
+    if username:
+        req["User-Name"] = username
+    if framed_ip:
+        req["Framed-IP-Address"] = framed_ip
+    if session_id:
+        req["Acct-Session-Id"] = session_id
+    try:
+        response = client.SendPacket(req)
+    except Timeout:
+        return CoADisconnectDisposition.timeout
+    except Exception as exc:
+        logger.warning("CoA disconnect failed for NAS %s: %s", log_ref, exc)
+        return CoADisconnectDisposition.transport_error
+    # A reply arrived (whatever it says): the exchange itself worked.
+    response_code = getattr(response, "code", None)
+    if response_code == DisconnectACK:
+        return CoADisconnectDisposition.disconnected
+    if response_code == DisconnectNAK:
+        error_cause = _disconnect_error_cause(response)
+        if error_cause == 503:
+            logger.info(
+                "Disconnect-NAK session-not-found from NAS %s for session %s.",
+                log_ref,
+                session_id,
+            )
+            return CoADisconnectDisposition.session_not_found
+        logger.warning(
+            "Disconnect-NAK from NAS %s for session %s — disconnect was "
+            "not confirmed; falling back to another transport.",
+            log_ref,
+            session_id,
+        )
+        return CoADisconnectDisposition.rejected
+    logger.warning(
+        "Unexpected CoA response from NAS %s for session %s.",
+        log_ref,
+        session_id,
+    )
+    return CoADisconnectDisposition.unexpected_response
+
+
+def send_coa_probe_disconnect(
+    db: Session, nas_device: NasDevice, *, username: str
+) -> CoADisconnectDisposition:
+    """Send ONE User-Name-only Disconnect-Request as a health probe.
+
+    Used by the router-health canary with a synthetic, non-existent username.
+    Unlike ``_send_coa_disconnect`` this neither reads nor writes the CoA
+    negative cache and records no enforcement evidence (the caller records its
+    own ``canary`` outcome), so a probe can never suppress real enforcement.
+    Preconditions mirror the real path; one retry only.
+    """
+    host = nas_device.nas_ip or nas_device.management_ip or nas_device.ip_address
+    if not host:
+        return CoADisconnectDisposition.missing_nas_host
+    dict_path = _radius_dictionary_path(db)
+    if not dict_path:
+        return CoADisconnectDisposition.missing_dictionary
+    try:
+        dictionary = Dictionary(dict_path)
+    except Exception:
+        return CoADisconnectDisposition.invalid_dictionary
+    secret = _resolve_coa_secret(db, nas_device)
+    if not secret:
+        return CoADisconnectDisposition.missing_secret
+    return _exchange_coa_disconnect(
+        host=host,
+        secret=secret.encode("utf-8"),
+        dictionary=dictionary,
+        port=int(nas_device.coa_port or 3799),
+        retries=1,
+        timeout=_radius_timeout_sec(db),
+        username=username,
+        framed_ip=None,
+        session_id=None,
+        log_ref=nas_device.id,
+    )
+
+
+def _record_coa_evidence(nas_id: Any, kind: CoaKind, disposition: str) -> None:
+    """Count a CoA outcome out of band; can never change the caller's result."""
+    if disposition == CoADisconnectDisposition.disabled.value:
+        return
+    try:
+        _coa_evidence.record_coa_outcome(nas_id, kind, disposition)
+    except Exception as exc:
+        if _coa_evidence.is_task_time_limit(exc):
+            raise
+        logger.warning("CoA outcome evidence call failed: %s", sanitize_exception(exc))
+
+
+def _attempt_coa_disconnect(
     db: Session,
     nas_device: NasDevice,
     username: str | None,
@@ -489,60 +610,40 @@ def _send_coa_disconnect(
             host,
         )
         return CoADisconnectOutcome(CoADisconnectDisposition.missing_secret)
-    client = Client(
-        server=host,
+    disposition = _exchange_coa_disconnect(
+        host=host,
         secret=decrypted_secret.encode("utf-8"),
-        dict=dictionary,
-        coaport=int(nas_device.coa_port or 3799),
+        dictionary=dictionary,
+        port=int(nas_device.coa_port or 3799),
+        retries=_coa_retries(db),
+        timeout=_radius_timeout_sec(db),
+        username=username,
+        framed_ip=framed_ip,
+        session_id=session_id,
+        log_ref=nas_device.id,
     )
-    client.retries = _coa_retries(db)
-    client.timeout = _radius_timeout_sec(db)
-    req = client.CreateCoAPacket(code=DisconnectRequest)
-    if username:
-        req["User-Name"] = username
-    if framed_ip:
-        req["Framed-IP-Address"] = framed_ip
-    if session_id:
-        req["Acct-Session-Id"] = session_id
-    try:
-        response = client.SendPacket(req)
-        _mark_coa_supported(nas_device.id)
-        response_code = getattr(response, "code", None)
-        if response_code == DisconnectACK:
-            return CoADisconnectOutcome(CoADisconnectDisposition.disconnected)
-        if response_code == DisconnectNAK:
-            error_cause = _disconnect_error_cause(response)
-            if error_cause == 503:
-                logger.info(
-                    "Disconnect-NAK session-not-found from NAS %s for session %s.",
-                    nas_device.id,
-                    session_id,
-                )
-                return CoADisconnectOutcome(CoADisconnectDisposition.session_not_found)
-            logger.warning(
-                "Disconnect-NAK from NAS %s for session %s — disconnect was "
-                "not confirmed; falling back to another transport.",
-                nas_device.id,
-                session_id,
-            )
-            return CoADisconnectOutcome(CoADisconnectDisposition.rejected)
-        logger.warning(
-            "Unexpected CoA response from NAS %s for session %s.",
-            nas_device.id,
-            session_id,
-        )
-        return CoADisconnectOutcome(CoADisconnectDisposition.unexpected_response)
-    except Timeout:
+    if disposition is CoADisconnectDisposition.timeout:
         _mark_coa_unsupported(nas_device.id)
         logger.warning(
             "CoA disconnect timed out for NAS %s — marking unsupported for %s.",
             nas_device.id,
             _COA_NEG_TTL,
         )
-        return CoADisconnectOutcome(CoADisconnectDisposition.timeout)
-    except Exception as exc:
-        logger.warning("CoA disconnect failed for NAS %s: %s", nas_device.id, exc)
-        return CoADisconnectOutcome(CoADisconnectDisposition.transport_error)
+    elif disposition is not CoADisconnectDisposition.transport_error:
+        _mark_coa_supported(nas_device.id)
+    return CoADisconnectOutcome(disposition)
+
+
+def _send_coa_disconnect(
+    db: Session,
+    nas_device: NasDevice,
+    username: str | None,
+    framed_ip: str | None,
+    session_id: str | None,
+) -> CoADisconnectOutcome:
+    outcome = _attempt_coa_disconnect(db, nas_device, username, framed_ip, session_id)
+    _record_coa_evidence(nas_device.id, CoaKind.disconnect, outcome.disposition.value)
+    return outcome
 
 
 def _build_mikrotik_rate_limit(profile: RadiusProfile) -> str | None:
@@ -573,14 +674,14 @@ def _build_mikrotik_rate_limit(profile: RadiusProfile) -> str | None:
     return rate
 
 
-def _send_coa_update(
+def _attempt_coa_update(
     db: Session,
     nas_device: NasDevice,
     username: str | None,
     framed_ip: str | None,
     session_id: str | None,
     profile: RadiusProfile,
-) -> bool:
+) -> tuple[bool, str]:
     """Send a RADIUS CoA-Update to change session attributes in-place.
 
     This sends a CoA-Request (code 43) with updated bandwidth/profile
@@ -588,23 +689,23 @@ def _send_coa_update(
     the subscriber.
     """
     if not _coa_enabled(db):
-        return False
+        return False, CoADisconnectDisposition.disabled.value
     if _coa_disabled_for_nas(nas_device.id):
         logger.debug("Skipping CoA update for NAS %s (negative-cached).", nas_device.id)
-        return False
+        return False, CoADisconnectDisposition.temporarily_suppressed.value
     host = nas_device.nas_ip or nas_device.management_ip or nas_device.ip_address
     if not host:
         logger.warning("Missing NAS host for CoA update.")
-        return False
+        return False, CoADisconnectDisposition.missing_nas_host.value
     dict_path = _radius_dictionary_path(db)
     if not dict_path:
         logger.warning("Missing RADIUS dictionary path for CoA update.")
-        return False
+        return False, CoADisconnectDisposition.missing_dictionary.value
     try:
         dictionary = Dictionary(dict_path)
     except Exception as exc:
         logger.warning("Failed to load RADIUS dictionary: %s", exc)
-        return False
+        return False, CoADisconnectDisposition.invalid_dictionary.value
     # Same secret resolution as the disconnect path: device record first,
     # external radius nas table second (decrypt-drift devices have no
     # usable local secret — bare decrypt_credential left profile-change
@@ -616,7 +717,7 @@ def _send_coa_update(
             nas_device.name,
             nas_device.id,
         )
-        return False
+        return False, CoADisconnectDisposition.missing_secret.value
     client = Client(
         server=host,
         secret=decrypted_secret.encode("utf-8"),
@@ -653,7 +754,7 @@ def _send_coa_update(
             nas_device.id,
             profile.name,
         )
-        return True
+        return True, "sent"
     except Timeout:
         _mark_coa_unsupported(nas_device.id)
         logger.warning(
@@ -661,10 +762,26 @@ def _send_coa_update(
             nas_device.id,
             _COA_NEG_TTL,
         )
-        return False
+        return False, CoADisconnectDisposition.timeout.value
     except Exception as exc:
         logger.warning("CoA update failed for NAS %s: %s", nas_device.id, exc)
-        return False
+        return False, CoADisconnectDisposition.transport_error.value
+
+
+def _send_coa_update(
+    db: Session,
+    nas_device: NasDevice,
+    username: str | None,
+    framed_ip: str | None,
+    session_id: str | None,
+    profile: RadiusProfile,
+) -> bool:
+    """Send a RADIUS CoA-Update; the bool contract is unchanged."""
+    sent, disposition = _attempt_coa_update(
+        db, nas_device, username, framed_ip, session_id, profile
+    )
+    _record_coa_evidence(nas_device.id, CoaKind.update, disposition)
+    return sent
 
 
 def update_subscription_sessions(
@@ -1232,6 +1349,7 @@ def disconnect_subscription_sessions(
     require_terminal: bool = False,
     authoritative_only: bool = False,
     refresh_test_access: bool = False,
+    login: str | None = None,
 ) -> int:
     subscription = db.get(Subscription, coerce_uuid(subscription_id))
     if not subscription:
@@ -1245,7 +1363,10 @@ def disconnect_subscription_sessions(
     ):
         return 0
 
-    login = (subscription.login or "").strip()
+    # An explicit ``login`` targets sessions of that exact username (for example
+    # the name a credential edit just retired) and never the app-side rows.
+    explicit_login = (login or "").strip()
+    login = explicit_login or (subscription.login or "").strip()
     expected_framed_ip = str(framed_ip_address or "").strip()
 
     # Primary source: open radacct sessions by login. Keyed by session_id
@@ -1281,7 +1402,7 @@ def disconnect_subscription_sessions(
     # login changed after they started).
     legacy_sessions = (
         []
-        if authoritative_only
+        if authoritative_only or explicit_login
         else (
             db.query(RadiusAccountingSession)
             .filter(RadiusAccountingSession.subscription_id == subscription.id)
@@ -2093,6 +2214,7 @@ def cleanup_subscription_on_cancel(db: Session, subscription_id: str) -> dict[st
     if not other_active:
         for cred in credentials:
             cred.is_active = False
+            cred.deactivation_reason = "service_ended"
             stats["credentials_deactivated"] += 1
         # 3. Remove from external RADIUS DB
         _remove_credentials_from_external_radius(db, credentials)

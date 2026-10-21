@@ -1,5 +1,6 @@
 import json
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 from fastapi import HTTPException
@@ -116,7 +117,6 @@ def test_customer_bulk_message_confirmation_returns_durable_acceptance(
             status_url=f"/admin/customers/bulk/send-message/{request_id}",
         ),
     )
-    monkeypatch.setattr(customers_web, "_get_actor_id", lambda _request: str(actor_id))
     dispatch_calls = []
 
     def enqueue(task_name, **kwargs):
@@ -129,7 +129,9 @@ def test_customer_bulk_message_confirmation_returns_durable_acceptance(
 
     monkeypatch.setattr(customers_web, "enqueue_task", enqueue)
     response = customers_web.bulk_send_customer_message(
-        request=None,
+        request=SimpleNamespace(
+            state=SimpleNamespace(auth={"principal_id": str(actor_id)})
+        ),
         data={**spec.model_dump(mode="json"), "request_id": str(request_id)},
         db=object(),
     )

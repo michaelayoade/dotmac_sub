@@ -31,6 +31,7 @@ work order's ``public_id``, which rides the existing
 from __future__ import annotations
 
 import uuid
+from dataclasses import dataclass
 from datetime import UTC, datetime
 
 from sqlalchemy import select
@@ -81,14 +82,18 @@ def _thread_id(work_order: WorkOrder) -> str:
     return str(work_order.public_id)
 
 
-def conversation_for(db: Session, work_order: WorkOrder) -> InboxConversation | None:
+def conversation_for(
+    db: Session, work_order: WorkOrder, *, for_update: bool = False
+) -> InboxConversation | None:
     """Return the job's conversation, open or resolved."""
-    return (
+    query = (
         db.query(InboxConversation)
         .filter(InboxConversation.channel_type == FIELD_JOB_CHANNEL)
         .filter(InboxConversation.external_thread_id == _thread_id(work_order))
-        .one_or_none()
     )
+    if for_update:
+        query = query.with_for_update().populate_existing()
+    return query.one_or_none()
 
 
 def is_open(conversation: InboxConversation) -> bool:
@@ -248,14 +253,39 @@ def open_for_departure(
     return conversation, OPENED
 
 
+@dataclass(frozen=True, slots=True)
+class FieldJobCustomerMessageOutcome:
+    message_id: uuid.UUID
+    conversation_id: uuid.UUID
+    body: str
+    author_name: str | None
+    created_at: datetime
+    replayed: bool = False
+
+
+def customer_message_outcome(
+    message: InboxMessage, *, replayed: bool = False
+) -> FieldJobCustomerMessageOutcome:
+    author_name = (message.metadata_ or {}).get("author_name")
+    return FieldJobCustomerMessageOutcome(
+        message_id=message.id,
+        conversation_id=message.conversation_id,
+        body=message.body or "",
+        author_name=author_name if isinstance(author_name, str) else None,
+        created_at=message.created_at,
+        replayed=replayed,
+    )
+
+
 def record_customer_message(
     db: Session,
     *,
     conversation: InboxConversation,
     body: str,
     author_name: str | None,
+    external_message_id: str,
     now: datetime | None = None,
-) -> dict:
+) -> FieldJobCustomerMessageOutcome:
     """Write the customer's side of a job chat.
 
     Returns an inert snapshot rather than the ORM row: the caller commits
@@ -272,6 +302,7 @@ def record_customer_message(
         direction=InboxMessageDirection.inbound.value,
         body=body,
         external_thread_id=conversation.external_thread_id,
+        external_message_id=external_message_id,
         to_addresses=[],
         cc_addresses=[],
         received_at=moment,
@@ -288,13 +319,7 @@ def record_customer_message(
 
     # Snapshot inside the transaction. Reading an ORM attribute after the
     # caller's commit opens a fresh one, so hand back inert values.
-    return {
-        "id": str(message.id),
-        "conversation_id": str(conversation.id),
-        "body": message.body,
-        "author_name": author_name,
-        "created_at": message.created_at,
-    }
+    return customer_message_outcome(message)
 
 
 def close(
@@ -305,6 +330,7 @@ def close(
     now: datetime | None = None,
 ) -> None:
     """Resolve a job chat, leaving its history readable."""
+    db.refresh(conversation, with_for_update=True)
     moment = now or datetime.now(UTC)
     team_inbox_status.apply_status_transition(
         db,
@@ -337,7 +363,7 @@ def close_for_work_order(
     message unanswered, resolving here would silently drop it — so it goes to
     the queue instead, and the exclusion lets it through.
     """
-    conversation = conversation_for(db, work_order)
+    conversation = conversation_for(db, work_order, for_update=True)
     if conversation is None:
         return None
     if _awaiting_reply(db, conversation):

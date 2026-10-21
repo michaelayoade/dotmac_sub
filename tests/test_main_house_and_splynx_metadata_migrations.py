@@ -103,10 +103,13 @@ def test_purge_never_touches_declared_or_still_read_keys() -> None:
         "splynx_last_online",
         "splynx_gps",
         "splynx_location_id",
-        "splynx_billing_email",
     ):
         assert f'"{key}"' in still_read
         assert key not in retired
+    # Moved to billing contacts by 665 and no longer read, but conflict and
+    # invalid rows keep it, so 664 must still not purge it.
+    assert '"splynx_billing_email"' not in still_read
+    assert "splynx_billing_email" not in retired
 
 
 def test_purge_downgrade_is_an_explicit_irreversible_no_op() -> None:

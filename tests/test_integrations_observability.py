@@ -25,6 +25,9 @@ from app.services.auth import hash_api_key
 from app.services.auth_dependencies import require_user_auth
 from app.web.brand_globals import install_brand_jinja_global
 from tests.integration_platform_helpers import enable_capability
+from tests.test_api_key_authentication_maintenance import (
+    local_auth_owner_session,  # noqa: F401
+)
 
 
 def _make_installation(db, name: str | None = None) -> IntegrationInstallation:

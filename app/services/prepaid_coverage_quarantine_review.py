@@ -13,7 +13,10 @@ no automatic repair:
   account/amount/currency disagree with its ledger debit.
 
 This query explains such a quarantine record by record and names the existing
-reviewed owner (if any) that may correct each one. It reuses the owner's own
+reviewed owner (if any) that may correct each one. A malformed paid-invoice
+period is corrected by ``financial.prepaid_paid_invoice_period_repair``; a
+legitimate renewal debit whose reference is malformed is corrected by
+``financial.prepaid_renewal_origin_correction``. It reuses the owner's own
 predicates so it cannot drift from what enforcement blocks on. It never
 writes, never infers a period from memo or description text, and never
 decides the correction: it states which facts Finance must establish before a
@@ -66,6 +69,10 @@ from app.services.prepaid_coverage_reconciliation import (
 QUARANTINE_FINDING_PREFIX = "prepaid-coverage:quarantine:"
 RUNBOOK = "docs/runbooks/PREPAID_COVERAGE_QUARANTINE_FINANCE_REVIEW.md"
 _UNUSED_RENEWAL_RUNBOOK = "docs/runbooks/UNUSED_PREPAID_RENEWAL_CORRECTION.md"
+_PERIOD_REPAIR_OWNER = "financial.prepaid_paid_invoice_period_repair"
+_PERIOD_REPAIR_CLI = "scripts.billing.repair_prepaid_paid_invoice_period"
+_ORIGIN_CORRECTION_OWNER = "financial.prepaid_renewal_origin_correction"
+_ORIGIN_CORRECTION_CLI = "scripts.billing.correct_prepaid_renewal_origin"
 _RENEWAL_ORIGIN = AccountAdjustmentOrigin.prepaid_service_renewal
 _BASE_LINE_KIND = "base_subscription"
 _DERIVED_LINE_PERIOD_SOURCES = frozenset({"paid_at_manual_invoice"})
@@ -100,12 +107,8 @@ class PeriodProof(StrEnum):
 class ResolutionRoute(StrEnum):
     unused_prepaid_renewal_correction = "unused_prepaid_renewal_correction"
     reviewed_account_adjustment_reversal = "reviewed_account_adjustment_reversal"
-    engineering_paid_invoice_period_restoration = (
-        "engineering_paid_invoice_period_restoration"
-    )
-    engineering_documentary_paid_invoice_period = (
-        "engineering_documentary_paid_invoice_period"
-    )
+    reviewed_paid_invoice_period_repair = "reviewed_paid_invoice_period_repair"
+    reviewed_renewal_origin_correction = "reviewed_renewal_origin_correction"
     engineering_non_service_line_classification = (
         "engineering_non_service_line_classification"
     )
@@ -435,10 +438,44 @@ def _line_period_proof(
     return PeriodProof.none, None, None
 
 
+def _period_repair_command(
+    *,
+    invoice_id: UUID,
+    lines: list[InvoiceLineEvidence],
+    proven_start: datetime | None,
+    proven_end: datetime | None,
+) -> str:
+    """Prefilled READ-ONLY preview of the reviewed period repair."""
+    scoped = [line for line in lines if line.in_quarantine_scope]
+    line_id = str(scoped[0].line_id) if len(scoped) == 1 else "<line-id>"
+    subscription_id = (
+        str(scoped[0].subscription_id)
+        if len(scoped) == 1 and scoped[0].subscription_id is not None
+        else "<subscription-id>"
+    )
+    start = (
+        proven_start.isoformat()
+        if proven_start is not None
+        else "<finance-documented-start>"
+    )
+    end = (
+        proven_end.isoformat() if proven_end is not None else "<finance-documented-end>"
+    )
+    return (
+        f"poetry run python -m {_PERIOD_REPAIR_CLI} preview "
+        f"--invoice-id {invoice_id} --line-id {line_id} "
+        f"--subscription-id {subscription_id} "
+        f"--period-start {start} --period-end {end}"
+    )
+
+
 def _invoice_options(
     *,
+    invoice_id: UUID,
     lines: list[InvoiceLineEvidence],
     proof: PeriodProof,
+    proven_start: datetime | None,
+    proven_end: datetime | None,
 ) -> tuple[ResolutionOption, ...]:
     options: list[ResolutionOption] = []
     scoped = [line for line in lines if line.in_quarantine_scope]
@@ -464,55 +501,37 @@ def _invoice_options(
                 ),
             )
         )
-    if proof in {PeriodProof.source_entitlement, PeriodProof.line_metadata_period}:
-        options.append(
-            ResolutionOption(
-                route=ResolutionRoute.engineering_paid_invoice_period_restoration,
-                sanctioned=False,
-                when=(
+    proven = proof in {PeriodProof.source_entitlement, PeriodProof.line_metadata_period}
+    options.append(
+        ResolutionOption(
+            route=ResolutionRoute.reviewed_paid_invoice_period_repair,
+            sanctioned=True,
+            when=(
+                (
                     "Finance confirms the structured period shown in "
                     "proven_period_start/proven_period_end is the period this "
                     "invoice paid for."
-                ),
-                owner=None,
-                runbook=RUNBOOK,
-                command=None,
-                missing_capability=(
-                    "No reviewed owner restores billing_period_start/end on a "
-                    "PAID invoice whose positive line is already linked to the "
-                    "subscription. The admin coverage repair and "
-                    "prepaid_coverage_reconcile only create entitlements from an "
-                    "exact period; reconcile_prepaid_drafts --repair-paid-invoice "
-                    "only repairs unlinked lines; sequence reconstruction "
-                    "refuses paid invoices; calendar reconciliation needs a "
-                    "stored period. Needs an engineering-built reviewed period "
-                    "restoration (preview/fingerprint, actor plus distinct "
-                    "approver, evidence reference, idempotency, provenance)."
-                ),
-            )
-        )
-    else:
-        options.append(
-            ResolutionOption(
-                route=ResolutionRoute.engineering_documentary_paid_invoice_period,
-                sanctioned=False,
-                when=(
+                )
+                if proven
+                else (
                     "No single structured period exists (proof="
-                    f"{proof.value}); Finance must determine the paid period "
-                    "from source documents, never from memo or description text."
-                ),
-                owner=None,
-                runbook=RUNBOOK,
-                command=None,
-                missing_capability=(
-                    "No reviewed owner records a Finance-documented period on a "
-                    "paid invoice with a subscription-linked line. Needs an "
-                    "engineering-built documentary period correction with "
-                    "four-eyes approval; until then the account stays "
-                    "quarantined (protected from adverse enforcement)."
-                ),
-            )
+                    f"{proof.value}); Finance determines the paid period and "
+                    "subscription from source documents (original or Splynx "
+                    "invoice, payment receipt, customer order), never from memo "
+                    "or description text."
+                )
+            ),
+            owner=_PERIOD_REPAIR_OWNER,
+            runbook=RUNBOOK,
+            command=_period_repair_command(
+                invoice_id=invoice_id,
+                lines=lines,
+                proven_start=proven_start if proven else None,
+                proven_end=proven_end if proven else None,
+            ),
+            missing_capability=None,
         )
+    )
     return tuple(options)
 
 
@@ -658,7 +677,13 @@ def _invoice_findings(
                 period_proof=proof,
                 proven_period_start=proven_start,
                 proven_period_end=proven_end,
-                options=_invoice_options(lines=lines, proof=proof),
+                options=_invoice_options(
+                    invoice_id=invoice.id,
+                    lines=lines,
+                    proof=proof,
+                    proven_start=proven_start,
+                    proven_end=proven_end,
+                ),
             )
         )
     return tuple(findings)
@@ -712,6 +737,57 @@ def _renewal_defects(
         if adjustment.currency != ledger.currency:
             defects.append(RenewalOriginDefect.ledger_currency_mismatch)
     return tuple(defects), subscription_id, starts_at, ends_at
+
+
+def _origin_correction_option(
+    adjustment: AccountAdjustment,
+    *,
+    linked_entitlement: EntitlementEvidence | None,
+) -> ResolutionOption:
+    """Sanctioned reference correction; the preview is READ-ONLY."""
+    base = (
+        f"poetry run python -m {_ORIGIN_CORRECTION_CLI} preview "
+        f"--adjustment-id {adjustment.id} "
+    )
+    if linked_entitlement is not None:
+        return ResolutionOption(
+            route=ResolutionRoute.reviewed_renewal_origin_correction,
+            sanctioned=True,
+            when=(
+                "Finance confirms the service WAS delivered, so the debit is "
+                "legitimate and only its origin reference is malformed. The "
+                "linked entitlement structurally proves "
+                f"{linked_entitlement.subscription_id}:"
+                f"{linked_entitlement.starts_at.isoformat()}:"
+                f"{linked_entitlement.ends_at.isoformat()}. Money does not move."
+            ),
+            owner=_ORIGIN_CORRECTION_OWNER,
+            runbook=RUNBOOK,
+            command=(
+                base + "--disposition entitlement_already_linked "
+                f"--entitlement-id {linked_entitlement.entitlement_id}"
+            ),
+            missing_capability=None,
+        )
+    return ResolutionOption(
+        route=ResolutionRoute.reviewed_renewal_origin_correction,
+        sanctioned=True,
+        when=(
+            "Finance confirms the service WAS delivered, so the debit is "
+            "legitimate, and names the existing active entitlement it funded "
+            "(link_existing_entitlement), or supplies the subscription and "
+            "exact period when no entitlement exists "
+            "(create_entitlement_from_debit, which creates one through the "
+            "existing coverage writer). Money does not move."
+        ),
+        owner=_ORIGIN_CORRECTION_OWNER,
+        runbook=RUNBOOK,
+        command=(
+            base + "--disposition link_existing_entitlement "
+            "--entitlement-id <finance-named-entitlement>"
+        ),
+        missing_capability=None,
+    )
 
 
 def _renewal_options(
@@ -787,30 +863,22 @@ def _renewal_options(
             )
         )
         options.append(
-            ResolutionOption(
-                route=ResolutionRoute.engineering_renewal_origin_correction,
-                sanctioned=False,
-                when=(
-                    "Finance confirms the service WAS delivered, so the debit is "
-                    "legitimate and only its origin reference is malformed. The "
-                    "linked entitlement structurally proves "
-                    f"{entitlement.subscription_id}:"
-                    f"{entitlement.starts_at.isoformat()}:"
-                    f"{entitlement.ends_at.isoformat()}."
-                ),
-                owner=None,
-                runbook=RUNBOOK,
-                command=None,
-                missing_capability=(
-                    "No reviewed owner corrects origin_ref on an existing "
-                    "renewal adjustment; the legacy tax-invoice correction "
-                    "requires an already exact origin_ref. Needs an "
-                    "engineering-built reviewed origin correction from the "
-                    "linked entitlement."
-                ),
-            )
+            _origin_correction_option(adjustment, linked_entitlement=entitlement)
         )
         return tuple(options)
+    exactly_one_linked = [
+        row
+        for row in linked
+        if row.status == ServiceEntitlementStatus.active.value
+        and row.account_id == adjustment.account_id
+        and row.currency == currency
+    ]
+    if len(linked) == 1 and len(exactly_one_linked) == 1 and adjustment_debit:
+        return (
+            _origin_correction_option(
+                adjustment, linked_entitlement=exactly_one_linked[0]
+            ),
+        )
     if not linked and adjustment_debit:
         options.append(
             ResolutionOption(
@@ -830,26 +898,30 @@ def _renewal_options(
                 missing_capability=None,
             )
         )
-    options.append(
-        ResolutionOption(
-            route=ResolutionRoute.engineering_renewal_origin_correction,
-            sanctioned=False,
-            when=(
-                "The debit is legitimate (or the linked evidence is not exactly "
-                "one active non-invoice entitlement), so the period cannot be "
-                "proven from structured data."
-            ),
-            owner=None,
-            runbook=RUNBOOK,
-            command=None,
-            missing_capability=(
-                "No reviewed owner records a Finance-documented period for a "
-                "renewal adjustment whose origin_ref is malformed and whose "
-                "period is not proven by exactly one linked entitlement. Needs "
-                "engineering; the account stays quarantined meanwhile."
-            ),
+    if not linked and adjustment_debit:
+        options.append(_origin_correction_option(adjustment, linked_entitlement=None))
+    else:
+        options.append(
+            ResolutionOption(
+                route=ResolutionRoute.engineering_renewal_origin_correction,
+                sanctioned=False,
+                when=(
+                    "The debit is legitimate but the linked evidence is not "
+                    "exactly one active entitlement on this account (several "
+                    "entitlements, an inactive or foreign one, or a debit that "
+                    "is not a plain adjustment debit)."
+                ),
+                owner=None,
+                runbook=RUNBOOK,
+                command=None,
+                missing_capability=(
+                    "The reviewed origin correction needs exactly one active "
+                    "linked entitlement, or none linked. Needs engineering "
+                    "investigation of the linked entitlements; the account "
+                    "stays quarantined meanwhile."
+                ),
+            )
         )
-    )
     return tuple(options)
 
 

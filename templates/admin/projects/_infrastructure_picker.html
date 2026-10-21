@@ -1,9 +1,9 @@
 <div class="relative border-t border-slate-200 pt-4 dark:border-slate-700"
      x-data='projectInfrastructurePicker({{ infrastructure_editor | tojson }})'
-     x-show="projectType === 'cable_rerun' || type || id" x-cloak
+     x-show='{{ infrastructure_project_types | tojson }}.includes(projectType) || type || id' x-cloak
      @keydown.escape.stop="open = false">
     <p class="mb-3 text-sm font-semibold text-slate-900 dark:text-white">Infrastructure (optional)</p>
-    <p class="mb-3 text-sm text-slate-600 dark:text-slate-300">Select the infrastructure this cable rerun is for. Customer-only work can leave this blank.</p>
+    <p class="mb-3 text-sm text-slate-600 dark:text-slate-300">Select the infrastructure for this physical project. Customer-only work can leave this blank.</p>
     <div class="grid gap-3 sm:grid-cols-2">
         <div>
             <label for="project-infrastructure-type" class="mb-1 block text-sm font-medium">Infrastructure type</label>

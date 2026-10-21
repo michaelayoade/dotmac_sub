@@ -49,6 +49,7 @@ class CustomerPortalProfileCommandError(DomainError):
 class UpdateCustomerProfileCommand:
     context: CommandContext
     subscriber_id: UUID
+    actor: AuditActor
     first_name: str
     last_name: str
     email: str
@@ -411,7 +412,7 @@ def update_customer_profile(
             )
             stage_audit_event(
                 db,
-                actor=AuditActor.user(str(subscriber.id), label=command.context.actor),
+                actor=command.actor,
                 action="portal_profile_update",
                 entity_type="subscriber",
                 entity_id=str(subscriber.id),
@@ -423,6 +424,17 @@ def update_customer_profile(
                     "correlation_id": str(command.context.correlation_id),
                     "source": "customer_portal",
                 },
+            )
+        if email_changed and fields.email:
+            from app.services import email_verification
+
+            email_verification.stage_email_verification(
+                db,
+                command=email_verification.RequestEmailVerificationCommand(
+                    context=command.context,
+                    subscriber_id=subscriber.id,
+                    actor=command.actor,
+                ),
             )
         return CustomerProfileUpdateOutcome(
             subscriber_id=subscriber.id,
@@ -436,17 +448,4 @@ def update_customer_profile(
         context=command.context,
         operation=operation,
     )
-    if outcome.email_changed and fields.email:
-        try:
-            from app.services import auth_flow
-
-            auth_flow.send_email_verification(db, str(command.subscriber_id))
-        except Exception:
-            import logging
-
-            logging.getLogger(__name__).warning(
-                "profile email verification dispatch failed for subscriber %s",
-                command.subscriber_id,
-                exc_info=True,
-            )
     return outcome

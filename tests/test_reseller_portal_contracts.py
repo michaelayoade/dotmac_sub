@@ -200,7 +200,12 @@ def test_accounts_kpi_value_is_independent_of_a_page_status_filter(db_session):
     assert overview_value == reseller_portal.count_accounts(db_session, rid) == 3
     # A page status filter narrows the list but the overview tile is unchanged.
     assert (
-        reseller_portal.count_accounts(db_session, rid, status_filter="suspended") == 1
+        reseller_portal.count_accounts(
+            db_session,
+            rid,
+            status_filter=reseller_portal.ResellerAccountListStatusFilter.suspended,
+        )
+        == 1
     )
     assert overview_value == 3
 
@@ -221,3 +226,10 @@ def test_account_detail_template_uses_action_contracts_for_eligibility():
     # dict so the confirm POST can re-check it.
     assert "account.status_actions.restore.fingerprint" in source
     assert "account.status_actions.disable.fingerprint" in source
+
+
+def test_canceled_account_rows_are_read_only_in_reseller_list_template():
+    source = (_TEMPLATES / "reseller/accounts/index.html").read_text(encoding="utf-8")
+    assert "{% if not account.is_read_only %}" in source
+    assert "View as customer" in source
+    assert "Read only" in source

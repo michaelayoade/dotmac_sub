@@ -263,6 +263,8 @@ class ManagerJob {
     this.scheduledStart,
     this.scheduledEnd,
     this.assignmentQueueId,
+    this.revision,
+    this.assignmentGeneration,
     this.assignedToPersonId,
     this.assignedToLabel,
     this.subscriberLabel,
@@ -283,6 +285,8 @@ class ManagerJob {
   final DateTime? scheduledStart;
   final DateTime? scheduledEnd;
   final String? assignmentQueueId;
+  final DateTime? revision;
+  final String? assignmentGeneration;
   final String? assignedToPersonId;
   final String? assignedToLabel;
   final String? subscriberLabel;
@@ -304,6 +308,8 @@ class ManagerJob {
     scheduledStart: _date(json['scheduled_start']),
     scheduledEnd: _date(json['scheduled_end']),
     assignmentQueueId: json['assignment_queue_id']?.toString(),
+    revision: _date(json['revision']),
+    assignmentGeneration: json['assignment_generation']?.toString(),
     assignedToPersonId: json['assigned_to_person_id']?.toString(),
     assignedToLabel: json['assigned_to_label']?.toString(),
     subscriberLabel: json['subscriber_label']?.toString(),
@@ -311,6 +317,43 @@ class ManagerJob {
     latitude: _double(json['latitude']),
     longitude: _double(json['longitude']),
   );
+}
+
+class ManagerAssignmentSnapshotUnavailable implements Exception {
+  const ManagerAssignmentSnapshotUnavailable();
+}
+
+class ManagerJobAssignmentCommand {
+  const ManagerJobAssignmentCommand._({
+    required this.jobId,
+    required this.personId,
+    required this.expectedRevision,
+    required this.expectedAssignmentGeneration,
+    required this.commandId,
+  });
+
+  factory ManagerJobAssignmentCommand.fromSnapshot({
+    required ManagerJob job,
+    required String personId,
+  }) {
+    final revision = job.revision;
+    if (revision == null) {
+      throw const ManagerAssignmentSnapshotUnavailable();
+    }
+    return ManagerJobAssignmentCommand._(
+      jobId: job.id,
+      personId: personId,
+      expectedRevision: revision,
+      expectedAssignmentGeneration: job.assignmentGeneration,
+      commandId: const Uuid().v4(),
+    );
+  }
+
+  final String jobId;
+  final String personId;
+  final DateTime expectedRevision;
+  final String? expectedAssignmentGeneration;
+  final String commandId;
 }
 
 class ManagerAssignmentUpdate {
@@ -465,16 +508,19 @@ class ManagerRepository {
     return _items(response.data).map(ManagerJob.fromJson).toList();
   }
 
-  Future<void> assignJob({
-    required String jobId,
-    required String personId,
-  }) async {
+  Future<void> assignJob(ManagerJobAssignmentCommand command) async {
     await _ref
         .read(apiClientProvider)
         .dio
         .post(
-          '/api/v1/field/manager/jobs/$jobId/assign',
-          data: {'person_id': personId},
+          '/api/v1/field/manager/jobs/${command.jobId}/assign',
+          data: {
+            'person_id': command.personId,
+            'expected_revision': command.expectedRevision.toIso8601String(),
+            'expected_assignment_generation':
+                command.expectedAssignmentGeneration,
+            'command_id': command.commandId,
+          },
         );
   }
 

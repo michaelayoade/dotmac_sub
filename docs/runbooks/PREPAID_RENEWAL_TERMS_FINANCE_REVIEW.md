@@ -17,6 +17,23 @@ Every such subscription carries one admin work item with fingerprint
 `PrepaidRenewalTermsUnresolved` and `PrepaidWorkItemsOverdue`
 (`deploy/observability/prepaid_enforcement.rules.yml`) link here.
 
+## Automatic historical restoration is retired
+
+Under the 2026-10-12 billing mutation policy, scheduled and direct capture
+only synchronize review evidence. Exact paid evidence (`repairable`) also
+receives an open work item with `next_action=manual_exceptions_review`; it
+never writes `Subscription.unit_price` or emits a new backfilled event.
+Capture reports zero repaired rows and counts every blocked preview row as
+a work item. Missing terms remain blocked; never supply a guessed default.
+Retain exact evidence for the manual exceptions queue and reviewed cutover.
+Closed history stays a read-only Sub archive under the M8 direction.
+
+Payment settlement similarly records periodless paid-invoice candidates as
+manual review alerts, including exact candidates. It does not repair their
+historical line identity, service periods, entitlement, anchor or access.
+Ordinary linked forward settlement and coverage projection repair retain
+their separate owners.
+
 ## What is never allowed
 
 - Never infer the amount from the catalog. The current catalog price is not
@@ -32,7 +49,10 @@ Every such subscription carries one admin work item with fingerprint
 - Never add a catalog price row to an offer that exists to describe
   per-customer free service ("... - Non Billing", staff offers). That turns
   a concession into billed service for everyone on the offer.
-- Never approve your own request. The record command refuses it.
+- Never approve your own request. The record command refuses it, except under
+  the governed, time-boxed sole-approver exception
+  ([`SOLE_APPROVER_EXCEPTION.md`](SOLE_APPROVER_EXCEPTION.md)): off by default,
+  Michael only, with `--sole-approver-justification` and recorded evidence.
 - Never decide from an offer's name: work from the structured decision and
   reasons on the work item.
 

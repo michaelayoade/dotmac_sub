@@ -192,6 +192,17 @@ def open_item(
     return ticket, True
 
 
+def _prepare_close_graph(db: Session, tickets: tuple[Ticket, ...]) -> None:
+    from app.services.topology.outage_completion import lock_complaint_graph
+    from app.services.topology.outage_completion_contracts import (
+        ComplaintGraphLocksQuery,
+    )
+
+    lock_complaint_graph(
+        db, query=ComplaintGraphLocksQuery(tuple(sorted(item.id for item in tickets)))
+    )
+
+
 def close_item(db: Session, ticket: Ticket, resolution: str) -> None:
     now = _now()
     support_service.transition_ticket_status(
@@ -216,8 +227,10 @@ def close_open_items_for_mac(
     resolution: str,
     reasons: set[str] | None = None,
 ) -> int:
+    candidates = tuple(open_items(db))
+    _prepare_close_graph(db, candidates)
     closed = 0
-    for ticket in open_items(db):
+    for ticket in candidates:
         meta = ticket.metadata_ if isinstance(ticket.metadata_, dict) else {}
         if meta.get("radio_mac") != mac_compact:
             continue
@@ -290,8 +303,11 @@ def evaluate(
     stats: Counter = Counter()
     confirmed = _confirmed_rows_by_mac(db)
 
+    # Fence the whole batch before the first Ticket write.
+    candidates = tuple(open_items(db))
+    _prepare_close_graph(db, candidates)
     # 1. Auto-close items whose condition no longer holds.
-    for ticket in open_items(db):
+    for ticket in candidates:
         meta = ticket.metadata_ if isinstance(ticket.metadata_, dict) else {}
         mac = meta.get("radio_mac")
         if not mac:

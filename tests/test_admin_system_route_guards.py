@@ -1,10 +1,12 @@
 import hashlib
+from contextlib import contextmanager
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
 from fastapi import HTTPException
+from sqlalchemy.orm import Session
 
 from app.models.auth import (
     AuthProvider,
@@ -20,6 +22,7 @@ from app.models.system_user import SystemUser
 from app.services import web_system_profiles as web_system_profiles_service
 from app.services.auth_flow import hash_password
 from app.services.credential_crypto import decrypt_credential
+from app.services.db_session_adapter import db_session_adapter
 from app.services.radius_population import record_device_login_sync_status
 from app.web.admin import system as admin_system
 from tests.staff_identity_fixtures import add_bound_staff_user
@@ -44,16 +47,6 @@ def test_require_system_user_principal_rejects_subscriber():
         admin_system._require_system_user_principal(request)
 
     assert exc.value.status_code == 403
-
-
-def test_dbi_principal_id_prefers_stable_actor_id(monkeypatch):
-    request = SimpleNamespace()
-    monkeypatch.setattr(
-        "app.web.admin.get_current_user",
-        lambda _request: {"subscriber_id": "system-user-1", "id": "system-user-1"},
-    )
-
-    assert admin_system._dbi_principal_id(request) == "system-user-1"
 
 
 def test_profile_state_prefers_system_user_id_for_mfa_status(db_session):
@@ -372,7 +365,7 @@ def test_profile_device_login_self_rotation_rejects_non_router_user(db_session):
     assert exc.value.status_code == 403
 
 
-def test_profile_sign_out_other_sessions_keeps_current(db_session):
+def test_profile_sign_out_other_sessions_keeps_current(db_session, monkeypatch):
     system_user, person = add_bound_staff_user(
         db_session,
         email="session-revoker@example.com",
@@ -393,6 +386,15 @@ def test_profile_sign_out_other_sessions_keeps_current(db_session):
     )
     db_session.add_all([current, other])
     db_session.commit()
+
+    @contextmanager
+    def fresh():
+        with Session(
+            bind=db_session.get_bind(), join_transaction_mode="create_savepoint"
+        ) as command_db:
+            yield command_db
+
+    monkeypatch.setattr(db_session_adapter, "owner_command_session", fresh)
     request = SimpleNamespace(
         state=SimpleNamespace(
             auth={

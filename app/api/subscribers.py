@@ -423,8 +423,23 @@ def change_subscriber_billing_approval(
     tags=["subscribers"],
     dependencies=[Depends(require_permission("customer:delete"))],
 )
-def delete_subscriber(subscriber_id: str, db: Session = Depends(get_db)):
-    subscriber_service.subscribers.delete(db, subscriber_id)
+def delete_subscriber(
+    subscriber_id: str, request: Request, db: Session = Depends(get_db)
+) -> None:
+    from app.adapters.customer_account_deletion import (
+        customer_deletion_actor,
+        delete_customer_from_adapter,
+        require_deleted,
+    )
+    from app.services.customer_account_deletion import CustomerDeletionPolicy
+
+    require_deleted(
+        delete_customer_from_adapter(
+            customer_id=subscriber_id,
+            actor=customer_deletion_actor(request),
+            policy=CustomerDeletionPolicy.JSON,
+        )
+    )
 
 
 @router.post(

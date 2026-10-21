@@ -312,11 +312,10 @@ TASK_RELIABILITY_CONTRACTS: dict[str, TaskReliabilityContract] = {
     "app.tasks.enforcement.reconcile_billing_approval_drift": _c(
         "enforcement",
         SWEEP,
-        PER_ITEM,
+        IDEMP,
         LOG,
-        "Permanent drift sweep; each account is locked and recomputed by the "
-        "billing-approval owner, failures are isolated, and the next beat pass "
-        "reselects any remaining active/unapproved account.",
+        "Retired no-op kept for one release so queued beat messages resolve; "
+        "writes nothing.",
     ),
     "app.tasks.enforcement.detect_stale_overdue_locks": _c(
         "enforcement", SWEEP, IDEMP, STATUS, "Dry-run detector; writes nothing."
@@ -692,6 +691,7 @@ TASK_RELIABILITY_CONTRACTS: dict[str, TaskReliabilityContract] = {
     "app.tasks.radius.audit_ip_consistency": _c("radius", SWEEP, IDEMP, HEALTH),
     "app.tasks.radius.audit_suspension_enforcement": _c("radius", SWEEP, IDEMP, HEALTH),
     "app.tasks.radius.connectivity_shadow_audit": _c("radius", SWEEP, IDEMP, HEALTH),
+    "app.tasks.radius.ipv4_retention_release": _c("radius", SWEEP, IDEMP, HEALTH),
     "app.tasks.radius.reap_radacct_ghosts": _c("radius", SWEEP, IDEMP, HEALTH),
     "app.tasks.radius.reconcile_active_sessions": _c(
         "radius",
@@ -854,6 +854,47 @@ TASK_RELIABILITY_CONTRACTS: dict[str, TaskReliabilityContract] = {
         "Periodic observation refresh; expiring facts are recomputed and a later "
         "beat run repairs a missed or failed collection.",
     ),
+    "app.tasks.router_health.reconcile_router_posture": _c(
+        "network",
+        SWEEP,
+        IDEMP,
+        HEALTH,
+        "Read-only snapshot posture projection into admin alerts; findings are "
+        "recomputed from stored snapshots, so a later run repairs a missed one.",
+    ),
+    "app.tasks.router_health.reconcile_service_path": _c(
+        "network",
+        SWEEP,
+        IDEMP,
+        HEALTH,
+        "Recomputes CoA outcome and enforcement-path findings from counters; a "
+        "later run repairs a missed one.",
+    ),
+    "app.tasks.router_health.run_coa_canary": _c(
+        "network",
+        SWEEP,
+        GUARDED,
+        HEALTH,
+        "Sends no-op CoA probes to production NAS: audited before sending, "
+        "single-flight by advisory lock and rate-limited per NAS, so it is "
+        "never blindly retried; the next daily run re-attempts.",
+    ),
+    "app.tasks.router_health.reprobe_coa_canary": _c(
+        "network",
+        SWEEP,
+        GUARDED,
+        HEALTH,
+        "One follow-up probe after a canary timeout; not retried, the next "
+        "daily canary re-attempts.",
+    ),
+    "app.tasks.router_health.observe_router_runtime": _c(
+        "network",
+        SWEEP,
+        IDEMP,
+        HEALTH,
+        "Read-only REST poll of each router; signal state and findings are "
+        "recomputed every run, so a later run repairs a missed one.",
+    ),
     "app.tasks.topology_metrics.export_topology_metrics": _c(
         "network", SWEEP, IDEMP, HEALTH
     ),
@@ -990,6 +1031,9 @@ TASK_RELIABILITY_CONTRACTS: dict[str, TaskReliabilityContract] = {
     "app.tasks.usage.reap_stale_radius_sessions": _c("usage", SWEEP, IDEMP, HEALTH),
     "app.tasks.usage.run_usage_rating": _c("usage", STATE, GUARDED, HEALTH),
     "app.tasks.vacation_holds.resume_expired_holds": _c(
+        "customer", SWEEP, GUARDED, HEALTH
+    ),
+    "app.tasks.vacation_holds.resume_ticket_resolved_pauses": _c(
         "customer", SWEEP, GUARDED, HEALTH
     ),
     "app.tasks.vpn.run_vpn_control_job": _c("network", STATE, STATEFUL, STATUS),

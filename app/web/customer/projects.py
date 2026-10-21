@@ -4,6 +4,8 @@ Server-rendered typed projection of native projects, tasks, field visits and
 support resolution. Distinct from /portal/installations (provisioning slots).
 """
 
+from uuid import UUID
+
 from fastapi import APIRouter, Depends, Request
 from fastapi.responses import HTMLResponse, RedirectResponse, Response
 from sqlalchemy.orm import Session
@@ -25,13 +27,16 @@ def customer_projects(request: Request, db: Session = Depends(get_db)) -> Respon
         return RedirectResponse(
             url="/portal/auth/login?next=/portal/projects", status_code=303
         )
-    subscriber_id = str(optional_customer_subscriber_id(db, customer) or "")
+    subscriber_id = optional_customer_subscriber_id(db, customer)
     context = {
         "request": request,
         "customer": customer,
         "active_page": "projects",
         "tracker": customer_experience_lifecycle.projects_for_subscriber(
-            db, subscriber_id
+            db,
+            query=customer_experience_lifecycle.CustomerLifecycleQuery(
+                UUID(subscriber_id) if subscriber_id else None
+            ),
         ),
     }
     return templates.TemplateResponse("customer/projects/index.html", context)

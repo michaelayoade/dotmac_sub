@@ -196,6 +196,16 @@ period and due boundaries use Africa/Lagos midnight converted to UTC. The
 invoice, allocation ledger evidence, entitlement, anchor, audit, metadata, and
 idempotency reservation commit together.
 
+That generic missing-invoice command intentionally rejects a period that
+already has an active ledger-backed entitlement. When the overlap is the exact
+historical payment-linked debit chain (no invoice and no `AccountAdjustment`),
+the only writer is
+`financial.prepaid_service_renewals.repair_legacy_payment_backed_renewal_invoice`.
+It first reverses the existing customer-position debit and retires the exact
+entitlement, then creates the paid documentary replacement with zero funding
+or coverage delta. The generic command does not acquire this authority and its
+overlap refusal remains a safety invariant.
+
 The selected-payment allocation uses a typed reviewed-document finalization.
 It creates the canonical paid-invoice and entitlement evidence but does not
 emit a second funding-increase observation or invoke financial-access
@@ -590,6 +600,49 @@ draft creation remains owned by `financial.prepaid_recovery_billing`, while
 every resulting prepaid draft is classified and reconciled here regardless of
 which approved path created it.
 
+## Reviewed paid-period replacement
+
+A lapsed prepaid subscription can receive a payment after its historical
+anniversary has passed. If an older funding event is replayed as fresh funding,
+the canonical renewal path may create and settle a future-shifted invoice even
+though the immediately preceding period remains missing. When no periodless
+draft exists, the existing reviewed-draft command has no safe target and must
+not manufacture one in an adapter.
+
+The separate `replace_reviewed_paid_prepaid_period` owner command handles only
+that no-draft shape. Its typed query names the subscription, wrong paid invoice,
+sole funding Payment, exact replacement UTC instants, expected contract total,
+unchanged remaining credit, verified payment reference, Finance approver,
+ticket, and evidence digest. Preview is read-only and requires:
+
+- one active, non-proforma, fully paid invoice with one positive line, one
+  active full-value allocation from the selected successful unreturned
+  Payment, and one matching active invoice-backed entitlement;
+- a replacement interval with the strict lapsed-renewal shape `replacement
+  start < wrong start < replacement end < wrong end`;
+- exactly one surviving entitlement ending at the replacement start and no
+  competing invoice or entitlement overlapping the replacement interval;
+- exact current contract cadence, subtotal, tax, total, currency, payment
+  proof reference, cutover-aware verified prepaid funding position,
+  allocation-release preview, and billing anchor; pre-opening mirror ledger
+  residue is not current customer credit; and
+- an active named Finance approver plus an authorized operator principal.
+
+Apply enters `execute_owner_command` once. It locks all evidence, recomputes the
+fingerprint, voids the wrong invoice through the invoice owner, releases only
+its allocation, revokes only its entitlement, and retracts the anchor to the
+end of surviving coverage. It then invokes the canonical prepaid-renewal owner
+to create and settle the replacement invoice from the same selected Payment.
+The resulting entitlement, renewal event, final anchor, metadata, audit record,
+and idempotency reservation commit together. The expected verified customer
+funding position (reviewed opening plus native post-boundary facts) must be
+identical before and after; any changed cent, unavailable opening, or ambiguous
+overlap rolls back the whole repair.
+
+The operator CLI is dry-run first. Deployment does not apply this repair; a
+production operator still needs separate authorization for the exact reviewed
+fingerprint and production target.
+
 ## Reviewed multi-invoice sequence reconstruction
 
 Some cutover defects span several consecutive invoices and payments. Repairing
@@ -738,3 +791,14 @@ or incomplete paid/coverage result, rolling back the complete repair.
 
 This change does not mutate historical customer records during deployment.
 Backlog state changes occur only through an explicit reviewed apply command.
+# Reviewed missing-invoice calendar selection
+
+The entity-scoped missing-paid-invoice repair defaults to Lagos business
+midnight. It may instead select `documented_anniversary` only with an aware
+expected initial anchor and an explicit active reference entitlement belonging
+to the same account and subscription. The reference start/end Lagos clocks must
+agree, its end and the current `next_billing_at` must equal the proposed period
+start, and the proposed end must be the canonical next cadence boundary. The
+selected Payment's Lagos paid date remains the issue-date evidence. These facts
+are fingerprinted and rechecked under lock. Business-midnight mode rejects both
+documentary arguments, so adapters cannot introduce an arbitrary clock.

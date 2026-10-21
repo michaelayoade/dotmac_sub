@@ -709,8 +709,7 @@ class _LayerSelector extends StatelessWidget {
 }
 
 IconData _assetIcon(String type) => switch (type) {
-  'olt' => Icons.router_outlined,
-  'fdh' => Icons.hub_outlined,
+  'fdh_cabinet' => Icons.hub_outlined,
   'fiber_access_point' => Icons.device_hub_outlined,
   'splice_closure' => Icons.join_inner_outlined,
   'wireless_mast' => Icons.cell_tower_outlined,
@@ -719,8 +718,7 @@ IconData _assetIcon(String type) => switch (type) {
 };
 
 Color _assetColor(String type) => switch (type) {
-  'olt' => AppColors.category(0),
-  'fdh' => AppColors.category(1),
+  'fdh_cabinet' => AppColors.category(1),
   'fiber_access_point' => AppColors.category(2),
   'splice_closure' => AppColors.category(4),
   'wireless_mast' => AppColors.category(5),
@@ -733,7 +731,6 @@ int _assetPaintRank(String type) => switch (type) {
   'fiber_access_point' => 1,
   'wireless_mast' => 2,
   'splice_closure' => 3,
-  'fdh' => 4,
-  'olt' => 5,
+  'fdh_cabinet' => 4,
   _ => 0,
 };

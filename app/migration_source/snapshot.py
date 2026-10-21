@@ -171,7 +171,14 @@ class SourceIdentity(BaseModel):
 
 
 class SourceRevision(BaseModel):
-    """What the snapshot was taken from, precisely enough to retake it."""
+    """What the snapshot was taken from, precisely enough to retake it.
+
+    Defaults stamp newly captured snapshots with the current programme binding.
+    Explicit values in historical artifacts are preserved, never upgraded on
+    load: both identifiers contribute to the canonical digest. A historical
+    digest remains source evidence for its recorded binding, not proof of the
+    current in-place shadow or authority switch.
+    """
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 

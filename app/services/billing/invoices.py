@@ -9,6 +9,7 @@ import re
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
+from enum import Enum
 from uuid import UUID
 
 from fastapi import HTTPException
@@ -81,6 +82,7 @@ from app.services.events import emit_event
 from app.services.events.types import EventType
 from app.services.invoice_classification import collectible_ar_invoice_filter
 from app.services.locking import lock_for_update
+from app.services.owner_commands import owner_command_active
 from app.services.response import ListResponseMixin
 from app.services.sync_feeds import apply_sync_page, sync_page_response
 
@@ -91,11 +93,192 @@ _WRITE_OFF_IDEMPOTENCY_SCOPE = "invoice_write_off"
 _RECONCILIATION_IDEMPOTENCY_SCOPE = "invoice_closure_reconciliation"
 _HISTORICAL_TAX_CORRECTION_METADATA_KEY = "historical_invoice_tax_correction"
 _EXISTING_TAX_REPLACEMENT_METADATA_KEY = "existing_invoice_tax_replacement"
+_CONTROLLED_DRAFT_METADATA_KEY = "controlled_draft"
+_CONTROLLED_DRAFT_SCHEMA_VERSION = 1
+_BACKDATED_SERVICE_INVOICE_OWNER = "financial.backdated_service_invoicing"
+_BACKDATED_SERVICE_INVOICE_MARKER = "backdated_service_invoice"
+_BACKDATED_SERVICE_INVOICE_REF_PREFIX = "backdated-service-invoicing:"
 _IDEMPOTENCY_KEY_RE = re.compile(r"^[A-Za-z0-9._~-]{16,120}$")
 
 
 class InvoiceOwnerError(DomainError):
     """Transport-neutral failure from an invoice-owner participant."""
+
+
+def _controlled_draft_metadata(invoice: Invoice) -> dict[str, object] | None:
+    metadata = invoice.metadata_ if isinstance(invoice.metadata_, dict) else {}
+    value = metadata.get(_CONTROLLED_DRAFT_METADATA_KEY)
+    return value if isinstance(value, dict) else None
+
+
+def is_controlled_invoice_draft(invoice: Invoice) -> bool:
+    """Return whether a draft carries owner-sealed documentary identity."""
+
+    return (
+        invoice.status is InvoiceStatus.draft
+        and _controlled_draft_metadata(invoice) is not None
+    )
+
+
+def _canonical_control_value(value: object) -> object:
+    if isinstance(value, dict):
+        return {
+            str(key): _canonical_control_value(item)
+            for key, item in sorted(value.items(), key=lambda pair: str(pair[0]))
+        }
+    if isinstance(value, (list, tuple)):
+        return [_canonical_control_value(item) for item in value]
+    if isinstance(value, datetime):
+        normalized = _evidence_utc(value)
+        return normalized.isoformat() if normalized is not None else None
+    if isinstance(value, (Decimal, UUID)):
+        return str(value)
+    if isinstance(value, Enum):
+        return value.value
+    return value
+
+
+def _controlled_draft_document_fingerprint(
+    invoice: Invoice,
+    lines: tuple[InvoiceLine, ...],
+    *,
+    controller_owner: str,
+    preview_fingerprint: str,
+) -> str:
+    payload = {
+        "schema_version": _CONTROLLED_DRAFT_SCHEMA_VERSION,
+        "controller_owner": controller_owner,
+        "preview_fingerprint": preview_fingerprint,
+        "invoice": {
+            "id": invoice.id,
+            "account_id": invoice.account_id,
+            "invoice_number": invoice.invoice_number,
+            "status": invoice.status,
+            "currency": invoice.currency,
+            "subtotal": invoice.subtotal,
+            "discount_type": invoice.discount_type,
+            "discount_value": invoice.discount_value,
+            "discount_amount": invoice.discount_amount,
+            "discount_reason": invoice.discount_reason,
+            "tax_total": invoice.tax_total,
+            "total": invoice.total,
+            "balance_due": invoice.balance_due,
+            "billing_period_start": invoice.billing_period_start,
+            "billing_period_end": invoice.billing_period_end,
+            "issued_at": invoice.issued_at,
+            "due_at": invoice.due_at,
+            "due_date_basis": invoice.due_date_basis,
+            "due_date_basis_ref": invoice.due_date_basis_ref,
+            "due_date_policy_version": invoice.due_date_policy_version,
+            "paid_at": invoice.paid_at,
+            "memo": invoice.memo,
+            "is_proforma": invoice.is_proforma,
+            "is_sent": invoice.is_sent,
+            "added_by_id": invoice.added_by_id,
+            "splynx_invoice_id": invoice.splynx_invoice_id,
+            "legacy_external_reference": invoice.legacy_external_reference,
+            "metadata": {
+                str(key): value
+                for key, value in (invoice.metadata_ or {}).items()
+                if key != _CONTROLLED_DRAFT_METADATA_KEY
+            },
+            "is_active": invoice.is_active,
+        },
+        "lines": [
+            {
+                "id": line.id,
+                "subscription_id": line.subscription_id,
+                "description": line.description,
+                "quantity": line.quantity,
+                "unit_price": line.unit_price,
+                "amount": line.amount,
+                "tax_rate_id": line.tax_rate_id,
+                "tax_rate_snapshot_version": line.tax_rate_snapshot_version,
+                "tax_rate_code_snapshot": line.tax_rate_code_snapshot,
+                "tax_rate_percent_snapshot": line.tax_rate_percent_snapshot,
+                "tax_rate_is_active_snapshot": line.tax_rate_is_active_snapshot,
+                "tax_application": line.tax_application,
+                "metadata": line.metadata_,
+                "billing_line_key": line.billing_line_key,
+                "is_active": line.is_active,
+            }
+            for line in lines
+        ],
+    }
+    return hashlib.sha256(
+        json.dumps(
+            _canonical_control_value(payload),
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode("utf-8")
+    ).hexdigest()
+
+
+def _controlled_draft_lines(db: Session, invoice_id: UUID) -> tuple[InvoiceLine, ...]:
+    return tuple(
+        db.scalars(
+            select(InvoiceLine)
+            .where(
+                InvoiceLine.invoice_id == invoice_id,
+                InvoiceLine.is_active.is_(True),
+            )
+            .order_by(InvoiceLine.created_at, InvoiceLine.id)
+            .with_for_update()
+        ).all()
+    )
+
+
+def _assert_generic_draft_mutation_allowed(invoice: Invoice) -> None:
+    if _controlled_draft_metadata(invoice) is not None:
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                "This reviewed invoice document is owner-controlled and cannot "
+                "be edited through the generic invoice workflow"
+            ),
+        )
+
+
+def _assert_controlled_draft_ready_for_issue(db: Session, invoice: Invoice) -> None:
+    seal = _controlled_draft_metadata(invoice)
+    if seal is None:
+        return
+    controller_owner = str(seal.get("controller_owner") or "")
+    preview_fingerprint = str(seal.get("preview_fingerprint") or "")
+    expected_fingerprint = str(seal.get("document_fingerprint") or "")
+    raw_line_ids = seal.get("line_ids")
+    expected_line_ids = (
+        tuple(str(value) for value in raw_line_ids)
+        if isinstance(raw_line_ids, (list, tuple))
+        else ()
+    )
+    lines = _controlled_draft_lines(db, invoice.id)
+    actual_line_ids = tuple(str(line.id) for line in lines)
+    if (
+        seal.get("schema_version") != _CONTROLLED_DRAFT_SCHEMA_VERSION
+        or not controller_owner
+        or len(preview_fingerprint) != 64
+        or len(expected_fingerprint) != 64
+        or not isinstance(raw_line_ids, (list, tuple))
+        or not lines
+        or expected_line_ids != actual_line_ids
+        or expected_fingerprint
+        != _controlled_draft_document_fingerprint(
+            invoice,
+            lines,
+            controller_owner=controller_owner,
+            preview_fingerprint=preview_fingerprint,
+        )
+    ):
+        raise InvoiceOwnerError(
+            code="financial.invoice.controlled_draft_drift",
+            message=(
+                "The reviewed invoice draft changed after approval; create a new "
+                "preview before issuing it."
+            ),
+            details={"invoice_id": str(invoice.id)},
+            retryable=False,
+        )
 
 
 def build_transient_classification_invoice_shell(
@@ -486,6 +669,29 @@ class PaidPrepaidInvoiceDocumentRepair:
 
 
 @dataclass(frozen=True, slots=True)
+class ReviewedPaidPrepaidInvoicePeriodRestoration:
+    """Finance-reviewed service period for one paid invoice whose period is malformed.
+
+    The ``expected_*`` values are the exact before-state the coordinating
+    owner previewed and two staff members approved. The participant refuses
+    to write when any of them changed, so a period is never restored over
+    evidence nobody reviewed. ``expected_line_subscription_id`` is ``None``
+    when the reviewed line was unlinked and is linked by this restoration.
+    """
+
+    invoice_id: UUID
+    line_id: UUID
+    subscription_id: UUID
+    expected_billing_period_start: datetime | None
+    expected_billing_period_end: datetime | None
+    expected_line_subscription_id: UUID | None
+    expected_line_amount: Decimal
+    billing_period_start: datetime
+    billing_period_end: datetime
+    evidence_ref: str
+
+
+@dataclass(frozen=True, slots=True)
 class DraftInvoiceLineReplacement:
     """One line in a complete admin-draft replacement request."""
 
@@ -509,6 +715,26 @@ class InvoiceLineTaxSnapshot:
     code: str | None
     rate: Decimal
     is_active: bool
+
+
+def _has_backdated_service_line_evidence(metadata: object) -> bool:
+    if not isinstance(metadata, dict):
+        return False
+    return metadata.get(_BACKDATED_SERVICE_INVOICE_MARKER) is True or str(
+        metadata.get("reviewed_prepaid_sequence_ref") or ""
+    ).startswith(_BACKDATED_SERVICE_INVOICE_REF_PREFIX)
+
+
+def _assert_backdated_service_line_evidence_owner(
+    db: Session, metadata: object
+) -> None:
+    if _has_backdated_service_line_evidence(metadata) and not owner_command_active(
+        db, owner=_BACKDATED_SERVICE_INVOICE_OWNER
+    ):
+        raise InvoiceOwnerError(
+            code="financial.invoice.backdated_service_owner_required",
+            message="Backdated service line evidence requires its active owner.",
+        )
 
 
 def _apply_invoice_line_tax_snapshot(
@@ -720,7 +946,11 @@ def reconcile_service_after_invoice_settlement(
 
 
 def next_invoice_number(db: Session) -> str:
-    """Generate the next sequential invoice number."""
+    """Generate the next invoice number using the active legacy sequence.
+
+    The released Numbering series remains inactive until its census, parity and
+    single-writer cutover are separately approved.
+    """
     return numbering.generate_required_number(
         db,
         SettingDomain.billing,
@@ -1173,6 +1403,11 @@ class Invoices(ListResponseMixin):
             raise DraftInvoiceParticipantError(
                 "invoice_not_editable",
                 "Only draft invoices can be edited",
+            )
+        if is_controlled_invoice_draft(invoice):
+            raise DraftInvoiceParticipantError(
+                "controlled_draft_immutable",
+                "Reviewed controlled drafts cannot be edited",
             )
         data = payload.model_dump(exclude_unset=True)
         if "account_id" in data and data["account_id"] != invoice.account_id:
@@ -2154,6 +2389,7 @@ class Invoices(ListResponseMixin):
                 status_code=409,
                 detail="Convert the proforma before issuing an invoice",
             )
+        _assert_controlled_draft_ready_for_issue(db, invoice)
         issuance_funding = None
         if apply_available_credit:
             from app.services.billing.account_credit import AccountCreditApplications
@@ -2466,6 +2702,11 @@ class Invoices(ListResponseMixin):
         but never changes money, lifecycle state, or a conflicting identity.
         """
 
+        _assert_backdated_service_line_evidence_owner(
+            db,
+            {"reviewed_prepaid_sequence_ref": document.evidence_ref},
+        )
+
         invoice = lock_for_update(db, Invoice, str(document.invoice_id))
         eligible_statuses = {
             InvoiceStatus.draft,
@@ -2709,6 +2950,105 @@ class Invoices(ListResponseMixin):
                 "billing_period_start": repair.billing_period_start.isoformat(),
                 "billing_period_end": repair.billing_period_end.isoformat(),
                 "paid_prepaid_invoice_repair_ref": repair.repair_evidence_ref,
+            }
+        )
+        line.metadata_ = line_metadata
+        db.flush()
+        return invoice
+
+    @staticmethod
+    def restore_reviewed_paid_prepaid_period_for_owner(
+        db: Session,
+        restoration: ReviewedPaidPrepaidInvoicePeriodRestoration,
+    ) -> Invoice:
+        """Write a finance-reviewed period onto one paid, period-malformed invoice.
+
+        Flush-only participant for
+        ``financial.prepaid_paid_invoice_period_repair``. It changes only the
+        invoice's documentary service period, the reviewed line's period
+        projection, and (for an unlinked line) its subscription link. It never
+        changes status, totals, balance, allocations, ledger facts, or the
+        line's ``kind``: a proration or one-off line keeps its classification.
+        The coordinating owner proves settlement, terms, overlap, and approval.
+        """
+
+        invoice = lock_for_update(db, Invoice, str(restoration.invoice_id))
+        start = restoration.billing_period_start
+        end = restoration.billing_period_end
+        current_start = invoice.billing_period_start if invoice is not None else None
+        current_end = invoice.billing_period_end if invoice is not None else None
+        normalized_start = _evidence_utc(current_start)
+        normalized_end = _evidence_utc(current_end)
+        currently_malformed = (
+            normalized_start is None
+            or normalized_end is None
+            or normalized_end <= normalized_start
+        )
+        if (
+            invoice is None
+            or not invoice.is_active
+            or invoice.is_proforma
+            or invoice.status is not InvoiceStatus.paid
+            or round_money(to_decimal(invoice.balance_due)) > Decimal("0.00")
+            or not currently_malformed
+            or normalized_start
+            != _evidence_utc(restoration.expected_billing_period_start)
+            or normalized_end != _evidence_utc(restoration.expected_billing_period_end)
+        ):
+            raise InvoiceOwnerError(
+                code="financial.invoice.paid_prepaid_period_restoration_rejected",
+                message=(
+                    "Invoice is not the reviewed active paid document with a "
+                    "malformed service period."
+                ),
+                details={"invoice_id": str(restoration.invoice_id)},
+            )
+        if (
+            start.tzinfo is None
+            or end.tzinfo is None
+            or end <= start
+            or not restoration.evidence_ref.strip()
+        ):
+            raise InvoiceOwnerError(
+                code="financial.invoice.paid_prepaid_period_restoration_rejected",
+                message="Restored service period must be positive and timezone-aware.",
+                details={"invoice_id": str(restoration.invoice_id)},
+            )
+        line = db.scalar(
+            select(InvoiceLine)
+            .where(
+                InvoiceLine.id == restoration.line_id,
+                InvoiceLine.invoice_id == invoice.id,
+                InvoiceLine.is_active.is_(True),
+            )
+            .with_for_update()
+        )
+        if (
+            line is None
+            or line.subscription_id != restoration.expected_line_subscription_id
+            or line.subscription_id not in {None, restoration.subscription_id}
+            or round_money(to_decimal(line.amount))
+            != round_money(restoration.expected_line_amount)
+        ):
+            raise InvoiceOwnerError(
+                code="financial.invoice.paid_prepaid_period_restoration_rejected",
+                message="Reviewed paid invoice line identity changed after approval.",
+                details={
+                    "invoice_id": str(restoration.invoice_id),
+                    "line_id": str(restoration.line_id),
+                },
+            )
+
+        invoice.billing_period_start = start
+        invoice.billing_period_end = end
+        line.subscription_id = restoration.subscription_id
+        line_metadata = dict(line.metadata_ or {})
+        line_metadata.update(
+            {
+                "billing_period_start": start.isoformat(),
+                "billing_period_end": end.isoformat(),
+                "billing_period_source": "finance_reviewed_period_repair",
+                "paid_prepaid_period_repair_ref": restoration.evidence_ref,
             }
         )
         line.metadata_ = line_metadata
@@ -3235,9 +3575,7 @@ class Invoices(ListResponseMixin):
                     ),
                 )
         if not data.get("invoice_number"):
-            generated = next_invoice_number(db)
-            if generated:
-                data["invoice_number"] = generated
+            data["invoice_number"] = next_invoice_number(db)
         native_issue = (
             not _allow_unverified_due_date
             and data.get("status") == InvoiceStatus.issued
@@ -3417,15 +3755,6 @@ class Invoices(ListResponseMixin):
             else round_money(subtotal + tax_total)
         )
 
-        # Create invoice
-        invoice_number = numbering.generate_required_number(
-            db,
-            SettingDomain.billing,
-            "invoice_number",
-            "invoice_number_prefix",
-            "invoice_number_padding",
-            "invoice_number_start",
-        )
         # An invoice that calls itself issued must carry the dates that make
         # that true. Declaring the status without them produced invoices with no
         # issue date and no due date: they could never age, never go overdue,
@@ -3442,7 +3771,7 @@ class Invoices(ListResponseMixin):
             db,
             InvoiceCreate(
                 account_id=coerce_uuid(subscriber_id),
-                invoice_number=invoice_number,
+                invoice_number=None,
                 currency=currency,
                 subtotal=subtotal,
                 tax_total=tax_total,
@@ -3641,6 +3970,7 @@ class Invoices(ListResponseMixin):
         invoice = get_by_id(db, Invoice, invoice_id)
         if not invoice:
             raise HTTPException(status_code=404, detail="Invoice not found")
+        _assert_generic_draft_mutation_allowed(invoice)
         previous_status = invoice.status
         data = payload.model_dump(exclude_unset=True)
         if invoice.status in {InvoiceStatus.void, InvoiceStatus.written_off}:
@@ -3760,6 +4090,7 @@ class Invoices(ListResponseMixin):
         invoice = get_by_id(db, Invoice, invoice_id)
         if not invoice:
             raise HTTPException(status_code=404, detail="Invoice not found")
+        _assert_generic_draft_mutation_allowed(invoice)
         if invoice.status != InvoiceStatus.draft:
             raise HTTPException(
                 status_code=409,
@@ -3900,6 +4231,11 @@ class InvoiceLines(ListResponseMixin):
                 "invoice_not_editable",
                 "Invoice lines can be edited only while the invoice is a draft",
             )
+        if is_controlled_invoice_draft(invoice):
+            raise DraftInvoiceParticipantError(
+                "controlled_draft_immutable",
+                "Reviewed controlled draft lines cannot be edited",
+            )
         if invoice.discount_type and not allow_discount_reprice:
             raise DraftInvoiceParticipantError(
                 "active_discount_blocks_line_mutation",
@@ -3917,6 +4253,13 @@ class InvoiceLines(ListResponseMixin):
         seen: set[UUID] = set()
         for replacement in replacements:
             payload = replacement.payload
+            try:
+                _assert_backdated_service_line_evidence_owner(db, payload.metadata_)
+            except InvoiceOwnerError as exc:
+                raise DraftInvoiceParticipantError(
+                    "reserved_line_evidence",
+                    "Reserved invoice line evidence cannot be authored here",
+                ) from exc
             if payload.invoice_id != invoice.id:
                 raise DraftInvoiceParticipantError(
                     "line_not_found",
@@ -3975,6 +4318,11 @@ class InvoiceLines(ListResponseMixin):
                 status_code=409,
                 detail="System lines may be added only to draft or issued invoices",
             )
+        try:
+            _assert_backdated_service_line_evidence_owner(db, payload.metadata_)
+        except InvoiceOwnerError as exc:
+            raise HTTPException(status_code=409, detail=exc.message) from exc
+        _assert_generic_draft_mutation_allowed(invoice)
         tax_rate: TaxRate | InvoiceLineTaxSnapshot | None = (
             tax_snapshot
             or _resolve_tax_rate(
@@ -4092,6 +4440,11 @@ class InvoiceLines(ListResponseMixin):
                 status_code=409,
                 detail="Invoice lines can be edited only while the invoice is a draft",
             )
+        try:
+            _assert_backdated_service_line_evidence_owner(db, payload.metadata_)
+        except InvoiceOwnerError as exc:
+            raise HTTPException(status_code=409, detail=exc.message) from exc
+        _assert_generic_draft_mutation_allowed(invoice)
         if invoice.discount_type:
             raise HTTPException(
                 status_code=409,
@@ -4170,6 +4523,7 @@ class InvoiceLines(ListResponseMixin):
                 status_code=409,
                 detail="Invoice lines can be edited only while the invoice is a draft",
             )
+        _assert_generic_draft_mutation_allowed(invoice)
         if invoice.discount_type:
             raise HTTPException(
                 status_code=409,
@@ -4211,6 +4565,7 @@ class InvoiceLines(ListResponseMixin):
                 status_code=409,
                 detail="Invoice lines can be edited only while the invoice is a draft",
             )
+        _assert_generic_draft_mutation_allowed(invoice)
         if invoice.discount_type:
             raise HTTPException(
                 status_code=409,

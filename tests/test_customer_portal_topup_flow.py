@@ -1,5 +1,6 @@
 import asyncio
 import importlib
+import uuid
 from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
@@ -78,6 +79,20 @@ def _upsert_billing_setting(db_session, key: str, value: str) -> None:
     db_session.add(setting)
     db_session.commit()
     SettingsCache.invalidate(SettingDomain.billing.value, key)
+
+
+@pytest.fixture(autouse=True)
+def _stub_module_intent_open(monkeypatch) -> None:
+    """Unit lane has no mod_payments schema; stub the module intent open.
+
+    Real cross-module behavior is proven on migrated PostgreSQL in
+    tests/integration/test_gateway_invoice_intent_module_pg.py.
+    """
+
+    monkeypatch.setattr(
+        "app.services.gateway_topup_intents._open_module_invoice_intent",
+        lambda _db, _intent: None,
+    )
 
 
 @pytest.fixture(autouse=True)
@@ -1715,7 +1730,6 @@ def test_verify_and_record_topup_returns_allocation_breakdown_and_credit_added(
             metadata={"topup_intent_id": intent["intent_id"]},
         ),
     )
-    monkeypatch.setattr("app.services.events.emit_event", lambda *args, **kwargs: None)
 
     result = verify_and_record_topup(
         db_session,
@@ -1815,7 +1829,6 @@ def test_verify_and_record_topup_preserves_paystack_gross_and_fee(
             metadata={"topup_intent_id": intent["intent_id"]},
         ),
     )
-    monkeypatch.setattr("app.services.events.emit_event", lambda *args, **kwargs: None)
 
     result = verify_and_record_topup(
         db_session,
@@ -1861,7 +1874,6 @@ def test_verify_preserves_pre_migration_intent_policy(
             metadata={},
         ),
     )
-    monkeypatch.setattr("app.services.events.emit_event", lambda *args, **kwargs: None)
 
     result = verify_and_record_topup(
         db_session,
@@ -1929,6 +1941,15 @@ def test_verify_and_record_payment_allocates_invoice_and_credits_remainder(
         lambda *_args, **_kwargs: Decimal("2000.00"),
     )
 
+    # D1 hold: switch OFF (default) => an OFF-created, legacy-only intent
+    # settles without any payments-module read (production has no mod_*).
+    def _forbidden(*_args, **_kwargs):
+        raise AssertionError("payments module must not be read while OFF")
+
+    monkeypatch.setattr(
+        "app.services.customer_portal_flow_payments.observe_invoice_intent_parity",
+        _forbidden,
+    )
     result = verify_and_record_payment(
         db_session,
         {"account_id": str(subscriber.id)},
@@ -2117,7 +2138,6 @@ def test_verify_and_record_topup_is_idempotent_and_preserves_summary(
             metadata={"topup_intent_id": intent["intent_id"]},
         ),
     )
-    monkeypatch.setattr("app.services.events.emit_event", lambda *args, **kwargs: None)
 
     first = verify_and_record_topup(
         db_session,
@@ -2164,7 +2184,6 @@ def test_verify_and_record_topup_omits_available_balance_when_lookup_fails(
             metadata={"topup_intent_id": intent["intent_id"]},
         ),
     )
-    monkeypatch.setattr("app.services.events.emit_event", lambda *args, **kwargs: None)
     monkeypatch.setattr(
         "app.services.customer_portal_flow_payments.get_available_balance",
         lambda *_args, **_kwargs: (_ for _ in ()).throw(
@@ -2181,3 +2200,206 @@ def test_verify_and_record_topup_omits_available_balance_when_lookup_fails(
 
     assert result["already_recorded"] is False
     assert result["available_balance"] is None
+
+
+@pytest.mark.parametrize("parity_outcome", ("missing", "mismatch", "match"))
+def test_invoice_checkout_authorizes_before_module_query_and_provider(
+    monkeypatch: pytest.MonkeyPatch, db_session, subscriber, parity_outcome: str
+) -> None:
+    from app.services import customer_portal_flow_payments as flow
+    from app.services.payment_intent_module_shadow import (
+        AuthorizedInvoiceIntentBinding,
+        IntentBindingParity,
+        IntentParityOutcome,
+    )
+
+    intent = TopupIntent(
+        account_id=subscriber.id,
+        reference="ordering-checkout",
+        provider_type="paystack",
+        requested_amount=Decimal("100.00"),
+        currency="NGN",
+        channel="customer_selfcare",
+        metadata_={"payment_flow": "invoice_payment"},
+    )
+    db_session.add(intent)
+    db_session.commit()
+    calls: list[str] = []
+
+    def authorize(*_args) -> bool:
+        calls.append("authorize")
+        return False
+
+    def compare(_db, binding: AuthorizedInvoiceIntentBinding) -> IntentBindingParity:
+        calls.append("module")
+        assert binding.reference == intent.reference
+        assert binding.invoice_reference is None
+        return IntentBindingParity(IntentParityOutcome(parity_outcome))
+
+    class ProviderReached(Exception):
+        pass
+
+    def provider(*_args, **_kwargs):
+        calls.append("provider")
+        raise ProviderReached
+
+    monkeypatch.setattr(flow, "starter_ledger_live_enabled", lambda _db: True)
+    monkeypatch.setattr(flow, "customer_can_access_account", authorize)
+    monkeypatch.setattr(flow, "observe_invoice_intent_parity", compare)
+    monkeypatch.setattr(flow, "_observe_gateway_for_customer", provider)
+    with pytest.raises(ValueError, match="does not belong"):
+        flow.verify_and_record_payment(
+            db_session, {"account_id": str(subscriber.id)}, intent.reference
+        )
+    assert calls == ["authorize"]
+    calls.clear()
+
+    def allow(*_args) -> bool:
+        calls.append("authorize")
+        return True
+
+    monkeypatch.setattr(flow, "customer_can_access_account", allow)
+    with pytest.raises(ProviderReached):
+        flow.verify_and_record_payment(
+            db_session, {"account_id": str(subscriber.id)}, intent.reference
+        )
+    assert calls == ["authorize", "module", "provider"]
+
+
+def test_invoice_checkout_module_database_error_stops_provider(
+    monkeypatch: pytest.MonkeyPatch, db_session, subscriber
+) -> None:
+    from sqlalchemy.exc import DBAPIError
+
+    from app.services import customer_portal_flow_payments as flow
+    from app.services.payment_intent_module_shadow import AuthorizedInvoiceIntentBinding
+
+    intent = TopupIntent(
+        account_id=subscriber.id,
+        reference="module-database-refusal",
+        provider_type="paystack",
+        requested_amount=Decimal("100.00"),
+        currency="NGN",
+        metadata_={"payment_flow": "invoice_payment"},
+    )
+    db_session.add(intent)
+    db_session.commit()
+    error = DBAPIError("query", {}, RuntimeError("database failure"))
+
+    def refuse(_db, _binding: AuthorizedInvoiceIntentBinding):
+        raise error
+
+    def unexpected_provider(*_args, **_kwargs):
+        pytest.fail("provider must not run after a failed module database read")
+
+    monkeypatch.setattr(flow, "starter_ledger_live_enabled", lambda _db: True)
+    monkeypatch.setattr(flow, "customer_can_access_account", lambda *_args: True)
+    monkeypatch.setattr(flow, "observe_invoice_intent_parity", refuse)
+    monkeypatch.setattr(flow, "_observe_gateway_for_customer", unexpected_provider)
+    with pytest.raises(DBAPIError) as caught:
+        flow.verify_and_record_payment(
+            db_session, {"account_id": str(subscriber.id)}, intent.reference
+        )
+    assert caught.value is error
+
+
+def test_invoice_verify_switch_off_skips_module_parity_query(
+    monkeypatch: pytest.MonkeyPatch, db_session, subscriber
+) -> None:
+    """D1 hold: OFF means no mod_payments read on the verify path."""
+
+    from app.services import customer_portal_flow_payments as flow
+
+    intent = TopupIntent(
+        account_id=subscriber.id,
+        reference="verify-switch-off",
+        provider_type="paystack",
+        requested_amount=Decimal("100.00"),
+        currency="NGN",
+        metadata_={"payment_flow": "invoice_payment"},
+    )
+    db_session.add(intent)
+    db_session.commit()
+
+    class ProviderReached(Exception):
+        pass
+
+    def forbidden(*_args, **_kwargs):
+        raise AssertionError("payments module must not be read while OFF")
+
+    def provider(*_args, **_kwargs):
+        raise ProviderReached
+
+    monkeypatch.setattr(flow, "customer_can_access_account", lambda *_args: True)
+    monkeypatch.setattr(flow, "observe_invoice_intent_parity", forbidden)
+    monkeypatch.setattr(flow, "_observe_gateway_for_customer", provider)
+    with pytest.raises(ProviderReached):
+        flow.verify_and_record_payment(
+            db_session, {"account_id": str(subscriber.id)}, intent.reference
+        )
+
+
+def test_invoice_verify_switch_off_starter_linked_invoice_reads_module_parity(
+    monkeypatch: pytest.MonkeyPatch, db_session, subscriber
+) -> None:
+    """A Starter-linked invoice keeps the module parity read even when OFF."""
+
+    from app.models.billing import StarterInvoiceLink
+    from app.services import customer_portal_flow_payments as flow
+    from app.services.payment_intent_module_shadow import (
+        IntentBindingParity,
+        IntentParityOutcome,
+    )
+
+    invoice = Invoice(
+        account_id=subscriber.id,
+        invoice_number="INV-VERIFY-LINKED",
+        currency="NGN",
+        subtotal=Decimal("100.00"),
+        total=Decimal("100.00"),
+        balance_due=Decimal("100.00"),
+        status=InvoiceStatus.issued,
+    )
+    db_session.add(invoice)
+    db_session.flush()
+    db_session.add(
+        StarterInvoiceLink(
+            tenant_id=uuid.UUID(int=1),
+            invoice_id=invoice.id,
+            billing_account_id=uuid.UUID(int=2),
+            document_id=uuid.uuid4(),
+            source_fact_id="fact-verify-linked",
+        )
+    )
+    intent = TopupIntent(
+        account_id=subscriber.id,
+        invoice_id=invoice.id,
+        reference="verify-linked",
+        provider_type="paystack",
+        requested_amount=Decimal("100.00"),
+        currency="NGN",
+        metadata_={"payment_flow": "invoice_payment"},
+    )
+    db_session.add(intent)
+    db_session.commit()
+    calls: list[str] = []
+
+    class ProviderReached(Exception):
+        pass
+
+    def compare(_db, _binding):
+        calls.append("module")
+        return IntentBindingParity(IntentParityOutcome.MATCH)
+
+    def provider(*_args, **_kwargs):
+        raise ProviderReached
+
+    monkeypatch.setattr(flow, "customer_can_access_account", lambda *_args: True)
+    monkeypatch.setattr(flow, "starter_ledger_live_enabled", lambda _db: False)
+    monkeypatch.setattr(flow, "observe_invoice_intent_parity", compare)
+    monkeypatch.setattr(flow, "_observe_gateway_for_customer", provider)
+    with pytest.raises(ProviderReached):
+        flow.verify_and_record_payment(
+            db_session, {"account_id": str(subscriber.id)}, intent.reference
+        )
+    assert calls == ["module"]

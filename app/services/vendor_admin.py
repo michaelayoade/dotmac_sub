@@ -10,14 +10,13 @@ vendor is half-real:
   ``VendorPurchaseInvoice.vendor_id`` FK against it, so it is what quoting and
   invoicing see.
 * ``field_vendors`` (``FieldVendor``) is what *authentication* resolves through:
-  ``FieldVendorUser.system_user_id -> FieldVendor -> crm_vendor_id -> Vendor``
+  ``FieldVendorUser.system_user_id -> FieldVendor -> native_vendor_id -> Vendor``
   (``app/services/field/vendor_auth.py``).
 
-The two are bridged only by ``FieldVendor.crm_vendor_id`` — a ``String(64)``
-holding the ``Vendor`` UUID, not a foreign key. So creating a ``Vendor`` alone
-yields a vendor who can be quoted against but **cannot log in**, and creating a
-``FieldVendor`` alone yields a login with no quoting identity. ``create`` below
-always writes the pair and bridges them.
+The profiles are linked by ``FieldVendor.native_vendor_id``, a unique foreign
+key. ``crm_vendor_id`` remains a compatibility projection for older portal
+readers. ``create`` writes both records and both links until those readers are
+retired.
 
 (``Vendor.users`` relates to ``VendorUser``, which has no consumers anywhere —
 the live membership model is ``FieldVendorUser``. Do not wire new work to it.)
@@ -25,14 +24,11 @@ the live membership model is ``FieldVendorUser``. Do not wire new work to it.)
 **Revocation invariant.** Deactivating a vendor is an authorization decision,
 so it fails closed. ``vendor_auth`` gates portal login on
 ``FieldVendor.is_active``, which means a deactivation that does not reach the
-twin revokes nothing while still reporting success. Because the bridge is a
-nullable string rather than a foreign key, "no twin resolved" is not evidence
-that no login exists — an imported vendor routinely carries one this service
-cannot resolve. So a deactivation with no resolvable twin refuses outright when
-an unbridged login still matches the vendor, and it refuses *before* mutating
-the row so no caller can commit a revocation that never took effect. Repairing
-the bridge is a deliberate staff act; guessing at it here would be guessing at
-an authorization boundary.
+twin revokes nothing while still reporting success. A deactivation with no
+linked profile refuses outright when an unlinked login still matches the
+vendor, and it refuses *before* mutating the row so no caller can commit a
+revocation that never took effect. Repairing the link is a deliberate staff
+act; guessing at it here would be guessing at an authorization boundary.
 """
 
 from __future__ import annotations
@@ -68,7 +64,7 @@ def get_field_vendor(db: Session, vendor: Vendor) -> FieldVendor | None:
     """The auth-side twin of a native vendor, if it has been bridged."""
     return (
         db.query(FieldVendor)
-        .filter(FieldVendor.crm_vendor_id == str(vendor.id))
+        .filter(FieldVendor.native_vendor_id == vendor.id)
         .one_or_none()
     )
 
@@ -152,21 +148,21 @@ def portal_access_summaries(
     vendors: list[Vendor],
 ) -> dict[UUID, VendorPortalAccessSummary]:
     """Summarize whether native vendors have usable portal access."""
-    vendor_ids = [str(vendor.id) for vendor in vendors]
+    vendor_ids = [vendor.id for vendor in vendors]
     field_vendors = (
-        db.query(FieldVendor).filter(FieldVendor.crm_vendor_id.in_(vendor_ids)).all()
+        db.query(FieldVendor).filter(FieldVendor.native_vendor_id.in_(vendor_ids)).all()
         if vendor_ids
         else []
     )
     field_vendor_by_native_id = {
-        field_vendor.crm_vendor_id: field_vendor for field_vendor in field_vendors
+        field_vendor.native_vendor_id: field_vendor for field_vendor in field_vendors
     }
     user_counts = _active_portal_user_counts(
         db, [field_vendor.id for field_vendor in field_vendors]
     )
     summaries: dict[UUID, VendorPortalAccessSummary] = {}
     for vendor in vendors:
-        field_vendor = field_vendor_by_native_id.get(str(vendor.id))
+        field_vendor = field_vendor_by_native_id.get(vendor.id)
         active_user_count = user_counts.get(field_vendor.id, 0) if field_vendor else 0
         summaries[vendor.id] = _portal_access_summary(
             field_vendor,
@@ -179,8 +175,8 @@ def unbridged_twin_candidates(db: Session, vendor: Vendor) -> list[FieldVendor]:
     """Active ``FieldVendor`` rows that look like this vendor but are not
     bridged to it.
 
-    ``FieldVendor.crm_vendor_id`` is a nullable ``String(64)``, not a foreign
-    key, so an imported vendor can carry a login this service cannot resolve.
+    ``FieldVendor.native_vendor_id`` is the authoritative foreign key, so an
+    unlinked imported vendor can carry a login this service cannot resolve.
     Matching on the unique ``code`` or the contact email is enough to *detect*
     that case; it is deliberately not enough to act on it, because guessing at
     an authorization boundary is how access silently survives revocation.
@@ -197,8 +193,8 @@ def unbridged_twin_candidates(db: Session, vendor: Vendor) -> list[FieldVendor]:
         .filter(FieldVendor.is_active.is_(True))
         .filter(
             or_(
-                FieldVendor.crm_vendor_id.is_(None),
-                FieldVendor.crm_vendor_id != str(vendor.id),
+                FieldVendor.native_vendor_id.is_(None),
+                FieldVendor.native_vendor_id != vendor.id,
             )
         )
         .filter(or_(*matches))
@@ -261,8 +257,8 @@ def _assert_code_free(
     if exclude_id is not None:
         twin_query = twin_query.filter(
             or_(
-                FieldVendor.crm_vendor_id.is_(None),
-                FieldVendor.crm_vendor_id != str(exclude_id),
+                FieldVendor.native_vendor_id.is_(None),
+                FieldVendor.native_vendor_id != exclude_id,
             )
         )
     if twin_query.first() is not None:
@@ -310,6 +306,7 @@ def create(
 
     db.add(
         FieldVendor(
+            native_vendor_id=vendor.id,
             crm_vendor_id=str(vendor.id),
             name=vendor.name,
             code=vendor.code,
@@ -344,7 +341,17 @@ def update(
     notes: str | None = None,
     is_active: bool | None = None,
 ) -> Vendor:
-    vendor = get(db, vendor_id)
+    # Match field execution/import: native vendor precedes its portal bridge.
+    # Explicit locks avoid relying on ORM flush ordering across these tables.
+    vendor = (
+        db.query(Vendor)
+        .populate_existing()
+        .filter(Vendor.id == coerce_uuid(vendor_id))
+        .with_for_update()
+        .one_or_none()
+    )
+    if vendor is None:
+        raise HTTPException(status_code=404, detail="Vendor not found")
 
     clean_name = _clean(name)
     if name is not None and not clean_name:
@@ -355,6 +362,8 @@ def update(
         _assert_code_free(db, clean_code, exclude_id=vendor.id)
 
     twin = get_field_vendor(db, vendor)
+    if twin is not None:
+        db.refresh(twin, with_for_update=True)
     if is_active is False and twin is None:
         # Revocation with no resolvable twin: fail closed, and do it *before*
         # touching the row. A missing bridge is not evidence that no login

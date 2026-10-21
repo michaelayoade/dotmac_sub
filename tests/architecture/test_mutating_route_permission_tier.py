@@ -93,8 +93,10 @@ _WRITE_TIER_VERBS = frozenset(
         "cancel",
         "commission",
         "configure",
+        "correct",  # Appends a reviewed customer-subledger opening correction.
         "create",
-        "db_admin",
+        "create_backdated_service",  # Creates a reviewed historical service document.
+        "create_subscription_service",  # Issues a reviewed next-period document.
         "delete",
         "dispatch",
         "distribute",
@@ -106,12 +108,16 @@ _WRITE_TIER_VERBS = frozenset(
         "mirror",
         "pay",
         "operate",
+        "policy",  # Publishes decision-bearing policy.
         "publish",
         "push_config",
         "redrive",
         "repair",  # Executes reviewed financial recovery.
+        "reconstruct_backdated_service",  # Adds reviewed historical identity.
         "retire",
+        "reveal",  # Audited disclosure of a stored credential; never read-tier.
         "reverse",
+        "revoke",  # Withdraws current authority or approval.
         "resume",
         "review",
         "self_assign",
@@ -204,12 +210,16 @@ _POST_SHAPED_READS: dict[str, str] = {
         "Simulates FUP rules against a hypothetical usage scenario and returns JSON."
     ),
     "POST /admin/catalog/subscriptions/{subscription_id}/lifecycle/preview": (
-        "Previews one lifecycle command without mutating subscription state, "
-        "and additionally re-checks the per-kind permission in the body "
-        "(``_assert_lifecycle_preview_permission``)."
+        "Previews one lifecycle command without mutating subscription state "
+        "(``subscription:read``). The execute route enforces the per-kind "
+        "permission."
     ),
     "POST /admin/catalog/subscriptions/bulk/lifecycle/preview": (
         "Batch counterpart of the lifecycle preview; no item is mutated."
+    ),
+    "POST /admin/catalog/bulk-tariff-change/preview": (
+        "Computes the bulk tariff change preview and fingerprint from posted "
+        "offer ids; persists nothing. The execute route stays on catalog:write."
     ),
     "POST /admin/provisioning/bulk-activate/preview": (
         "Builds the bulk-activation preview from posted filters/mapping. The "
@@ -611,3 +621,18 @@ def test_every_permission_guard_factory_declares_what_it_demands():
         "guard. Wrap the returned dependency in _declare_permissions(...):\n  "
         + "\n  ".join(undeclared)
     )
+
+
+def test_policy_and_revoke_permissions_are_write_tier():
+    for verb in ("policy", "revoke"):
+        assert verb in _WRITE_TIER_VERBS
+        assert verb not in _READ_TIER_VERBS
+        planted = APIRouter(prefix="/admin/__planted__")
+
+        @planted.post(
+            "/mutate", dependencies=[Depends(require_permission(f"operations:{verb}"))]
+        )
+        def _quiet_policy() -> None:  # pragma: no cover - never called
+            return None
+
+        assert _read_tier_violations(_surface_with(planted)) == set()

@@ -102,7 +102,103 @@ class HighImpactEditor:
     reason: str | None = None
 
 
+SUPPORT_RESOLUTION_FORM = register(
+    FormContract(
+        key="support.request_resolution_confirmation",
+        title="Request customer resolution confirmation",
+        entity="support_ticket",
+        command_owner="support.ticket_lifecycle",
+        consequences=(
+            FormConsequence(
+                "pinned_basis",
+                "Pins the exact current accepted completion evidence for all enrolled linked work orders.",
+            ),
+            FormConsequence(
+                "customer_confirmation",
+                "Moves the ticket to pending confirmation and schedules its grace timer; customer confirmation or dispute remains separate.",
+            ),
+            FormConsequence(
+                "replace_capability",
+                "A replacement request invalidates the previous customer confirmation capability; exact retries retain the original deadline.",
+            ),
+        ),
+    )
+)
+
+
 HIGH_IMPACT_EDITORS: tuple[HighImpactEditor, ...] = (
+    HighImpactEditor(
+        key="integrations.nextcloud_talk.credentials",
+        surface="admin installed Nextcloud Talk credential setup",
+        status="contracted",
+        contract_key="integrations.nextcloud_talk.credentials",
+    ),
+    HighImpactEditor(
+        key="support.request_resolution_confirmation",
+        surface="admin support ticket customer confirmation request",
+        status="contracted",
+        contract_key="support.request_resolution_confirmation",
+    ),
+    HighImpactEditor(
+        key="field_completion.enroll",
+        surface="admin completion enrollment",
+        status="contracted",
+        contract_key="field_completion.enroll",
+    ),
+    HighImpactEditor(
+        key="field_completion.publish_criteria",
+        surface="admin native completion criteria",
+        status="contracted",
+        contract_key="field_completion.publish_criteria",
+    ),
+    HighImpactEditor(
+        key="field_completion.publish_policy",
+        surface="admin completion publish_policy",
+        status="contracted",
+        contract_key="field_completion.publish_policy",
+    ),
+    HighImpactEditor(
+        key="field_completion.decide",
+        surface="admin completion decide",
+        status="contracted",
+        contract_key="field_completion.decide",
+    ),
+    HighImpactEditor(
+        key="field_completion.revoke",
+        surface="admin completion revoke",
+        status="contracted",
+        contract_key="field_completion.revoke",
+    ),
+    HighImpactEditor(
+        key="project_engineering.policy",
+        surface="admin Project engineering policy",
+        status="contracted",
+        contract_key="project_engineering.policy",
+    ),
+    HighImpactEditor(
+        key="project_engineering.draft",
+        surface="admin Project engineering draft",
+        status="contracted",
+        contract_key="project_engineering.draft",
+    ),
+    HighImpactEditor(
+        key="project_engineering.review",
+        surface="admin Project engineering review",
+        status="contracted",
+        contract_key="project_engineering.review",
+    ),
+    HighImpactEditor(
+        key="project_engineering.revoke",
+        surface="admin Project engineering revoke",
+        status="contracted",
+        contract_key="project_engineering.revoke",
+    ),
+    HighImpactEditor(
+        key="project_engineering.issue",
+        surface="admin Project engineering issue",
+        status="contracted",
+        contract_key="project_engineering.issue",
+    ),
     HighImpactEditor(
         key="admin.subscription_test_connection",
         surface="admin customer subscription Test Connection",
@@ -142,6 +238,12 @@ HIGH_IMPACT_EDITORS: tuple[HighImpactEditor, ...] = (
         surface="admin billing prepaid draft reconciliation confirmation",
         status="contracted",
         contract_key="admin.prepaid_draft_reconciliation",
+    ),
+    HighImpactEditor(
+        key="admin.customer_subledger_opening_correction",
+        surface="admin billing customer-subledger opening correction",
+        status="contracted",
+        contract_key="admin.customer_subledger_opening_correction",
     ),
     HighImpactEditor(
         key="admin.credit_note_create",

@@ -39,6 +39,9 @@ from app.services.dotmac_erp.invoice_sync_projection import (
     list_invoice_accounting_sync,
     project_invoice_for_accounting,
 )
+from tests.test_api_key_authentication_maintenance import (
+    local_auth_owner_session,  # noqa: F401
+)
 
 _NOW = datetime(2026, 9, 6, 12, 0, tzinfo=UTC)
 

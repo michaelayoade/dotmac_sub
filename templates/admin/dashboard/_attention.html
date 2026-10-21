@@ -1,0 +1,43 @@
+{# Inclusion/severity/order belong to app.services.admin_attention. This partial
+   only applies RBAC visibility and refreshes the rendered projection. #}
+{% set domain_visible = {
+    "network": show_network,
+    "customers": show_subscribers,
+    "provisioning": show_network or show_subscribers,
+    "support": show_support,
+} %}
+{% set attention_rows = [] %}
+{% for item in attention_items %}
+    {% if domain_visible.get(item.domain, true) %}
+        {% if attention_rows.append(item) %}{% endif %}
+    {% endif %}
+{% endfor %}
+<section id="dashboard-attention"
+         data-tour-id="dashboard-attention"
+         hx-get="/admin/dashboard/attention"
+         hx-trigger="every 60s"
+         hx-swap="outerHTML"
+         class="rounded-2xl border border-rose-200/70 bg-white shadow-sm dark:border-rose-900/40 dark:bg-slate-800">
+    <div class="flex items-center justify-between border-b border-rose-100 px-5 py-3 dark:border-rose-900/30">
+        <div class="flex items-center gap-2.5">
+            <span class="flex h-7 w-7 items-center justify-center rounded-lg bg-rose-100 text-rose-600 dark:bg-rose-900/30 dark:text-rose-400" aria-hidden="true">
+                <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01M5.07 19h13.86c1.54 0 2.5-1.67 1.73-3L13.73 4c-.77-1.33-2.69-1.33-3.46 0L3.34 16c-.77 1.33.19 3 1.73 3z"/></svg>
+            </span>
+            <h2 class="text-sm font-semibold text-slate-900 dark:text-white">Needs attention</h2>
+        </div>
+        <span class="rounded-full bg-rose-50 px-2.5 py-0.5 text-xs font-semibold tabular-nums text-rose-700 dark:bg-rose-900/30 dark:text-rose-300">{{ attention_rows | length }}</span>
+    </div>
+    {% if attention_rows %}
+    <div class="grid grid-cols-1 divide-y divide-slate-100 sm:grid-cols-2 sm:divide-y-0 dark:divide-slate-700/40">
+        {% for item in attention_rows %}
+        <a href="{{ item.href }}" class="group flex min-h-11 items-center gap-3 px-5 py-2.5 text-sm transition hover:bg-slate-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-amber-500 dark:hover:bg-slate-700/40">
+            <span class="status-tone-dot status-tone-dot-{{ item.tone }} h-2 w-2 shrink-0 rounded-full" aria-hidden="true"></span>
+            <span class="min-w-0 flex-1 truncate text-slate-700 group-hover:text-slate-900 dark:text-slate-200 dark:group-hover:text-white">{{ item.label }}</span>
+            <svg class="h-4 w-4 shrink-0 text-slate-300 transition group-hover:text-slate-500 dark:text-slate-600 dark:group-hover:text-slate-300" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"/></svg>
+        </a>
+        {% endfor %}
+    </div>
+    {% else %}
+    <p class="px-5 py-4 text-sm text-slate-600 dark:text-slate-300">No items currently need attention.</p>
+    {% endif %}
+</section>

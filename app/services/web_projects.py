@@ -1225,6 +1225,10 @@ def build_project_form_context(
         "infrastructure_error": error
         if error and "infrastructure" in error.lower()
         else None,
+        "infrastructure_project_types": [
+            kind.value
+            for kind in projects_service.PHYSICAL_INFRASTRUCTURE_PROJECT_TYPES
+        ],
         "infrastructure_types": [
             (kind.value, kind.value.replace("_", " ").title())
             for kind in InfrastructureType

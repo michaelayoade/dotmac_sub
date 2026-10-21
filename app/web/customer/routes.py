@@ -31,13 +31,13 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 from sse_starlette.sse import EventSourceResponse
 
+from app import subscriber_mfa_enrollment_http as subscriber_mfa_adapter
 from app.db import finish_read_transaction, get_db
 from app.models.domain_settings import SettingDomain
 from app.schemas.service_period_purchase import (
     ServicePeriodPurchaseCheckoutRequest,
     ServicePeriodPurchasePreviewRequest,
 )
-from app.services import auth_flow as auth_flow_service
 from app.services import autopay as autopay_service
 from app.services import billing_payment_receipts as payment_receipts_service
 from app.services import chat_session as chat_session_service
@@ -57,6 +57,7 @@ from app.services import customer_portal_contacts as customer_portal_contacts_se
 from app.services import customer_portal_flow_payment_methods as customer_cards
 from app.services import customer_portal_notifications as customer_notifications_service
 from app.services import customer_portal_profile_commands as portal_profile_commands
+from app.services import password_authentication as subscriber_mfa_owner
 from app.services import payment_proofs as payment_proofs_service
 from app.services import web_customer_actions as customer_profile_service
 from app.services import web_customer_auth as web_customer_auth_service
@@ -66,6 +67,7 @@ from app.services.application_exception_observability import (
     PaymentVerificationOutcome,
     record_payment_verification_outcome,
 )
+from app.services.audit_adapter import AuditActor
 from app.services.bandwidth import add_directions_to_series, bandwidth_samples
 from app.services.customer_context import (
     optional_customer_account_id,
@@ -1754,6 +1756,12 @@ def customer_update_profile(
         return RedirectResponse(url="/portal/auth/login", status_code=303)
     if _is_read_only_customer(customer):
         return _read_only_response(request, customer, active_page="profile")
+    if customer.get("is_impersonation") or customer.get("impersonated_by"):
+        return Response(
+            content="Profile verification changes are unavailable during impersonation.",
+            status_code=403,
+            media_type="text/plain",
+        )
     subscriber_id = optional_customer_subscriber_id(db, customer)
     if not subscriber_id:
         return templates.TemplateResponse(
@@ -1780,6 +1788,7 @@ def customer_update_profile(
                         scope=portal_profile_commands.PORTAL_PROFILE_WRITE_SCOPE,
                         reason="customer portal profile submission",
                     ),
+                    actor=AuditActor.user(str(customer.get("id") or subscriber_id)),
                     subscriber_id=UUID(str(subscriber_id)),
                     first_name=first_name,
                     last_name=last_name,
@@ -1862,10 +1871,48 @@ def customer_resend_email_verification(
     if _is_read_only_customer(customer):
         return _read_only_response(request, customer, active_page="profile")
     sent = False
+    if customer.get("is_impersonation") or customer.get("impersonated_by"):
+        return Response(
+            content="Profile verification changes are unavailable during impersonation.",
+            status_code=403,
+            media_type="text/plain",
+        )
     subscriber_id = optional_customer_subscriber_id(db, customer)
     if subscriber_id:
         try:
-            sent = auth_flow_service.send_email_verification(db, str(subscriber_id))
+            from uuid import UUID
+
+            from app.services import email_verification
+            from app.services.db_session_adapter import db_session_adapter
+            from app.services.owner_commands import CommandContext
+
+            # Derive the authenticated target before opening the independent owner session.
+            target_id = UUID(str(subscriber_id))
+            with db_session_adapter.owner_command_session() as owner_db:
+                outcome = email_verification.request_email_verification(
+                    owner_db,
+                    command=email_verification.RequestEmailVerificationCommand(
+                        context=CommandContext.system(
+                            actor=f"subscriber:{target_id}",
+                            scope=email_verification.EMAIL_VERIFICATION_SCOPE,
+                            reason="Authenticated email verification resend",
+                        ),
+                        subscriber_id=target_id,
+                        actor=AuditActor.user(str(target_id)),
+                    ),
+                )
+                sent = outcome.queued
+        except email_verification.EmailVerificationError as exc:
+            if exc.code == "auth.email_verification.lock_timeout":
+                return Response(
+                    content=exc.message,
+                    status_code=503,
+                    headers={"Retry-After": "5"},
+                    media_type="text/plain",
+                )
+            logger.warning(
+                "customer_resend_email_verification_rejected code=%s", exc.code
+            )
         except Exception:
             logger.warning("customer_resend_email_verification_failed", exc_info=True)
     return RedirectResponse(
@@ -1888,8 +1935,24 @@ def customer_mfa_setup(request: Request, db: Session = Depends(get_db)) -> Respo
     if not subscriber_id:
         return RedirectResponse(url="/portal/profile", status_code=303)
 
-    setup = auth_flow_service.auth_flow.mfa_setup(
-        db, str(subscriber_id), "Authenticator app"
+    proof = subscriber_mfa_adapter.session_proof(
+        principal_type="subscriber",
+        principal_id=str(subscriber_id),
+        session_id=str(customer.get("auth_session_id")),
+        is_impersonation=bool(
+            customer.get("is_impersonation") or customer.get("impersonated_by")
+        ),
+    )
+    setup = subscriber_mfa_adapter.setup(
+        command=subscriber_mfa_owner.SetupSubscriberMfaCommand(
+            context=subscriber_mfa_adapter.command_context(
+                proof=proof, reason="Customer MFA setup"
+            ),
+            subscriber_id=proof.subscriber_id,
+            label="Authenticator app",
+            provenance=subscriber_mfa_owner.SubscriberMfaProvenance.CUSTOMER_WEB,
+            session=proof,
+        )
     )
     return templates.TemplateResponse(
         "customer/profile/mfa_setup.html",
@@ -1897,9 +1960,9 @@ def customer_mfa_setup(request: Request, db: Session = Depends(get_db)) -> Respo
             "request": request,
             "customer": customer,
             "active_page": "profile",
-            "method_id": setup["method_id"],
-            "secret_key": setup["secret"],
-            "otpauth_uri": setup["otpauth_uri"],
+            "method_id": setup.method_id,
+            "secret_key": setup.secret,
+            "otpauth_uri": setup.otpauth_uri,
         },
     )
 
@@ -1930,10 +1993,28 @@ def customer_mfa_confirm(
         return RedirectResponse(url="/portal/profile", status_code=303)
 
     try:
-        method = auth_flow_service.auth_flow.mfa_confirm(
-            db, method_id, code.strip(), str(subscriber_id)
+        proof = subscriber_mfa_adapter.session_proof(
+            principal_type="subscriber",
+            principal_id=str(subscriber_id),
+            session_id=str(customer.get("auth_session_id")),
+            is_impersonation=bool(
+                customer.get("is_impersonation") or customer.get("impersonated_by")
+            ),
         )
-    except Exception:
+        outcome = subscriber_mfa_adapter.confirm(
+            command=subscriber_mfa_owner.ConfirmSubscriberMfaCommand(
+                context=subscriber_mfa_adapter.command_context(
+                    proof=proof, reason="Customer MFA confirmation"
+                ),
+                subscriber_id=proof.subscriber_id,
+                method_id=UUID(method_id),
+                code=code.strip(),
+                provenance=subscriber_mfa_owner.SubscriberMfaProvenance.CUSTOMER_WEB,
+                session=proof,
+                recovery_delivery=subscriber_mfa_owner.RecoveryCodeDelivery.RETURN_ONCE,
+            )
+        )
+    except (HTTPException, ValueError) as exc:
         return templates.TemplateResponse(
             "customer/profile/mfa_setup.html",
             {
@@ -1945,14 +2026,11 @@ def customer_mfa_confirm(
                 "otpauth_uri": "",
                 "error": "Invalid verification code. Please try again.",
             },
-            status_code=401,
+            status_code=exc.status_code if isinstance(exc, HTTPException) else 400,
+            headers=exc.headers if isinstance(exc, HTTPException) else None,
         )
 
-    recovery_codes = (
-        auth_flow_service.generate_mfa_recovery_codes(db, method)
-        if getattr(method, "id", None)
-        else []
-    )
+    recovery_codes = outcome.recovery_codes
     if recovery_codes:
         return templates.TemplateResponse(
             "customer/profile/mfa_setup.html",

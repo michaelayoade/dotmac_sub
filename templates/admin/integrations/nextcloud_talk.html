@@ -1,0 +1,38 @@
+{% extends "layouts/admin.html" %}
+{% block title %}Nextcloud Talk credentials - Integrations{% endblock %}
+{% block content %}
+<div class="space-y-4">
+    <div class="border-b border-slate-200 pb-4 dark:border-slate-700">
+        <nav class="mb-2 text-sm text-slate-500 dark:text-slate-400"><a href="/admin/integrations/installed" class="hover:text-primary-600">Installed integrations</a> / Nextcloud Talk</nav>
+        <h1 class="text-2xl font-bold text-slate-900 dark:text-white">Nextcloud Talk credentials</h1>
+        <p class="mt-1 text-sm text-slate-500 dark:text-slate-400">Set the existing notifier account’s app password and check its connection.</p>
+    </div>
+    {% if page.error %}<div role="alert" class="rounded-md border border-rose-200 bg-rose-50 p-4 text-sm text-rose-700 dark:border-rose-900 dark:bg-rose-950 dark:text-rose-300">{{ page.error }}</div>{% endif %}
+    {% if page.notice %}<div role="status" class="rounded-md border border-emerald-200 bg-emerald-50 p-4 text-sm text-emerald-700 dark:border-emerald-900 dark:bg-emerald-950 dark:text-emerald-300">{{ page.notice }}</div>{% endif %}
+    <div class="rounded-md border border-slate-200 bg-white p-4 dark:border-slate-700 dark:bg-slate-800">
+        <dl class="grid gap-3 text-sm sm:grid-cols-3">
+            <div><dt class="text-slate-500 dark:text-slate-400">Approved server</dt><dd class="break-all text-slate-900 dark:text-white">{{ page.installation.base_url }}</dd></div>
+            <div><dt class="text-slate-500 dark:text-slate-400">Integration state</dt><dd class="text-slate-900 dark:text-white">{{ page.installation.state | replace('_', ' ') | title }}</dd></div>
+            <div><dt class="text-slate-500 dark:text-slate-400">App password</dt><dd class="text-slate-900 dark:text-white">{{ 'Configured' if page.installation.credential_bound else 'Not configured' }}</dd><dd class="mt-1 text-xs text-slate-500 dark:text-slate-400">Configured means a credential reference is stored; save and validate to check the connection.</dd></div>
+        </dl>
+    </div>
+    {% if can(request, 'system:settings:write') and can(request, 'system:secrets:write') %}
+    <form method="post" action="/admin/integrations/nextcloud-talk/{{ page.installation.installation_id }}" class="space-y-4 rounded-md border border-slate-200 bg-white p-4 dark:border-slate-700 dark:bg-slate-800">
+        {% include "components/forms/csrf_input.html" %}
+        <input type="hidden" name="revision_id" value="{{ page.installation.revision_id }}">
+        <input type="hidden" name="connector_version" value="{{ page.installation.pin.connector_version }}">
+        <input type="hidden" name="manifest_digest" value="{{ page.installation.pin.manifest_digest }}">
+        <input type="hidden" name="operation_id" value="{{ page.operation_id }}">
+        <div><label for="talk-username" class="mb-1 block text-sm font-medium text-slate-700 dark:text-slate-300">Notifier username</label>
+            <input id="talk-username" name="username" required maxlength="160" autocomplete="username" value="{{ page.installation.username }}" class="w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 dark:border-slate-600 dark:bg-slate-900 dark:text-white">
+            <p class="mt-1 text-sm text-slate-500 dark:text-slate-400">Use the approved notifier account that already exists in Nextcloud.</p></div>
+        <div><label for="talk-password" class="mb-1 block text-sm font-medium text-slate-700 dark:text-slate-300">App password</label>
+            <input id="talk-password" type="password" name="app_password" required maxlength="4096" autocomplete="new-password" class="w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 dark:border-slate-600 dark:bg-slate-900 dark:text-white">
+            <p class="mt-1 text-sm text-slate-500 dark:text-slate-400">Enter a new app password for this notifier. Stored passwords are never displayed.</p></div>
+        <ul class="space-y-1 text-sm text-slate-600 dark:text-slate-300">{% for consequence in form_contract.consequences %}<li>{{ consequence.label }}</li>{% endfor %}</ul>
+        <button type="submit" class="rounded-md bg-primary-600 px-4 py-2 text-sm font-semibold text-white hover:bg-primary-700 focus:ring-2 focus:ring-primary-500">Save and validate credentials</button>
+    </form>
+    {% else %}<p class="text-sm text-slate-500 dark:text-slate-400">Updating credentials requires settings and secrets write access.</p>{% endif %}
+    {% include "components/data/recent_activity_panel.html" %}
+</div>
+{% endblock %}

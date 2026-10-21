@@ -1,10 +1,10 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 import pytest
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from sqlalchemy.exc import IntegrityError
 
@@ -23,6 +23,9 @@ from app.services.db_session_adapter import db_session_adapter
 from app.services.field.location_tracking import (
     FieldLocationTracking,
     LocationPingCommand,
+    LocationPingRejected,
+    LocationRequester,
+    LocationSharingCommand,
     field_location_tracking,
 )
 from app.services.owner_commands import owner_command_active
@@ -130,14 +133,14 @@ def test_record_batch_persists_pings_and_updates_presence(db_session):
 
     result = field_location_tracking.record_batch(
         db_session,
-        auth,
+        LocationRequester(UUID(str(auth["principal_id"]))),
         [
             LocationPingCommand(
                 latitude=9.071,
                 longitude=7.451,
                 accuracy_m=10,
                 captured_at=now,
-                crm_work_order_id="wo-live",
+                work_order_public_id="wo-live",
                 status="on_shift",
             ),
             LocationPingCommand(
@@ -169,12 +172,12 @@ def test_stale_ping_does_not_roll_presence_backwards(db_session):
 
     field_location_tracking.record_ping(
         db_session,
-        auth,
+        LocationRequester(UUID(str(auth["principal_id"]))),
         command=LocationPingCommand(latitude=9.071, longitude=7.451, captured_at=now),
     )
     field_location_tracking.record_ping(
         db_session,
-        auth,
+        LocationRequester(UUID(str(auth["principal_id"]))),
         command=LocationPingCommand(
             latitude=1.0,
             longitude=1.0,
@@ -182,7 +185,9 @@ def test_stale_ping_does_not_roll_presence_backwards(db_session):
         ),
     )
 
-    presence = field_location_tracking.get_or_create_presence(db_session, auth)
+    presence = field_location_tracking.get_or_create_presence(
+        db_session, LocationRequester(UUID(str(auth["principal_id"])))
+    )
     assert presence.last_latitude == 9.071
     assert db_session.query(FieldTechLocationPing).count() == 2
 
@@ -195,7 +200,7 @@ def test_location_batch_collects_per_ping_errors(db_session):
 
     result = field_location_tracking.record_batch(
         db_session,
-        auth,
+        LocationRequester(UUID(str(auth["principal_id"]))),
         [
             LocationPingCommand(latitude=9.071, longitude=7.451),
             LocationPingCommand(latitude=9.072, longitude=7.452, status="teleporting"),
@@ -218,12 +223,12 @@ def test_location_ping_rejects_unassigned_work_order_tag(db_session):
 
     result = field_location_tracking.record_batch(
         db_session,
-        auth,
+        LocationRequester(UUID(str(auth["principal_id"]))),
         [
             LocationPingCommand(
                 latitude=9.071,
                 longitude=7.451,
-                crm_work_order_id=row_public_id,
+                work_order_public_id=row_public_id,
             )
         ],
     )
@@ -256,12 +261,12 @@ def test_location_ping_rejects_terminal_work_order_tag(db_session):
 
     result = field_location_tracking.record_batch(
         db_session,
-        auth,
+        LocationRequester(UUID(str(auth["principal_id"]))),
         [
             LocationPingCommand(
                 latitude=9.071,
                 longitude=7.451,
-                crm_work_order_id=row_public_id,
+                work_order_public_id=row_public_id,
             )
         ],
     )
@@ -279,7 +284,7 @@ def test_location_ping_rejects_timestamp_beyond_clock_skew(db_session):
 
     result = field_location_tracking.record_batch(
         db_session,
-        auth,
+        LocationRequester(UUID(str(auth["principal_id"]))),
         [
             LocationPingCommand(
                 latitude=9.071,
@@ -312,24 +317,23 @@ def test_location_ping_rejects_technician_after_reassignment(db_session):
         )
     )
     db_session.flush()
-    db_session.add(
-        WorkOrderAssignmentQueue(
-            work_order_mirror_id=row.id,
-            status="assigned",
-            assigned_technician_id=new_profile.id,
-            updated_at=datetime.now(UTC),
-        )
+    assignment = (
+        db_session.query(WorkOrderAssignmentQueue)
+        .filter_by(work_order_mirror_id=row.id, status="assigned")
+        .one()
     )
+    assignment.assigned_technician_id = new_profile.id
+    assignment.updated_at = datetime.now(UTC)
     db_session.commit()
 
     result = field_location_tracking.record_batch(
         db_session,
-        old_auth,
+        LocationRequester(UUID(str(old_auth["principal_id"]))),
         [
             LocationPingCommand(
                 latitude=9.071,
                 longitude=7.451,
-                crm_work_order_id=row_public_id,
+                work_order_public_id=row_public_id,
             )
         ],
     )
@@ -349,7 +353,7 @@ def test_geofence_is_disabled_by_default(db_session):
 
     result = field_location_tracking.record_batch(
         db_session,
-        auth,
+        LocationRequester(UUID(str(auth["principal_id"]))),
         [LocationPingCommand(latitude=9.071, longitude=7.451)],
     )
 
@@ -370,7 +374,7 @@ def test_geofence_auto_starts_arrived_job_once(db_session):
 
     result = field_location_tracking.record_batch(
         db_session,
-        auth,
+        LocationRequester(UUID(str(auth["principal_id"]))),
         [LocationPingCommand(latitude=9.0711, longitude=7.4511)],
     )
 
@@ -392,7 +396,7 @@ def test_geofence_auto_starts_arrived_job_once(db_session):
     db_session_adapter.release_read_transaction(db_session)
     replay = field_location_tracking.record_batch(
         db_session,
-        auth,
+        LocationRequester(UUID(str(auth["principal_id"]))),
         [LocationPingCommand(latitude=9.0711, longitude=7.4511)],
     )
     assert replay.transitions == ()
@@ -407,9 +411,8 @@ def test_set_sharing_updates_presence_status(db_session):
 
     presence = field_location_tracking.set_sharing(
         db_session,
-        auth,
-        enabled=True,
-        status="on_shift",
+        LocationRequester(UUID(str(auth["principal_id"]))),
+        command=LocationSharingCommand(enabled=True, status="on_shift"),
     )
     assert presence.location_sharing_enabled is True
     assert presence.status == "on_shift"
@@ -417,7 +420,11 @@ def test_set_sharing_updates_presence_status(db_session):
     # set_sharing is an owner command; reading the attributes above already
     # reopened an implicit read transaction on this shared session.
     db_session_adapter.release_read_transaction(db_session)
-    presence = field_location_tracking.set_sharing(db_session, auth, enabled=False)
+    presence = field_location_tracking.set_sharing(
+        db_session,
+        LocationRequester(UUID(str(auth["principal_id"]))),
+        command=LocationSharingCommand(enabled=False),
+    )
     assert presence.location_sharing_enabled is False
     assert presence.status == "off_shift"
 
@@ -428,15 +435,14 @@ def test_unknown_status_is_rejected(db_session):
     _profile(db_session, user)
     db_session.commit()
 
-    with pytest.raises(HTTPException) as exc:
+    with pytest.raises(LocationPingRejected) as exc:
         field_location_tracking.set_sharing(
             db_session,
-            auth,
-            enabled=True,
-            status="teleporting",
+            LocationRequester(UUID(str(auth["principal_id"]))),
+            command=LocationSharingCommand(enabled=True, status="teleporting"),
         )
 
-    assert exc.value.status_code == 422
+    assert exc.value.code == "invalid_presence_status"
 
 
 def test_location_api_routes(db_session, monkeypatch):
@@ -542,7 +548,7 @@ def test_batch_row_flush_conflict_is_isolated_to_its_own_row(db_session, monkeyp
 
     result = field_location_tracking.record_batch(
         db_session,
-        auth,
+        LocationRequester(UUID(str(auth["principal_id"]))),
         [
             LocationPingCommand(latitude=9.071, longitude=7.451),
             LocationPingCommand(latitude=9.072, longitude=7.452),
@@ -637,17 +643,17 @@ def test_geofence_runs_after_the_ingest_owner_command_commits(db_session, monkey
     observed: dict[str, object] = {}
     original_evaluate = geofence_module.evaluate
 
-    def _spy_evaluate(db, principal, latitude, longitude):
+    def _spy_evaluate(db, query):
         observed["owner_command_active"] = owner_command_active(
             db, owner="operations.field_location_ingest"
         )
-        return original_evaluate(db, principal, latitude, longitude)
+        return original_evaluate(db, query)
 
     monkeypatch.setattr(geofence_module, "evaluate", _spy_evaluate)
 
     field_location_tracking.record_batch(
         db_session,
-        auth,
+        LocationRequester(UUID(str(auth["principal_id"]))),
         [LocationPingCommand(latitude=9.071, longitude=7.451)],
     )
 
@@ -705,7 +711,7 @@ def test_replayed_ping_persists_once_and_does_not_move_presence(db_session):
     )
 
     first_ping, _, first_replayed = field_location_tracking.record_ping(
-        db_session, auth, command=command
+        db_session, LocationRequester(UUID(str(auth["principal_id"]))), command=command
     )
     assert first_replayed is False
 
@@ -719,7 +725,9 @@ def test_replayed_ping_persists_once_and_does_not_move_presence(db_session):
         client_observation_id=client_observation_id,
     )
     second_ping, presence, second_replayed = field_location_tracking.record_ping(
-        db_session, auth, command=retry_command
+        db_session,
+        LocationRequester(UUID(str(auth["principal_id"]))),
+        command=retry_command,
     )
 
     assert second_replayed is True
@@ -750,7 +758,7 @@ def test_different_technicians_may_share_a_client_observation_id(db_session):
     shared_client_observation_id = uuid4()
     first_ping, _, first_replayed = field_location_tracking.record_ping(
         db_session,
-        first_auth,
+        LocationRequester(UUID(str(first_auth["principal_id"]))),
         command=LocationPingCommand(
             latitude=9.071,
             longitude=7.451,
@@ -759,7 +767,7 @@ def test_different_technicians_may_share_a_client_observation_id(db_session):
     )
     second_ping, _, second_replayed = field_location_tracking.record_ping(
         db_session,
-        second_auth,
+        LocationRequester(UUID(str(second_auth["principal_id"]))),
         command=LocationPingCommand(
             latitude=8.0,
             longitude=6.0,
@@ -788,7 +796,7 @@ def test_batch_duplicate_counts_as_accepted_not_error(db_session):
     already_sent_id = uuid4()
     existing_ping, _, _ = field_location_tracking.record_ping(
         db_session,
-        auth,
+        LocationRequester(UUID(str(auth["principal_id"]))),
         command=LocationPingCommand(
             latitude=9.071,
             longitude=7.451,
@@ -798,7 +806,7 @@ def test_batch_duplicate_counts_as_accepted_not_error(db_session):
 
     result = field_location_tracking.record_batch(
         db_session,
-        auth,
+        LocationRequester(UUID(str(auth["principal_id"]))),
         [
             LocationPingCommand(
                 latitude=9.071,
@@ -834,10 +842,10 @@ def test_ping_without_client_observation_id_always_creates_a_new_row(db_session)
 
     command = LocationPingCommand(latitude=9.071, longitude=7.451, status="on_shift")
     first_ping, _, first_replayed = field_location_tracking.record_ping(
-        db_session, auth, command=command
+        db_session, LocationRequester(UUID(str(auth["principal_id"]))), command=command
     )
     second_ping, _, second_replayed = field_location_tracking.record_ping(
-        db_session, auth, command=command
+        db_session, LocationRequester(UUID(str(auth["principal_id"]))), command=command
     )
 
     assert first_replayed is False
@@ -863,7 +871,7 @@ def test_concurrent_insert_race_recovers_via_replay_not_error(db_session, monkey
 
     winner_ping, _, winner_replayed = field_location_tracking.record_ping(
         db_session,
-        auth,
+        LocationRequester(UUID(str(auth["principal_id"]))),
         command=LocationPingCommand(
             latitude=9.071,
             longitude=7.451,
@@ -903,7 +911,7 @@ def test_concurrent_insert_race_recovers_via_replay_not_error(db_session, monkey
     # the winner's row.
     loser_ping, _, loser_replayed = field_location_tracking.record_ping(
         db_session,
-        auth,
+        LocationRequester(UUID(str(auth["principal_id"]))),
         command=LocationPingCommand(
             latitude=1.0,
             longitude=1.0,
@@ -914,3 +922,52 @@ def test_concurrent_insert_race_recovers_via_replay_not_error(db_session, monkey
     assert loser_replayed is True
     assert loser_ping.id == winner_ping.id
     assert db_session.query(FieldTechLocationPing).count() == 1
+
+
+def test_generated_assignment_requires_matching_location_provenance(db_session):
+    user = _user(db_session)
+    profile = _profile(db_session, user)
+    subscriber = _subscriber(db_session)
+    visit = _work_order(db_session, subscriber)
+    generation = uuid4()
+    db_session.add(
+        WorkOrderAssignmentQueue(
+            work_order_mirror_id=visit.id,
+            status="assigned",
+            assigned_technician_id=profile.id,
+            assignment_generation=generation,
+            assignment_effective_at=datetime.now(UTC),
+        )
+    )
+    requester = LocationRequester(user.id)
+    public_id = visit.public_id
+    db_session.commit()
+    result = field_location_tracking.record_batch(
+        db_session,
+        requester,
+        [
+            LocationPingCommand(
+                latitude=9.0, longitude=7.0, work_order_public_id=public_id
+            ),
+            LocationPingCommand(
+                latitude=9.0,
+                longitude=7.0,
+                work_order_public_id=public_id,
+                assignment_generation=uuid4(),
+            ),
+            LocationPingCommand(
+                latitude=9.0,
+                longitude=7.0,
+                work_order_public_id=public_id,
+                assignment_generation=generation,
+            ),
+        ],
+    )
+    assert result.accepted == 1
+    assert [issue.code for issue in result.errors] == [
+        "assignment_generation_mismatch",
+        "assignment_generation_mismatch",
+    ]
+    rows = db_session.query(FieldTechLocationPing).all()
+    assert len(rows) == 1
+    assert rows[0].assignment_generation == generation

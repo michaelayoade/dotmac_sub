@@ -9,10 +9,16 @@ re-arms verification (reset flag + re-dispatch).
 import uuid
 
 import pytest
-from fastapi import HTTPException
 
 from app.services import auth_flow as auth_flow_service
-from app.services import web_customer_actions
+from app.services import customer_portal_profile_commands as profile_commands
+from app.services import email_verification
+from app.services.audit_adapter import AuditActor
+from app.services.owner_commands import CommandContext
+from tests.customer_profile_owner_support import (
+    profile_command_context,
+    profile_owner_session,
+)
 
 
 @pytest.fixture(autouse=True)
@@ -45,6 +51,21 @@ def _capture_email(monkeypatch):
     return sent
 
 
+def _complete(caller, token):
+    with profile_owner_session(caller) as owner_db:
+        return email_verification.complete_email_verification(
+            owner_db,
+            command=email_verification.CompleteEmailVerificationCommand(
+                context=CommandContext.system(
+                    actor="capability:email-verification",
+                    scope=email_verification.EMAIL_VERIFICATION_SCOPE,
+                    reason="Email completion fast-unit test",
+                ),
+                token=token,
+            ),
+        )
+
+
 def test_verify_email_round_trip(db_session, subscriber, _no_audit):
     """A freshly minted token flips the subscriber to verified, idempotently."""
     assert subscriber.email_verified is False
@@ -52,20 +73,20 @@ def test_verify_email_round_trip(db_session, subscriber, _no_audit):
     token = auth_flow_service._issue_email_verification_token(
         db_session, str(subscriber.id), subscriber.email
     )
-    result = auth_flow_service.verify_email(db_session, token)
+    result = _complete(db_session, token)
     assert result.email_verified is True
 
     db_session.refresh(subscriber)
     assert subscriber.email_verified is True
 
     # Idempotent: verifying again is a success no-op, not an error.
-    again = auth_flow_service.verify_email(db_session, token)
+    again = _complete(db_session, token)
     assert again.email_verified is True
 
 
 def test_verify_email_rejects_bad_token(db_session, _no_audit):
-    with pytest.raises(HTTPException):
-        auth_flow_service.verify_email(db_session, "not-a-real-token")
+    with pytest.raises(email_verification.EmailVerificationError):
+        _complete(db_session, "not-a-real-token")
 
 
 def test_verify_email_rejects_wrong_email(db_session, subscriber, _no_audit):
@@ -73,8 +94,8 @@ def test_verify_email_rejects_wrong_email(db_session, subscriber, _no_audit):
     token = auth_flow_service._issue_email_verification_token(
         db_session, str(subscriber.id), "stale@example.com"
     )
-    with pytest.raises(HTTPException):
-        auth_flow_service.verify_email(db_session, token)
+    with pytest.raises(email_verification.EmailVerificationError):
+        _complete(db_session, token)
     db_session.refresh(subscriber)
     assert subscriber.email_verified is False
 
@@ -112,26 +133,38 @@ def test_profile_email_change_rearms_verification(
     db_session.commit()
 
     new_email = f"changed-{uuid.uuid4().hex[:8]}@example.com"
-    outcome = web_customer_actions.update_customer_profile(
-        db_session,
-        command=web_customer_actions.UpdateCustomerProfileCommand(
-            subscriber_id=subscriber.id,
-            first_name="Test",
-            last_name="User",
-            email=new_email,
-            phone=None,
-            billing_notifications=False,
-            sms_updates=False,
-        ),
-    )
+    with profile_owner_session(db_session) as owner_db:
+        outcome = profile_commands.update_customer_profile(
+            owner_db,
+            command=profile_commands.UpdateCustomerProfileCommand(
+                context=profile_command_context(actor_id=subscriber.id),
+                actor=AuditActor.user(str(subscriber.id)),
+                subscriber_id=subscriber.id,
+                first_name="Test",
+                last_name="User",
+                email=new_email,
+                phone=None,
+                billing_notifications=False,
+                sms_updates=False,
+            ),
+        )
+    db_session.refresh(subscriber)
     assert outcome is not None
-    updated = outcome.subscriber
+    updated = subscriber
     assert updated.email == new_email
     assert updated.email_verified is False
 
-    # A fresh verification email went to the new address.
-    assert len(_capture_email) == 1
-    assert _capture_email[0]["to_email"] == new_email
+    # The profile transaction stages a delivery; it does not call SMTP.
+    from sqlalchemy import select
+
+    from app.models.notification import Notification
+
+    assert _capture_email == []
+    notification = db_session.scalars(
+        select(Notification).where(Notification.event_type == "auth.email_verification")
+    ).one()
+    assert notification.recipient == new_email
+    assert notification.body is None
 
 
 def test_profile_same_email_does_not_resend(
@@ -141,20 +174,24 @@ def test_profile_same_email_does_not_resend(
     subscriber.email_verified = True
     db_session.commit()
 
-    outcome = web_customer_actions.update_customer_profile(
-        db_session,
-        command=web_customer_actions.UpdateCustomerProfileCommand(
-            subscriber_id=subscriber.id,
-            first_name="Test",
-            last_name="User",
-            email=subscriber.email,
-            phone=None,
-            billing_notifications=False,
-            sms_updates=False,
-        ),
-    )
+    with profile_owner_session(db_session) as owner_db:
+        outcome = profile_commands.update_customer_profile(
+            owner_db,
+            command=profile_commands.UpdateCustomerProfileCommand(
+                context=profile_command_context(actor_id=subscriber.id),
+                actor=AuditActor.user(str(subscriber.id)),
+                subscriber_id=subscriber.id,
+                first_name="Test",
+                last_name="User",
+                email=subscriber.email,
+                phone=None,
+                billing_notifications=False,
+                sms_updates=False,
+            ),
+        )
+    db_session.refresh(subscriber)
     assert outcome is not None
-    updated = outcome.subscriber
+    updated = subscriber
     assert updated.email_verified is True
     assert _capture_email == []
 

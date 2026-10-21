@@ -1,0 +1,16 @@
+{% extends "layouts/admin.html" %}
+{% from "components/forms/action_form.html" import action_form with context %}
+{% from "components/actions/action_readiness.html" import action_readiness_panel %}
+{% block title %}Apply accepted field completion{% endblock %}
+{% block content %}
+<div class="mx-auto max-w-4xl space-y-6">
+<h1 class="text-2xl font-semibold">Apply accepted field completion</h1>
+{% if page.preview %}
+<p>{{ page.preview.title }} · {{ page.preview.status }}</p>
+<p>All {{ page.preview.requirements|length }} registered field requirements in this scope must have current accepted evidence, including each reviewed replacement chain.</p>
+<section class="rounded-lg border p-5"><h2 class="font-semibold">Required field visits</h2><ul>{% for work in page.preview.work_orders %}<li>{{ work.public_id }} · {{ work.title }} · {{ work.status }}</li>{% else %}<li>No explicit field enrollments.</li>{% endfor %}</ul></section>
+{{ action_readiness_panel(page.panel) }}
+{% else %}<p role="alert">{{ page.error }}</p><p>The original draft and intent remain below. Reload current information before starting a new intent.</p>{% endif %}
+{% if page.form %}{{ action_form(page.form) }}{% endif %}
+</div>
+{% endblock %}

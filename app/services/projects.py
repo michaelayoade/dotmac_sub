@@ -70,6 +70,12 @@ from app.models.project import (
     ProjectTemplateTaskDependency,
     ProjectType,
 )
+from app.models.project_field_completion import (
+    ProjectFieldCompletionApplication,
+    ProjectFieldCompletionBasis,
+    ProjectFieldCompletionReceipt,
+    ProjectFieldCompletionRequirement,
+)
 from app.models.sales import Lead
 from app.models.subscriber import Subscriber
 from app.models.support import Ticket
@@ -662,6 +668,17 @@ _PROJECT_TERMINAL_STATUSES = {
 # sale. Paired with ``Project.external_reference`` (the BuildoutProject id) it
 # reuses ``uq_projects_external_system_reference`` as the idempotency key.
 BUILDOUT_PROJECT_SYSTEM = "buildout"
+# Explicit physical scope policy; adding a future project type requires owner review.
+PHYSICAL_INFRASTRUCTURE_PROJECT_TYPES: tuple[ProjectType, ...] = (
+    ProjectType.cable_rerun,
+    ProjectType.fiber_optics_relocation,
+    ProjectType.air_fiber_relocation,
+    ProjectType.fiber_optics_installation,
+    ProjectType.air_fiber_installation,
+    ProjectType.cross_connect,
+)
+
+
 _PROJECT_STATUS_TRANSITIONS: dict[str, frozenset[str]] = {
     status.value: frozenset(
         candidate.value
@@ -704,10 +721,12 @@ def _set_project_infrastructure(
     if reference == previous:
         return False
     if reference is not None:
-        if project.project_type != ProjectType.cable_rerun.value:
+        if project.project_type not in {
+            kind.value for kind in PHYSICAL_INFRASTRUCTURE_PROJECT_TYPES
+        }:
             raise _project_error(
                 "invalid_input",
-                "Infrastructure selection is supported for Cable Rerun projects.",
+                "Select a physical project type before choosing infrastructure.",
             )
         if infrastructure_catalogue.resolve(db, reference=reference) is None:
             raise _project_error(
@@ -2508,6 +2527,7 @@ def complete_from_verified_installation(
             "project_canceled",
             "Canceled project cannot receive implementation verification",
         )
+    _guard_project_field_completion(db, project_id=project.id, task_id=None)
     previous_status = project.status
     project.status = ProjectStatus.completed.value
     project.completed_at = datetime.now(UTC)
@@ -3588,6 +3608,18 @@ class Projects(ListResponseMixin):
         )
         if not project:
             raise _project_error("not_found", "Project not found")
+        if (
+            db.scalar(
+                select(ProjectFieldCompletionRequirement.enrollment_id)
+                .where(ProjectFieldCompletionRequirement.project_id == project.id)
+                .limit(1)
+            )
+            is not None
+        ):
+            raise _project_error(
+                "accepted_field_completion_required",
+                "Explicitly enrolled project scopes cannot be archived",
+            )
         project.is_active = False
         _stage_project_audit(
             db,
@@ -3695,14 +3727,18 @@ class Projects(ListResponseMixin):
                 db, project=project, reference=payload.infrastructure, context=context
             ):
                 changed_fields.append("infrastructure")
-        if (
-            project.infrastructure is not None
-            and project.project_type != ProjectType.cable_rerun.value
-        ):
+        if project.infrastructure is not None and project.project_type not in {
+            kind.value for kind in PHYSICAL_INFRASTRUCTURE_PROJECT_TYPES
+        }:
             raise _project_error(
                 "invalid_input",
                 "Clear the infrastructure selection before changing the project type.",
             )
+        if (
+            data.get("status") == ProjectStatus.completed.value
+            and previous_status != ProjectStatus.completed.value
+        ):
+            _guard_project_field_completion(db, project_id=project.id, task_id=None)
         if (
             data.get("status") == ProjectStatus.completed.value
             and project.completed_at is None
@@ -4653,6 +4689,169 @@ def _lock_project_task_scope(
     return project, task
 
 
+@dataclass(frozen=True, slots=True, kw_only=True)
+class ProjectEngineeringOrigin:
+    project_id: UUID
+    task_id: UUID | None
+    project_updated_at: datetime
+    task_updated_at: datetime | None
+    project_template_id: UUID | None
+    applied_template_revision: int | None
+    task_template_id: UUID | None
+    task_template_revision: int | None
+    infrastructure: InfrastructureReference
+    issuance_eligible: bool
+    project_label: str = "Project"
+    task_label: str | None = None
+
+
+def engineering_plan_origin(
+    db: Session, *, project_id: UUID, task_id: UUID | None, lock: bool
+) -> ProjectEngineeringOrigin:
+    """Typed native origin snapshot; Project owns identity and eligibility.
+
+    Locking callers must already be inside their registered owner transaction.
+    Updated-at tokens protect commands; engineering bindings protect long-lived
+    approval freshness. Ordinary title edits do not invalidate approved content.
+    """
+    if lock and not db.in_transaction():
+        raise _project_error(
+            "invalid_input", "Origin locking requires an owner transaction"
+        )
+    project: Project | None
+    task: ProjectTask | None
+    if task_id is not None and lock:
+        project, task = _lock_project_task_scope(db, task_id)
+        # The transaction-free session may retain ORM identities from an older
+        # read. Refresh under the authoritative locks before issuing tokens.
+        db.refresh(project)
+        db.refresh(task)
+    else:
+        query = (
+            select(Project)
+            .where(Project.id == project_id)
+            .execution_options(populate_existing=True)
+        )
+        if lock:
+            query = query.with_for_update()
+        project = db.scalar(query)
+        task = (
+            db.scalar(
+                select(ProjectTask)
+                .where(ProjectTask.id == task_id)
+                .execution_options(populate_existing=True)
+            )
+            if task_id
+            else None
+        )
+    if project is None or not project.is_active or project.id != project_id:
+        raise _project_error(
+            "relationship_conflict", "Active native Project scope required"
+        )
+    if task_id is not None and (
+        task is None
+        or not task.is_active
+        or task.project_id != project.id
+        or task.template_plan_state == ProjectTaskTemplatePlanState.superseded.value
+    ):
+        raise _project_error(
+            "relationship_conflict", "Current active native task scope required"
+        )
+    link_query = (
+        select(ProjectInfrastructure)
+        .where(ProjectInfrastructure.project_id == project.id)
+        .execution_options(populate_existing=True)
+    )
+    link = db.scalar(link_query)
+    if link is None:
+        raise _project_error(
+            "relationship_conflict", "Reviewed native Project infrastructure required"
+        )
+    reference = InfrastructureReference(type=link.type, id=link.id)
+    if (
+        infrastructure_catalogue.resolve(db, reference=reference, active_only=True)
+        is None
+    ):
+        raise _project_error(
+            "relationship_conflict", "Project infrastructure is unavailable"
+        )
+    return ProjectEngineeringOrigin(
+        project_id=project.id,
+        task_id=task.id if task else None,
+        project_updated_at=project.updated_at,
+        task_updated_at=task.updated_at if task else None,
+        project_template_id=project.project_template_id,
+        applied_template_revision=project.applied_template_revision,
+        task_template_id=task.template_task_id if task else None,
+        task_template_revision=task.template_revision if task else None,
+        infrastructure=reference,
+        project_label=f"{project.number} · {project.name}"
+        if project.number
+        else project.name,
+        task_label=(f"{task.number} · {task.title}" if task.number else task.title)
+        if task
+        else None,
+        issuance_eligible=project.status in {"open", "planned", "active"}
+        and (task is None or task.status in {"backlog", "todo", "in_progress"}),
+    )
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class ProjectEngineeringRevocationScope:
+    project_id: UUID
+    task_id: UUID | None
+    project_updated_at: datetime
+    task_updated_at: datetime | None
+    project_label: str = "Project"
+    task_label: str | None = None
+
+
+def engineering_plan_revocation_scope(
+    db: Session, *, project_id: UUID, task_id: UUID | None
+) -> ProjectEngineeringRevocationScope:
+    """Lock an exact historical origin for revocation, without work eligibility.
+
+    Archival, supersession and infrastructure removal cannot preserve an old
+    approval against an explicitly authorized revocation. No lifecycle changes.
+    """
+    if not db.in_transaction():
+        raise _project_error(
+            "invalid_input", "Revocation locking requires an owner transaction"
+        )
+    project = db.scalar(
+        select(Project)
+        .where(Project.id == project_id)
+        .with_for_update()
+        .execution_options(populate_existing=True)
+    )
+    if project is None:
+        raise _project_error("not_found", "Historical Project not found")
+    task = None
+    if task_id is not None:
+        task = db.scalar(
+            select(ProjectTask)
+            .where(ProjectTask.id == task_id)
+            .with_for_update()
+            .execution_options(populate_existing=True)
+        )
+        if task is None or task.project_id != project.id:
+            raise _project_error(
+                "relationship_conflict", "Historical task scope does not match Project"
+            )
+    return ProjectEngineeringRevocationScope(
+        project_id=project.id,
+        task_id=task.id if task else None,
+        project_updated_at=project.updated_at,
+        task_updated_at=task.updated_at if task else None,
+        project_label=f"{project.number} · {project.name}"
+        if project.number
+        else project.name,
+        task_label=(f"{task.number} · {task.title}" if task.number else task.title)
+        if task
+        else None,
+    )
+
+
 def _validate_parent_task(
     db: Session,
     *,
@@ -5049,6 +5248,9 @@ class ProjectTasks(ListResponseMixin):
             previous_status != ProjectTaskStatus.done.value
             and task.status == ProjectTaskStatus.done.value
         ):
+            _guard_project_field_completion(
+                db, project_id=task.project_id, task_id=task.id
+            )
             _require_task_completion_ready(db, task)
         if task.status == ProjectTaskStatus.done.value and not task.completed_at:
             task.completed_at = datetime.now(UTC)
@@ -5529,3 +5731,449 @@ project_templates = ProjectTemplates()
 project_template_tasks = ProjectTemplateTasks()
 project_task_comments = ProjectTaskComments()
 project_comments = ProjectComments()
+
+
+# Explicit physical enrollment is a project-owned lifecycle requirement. This
+# owner never reads completion decisions; the field owner supplies applied proof.
+def project_field_completion_scope(
+    db: Session, *, query: ProjectFieldScopeQuery
+) -> ProjectFieldScope:
+    import hashlib
+    import json
+
+    from app.services.project_field_completion_contracts import ProjectFieldRequirement
+
+    statement = (
+        select(Project)
+        .where(Project.id == query.project_id)
+        .execution_options(populate_existing=query.lock)
+    )
+    if query.lock:
+        statement = statement.with_for_update()
+    project = db.scalar(statement)
+    if project is None or not project.is_active:
+        raise _project_error("not_found", "Active project required")
+    tasks_query = (
+        select(ProjectTask)
+        .where(ProjectTask.project_id == project.id)
+        .order_by(ProjectTask.id)
+        .execution_options(populate_existing=query.lock)
+    )
+    if query.lock:
+        tasks_query = tasks_query.with_for_update()
+    tasks = tuple(db.scalars(tasks_query).all())
+    by_id = {item.id: item for item in tasks}
+    task = by_id.get(query.task_id) if query.task_id else None
+    if query.task_id is not None and (
+        task is None
+        or not task.is_active
+        or task.template_plan_state == ProjectTaskTemplatePlanState.superseded.value
+    ):
+        raise _project_error(
+            "relationship_conflict", "Current active task in this project required"
+        )
+    selected = {task.id} if task else set(by_id)
+    if task:
+        while True:
+            expanded = selected | {
+                item.id for item in tasks if item.parent_task_id in selected
+            }
+            if expanded == selected:
+                break
+            selected = expanded
+        for identity in selected:
+            seen: set[UUID] = set()
+            cursor: UUID | None = identity
+            while cursor in selected:
+                if cursor in seen:
+                    raise _project_error(
+                        "relationship_conflict", "Task subtree contains a cycle"
+                    )
+                seen.add(cursor)
+                cursor = by_id[cursor].parent_task_id
+    rows = tuple(
+        db.scalars(
+            select(ProjectFieldCompletionRequirement)
+            .where(ProjectFieldCompletionRequirement.project_id == project.id)
+            .order_by(ProjectFieldCompletionRequirement.enrollment_id)
+        ).all()
+    )
+    if any(item.project_subscriber_id != project.subscriber_id for item in rows):
+        raise _project_error(
+            "relationship_conflict",
+            "Project customer changed after explicit field enrollment",
+        )
+    requirements = tuple(
+        ProjectFieldRequirement(
+            item.enrollment_id, item.work_order_id, item.project_id, item.task_id
+        )
+        for item in rows
+        if task is None or item.task_id in selected
+    )
+    token = hashlib.sha256(
+        json.dumps(
+            {
+                "project": str(project.id),
+                "task": str(query.task_id),
+                "tasks": [
+                    (str(identity), str(by_id[identity].parent_task_id))
+                    for identity in sorted(selected)
+                ],
+                "required": [
+                    (
+                        str(item.enrollment_id),
+                        str(item.work_order_id),
+                        str(item.task_id),
+                    )
+                    for item in requirements
+                ],
+            },
+            sort_keys=True,
+        ).encode()
+    ).hexdigest()
+    return ProjectFieldScope(
+        project.id,
+        query.task_id,
+        task.title if task else project.name,
+        task.status if task else project.status,
+        project.updated_at,
+        task.updated_at if task else None,
+        token,
+        requirements,
+        tuple(sorted(selected)),
+    )
+
+
+def stage_register_field_completion_requirement(
+    db: Session, *, query: RegisterProjectFieldCompletionRequirement
+) -> None:
+    from app.models.work_order import WorkOrder
+
+    if not owner_command_active(db, owner="operations.field_completion"):
+        raise _project_error("unauthorized", "Field completion owner required")
+    scope = project_field_completion_scope(
+        db,
+        query=ProjectFieldScopeQuery(
+            project_id=query.project_id, task_id=query.task_id, lock=True
+        ),
+    )
+    project = db.get(Project, query.project_id)
+    row = db.get(WorkOrder, query.work_order_id)
+    if (
+        project is None
+        or project.status
+        in {ProjectStatus.completed.value, ProjectStatus.canceled.value}
+        or (
+            query.task_id is not None
+            and scope.status
+            in {ProjectTaskStatus.done.value, ProjectTaskStatus.canceled.value}
+        )
+        or row is None
+        or row.project_id != query.project_id
+        or row.project_task_id != query.task_id
+        or (
+            project.subscriber_id is not None
+            and row.subscriber_id is not None
+            and project.subscriber_id != row.subscriber_id
+        )
+    ):
+        raise _project_error(
+            "relationship_conflict",
+            "Exact nonterminal project/task enrollment scope required",
+        )
+    existing = db.get(ProjectFieldCompletionRequirement, query.enrollment_id)
+    if existing is not None:
+        if (existing.work_order_id, existing.project_id, existing.task_id) != (
+            query.work_order_id,
+            query.project_id,
+            query.task_id,
+        ):
+            raise _project_error(
+                "relationship_conflict", "Existing field requirement scope differs"
+            )
+        return
+    db.add(
+        ProjectFieldCompletionRequirement(
+            enrollment_id=query.enrollment_id,
+            work_order_id=query.work_order_id,
+            project_id=query.project_id,
+            task_id=query.task_id,
+            project_subscriber_id=project.subscriber_id,
+        )
+    )
+    db.flush()
+
+
+def _guard_project_field_completion(
+    db: Session, *, project_id: UUID, task_id: UUID | None
+) -> None:
+
+    if (
+        db.scalar(
+            select(ProjectFieldCompletionRequirement.enrollment_id)
+            .where(ProjectFieldCompletionRequirement.project_id == project_id)
+            .limit(1)
+        )
+        is None
+    ):
+        return
+    scope = project_field_completion_scope(
+        db, query=ProjectFieldScopeQuery(project_id=project_id, task_id=task_id)
+    )
+    if not scope.requirements:
+        return
+    application_id = db.info.get("accepted_project_field_completion_application")
+    application = (
+        db.get(ProjectFieldCompletionApplication, application_id)
+        if isinstance(application_id, UUID)
+        else None
+    )
+    if (
+        application is None
+        or not owner_command_active(db, owner="operations.field_completion")
+        or (application.project_id, application.task_id, application.requirement_token)
+        != (project_id, task_id, scope.requirement_token)
+    ):
+        raise _project_error(
+            "accepted_field_completion_required",
+            "Use accepted field completion after every enrolled visit is independently accepted",
+        )
+    actual = set(
+        db.scalars(
+            select(ProjectFieldCompletionBasis.enrollment_id).where(
+                ProjectFieldCompletionBasis.application_id == application.id
+            )
+        ).all()
+    )
+    if actual != {item.enrollment_id for item in scope.requirements}:
+        raise _project_error(
+            "relationship_conflict",
+            "Applied field completion basis does not cover every registered requirement",
+        )
+
+
+def validate_project_field_completion_ready(
+    db: Session, *, query: ProjectFieldScopeQuery
+) -> None:
+    scope = project_field_completion_scope(db, query=query)
+    if scope.task_id is not None:
+        task = db.get(ProjectTask, scope.task_id)
+        assert task is not None
+        _require_task_completion_ready(db, task)
+
+
+def _marked_task_subtree(db: Session, task_id: UUID, project_id: UUID) -> bool:
+    pairs = tuple(
+        db.execute(
+            select(ProjectTask.id, ProjectTask.parent_task_id).where(
+                ProjectTask.project_id == project_id
+            )
+        ).all()
+    )
+    selected = {task_id}
+    while True:
+        expanded = selected | {
+            identity for identity, parent in pairs if parent in selected
+        }
+        if expanded == selected:
+            break
+        selected = expanded
+    return (
+        db.scalar(
+            select(ProjectFieldCompletionRequirement.enrollment_id)
+            .where(
+                ProjectFieldCompletionRequirement.project_id == project_id,
+                ProjectFieldCompletionRequirement.task_id.in_(selected),
+            )
+            .limit(1)
+        )
+        is not None
+    )
+
+
+def stage_complete_from_accepted_field_scope(
+    db: Session, *, command: CompleteAcceptedProjectFieldScope
+) -> None:
+
+    if not owner_command_active(db, owner="operations.field_completion"):
+        raise _project_error("unauthorized", "Field completion owner required")
+    scope = project_field_completion_scope(
+        db,
+        query=ProjectFieldScopeQuery(
+            project_id=command.project_id, task_id=command.task_id, lock=True
+        ),
+    )
+
+    def instant(value: datetime | None) -> datetime | None:
+        return (
+            value.replace(tzinfo=UTC)
+            if value is not None and value.tzinfo is None
+            else value
+        )
+
+    if (
+        instant(scope.project_revision),
+        instant(scope.task_revision),
+        scope.requirement_token,
+    ) != (
+        instant(command.expected_project_revision),
+        instant(command.expected_task_revision),
+        command.expected_requirement_token,
+    ):
+        raise _project_error(
+            "stale_state", "Project, task or required field scope changed; refresh"
+        )
+    application = db.get(ProjectFieldCompletionApplication, command.application_id)
+    receipt = db.scalar(
+        select(ProjectFieldCompletionReceipt).where(
+            ProjectFieldCompletionReceipt.application_id == command.application_id
+        )
+    )
+    if (
+        application is None
+        or receipt is None
+        or application.command_id != command.context.command_id
+        or application.reason != command.context.reason
+        or (application.project_id, application.task_id)
+        != (scope.project_id, scope.task_id)
+        or application
+        not in db.info.get("new_project_field_completion_applications", ())
+    ):
+        raise _project_error(
+            "relationship_conflict",
+            "Exact applied evidence created by this command required",
+        )
+    if scope.status in {
+        ProjectStatus.completed.value,
+        ProjectStatus.canceled.value,
+        ProjectTaskStatus.done.value,
+        ProjectTaskStatus.canceled.value,
+    }:
+        raise _project_error("invalid_transition", "Project/task is already terminal")
+    db.info["accepted_project_field_completion_application"] = application.id
+    try:
+        _guard_project_field_completion(
+            db, project_id=scope.project_id, task_id=scope.task_id
+        )
+        if scope.task_id is None:
+            Projects.update(
+                db,
+                str(scope.project_id),
+                ProjectUpdate(status=ProjectStatus.completed),
+                actor_id=application.actor_user_id,
+                context=command.context,
+            )
+        else:
+            task = db.get(ProjectTask, scope.task_id)
+            assert task is not None
+            _require_task_completion_ready(db, task)
+            ProjectTasks.update(
+                db,
+                str(scope.task_id),
+                ProjectTaskUpdate(status=ProjectTaskStatus.done),
+                actor_id=application.actor_user_id,
+                context=command.context,
+                _status_transition=True,
+            )
+        db.flush()
+    finally:
+        db.info.pop("accepted_project_field_completion_application", None)
+        db.info.pop("new_project_field_completion_applications", None)
+
+
+from sqlalchemy import event as _project_completion_event
+from sqlalchemy import inspect as _project_completion_inspect
+
+from app.services.project_field_completion_contracts import (
+    CompleteAcceptedProjectFieldScope,
+    ProjectFieldScope,
+    ProjectFieldScopeQuery,
+    RegisterProjectFieldCompletionRequirement,
+)
+
+
+@_project_completion_event.listens_for(Session, "before_flush")
+def _guard_mapped_project_field_completion(
+    session: Session, _flush_context: object, _instances: object
+) -> None:
+    # Covers direct mapped status shortcuts, imports and repair writers too.
+    for row in tuple(session.new) + tuple(session.dirty):
+        if (
+            isinstance(row, Project)
+            and row not in session.new
+            and _project_completion_inspect(row).attrs.is_active.history.has_changes()
+        ):
+            session.scalar(
+                select(Project.id).where(Project.id == row.id).with_for_update()
+            )
+            if (
+                session.scalar(
+                    select(ProjectFieldCompletionRequirement.enrollment_id)
+                    .where(ProjectFieldCompletionRequirement.project_id == row.id)
+                    .limit(1)
+                )
+                is not None
+            ):
+                raise _project_error(
+                    "accepted_field_completion_required",
+                    "Explicitly enrolled project scopes cannot be archived",
+                )
+        if (
+            isinstance(row, ProjectTask)
+            and row.id is not None
+            and row.project_id is not None
+        ):
+            state = _project_completion_inspect(row)
+            if (
+                any(
+                    state.attrs[name].history.has_changes()
+                    for name in ("parent_task_id", "is_active", "project_id")
+                )
+                and row not in session.new
+                and _marked_task_subtree(
+                    session,
+                    row.id,
+                    state.attrs.project_id.history.deleted[0]
+                    if state.attrs.project_id.history.deleted
+                    else row.project_id,
+                )
+            ):
+                raise _project_error(
+                    "accepted_field_completion_required",
+                    "Explicitly enrolled task scopes and their ancestors cannot be archived or reparented",
+                )
+        if (
+            isinstance(row, Project)
+            and row.status == ProjectStatus.completed.value
+            and row.id is not None
+        ):
+            history = _project_completion_inspect(row).attrs.status.history
+            if (
+                history.has_changes()
+                and ProjectStatus.completed.value not in history.deleted
+            ):
+                session.scalar(
+                    select(Project.id).where(Project.id == row.id).with_for_update()
+                )
+                _guard_project_field_completion(
+                    session, project_id=row.id, task_id=None
+                )
+        elif (
+            isinstance(row, ProjectTask)
+            and row.status == ProjectTaskStatus.done.value
+            and row.id is not None
+            and row.project_id is not None
+        ):
+            history = _project_completion_inspect(row).attrs.status.history
+            if (
+                history.has_changes()
+                and ProjectTaskStatus.done.value not in history.deleted
+            ):
+                session.scalar(
+                    select(Project.id)
+                    .where(Project.id == row.project_id)
+                    .with_for_update()
+                )
+                _guard_project_field_completion(
+                    session, project_id=row.project_id, task_id=row.id
+                )

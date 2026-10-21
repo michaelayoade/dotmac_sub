@@ -13,7 +13,7 @@ from sqlalchemy.orm import Session
 
 from app.models.network import CPEDevice, OntUnit, VendorModelCapability
 from app.models.uisp_control import UispDeviceIntent, UispIntentTargetType
-from app.services.credential_crypto import decrypt_credential
+from app.services.credential_crypto import decrypt_stored_secret_or_none
 from app.services.device_adapter_binding import AdapterBinding, DeviceIdentity
 from app.services.network.vendor_capabilities import (
     VendorCapabilityAmbiguous,
@@ -314,7 +314,7 @@ def _materialize_value(
     canonical_name: str, value: Any, mapping: UispFieldMapping
 ) -> Any:
     if canonical_name in _SECRET_FIELDS:
-        resolved = decrypt_credential(str(value))
+        resolved = decrypt_stored_secret_or_none(value)
         if not resolved:
             raise UispWriteAdapterError("UISP Wi-Fi credential could not be resolved")
         value = resolved

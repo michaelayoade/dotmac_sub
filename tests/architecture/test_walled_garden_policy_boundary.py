@@ -41,8 +41,17 @@ def test_policy_exposes_typed_reasons_and_has_no_transport_or_transaction_code()
 def test_all_captive_outcomes_are_explicitly_fail_closed_or_ready() -> None:
     source = OWNER.read_text(encoding="utf-8")
 
-    assert "effective_mode=AccessRestrictionMode.captive" in source
-    assert source.count("effective_mode=AccessRestrictionMode.hard_reject") == 2
+    # Exactly one captive constructor (after every gate) and one fail-closed
+    # constructor that every refusal goes through.
+    assert source.count("effective_mode=AccessRestrictionMode.captive") == 1
+    assert source.count("effective_mode=AccessRestrictionMode.hard_reject") == 1
+    assert "def _hard_reject(" in source
+    # The policy and router gate are consulted before captive is granted, and
+    # the raw account flag is not a decision input.
+    captive_at = source.index("effective_mode=AccessRestrictionMode.captive")
+    assert source.index("context.policy_snapshot().resolve(") < captive_at
+    assert source.index("context.gate().decide(subscription)") < captive_at
+    assert "account.captive_redirect_enabled" not in source
     assert "if AccessRestrictionMode.hard_reject in modes:" in source
     assert "elif modes and all(" in source
     assert (

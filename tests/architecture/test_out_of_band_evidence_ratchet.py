@@ -27,6 +27,7 @@ ROOT = Path(__file__).resolve().parents[2]
 #: Service name -> the ADR that approves its out-of-band evidence write.
 APPROVED_OUT_OF_BAND_EVIDENCE: Mapping[str, str] = {
     "access.enforcement_evidence": "docs/adr/0017-enforcement-application-evidence.md",
+    "network.coa_outcome_evidence": "docs/adr/0018-coa-outcome-evidence.md",
 }
 
 #: Older out-of-band writers that predate the mode and are NOT migrated to it

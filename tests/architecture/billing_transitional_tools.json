@@ -1,0 +1,75 @@
+{
+  "comment": "Transitional billing cutover tools allowed to exist in Sub only until their deletion trigger fires. Each entry is owner-approved surface under the thin-client gate (docs/FEATURE_FREEZE.md): no entry may grow beyond baseline_lines, and no detected transitional tool may exist without an entry here.",
+  "tools": [
+    {
+      "path": "app/services/billing/opening_balance_history.py",
+      "purpose": "One-time opening-balance targets for customer-subledger completion; read-only resolver over frozen audit restore.",
+      "baseline_lines": 570,
+      "deletion_trigger": "Delete when the Starter ledger switch completes and opening positions are sealed in dotmac-billing.",
+      "owner": "michaelayoade"
+    },
+    {
+      "path": "app/services/billing/opening_export.py",
+      "purpose": "Read-only opening/cash-receipt evidence census export for the Starter cutover (PRs #3600/#3606).",
+      "baseline_lines": 2072,
+      "deletion_trigger": "Delete after the opening import is sealed in dotmac-billing and the final rehearsal artifact is archived.",
+      "owner": "michaelayoade"
+    },
+    {
+      "path": "app/services/billing/opening_export_contracts.py",
+      "purpose": "Typed contracts for the opening evidence census export.",
+      "baseline_lines": 527,
+      "deletion_trigger": "Delete with opening_export.py after the opening import is sealed in dotmac-billing.",
+      "owner": "michaelayoade"
+    },
+    {
+      "path": "app/services/billing_numbering_activation_proof.py",
+      "purpose": "Read-only disjoint invoice-numbering candidate proof; never authorizes activation.",
+      "baseline_lines": 591,
+      "deletion_trigger": "Delete when Starter numbering is activated for Sub and the disjointness proof is archived.",
+      "owner": "michaelayoade"
+    },
+    {
+      "path": "app/services/billing_numbering_readiness.py",
+      "purpose": "Read-only numbering readiness observation for the Starter numbering cutover.",
+      "baseline_lines": 587,
+      "deletion_trigger": "Delete when Starter numbering is activated for Sub.",
+      "owner": "michaelayoade"
+    },
+    {
+      "path": "scripts/migration/billing_numbering_activation_proof.py",
+      "purpose": "CLI entry for the read-only numbering activation proof.",
+      "baseline_lines": 80,
+      "deletion_trigger": "Delete with billing_numbering_activation_proof.py when Starter numbering is activated.",
+      "owner": "michaelayoade"
+    },
+    {
+      "path": "scripts/migration/billing_numbering_readiness.py",
+      "purpose": "CLI entry for numbering readiness observation.",
+      "baseline_lines": 70,
+      "deletion_trigger": "Delete with billing_numbering_readiness.py when Starter numbering is activated.",
+      "owner": "michaelayoade"
+    },
+    {
+      "path": "scripts/migration/billing_opening_export.py",
+      "purpose": "CLI entry for the read-only opening evidence census export.",
+      "baseline_lines": 149,
+      "deletion_trigger": "Delete with opening_export.py after the opening import is sealed in dotmac-billing.",
+      "owner": "michaelayoade"
+    },
+    {
+      "path": "app/services/billing/opening_rehearsal_assembly.py",
+      "purpose": "Read-only census-to-observation assembly for the opening rehearsal (Step 5); translates the opening census preview onto the pinned dotmac-billing rehearsal observation contract.",
+      "baseline_lines": 169,
+      "deletion_trigger": "Delete after the opening import is sealed in dotmac-billing and the final rehearsal artifact is archived.",
+      "owner": "michaelayoade"
+    },
+    {
+      "path": "app/services/billing/opening_census_wire.py",
+      "purpose": "Read-only serializer rendering the typed opening census preview to the exact JSON document Starter's rehearsal adapter consumes (Step 5).",
+      "baseline_lines": 117,
+      "deletion_trigger": "Delete after the opening import is sealed in dotmac-billing and the final rehearsal artifact is archived.",
+      "owner": "michaelayoade"
+    }
+  ]
+}

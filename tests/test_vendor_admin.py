@@ -26,7 +26,7 @@ def test_create_bridges_the_native_vendor_to_its_auth_twin(db_session):
 
     twin = (
         db_session.query(FieldVendor)
-        .filter(FieldVendor.crm_vendor_id == str(vendor.id))
+        .filter(FieldVendor.native_vendor_id == vendor.id)
         .one()
     )
     # The bridge is a stringly-typed id, not an FK -- so assert it explicitly.
@@ -97,10 +97,9 @@ def test_deactivation_fails_closed_when_a_login_is_not_bridged(db_session):
     vendor = vendor_admin.create_committed(
         db_session, name="Jos Fibre", code="JOS", contact_email="ops@jos.example"
     )
-    # Break the bridge the way an import does: a live login this service's
-    # crm_vendor_id lookup can no longer resolve.
+    # Break the native link while preserving a matching live login.
     twin = vendor_admin.get_field_vendor(db_session, vendor)
-    twin.crm_vendor_id = None
+    twin.native_vendor_id = None
     db_session.commit()
 
     with pytest.raises(ValueError, match="cannot be deactivated"):

@@ -1,9 +1,13 @@
 from __future__ import annotations
 
+import getpass
+import json
 import os
 import subprocess
 import sys
 from pathlib import Path
+
+import pytest
 
 REVISION = "32eebc1a6ac05a21275ed4db6f3d1dd28514a045"
 IMAGE_DIGEST = "sha256:" + "a" * 64
@@ -18,6 +22,7 @@ FULL_SERVICES = (
     "celery-worker",
     "celery-worker-bandwidth",
     "celery-worker-ingestion",
+    "celery-worker-inventory",
     "celery-worker-monitoring",
     "celery-worker-notifications-immediate",
     "celery-worker-notifications",
@@ -26,7 +31,11 @@ FULL_SERVICES = (
     "celery-beat",
     "bandwidth-poller",
     "syslog-listener",
+    "team-inbox-smtp",
 )
+#: App-image services a host override can declare that no container has ever
+#: run (production's `app-backup` is privileged); a deploy must never create them.
+OVERRIDE_ONLY_APP_SERVICES = ("app-backup", "override-only-app")
 
 
 def _write_executable(path: Path, content: str) -> None:
@@ -46,6 +55,15 @@ def _run_deploy(
     rollback_repin_failure: str | None = None,
     proxy_ready: bool = True,
     migration_lock_failures: int = 0,
+    migration_hard_failure: bool = False,
+    heads_before: str = "670_a",
+    heads_after: str | None = None,
+    heads_read_fails: bool = False,
+    database_url: str = (
+        "postgresql://dotmac:not-a-real-pw@db.example.test:5432/dotmac_sub"
+    ),
+    migration_interrupt: bool = False,
+    first_deploy: bool = False,
     manifest_pins_ready: bool = True,
     github_checks_ready: bool = True,
     background_runtime_ready: bool = True,
@@ -74,16 +92,31 @@ def _run_deploy(
     curl_attempts.write_text("0")
     sed_attempts = tmp_path / "sed-attempts"
     sed_attempts.write_text("0")
+    heads_file = tmp_path / "alembic-heads"
+    heads_file.write_text(heads_before + "\n")
+    migration_admin_pgpass = tmp_path / "migration-admin.pgpass"
+    migration_admin_pgpass.write_text(
+        "db.example.test:5432:dotmac_sub:app_admin:not-a-real-pw\n"
+    )
+    migration_admin_pgpass.chmod(0o400)
     app_env, server_name = (
         ("production", "dotmac-sub-prod")
         if deployment_target == "production"
         else ("staging", "dotmac-sub-staging")
     )
     (deploy_dir / ".env").write_text(
-        "APP_IMAGE=ghcr.io/michaelayoade/dotmac_sub:sha-old0000\n"
-        "GIT_SHA=old0000000000000000000000000000000000000\n"
+        (
+            ""
+            if first_deploy
+            else "APP_IMAGE=ghcr.io/michaelayoade/dotmac_sub:sha-old0000\n"
+            "GIT_SHA=old0000000000000000000000000000000000000\n"
+        )
+        + f"DATABASE_URL={database_url}\n"
         f"APP_ENV={app_env}\n"
         f"SERVER_NAME={server_name}\n"
+    )
+    running_app_services = " ".join(
+        service for service in declared_services if service in FULL_SERVICES
     )
     declared_services_literal = " ".join(
         f"'{service}'" for service in declared_services
@@ -105,12 +138,84 @@ def _run_deploy(
         text=True,
     ).stdout.strip()
     reported_source_tree = image_source_tree or release_source_tree
+    # Resolved Compose is the source of the candidate component plan. Bind
+    # the image to the real deploy invocation's APP_IMAGE, including digest
+    # selectors, instead of returning an empty success for the new gate.
+    candidate_service_graph = json.dumps(
+        {
+            "services": {
+                name: {
+                    "image": (
+                        "__candidate_image__"
+                        if name in FULL_SERVICES or name in OVERRIDE_ONLY_APP_SERVICES
+                        else "example.invalid/other:1"
+                    ),
+                    "working_dir": "/app",
+                    "environment": {"PYTHONPATH": "/app"},
+                    "volumes": [],
+                }
+                for name in declared_services
+            }
+        }
+    )
     _write_executable(
         bin_dir / "docker",
         f"""#!/usr/bin/env bash
 set -eu
 printf '%s\\n' "$*" >> "$DOCKER_LOG"
 {docker_prelude}
+if [[ "$1 $2" == "image inspect" && "$*" == *"{{{{.Id}}}}"* ]]; then
+  printf 'sha256:release-image-id\\n'
+  exit 0
+fi
+if [[ "$1" == "inspect" && "$*" == *"com.docker.compose.project"* ]]; then
+  printf 'dotmac_sub\\n'
+  exit 0
+fi
+if [[ "$1" == "ps" && "$*" == *"label=com.docker.compose.project"* ]]; then
+  for svc in ${{FAKE_PS_SERVICES-{running_app_services}}}; do
+    printf 'container-%s\\n' "$svc"
+  done
+  if [[ "$*" == *" -a "* ]]; then
+    for svc in ${{FAKE_EXITED_SERVICES:-}}; do
+      printf 'container-exited-%s\\n' "$svc"
+    done
+  fi
+  if [[ "$*" != *"com.docker.compose.oneoff=False"* ]]; then
+    for svc in ${{FAKE_ONEOFF_SERVICES:-}}; do
+      printf 'container-oneoff-%s\\n' "$svc"
+    done
+  fi
+  exit 0
+fi
+if [[ "$1" == "inspect" && "$*" == *"com.docker.compose.service"* ]]; then
+  svc="${{2#container-}}"
+  svc="${{svc#oneoff-}}"
+  svc="${{svc#exited-}}"
+  if [[ "${{FAKE_CONFIG_IMAGE_SHORT:-0}}" == "1" ]]; then
+    config_image="7081c646845a"
+  else
+    config_image="ghcr.io/michaelayoade/dotmac_sub@sha256:cccc"
+  fi
+  image_id="sha256:release-image-id"
+  if [[ "$2" == "${{FAKE_STALE_CONTAINER:-none}}" ]]; then
+    image_id="sha256:stale-image-id"
+  fi
+  printf '%s|%s|%s|%s|/dotmac_sub_%s\\n' "$2" "$svc" "$config_image" "$image_id" "$svc"
+  exit 0
+fi
+if [[ "$*" == "image ls --no-trunc -q "* ]]; then
+  printf 'sha256:release-image-id\\nsha256:stale-image-id\\n'
+  exit 0
+fi
+if [[ "$1" == "inspect" && "$2" == "${{FAKE_STALE_CONTAINER:-none}}" && "$*" == *"{{{{.Image}}}}"* ]]; then
+  printf 'sha256:stale-image-id\\n'
+  exit 0
+fi
+if [[ "$1" == "inspect" && "$*" == *"{{{{.Image}}}}"* ]]; then
+  printf '%s\\n' "${{FAKE_CONTAINER_IMAGE_ID:-sha256:release-image-id}}"
+  exit 0
+fi
 if [[ "$1 $2" == "image inspect" ]]; then
   if [[ "$*" == *"RepoDigests"* ]]; then
     printf '%s\\n' "{reported_digest_reference}"
@@ -127,6 +232,31 @@ if [[ "$*" == *"alembic upgrade heads"* ]]; then
     echo "canceling statement due to lock timeout" >&2
     exit 1
   fi
+  if [[ "{int(migration_interrupt)}" == "1" ]]; then
+    printf '%s\\n' "{heads_after if heads_after is not None else heads_before}" > "{heads_file}"
+    top=""
+    pid=$PPID
+    while [[ -n "$pid" && "$pid" != "1" && "$pid" != "0" ]]; do
+      if ps -o command= -p "$pid" | grep -q 'deploy.sh'; then top="$pid"; fi
+      pid="$(ps -o ppid= -p "$pid" | tr -d ' ')"
+    done
+    kill -INT "$top"
+    sleep 1
+    exit 0
+  fi
+  if [[ "{int(migration_hard_failure)}" == "1" ]]; then
+    printf '%s\\n' "{heads_after if heads_after is not None else heads_before}" > "{heads_file}"
+    echo "psycopg2.errors.UndefinedTable: boom" >&2
+    exit 1
+  fi
+fi
+if [[ "$1" == "exec" && "$*" == *"alembic_version"* ]]; then
+  if [[ "{int(heads_read_fails)}" == "1" ]]; then
+    echo "canceling statement due to statement timeout" >&2
+    exit 1
+  fi
+  cat "{heads_file}"
+  exit 0
 fi
 if [[ "$*" == *"scripts.integrations.verify_manifest_pins"* ]]; then
   exit {0 if manifest_pins_ready else 1}
@@ -141,6 +271,19 @@ if [[ "$*" == *" up -d "* ]]; then
   if [[ "$attempts" == "1" && "{int(not rollback_recreate_success)}" == "1" ]]; then
     exit 1
   fi
+fi
+if [[ "$*" == *"config --format json"* ]]; then
+  config='{candidate_service_graph}'
+  printf '%s\\n' "${{config//__candidate_image__/${{APP_IMAGE:?}}}}"
+  exit 0
+fi
+if [[ "$*" == *"--entrypoint /opt/venv/bin/python"* && "$*" == *"-m scripts.setup.verify_openbao_boot_secrets"* ]]; then
+  printf 'OpenBao boot-secret fixture: ready\\n'
+  exit 0
+fi
+if [[ "$*" == *"--entrypoint /opt/venv/bin/python"* && "$*" == *"-m scripts.setup.verify_deployment_secret_requirements"* ]]; then
+  printf 'Declared secret requirements satisfied.\\n'
+  exit 0
 fi
 if [[ "$*" == *"config --services"* ]]; then
   printf '%s\\n' {declared_services_literal}
@@ -221,7 +364,7 @@ exec /usr/bin/sed "$@"
 set -eu
 printf 'host-python cwd=%s args=%s\\n' "$PWD" "$*" >> "$DOCKER_LOG"
 # Pure, stdlib-only deploy helpers run for real against the test's files.
-if [[ "$*" == *"-m scripts.deploy_config_freshness"* ]]; then
+if [[ "$*" == *"-m scripts.deploy_config_freshness"* || "$*" == *"-m scripts.deployment_secret_readiness"* || "$*" == *"-m scripts.deploy_app_image_services"* ]]; then
   exec "{sys.executable}" "$@"
 fi
 if [[ "$*" == *"-m scripts.release_candidate_evidence verify-production"* ]]; then
@@ -260,6 +403,11 @@ exit 0
         **os.environ,
         "PATH": f"{bin_dir}:{os.environ['PATH']}",
         "DEPLOY_DIR": str(deploy_dir),
+        "MIGRATION_ADMIN_URL": (
+            "postgresql://app_admin@db.example.test:5432/dotmac_sub"
+        ),
+        "MIGRATION_ADMIN_PGPASS": str(migration_admin_pgpass),
+        "MIGRATION_ADMIN_OWNER": getpass.getuser(),
         "REPO_DIR": str(repo_root),
         "DEPLOY_LOCK_FILE": str(tmp_path / "deploy.lock"),
         "DEPLOY_BACKUP_MODE": "skip_staging",
@@ -291,6 +439,11 @@ exit 0
         **production_evidence,
         **(extra_env or {}),
     }
+    for key in list(env):
+        if key.startswith(
+            ("DATABASE_URL", "DB_BACKUP", "DB_CONTAINER")
+        ) and key not in (extra_env or {}):
+            env.pop(key)
     result = subprocess.run(
         ["bash", str(repo_root / "scripts/deploy.sh"), image_selector],
         cwd=repo_root,
@@ -303,12 +456,43 @@ exit 0
 
 
 def test_deploy_pins_git_sha_from_image_revision(tmp_path: Path) -> None:
-    result, env_file, _docker_log = _run_deploy(tmp_path)
+    result, env_file, docker_log = _run_deploy(tmp_path)
 
     assert result.returncode == 0, result.stderr
     env_text = env_file.read_text()
     assert "APP_IMAGE=ghcr.io/michaelayoade/dotmac_sub:sha-32eebc1" in env_text
     assert f"GIT_SHA={REVISION}" in env_text
+    commands = docker_log.read_text().splitlines()
+    # The shared harness must exercise the real component parser and both
+    # candidate module gates, rather than globally skipping readiness.
+    graph = next(
+        index
+        for index, command in enumerate(commands)
+        if "config --format json" in command
+    )
+    parser = next(
+        index
+        for index, command in enumerate(commands)
+        if "-m scripts.deployment_secret_readiness" in command
+    )
+    boot = next(
+        index
+        for index, command in enumerate(commands)
+        if "-m scripts.setup.verify_openbao_boot_secrets" in command
+    )
+    features = [
+        index
+        for index, command in enumerate(commands)
+        if "-m scripts.setup.verify_deployment_secret_requirements" in command
+    ]
+    migration = next(
+        index
+        for index, command in enumerate(commands)
+        if "alembic upgrade heads" in command
+    )
+    # The config writer and parser are concurrent sides of one pipeline.
+    assert max(graph, parser) < boot < features[0] < migration < features[1]
+    assert "--require-installed-schema" in commands[features[1]]
 
 
 def test_deploy_pins_exact_oci_digest(tmp_path: Path) -> None:
@@ -678,6 +862,223 @@ def test_deploy_retries_a_bounded_migration_lock_timeout(tmp_path: Path) -> None
     assert len(attempts) == 3
 
 
+def _assert_failed_pre_swap_migration_left_no_new_state(
+    docker_log: Path,
+) -> None:
+    log = docker_log.read_text()
+    assert "rollback-gate" not in log
+    assert "verify_payment_email_rollback" not in log
+    assert "--name dotmac_sub_app_candidate" not in log
+    assert " up -d " not in log
+
+
+_HEADS_ENV = {"DB_BACKUP_DB_NAME": "dotmac_sub"}
+
+
+@pytest.mark.parametrize(
+    "kwargs",
+    [
+        {"migration_lock_failures": 4},  # lock-blocked on every bounded attempt
+        {"migration_hard_failure": True},  # non-lock failure, heads unchanged
+    ],
+)
+def test_failed_migration_restores_pin_without_rollback_or_recreate(
+    tmp_path: Path, kwargs: dict[str, object]
+) -> None:
+    result, env_file, docker_log = _run_deploy(
+        tmp_path,
+        extra_env=_HEADS_ENV,
+        **kwargs,  # type: ignore[arg-type]
+    )
+
+    assert result.returncode != 0
+    env_text = env_file.read_text()
+    assert "APP_IMAGE=ghcr.io/michaelayoade/dotmac_sub:sha-old0000" in env_text
+    assert "GIT_SHA=old0000000000000000000000000000000000000" in env_text
+    assert "restored .env pin to" in result.stderr.lower()
+    _assert_failed_pre_swap_migration_left_no_new_state(docker_log)
+
+
+def test_failed_migration_that_advanced_heads_keeps_pin_and_refuses_to_guess(
+    tmp_path: Path,
+) -> None:
+    result, env_file, docker_log = _run_deploy(
+        tmp_path,
+        extra_env=_HEADS_ENV,
+        migration_hard_failure=True,
+        heads_after="670_b",
+    )
+
+    assert result.returncode != 0
+    assert "APP_IMAGE=ghcr.io/michaelayoade/dotmac_sub:sha-old0000" not in (
+        env_file.read_text()
+    )
+    assert "Do not recreate containers; repair forward" in result.stderr
+    _assert_failed_pre_swap_migration_left_no_new_state(docker_log)
+
+
+def test_heads_query_timeout_counts_as_unreadable_and_keeps_pin(
+    tmp_path: Path,
+) -> None:
+    result, env_file, docker_log = _run_deploy(
+        tmp_path,
+        extra_env=_HEADS_ENV,
+        migration_hard_failure=True,
+        heads_read_fails=True,
+    )
+
+    assert result.returncode != 0
+    assert "sha-old0000" not in env_file.read_text()
+    assert "<unreadable>" in result.stderr
+    assert "Do not recreate containers; repair forward" in result.stderr
+    assert "PGOPTIONS=-c lock_timeout=5s -c statement_timeout=15s" in (
+        docker_log.read_text()
+    )
+    _assert_failed_pre_swap_migration_left_no_new_state(docker_log)
+
+
+def test_heads_query_against_another_database_keeps_pin(tmp_path: Path) -> None:
+    result, env_file, docker_log = _run_deploy(
+        tmp_path,
+        extra_env={"DB_BACKUP_DB_NAME": "some_other_db"},
+        migration_hard_failure=True,
+    )
+
+    assert result.returncode != 0
+    assert "sha-old0000" not in env_file.read_text()
+    assert "targets database 'some_other_db' but alembic uses 'dotmac_sub'" in (
+        result.stderr
+    )
+    assert "not-a-real-pw" not in result.stdout + result.stderr
+    assert "Do not recreate containers; repair forward" in result.stderr
+    _assert_failed_pre_swap_migration_left_no_new_state(docker_log)
+
+
+def test_first_deploy_failed_migration_says_there_is_no_previous_pin(
+    tmp_path: Path,
+) -> None:
+    result, env_file, docker_log = _run_deploy(
+        tmp_path,
+        extra_env=_HEADS_ENV,
+        migration_hard_failure=True,
+        first_deploy=True,
+    )
+
+    assert result.returncode != 0
+    assert "no previous pin and no running dotmac_sub_app container" in (result.stderr)
+    assert "matches the running" not in result.stderr
+    assert "APP_IMAGE=ghcr.io/michaelayoade/dotmac_sub:sha-32eebc1" not in (
+        env_file.read_text()
+    )
+    _assert_failed_pre_swap_migration_left_no_new_state(docker_log)
+
+
+def test_interrupt_during_migration_with_unchanged_heads_repins(
+    tmp_path: Path,
+) -> None:
+    result, env_file, docker_log = _run_deploy(
+        tmp_path, extra_env=_HEADS_ENV, migration_interrupt=True
+    )
+
+    assert result.returncode == 130
+    assert "APP_IMAGE=ghcr.io/michaelayoade/dotmac_sub:sha-old0000" in (
+        env_file.read_text()
+    )
+    assert "heads measured unchanged" in result.stderr
+    _assert_failed_pre_swap_migration_left_no_new_state(docker_log)
+
+
+def test_interrupt_during_migration_with_advanced_heads_keeps_pin(
+    tmp_path: Path,
+) -> None:
+    result, env_file, docker_log = _run_deploy(
+        tmp_path,
+        extra_env=_HEADS_ENV,
+        migration_interrupt=True,
+        heads_after="670_b",
+    )
+
+    assert result.returncode == 130
+    assert "sha-old0000" not in env_file.read_text()
+    assert "Do not recreate containers; repair forward" in result.stderr
+    _assert_failed_pre_swap_migration_left_no_new_state(docker_log)
+
+
+def test_exported_database_url_differing_from_env_refuses_before_any_change(
+    tmp_path: Path,
+) -> None:
+    result, env_file, docker_log = _run_deploy(
+        tmp_path,
+        extra_env={"DATABASE_URL": "postgresql://u:s3cr3t@h.example.test/other"},
+    )
+
+    assert result.returncode != 0
+    assert "DEPLOY REFUSED: DATABASE_URL is exported" in result.stderr
+    assert "s3cr3t" not in result.stdout + result.stderr
+    assert "sha-old0000" in env_file.read_text()
+    assert "alembic upgrade heads" not in docker_log.read_text()
+
+
+@pytest.mark.parametrize(
+    "url",
+    [
+        "postgresql://u:s3cr3t@db.example.test",
+        "postgresql://u:s3cr3t@db.example.test?password=ab/cd",
+        "postgresql://u:p@s3cr3t@db.example.test",
+    ],
+)
+def test_unparseable_database_url_does_not_leak_in_full_script(
+    tmp_path: Path, url: str
+) -> None:
+    result, env_file, docker_log = _run_deploy(
+        tmp_path,
+        extra_env={"DB_BACKUP_DB_NAME": "dotmac_sub"},
+        migration_hard_failure=True,
+        database_url=url,
+    )
+
+    assert result.returncode != 0
+    assert "s3cr3t" not in result.stdout + result.stderr
+    assert "database name unparseable" in result.stderr
+    assert "sha-old0000" not in env_file.read_text()
+    _assert_failed_pre_swap_migration_left_no_new_state(docker_log)
+
+
+def test_query_string_secret_fragment_is_never_printed_on_db_mismatch(
+    tmp_path: Path,
+) -> None:
+    result, env_file, docker_log = _run_deploy(
+        tmp_path,
+        extra_env={"DB_BACKUP_DB_NAME": "dotmac_sub"},
+        migration_hard_failure=True,
+        database_url="postgresql://u@db.example.test/other?password=p@ss/word",
+    )
+
+    out = result.stdout + result.stderr
+    assert result.returncode != 0
+    assert "alembic uses 'other'" in result.stderr
+    assert "p@ss" not in out and "ss/word" not in out and "'word'" not in out
+    assert "sha-old0000" not in env_file.read_text()
+    _assert_failed_pre_swap_migration_left_no_new_state(docker_log)
+
+
+def test_migration_container_is_named_per_attempt_and_kept_removable(
+    tmp_path: Path,
+) -> None:
+    result, _env_file, docker_log = _run_deploy(
+        tmp_path, extra_env=_HEADS_ENV, migration_lock_failures=2
+    )
+
+    assert result.returncode == 0, result.stderr
+    runs = [
+        c for c in docker_log.read_text().splitlines() if "alembic upgrade heads" in c
+    ]
+    names = [c.split("--name ")[1].split()[0] for c in runs]
+    assert len(names) == 3 and len(set(names)) == 3
+    assert all(n.startswith("dotmac_sub_migrate_") for n in names)
+    assert all(" --rm " in c for c in runs)
+
+
 def test_deploy_verifies_every_worker_and_beat_before_success(tmp_path: Path) -> None:
     result, _env_file, docker_log = _run_deploy(tmp_path)
 
@@ -691,6 +1092,7 @@ def test_deploy_verifies_every_worker_and_beat_before_success(tmp_path: Path) ->
         "celery-worker",
         "celery-worker-bandwidth",
         "celery-worker-ingestion",
+        "celery-worker-inventory",
         "celery-worker-monitoring",
         "celery-worker-notifications-immediate",
         "celery-worker-notifications",
@@ -757,6 +1159,175 @@ def test_deploy_never_starts_a_service_the_host_does_not_declare(
     assert not any("celery-beat" in command for command in recreate_commands)
     # ...and it must not be health-gated as if it were running either.
     assert "BACKGROUND RUNTIME FAILURE: celery-beat" not in result.stderr
+
+
+def test_deploy_recreates_team_inbox_smtp_with_the_app_image(
+    tmp_path: Path,
+) -> None:
+    result, _env_file, docker_log = _run_deploy(tmp_path)
+
+    assert result.returncode == 0, result.stderr
+    recreate = [c for c in docker_log.read_text().splitlines() if " up -d " in c]
+    assert any("team-inbox-smtp" in command for command in recreate)
+
+
+def test_deploy_skips_team_inbox_smtp_when_its_profile_is_inactive(
+    tmp_path: Path,
+) -> None:
+    without = tuple(s for s in FULL_SERVICES if s != "team-inbox-smtp")
+    result, _env_file, docker_log = _run_deploy(tmp_path, declared_services=without)
+
+    assert result.returncode == 0, result.stderr
+    recreate = [c for c in docker_log.read_text().splitlines() if " up -d " in c]
+    assert recreate
+    assert not any("team-inbox-smtp" in command for command in recreate)
+
+
+def test_running_profile_gated_service_is_recreated_and_drift_checked(
+    tmp_path: Path,
+) -> None:
+    """Production starts team-inbox-smtp by name; its profile is not active."""
+    without = tuple(s for s in FULL_SERVICES if s != "team-inbox-smtp")
+    result, _env_file, docker_log = _run_deploy(
+        tmp_path,
+        declared_services=without,
+        extra_env={"FAKE_PS_SERVICES": " ".join(FULL_SERVICES)},
+    )
+
+    assert result.returncode == 0, result.stderr
+    recreate = [c for c in docker_log.read_text().splitlines() if " up -d " in c]
+    assert any("team-inbox-smtp" in command for command in recreate)
+
+
+def test_running_profile_gated_service_on_stale_image_fails_the_deploy(
+    tmp_path: Path,
+) -> None:
+    without = tuple(s for s in FULL_SERVICES if s != "team-inbox-smtp")
+    result, _env_file, _docker_log = _run_deploy(
+        tmp_path,
+        declared_services=without,
+        extra_env={
+            "FAKE_PS_SERVICES": " ".join(FULL_SERVICES),
+            "FAKE_STALE_CONTAINER": "container-team-inbox-smtp",
+        },
+    )
+
+    assert result.returncode != 0
+    assert "APP IMAGE DRIFT: team-inbox-smtp" in result.stderr
+
+
+def test_override_only_app_image_service_with_no_container_is_never_created(
+    tmp_path: Path,
+) -> None:
+    """Production's override declares a privileged `app-backup`; nothing runs it."""
+    result, _env_file, docker_log = _run_deploy(
+        tmp_path,
+        declared_services=(*FULL_SERVICES, *OVERRIDE_ONLY_APP_SERVICES),
+    )
+
+    assert result.returncode == 0, result.stderr
+    recreate = [c for c in docker_log.read_text().splitlines() if " up -d " in c]
+    assert recreate
+    for command in recreate:
+        assert "app-backup" not in command
+        assert "override-only-app" not in command
+
+
+def test_exited_app_image_containers_are_neither_started_nor_flagged(
+    tmp_path: Path,
+) -> None:
+    """Long-dead containers (staging's poller/listener) must stay dead."""
+    exited = ("bandwidth-poller", "syslog-listener", "team-inbox-smtp")
+    declared = tuple(s for s in FULL_SERVICES if s not in exited)
+    result, _env_file, docker_log = _run_deploy(
+        tmp_path,
+        declared_services=declared,
+        extra_env={
+            "FAKE_EXITED_SERVICES": " ".join(exited),
+            "FAKE_STALE_CONTAINER": "container-exited-bandwidth-poller",
+        },
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert "APP IMAGE DRIFT" not in result.stderr
+    recreate = [c for c in docker_log.read_text().splitlines() if " up -d " in c]
+    assert recreate
+    for command in recreate:
+        for service in exited:
+            assert service not in command
+    assert not any(" ps -a " in c for c in docker_log.read_text().splitlines())
+
+
+def test_running_excluded_service_is_still_not_recreated(tmp_path: Path) -> None:
+    result, _env_file, docker_log = _run_deploy(
+        tmp_path,
+        declared_services=(*FULL_SERVICES, "app-backup"),
+        extra_env={"FAKE_PS_SERVICES": " ".join((*FULL_SERVICES, "app-backup"))},
+    )
+
+    assert result.returncode == 0, result.stderr
+    recreate = [c for c in docker_log.read_text().splitlines() if " up -d " in c]
+    assert not any("app-backup" in command for command in recreate)
+
+
+def test_one_off_container_on_an_old_image_is_ignored(tmp_path: Path) -> None:
+    result, _env_file, docker_log = _run_deploy(
+        tmp_path,
+        extra_env={
+            "FAKE_ONEOFF_SERVICES": "celery-worker team-inbox-smtp",
+            "FAKE_STALE_CONTAINER": "container-oneoff-celery-worker",
+        },
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert "APP IMAGE DRIFT" not in result.stderr
+    assert any("oneoff=False" in c for c in docker_log.read_text().splitlines())
+
+
+def test_one_off_container_does_not_pull_a_profile_gated_service_in(
+    tmp_path: Path,
+) -> None:
+    without = tuple(s for s in FULL_SERVICES if s != "celery-beat")
+    result, _env_file, docker_log = _run_deploy(
+        tmp_path,
+        declared_services=without,
+        extra_env={"FAKE_ONEOFF_SERVICES": "celery-beat"},
+    )
+
+    assert result.returncode == 0, result.stderr
+    recreate = [c for c in docker_log.read_text().splitlines() if " up -d " in c]
+    assert not any("celery-beat" in command for command in recreate)
+
+
+def test_running_service_is_found_when_the_image_is_untagged_and_digest_pulled(
+    tmp_path: Path,
+) -> None:
+    """Production shows a short image ID, never `ghcr.io/...:tag`, in `docker ps`."""
+    without = tuple(s for s in FULL_SERVICES if s != "team-inbox-smtp")
+    result, _env_file, docker_log = _run_deploy(
+        tmp_path,
+        declared_services=without,
+        extra_env={
+            "FAKE_PS_SERVICES": " ".join(FULL_SERVICES),
+            "FAKE_CONFIG_IMAGE_SHORT": "1",
+        },
+    )
+
+    assert result.returncode == 0, result.stderr
+    recreate = [c for c in docker_log.read_text().splitlines() if " up -d " in c]
+    assert any("team-inbox-smtp" in command for command in recreate)
+
+
+def test_deploy_fails_when_an_app_service_runs_a_different_image(
+    tmp_path: Path,
+) -> None:
+    result, _env_file, _docker_log = _run_deploy(
+        tmp_path,
+        extra_env={"FAKE_CONTAINER_IMAGE_ID": "sha256:stale-image-id"},
+    )
+
+    assert result.returncode != 0
+    assert "APP IMAGE DRIFT" in result.stderr
 
 
 def test_deploy_refuses_missing_required_celery_worker(tmp_path: Path) -> None:

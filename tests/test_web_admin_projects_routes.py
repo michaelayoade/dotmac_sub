@@ -7,6 +7,10 @@ from app.services.auth_dependencies import permission_requirement
 from app.web.admin.projects import router, templates
 
 EXPECTED_ROUTES = {
+    ("GET", "/projects/{project_id}/accepted-field-completion"),
+    ("POST", "/projects/{project_id}/accepted-field-completion"),
+    ("GET", "/projects/{project_id}/tasks/{task_id}/accepted-field-completion"),
+    ("POST", "/projects/{project_id}/tasks/{task_id}/accepted-field-completion"),
     ("GET", "/projects"),
     ("POST", "/projects"),
     ("GET", "/projects/export.csv"),
@@ -47,6 +51,14 @@ EXPECTED_ROUTES = {
 }
 
 EXPECTED_PERMISSIONS = {
+    ("GET", "/projects/{project_id}/accepted-field-completion"): "project:update",
+    ("POST", "/projects/{project_id}/accepted-field-completion"): "project:update",
+    ("GET", "/projects/{project_id}/tasks/{task_id}/accepted-field-completion"): (
+        "project:task:write"
+    ),
+    ("POST", "/projects/{project_id}/tasks/{task_id}/accepted-field-completion"): (
+        "project:task:write"
+    ),
     ("GET", "/projects/infrastructure-options"): ("project:create", "project:update"),
     ("GET", "/projects"): "project:read",
     ("POST", "/projects"): "project:create",
@@ -138,8 +150,8 @@ def test_static_paths_declared_before_dynamic_detail():
 
 def _permission_keys(route, method: str) -> set[str]:
     keys: set[str] = set()
-    for dep in route.dependencies:
-        requirement = permission_requirement(dep.dependency)
+    for dep in route.dependant.dependencies:
+        requirement = permission_requirement(dep.call)
         if requirement is not None:
             keys.update(requirement.any_of_for(method))
     return keys

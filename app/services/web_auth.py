@@ -10,8 +10,13 @@ from sqlalchemy.orm import Session
 from starlette.responses import Response
 
 from app.csrf import renew_csrf_cookie
+from app.services import (
+    anonymous_recovery_adapter,
+    credential_recovery,
+    staff_party_authentication,
+)
 from app.services import auth_flow as auth_flow_service
-from app.services import credential_recovery, staff_party_authentication
+from app.services import password_authentication as pa
 from app.services.auth_flow import AuthFlow, LoginAudience
 from app.services.domain_errors import DomainError
 from app.services.owner_commands import CommandContext
@@ -363,14 +368,68 @@ def mfa_submit(
 def _mfa_enrollment_binding(
     db: Session,
     token: str,
+    *,
+    request: Request | None = None,
 ) -> staff_party_authentication.StaffSessionBinding:
-    payload = auth_flow_service._decode_jwt(db, token, "mfa_enrollment")  # noqa: SLF001
-    if payload.get("principal_type") != "system_user":
+    """Validate the v2 enrollment challenge (credential id + version bound).
+
+    A legacy token (no ``ver``/``cid``/``cv``) is refused: the user restarts
+    login. The standing check is advisory and read-only; the authoritative gate
+    is inside ``pa.confirm_mfa_enrollment``.
+    """
+
+    try:
+        challenge = pa.decode_challenge(db, token, expected_typ="mfa_enrollment")
+    except pa.PasswordAuthenticationError as exc:
+        pa.record_authentication_denial(
+            pa.denial_for_request(
+                reason=pa.DenialReason.INVALID_CHALLENGE,
+                surface=pa.DenialSurface.ENROLLMENT,
+                phase=pa.DenialPhase.ENROLLMENT,
+                target=None,
+                request=request,
+            )
+        )
+        raise ValueError("Invalid MFA enrollment token") from exc
+    target = pa.challenge_denial_target(db, challenge)
+    if challenge.principal_type != "system_user":
+        pa.record_authentication_denial(
+            pa.denial_for_request(
+                reason=pa.DenialReason.INVALID_CHALLENGE,
+                surface=pa.DenialSurface.ENROLLMENT,
+                phase=pa.DenialPhase.ENROLLMENT,
+                target=target,
+                request=request,
+            )
+        )
         raise ValueError("Invalid MFA enrollment token")
-    binding = auth_flow_service.staff_binding_from_token_payload(
-        payload,
-        invalid_detail="Invalid MFA enrollment token",
-    )
+    if not pa.challenge_has_standing(db, challenge):
+        pa.record_authentication_denial(
+            pa.denial_for_request(
+                reason=pa.DenialReason.INVALID_CHALLENGE,
+                surface=pa.DenialSurface.ENROLLMENT,
+                phase=pa.DenialPhase.ENROLLMENT,
+                target=target,
+                request=request,
+            )
+        )
+        raise ValueError("Invalid MFA enrollment token")
+    try:
+        binding = auth_flow_service.staff_binding_from_token_payload(
+            {"principal_id": challenge.principal_id, "party_id": challenge.party_id},
+            invalid_detail="Invalid MFA enrollment token",
+        )
+    except HTTPException:
+        pa.record_authentication_denial(
+            pa.denial_for_request(
+                reason=pa.DenialReason.INVALID_CHALLENGE,
+                surface=pa.DenialSurface.ENROLLMENT,
+                phase=pa.DenialPhase.ENROLLMENT,
+                target=target,
+                request=request,
+            )
+        )
+        raise
     try:
         principal = staff_party_authentication.resolve_staff_principal_by_party(
             db,
@@ -379,8 +438,26 @@ def _mfa_enrollment_binding(
             reference=binding.system_user_id,
         )
     except staff_party_authentication.StaffProjectionError as exc:
+        pa.record_authentication_denial(
+            pa.denial_for_request(
+                reason=pa.DenialReason.PROJECTION,
+                surface=pa.DenialSurface.ENROLLMENT,
+                phase=pa.DenialPhase.ENROLLMENT,
+                target=target,
+                request=request,
+            )
+        )
         raise ValueError("Invalid MFA enrollment token") from exc
     if not auth_flow_service.is_admin_portal_principal("system_user", principal):
+        pa.record_authentication_denial(
+            pa.denial_for_request(
+                reason=pa.DenialReason.AUDIENCE,
+                surface=pa.DenialSurface.ENROLLMENT,
+                phase=pa.DenialPhase.ENROLLMENT,
+                target=target,
+                request=request,
+            )
+        )
         raise ValueError("Invalid MFA enrollment token")
     return binding
 
@@ -395,7 +472,7 @@ def mfa_enroll_page(
     if not enrollment_token:
         return RedirectResponse(url="/auth/login", status_code=303)
     try:
-        binding = _mfa_enrollment_binding(db, enrollment_token)
+        binding = _mfa_enrollment_binding(db, enrollment_token, request=request)
         principal_id = str(binding.system_user_id)
         setup = auth_flow_service.auth_flow.admin_mfa_setup(
             db, principal_id, "Authenticator app"
@@ -432,22 +509,11 @@ def mfa_enroll_confirm(
         return RedirectResponse(url="/auth/login", status_code=303)
     redirect_url = _safe_next(next_url)
     try:
-        binding = _mfa_enrollment_binding(db, enrollment_token)
-        principal_id = str(binding.system_user_id)
-        method = auth_flow_service.auth_flow.admin_mfa_confirm(
-            db, method_id, code.strip(), principal_id
-        )
-        recovery_codes = (
-            auth_flow_service.generate_mfa_recovery_codes(db, method)
-            if getattr(method, "id", None)
-            else []
-        )
-        result = auth_flow_service.auth_flow._issue_tokens(  # noqa: SLF001
-            db,
-            "system_user",
-            principal_id,
-            request,
-            staff_binding=binding,
+        _mfa_enrollment_binding(db, enrollment_token, request=request)
+        # One credential-gated owner transaction: factor, recovery codes,
+        # session and audit commit together or not at all.
+        result, recovery_codes = auth_flow_service.auth_flow.confirm_mfa_enrollment(
+            db, enrollment_token, method_id, code.strip(), request
         )
         response: Response
         if recovery_codes:
@@ -491,7 +557,15 @@ def mfa_enroll_confirm(
                 persistent=_wants_persistent_session(request),
             )
         return response
-    except Exception:
+    except Exception as exc:
+        logger.warning(
+            "mfa_enrollment_confirm_refused",
+            extra={
+                "event": "mfa_enrollment_confirm_refused",
+                "error_type": type(exc).__name__,
+                "status_code": getattr(exc, "status_code", None),
+            },
+        )
         return templates.TemplateResponse(
             request,
             "auth/mfa_enroll.html",
@@ -520,18 +594,14 @@ def forgot_password_page(request: Request, success: bool = False):
 
 
 def forgot_password_submit(request: Request, db: Session, email: str):
-    try:
-        credential_recovery.request_password_recovery(
-            db,
-            credential_recovery.RequestPasswordRecoveryCommand(
-                context=_credential_recovery_context(
-                    "Administrative web password recovery request"
-                ),
-                email=email,
+    anonymous_recovery_adapter.request_password_recovery(
+        command=credential_recovery.RequestPasswordRecoveryCommand(
+            context=_credential_recovery_context(
+                "Administrative web password recovery request"
             ),
-        )
-    except Exception:
-        logger.info("Password reset request failed for %s", email, exc_info=True)
+            email=email,
+        ),
+    )
     return templates.TemplateResponse(
         "auth/forgot-password.html",
         {
@@ -729,8 +799,9 @@ def logout(request: Request, db: Session):
     if refresh_token:
         try:
             auth_flow_service.auth_flow.logout(db, refresh_token)
-        except Exception:
-            logger.debug("Logout failed while clearing refresh token", exc_info=True)
+        except HTTPException as exc:
+            if exc.status_code != 404:
+                raise
     response = RedirectResponse(url="/auth/login", status_code=303)
     response.delete_cookie("session_token")
     response.delete_cookie("mfa_pending")

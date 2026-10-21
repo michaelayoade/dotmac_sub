@@ -84,10 +84,43 @@ The Test Connection Finance slice adds two test-only `sessionmaker` sites in
 `tests/integration/test_test_connection_finance.py`: one for independently
 committing concurrent creations and one for observing complete request/outbox
 rollback. Both bind the shared migrated PostgreSQL test engine. The reviewed
-aggregate test-fixture ratchet is now 172 (170 from current main plus the two
+aggregate test-fixture ratchet was 172 at that slice (170 plus its two
 period-purchase concurrency fixture sites); production construction sites and
 the production per-file baseline are unchanged. This is test-fixture authorship,
 not an application runtime change.
+
+The earlier lifecycle AST snapshot on 2026-10-11 recorded **338 test construction
+sites across 108 files** and **17 live production/operational sites across
+15 files**. The production per-file baseline is unchanged. The test aggregate
+ratchet increased from 283 to 338 after reviewing the independently committed
+sessions used by engineering, universal completion and support acceptance
+proofs, plus their fast permission and adapter fixtures. Main integration adds
+no construction sites relative to the preceding base.
+
+The exact reconciliation of the previous aggregate is:
+
+| Test path under `tests/` | Previous accounting | Current sites | Change |
+|---|---:|---:|---:|
+| `integration/test_project_work_order_issuance_acceptance.py` | 19 | 16 | −3 |
+| `integration/test_field_completion_review_acceptance.py` | 31 | 51 | +20 |
+| `test_project_engineering_completion_boundary.py` | 1 | 2 | +1 |
+| `test_field_completion_review_adapters.py` | 0 | 7 | +7 |
+| `test_project_engineering_plans.py` | 0 | 1 | +1 |
+| `test_project_work_order_handoff.py` | 0 | 2 | +2 |
+| `integration/test_support_completion_gate_acceptance.py` | 0 | 27 | +27 |
+| **Net aggregate change** | **283** | **338** | **+55** |
+
+These are construction call sites, not counts of tests or runtime sessions.
+The table explains reviewed fixture authorship and corrects prior accounting;
+it does not establish a per-file test allowance or an application runtime change.
+
+The authentication-denial slice moves the current test-fixture total from 189
+to 197: one disposable file-SQLite engine, six explicit file-SQLite Session
+sites (independent lifecycle, observation, cleanup failure, lock preservation,
+and pending/flushed request-write proofs), and one named logic-only savepoint
+Session factory. Its PostgreSQL proofs reuse the migrated factory already in
+the inventory. No application engine/session construction or production
+per-file allowance is added.
 
 Every place that builds a `sqlalchemy.Engine` or an ORM `Session` outside
 `app.db`'s canonical `SessionLocal` factory (`app/db.py:69`), swept by AST
@@ -100,7 +133,7 @@ repository. Full raw counts:
 | Alembic migration runner | `alembic/` | 1 | 1 |
 | Standalone operational/migration scripts — live | `scripts/` | 4 | 5 |
 | Standalone operational/migration scripts — historical residue (see below; excluded, not a `DatabaseRuntime` requirement) | `scripts/` | 7 | 8 |
-| Test fixtures, migration rehearsals, integration/playwright harnesses | `tests/` | 65 | 119 |
+| Test fixtures, migration rehearsals, integration/playwright harnesses | `tests/` | 137 | 643 |
 
 The mechanical AST sweep itself found 22 production/operational files (25
 sites) with no interpretation applied. Seven of those files are historical
@@ -184,15 +217,17 @@ its target database is reachable) is a Sub repository-hygiene /
 residue-deletion question for that decommissioning programme to close —
 not a Kernel capability requirement, and out of scope for this inventory.
 
-### Test/fixture family — 65 files, 119 sites (tracked as an aggregate, not
+### Test/fixture family — 137 files, 643 sites (tracked as an aggregate, not
 per-file — see the ratchet's rationale below)
 
-Dominated by: migration rehearsal harnesses that build a real Postgres
-engine per migration boundary (`tests/integration/test_kernel_lineage_rehearsal.py`,
-8 sites), SQLite-per-test unit migration tests (~40 files, 1-2 sites each),
-and Postgres integration concurrency/composition tests. None of these
-construct a session against Sub's application `SessionLocal`; they are each
-a private, disposable database/engine per test.
+This family includes disposable migration rehearsal engines, isolated SQLite
+fixtures, and independently committed PostgreSQL setup, worker and verification
+sessions. The completion-review acceptance harness contributes 51 Session
+construction sites; support completion-gate acceptance contributes 27. These
+sessions bind the dedicated migrated test fixtures rather than adding an
+application session factory. A shared fixture may supply the engine to several
+independent sessions; a construction site is counted once in source regardless
+of how often a parametrized test executes it.
 
 ## Ratchet
 
@@ -211,7 +246,7 @@ two-directional ratchet, mirroring the existing
   without deliberately lowering the baseline, so the debt figure cannot
   drift down silently either.
 - `test_test_fixture_engine_family_is_swept` holds `tests/` to the same
-  two-directional discipline at the AGGREGATE level (currently 172) rather
+  two-directional discipline at the AGGREGATE level (currently 643) rather
   than per-file, because test fixtures legitimately construct one ad hoc
   engine per test and per-file tracking there would churn with test
   authorship, not with runtime readiness.
@@ -244,5 +279,89 @@ two-directional ratchet, mirroring the existing
 
 Both the AST scanner and baseline were independently re-derived and cross-
 checked against the live repository before being committed (see this
-document's construction-site tables above); the counts are exact as of this
-worktree's base commit, not estimated.
+document's construction-site tables above). The construction counts were
+reconciled against the integrated source on 2026-10-12; the earlier capability
+comparison retains the measurement scope stated above.
+
+
+### Lifecycle completion fixture accounting — 2026-10-11
+
+The lifecycle slice closed at **589 construction sites across 120 test files**.
+The earlier 338-site snapshot above remains historical accounting. Current main
+adds two credential-administration fixture sessions. Reviewed recovery and
+follow-up add 113: native replacement PostgreSQL34, engineering replacement
+PostgreSQL47, follow-up PostgreSQL17, correlation PostgreSQL14, and adapter1.
+Shared-outage/project completion adds94: shared acceptance34, shared independently
+committed-session helpers9, project acceptance49 and project fast fixtures2.
+All new engines and sessions are disposable test harnesses. The 17 production
+construction sites and their shrink-only per-file allowance are unchanged.
+
+The savepoint-safe completion correction adds 18 reviewed fixture sites: four
+terminal-history sessions in field acceptance, five project outer-transaction
+regression sessions, and nine dedicated full-XID/savepoint proof sessions.
+The production construction allowance remains unchanged.
+
+The complete outer-transaction proof adds another nine fixture sites: three
+replacement-lineage sessions and six enrollment/submission/review sessions,
+bringing the reviewed aggregate to 574 across 120 files.
+
+Canonical fiber/radio project entry acceptance adds ten disposable Session sites,
+bringing that slice aggregate to 584 across 120 files. Production remains unchanged.
+
+The normal-evidence radio completion regression adds five disposable Session
+sites, bringing that slice aggregate to 589 across 120 files. Production remains unchanged.
+
+
+### Integrated main and lifecycle fixture accounting — 2026-10-12
+
+The canonical AST scanner now measures **643 test construction sites across
+137 files** in the integrated source. Both slice histories above are retained
+as reviewed fixture accounting. They share a 191-site base: current main has
+245 sites (+54), while the lifecycle slice has 589 (+398). Combining their
+independent additions gives 191 + 54 + 398 = 643; the scanner independently
+confirms that total rather than relying only on the arithmetic.
+
+Main's added fixtures cover email verification, customer-profile isolation,
+authentication denial, identity lock ordering, OIDC atomic sessions, transaction
+trace attribution, session revocation, reseller standing, anonymous recovery,
+credential inventory, Argon2 benchmarking, logout and administrative revocation.
+The lifecycle additions retain the engineering, completion, replacement,
+follow-up and shared-outage/project proof rationales recorded above and beside
+`TEST_FIXTURE_BASELINE_TOTAL`.
+
+Live production remains **17 sites across 15 files**. The unchanged mechanical
+production sweep finds 25 sites across 22 files, including the separately
+excluded historical residue of eight sites across seven files. Neither this
+reconciliation nor its aggregate test baseline adds a production construction
+allowance; `session_construction_baseline.txt` is unchanged.
+
+### Optional owner-savepoint hardening fixture accounting — 2026-10-14
+
+The standalone hardening slice's static AST census measured **775 test
+construction sites across 166 files**, one more than accepted main's 774 sites. The new site
+is the engine-bound `Session` in
+`tests/integration/test_owner_commands_optional_savepoint_pg.py`. It uses the
+existing migrated PostgreSQL engine and observes visibility through a separate
+connection to distinguish savepoint release from durable owner completion.
+This is fixture authorship, not evidence that the pending hosted canaries pass.
+Production construction allowances and the per-file baseline are unchanged.
+
+### Invoice numbering V2 proof fixture accounting — 2026-10-14
+
+The standalone V2 slice's static AST census measured **777 test construction
+sites across 166 files**, accepted main's 774 sites plus three in
+`tests/integration/test_billing_numbering_activation_proof.py`. Two session
+factories and a clone-bound observer engine exercise the existing migrated
+PostgreSQL test schema, independently committed configuration/counter/receipt
+changes, and restricted read-only queries. This is fixture authorship;
+runtime acceptance remains pending hosted CI. Production construction
+allowances and the per-file baseline are unchanged.
+
+### Integrated owner and numbering proof fixture accounting — 2026-10-14
+
+The combined static AST census measures **778 sites across 167 files**:
+accepted main's 774 plus one owner-boundary Session and three Numbering-proof
+fixture sites. Both standalone histories above remain evidence of fixture
+authorship. The integrated ratchet records the complete measured population;
+production construction allowances and the per-file baseline are unchanged.
+Hosted acceptance must exercise this combined head and base.

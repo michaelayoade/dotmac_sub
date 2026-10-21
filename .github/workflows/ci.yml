@@ -629,6 +629,12 @@ jobs:
       TEST_DATABASE_URL: "postgresql+psycopg://postgres:postgres@localhost:5432/dotmac_sub_test"
     steps:
       - uses: actions/checkout@v4
+        with:
+          # The canary archives a pinned old source, independent of squash ancestry.
+          fetch-depth: 0
+
+      - name: Verify immutable ERP accounting-fact predecessor
+        run: python3 -m scripts.ci.immutable_predecessor
 
       - uses: ./.github/actions/setup-ci-python
         with:
@@ -844,7 +850,9 @@ jobs:
             'BOOTSTRAP_DATABASE_URL="$DATABASE_URL" python scripts/bootstrap_commercial_module_prereqs.py'
           docker run --rm $common_args dotmac-sub:ci sh -c \
             'BOOTSTRAP_DATABASE_URL="$DATABASE_URL" python scripts/bootstrap_outbox_dispatcher_roles.py --repair'
-          docker run --rm $common_args dotmac-sub:ci alembic upgrade heads
+          docker run --rm $common_args \
+            -e MIGRATION_DATABASE_URL=postgresql+psycopg://postgres:postgres@ci-db:5432/dotmac_sub_ci \
+            dotmac-sub:ci alembic upgrade heads
           docker run -d --name ci-app $common_args \
             -e CELERY_BROKER_URL=redis://ci-redis:6379/0 dotmac-sub:ci
           for i in $(seq 1 60); do

@@ -1,9 +1,9 @@
 // Auth-flow models mirroring app/schemas/auth_flow.py.
 
-/// Response from POST /auth/login.
+/// Response from POST /customer/auth/login.
 ///
 /// When MFA is enabled, `accessToken` is null, `mfaRequired` is true and
-/// `mfaToken` must be exchanged at POST /auth/mfa/verify.
+/// `mfaToken` must be exchanged at POST /customer/auth/mfa/verify.
 class LoginResult {
   LoginResult({
     this.accessToken,
@@ -30,7 +30,7 @@ class LoginResult {
       );
 }
 
-/// Response from POST /auth/mfa/verify and POST /auth/refresh.
+/// Response from POST /customer/auth/mfa/verify and POST /auth/refresh.
 class TokenPair {
   TokenPair({required this.accessToken, this.refreshToken});
 
@@ -92,13 +92,13 @@ class Me {
   final String? locale;
   final String? timezone;
 
-  /// Principal kind from the API ("customer" | "reseller"); drives portal
-  /// routing after login.
+  /// Principal kind from the API; customer admission requires an explicit kind.
   final String userType;
   final List<String> roles;
   final List<String> scopes;
 
   bool get isReseller => userType == 'reseller';
+  bool get isCustomer => userType == 'customer';
 
   String get fullName {
     final dn = displayName?.trim();
@@ -149,6 +149,7 @@ class Me {
         'country_code': countryCode,
         'locale': locale,
         'timezone': timezone,
+        'user_type': userType,
         'roles': roles,
         'scopes': scopes,
       };
@@ -173,7 +174,7 @@ class Me {
         countryCode: json['country_code'] as String?,
         locale: json['locale'] as String?,
         timezone: json['timezone'] as String?,
-        userType: json['user_type'] as String? ?? 'customer',
+        userType: json['user_type'] as String? ?? 'unknown',
         roles: (json['roles'] as List? ?? const [])
             .map((e) => e.toString())
             .toList(),

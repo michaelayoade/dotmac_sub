@@ -12,7 +12,12 @@ const status = id => ({request_id: id, accepted: true, materialization_status: '
     matched_count: 1, planned_queued_count: 1, planned_suppressed_count: 0, skipped_count: 0,
     delivered_count: 0, submitted_count: 0, pending_count: 0, failed_count: 0, canceled_count: 0,
     error: null, status_url: `/admin/customers/bulk/send-message/${id}`});
-const response = (code, body) => ({ok: code < 400, status: code, json: async () => body});
+const response = (code, body) => ({ok: code < 400, status: code,
+    headers: {get: name => name.toLowerCase() === 'content-type' ? 'application/json; charset=utf-8' : null},
+    json: async () => body});
+const htmlResponse = (code, body = '<!doctype html><html></html>') => ({ok: code < 400, status: code,
+    headers: {get: name => name.toLowerCase() === 'content-type' ? 'text/html; charset=utf-8' : null},
+    text: async () => body});
 function runtime(fetch, storage = new Map(), panel = null) {
     const callbacks = {};
     const context = {
@@ -31,9 +36,11 @@ test('a lost POST response recovers the durable acceptance without another POST'
     const client = runtime(async (url, options) => {
         if (options.method === 'POST') {
             posts++; id = JSON.parse(options.body).request_id;
+            assert.equal(options.headers.Accept, 'application/json');
             throw new Error('connection lost after acceptance');
         }
         gets++;
+        assert.equal(options.headers.Accept, 'application/json');
         assert.equal(url, `/admin/customers/bulk/send-message/${id}`);
         return response(200, status(id));
     });
@@ -48,12 +55,12 @@ test('an uncertain send keeps its UUID across reload and explicit retry', async 
     const ids = [];
     const fetch = async (_url, options) => {
         if (options.method === 'POST') { ids.push(JSON.parse(options.body).request_id); throw new Error('lost response'); }
-        return response(404, {detail: 'not found'});
+        throw new Error('status unavailable');
     };
-    await assert.rejects(runtime(fetch, storage).send(payload, {}), /Could not confirm/);
+    await assert.rejects(runtime(fetch, storage).send(payload, {}), /status unavailable/);
     const next = runtime(fetch, storage);
     next.startPreview();
-    await assert.rejects(next.send(payload, {}), /Could not confirm/);
+    await assert.rejects(next.send(payload, {}), /status unavailable/);
     assert.equal(ids.length, 2);
     assert.equal(ids[0], ids[1]);
     assert.ok(!JSON.stringify([...storage.values()]).includes('customer-1'));
@@ -63,11 +70,11 @@ test('changed inputs cannot create a new send while the preceding outcome is unk
     let posts = 0;
     const client = runtime(async (_url, options) => {
         if (options.method === 'POST') { posts++; throw new Error('lost response'); }
-        return response(404, {detail: 'not found'});
+        throw new Error('status unavailable');
     });
-    await assert.rejects(client.send(payload, {}));
+    await assert.rejects(client.send(payload, {}), /status unavailable/);
     client.startPreview();
-    await assert.rejects(client.send({...payload, expected_impact_token: 'different'}, {}));
+    await assert.rejects(client.send({...payload, expected_impact_token: 'different'}, {}), /status unavailable/);
     assert.equal(posts, 1);
 });
 
@@ -90,13 +97,123 @@ test('definite rejection shows its reason and allows a corrected interaction', a
     const ids = [];
     const client = runtime(async (_url, options) => {
         ids.push(JSON.parse(options.body).request_id);
-        if (ids.length === 1) return response(409, {detail: 'Preview changed'});
+        if (ids.length === 1) return response(400, {code: 'http_400', message: 'Preview changed'});
         return response(202, status(ids[1]));
     });
     await assert.rejects(client.send(payload, {}), /Preview changed/);
     const result = await client.send({...payload, expected_impact_token: 'updated'}, {});
     assert.notEqual(ids[0], ids[1]);
     assert.equal(result.accepted, true);
+});
+
+test('a conflict checks the existing receipt before allowing another send', async () => {
+    let id, posts = 0;
+    const client = runtime(async (_url, options) => {
+        if (options.method === 'POST') {
+            posts++;
+            id = JSON.parse(options.body).request_id;
+            return response(409, {code: 'http_409', message: 'Send conflict.'});
+        }
+        return response(200, status(id));
+    });
+    const result = await client.send(payload, {});
+    assert.equal(result.request_id, id);
+    assert.equal(posts, 1);
+});
+
+test('API error envelopes show the server reason without an unnecessary status lookup', async () => {
+    let gets = 0;
+    const client = runtime(async (_url, options) => {
+        if (options.method === 'POST') {
+            return response(400, {code: 'http_400', message: 'Invalid send reference.'});
+        }
+        gets++;
+        return response(404, {code: 'http_404', message: 'Not found.'});
+    });
+    await assert.rejects(client.send(payload, {}), /Invalid send reference/);
+    assert.equal(gets, 0);
+});
+
+test('an authentication failure preserves the send reference and explains the next step', async () => {
+    const storage = new Map();
+    let id;
+    const client = runtime(async (_url, options) => {
+        if (options.method === 'POST') {
+            id = JSON.parse(options.body).request_id;
+            throw new Error('confirmation response unavailable');
+        }
+        assert.equal(options.headers.Accept, 'application/json');
+        return response(401, {code: 'http_401', message: 'Unauthorized'});
+    }, storage);
+    await assert.rejects(client.send(payload, {}), /Sign in again/);
+    assert.ok([...storage.values()].some(value => value.includes(id)));
+});
+
+test('a temporarily missing receipt stays unresolved and blocks a second message', async () => {
+    const storage = new Map();
+    let posts = 0;
+    const fetch = async (_url, options) => {
+        if (options.method === 'POST') {
+            posts++;
+            return response(503, {code: 'http_503', message: 'Temporarily unavailable.'});
+        }
+        return response(404, {code: 'http_404', message: 'Not found.'});
+    };
+    const first = runtime(fetch, storage);
+    await assert.rejects(first.send(payload, {}), /No saved send record is available yet/);
+    const second = runtime(fetch, storage);
+    second.startPreview();
+    await assert.rejects(second.send({...payload, expected_impact_token: 'changed'}, {}), /No saved send record is available yet/);
+    assert.equal(posts, 1);
+});
+
+test('an HTML confirmation failure checks the saved reference without exposing a parse error or retrying', async () => {
+    const storage = new Map();
+    let id, posts = 0, gets = 0;
+    const client = runtime(async (url, options) => {
+        if (options.method === 'POST') {
+            posts++;
+            id = JSON.parse(options.body).request_id;
+            return htmlResponse(502);
+        }
+        gets++;
+        assert.equal(url, `/admin/customers/bulk/send-message/${id}`);
+        return response(404, {code: 'http_404', message: 'Not found.'});
+    }, storage);
+    await assert.rejects(client.send(payload, {}), /No saved send record is available yet/);
+    assert.equal(posts, 1);
+    assert.equal(gets, 1);
+    assert.ok([...storage.values()].some(value => value.includes(id)));
+});
+
+test('an HTML status response keeps the reference and displays a safe message', async () => {
+    const storage = new Map();
+    let id;
+    const client = runtime(async (_url, options) => {
+        if (options.method === 'POST') {
+            id = JSON.parse(options.body).request_id;
+            throw new Error('connection lost');
+        }
+        return htmlResponse(502);
+    }, storage);
+    await assert.rejects(client.send(payload, {}), /webpage instead of send status/);
+    assert.ok([...storage.values()].some(value => value.includes(id)));
+});
+
+test('a JSON CSRF rejection keeps the reference and explains how to recover', async () => {
+    const storage = new Map();
+    let id, gets = 0;
+    const client = runtime(async (_url, options) => {
+        id = JSON.parse(options.body).request_id;
+        if (options.method === 'POST') {
+            return response(403, {code: 'csrf_validation_failed', message: 'Refresh the page and try again.'});
+        }
+        gets++;
+        return response(404, {code: 'http_404', message: 'Not found.'});
+    }, storage);
+    await assert.rejects(client.send(payload, {}), /Refresh the page and try again/);
+    assert.equal(gets, 0);
+    assert.ok([...storage.values()].some(value => value.includes(id)));
 });
 
 test('a malformed successful response checks the receipt instead of claiming failure', async () => {

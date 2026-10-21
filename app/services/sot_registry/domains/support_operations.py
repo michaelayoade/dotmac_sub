@@ -285,146 +285,6 @@ DOMAIN = DomainSOT(
             ),
         ),
         SOTService(
-            name="support.ticket_automation_rule_configuration",
-            module="app.services.support_automation_rules",
-            owns=("ticket automation-rule configuration",),
-            contract=ServiceContract(
-                concerns=(
-                    ConcernContract(
-                        name="ticket automation-rule configuration",
-                        role=OwnerRole.AUTHORITATIVE_RECORD,
-                        input_names=(
-                            "typed automation-rule command",
-                            "automation rules",
-                        ),
-                        canonical_writer=(
-                            "support.ticket_automation_rule_configuration"
-                        ),
-                    ),
-                ),
-                authoritative_inputs=(
-                    AuthorityInput(
-                        name="typed automation-rule command",
-                        owner="support.ticket_automation_rule_configuration",
-                        kind=AuthorityKind.CONTROL_INPUT,
-                        source=(
-                            "typed create/update/delete/activation command with validated "
-                            "trigger, conditions, action, actor, and idempotency evidence"
-                        ),
-                    ),
-                    AuthorityInput(
-                        name="automation rules",
-                        owner="support.ticket_automation_rule_configuration",
-                        kind=AuthorityKind.AUTHORITATIVE_RECORD,
-                        source="TicketAutomationRule rows and active priority order",
-                    ),
-                ),
-                transaction=TransactionContract(
-                    mode=TransactionMode.OWNER_MANAGED,
-                    boundary="each rule mutation enters execute_owner_command once",
-                    locking="rule row is locked for update/delete/activation",
-                    idempotency="command key and stable rule identity bound replay",
-                    retries="retry the complete rule command after rollback",
-                ),
-                errors=ErrorContract(
-                    domain_codes=(
-                        "automation_rule_not_found",
-                        "automation_rule_invalid",
-                        *owner_command_boundary_error_codes(
-                            "support.ticket_automation_rule_configuration"
-                        ),
-                    ),
-                    mapping_owner="support automation web adapters",
-                    fail_closed_on=("invalid trigger", "invalid action target"),
-                ),
-                events=EventContract(
-                    event_types=("ticket.automation_rule_changed",),
-                    schema_version=1,
-                    delivery_owner="observability.audit_log",
-                    compatibility="Version 1 records rule identity and change type only.",
-                    replay="TicketAutomationRule rows and audit evidence reconstruct changes.",
-                ),
-                migration=MigrationContract(
-                    state=AuthorityMigrationState.COMPLETE,
-                    old_owner="automation route and direct-commit service helpers",
-                    new_owner="support.ticket_automation_rule_configuration",
-                    verification="automation configuration and architecture tests",
-                    cutover_gate="all rule writes use typed owner commands",
-                    fallback_retirement="HTTP and direct transaction behavior are absent",
-                ),
-                steward="support operations",
-                design_refs=(
-                    "docs/designs/SUPPORT_TICKET_LIFECYCLE_SOT.md",
-                    "docs/SOT_RELATIONSHIP_MAP.md",
-                ),
-                test_refs=(
-                    "tests/test_support_automation.py",
-                    "tests/architecture/test_support_ticket_sot_boundary.py",
-                ),
-            ),
-        ),
-        SOTService(
-            name="support.ticket_automation_evaluation",
-            module="app.services.support_automation",
-            owns=("ticket automation-rule evaluation",),
-            depends_on=("support.ticket_automation_rule_configuration",),
-            contract=ServiceContract(
-                concerns=(
-                    ConcernContract(
-                        name="ticket automation-rule evaluation",
-                        role=OwnerRole.POLICY,
-                        input_names=(
-                            "canonical automation rules",
-                            "ticket automation facts",
-                        ),
-                    ),
-                ),
-                authoritative_inputs=(
-                    AuthorityInput(
-                        name="canonical automation rules",
-                        owner="support.ticket_automation_rule_configuration",
-                        kind=AuthorityKind.CONTROL_INPUT,
-                        source="active TicketAutomationRule rows for the trigger",
-                    ),
-                    AuthorityInput(
-                        name="ticket automation facts",
-                        owner="support.ticket_lifecycle",
-                        kind=AuthorityKind.AUTHORITATIVE_RECORD,
-                        source="current typed Ticket fields and identity-review evidence",
-                    ),
-                ),
-                transaction=TransactionContract(
-                    mode=TransactionMode.READ_ONLY,
-                    boundary="evaluation is side-effect-free and returns typed proposals",
-                    locking="not applicable; lifecycle owner rechecks state before application",
-                    idempotency="same rules and Ticket facts produce the same ordered proposals",
-                    retries="re-evaluate from canonical inputs",
-                ),
-                errors=ErrorContract(
-                    domain_codes=("automation_evaluation_invalid_rule",),
-                    mapping_owner="support.ticket_lifecycle",
-                    fail_closed_on=("identity manual review", "unknown action"),
-                ),
-                migration=MigrationContract(
-                    state=AuthorityMigrationState.COMPLETE,
-                    old_owner="automation engine direct Ticket writer",
-                    new_owner="support.ticket_automation_evaluation",
-                    verification="proposal-only automation and lifecycle application tests",
-                    cutover_gate="policy returns TicketAutomationProposal values only",
-                    fallback_retirement="automation policy cannot mutate or flush Ticket rows",
-                ),
-                steward="support operations",
-                design_refs=(
-                    "docs/designs/SUPPORT_TICKET_LIFECYCLE_SOT.md",
-                    "docs/SOT_RELATIONSHIP_MAP.md",
-                ),
-                test_refs=(
-                    "tests/test_support_automation.py",
-                    "tests/architecture/test_support_ticket_sot_boundary.py",
-                ),
-            ),
-        ),
-        SOTService(
             name="support.ticket_vocabulary",
             module="app.models.support",
             owns=("ticket status vocabulary",),
@@ -492,7 +352,11 @@ DOMAIN = DomainSOT(
         SOTService(
             name="support.ticket_lifecycle",
             module="app.services.support",
+            implementation_modules=("app.services.support_outage_resolution",),
             owns=(
+                "protected staff resolution request preview",
+                "ticket completion-basis confirmation gating",
+                "ticket immutable resolution requests and basis",
                 "ticket lifecycle mutations",
                 "ticket creation and identity",
                 "admin-created ticket customer email acknowledgement",
@@ -511,12 +375,15 @@ DOMAIN = DomainSOT(
                 "ticket audit official timeline and transactional events",
             ),
             depends_on=(
+                "operations.field_completion",
+                "network.outage_completion_evidence",
+                "operations.work_order_commands",
                 "support.ticket_configuration",
                 "support.ticket_vocabulary",
                 "support.ticket_assignment_evaluation",
-                "support.ticket_automation_evaluation",
                 "customer.identity_scope",
                 "auth.staff_provisioning",
+                "auth.staff_permission_admission",
                 "customer.branding",
                 "communications.intents",
                 "communications.notification_service",
@@ -525,6 +392,35 @@ DOMAIN = DomainSOT(
             ),
             contract=ServiceContract(
                 concerns=(
+                    ConcernContract(
+                        name="protected staff resolution request preview",
+                        role=OwnerRole.RESOLVER,
+                        input_names=(
+                            "fresh resolution request staff admission",
+                            "canonical ticket state",
+                            "accepted linked work-order completion basis",
+                        ),
+                    ),
+                    ConcernContract(
+                        name="ticket completion-basis confirmation gating",
+                        role=OwnerRole.COMMAND_WRITER,
+                        canonical_writer="support.ticket_lifecycle",
+                        input_names=(
+                            "canonical ticket state",
+                            "accepted linked work-order completion basis",
+                            "typed ticket command",
+                        ),
+                    ),
+                    ConcernContract(
+                        name="ticket immutable resolution requests and basis",
+                        role=OwnerRole.AUTHORITATIVE_RECORD,
+                        canonical_writer="support.ticket_lifecycle",
+                        input_names=(
+                            "canonical ticket state",
+                            "accepted linked work-order completion basis",
+                            "typed ticket command",
+                        ),
+                    ),
                     *tuple(
                         ConcernContract(
                             name=name,
@@ -544,7 +440,6 @@ DOMAIN = DomainSOT(
                                 "portal team-routing resolution",
                                 "customer identity evidence",
                                 "assignment policy proposal",
-                                "automation policy proposal",
                                 *(
                                     (
                                         "active assigned staff contact identity",
@@ -616,6 +511,24 @@ DOMAIN = DomainSOT(
                 ),
                 authoritative_inputs=(
                     AuthorityInput(
+                        name="reviewed shared outage completion scope",
+                        owner="network.outage_completion_evidence",
+                        kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                        source="Exact native complaint receipt and selected service, canonical infrastructure ticket, current restored incident/revision/token, all actual issued audience matching work scopes; explicit reviewed empty iff no issuance; snapshots compared on request/confirmation/grace. Unknown history requires explicit correlation adoption; no guessed evidence.",
+                    ),
+                    AuthorityInput(
+                        name="fresh resolution request staff admission",
+                        owner="auth.staff_permission_admission",
+                        kind=AuthorityKind.CONTROL_INPUT,
+                        source="SupportResolutionPreviewQuery and SupportResolutionRequestCommand carry PermissionAdmission freshly revalidated for support:ticket:update with WRITE leave restrictions and canonical active staff Person; checks repeat after waits and before replay. No support READ floor or synthetic executor.",
+                    ),
+                    AuthorityInput(
+                        name="accepted linked work-order completion basis",
+                        owner="operations.field_completion",
+                        kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                        source="Typed exact origin_ticket_id enrollment presence and support-only TicketCompletionBasis; public resolution_request_preview uses preview_ticket_completion_basis with fresh support:ticket:update admission and the same exact freshness kernel, without writes or an executor; fresh completed event, assignment, criteria, policy, submission, accepted decision and review generation. Support pins native immutable request/child basis, preserving every original required work-order/enrollment scope plus optional exact effective accepted endpoint and ordered reviewed replacement decision lineage. Confirmation/grace revalidate exact current failure/assignment/criteria/policy/coverage lineage and acceptance; stale/revoked lineage blocks consent. A valid request capability may still dispute stale completion evidence. Never infers from ProjectTask.ticket_id.",
+                    ),
+                    AuthorityInput(
                         name="typed ticket command",
                         owner="support.ticket_lifecycle",
                         kind=AuthorityKind.CONTROL_INPUT,
@@ -674,15 +587,6 @@ DOMAIN = DomainSOT(
                         kind=AuthorityKind.DERIVED_PROJECTION,
                         source=(
                             "typed proposal containing team/person/scope and rule evidence; "
-                            "never a Ticket mutation"
-                        ),
-                    ),
-                    AuthorityInput(
-                        name="automation policy proposal",
-                        owner="support.ticket_automation_evaluation",
-                        kind=AuthorityKind.DERIVED_PROJECTION,
-                        source=(
-                            "typed action proposal derived from a matching active rule; "
                             "never a Ticket mutation"
                         ),
                     ),
@@ -746,6 +650,7 @@ DOMAIN = DomainSOT(
                         "transaction."
                     ),
                     locking=(
+                        "Ticket linkage advisory fences sorted before Ticket locks, then completion participant batch Project/task/engineering roots before all WOs/criteria/policy/review/replacement heads; enrollment and issuance use the same fence. "
                         "Existing Ticket mutations lock or operate under the root command; "
                         "comment creation locks the Ticket before resolving its scoped "
                         "idempotency UUID; the database uniquely arbitrates ticket/key; "
@@ -754,6 +659,7 @@ DOMAIN = DomainSOT(
                         "are rechecked before writing."
                     ),
                     idempotency=(
+                        "Public request_resolution returns SupportResolutionRequestOutcome with native request identity, expiry/deadline, pending status and replay flag, never raw token capability; exact actor and stable UUID intent are required. Immutable resolution request intent/fingerprint replays only an active original token with unchanged current basis and original deadline. Changed payload/basis conflicts; consumed tokens cannot be resurrected. Timer receipt records blocked_completion_basis atomically with immutable support attempt and audit. "
                         "The server-generated ticket-comment form UUID and adapter "
                         "Idempotency-Key are carried in CommandContext where supplied; "
                         "ticket/comment-key uniqueness plus an immutable material-input "
@@ -795,6 +701,14 @@ DOMAIN = DomainSOT(
                         "ticket_comment_idempotency_conflict",
                         "automation_assignment_team_unavailable",
                         "automation_priority_invalid",
+                        "resolution_confirmation_required",
+                        "resolution_basis_changed",
+                        "resolution_idempotency_conflict",
+                        "invalid_grace_hours",
+                        "resolution_forbidden",
+                        "resolution_intent_required",
+                        "ticket_inactive",
+                        "invalid_command_scope",
                         *owner_command_boundary_error_codes("support.ticket_lifecycle"),
                     ),
                     mapping_owner=(
@@ -806,6 +720,8 @@ DOMAIN = DomainSOT(
                         "ambiguous customer identity",
                         "merged source",
                         "inactive confirmation capability",
+                        "enrolled direct close without customer confirmation",
+                        "missing changed rejected revoked or stale completion basis",
                     ),
                 ),
                 events=EventContract(
@@ -864,6 +780,7 @@ DOMAIN = DomainSOT(
                 ),
                 steward="support operations",
                 design_refs=(
+                    "docs/designs/SUPPORT_COMPLETION_CONFIRMATION_GATE.md",
                     "docs/SOT_RELATIONSHIP_MAP.md",
                     "docs/designs/SUPPORT_TICKET_LIFECYCLE_SOT.md",
                     "docs/designs/SUPPORT_UX_POLISH_AUDIT.md",
@@ -871,9 +788,15 @@ DOMAIN = DomainSOT(
                     "mobile/README.md",
                 ),
                 test_refs=(
+                    "tests/test_support_resolution_owner_reads.py",
+                    "tests/test_support_completion_gate.py",
+                    "tests/test_failed_scope_replacement.py",
+                    "tests/integration/test_failed_scope_replacement_acceptance.py",
+                    "tests/architecture/test_failed_scope_replacement_boundary.py",
+                    "tests/integration/test_support_completion_gate_acceptance.py",
+                    "tests/architecture/test_support_completion_gate_boundary.py",
                     "tests/test_support_services.py",
                     "tests/test_ticket_status_transition.py",
-                    "tests/test_support_automation.py",
                     "tests/test_ticket_assignment_engine.py",
                     "tests/test_ticket_assignment_authorization.py",
                     "tests/test_ticket_assignment_role_grant_migration.py",
@@ -1123,6 +1046,7 @@ DOMAIN = DomainSOT(
                 "ticket SLA clock lifecycle",
                 "ticket SLA breach records",
                 "ticket SLA breach event emission",
+                "ticket dashboard attention projection",
             ),
             depends_on=(
                 "support.ticket_lifecycle",
@@ -1165,6 +1089,15 @@ DOMAIN = DomainSOT(
                             "canonical ticket lifecycle state",
                             "current ticket SLA records",
                             "configured operational escalation policy",
+                        ),
+                    ),
+                    ConcernContract(
+                        name="ticket dashboard attention projection",
+                        role=OwnerRole.RESOLVER,
+                        input_names=(
+                            "canonical ticket lifecycle state",
+                            "configured ticket SLA targets",
+                            "current ticket SLA records",
                         ),
                     ),
                 ),
@@ -1250,6 +1183,35 @@ DOMAIN = DomainSOT(
                         "escalation rows reconstruct the breach consequence."
                     ),
                 ),
+                projections=(
+                    ProjectionContract(
+                        name="ticket dashboard attention projection",
+                        input_names=(
+                            "canonical ticket lifecycle state",
+                            "configured ticket SLA targets",
+                            "current ticket SLA records",
+                        ),
+                        writer="support.ticket_sla_clock",
+                        freshness=(
+                            "Computed at query time; the admin dashboard refreshes the "
+                            "snapshot every 60 seconds."
+                        ),
+                        stale_behavior=(
+                            "The dashboard retains the last successfully rendered "
+                            "snapshot and never substitutes zero for an unavailable query."
+                        ),
+                        drift_signal=(
+                            "Focused SLA-assignment tests compare unassigned, warning, "
+                            "and breached cohorts with canonical ticket and clock rows."
+                        ),
+                        rebuild_operation=(
+                            "Re-run ticket_attention_summary for the requested observation "
+                            "time from canonical Ticket, TicketAssignee, SlaTarget, and "
+                            "SlaClock rows."
+                        ),
+                        repair_owner="support.ticket_sla_clock",
+                    ),
+                ),
                 migration=MigrationContract(
                     state=AuthorityMigrationState.COMPLETE,
                     old_owner=(
@@ -1323,7 +1285,9 @@ DOMAIN = DomainSOT(
                         owner="support.ticket_lifecycle",
                         kind=AuthorityKind.AUTHORITATIVE_RECORD,
                         source=(
-                            "current Ticket status, customer link, and resolution state"
+                            "cause-linked Ticket identity and immutable merge relation; "
+                            "the complete same-account merged_into_ticket_id chain and "
+                            "final destination status determine effective resolution state"
                         ),
                     ),
                     AuthorityInput(
@@ -1383,10 +1347,11 @@ DOMAIN = DomainSOT(
                         "flush-only participants."
                     ),
                     locking=(
-                        "The Ticket, exact prior pause cause, and active service "
-                        "candidates are selected with row locks. Prepaid coverage "
-                        "is re-resolved from exact entitlement and applied-extension "
-                        "evidence after the subscription lock is held."
+                        "The cause-linked Ticket, every existing merge-chain Ticket, "
+                        "exact prior pause cause, and active service candidates are "
+                        "selected with row locks. Prepaid coverage is re-resolved from "
+                        "exact entitlement and applied-extension evidence after the "
+                        "subscription lock is held."
                     ),
                     idempotency=(
                         "The event, rule version, and step derive one stable pause-cause "
@@ -1445,6 +1410,7 @@ DOMAIN = DomainSOT(
                     mapping_owner="automation action adapter",
                     fail_closed_on=(
                         "missing Ticket or customer account link",
+                        "missing merge destination, merge cycle, or merge-chain customer mismatch",
                         "zero or multiple active linked services",
                         "conflicting replay evidence",
                         "missing, discontinuous, or anchor-inconsistent prepaid coverage",
@@ -1492,6 +1458,7 @@ DOMAIN = DomainSOT(
                 test_refs=(
                     "tests/test_ticket_sla_service_automation.py",
                     "tests/test_subscription_pause_lifecycle.py",
+                    "tests/test_subscription_lifecycle_ui.py",
                     "tests/test_sla_assignment.py",
                     "tests/test_automation_ticket_assignment_drafts.py",
                     "tests/architecture/test_automation_runtime_boundary.py",
@@ -2056,14 +2023,6 @@ DOMAIN = DomainSOT(
                 management_path="/admin/support/assignment-rules",
             ),
             AutomationCatalogItem(
-                key="support.ticket.legacy_automation",
-                label="Legacy ticket automation rules",
-                group="Support",
-                state=AutomationCatalogState.managed_elsewhere,
-                explanation="Existing ticket rules remain on their current page and are checked for conflicts.",
-                management_path="/admin/support/automation",
-            ),
-            AutomationCatalogItem(
                 key="support.ticket.center_rules",
                 label="Automation Center ticket rules",
                 group="Support",
@@ -2398,7 +2357,10 @@ DOMAIN = DomainSOT(
                         key="resume_policy",
                         label="Resume policy",
                         value_type=AutomationValueType.enum,
-                        enum_values=("manual_after_ticket_resolution",),
+                        enum_values=(
+                            "manual_after_ticket_resolution",
+                            "auto_on_ticket_resolution",
+                        ),
                     ),
                     AutomationActionInput(
                         key="billing_policy",
@@ -2435,13 +2397,6 @@ DOMAIN = DomainSOT(
                 label="Ticket assignment rules",
                 owner_service="support.ticket_assignment_evaluation",
                 management_path="/admin/support/assignment-rules",
-                conflict_scopes=(),
-            ),
-            LegacyAutomationSurface(
-                key="support.ticket_creation_automation",
-                label="Ticket creation automation",
-                owner_service="support.ticket_automation_rule_configuration",
-                management_path="/admin/support/automation",
                 conflict_scopes=(),
             ),
         ),

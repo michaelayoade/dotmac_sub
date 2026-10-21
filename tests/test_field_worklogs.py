@@ -4,8 +4,9 @@ from datetime import UTC, datetime, timedelta
 from uuid import uuid4
 
 import pytest
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI
 from fastapi.testclient import TestClient
+from sqlalchemy.orm import Session
 
 from app.api.field import router
 from app.db import get_db
@@ -14,9 +15,18 @@ from app.models.field_worklog import FieldWorkLog
 from app.models.subscriber import Subscriber, UserType
 from app.models.system_user import SystemUser
 from app.models.work_order import WorkOrder
+from app.schemas.field import FieldWorkLogResult
 from app.services.auth_dependencies import require_user_auth
+from app.services.db_session_adapter import db_session_adapter
+from app.services.field.execution_contracts import (
+    FieldJobQuery,
+    FieldWorkLogEntry,
+    SubmitFieldWorkLogs,
+)
 from app.services.field.jobs import field_jobs
+from app.services.field.work_order_access import FieldAccessError
 from app.services.field.worklogs import field_worklogs
+from app.services.owner_commands import CommandContext
 
 
 def _user(db_session, name: str = "Log") -> SystemUser:
@@ -93,19 +103,37 @@ def test_submit_worklog_and_surface_in_job_detail(db_session):
     end = start + timedelta(minutes=90)
     db_session.commit()
 
-    result = field_worklogs.submit(
-        db_session,
-        _auth(user),
-        "wo-log-detail",
-        [{"start_at": start, "end_at": end, "notes": "Spliced drop"}],
+    result = _worklogs_submit(
+        db=db_session,
+        command=SubmitFieldWorkLogs(
+            requester_system_user_id=user.id,
+            public_id="wo-log-detail",
+            entries=tuple(
+                FieldWorkLogEntry(**entry)
+                for entry in [
+                    {"start_at": start, "end_at": end, "notes": "Spliced drop"}
+                ]
+            ),
+            context=CommandContext.system(
+                actor=f"user:{user.id}",
+                scope="field:test",
+                reason="test_field_execution",
+                idempotency_key=str(uuid4()),
+            ),
+        ),
     )
 
-    assert result[0]["duplicate"] is False
-    assert result[0]["worklog"]["minutes"] == 90
+    assert result[0].duplicate is False
+    assert result[0].worklog.minutes == 90
     stored = db_session.query(FieldWorkLog).one()
     assert stored.work_order_mirror.public_id == "wo-log-detail"
 
-    detail = field_jobs.get_detail(db_session, _auth(user), "wo-log-detail")
+    detail = field_jobs.get_detail(
+        db=db_session,
+        query=FieldJobQuery(
+            requester_system_user_id=user.id, public_id="wo-log-detail"
+        ),
+    )
     assert len(detail.worklogs) == 1
     assert detail.worklogs[0].minutes == 90
 
@@ -120,21 +148,47 @@ def test_worklog_client_ref_dedupes_retry(db_session):
     client_ref = uuid4()
     db_session.commit()
 
-    first = field_worklogs.submit(
-        db_session,
-        _auth(user),
-        "wo-log-dedupe",
-        [{"start_at": start, "end_at": end, "client_ref": client_ref}],
+    first = _worklogs_submit(
+        db=db_session,
+        command=SubmitFieldWorkLogs(
+            requester_system_user_id=user.id,
+            public_id="wo-log-dedupe",
+            entries=tuple(
+                FieldWorkLogEntry(**entry)
+                for entry in [
+                    {"start_at": start, "end_at": end, "client_ref": client_ref}
+                ]
+            ),
+            context=CommandContext.system(
+                actor=f"user:{user.id}",
+                scope="field:test",
+                reason="test_field_execution",
+                idempotency_key=str(uuid4()),
+            ),
+        ),
     )
-    second = field_worklogs.submit(
-        db_session,
-        _auth(user),
-        "wo-log-dedupe",
-        [{"start_at": start, "end_at": end, "client_ref": client_ref}],
+    second = _worklogs_submit(
+        db=db_session,
+        command=SubmitFieldWorkLogs(
+            requester_system_user_id=user.id,
+            public_id="wo-log-dedupe",
+            entries=tuple(
+                FieldWorkLogEntry(**entry)
+                for entry in [
+                    {"start_at": start, "end_at": end, "client_ref": client_ref}
+                ]
+            ),
+            context=CommandContext.system(
+                actor=f"user:{user.id}",
+                scope="field:test",
+                reason="test_field_execution",
+                idempotency_key=str(uuid4()),
+            ),
+        ),
     )
 
-    assert first[0]["worklog"]["id"] == second[0]["worklog"]["id"]
-    assert second[0]["duplicate"] is True
+    assert first[0].worklog.id == second[0].worklog.id
+    assert second[0].duplicate is True
     assert db_session.query(FieldWorkLog).count() == 1
 
 
@@ -146,26 +200,48 @@ def test_worklog_overlap_rejected(db_session):
     start = datetime.now(UTC) - timedelta(hours=2)
     db_session.commit()
 
-    field_worklogs.submit(
-        db_session,
-        _auth(user),
-        "wo-log-overlap",
-        [{"start_at": start, "end_at": start + timedelta(hours=1)}],
+    _worklogs_submit(
+        db=db_session,
+        command=SubmitFieldWorkLogs(
+            requester_system_user_id=user.id,
+            public_id="wo-log-overlap",
+            entries=tuple(
+                FieldWorkLogEntry(**entry)
+                for entry in [{"start_at": start, "end_at": start + timedelta(hours=1)}]
+            ),
+            context=CommandContext.system(
+                actor=f"user:{user.id}",
+                scope="field:test",
+                reason="test_field_execution",
+                idempotency_key=str(uuid4()),
+            ),
+        ),
     )
-    with pytest.raises(HTTPException) as exc:
-        field_worklogs.submit(
-            db_session,
-            _auth(user),
-            "wo-log-overlap",
-            [
-                {
-                    "start_at": start + timedelta(minutes=30),
-                    "end_at": start + timedelta(minutes=90),
-                }
-            ],
+    with pytest.raises(FieldAccessError) as exc:
+        _worklogs_submit(
+            db=db_session,
+            command=SubmitFieldWorkLogs(
+                requester_system_user_id=user.id,
+                public_id="wo-log-overlap",
+                entries=tuple(
+                    FieldWorkLogEntry(**entry)
+                    for entry in [
+                        {
+                            "start_at": start + timedelta(minutes=30),
+                            "end_at": start + timedelta(minutes=90),
+                        }
+                    ]
+                ),
+                context=CommandContext.system(
+                    actor=f"user:{user.id}",
+                    scope="field:test",
+                    reason="test_field_execution",
+                    idempotency_key=str(uuid4()),
+                ),
+            ),
         )
 
-    assert exc.value.status_code == 409
+    assert exc.value.code.endswith("conflict")
 
 
 def test_worklog_hidden_job_404(db_session):
@@ -182,20 +258,31 @@ def test_worklog_hidden_job_404(db_session):
     )
     db_session.commit()
 
-    with pytest.raises(HTTPException) as exc:
-        field_worklogs.submit(
-            db_session,
-            _auth(user),
-            "wo-log-hidden",
-            [
-                {
-                    "start_at": datetime.now(UTC),
-                    "end_at": datetime.now(UTC) + timedelta(minutes=15),
-                }
-            ],
+    with pytest.raises(FieldAccessError) as exc:
+        _worklogs_submit(
+            db=db_session,
+            command=SubmitFieldWorkLogs(
+                requester_system_user_id=user.id,
+                public_id="wo-log-hidden",
+                entries=tuple(
+                    FieldWorkLogEntry(**entry)
+                    for entry in [
+                        {
+                            "start_at": datetime.now(UTC),
+                            "end_at": datetime.now(UTC) + timedelta(minutes=15),
+                        }
+                    ]
+                ),
+                context=CommandContext.system(
+                    actor=f"user:{user.id}",
+                    scope="field:test",
+                    reason="test_field_execution",
+                    idempotency_key=str(uuid4()),
+                ),
+            ),
         )
 
-    assert exc.value.status_code == 404
+    assert exc.value.code.endswith("not_found")
 
 
 def test_worklog_api(db_session):
@@ -227,3 +314,10 @@ def test_worklog_api(db_session):
 
     assert resp.status_code == 200
     assert resp.json()["results"][0]["worklog"]["minutes"] == 20
+
+
+def _worklogs_submit(
+    db: Session, command: SubmitFieldWorkLogs
+) -> tuple[FieldWorkLogResult, ...]:
+    db_session_adapter.release_read_transaction(db)
+    return field_worklogs.submit(db=db, command=command)

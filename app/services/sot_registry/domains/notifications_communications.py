@@ -38,6 +38,7 @@ def _team_inbox_contract(
     transaction_mode: TransactionMode,
     transaction_contract: TransactionContract | None = None,
     event_types: tuple[str, ...] = (),
+    emits_events: bool = False,
     projections: tuple[str, ...] = (),
     domain_error_codes: tuple[str, ...] = (),
     retryable_codes: tuple[str, ...] = (),
@@ -136,7 +137,7 @@ def _team_inbox_contract(
                     "receipt, and read-cursor evidence deterministically rebuild projections."
                 ),
             )
-            if has_writer
+            if has_writer or emits_events
             else None
         ),
         projections=tuple(
@@ -1409,6 +1410,71 @@ DOMAIN = DomainSOT(
                     "tests/test_payment_template_adoption.py",
                     "tests/architecture/test_payment_template_adoption_boundary.py",
                     "tests/integration/test_payment_template_adoption_runtime_role_pg.py",
+                ),
+            ),
+        ),
+        SOTService(
+            name="communications.work_order_assignment_updates",
+            module="app.services.customer_experience_communications",
+            owns=("typed customer assignment and schedule communication requests",),
+            depends_on=("communications.intents",),
+            notes=(
+                "Flush-only assignment consequence accepts the authoritative locked "
+                "assignment preview and command UUID; delivery remains asynchronous."
+            ),
+            contract=ServiceContract(
+                concerns=(
+                    ConcernContract(
+                        name="typed customer assignment and schedule communication requests",
+                        role=OwnerRole.COMMAND_WRITER,
+                        canonical_writer="communications.work_order_assignment_updates",
+                        input_names=("locked assignment outcome",),
+                    ),
+                ),
+                authoritative_inputs=(
+                    AuthorityInput(
+                        name="locked assignment outcome",
+                        owner="operations.work_order_commands",
+                        kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                        source="AssignmentCommunicationRequest staged by the locked assignment command.",
+                    ),
+                ),
+                transaction=TransactionContract(
+                    mode=TransactionMode.PARTICIPANT,
+                    boundary="Flush-only participant inside the authoritative assignment command; never commits or delivers.",
+                    locking="Caller locks WorkOrder first; communications.intents owns intent dedupe constraints.",
+                    idempotency="Assignment command UUID is the stable intent dedupe identity; receipted assignment replays skip this participant.",
+                    retries="Failure rolls back assignment and intent together; retry the same typed assignment command.",
+                ),
+                errors=ErrorContract(
+                    domain_codes=(
+                        "assignment_communication_transaction_required",
+                        "assignment_communication_scope_mismatch",
+                    ),
+                    mapping_owner="operations.work_order_commands",
+                    fail_closed_on=("missing subscriber has no customer audience",),
+                ),
+                events=EventContract(
+                    event_types=(
+                        "work_order_assigned",
+                        "work_order_reassigned",
+                        "work_order_schedule_changed",
+                    ),
+                    schema_version=1,
+                    delivery_owner="communications.intents",
+                    compatibility="Intent metadata carries native lineage, assignment command, target identity and schedule snapshots.",
+                    replay="Same assignment command dedupes; no target or schedule change stages no new intent.",
+                ),
+                migration=MigrationContract(
+                    state=AuthorityMigrationState.NATIVE,
+                    new_owner="communications.work_order_assignment_updates",
+                ),
+                steward="customer experience platform",
+                design_refs=("docs/designs/WORK_ORDER_ASSIGNMENT_CUSTOMER_UPDATES.md",),
+                test_refs=(
+                    "tests/test_customer_experience_communications.py",
+                    "tests/test_work_order_commands.py",
+                    "tests/architecture/test_customer_experience_lifecycle_sot.py",
                 ),
             ),
         ),
@@ -3247,6 +3313,7 @@ DOMAIN = DomainSOT(
                 "agent presence transitions",
                 "immutable agent presence transition evidence",
                 "expired WhatsApp assignment and FIFO release",
+                "AI intake route configuration",
             ),
             depends_on=(
                 "ai.intake",
@@ -3261,6 +3328,7 @@ DOMAIN = DomainSOT(
             contract=_team_inbox_contract(
                 service_name="communications.team_inbox_routing",
                 concerns=(
+                    ("AI intake route configuration", OwnerRole.COMMAND_WRITER),
                     ("routing assignment and escalation policy", OwnerRole.POLICY),
                     (
                         "routing assignment and escalation transitions",
@@ -3408,6 +3476,12 @@ DOMAIN = DomainSOT(
                     "team admission sequence, current visible FIFO position, "
                     "agent capacity and notification due state",
                 ),
+                domain_error_codes=(
+                    "communications.team_inbox_routing.invalid_route_threshold",
+                    "communications.team_inbox_routing.route_not_found",
+                    "communications.team_inbox_routing.route_changed",
+                    "communications.team_inbox_routing.invalid_route_team",
+                ),
                 test_refs=(
                     "tests/test_admin_inbox_slice4_workflows.py",
                     "tests/test_auth_flow.py",
@@ -3476,53 +3550,6 @@ DOMAIN = DomainSOT(
                     "suppression reason and delivery status",
                 ),
                 test_refs=("tests/test_team_inbox_queue_notifications.py",),
-            ),
-        ),
-        SOTService(
-            name="communications.team_inbox_automation",
-            module="app.services.team_inbox_automation",
-            owns=(
-                "Team Inbox automation trigger matching",
-                "ordered Inbox automation action execution",
-            ),
-            depends_on=(
-                "communications.team_inbox_threads",
-                "communications.team_inbox_routing",
-                "communications.team_inbox_commands",
-                "ai.intake",
-            ),
-            contract=_team_inbox_contract(
-                service_name="communications.team_inbox_automation",
-                concerns=(
-                    ("Team Inbox automation trigger matching", OwnerRole.POLICY),
-                    (
-                        "ordered Inbox automation action execution",
-                        OwnerRole.APPLICATION_COORDINATOR,
-                    ),
-                ),
-                inputs=(
-                    AuthorityInput(
-                        name="active AI conversation ownership",
-                        owner="ai.intake",
-                        kind=AuthorityKind.DERIVED_PROJECTION,
-                        source="Active AI sessions suppress generic automation actions.",
-                    ),
-                    AuthorityInput(
-                        name="conversation trigger facts",
-                        owner="communications.team_inbox_threads",
-                        kind=AuthorityKind.AUTHORITATIVE_RECORD,
-                        source="Typed conversation channel, status, priority, team and contact-resolution state.",
-                    ),
-                    AuthorityInput(
-                        name="routing and collaboration commands",
-                        owner="communications.team_inbox_routing",
-                        kind=AuthorityKind.CONTROL_INPUT,
-                        source="Validated assign, auto-assign and label participant operations.",
-                    ),
-                ),
-                transaction_mode=TransactionMode.COORDINATOR_MANAGED,
-                event_types=("team_inbox.automation_executed.v1",),
-                test_refs=("tests/test_team_inbox_automation.py",),
             ),
         ),
         SOTService(
@@ -3598,7 +3625,11 @@ DOMAIN = DomainSOT(
                         name="Customer resolution readiness",
                         owner="communications.team_inbox_customer_completion",
                         kind=AuthorityKind.DERIVED_PROJECTION,
-                        source="Transaction-current Customer-only ActionReadiness verdict for agent resolution.",
+                        source=(
+                            "Transaction-current Customer/Lead classification and "
+                            "ActionReadiness verdict; spam resolution admits only "
+                            "unresolved identity without pending Lead materialization."
+                        ),
                     ),
                     AuthorityInput(
                         name="Meta channel resolution state",
@@ -4030,9 +4061,11 @@ DOMAIN = DomainSOT(
             module="app.services.team_inbox_commands",
             owns=(
                 "operator conversation and collaboration commands",
+                "customer field-job chat message commands",
                 "queued AI outbound ownership revalidation and suppression",
             ),
             depends_on=(
+                "operations.work_order_commands",
                 "auth.permission_gate",
                 "communications.nextcloud_talk_staff",
                 "communications.staff_notifications",
@@ -4050,6 +4083,10 @@ DOMAIN = DomainSOT(
                 service_name="communications.team_inbox_commands",
                 concerns=(
                     (
+                        "customer field-job chat message commands",
+                        OwnerRole.APPLICATION_COORDINATOR,
+                    ),
+                    (
                         "operator conversation and collaboration commands",
                         OwnerRole.APPLICATION_COORDINATOR,
                     ),
@@ -4059,6 +4096,18 @@ DOMAIN = DomainSOT(
                     ),
                 ),
                 inputs=(
+                    AuthorityInput(
+                        name="authenticated customer visit message",
+                        owner="auth.permission_gate",
+                        kind=AuthorityKind.CONTROL_INPUT,
+                        source="Typed customer subscriber UUID, body and subscriber-bound CommandContext; no trusted preflight authorization.",
+                    ),
+                    AuthorityInput(
+                        name="locked native visit customer scope",
+                        owner="operations.work_order_commands",
+                        kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                        source="WorkOrder locked before conversation; current subscriber and conversation subscriber must both match command actor.",
+                    ),
                     AuthorityInput(
                         name="active AI conversation ownership",
                         owner="ai.intake",
@@ -4156,6 +4205,19 @@ DOMAIN = DomainSOT(
                             "isolated by the command owner's approved savepoint."
                         ),
                     ),
+                ),
+                event_types=("field_job.customer_message_created",),
+                emits_events=True,
+                design_refs=(
+                    "docs/designs/TEAM_INBOX_SOURCE_OF_TRUTH.md",
+                    "docs/designs/CUSTOMER_FIELD_CHAT_ADMISSION.md",
+                    "docs/SOT_RELATIONSHIP_MAP.md",
+                ),
+                test_refs=(
+                    "tests/test_team_inbox_sot_completion.py",
+                    "tests/architecture/test_team_inbox_boundaries.py",
+                    "tests/architecture/test_team_inbox_sot_contracts.py",
+                    "tests/test_customer_field_chat_admission.py",
                 ),
                 transaction_mode=TransactionMode.COORDINATOR_MANAGED,
                 domain_error_codes=(
@@ -5426,13 +5488,6 @@ DOMAIN = DomainSOT(
                 group="Team Inbox",
                 state=AutomationCatalogState.unavailable,
                 explanation="Inbound messages use fixed identity, safety, and routing checks that are not rule steps yet.",
-            ),
-            AutomationCatalogItem(
-                key="communications.inbox_automation_rules",
-                label="Inbox automation rules",
-                group="Team Inbox",
-                state=AutomationCatalogState.unavailable,
-                explanation="The existing Inbox rule engine is not connected to the Automation Center's audited run history.",
             ),
             AutomationCatalogItem(
                 key="communications.fifo_queue_promotion",

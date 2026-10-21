@@ -13,8 +13,8 @@ def test_task_registered():
     assert TASK in celery_app.tasks
 
 
-def test_task_routed_to_ingestion():
-    assert celery_app.conf.task_routes[TASK] == {"queue": "ingestion"}
+def test_task_routed_to_inventory():
+    assert celery_app.conf.task_routes[TASK] == {"queue": "inventory"}
 
 
 def test_task_exported():

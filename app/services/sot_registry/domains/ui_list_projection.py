@@ -1356,9 +1356,11 @@ DOMAIN = DomainSOT(
                 "SQL, status totals, and enrichment. Explicit start_date and "
                 "end_date filters bound UTC created_at with an inclusive end "
                 "date. The route validates through the contract and delegates. "
-                "The streaming CSV export reuses the "
+                "The database-partitioned streaming CSV export reuses the "
                 "same filter and stable-sort owner without a page cap or full-body "
-                "materialization. Its customer_name column uses the customer "
+                "materialization, and its adapter-owned session remains open only "
+                "for the streaming-response lifetime. Its customer_name column uses "
+                "the customer "
                 "account's human display identity and does not expose account "
                 "UUIDs. Gated by the existing granular "
                 "billing:payment:read. Read-only: no admin bulk command declared, "
@@ -1369,6 +1371,7 @@ DOMAIN = DomainSOT(
             name="ui.support_ticket_list_projection",
             module="app.services.web_support_tickets",
             owns=(
+                "customer-scoped visible support attachment content",
                 "admin support-ticket searchable fields",
                 "admin support-ticket filter semantics",
                 "admin support-ticket per-user applied-list restoration",
@@ -1423,6 +1426,14 @@ DOMAIN = DomainSOT(
                 )
                 + (
                     ConcernContract(
+                        name="customer-scoped visible support attachment content",
+                        role=OwnerRole.RESOLVER,
+                        input_names=(
+                            "authenticated customer attachment scope",
+                            "canonical ticket lifecycle state",
+                        ),
+                    ),
+                    ConcernContract(
                         name=(
                             "admin support-ticket detail customer-account navigation"
                         ),
@@ -1431,6 +1442,12 @@ DOMAIN = DomainSOT(
                     ),
                 ),
                 authoritative_inputs=(
+                    AuthorityInput(
+                        name="authenticated customer attachment scope",
+                        owner="ui.support_ticket_list_projection",
+                        kind=AuthorityKind.CONTROL_INPUT,
+                        source="CustomerTicketAttachmentQuery carries exact authenticated subscriber, Ticket and StoredFile UUIDs; customer_ticket_attachment_content refreshes/locks Ticket ownership and reuses the existing customer-visible reference resolver against fresh comment/file state before canonical file_uploads reading bounded to the existing 5 MiB support-upload limit; closes provider chunks and revalidates visibility/active binding after I/O before returning inert bytes. The bearer API rejects noncustomer principals and returns only protected binary bytes and safe filename/content metadata, never storage keys or public grants.",
+                    ),
                     AuthorityInput(
                         name="typed support Ticket list query",
                         owner="ui.support_ticket_list_projection",
@@ -1453,7 +1470,7 @@ DOMAIN = DomainSOT(
                         name="canonical ticket lifecycle state",
                         owner="support.ticket_lifecycle",
                         kind=AuthorityKind.AUTHORITATIVE_RECORD,
-                        source="canonical Tickets.query scope before sort and pagination",
+                        source="canonical Tickets.query scope before sort and pagination; exact Ticket subscriber ownership, description/comment publication flags and typed AttachmentMeta stored_file_id references admit customer content only for an active matching StoredFile binding.",
                     ),
                     AuthorityInput(
                         name="ticket configuration",
@@ -1473,14 +1490,17 @@ DOMAIN = DomainSOT(
                 ),
                 transaction=TransactionContract(
                     mode=TransactionMode.READ_ONLY,
-                    boundary="list, summaries, and export are read-only projections",
-                    locking="stable unique Ticket.id tie-breaker prevents page ambiguity",
+                    boundary="list, summaries, export and typed customer attachment content are read-only projections; no executor, commit or public file grant",
+                    locking="stable unique Ticket.id tie-breaker prevents page ambiguity; customer attachment reads refresh and lock Ticket before exact ownership/publication checks, then refresh child comments and active StoredFile metadata before reading bounded canonical storage bytes; provider resources close before returning and final visible/active scope revalidates after I/O",
                     idempotency="same ListQuery and database snapshot yield the same scope",
                     retries="repeat the read from the canonical query",
                 ),
                 errors=ErrorContract(
-                    domain_codes=("support_ticket_list_invalid_query",),
-                    mapping_owner="admin support list and export HTTP adapters",
+                    domain_codes=(
+                        "support_ticket_list_invalid_query",
+                        "customer_ticket_attachment_not_found",
+                    ),
+                    mapping_owner="admin support list/export and customer support attachment HTTP adapters; attachment scope/private/deleted/missing bytes map uniformly to safe404 with private no-store/nosniff",
                     fail_closed_on=(
                         "unsupported filter",
                         "unsupported sort",
@@ -1497,11 +1517,15 @@ DOMAIN = DomainSOT(
                 ),
                 steward="support product UI",
                 design_refs=(
+                    "docs/designs/SUPPORT_TICKET_LIFECYCLE_SOT.md",
                     "docs/UI_INFORMATION_AND_ACTION_STANDARD.md",
                     "docs/designs/SUPPORT_UX_POLISH_AUDIT.md",
                     "docs/SOT_RELATIONSHIP_MAP.md",
                 ),
                 test_refs=(
+                    "tests/test_customer_support_attachment_api.py",
+                    "tests/architecture/test_customer_support_attachment_boundary.py",
+                    "tests/test_ticket_attachment_viewing.py",
                     "tests/test_customer_detail_navigation.py",
                     "tests/test_support_ticket_list_ui_contract.py",
                     "tests/test_web_support_ticket_customer_context.py",
@@ -2923,20 +2947,216 @@ DOMAIN = DomainSOT(
                 "admin audit-log filterable fields",
                 "admin audit-log sort and default-order semantics",
                 "admin audit-log list pagination normalization",
+                "admin audit-log filtered export projection",
             ),
             depends_on=(
                 "ui.list_contracts",
                 "observability.audit_log",
             ),
             notes=(
-                "audit_service.audit_events.list (observability.audit_log) owns "
+                "audit_service.audit_events.query_page and filter_options "
+                "(observability.audit_log) own "
                 "the canonical filtered/sorted audit query; this projection "
-                "declares the list capabilities (filter by actor/action/entity, "
-                "sort on occurred_at) and normalizes request state, then "
-                "delegates the read and count. It issues no query of its own. "
+                "declares the list capabilities (filter by actor and actor type, "
+                "result, action, entity_type presented as Module, application-local "
+                "period, record ID, request ID, and missing-ID evidence; sort on "
+                "occurred_at) and normalizes request state, then delegates the read, "
+                "count, and distinct action/entity_type options. It issues no query "
+                "of its own. CSV and JSON exports reuse that normalized filter "
+                "translation and the audit owner's bounded redaction policy. "
                 "Read-only: audit events are immutable observations with no admin "
                 "bulk command, so no selection or bulk is declared. Gated by the "
                 "existing granular audit:read."
+            ),
+            contract=ServiceContract(
+                concerns=(
+                    ConcernContract(
+                        name="admin audit-log filterable fields",
+                        role=OwnerRole.POLICY,
+                        input_names=(
+                            "shared list query contract",
+                            "canonical audit query capability",
+                        ),
+                    ),
+                    ConcernContract(
+                        name="admin audit-log sort and default-order semantics",
+                        role=OwnerRole.POLICY,
+                        input_names=(
+                            "shared list query contract",
+                            "canonical audit query capability",
+                        ),
+                    ),
+                    ConcernContract(
+                        name="admin audit-log list pagination normalization",
+                        role=OwnerRole.RESOLVER,
+                        input_names=(
+                            "normalized audit list request",
+                            "canonical filtered audit page",
+                        ),
+                    ),
+                    ConcernContract(
+                        name="admin audit-log filtered export projection",
+                        role=OwnerRole.RESOLVER,
+                        input_names=(
+                            "normalized audit list request",
+                            "canonical filtered audit page",
+                            "canonical audit redaction policy",
+                        ),
+                    ),
+                ),
+                authoritative_inputs=(
+                    AuthorityInput(
+                        name="shared list query contract",
+                        owner="ui.list_contracts",
+                        kind=AuthorityKind.CONTROL_INPUT,
+                        source=(
+                            "ListDefinition capabilities, stable ordering, and "
+                            "allowed page-size rules"
+                        ),
+                    ),
+                    AuthorityInput(
+                        name="canonical audit query capability",
+                        owner="observability.audit_log",
+                        kind=AuthorityKind.CONTROL_INPUT,
+                        source=(
+                            "the typed AuditEventPageQuery filter and ordering surface "
+                            "plus bounded distinct filter-option query"
+                        ),
+                    ),
+                    AuthorityInput(
+                        name="normalized audit list request",
+                        owner="ui.audit_events_list_projection",
+                        kind=AuthorityKind.DERIVED_PROJECTION,
+                        source=(
+                            "the validated ListQuery produced from declared audit-list "
+                            "capabilities"
+                        ),
+                    ),
+                    AuthorityInput(
+                        name="canonical filtered audit page",
+                        owner="observability.audit_log",
+                        kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                        source=(
+                            "typed audit rows and matching total returned from one "
+                            "shared database filter scope"
+                        ),
+                    ),
+                    AuthorityInput(
+                        name="canonical audit redaction policy",
+                        owner="observability.audit_log",
+                        kind=AuthorityKind.CONTROL_INPUT,
+                        source=(
+                            "the bounded recursive audit detail redaction policy used "
+                            "for both screen details and exported evidence"
+                        ),
+                    ),
+                ),
+                transaction=TransactionContract(
+                    mode=TransactionMode.READ_ONLY,
+                    boundary=(
+                        "The admin GET adapter supplies one read session; the projection "
+                        "normalizes request state and delegates rows and total to the "
+                        "audit query owner without flushing or committing."
+                    ),
+                    locking="Immutable audit observations require no mutation lock.",
+                    idempotency=(
+                        "The same committed audit rows and normalized query return the "
+                        "same ordered page and total."
+                    ),
+                    retries="The read-only list query is safe to retry.",
+                ),
+                errors=ErrorContract(
+                    domain_codes=(
+                        "ui.audit_events_list_projection.invalid_query",
+                        "ui.audit_events_list_projection.export_too_large",
+                    ),
+                    mapping_owner="admin system audit GET adapter",
+                    fail_closed_on=(
+                        "unsupported filter, sort, direction, page, or page size",
+                        "missing audit:read permission",
+                        "an export above the declared 10,000-row bound",
+                    ),
+                ),
+                migration=MigrationContract(
+                    state=AuthorityMigrationState.COMPLETE,
+                    old_owner=(
+                        "web audit projection direct AuditEvent count query alongside "
+                        "the canonical audit row query"
+                    ),
+                    new_owner="ui.audit_events_list_projection",
+                    verification=(
+                        "focused audit owner/page tests and an architecture assertion "
+                        "that the projection cannot directly query AuditEvent"
+                    ),
+                    cutover_gate=(
+                        "rows and total come from one typed observability.audit_log query"
+                    ),
+                    fallback_retirement=(
+                        "the projection-local AuditEvent count query is removed"
+                    ),
+                ),
+                steward="platform operations UI",
+                design_refs=(
+                    "docs/audits/AUDIT_R1_KERNEL_INTEGRATION.md",
+                    "docs/audits/AUDIT_APPEND_ONLY_BOUNDARY.md",
+                    "docs/UI_INFORMATION_AND_ACTION_STANDARD.md",
+                    "docs/SOT_RELATIONSHIP_MAP.md",
+                ),
+                test_refs=(
+                    "tests/test_web_system_audit_service.py",
+                    "tests/test_audit_actor_search.py",
+                ),
+                projections=(
+                    ProjectionContract(
+                        name="admin audit event list page",
+                        input_names=(
+                            "normalized audit list request",
+                            "canonical filtered audit page",
+                        ),
+                        writer="ui.audit_events_list_projection",
+                        freshness=(
+                            "Built on demand from committed active audit rows for each "
+                            "admin request."
+                        ),
+                        stale_behavior=(
+                            "A failed read reports unavailable; no cached or estimated "
+                            "rows or totals are presented."
+                        ),
+                        drift_signal=(
+                            "The displayed page scope or total differs from the typed "
+                            "audit owner's result for the same normalized query."
+                        ),
+                        rebuild_operation=(
+                            "Re-run the idempotent typed audit page query."
+                        ),
+                        repair_owner="observability.audit_log",
+                    ),
+                    ProjectionContract(
+                        name="admin audit event filtered export",
+                        input_names=(
+                            "normalized audit list request",
+                            "canonical filtered audit page",
+                            "canonical audit redaction policy",
+                        ),
+                        writer="ui.audit_events_list_projection",
+                        freshness=(
+                            "Built on demand from the committed rows matching the "
+                            "current audit filters."
+                        ),
+                        stale_behavior=(
+                            "Export fails rather than returning cached, unredacted, "
+                            "or silently truncated evidence."
+                        ),
+                        drift_signal=(
+                            "Exported rows differ from the audit owner's result for "
+                            "the same normalized query."
+                        ),
+                        rebuild_operation=(
+                            "Re-run the bounded CSV or JSON export with the same filters."
+                        ),
+                        repair_owner="observability.audit_log",
+                    ),
+                ),
             ),
         ),
         SOTService(

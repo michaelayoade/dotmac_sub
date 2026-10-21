@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import ssl
 import threading
 import time
 from typing import TYPE_CHECKING
@@ -204,6 +205,31 @@ class RouterConnectionService:
             verify=router.verify_tls,
             timeout=timeout or httpx.Timeout(CONNECT_TIMEOUT, read=READ_TIMEOUT),
         )
+
+    @staticmethod
+    def classify_rest_failure(exc: BaseException) -> str | None:
+        """Class of a REST transport failure: auth_failed, forbidden, tls,
+        unreachable or other; ``None`` when the failure is local to one
+        endpoint (for example a 404 on an unsupported resource) rather than
+        the router being unreadable. Never returns or logs exception text.
+        """
+        if isinstance(exc, httpx.HTTPStatusError):
+            code = exc.response.status_code
+            if code == 401:
+                return "auth_failed"
+            if code == 403:
+                return "forbidden"
+            return None
+        if isinstance(exc, httpx.ConnectError):
+            cause = exc.__cause__ or exc.__context__
+            if isinstance(cause, ssl.SSLError) or "CERTIFICATE" in str(exc).upper():
+                return "tls"
+            return "unreachable"
+        if isinstance(exc, ssl.SSLError):
+            return "tls"
+        if isinstance(exc, httpx.TransportError):
+            return "unreachable"
+        return "other"
 
     @classmethod
     def execute_once(

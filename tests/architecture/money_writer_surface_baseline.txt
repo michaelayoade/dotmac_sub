@@ -1,0 +1,20 @@
+# Money-writer surface outside the billing paths (ADR 0020).
+# These modules instantiate money-state models despite living
+# outside the path-shaped billing surface; the thin-client
+# migration must retire every one. The inventory is exact and
+# the total is two-directional — shrink the code and lower this
+# baseline in the same change; a new or growing writer requires
+# Michael's explicit exception in docs/feature_freeze_exceptions.json.
+# Regenerate with tests.architecture.billing_thin_client_inventory
+# .render_money_writer_baseline(<repo root>).
+TOTAL 24075
+app/services/account_credit_deposits.py
+app/services/autopay.py
+app/services/cutover_balance_audit.py
+app/services/outage_compensation.py
+app/services/payment_arrangements.py
+app/services/payment_proofs.py
+app/services/prepaid_draft_reconciliation.py
+app/services/prepaid_period_purchases.py
+app/services/service_entitlements.py
+app/services/topup_intents.py

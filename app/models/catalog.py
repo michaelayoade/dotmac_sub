@@ -1576,6 +1576,10 @@ class OfferRadiusProfile(Base):
     profile = relationship("RadiusProfile", back_populates="offer_links")
 
 
+DEACTIVATION_SERVICE_ENDED = "service_ended"
+DEACTIVATION_MANUAL = "manual"
+
+
 class AccessCredential(Base):
     __tablename__ = "access_credentials"
     __table_args__ = (
@@ -1597,6 +1601,10 @@ class AccessCredential(Base):
     username: Mapped[str] = mapped_column(String(120), nullable=False)
     secret_hash: Mapped[str | None] = mapped_column(String(512))
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
+    # Why the credential was deactivated: "service_ended" (deactivated together
+    # with its service) or "manual" (an explicit administrative deactivation).
+    # NULL means unknown or historical. Cleared on reactivation.
+    deactivation_reason: Mapped[str | None] = mapped_column(String(32))
     last_auth_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     radius_profile_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True), ForeignKey("radius_profiles.id")

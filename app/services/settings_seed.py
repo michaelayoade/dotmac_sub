@@ -211,13 +211,6 @@ def seed_auth_settings(db: Session) -> None:
 def seed_audit_settings(db: Session) -> None:
     audit_settings.ensure_by_key(
         db,
-        key="enabled",
-        value_type=SettingValueType.boolean,
-        value_text="true",
-        value_json=True,
-    )
-    audit_settings.ensure_by_key(
-        db,
         key="methods",
         value_type=SettingValueType.json,
         value_json=["POST", "PUT", "PATCH", "DELETE"],
@@ -1990,6 +1983,25 @@ def seed_billing_settings(db: Session) -> None:
         value_type=SettingValueType.integer,
         value_text=os.getenv("BILLING_CREDIT_NOTE_NUMBER_START", "1"),
     )
+    # Governed sole-approver exception: seeded OFF and inert; never from env.
+    billing_settings.ensure_by_key(
+        db,
+        key="sole_approver_exception_enabled",
+        value_type=SettingValueType.boolean,
+        value_text="false",
+        value_json=False,
+    )
+    for exception_key in (
+        "sole_approver_exception_principal",
+        "sole_approver_exception_review_due",
+        "sole_approver_exception_decision_ref",
+    ):
+        billing_settings.ensure_by_key(
+            db,
+            key=exception_key,
+            value_type=SettingValueType.string,
+            value_text="",
+        )
 
 
 def seed_catalog_settings(db: Session) -> None:
@@ -2254,12 +2266,6 @@ def seed_auth_policy_settings(db: Session) -> None:
         key="default_auth_provider",
         value_type=SettingValueType.string,
         value_text=os.getenv("AUTH_DEFAULT_AUTH_PROVIDER", "local"),
-    )
-    auth_settings.ensure_by_key(
-        db,
-        key="default_session_status",
-        value_type=SettingValueType.string,
-        value_text=os.getenv("AUTH_DEFAULT_SESSION_STATUS", "active"),
     )
 
 

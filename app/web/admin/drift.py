@@ -13,7 +13,8 @@ from sqlalchemy.orm import Session
 
 from app.db import get_db
 from app.services import cross_app_drift
-from app.services.auth_dependencies import require_any_permission
+from app.services.auth_dependencies import has_permission, require_any_permission
+from app.services.router_health import read_models as router_health_read_models
 
 templates = Jinja2Templates(directory="templates")
 router = APIRouter(prefix="/drift", tags=["web-admin-drift"])
@@ -37,6 +38,11 @@ def drift_index(
 ):
     from app.web.admin import get_current_user, get_sidebar_stats
 
+    auth = getattr(request.state, "auth", None) or {}
+    # Evidence in router findings carries management addresses: detail needs
+    # router:read, everyone with drift access sees the counts.
+    can_see_router_detail = bool(auth) and has_permission(auth, db, "router:read")
+
     return templates.TemplateResponse(
         "admin/drift/index.html",
         {
@@ -50,6 +56,9 @@ def drift_index(
                 owner=owner,
                 page=page,
                 per_page=per_page,
+            ),
+            "router_posture": router_health_read_models.router_posture_summary(
+                db, include_detail=can_see_router_detail
             ),
             "active_page": "admin-drift",
             "active_menu": "dashboard",

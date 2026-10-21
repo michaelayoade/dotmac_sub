@@ -28,10 +28,16 @@ from app.models.catalog import (
 from app.models.domain_settings import DomainSetting, SettingDomain
 from app.models.subscription_engine import SettingValueType
 from app.services import numbering, settings_spec
-from app.services.credential_crypto import encrypt_credential
+from app.services.access_credential_secret import (
+    UNUSABLE_STORED_SECRET_MESSAGE,
+    is_secret_reference_value,
+    reject_reserved_service_password,
+)
+from app.services.credential_crypto import decrypt_credential, encrypt_credential
 from app.services.customer_identifiers import pppoe_username_from_subscriber_number
 from app.services.domain_errors import DomainError
 from app.services.events import EventType, emit_event
+from app.services.pppoe_password_reveal import CredentialUnusable
 
 if TYPE_CHECKING:
     from sqlalchemy.orm import Session
@@ -72,6 +78,9 @@ class EnsurePppoeCredentialOutcome:
     username: str
     disposition: PppoeCredentialDisposition
     changed: bool
+    #: Secret-free reason a replacement did not inherit although an ended
+    #: service held a credential (``ambiguous_candidates`` | ``other_live_service``).
+    inherit_declined_reason: str | None = None
 
 
 def _error(code: str, message: str) -> PppoeCredentialError:
@@ -168,6 +177,118 @@ def _resolve_radius_setting(db: Session, key: str) -> object | None:
     return value
 
 
+_INHERITABLE_STATUSES = {
+    SubscriptionStatus.disabled,
+    SubscriptionStatus.canceled,
+    SubscriptionStatus.expired,
+}
+# Statuses where a service has genuinely ended; anything else is a live service.
+_ENDED_STATUSES = _INHERITABLE_STATUSES | {
+    SubscriptionStatus.archived,
+    SubscriptionStatus.hidden,
+}
+
+
+def _is_live_binding(db: Session, credential: AccessCredential) -> bool:
+    """True when the credential serves a service that has not ended."""
+    if credential.subscription_id is None:
+        return True
+    bound = db.get(Subscription, credential.subscription_id)
+    return bound is None or bound.status not in _ENDED_STATUSES
+
+
+def _login_moved_to_live_service(
+    db: Session,
+    command: EnsurePppoeCredentialCommand,
+    subscription: Subscription,
+) -> bool:
+    """True when ``subscription.login`` is an ACTIVE credential of the same
+    customer that is bound to another, non-ended service."""
+    holders = (
+        db.query(AccessCredential)
+        .filter(
+            AccessCredential.subscriber_id == command.subscriber_id,
+            AccessCredential.username == subscription.login,
+            AccessCredential.is_active.is_(True),
+            AccessCredential.subscription_id.is_not(None),
+            AccessCredential.subscription_id != command.subscription_id,
+        )
+        .all()
+    )
+    return any(_is_live_binding(db, holder) for holder in holders)
+
+
+def legacy_unbound_candidate(
+    db: Session, subscriber_id: UUID, subscription_id: UUID
+) -> AccessCredential | None:
+    """The customer's single unbound legacy credential, or None.
+
+    Explicit rule (never a guess): exactly ONE credential of the customer has
+    ``subscription_id IS NULL`` and this service is the customer's ONLY live
+    service. Staff must still choose to adopt it.
+    """
+    unbound = (
+        db.query(AccessCredential)
+        .filter(
+            AccessCredential.subscriber_id == subscriber_id,
+            AccessCredential.subscription_id.is_(None),
+        )
+        .all()
+    )
+    if len(unbound) != 1:
+        return None
+    others = (
+        db.query(Subscription)
+        .filter(
+            Subscription.subscriber_id == subscriber_id,
+            Subscription.id != subscription_id,
+        )
+        .all()
+    )
+    if any(other.status not in _ENDED_STATUSES for other in others):
+        return None
+    return unbound[0]
+
+
+_SERVICE_ENDED = "service_ended"
+_MANUAL = "manual"
+_MANUAL_MESSAGE = (
+    "This service's PPPoE credential was deactivated manually, so its password "
+    "is not reused. Set the credential setting to 'new' to issue a new "
+    "credential, or issue this service its own login manually."
+)
+
+
+def _inherit_enabled(db: Session) -> bool:
+    return _resolve_radius_setting(db, "pppoe_credential_on_new_service") == "inherit"
+
+
+def _inherit_statuses(db: Session) -> set[SubscriptionStatus]:
+    """Configured ended statuses a replacement may inherit from (fail closed)."""
+    raw = _resolve_radius_setting(db, "pppoe_credential_inherit_from_statuses")
+    if not isinstance(raw, str):
+        raw = "disabled,canceled,expired"
+    names = {item.strip().lower() for item in raw.split(",") if item.strip()}
+    statuses = {status for status in _INHERITABLE_STATUSES if status.value in names}
+    return statuses
+
+
+def _has_usable_secret(credential: AccessCredential) -> bool:
+    if not credential.secret_hash:
+        return False
+    if is_secret_reference_value(credential.secret_hash):
+        return False
+    try:
+        return bool(decrypt_credential(credential.secret_hash))
+    except Exception:
+        return False
+
+
+def _default_password_length(db: Session) -> int:
+    raw = _resolve_radius_setting(db, "pppoe_default_password_length")
+    return max(8, min(64, _resolve_int_setting(raw, 12)))
+
+
 def _generate_pppoe_username(db: Session, subscriber_id: UUID) -> str | None:
     from app.models.subscriber import Subscriber
 
@@ -183,6 +304,91 @@ def _generate_pppoe_username(db: Session, subscriber_id: UUID) -> str | None:
     # are mandatory for activation, so generation must always yield a username —
     # otherwise non-canonical subscribers could never be activated.
     return _generate_pppoe_username_sequence(db)
+
+
+def generate_pppoe_username(db: Session, subscriber_id: UUID) -> str | None:
+    """Username activation would derive for ``subscriber_id`` (public alias)."""
+    return _generate_pppoe_username(db, subscriber_id)
+
+
+def username_in_use(
+    db: Session, username: str, *, exclude_id: UUID | None = None
+) -> bool:
+    query = db.query(AccessCredential).filter(AccessCredential.username == username)
+    if exclude_id is not None:
+        query = query.filter(AccessCredential.id != exclude_id)
+    return query.first() is not None
+
+
+def plan_change_provisioning(db: Session, subscription_id: UUID) -> bool:
+    """True while a plan change is provisioning on this subscription."""
+    from app.models.subscription_change import (
+        SubscriptionChangeExecutionState,
+        SubscriptionChangeRequest,
+    )
+
+    return (
+        db.query(SubscriptionChangeRequest.id)
+        .filter(
+            SubscriptionChangeRequest.subscription_id == subscription_id,
+            SubscriptionChangeRequest.execution_state
+            == SubscriptionChangeExecutionState.provisioning,
+        )
+        .first()
+        is not None
+    )
+
+
+def stage_pending_credential(
+    db: Session,
+    *,
+    subscriber_id: UUID,
+    subscription_id: UUID,
+    username: str,
+    plain_password: str | None,
+    radius_profile_id: UUID | None,
+) -> None:
+    """Stage typed login/password on an inactive credential bound to this service.
+
+    Flush-only; the caller owns the commit. Activation activates the staged row
+    as typed instead of generating new credentials. Only this subscription's own staged row is touched; there is
+    no subscriber-level fallback.
+    """
+    reject_reserved_service_password(plain_password)
+    staged = (
+        db.query(AccessCredential)
+        .filter(
+            AccessCredential.subscriber_id == subscriber_id,
+            AccessCredential.subscription_id == subscription_id,
+            AccessCredential.is_active.is_(False),
+        )
+        .order_by(AccessCredential.created_at.desc())
+        .first()
+    )
+    if username_in_use(db, username, exclude_id=staged.id if staged else None):
+        raise ValueError(
+            f"Service login {username} is already used by another customer or "
+            "credential."
+        )
+    secret_hash = encrypt_credential(plain_password) if plain_password else None
+    if staged is None:
+        db.add(
+            AccessCredential(
+                subscriber_id=subscriber_id,
+                subscription_id=subscription_id,
+                username=username,
+                secret_hash=secret_hash,
+                is_active=False,
+                radius_profile_id=radius_profile_id,
+            )
+        )
+    else:
+        staged.username = username
+        if secret_hash:
+            staged.secret_hash = secret_hash
+        if radius_profile_id:
+            staged.radius_profile_id = radius_profile_id
+    db.flush()
 
 
 def _generate_pppoe_username_sequence(db: Session) -> str | None:
@@ -235,6 +441,7 @@ def ensure_pppoe_credential(
                 "The target subscription no longer belongs to the subscriber.",
             )
 
+    inherit_declined_reason: str | None = None
     if command.radius_profile_id is not None:
         profile = db.get(RadiusProfile, command.radius_profile_id)
         if profile is None or not profile.is_active:
@@ -256,6 +463,71 @@ def ensure_pppoe_credential(
             .first()
         )
         if existing is None:
+            staged = (
+                db.query(AccessCredential)
+                .filter(
+                    AccessCredential.subscriber_id == command.subscriber_id,
+                    AccessCredential.subscription_id == command.subscription_id,
+                    AccessCredential.is_active.is_(False),
+                )
+                .order_by(AccessCredential.created_at.desc())
+                .with_for_update()
+                .first()
+            )
+            if staged is not None and staged.deactivation_reason == _MANUAL:
+                # Deactivated by an explicit administrative action: never bring
+                # its password back. `new` issues a new credential below;
+                # `inherit` has nothing it may reuse, so it refuses.
+                if _inherit_enabled(db):
+                    raise _error("credential_manually_deactivated", _MANUAL_MESSAGE)
+                staged = None
+            if staged is not None:
+                if is_secret_reference_value(staged.secret_hash):
+                    raise _error(
+                        "secret_reference_refused", UNUSABLE_STORED_SECRET_MESSAGE
+                    )
+                # Login/password typed on the create form were staged on an
+                # inactive credential bound to this exact service; activate it
+                # as typed. The secret is never read or logged here.
+                if not staged.secret_hash:
+                    staged.secret_hash = encrypt_credential(
+                        _generate_random_password(_default_password_length(db))
+                    )
+                staged.is_active = True
+                staged.deactivation_reason = None
+                staged.connection_type = ConnectionType.pppoe
+                staged.radius_profile_id = command.radius_profile_id
+                if subscription is not None:
+                    subscription.login = staged.username
+                db.flush()
+                return _stage_credential_event(
+                    db,
+                    command=command,
+                    outcome=EnsurePppoeCredentialOutcome(
+                        credential_id=staged.id,
+                        username=staged.username,
+                        disposition=PppoeCredentialDisposition.reactivated,
+                        changed=True,
+                    ),
+                )
+            if (
+                subscription is not None
+                and str(subscription.login or "").strip()
+                and _inherit_enabled(db)
+                and _login_moved_to_live_service(db, command, subscription)
+            ):
+                # Known limitation (pending the Starter disabled->SUSPENDED
+                # mapping): this service's credential was rebound to a LIVE
+                # replacement. Restoring it must neither issue a second
+                # credential nor take the first back. A pre-set login that
+                # matches an ENDED predecessor (bulk activate, API create) is
+                # the normal replacement and falls through to the inherit rule.
+                raise _error(
+                    "credential_rebound_elsewhere",
+                    "This service's PPPoE credential now belongs to a "
+                    "replacement service. Set the credential setting to 'new' "
+                    "or issue this service its own login manually.",
+                )
             legacy = (
                 existing_query.filter(AccessCredential.subscription_id.is_(None))
                 .with_for_update()
@@ -308,6 +580,70 @@ def ensure_pppoe_credential(
                         changed=True,
                     ),
                 )
+
+            if _inherit_enabled(db):
+                candidates = (
+                    db.query(AccessCredential)
+                    .join(
+                        Subscription,
+                        AccessCredential.subscription_id == Subscription.id,
+                    )
+                    .filter(
+                        AccessCredential.subscriber_id == command.subscriber_id,
+                        Subscription.subscriber_id == command.subscriber_id,
+                        Subscription.id != command.subscription_id,
+                        Subscription.status.in_(_inherit_statuses(db)),
+                    )
+                    .with_for_update()
+                    .all()
+                )
+                if candidates:
+                    live = [
+                        c
+                        for c in existing_query.with_for_update().all()
+                        if _is_live_binding(db, c)
+                    ]
+                    if len(candidates) == 1 and not live:
+                        inherited = candidates[0]
+                        if inherited.deactivation_reason == _MANUAL:
+                            raise _error(
+                                "credential_manually_deactivated", _MANUAL_MESSAGE
+                            )
+                        if is_secret_reference_value(inherited.secret_hash):
+                            raise _error(
+                                "secret_reference_refused",
+                                UNUSABLE_STORED_SECRET_MESSAGE,
+                            )
+                        inherited.subscription_id = command.subscription_id
+                        inherited.radius_profile_id = command.radius_profile_id
+                        inherited.connection_type = ConnectionType.pppoe
+                        inherited.is_active = True
+                        inherited.deactivation_reason = None
+                        if subscription is not None:
+                            subscription.login = inherited.username
+                        db.flush()
+                        return _stage_credential_event(
+                            db,
+                            command=command,
+                            outcome=EnsurePppoeCredentialOutcome(
+                                credential_id=inherited.id,
+                                username=inherited.username,
+                                disposition=(
+                                    PppoeCredentialDisposition.rebound_replacement
+                                ),
+                                changed=True,
+                            ),
+                        )
+                    inherit_declined_reason = (
+                        "other_live_service" if live else "ambiguous_candidates"
+                    )
+                    logger.info(
+                        "PPPoE credential inheritance declined",
+                        extra={
+                            "subscription_id": str(command.subscription_id),
+                            "reason": inherit_declined_reason,
+                        },
+                    )
     else:
         existing = existing_query.with_for_update().first()
     if existing:
@@ -355,11 +691,7 @@ def ensure_pppoe_credential(
             "A PPPoE username could not be allocated for the subscription.",
         )
 
-    password_length_raw = _resolve_radius_setting(db, "pppoe_default_password_length")
-    password_length = _resolve_int_setting(password_length_raw, 12)
-    password_length = max(8, min(64, password_length))
-
-    plain_password = _generate_random_password(password_length)
+    plain_password = _generate_random_password(_default_password_length(db))
     encrypted_password = encrypt_credential(plain_password)
 
     credential = (
@@ -386,9 +718,26 @@ def ensure_pppoe_credential(
         db.add(credential)
         disposition = PppoeCredentialDisposition.created
 
-    credential.secret_hash = encrypted_password
+    reactivating = disposition is PppoeCredentialDisposition.reactivated
+    reason = credential.deactivation_reason if reactivating else None
+    if reactivating and reason == _MANUAL and _inherit_enabled(db):
+        raise _error("credential_manually_deactivated", _MANUAL_MESSAGE)
+    if (
+        reactivating
+        and _has_usable_secret(credential)
+        and (
+            # Keep the password when the credential was deactivated together with
+            # its service; inherit mode keeps it for history (NULL) too. A manual
+            # deactivation never keeps it (a new password is issued below).
+            reason == _SERVICE_ENDED or (_inherit_enabled(db) and reason != _MANUAL)
+        )
+    ):
+        pass
+    else:
+        credential.secret_hash = encrypted_password
     credential.subscription_id = command.subscription_id
     credential.is_active = True
+    credential.deactivation_reason = None
     credential.connection_type = ConnectionType.pppoe
     credential.radius_profile_id = command.radius_profile_id
     if subscription is not None:
@@ -413,6 +762,7 @@ def ensure_pppoe_credential(
             username=credential.username,
             disposition=disposition,
             changed=True,
+            inherit_declined_reason=inherit_declined_reason,
         ),
     )
 
@@ -423,4 +773,39 @@ __all__ = [
     "PppoeCredentialDisposition",
     "PppoeCredentialError",
     "ensure_pppoe_credential",
+    "generate_pppoe_username",
+    "legacy_unbound_candidate",
+    "plan_change_provisioning",
+    "stage_pending_credential",
+    "username_in_use",
 ]
+
+
+def subscription_bound_credential(
+    db: Session, subscriber_id: str | UUID | None, subscription_id: str | UUID | None
+) -> AccessCredential | None:
+    """Return this subscription's own active credential, strictly.
+
+    No fallback to the subscriber's newest credential: on an account with
+    several services that would return another service's password. Raises
+    ``CredentialUnusable("ambiguous_credential")`` when more than one active
+    credential is bound to the subscription.
+    """
+    try:
+        subscriber_uuid = UUID(str(subscriber_id))
+        subscription_uuid = UUID(str(subscription_id))
+    except (TypeError, ValueError):
+        return None
+    rows = (
+        db.query(AccessCredential)
+        .filter(
+            AccessCredential.subscriber_id == subscriber_uuid,
+            AccessCredential.subscription_id == subscription_uuid,
+            AccessCredential.is_active.is_(True),
+        )
+        .limit(2)
+        .all()
+    )
+    if len(rows) > 1:
+        raise CredentialUnusable("ambiguous_credential")
+    return rows[0] if rows else None

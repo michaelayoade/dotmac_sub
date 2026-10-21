@@ -13,11 +13,13 @@ import hashlib
 import logging
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
+from enum import StrEnum
 from uuid import UUID
 
 from jose import JWTError
-from sqlalchemy import func, select
-from sqlalchemy.orm import Session
+from sqlalchemy import and_, case, func, or_, select
+from sqlalchemy.orm import Session, aliased
+from sqlalchemy.sql.elements import ColumnElement
 
 from app.models.audit import AuditActorType
 from app.models.auth import AuthProvider, SessionStatus, UserCredential
@@ -43,6 +45,8 @@ logger = logging.getLogger(__name__)
 CREDENTIAL_RECOVERY_SCOPE = "auth:credential_recovery"
 PASSWORD_RESET_TOKEN_TYPE = "password_reset"
 SYSTEM_USER_RESET_TTL_CAP_MINUTES = 60
+# Match Python str.strip contact normalization, including Unicode whitespace.
+_RECOVERY_EMAIL_WHITESPACE = " \t\n\r\v\f\x1c\x1d\x1e\x1f\x85\xa0\u1680\u2000\u2001\u2002\u2003\u2004\u2005\u2006\u2007\u2008\u2009\u200a\u2028\u2029\u202f\u205f\u3000"
 
 _REQUEST_COMMAND = OwnerCommandDefinition(
     owner="auth.credential_recovery",
@@ -139,6 +143,144 @@ class _PrincipalContext:
     principal_id: UUID
     email: str
     person_name: str | None
+
+
+class RecoveryReadinessReason(StrEnum):
+    """Conservative exact-recovery prerequisites; no delivery/support assertion."""
+
+    EXACT_LOCAL_EMAIL_ELIGIBLE = "exact_local_email_eligible"
+    MISSING_EMAIL = "missing_or_blank_email_support_unresolved"
+    INACTIVE = "inactive_credential_or_principal"
+    CANCELED = "canceled_subscriber"
+    MISSING_PRINCIPAL = "missing_principal"
+    NONLOCAL = "nonlocal_credential"
+    AMBIGUOUS_BINDING = "ambiguous_binding"
+
+
+@dataclass(frozen=True)
+class RecoveryReadinessProjection:
+    """SQL-only policy result, consumed inside an aggregate database query."""
+
+    reason: ColumnElement[str]
+
+
+def recovery_readiness_projection() -> RecoveryReadinessProjection:
+    """Interpret exact recovery prerequisites without loading PII or material.
+
+    This recovery-owned census policy is deliberately conservative: whitespace
+    email is unresolved and multiple active local credentials cannot identify
+    an exact reset target. Eligibility is neither verified contact nor notice
+    delivery, successful reset, or evidence of an available support workflow.
+    """
+    credential = UserCredential
+    links = (
+        case((credential.subscriber_id.is_not(None), 1), else_=0)
+        + case((credential.system_user_id.is_not(None), 1), else_=0)
+        + case((credential.reseller_user_id.is_not(None), 1), else_=0)
+    )
+    other = aliased(UserCredential)
+    exact_local_count = (
+        select(func.count())
+        .where(
+            other.provider == AuthProvider.local,
+            other.is_active.is_(True),
+            or_(
+                and_(
+                    credential.subscriber_id.is_not(None),
+                    other.subscriber_id == credential.subscriber_id,
+                ),
+                and_(
+                    credential.system_user_id.is_not(None),
+                    other.system_user_id == credential.system_user_id,
+                ),
+                and_(
+                    credential.reseller_user_id.is_not(None),
+                    other.reseller_user_id == credential.reseller_user_id,
+                ),
+            ),
+        )
+        .correlate(credential)
+        .scalar_subquery()
+    )
+    principal_present = or_(
+        select(Subscriber.id).where(Subscriber.id == credential.subscriber_id).exists(),
+        select(SystemUser.id)
+        .where(SystemUser.id == credential.system_user_id)
+        .exists(),
+        select(ResellerUser.id)
+        .where(ResellerUser.id == credential.reseller_user_id)
+        .exists(),
+    )
+    active_principal = or_(
+        select(Subscriber.id)
+        .where(
+            Subscriber.id == credential.subscriber_id, Subscriber.is_active.is_(True)
+        )
+        .exists(),
+        select(SystemUser.id)
+        .where(
+            SystemUser.id == credential.system_user_id, SystemUser.is_active.is_(True)
+        )
+        .exists(),
+        select(ResellerUser.id)
+        .where(
+            ResellerUser.id == credential.reseller_user_id,
+            ResellerUser.is_active.is_(True),
+        )
+        .exists(),
+    )
+    canceled = (
+        select(Subscriber.id)
+        .where(
+            Subscriber.id == credential.subscriber_id,
+            Subscriber.status == SubscriberStatus.canceled,
+        )
+        .exists()
+    )
+    email_present = or_(
+        select(Subscriber.id)
+        .where(
+            Subscriber.id == credential.subscriber_id,
+            func.length(func.btrim(Subscriber.email, _RECOVERY_EMAIL_WHITESPACE)) > 0,
+        )
+        .exists(),
+        select(SystemUser.id)
+        .where(
+            SystemUser.id == credential.system_user_id,
+            func.length(func.btrim(SystemUser.email, _RECOVERY_EMAIL_WHITESPACE)) > 0,
+        )
+        .exists(),
+        select(ResellerUser.id)
+        .where(
+            ResellerUser.id == credential.reseller_user_id,
+            func.length(func.btrim(ResellerUser.email, _RECOVERY_EMAIL_WHITESPACE)) > 0,
+        )
+        .exists(),
+    )
+    return RecoveryReadinessProjection(
+        reason=case(
+            (links > 1, RecoveryReadinessReason.AMBIGUOUS_BINDING.value),
+            (
+                or_(links == 0, ~principal_present),
+                RecoveryReadinessReason.MISSING_PRINCIPAL.value,
+            ),
+            (
+                or_(
+                    credential.provider.is_(None),
+                    credential.provider != AuthProvider.local,
+                ),
+                RecoveryReadinessReason.NONLOCAL.value,
+            ),
+            (
+                or_(credential.is_active.is_not(True), ~active_principal),
+                RecoveryReadinessReason.INACTIVE.value,
+            ),
+            (canceled, RecoveryReadinessReason.CANCELED.value),
+            (exact_local_count != 1, RecoveryReadinessReason.AMBIGUOUS_BINDING.value),
+            (~email_present, RecoveryReadinessReason.MISSING_EMAIL.value),
+            else_=RecoveryReadinessReason.EXACT_LOCAL_EMAIL_ELIGIBLE.value,
+        )
+    )
 
 
 def _error(code: str, message: str, **details: object) -> CredentialRecoveryError:
@@ -828,6 +970,9 @@ def complete_password_reset(
 
         now = _now()
         credential.password_hash = hash_password(command.new_password)
+        # The secret changed: void every verification and MFA challenge bound
+        # to the previous version (held under the credential FOR UPDATE above).
+        credential.credential_version = int(credential.credential_version or 1) + 1
         updated_marker = now
         if issued_at_seconds is not None and int(now.timestamp()) <= issued_at_seconds:
             updated_marker = now + timedelta(seconds=1)

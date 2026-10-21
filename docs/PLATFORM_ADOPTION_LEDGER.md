@@ -8,7 +8,9 @@ to `dotmac-kernel==0.1.0a81` on 2026-08-20, to
 `dotmac-kernel==0.1.0a90` on 2026-08-22, to `dotmac-kernel==0.1.0a91` the same
 day, to `dotmac-kernel==0.1.0a94` on 2026-08-25, and to
 `dotmac-kernel==0.1.0a97` for the proposed Template Studio shadow composition
-on 2026-09-30 — see "Pin history".
+on 2026-09-30, followed by the source-only `0.1.0a98` / Tax a4 candidate
+on 2026-10-13, followed by the source-only `0.1.0a105` candidate
+on 2026-10-15 — see "Pin history".
 Supersedes the
 2026-07-19 Phase-0 draft, which was surveyed before the kernel was released and
 against `origin/main` 7807afcd. No code, schema, or dependency change is
@@ -75,6 +77,38 @@ collision inventory re-verified at each rebase rather than assumed to hold:
 
 The recon is re-run on every pin and Sub model change because a stale inventory
 would silently under-report the very risk the S7 ADR gate exists to hold.
+
+**2026-10-13 — proposed `dotmac-numbering==0.1.0a2` inert tenant
+composition; validation pending.** The exact released dependency adds its
+installed `dotmac_numbering.migrations:versions` lineage and an explicit TENANT
+selection. Annotated tag `dotmac-numbering-v0.1.0a2` peels to
+`4c282228b53405442effc4159f5db9d50446d335`; publisher run `31908774569`
+verified the released module against published Kernel a66. Sub retains its
+exact Kernel a97 pin. Lock artifact filenames and hashes are carried unchanged
+from ERP's `poetry.lock` at `93d7e111d9278b8377bac311e78308c99f51da79`:
+wheel `ed7711ec3df50ccba066e920d7696ee4b9569fb7356108078719c3b139b184ec`,
+sdist `8e4b53760953ae691eac6923b31f0bf903337037c274d5ed4dd764c078dbffa0`.
+Poetry 2.4.1 serialized the existing resolved graph with that exact package row;
+no dependency moved. The ordinary registry lock attempt was blocked by DNS.
+These are existing adopter artifact oracles, not independent registry read-back
+or byte verification by this slice; hosted installation must fetch and verify
+the actual artifacts before acceptance. Sub supplies declared effects through migrations
+545 (`tenant_scope_catalog.v1`), 546 (`module_database_roles.v1`) and 556
+(`idempotency_ledger.v1`). Kernel migrations remain uncomposed.
+
+This is additive storage composition only. No runtime adapter, caller switch,
+series seed, counter projection or migration execution is included. Sub's
+`app.services.numbering`, document sequences, invoice formatting and registered
+financial owners retain authority. Numbering's platform tables are excluded.
+The hosted acceptance gates are fresh and real-556-predecessor upgrades,
+selected catalogue and FORCE RLS under actual `app_user` own/other/unset scope,
+wrong-tenant writes, read-only preview, exact-key replay, caller rollback of
+allocation and kernel idempotency together, repeated upgrade preservation, and
+incumbent invoice formatting. Tests are declared in
+`tests/integration/test_numbering_module_composition.py`; production activation
+and planted-defect guards are in
+`tests/architecture/test_numbering_module_composition.py`. These unexecuted
+canaries and a dependency pin do not establish adoption or deployment acceptance.
 
 **2026-08-13 — S7 GUC predecessor, no RLS activation.** Sub's existing
 session/transaction authority now applies its one deterministic operator tenant
@@ -348,6 +382,77 @@ per-table cutover decisions.
 
 
 ## Pin history
+
+**2026-10-13 — `0.1.0a97` → `0.1.0a98` and Tax `0.1.0a4` (source-only candidate).**
+Tax's released installed metadata declares Kernel `>=0.1.0a98`; its public
+`ensure_tax_authority`, `ensure_tax_jurisdiction`, `ensure_tax_code` and
+`ensure_tax_rule` implementations call the engine-free
+`dotmac_kernel.transactions.conflict_savepoint`. This is a real composed
+artifact floor, not an unused import added to justify a higher pin. ADR 0021's
+exact-pin rule derives the maximum of installed artifact floors and actual
+assembly imports. The existing Sub assembly imports retain their reviewed
+surfaces; no new production Kernel import is admitted by this candidate.
+Kernel a104 is excluded from this slice.
+
+Kernel tag `dotmac-kernel-v0.1.0a98` peels to
+`ae7320876ad91d5bf4639d634d65a6e8fd36bb00`; the prior a97 source is
+`548084fd74779ccf1ad436e1201e03cb9239631a`. The historical Kernel a98
+protected release run `32963545658` succeeded and
+retained artifact `9604819651` is reported available through 2026-11-24. The
+candidate copies the existing ERP lock coordinates (ERP `93d7e111d9278b8377bac311e78308c99f51da79`): wheel
+SHA256 `27405c57c4af395224cdd2f4366c0144207e9df2eab4ca8a8ed1142c1d0859fa`
+and sdist SHA256
+`597acda6b7d1046650aa17b5d847f581b05ee577e7893067762f3bb2790c38af`.
+These are candidate byte identities, not a new registry readback or proof that
+historical retained bytes equal registry bytes. That comparison remains pending;
+a modern receipt must not substitute for the original release artifact.
+
+Tax `dotmac-tax-v0.1.0a4` peels to
+`fb7fb252c6fba8e15d7c39ed18f8057057adfbab`; protected release run
+`34711205539` verified install-back, and release-record PR #701 landed as
+`60b31b8a0543165d42c974dcc26fdc0948d99e35`. The same ERP lock supplies wheel
+SHA256 `032908e1ca862b03ff9e649c1415bfcc067d3cd426ed1843ee4bf4693b0bd95e`
+and sdist SHA256
+`def1de45e6562a09dd400af52c11077892dad70f08294c59fee2757808e8498c`.
+`alembic.ini` composes the installed `tx_0001_tax`, `tx_0002_multi_tax`, and
+`tx_0003_result_fingerprint` chain. Its manifest is atomic TENANT-only, so
+there is no selectable-plane entry. Sub's existing 545/546 providers satisfy
+its tenant-catalog and module-role prerequisites; 556/557 remain unchanged.
+No Tax schema history is copied into Sub. The derived schema contract includes
+`mod_tax`, keeping privileged bootstrap and verification aligned.
+
+The a97/a98 source comparison leaves models, platform models, modules, planes,
+prerequisites, Kernel migrations and dependency contracts unchanged. a98's
+package root additionally imports `capability_composition` and
+`capability_contract`; both reach already-reviewed `product_manifest` values.
+The runtime snapshot admits only these two traced transitive modules. This
+does not widen the production source import allowlist. a98 also extracts
+`DatabaseRuntime` and tightens the web facet contract. Sub declares no such web
+facet and retains its own `app.db` engine/session owner. The known a98
+`create_app` / reference web-factory defect means this release is not
+universally adoptable. Sub's selective candidate explicitly excludes the
+factory, reference engine, database runtime and session runtime; a real boot
+subprocess guard must prove none enters its runtime graph.
+
+Authored tests cover real fresh and Sub-predecessor migration chains, forced RLS,
+non-superuser/non-bypass app-role tenant isolation, synthetic catalog/rule
+configuration, exact determination retry, caller rollback and post-rollback
+retry. Architecture plants reject production Tax imports, dynamic imports and
+SQL writers. Test construction grows only by the reviewed fixture sites;
+production remains 17 sites across 15 files. No tests were executed for this
+source-authoring slice. Exact locked hosted install/hash checks, current-root
+and application boot compatibility, falsifiable excluded-version resolution/import
+proof, all provider observables, both PostgreSQL
+chains and full repository checks remain acceptance gates. Generator-only
+observation used already-installed ERP Kernel a98 and Tax a4 first on
+`PYTHONPATH`, with existing Sub dependencies as fallback; it is not exact-graph
+installation or runtime acceptance evidence.
+
+Tax presence is not policy. No production Tax service caller, determination,
+classification, jurisdiction, category, rate or configuration write is added.
+The incumbent VAT resolver remains authoritative and unchanged. M7 prepaid
+VAT/WHT decisions, policy activation and any authority cutover remain pending.
+
 
 **2026-09-30 — `0.1.0a94` → `0.1.0a97` (source-only candidate).** Template
 Studio `0.2.0a5` requires Kernel `>=0.1.0a97` for its versioned web-surface
@@ -872,6 +977,26 @@ modules (including any `dotmac_kernel._*` and `display`) are forbidden outright.
 
 ## Kernel import allowlist (`app/`)
 
+### 2026-10-13: deployment requirement observation
+
+`dotmac_kernel.machine_models.MachineCredential` is admitted as a read-only
+input to `secrets.deployment_readiness`. Sub already hosts its table through
+migration 551; this change composes no Kernel lineage and declares no second
+model or credential writer. The query reads lifecycle/attribution predicates
+under Sub's canonical operator-tenant transaction scope and never reads hashes
+or raw tokens. The import guard admits only that named model, not a bare module
+import or other model names. Earlier transitive-only admission statements are
+historical; all unrelated Kernel adoption limits remain.
+
+The readiness owner may require the already-owned machine HMAC when live
+credentials depend on it. It neither issues credentials nor changes their
+lifecycle, scopes, identity authority or storage. Schema/RLS acceptance comes
+from the migrated PostgreSQL lane, not metadata-based unit tests. See
+`docs/runbooks/PRODUCTION_DEPLOYMENT.md` and
+`tests/integration/test_deployment_secret_requirements_pg.py`.
+
+### Admitted modules
+
 The executable form of the table above, enforced by
 `tests/architecture/test_kernel_import_boundary.py`. Only these modules may ever
 be imported under `app/`, and only once the dependency lands (S2). This section
@@ -889,6 +1014,8 @@ and the settings cutover all import from this list.
 - `dotmac_kernel.exceptions`
 - `dotmac_kernel.features`
 - `dotmac_kernel.machine_auth`
+- `dotmac_kernel.machine_models` — `MachineCredential` only, for the read-only
+  deployment requirement query. The 2026-10-13 amendment below narrows its use.
 - `dotmac_kernel.models`
 - `dotmac_kernel.money`
 - `dotmac_kernel.namespaces`
@@ -904,6 +1031,7 @@ and the settings cutover all import from this list.
 - `dotmac_kernel.settings_crypto`
 - `dotmac_kernel.settings_models`
 - `dotmac_kernel.settings_resolver`
+- `dotmac_kernel.transactions`
 
 `dotmac_kernel.exceptions` is narrowed to `BadRequestError`,
 `NotFoundError` and `ConflictError` for payment-template adoption and versioned
@@ -911,6 +1039,18 @@ Studio publication. The cutover's publication coordinator catches Studio's
 supported conflict exception and maps it into Sub's domain error; it does not
 install Kernel web/error handlers. No other
 Kernel exception or bare import of that module is admitted.
+
+`dotmac_kernel.transactions` is narrowed to `claim_conflict_savepoint_commit`
+and `current_conflict_savepoint`, added 2026-10-21 with the gateway prepaid
+lane. Starter kernel services run expected-conflict mutations inside
+`conflict_savepoint()`; when such a service executes inside a Sub owner
+command, the savepoint RELEASE fires the boundary's `before_commit` guard.
+The boundary itself stays kernel-free: `kernel_savepoint_guard` registers the
+kernel's exact claim/classification contract as participant hooks, so the
+boundary can tell a claimed kernel release (and a recovered kernel rollback)
+from a participant completing its transaction. No other transaction helper
+is admitted; reimplementing the claim protocol in Sub would create a second,
+divergent completion authority over composed savepoints.
 
 `dotmac_kernel.namespaces` is narrowed to `module_schema`, added 2026-08-31
 with the derived module schema contract. The commercial schema prerequisite
@@ -945,6 +1085,14 @@ business behavior. The architecture guard exercises both directions.
 shadow report needs the typed tenant scope carried by the module's public
 receivable observation. `PlatformScope`, cache-key construction and every
 other cache surface remain refused; this is not a platform-plane adoption.
+
+**Amended 2026-10-18, Slice 6a Starter issuance.** The `Scope` union alias
+(`TenantScope | PlatformScope`) is additionally admitted as a type name only:
+the pinned `dotmac-billing` `NumberingProvider` protocol declares its scope
+parameter as `Scope`, and Sub's numbering adapter must name that exact type
+to satisfy the protocol. Sub still constructs only `TenantScope`;
+`PlatformScope` construction and every other cache surface remain refused,
+and this is not a platform-plane adoption.
 
 **Amended 2026-08-23, composing `dotmac-service-orders`.** This clause
 previously read "effect NAMES only, and only in `app/migration_bindings.py`".
@@ -1534,3 +1682,66 @@ retirement. This slice satisfies none of those gates.
 - Renaming or merging `Subscriber`/`Organization`/`Party` into kernel identity.
 - Any dual-write, second writer, second outbox/inbox, or writer replacement.
 - Shared database or ORM imports with dotmac_erp or the vendor control plane.
+
+
+**2026-10-15 — `0.1.0a98` → `0.1.0a105` (source candidate; not adopted or deployed).**
+The exact Sub pin is proposed for the published Kernel a105 artifact after review
+of the existing composed imports. The a105 source commit is
+`2f5abe9101c9aef48f23977cad81a3e499672287`; annotated tag object
+`bd5f252b936efb3ee61aeb871b915f2e41bab754` identifies that source, with publisher
+`38587531416` and verifier `38588148403`. The authoritative published wheel SHA256
+is `f8937e5525c3efd27e2030bf69ed0c37e137c345e376668a79e00ebf349b6ffa`; the sdist
+SHA256 is `76a3ccb7d0344befe565681b710edfd3a563e64127b801e43bb239d5bc5b80d2`.
+Review evidence establishes unchanged direct dependencies, extras, Python bounds,
+and backend between a98 and a105. No dependency graph, extra selection, source, or
+other locked package is changed here. The ephemeral smoke rebuild is not registry
+publication authority and does not establish a registry reissue. This entry records
+a source candidate only; it makes no adoption, deployment, runtime acceptance, or
+ledger-switch claim.
+
+
+**2026-10-15 — released `dotmac-payments==0.1.0a2` read-only invoice
+intent consumer.** `verify_and_record_payment` observes the authorized original
+checkout binding through `get_payment_intent_v1` on its existing scoped Session,
+before provider observation. Missing/mismatched rows produce bounded PII-free
+telemetry; legacy settlement remains authoritative. The a2 universal wheel is
+pinned to verified SHA256
+`da2877bc5365fc0d6cf93868a6235a608413edbb809199cd5c919f78390cf8ed`;
+the lock intentionally admits only that verified wheel, not an unverified sdist.
+Release run `38765607117` succeeded; annotated tag object
+`94ebb4d4856fdd9c88f1c6adc58a06fa4c62a47e` targets
+`4fc0295da94ce62919966baaf1dd909f9af5dcbe`. The migration head is now
+`pm_0003_confirmation_immutable`. The earlier a1 entry is historical preparation;
+its no-live-import assertion no longer describes this consumer.
+
+Hosted CI must establish the new getter/application-hook/RLS and dirty-session
+canaries plus existing payment and architecture gates; no local runtime tests
+were executed. This is one genuine observation consumer, not fleet parity,
+backfill, a financial authority switch, or permission to merge/deploy during the
+active production freeze. See
+`docs/designs/PAYMENT_INTENT_MODULE_OBSERVATION.md`.
+
+**2026-10-17 — money-pack supply pins move to the cutover package set:
+`dotmac-billing==0.1.0a8`, `dotmac-payments==0.1.0a3`,
+`dotmac-numbering==0.1.0a3` (Kernel stays `0.1.0a105`).** All four pack modules
+(including `dotmac-integration==0.1.0a19`, not a Sub dependency) were published
+from Starter protected main through the module release lane on 2026-10-17 after
+Starter PR #863 (`650c7827fa6ee62dddc63e2a4d383d5cbb0f8d4f`) landed the reviewed
+cutover package source set. Annotated tags peel to: billing
+`76c18287626ff6005b3b55bff41dd996800ffd03` (release run `39015266001`, verify
+included the level-2 composition check registering billing alongside published
+Kernel `0.1.0a105`, integration `0.1.0a19`, payments `0.1.0a3` and numbering
+`0.1.0a3`), payments `ec3c0398ad93912afc0a9dd4fa82098cc812d6dd` (run
+`39006968601`), numbering `62ecb6b0e198ba08bef9a096037194a9dfca4da0` (run
+`39010380319`). Locked wheel SHA256: billing
+`a1d76c5a3244777a60854078991fbbfa1e6c4bfc6de03d26c581cbe23de5e537`, payments
+`6ce2d846218931f568183e0814e376597ec03f836c502302dfefd0bd4264a8eb`, numbering
+`03e9ac4de8b2d4501b6d3a0daf11131ec4d85c2913cd9e0d91a31937cdc9032c`; the payments
+and numbering wheel hashes were cross-checked against Starter's
+`module-release-verifications.json`, and `poetry.lock` changed for exactly these
+three distributions. Migration heads are now `bi_0011_settlement_earmarks`,
+`pm_0006_cash_qualification` and `nu_0001_numbering`. This is a supply-pin move
+only: no caller switch, backfill, opening-balance import or authority change is
+included, and Sub's incumbent billing/payment writers remain authoritative until
+the sealed cutover. Hosted CI must prove install-from-lock, the composition
+canaries at the new heads, and unchanged runtime authority before acceptance.

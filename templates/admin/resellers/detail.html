@@ -144,7 +144,7 @@
                             {% if portal_user.can_remove %}
                             <details class="relative">
                                 <summary class="cursor-pointer list-none rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-50 focus:outline-none focus:ring-2 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-200 dark:hover:bg-slate-700">More</summary>
-                                <div class="absolute right-0 z-10 mt-1 w-48 rounded-lg border border-slate-200 bg-white p-2 shadow-lg dark:border-slate-700 dark:bg-slate-800">
+                                <div class="absolute right-0 z-10 mt-1 w-64 rounded-lg border border-slate-200 bg-white p-2 shadow-lg dark:border-slate-700 dark:bg-slate-800">
                                     <form method="post"
                                           action="/admin/resellers/{{ reseller.id }}/users/{{ portal_user.principal_type }}/{{ portal_user.principal_id }}/remove"
                                           onsubmit="return confirm('Remove this reseller user from the account? Current reseller sessions will end, while identity and audit history are retained.');">
@@ -155,6 +155,20 @@
                                             Remove user
                                         </button>
                                     </form>
+                                    {% if portal_user.principal_type == 'reseller_user' %}
+                                    <form method="post" class="mt-2 border-t border-slate-200 pt-2 dark:border-slate-700"
+                                          action="/admin/resellers/{{ reseller.id }}/users/reseller_user/{{ portal_user.principal_id }}/disable-mfa"
+                                          onsubmit="return confirm('Remove all MFA factors for this reseller user? Sessions will end and the user will be notified.');">
+                                        {% include "components/forms/csrf_input.html" %}
+                                        <input type="hidden" name="page" value="{{ page|default(1) }}" />
+                                        <input type="hidden" name="per_page" value="{{ per_page|default(25) }}" />
+                                        <label class="block text-xs text-slate-600 dark:text-slate-300" for="mfa-reason-{{ portal_user.principal_id }}">Reason (verification + ticket)</label>
+                                        <input id="mfa-reason-{{ portal_user.principal_id }}" name="removal_reason" type="text" required minlength="3" maxlength="500" class="mt-1 w-full rounded-md border border-slate-300 px-2 py-1 text-xs dark:border-slate-600 dark:bg-slate-900 dark:text-slate-100" />
+                                        <button type="submit" class="mt-2 w-full rounded-md px-3 py-2 text-left text-xs font-medium text-amber-700 hover:bg-amber-50 focus:outline-none focus:ring-2 focus:ring-amber-500 dark:text-amber-300 dark:hover:bg-amber-900/30">
+                                            Remove MFA
+                                        </button>
+                                    </form>
+                                    {% endif %}
                                 </div>
                             </details>
                             {% endif %}

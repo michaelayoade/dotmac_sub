@@ -18,21 +18,26 @@ from uuid import UUID
 
 from pydantic import EmailStr, TypeAdapter, ValidationError
 from sqlalchemy import func, select, text
-from sqlalchemy.exc import IntegrityError
+from sqlalchemy.exc import IntegrityError, OperationalError
 from sqlalchemy.orm import Session
 
 from app.config import settings
 from app.models.audit import AuditActorType
-from app.models.auth import AuthProvider, SessionStatus, UserCredential
+from app.models.auth import AuthProvider, MFAMethod, SessionStatus, UserCredential
 from app.models.auth import Session as AuthSession
 from app.models.notification import Notification
 from app.models.rbac import Role
 from app.models.subscriber import Reseller, ResellerUser, Subscriber, UserType
 from app.schemas.subscriber import ResellerCreate, SubscriberCreate
-from app.services import auth_cache, credential_recovery, subscriber_assignments
+from app.services import (
+    auth_cache,
+    credential_recovery,
+    mfa_removal,
+    subscriber_assignments,
+)
 from app.services import auth_flow as auth_flow_service
 from app.services import subscriber as subscriber_service
-from app.services.audit_adapter import stage_audit_event
+from app.services.audit_adapter import AuditActor, stage_audit_event
 from app.services.domain_errors import DomainError
 from app.services.events import emit_event
 from app.services.events.types import EventType
@@ -60,6 +65,12 @@ _REVOKE_ACCESS_COMMAND = OwnerCommandDefinition(
     concern="reseller portal access revocation",
     name="revoke_reseller_portal_access",
 )
+_REMOVE_MFA_COMMAND = OwnerCommandDefinition(
+    owner="auth.reseller_onboarding",
+    concern="reseller portal MFA maintenance",
+    name="remove_reseller_user_mfa",
+)
+
 _EMAIL_ADAPTER = TypeAdapter(EmailStr)
 
 
@@ -124,6 +135,28 @@ class RevokeResellerPortalAccessCommand:
     reseller_id: UUID
     principal_type: str
     principal_id: UUID
+
+
+@dataclass(frozen=True)
+class RemoveResellerUserMfaCommand:
+    """Staff removal of every MFA factor of one reseller_user principal."""
+
+    context: CommandContext
+    reseller_id: UUID
+    principal_id: UUID
+    removal_reason: str
+
+
+@dataclass(frozen=True)
+class ResellerUserMfaRemovalOutcome:
+    reseller_id: UUID
+    principal_id: UUID
+    changed: bool
+    methods_disabled: int
+    recovery_codes_deactivated: int
+    sessions_revoked: int
+    command_id: UUID
+    correlation_id: UUID
 
 
 @dataclass(frozen=True)
@@ -984,3 +1017,145 @@ def materialize_reseller_invite_email(
         ttl_minutes=reset.ttl_minutes,
         source="reseller_onboarding",
     )
+
+
+def remove_reseller_user_mfa(
+    db: Session,
+    command: RemoveResellerUserMfaCommand,
+) -> ResellerUserMfaRemovalOutcome:
+    """Disable all MFA factors of one reseller_user principal atomically.
+
+    Authorization is the reseller-management scope (``reseller:write``), carried
+    by the command context. The principal is resolved through
+    ``command.reseller_id`` so a principal of another reseller is "not found".
+    Principal lock first, then factor rows and recovery codes; sessions are
+    revoked durably, the audit and a ``credential_administration.completed``
+    event are staged in the same transaction, and cache/Redis session
+    invalidation runs after commit. A repeat call is an audited no-op.
+    """
+
+    def operation() -> ResellerUserMfaRemovalOutcome:
+        actor_type, actor_id = _validate_context(command.context)
+        reason = mfa_removal.normalize_reason(command.removal_reason)
+        if reason is None:
+            raise _error(
+                "mfa_removal_reason_required",
+                mfa_removal.REASON_REQUIRED_MESSAGE,
+                field="removal_reason",
+            )
+        denied = _error(
+            "mfa_removal_forbidden",
+            "You are not permitted to remove this account's MFA.",
+        )
+        # Reseller management is a staff function: the actor must be a human
+        # administrator (admin role, like the credential API), never the target.
+        if actor_type != AuditActorType.user or actor_id == str(command.principal_id):
+            raise denied
+        try:
+            actor_uuid = UUID(actor_id)
+        except ValueError as exc:
+            raise denied from exc
+        from app.services import system_user_assignments
+
+        if not any(
+            role.lower() == "admin"
+            for role in system_user_assignments.system_user_role_names(db, actor_uuid)
+        ):
+            raise denied
+        mfa_removal.set_lock_timeout(db)
+        link = _locked_reseller_portal_link(
+            db,
+            reseller_id=command.reseller_id,
+            principal_type=ResellerPortalPrincipalType.RESELLER_USER,
+            principal_id=command.principal_id,
+        )
+        from app.services.credential_administration_mutation import (
+            disable_locked_principal_factors,
+        )
+
+        result = disable_locked_principal_factors(
+            db, principal_column=MFAMethod.reseller_user_id, principal_id=link.id
+        )
+        sessions_revoked = 0
+        if result.changed:
+            sessions_revoked = int(
+                db.query(AuthSession)
+                .filter(
+                    AuthSession.reseller_user_id == link.id,
+                    AuthSession.status == SessionStatus.active,
+                    AuthSession.revoked_at.is_(None),
+                )
+                .update(
+                    {"status": SessionStatus.revoked, "revoked_at": datetime.now(UTC)},
+                    synchronize_session=False,
+                )
+                or 0
+            )
+        metadata = {
+            **_command_metadata(command.context),
+            "principal_type": "reseller_user",
+            "principal_id": str(link.id),
+            "reseller_id": str(command.reseller_id),
+            "changed": result.changed,
+            "methods_disabled": result.methods_disabled,
+            "recovery_codes_deactivated": result.recovery_codes_deactivated,
+            "sessions_revoked": sessions_revoked,
+            "removal_reason": reason,
+        }
+        stage_audit_event(
+            db,
+            action="auth.mfa_disabled",
+            entity_type="reseller_user",
+            entity_id=str(link.id),
+            actor=AuditActor.user(actor_id),
+            request_id=str(command.context.correlation_id),
+            status_code=200,
+            metadata=metadata,
+        )
+        if result.changed:
+            emit_event(
+                db,
+                EventType.credential_administration_completed,
+                {
+                    **_command_metadata(command.context),
+                    "schema_version": 1,
+                    "principal_type": "reseller_user",
+                    "principal_id": str(link.id),
+                    "aggregate_type": "reseller_user",
+                    "aggregate_id": str(link.id),
+                    "transition": "reseller_mfa_removed",
+                    "invalidate_sessions": True,
+                    "sessions_revoked": sessions_revoked,
+                    "recovery_codes_deactivated": result.recovery_codes_deactivated,
+                    "methods_disabled": result.methods_disabled,
+                    "removed_at": datetime.now(UTC).isoformat(),
+                    "notify_mfa_removal": True,
+                },
+                actor=command.context.actor,
+            )
+        if result.changed:
+            _schedule_access_revocation_projection(
+                db, principal_type="reseller_user", principal_id=link.id
+            )
+        return ResellerUserMfaRemovalOutcome(
+            reseller_id=command.reseller_id,
+            principal_id=link.id,
+            changed=result.changed,
+            methods_disabled=result.methods_disabled,
+            recovery_codes_deactivated=result.recovery_codes_deactivated,
+            sessions_revoked=sessions_revoked,
+            command_id=command.context.command_id,
+            correlation_id=command.context.correlation_id,
+        )
+
+    try:
+        return execute_owner_command(
+            db,
+            definition=_REMOVE_MFA_COMMAND,
+            context=command.context,
+            operation=operation,
+        )
+    except OperationalError as exc:
+        if mfa_removal.is_lock_timeout(exc):
+            raise _error("lock_timeout", mfa_removal.LOCK_TIMEOUT_MESSAGE) from exc
+        raise

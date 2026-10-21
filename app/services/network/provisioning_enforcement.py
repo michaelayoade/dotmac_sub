@@ -274,7 +274,7 @@ class ProvisioningEnforcement:
         using GenieACS. This is idempotent - pushing the
         same config multiple times has no adverse effects.
         """
-        from app.services.credential_crypto import decrypt_credential
+        from app.services.credential_crypto import decrypt_stored_secret_or_none
 
         acs = genieacs_service
         pushed = 0
@@ -294,11 +294,10 @@ class ProvisioningEnforcement:
             password: str | None = None
             wifi_password_override = _effective_field(db, ont, "wifi.password")
             if wifi_password_override:
-                try:
-                    password = decrypt_credential(str(wifi_password_override))
-                except ValueError:
+                password = decrypt_stored_secret_or_none(wifi_password_override)
+                if password is None:
                     logger.warning(
-                        "Cannot decrypt WiFi password for ONT %s, pushing SSID only",
+                        "WiFi password for ONT %s is unusable, pushing SSID only",
                         ont.serial_number,
                     )
 
@@ -764,11 +763,15 @@ def _resolve_access_credential_password(
 
     if cred is None or not cred.secret_hash:
         return ""
+    from app.services.access_credential_secret import is_secret_reference_value
+
+    if is_secret_reference_value(cred.secret_hash):
+        return ""
 
     try:
-        from app.services.credential_crypto import decrypt_credential
+        from app.services.credential_crypto import decrypt_stored_secret_or_none
 
-        return decrypt_credential(cred.secret_hash) or ""
+        return decrypt_stored_secret_or_none(cred.secret_hash) or ""
     except ValueError as exc:
         logger.warning(
             "Could not decrypt access credential for ONT %s (username %s): %s",

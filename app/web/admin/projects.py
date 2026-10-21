@@ -60,7 +60,7 @@ class ProjectDomainRoute(APIRoute):
                     404
                     if code.endswith(".not_found")
                     else 403
-                    if code.endswith(".unauthorized")
+                    if code.endswith((".unauthorized", ".denied"))
                     else 409
                     if code.endswith((".stale_state", ".relationship_conflict"))
                     else 400
@@ -1122,3 +1122,192 @@ def project_delete(request: Request, project_ref: str, db: Session = Depends(get
             headers=projects_web_service.delete_project_hx_headers(),
         )
     return RedirectResponse(url="/admin/projects", status_code=303)
+
+
+from uuid import UUID
+
+from app.csrf import get_csrf_token, set_csrf_cookie
+from app.schemas.project_field_completion import ApplyAcceptedProjectCompletionRequest
+from app.services.auth_dependencies import require_permission_admission
+from app.services.db_session_adapter import db_session_adapter
+from app.services.field import completion_project_scope
+from app.services.field.completion_project_scope_contracts import (
+    AcceptedProjectCompletionPreviewQuery,
+)
+from app.services.permission_admission import PermissionAdmission
+from app.services.project_field_completion_projection import (
+    compose_accepted_completion_page,
+)
+
+
+def _accepted_completion_page(
+    request: Request,
+    db: Session,
+    *,
+    project_id: UUID,
+    task_id: UUID | None,
+    access: PermissionAdmission,
+    values: dict[str, str] | None = None,
+    error: str | None = None,
+    status_code: int = 200,
+) -> Response:
+    preview = None
+    try:
+        preview = completion_project_scope.preview_accepted_project_completion(
+            db,
+            query=AcceptedProjectCompletionPreviewQuery(
+                access=access, project_id=project_id, task_id=task_id
+            ),
+        )
+    except DomainError as exc:
+        if values is None:
+            raise
+        error = error or exc.message
+    context = _ctx(request, db)
+    context["page"] = compose_accepted_completion_page(
+        preview=preview, action_url=request.url.path, values=values, error=error
+    )
+    token = get_csrf_token(request)
+    context["csrf_token"] = token
+    response = templates.TemplateResponse(
+        "admin/projects/accepted_field_completion.html",
+        context,
+        status_code=status_code,
+    )
+    set_csrf_cookie(response, token, request)
+    return response
+
+
+async def _submit_accepted_completion(
+    request: Request,
+    db: Session,
+    *,
+    project_id: UUID,
+    task_id: UUID | None,
+    access: PermissionAdmission,
+) -> Response:
+    from app.services.field.completion_project_scope_contracts import (
+        SCOPE,
+        ApplyAcceptedProjectCompletion,
+    )
+    from app.services.owner_commands import CommandContext
+
+    form = await request.form()
+    allowed = {
+        "intent_id",
+        "command_id",
+        "correlation_id",
+        "expected_project_revision",
+        "expected_task_revision",
+        "expected_requirement_token",
+        "reason",
+    }
+    values = {str(k): str(v) for k, v in form.items() if k in allowed}
+    try:
+        payload = ApplyAcceptedProjectCompletionRequest.model_validate(values)
+        db_session_adapter.release_read_transaction(db)
+        completion_project_scope.apply_accepted_project_completion(
+            db,
+            command=ApplyAcceptedProjectCompletion(
+                context=CommandContext(
+                    command_id=payload.command_id,
+                    correlation_id=payload.correlation_id,
+                    actor=str(access.principal_id),
+                    scope=SCOPE,
+                    reason=payload.reason,
+                    idempotency_key=str(payload.intent_id),
+                ),
+                access=access,
+                project_id=project_id,
+                task_id=task_id,
+                expected_project_revision=payload.expected_project_revision,
+                expected_task_revision=payload.expected_task_revision,
+                expected_requirement_token=payload.expected_requirement_token,
+            ),
+        )
+    except (ValidationError, DomainError) as exc:
+        error = (
+            exc.message
+            if isinstance(exc, DomainError)
+            else "Check the submitted reason and exact preview values. Reload the page for a new preview."
+        )
+        return _accepted_completion_page(
+            request,
+            db,
+            project_id=project_id,
+            task_id=task_id,
+            access=access,
+            values=values,
+            error=error,
+            status_code=409 if isinstance(exc, DomainError) else 422,
+        )
+    destination = (
+        f"/admin/projects/tasks/{task_id}"
+        if task_id
+        else f"/admin/projects/{project_id}"
+    )
+    return RedirectResponse(destination, status_code=303)
+
+
+@router.get("/{project_id}/accepted-field-completion", response_class=HTMLResponse)
+def accepted_project_field_completion_page(
+    request: Request,
+    project_id: UUID,
+    db: Session = Depends(get_db),
+    access: PermissionAdmission = Depends(
+        require_permission_admission("project:update")
+    ),
+) -> Response:
+    return _accepted_completion_page(
+        request, db, project_id=project_id, task_id=None, access=access
+    )
+
+
+@router.post("/{project_id}/accepted-field-completion", response_class=HTMLResponse)
+async def accepted_project_field_completion_submit(
+    request: Request,
+    project_id: UUID,
+    db: Session = Depends(get_db),
+    access: PermissionAdmission = Depends(
+        require_permission_admission("project:update")
+    ),
+) -> Response:
+    return await _submit_accepted_completion(
+        request, db, project_id=project_id, task_id=None, access=access
+    )
+
+
+@router.get(
+    "/{project_id}/tasks/{task_id}/accepted-field-completion",
+    response_class=HTMLResponse,
+)
+def accepted_task_field_completion_page(
+    request: Request,
+    project_id: UUID,
+    task_id: UUID,
+    db: Session = Depends(get_db),
+    access: PermissionAdmission = Depends(
+        require_permission_admission("project:task:write")
+    ),
+) -> Response:
+    return _accepted_completion_page(
+        request, db, project_id=project_id, task_id=task_id, access=access
+    )
+
+
+@router.post(
+    "/{project_id}/tasks/{task_id}/accepted-field-completion",
+    response_class=HTMLResponse,
+)
+async def accepted_task_field_completion_submit(
+    request: Request,
+    project_id: UUID,
+    task_id: UUID,
+    db: Session = Depends(get_db),
+    access: PermissionAdmission = Depends(
+        require_permission_admission("project:task:write")
+    ),
+) -> Response:
+    return await _submit_accepted_completion(
+        request, db, project_id=project_id, task_id=task_id, access=access
+    )

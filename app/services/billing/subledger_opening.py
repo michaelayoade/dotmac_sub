@@ -11,9 +11,10 @@ from __future__ import annotations
 
 import hashlib
 import json
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 from decimal import Decimal
+from enum import StrEnum
 from uuid import UUID
 
 from sqlalchemy import func, select
@@ -23,6 +24,7 @@ from app.models.audit import AuditActorType
 from app.models.billing import Invoice, Payment, PaymentAllocation, PaymentStatus
 from app.models.billing_contract import BillingRecordAuthority
 from app.models.billing_shadow_verification import BillingCutoverVerificationRun
+from app.models.catalog import BillingMode
 from app.models.customer_subledger import (
     CustomerPostingGroup,
     CustomerSubledgerAuthorityCutover,
@@ -42,6 +44,10 @@ from app.models.splynx_transaction import SplynxBillingTransaction
 from app.models.subscriber import Subscriber
 from app.models.system_user import SystemUser
 from app.schemas.audit import AuditEventCreate
+from app.services.access_resolution import (
+    PrepaidFundingDecision,
+    resolve_prepaid_funding,
+)
 from app.services.audit import AuditEvents
 from app.services.auth_dependencies import has_permission
 from app.services.billing.customer_subledger import (
@@ -55,6 +61,7 @@ from app.services.billing.opening_balance_history import (
     OpeningBalanceSourceIdentityQuery,
     classify_opening_balance_source_identities,
 )
+from app.services.billing_profile import resolve_billing_profile
 from app.services.common import round_money
 from app.services.domain_errors import DomainError
 from app.services.events import emit_event
@@ -66,6 +73,10 @@ from app.services.owner_commands import (
     current_command_context,
     execute_owner_command,
     owner_command_active,
+)
+from app.services.prepaid_currency import resolve_prepaid_enforcement_currency
+from app.services.prepaid_funding_reconstruction import (
+    PrepaidFundingBaselineMissingError,
 )
 from app.services.system_user_assignments import system_user_role_names
 
@@ -1341,6 +1352,319 @@ def preview_customer_subledger_opening_correction(
     )
 
 
+class OpeningPositionProvenance(StrEnum):
+    """Which approved capture protocol produced an immutable opening."""
+
+    verification_run = "verification_run"
+    native_repair = "native_repair"
+
+
+@dataclass(frozen=True, slots=True)
+class CustomerSubledgerOpeningsQuery:
+    account_id: UUID
+
+
+@dataclass(frozen=True, slots=True)
+class CustomerSubledgerOpeningCorrectionRecord:
+    """One immutable, already-applied opening correction."""
+
+    correction_id: UUID
+    previous_opening_amount: Decimal
+    corrected_opening_amount: Decimal
+    delta: Decimal
+    reason: str
+    review_reference: str
+    applied_by: str
+    authorized_system_user_id: UUID
+    preview_fingerprint: str
+    occurred_at: datetime
+
+
+@dataclass(frozen=True, slots=True)
+class CustomerSubledgerOpeningSummary:
+    """One captured opening with its append-only correction history."""
+
+    opening_position_id: UUID
+    account_id: UUID
+    currency: str
+    provenance: OpeningPositionProvenance
+    captured_amount: Decimal
+    current_amount: Decimal
+    position_at: datetime
+    captured_at: datetime
+    captured_by: str
+    review_reference: str
+    evidence_fingerprint: str
+    corrections: tuple[CustomerSubledgerOpeningCorrectionRecord, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class CustomerSubledgerOpeningAccountView:
+    """Read model for one account's captured openings and correctability.
+
+    ``correction_available`` is this owner's eligibility answer: corrections
+    exist only after customer-subledger authority is active and only for an
+    already captured opening.
+    """
+
+    account_id: UUID
+    authority_active: bool
+    openings: tuple[CustomerSubledgerOpeningSummary, ...]
+
+    @property
+    def correction_available(self) -> bool:
+        return self.authority_active and bool(self.openings)
+
+    @property
+    def correction_unavailable_reason(self) -> str | None:
+        if not self.openings:
+            return "The account has no immutable opening position to correct."
+        if not self.authority_active:
+            return "Opening corrections require active customer-subledger authority."
+        return None
+
+    def opening(self, currency: str) -> CustomerSubledgerOpeningSummary | None:
+        normalized = currency.strip().upper()
+        return next(
+            (item for item in self.openings if item.currency == normalized), None
+        )
+
+
+def list_customer_subledger_openings(
+    db: Session,
+    query: CustomerSubledgerOpeningsQuery,
+) -> CustomerSubledgerOpeningAccountView:
+    """Return captured openings and their correction history; writes nothing."""
+
+    openings = db.scalars(
+        select(CustomerSubledgerOpeningPosition)
+        .where(CustomerSubledgerOpeningPosition.account_id == query.account_id)
+        .order_by(CustomerSubledgerOpeningPosition.currency)
+    ).all()
+    corrections_by_opening: dict[UUID, list[CustomerSubledgerOpeningCorrection]] = {}
+    if openings:
+        for correction in db.scalars(
+            select(CustomerSubledgerOpeningCorrection)
+            .where(
+                CustomerSubledgerOpeningCorrection.opening_position_id.in_(
+                    tuple(opening.id for opening in openings)
+                )
+            )
+            .order_by(
+                CustomerSubledgerOpeningCorrection.occurred_at,
+                CustomerSubledgerOpeningCorrection.id,
+            )
+        ).all():
+            corrections_by_opening.setdefault(
+                correction.opening_position_id, []
+            ).append(correction)
+    summaries: list[CustomerSubledgerOpeningSummary] = []
+    for opening in openings:
+        records = tuple(
+            CustomerSubledgerOpeningCorrectionRecord(
+                correction_id=correction.id,
+                previous_opening_amount=round_money(
+                    Decimal(correction.previous_opening_amount)
+                ),
+                corrected_opening_amount=round_money(
+                    Decimal(correction.corrected_opening_amount)
+                ),
+                delta=round_money(Decimal(correction.delta)),
+                reason=correction.reason,
+                review_reference=correction.review_reference,
+                applied_by=correction.applied_by,
+                authorized_system_user_id=correction.authorized_system_user_id,
+                preview_fingerprint=correction.preview_fingerprint,
+                occurred_at=_utc(correction.occurred_at),
+            )
+            for correction in corrections_by_opening.get(opening.id, [])
+        )
+        captured = round_money(Decimal(opening.legacy_position))
+        summaries.append(
+            CustomerSubledgerOpeningSummary(
+                opening_position_id=opening.id,
+                account_id=opening.account_id,
+                currency=opening.currency,
+                provenance=(
+                    OpeningPositionProvenance.native_repair
+                    if opening.native_repair_id is not None
+                    else OpeningPositionProvenance.verification_run
+                ),
+                captured_amount=captured,
+                current_amount=round_money(
+                    captured + sum((record.delta for record in records), Decimal("0"))
+                ),
+                position_at=_utc(opening.occurred_at),
+                captured_at=_utc(opening.created_at),
+                captured_by=opening.captured_by,
+                review_reference=opening.review_reference,
+                evidence_fingerprint=opening.evidence_fingerprint,
+                corrections=records,
+            )
+        )
+    return CustomerSubledgerOpeningAccountView(
+        account_id=query.account_id,
+        authority_active=(
+            db.scalar(select(CustomerSubledgerAuthorityCutover.id).limit(1)) is not None
+        ),
+        openings=tuple(summaries),
+    )
+
+
+class OpeningCorrectionEnforcementConsequence(StrEnum):
+    """Prepaid enforcement eligibility change implied by a correction."""
+
+    unchanged = "unchanged"
+    restoration_eligible = "restoration_eligible"
+    suspension_eligible = "suspension_eligible"
+    not_prepaid = "not_prepaid"
+    currency_not_enforced = "currency_not_enforced"
+    undetermined = "undetermined"
+
+
+@dataclass(frozen=True, slots=True)
+class CustomerSubledgerOpeningCorrectionImpact:
+    """Read-only consequence preview bound to one owner correction preview.
+
+    Balances come from ``financial.access_resolution``'s prepaid funding
+    decision. A correction adds exactly ``delta`` to the opening term of the
+    verified funding balance, so the resulting balance is the current decision
+    with that one input changed. ``None`` means not applicable or unavailable,
+    never zero; ``explanation`` states which.
+    """
+
+    preview: CustomerSubledgerOpeningCorrectionPreview
+    enforcement_currency: str | None
+    current_available_balance: Decimal | None
+    resulting_available_balance: Decimal | None
+    required_balance: Decimal | None
+    funded_before: bool | None
+    funded_after: bool | None
+    enforcement_consequence: OpeningCorrectionEnforcementConsequence
+    explanation: str
+
+
+def _impact(
+    preview: CustomerSubledgerOpeningCorrectionPreview,
+    consequence: OpeningCorrectionEnforcementConsequence,
+    explanation: str,
+    *,
+    enforcement_currency: str | None = None,
+    before: PrepaidFundingDecision | None = None,
+    after: PrepaidFundingDecision | None = None,
+) -> CustomerSubledgerOpeningCorrectionImpact:
+    return CustomerSubledgerOpeningCorrectionImpact(
+        preview=preview,
+        enforcement_currency=enforcement_currency,
+        current_available_balance=(
+            round_money(before.available_balance) if before is not None else None
+        ),
+        resulting_available_balance=(
+            round_money(after.available_balance) if after is not None else None
+        ),
+        required_balance=(
+            round_money(before.required_balance) if before is not None else None
+        ),
+        funded_before=before.funded if before is not None else None,
+        funded_after=after.funded if after is not None else None,
+        enforcement_consequence=consequence,
+        explanation=explanation,
+    )
+
+
+def preview_customer_subledger_opening_correction_impact(
+    db: Session,
+    query: PreviewCustomerSubledgerOpeningCorrectionQuery,
+    *,
+    now: datetime | None = None,
+) -> CustomerSubledgerOpeningCorrectionImpact:
+    """Preview one correction and its prepaid enforcement consequence.
+
+    Composes this owner's correction preview with the access-resolution
+    funding decision. It writes nothing; the command re-previews under lock
+    and binds only the correction fingerprint, never this consequence.
+    """
+
+    preview = preview_customer_subledger_opening_correction(db, query)
+    account = db.get(Subscriber, query.account_id)
+    if account is None:
+        raise _error(
+            "account_not_found",
+            "The customer account does not exist.",
+            account_id=str(query.account_id),
+        )
+    kinds = OpeningCorrectionEnforcementConsequence
+    try:
+        profile = resolve_billing_profile(db, account)
+    except DomainError as exc:
+        return _impact(
+            preview,
+            kinds.undetermined,
+            f"Billing mode could not be resolved ({exc.message}); prepaid "
+            "enforcement impact is unknown.",
+        )
+    if profile.effective_mode != BillingMode.prepaid:
+        return _impact(
+            preview,
+            kinds.not_prepaid,
+            "The account is not on prepaid billing, so prepaid funding "
+            "enforcement does not apply. The correction changes unapplied "
+            "customer credit by the delta.",
+        )
+    currency = resolve_prepaid_enforcement_currency(db)
+    if currency != preview.currency:
+        return _impact(
+            preview,
+            kinds.currency_not_enforced,
+            f"Prepaid enforcement uses {currency}; a {preview.currency} opening "
+            "correction does not change enforced funding.",
+            enforcement_currency=currency,
+        )
+    try:
+        before = resolve_prepaid_funding(db, account, now=now)
+    except (DomainError, PrepaidFundingBaselineMissingError) as exc:
+        return _impact(
+            preview,
+            kinds.undetermined,
+            f"Verified prepaid funding is unavailable ({exc}); enforcement "
+            "impact is unknown.",
+            enforcement_currency=currency,
+        )
+    after = replace(
+        before,
+        available_balance=round_money(before.available_balance + preview.delta),
+    )
+    if not before.funded and after.funded:
+        consequence = kinds.restoration_eligible
+        explanation = (
+            "The account is currently below its prepaid requirement and would "
+            "become funded: it becomes eligible for restoration on the next "
+            "enforcement run."
+        )
+    elif before.funded and after.adverse_action_allowed:
+        consequence = kinds.suspension_eligible
+        explanation = (
+            "The account is currently funded and would fall below its prepaid "
+            "requirement: it becomes eligible for suspension on the next "
+            "enforcement run."
+        )
+    else:
+        consequence = kinds.unchanged
+        explanation = (
+            "The account stays "
+            + ("funded" if after.funded else "below its prepaid requirement")
+            + "; prepaid enforcement eligibility does not change."
+        )
+    return _impact(
+        preview,
+        consequence,
+        explanation,
+        enforcement_currency=currency,
+        before=before,
+        after=after,
+    )
+
+
 def correct_customer_subledger_opening_position(
     db: Session,
     command: CorrectCustomerSubledgerOpeningCommand,
@@ -1761,20 +2085,29 @@ __all__ = [
     "CORRECTION_SCOPE",
     "CustomerSubledgerAuthorityResult",
     "CustomerSubledgerOpeningCaptureResult",
+    "CustomerSubledgerOpeningAccountView",
+    "CustomerSubledgerOpeningCorrectionImpact",
     "CustomerSubledgerOpeningCorrectionPreview",
+    "CustomerSubledgerOpeningCorrectionRecord",
     "CustomerSubledgerOpeningCorrectionResult",
+    "CustomerSubledgerOpeningSummary",
+    "CustomerSubledgerOpeningsQuery",
     "CustomerSubledgerOpeningError",
     "NATIVE_REPAIR_SCOPE",
     "NativePrepaidOpeningApproval",
     "NativePrepaidOpeningRepairPreview",
     "NativePrepaidOpeningRepairResult",
+    "OpeningCorrectionEnforcementConsequence",
+    "OpeningPositionProvenance",
     "PreviewNativePrepaidOpeningRepairQuery",
     "PreviewCustomerSubledgerOpeningCorrectionQuery",
     "RepairNativePrepaidOpeningCommand",
     "activate_customer_subledger_authority",
     "capture_customer_subledger_opening_positions",
     "correct_customer_subledger_opening_position",
+    "list_customer_subledger_openings",
     "preview_customer_subledger_opening_correction",
+    "preview_customer_subledger_opening_correction_impact",
     "preview_native_prepaid_opening_repair",
     "repair_native_prepaid_opening",
 ]

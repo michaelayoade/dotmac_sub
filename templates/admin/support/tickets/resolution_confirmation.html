@@ -1,0 +1,16 @@
+{% extends "layouts/admin.html" %}
+{% from "components/forms/action_form.html" import action_form with context %}
+{% from "components/actions/action_readiness.html" import action_readiness_panel %}
+{% block title %}Customer resolution confirmation{% endblock %}
+{% block content %}
+<div class="mx-auto max-w-3xl space-y-6">
+    {% if can(request, 'support:ticket:read') %}<a class="text-sm underline" href="/admin/support/tickets/{{ snapshot.ticket_id }}">Back to ticket</a>{% endif %}
+    <header><h1 class="text-2xl font-semibold">Customer resolution confirmation</h1><p class="mt-2 font-medium">{{ snapshot.number or 'Support ticket' }} · {{ snapshot.title }}</p><p class="mt-2 text-sm">Current ticket state: {{ snapshot.status|replace('_', ' ')|title }}. Supervisor acceptance, customer confirmation and ticket closure remain separate decisions.</p></header>
+    {% if snapshot.current_request_id %}<section class="rounded-lg border p-5"><h2 class="font-semibold">Current confirmation request</h2><p class="mt-2">Requested {{ snapshot.requested_at }} · Grace deadline {{ snapshot.deadline }}</p><p class="mt-2 text-sm">The customer can confirm or dispute from their ticket in the customer portal or the configured notification link. A replacement request invalidates the previous capability.</p></section>{% endif %}
+    {% if receipt %}<section role="status" class="rounded-lg border border-emerald-300 p-5"><h2 class="font-semibold">{{ 'Original confirmation request returned' if receipt.replayed else 'Confirmation request recorded' }}</h2><p class="mt-2">Ticket state: pending customer confirmation. Grace deadline: {{ receipt.deadline }}. Customer consent has not been recorded and the ticket remains open for confirmation or dispute.</p></section>{% endif %}
+    {% if error %}<div role="alert" class="rounded-lg border border-rose-300 p-4">{{ error }}{% if refused %}<p class="mt-2">Original intent and submitted values are preserved. <a class="underline" href="{{ request.url.path }}">Reload current readiness</a> before starting a new request.</p>{% endif %}</div>{% endif %}
+    {% if not receipt %}{{ action_readiness_panel(panel, heading="Request prerequisites") }}<ul class="space-y-2 text-sm">{% for consequence in contract.consequences %}<li>{{ consequence.label }}</li>{% endfor %}</ul>{% endif %}
+    {% for scope in snapshot.shared_scopes %}<section class="rounded-lg border p-5"><h2 class="font-semibold">{{ scope.incident_label }}</h2><p>Network recorded restoration: {{ scope.resolved_at }}. Audience revision {{ scope.reviewed_revision_sequence }}.</p><h3 class="mt-3 font-medium">Every issued scope for the reviewed service</h3><ul>{% for issued in scope.issuances %}<li><a class="underline" href="/admin/dispatch/work-orders/{{ issued.work_order_public_id }}">{{ issued.work_order_title }} · {{ issued.work_order_public_id }}</a> · issued audience revision {{ issued.issued_revision_sequence }}</li>{% else %}<li>Explicit review: restored without an issued field scope. This records that no matching issued work exists.</li>{% endfor %}</ul></section>{% endfor %}
+    {% if form %}{{ action_form(form) }}{% endif %}
+</div>
+{% endblock %}

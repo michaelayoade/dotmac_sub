@@ -868,6 +868,16 @@ def reports_revenue_export(days: int | None = None, db: Session = Depends(get_db
     )
 
 
+def _regional_report_query(
+    *, date_from: str | None, date_to: str | None, region_id: str | None
+) -> web_reports_service.RegionalReportQuery:
+    return web_reports_service.RegionalReportQuery(
+        date_from=_parse_report_date(date_from),
+        date_to=_parse_report_date(date_to),
+        region_id=_parse_optional_uuid(region_id, field="region"),
+    )
+
+
 @router.get(
     "/regional-performance",
     response_class=HTMLResponse,
@@ -877,7 +887,7 @@ def reports_regional_performance(
     request: Request,
     date_from: str | None = None,
     date_to: str | None = None,
-    region_id: UUID | None = None,
+    region_id: str | None = None,
     db: Session = Depends(get_db),
 ):
     from app.web.admin import get_current_user, get_sidebar_stats
@@ -885,9 +895,11 @@ def reports_regional_performance(
     try:
         report_data = web_reports_service.get_regional_report_data(
             db,
-            date_from=date_from,
-            date_to=date_to,
-            region_id=region_id,
+            query=_regional_report_query(
+                date_from=date_from,
+                date_to=date_to,
+                region_id=region_id,
+            ),
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -913,15 +925,17 @@ def reports_regional_performance(
 def reports_regional_performance_export(
     date_from: str | None = None,
     date_to: str | None = None,
-    region_id: UUID | None = None,
+    region_id: str | None = None,
     db: Session = Depends(get_db),
 ):
     try:
         report_data = web_reports_service.get_regional_report_data(
             db,
-            date_from=date_from,
-            date_to=date_to,
-            region_id=region_id,
+            query=_regional_report_query(
+                date_from=date_from,
+                date_to=date_to,
+                region_id=region_id,
+            ),
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc

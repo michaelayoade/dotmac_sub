@@ -2,12 +2,69 @@
 
 from __future__ import annotations
 
+import logging
 import re
-from collections.abc import Mapping
+from collections.abc import Callable, Iterable, Mapping
 from urllib.parse import quote_plus
+
+from sqlalchemy.orm import Session
 
 MASKED_SECRET_VALUE = "••••••••"
 _SECRET_FIELD_NAME = re.compile(r"^[A-Za-z0-9_.-]+$")
+AUDIT_UNAVAILABLE_MESSAGE = (
+    "The audit record could not be written, so the secret was not changed."
+)
+
+logger = logging.getLogger(__name__)
+
+
+class SecretAuditUnavailable(RuntimeError):
+    """The required audit record could not be persisted; the write must not run."""
+
+
+#: ``(action, path, field_names)``; persists the audit record or raises
+#: :class:`SecretAuditUnavailable`. Every secret write needs one (S12).
+SecretAuditor = Callable[[str, str, Iterable[str]], None]
+
+
+def _no_auditor(_action: str, _path: str, _field_names: Iterable[str]) -> None:
+    """Fail closed: a write attempted without an auditor never reaches OpenBao."""
+
+    raise SecretAuditUnavailable(AUDIT_UNAVAILABLE_MESSAGE)
+
+
+def secret_write_auditor(db: Session, request: object) -> SecretAuditor:
+    """Build the auditor that records a secret write BEFORE OpenBao is touched.
+
+    OpenBao is outside the database transaction, so atomicity here means
+    audit-first, fail-closed: the record is committed first and the write is
+    refused if it cannot be. Only the secret path and field NAMES are recorded,
+    never values.
+    """
+
+    def _audit(action: str, path: str, field_names: Iterable[str]) -> None:
+        from app.services.audit_helpers import log_audit_event
+
+        try:
+            log_audit_event(
+                db=db,
+                request=request,
+                action=action,
+                entity_type="secret",
+                entity_id=path,
+                actor_id=None,
+                metadata={"field_names": sorted(str(name) for name in field_names)},
+            )
+        except Exception as exc:
+            db.rollback()
+            logger.warning(
+                "secret_audit_unavailable",
+                exc_info=True,
+                extra={"event": "secret_audit_unavailable"},
+            )
+            raise SecretAuditUnavailable(AUDIT_UNAVAILABLE_MESSAGE) from exc
+
+    return _audit
 
 
 def build_secrets_index_context(*, status: str | None, message: str | None) -> dict:
@@ -101,8 +158,23 @@ def _updated_secret_fields(path: str, form: Mapping[str, object]) -> dict[str, s
     return updated
 
 
-def save_secret(path: str, form: Mapping[str, object]) -> dict:
-    from app.services.secrets import list_secret_field_names, write_secret
+def save_secret(
+    path: str, form: Mapping[str, object], *, audit: SecretAuditor = _no_auditor
+) -> dict:
+    from app.services.secrets import (
+        is_managed_secret_path,
+        list_secret_field_names,
+        write_secret,
+    )
+
+    if is_managed_secret_path(path):
+        return {
+            "ok": False,
+            "secret_path": path,
+            "fields": {},
+            "metadata": {},
+            "error": "This credential is managed by its integration. Use the integration setup page.",
+        }
 
     try:
         updated = _updated_secret_fields(path, form)
@@ -111,6 +183,16 @@ def save_secret(path: str, form: Mapping[str, object]) -> dict:
             "ok": False,
             "secret_path": path,
             "fields": dict.fromkeys(list_secret_field_names(path), MASKED_SECRET_VALUE),
+            "metadata": {},
+            "error": str(exc),
+        }
+    try:
+        audit("secret_update_requested", path, updated)
+    except SecretAuditUnavailable as exc:
+        return {
+            "ok": False,
+            "secret_path": path,
+            "fields": dict.fromkeys(updated, MASKED_SECRET_VALUE),
             "metadata": {},
             "error": str(exc),
         }
@@ -145,15 +227,26 @@ def _new_secret_fields(form: Mapping[str, object]) -> dict[str, str]:
     return data
 
 
-def create_secret(form: Mapping[str, object]) -> dict:
-    from app.services.secrets import write_secret
+def create_secret(
+    form: Mapping[str, object], *, audit: SecretAuditor = _no_auditor
+) -> dict:
+    from app.services.secrets import is_managed_secret_path, write_secret
 
     path = str(form.get("path") or "").strip()
     if not path:
         return {"ok": False, "error": "Secret path is required"}
+    if is_managed_secret_path(path):
+        return {
+            "ok": False,
+            "error": "This credential is managed by its integration. Use the integration setup page.",
+        }
     data = _new_secret_fields(form)
     if not data:
         return {"ok": False, "error": "At least one field is required"}
+    try:
+        audit("secret_create_requested", path, data)
+    except SecretAuditUnavailable as exc:
+        return {"ok": False, "error": str(exc)}
     if write_secret(path, data):
         return {
             "ok": True,
@@ -162,8 +255,14 @@ def create_secret(form: Mapping[str, object]) -> dict:
     return {"ok": False, "error": "Failed to create secret in OpenBao"}
 
 
-def delete_secret_path(path: str) -> str:
-    from app.services.secrets import delete_secret
+def delete_secret_path(path: str, *, audit: SecretAuditor = _no_auditor) -> str:
+    from app.services.secrets import delete_secret, is_managed_secret_path
 
-    delete_secret(path)
+    if not is_managed_secret_path(path):
+        try:
+            audit("secret_delete_requested", path, ())
+        except SecretAuditUnavailable:
+            return "/admin/system/secrets?status=error&message=Audit+unavailable%2C+secret+not+deleted"
+    if not delete_secret(path):
+        return "/admin/system/secrets?status=error&message=Secret+could+not+be+deleted"
     return f"/admin/system/secrets?status=success&message=Secret+{quote_plus(path)}+deleted"

@@ -1,0 +1,123 @@
+{
+  "cohort_code": "cohort-isp-01",
+  "contract_version": "1",
+  "schema_version": 1,
+  "tenant": {
+    "tenant_id": "8c7ae830-51fc-52ae-9818-d84b2a35e568"
+  },
+  "source_revision": {
+    "source_assembly_id": "asm-dotmac-sub-legacy",
+    "governance_revision": "d91a87f6823bfd2afa6c2025bdb1af644331fa39",
+    "schema_revision": "546_module_prerequisites",
+    "application_version": "8.6.0",
+    "snapshot_transaction_id": "4321:4321:",
+    "captured_at": "2026-08-21T10:00:00Z"
+  },
+  "entity_types": [
+    {
+      "entity_type": "brand_profile",
+      "count": 0,
+      "entries": [],
+      "completeness": "complete",
+      "resume_from": null,
+      "aggregate": "0d0a019488112db39011e8a2aee56055ec04baeccb6e386bbeb43e82b7c464de"
+    },
+    {
+      "entity_type": "customer_account",
+      "count": 0,
+      "entries": [],
+      "completeness": "complete",
+      "resume_from": null,
+      "aggregate": "2e8c74c2a82c99bc9eeddd52d6016c96d75ad685edd5687cd928045deaaa74e0"
+    },
+    {
+      "entity_type": "customer_address",
+      "count": 0,
+      "entries": [],
+      "completeness": "complete",
+      "resume_from": null,
+      "aggregate": "d5d0699f011a490822b2ca327b988e520442177cd54c4aaccb3308bc5c19a7b1"
+    },
+    {
+      "entity_type": "customer_contact",
+      "count": 0,
+      "entries": [],
+      "completeness": "complete",
+      "resume_from": null,
+      "aggregate": "c5b9699737d0e5c0d0112b4ad8cd4c2c8fd0c0472d09f49b4d3e3e54eedcc46b"
+    },
+    {
+      "entity_type": "organization",
+      "count": 0,
+      "entries": [],
+      "completeness": "complete",
+      "resume_from": null,
+      "aggregate": "678755de16997d13cafd8ed3ab9f99e9232ca54b1ae825134b2fb0fb85af804e"
+    },
+    {
+      "entity_type": "organization_membership",
+      "count": 0,
+      "entries": [],
+      "completeness": "complete",
+      "resume_from": null,
+      "aggregate": "fd20ce9d529dd57820f1104ed336eab9f3766a5cf1661aae7e667734aebf763d"
+    },
+    {
+      "entity_type": "party",
+      "count": 1,
+      "entries": [
+        {
+          "identity": "party:11111111-1111-1111-1111-111111111111",
+          "digest": "5fd8e1d9ee0ffa533e39f3cf8041162f88de9cd1c5fab94b8b266d6a62215c2d"
+        }
+      ],
+      "completeness": "complete",
+      "resume_from": null,
+      "aggregate": "30c7c4713db9e2cd87171d40612484300f6197edbd0dd9c1d85c906060d879b5"
+    },
+    {
+      "entity_type": "party_contact_point",
+      "count": 0,
+      "entries": [],
+      "completeness": "complete",
+      "resume_from": null,
+      "aggregate": "4bf71d60354eff501e20a871b111142c2681a261b1f1304f50d1f9f30c56045d"
+    },
+    {
+      "entity_type": "party_external_reference",
+      "count": 0,
+      "entries": [],
+      "completeness": "complete",
+      "resume_from": null,
+      "aggregate": "87244cf2aa103ea6cee2f6d1122d791ca2b3bbdef5bc8073cc3d2b199eab3979"
+    },
+    {
+      "entity_type": "party_membership",
+      "count": 0,
+      "entries": [],
+      "completeness": "complete",
+      "resume_from": null,
+      "aggregate": "0be19cba09b90c02cf91524dd8fec86103ace354ad821825aa6dd9aa659ea046"
+    },
+    {
+      "entity_type": "party_relationship",
+      "count": 0,
+      "entries": [],
+      "completeness": "complete",
+      "resume_from": null,
+      "aggregate": "cf488347b0a94128d39667eabc603ed4fa3a835557a894664f5b105b5e346f8f"
+    },
+    {
+      "entity_type": "party_role",
+      "count": 0,
+      "entries": [],
+      "completeness": "complete",
+      "resume_from": null,
+      "aggregate": "f783c39d042453a6c5ff43d5aa4a1222a72a5ba6509ea57ff235f9ee7c134682"
+    }
+  ],
+  "total_count": 1,
+  "aggregate": "8b7357a41952bafa95ebf15c6bea1865c0dd82fa11c27e58d1b24df0afac8c1f",
+  "completeness": "complete",
+  "generated_at": "2026-08-21T10:00:00Z"
+}

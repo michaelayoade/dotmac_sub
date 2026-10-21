@@ -11,6 +11,8 @@ from __future__ import annotations
 from functools import cache
 from pathlib import Path
 
+import pytest
+
 from app.services import sot_relationships
 from scripts.architecture import sot_debt
 
@@ -84,11 +86,11 @@ def _has_real_caller(module: str, graph: dict[str, set[str]]) -> bool:
 def test_every_declared_owner_has_a_real_caller() -> None:
     graph = _import_graph()
     dead = [
-        f"{service.name} -> {service.module}"
+        f"{service.name} -> {module}"
         for domain in sot_relationships.DOMAIN_SOT_RELATIONSHIPS
         for service in domain.services
-        if service.module not in KNOWN_DEAD_OWNERS
-        and not _has_real_caller(service.module, graph)
+        for module in service.owner_modules
+        if module not in KNOWN_DEAD_OWNERS and not _has_real_caller(module, graph)
     ]
 
     assert not dead, (
@@ -132,16 +134,62 @@ def test_no_module_is_declared_under_unexpected_owner_names() -> None:
     seen: dict[str, list[str]] = {}
     for domain in sot_relationships.DOMAIN_SOT_RELATIONSHIPS:
         for service in domain.services:
-            seen.setdefault(service.module, []).append(service.name)
+            assert len(service.owner_modules) == len(set(service.owner_modules)), (
+                f"{service.name} repeats an implementation module"
+            )
+            for module in service.owner_modules:
+                assert (
+                    PROJECT_ROOT / (module.replace(".", "/") + ".py")
+                ).is_file() or (
+                    PROJECT_ROOT / module.replace(".", "/") / "__init__.py"
+                ).is_file(), f"{service.name} declares missing implementation {module}"
+                seen.setdefault(module, []).append(service.name)
 
     duplicates = {module: names for module, names in seen.items() if len(names) > 1}
     known = {
         "app.services.domain_settings",
         "app.services.enforcement",
         "app.services.network.radius_sessions",
+        # The same module exposes two fully contracted reseller boundaries: a
+        # read-only list projection and an idempotent status-action coordinator.
+        "app.services.reseller_portal",
+        # Public owner commands and the explicitly registered flush-only
+        # assignment participant share this module and distinct boundaries.
+        "app.services.work_order_commands",
     }
+    # These modules compose separately registered typed readers/participants
+    # alongside retained legacy boundaries. Pin the exact split so a third
+    # authority cannot enter through a broad module exemption.
+    split_boundaries = {
+        # Account commands and the typed dashboard projections are distinct
+        # contracts implemented by the same legacy Subscribers service. Pin
+        # both names so this cannot become a broad third-owner exemption.
+        "app.services.subscriber": {
+            "customer.accounts",
+            "customer.dashboard_overview",
+        },
+        "app.services.customer_experience_communications": {
+            "communications.work_order_assignment_updates",
+            "communications.customer_experience_intents",
+        },
+        "app.services.customer_work_order_selfcare": {
+            "customer.work_order_tracking",
+            "customer.work_order_selfcare",
+        },
+        # One stateless Platform Health serialization value is shared by the
+        # two distinct local probe owners; neither gains the other's runtime
+        # authority, persistence, or transport responsibility.
+        "app.services.platform_health_observations": {
+            "runtime.bandwidth_poller_health",
+            "runtime.syslog_receiver_health",
+        },
+    }
+    for module, expected_names in split_boundaries.items():
+        assert set(duplicates.get(module, ())) == expected_names
     unexpected = {
-        module: names for module, names in duplicates.items() if module not in known
+        module: names
+        for module, names in duplicates.items()
+        if module not in known and module not in split_boundaries
     }
     stale_exemptions = sorted(known - duplicates.keys())
     assert not stale_exemptions, (
@@ -155,3 +203,52 @@ def test_no_module_is_declared_under_unexpected_owner_names() -> None:
             for module, names in sorted(unexpected.items())
         )
     )
+
+
+def test_additional_implementation_is_part_of_writer_coverage() -> None:
+    from dataclasses import replace
+
+    from app.services.sot_manifest import SOTService
+    from app.services.sot_registry.model import DomainSOT
+
+    service = SOTService(
+        name="planted.owner",
+        module="app.services.field.transitions",
+        owns=("planted concern",),
+        implementation_modules=("app.services.field.completion_review",),
+    )
+    domain = DomainSOT("planted", (service,), (), "one named owner")
+    assert sot_debt.declared_owner_modules((domain,)) == {
+        "app.services.field.transitions",
+        "app.services.field.completion_review",
+    }
+    without_additional = replace(
+        domain, services=(replace(service, implementation_modules=()),)
+    )
+    assert sot_debt.declared_owner_modules((without_additional,)) == {
+        "app.services.field.transitions"
+    }
+
+
+def test_additional_implementation_cannot_be_claimed_by_another_owner(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from dataclasses import replace
+
+    from app.services.sot_manifest import SOTService
+
+    domains = sot_relationships.DOMAIN_SOT_RELATIONSHIPS
+    duplicate = SOTService(
+        name="planted.parallel_completion",
+        module="app.services.field.completion_review",
+        owns=("planted concern",),
+    )
+    monkeypatch.setattr(
+        sot_relationships,
+        "DOMAIN_SOT_RELATIONSHIPS",
+        (replace(domains[0], services=(*domains[0].services, duplicate)), *domains[1:]),
+    )
+    with pytest.raises(
+        AssertionError, match="module declared under multiple owner names"
+    ):
+        test_no_module_is_declared_under_unexpected_owner_names()

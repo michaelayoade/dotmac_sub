@@ -28,6 +28,8 @@ from pydantic import ValidationError
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
+from app.adapters.customer_account_deletion import customer_deletion_actor
+from app.csrf import require_browser_csrf_header
 from app.db import get_db
 from app.models.party import PartyType
 from app.models.subscriber import Reseller, SubscriberCategory, UserType
@@ -39,6 +41,7 @@ from app.services import (
     subscriber_party_binding_repair,
     web_prepaid_activation_funding,
 )
+from app.services import customer_connection_types as customer_connection_types_service
 from app.services import customer_network_path as customer_network_path_service
 from app.services import network_monitoring as network_monitoring_service
 from app.services import subscriber as subscriber_service
@@ -77,6 +80,7 @@ from app.services.customer_timeline import CustomerTimelineItem
 from app.services.db_session_adapter import db_session_adapter
 from app.services.domain_errors import DomainError
 from app.services.owner_commands import CommandContext
+from app.services.pppoe_password_reveal import REVEAL_PERMISSION, audited_reveal
 from app.services.prepaid_activation_funding_guard import (
     OVERRIDE_PERMISSION as PREPAID_ACTIVATION_OVERRIDE_PERMISSION,
 )
@@ -115,6 +119,23 @@ def _reseller_form_context(
             if managed and reseller and reseller.contact_email
             else (reseller.name if managed and reseller else "")
         ),
+    }
+
+
+def _connection_type_form_context(
+    db: Session,
+    *,
+    current_code: str | None = None,
+    selected_code: str | None = None,
+) -> dict[str, object]:
+    effective_code = selected_code if selected_code is not None else current_code
+    return {
+        "customer_connection_types": (
+            customer_connection_types_service.connection_type_options(
+                db, current_code=effective_code
+            )
+        ),
+        "selected_connection_type": effective_code or "",
     }
 
 
@@ -194,10 +215,21 @@ def _resolve_business_customer_id(db: Session, customer_id: str) -> str:
 
 
 def _get_actor_id(request: Request) -> str | None:
-    from app.web.admin import get_current_user
+    from app.services import web_admin as web_admin_service
 
-    current_user = get_current_user(request)
-    return str(current_user.get("subscriber_id")) if current_user else None
+    return web_admin_service.get_actor_id(request)
+
+
+def _get_bulk_message_actor_id(request: Request) -> UUID | None:
+    """Return the authenticated principal that owns a bulk-send receipt."""
+    auth = getattr(request.state, "auth", {})
+    principal_id = auth.get("principal_id") if isinstance(auth, Mapping) else None
+    if not principal_id:
+        return None
+    try:
+        return UUID(str(principal_id))
+    except (TypeError, ValueError):
+        return None
 
 
 def _payment_intent_command_context(
@@ -745,6 +777,7 @@ def customer_wizard_form(
             "current_user": current_user,
             "sidebar_stats": sidebar_stats,
             "default_country": customer_defaults.get("country_code", "NG"),
+            **_connection_type_form_context(db),
         },
     )
 
@@ -819,6 +852,7 @@ def customer_new(
             "current_user": current_user,
             "sidebar_stats": sidebar_stats,
             **_reseller_form_context(db, None),
+            **_connection_type_form_context(db),
             **web_custom_fields_service.build_creation_form_context(
                 db,
                 target_type="subscriber",
@@ -1013,6 +1047,9 @@ async def customer_create(
                 "managed_by_reseller": managed_by_reseller is not None,
                 "selected_reseller_id": reseller_id or "",
                 "selected_reseller_label": reseller_label or "",
+                **_connection_type_form_context(
+                    db, selected_code=connection_type or ""
+                ),
                 **web_custom_fields_service.build_creation_form_context(
                     db,
                     target_type="subscriber",
@@ -1712,9 +1749,12 @@ def person_detail_stats_export(
     )
 
 
-@router.get(
+@router.post(
     "/person/{customer_id}/pppoe-password",
-    dependencies=[Depends(require_permission("customer:read"))],
+    dependencies=[
+        Depends(require_browser_csrf_header),
+        Depends(require_permission(REVEAL_PERMISSION)),
+    ],
 )
 def person_pppoe_password(
     request: Request,
@@ -1724,76 +1764,19 @@ def person_pppoe_password(
 ) -> JSONResponse:
     """Reveal a customer's reusable PPPoE service password.
 
-    Staff-only (admin router is system_user-gated). Every reveal is audited
-    and per-actor rate-limited — this exposes a reusable credential whose leak
-    equals takeover of the customer's connection.
+    Explicit action: POST, CSRF-protected, dedicated permission, audited,
+    per-actor rate-limited and never cached. A leak of this credential equals
+    takeover of the customer's connection.
     """
-    from app.services import web_admin as web_admin_service
-    from app.services.audit_adapter import AuditActor, record_audit_event
-    from app.services.rate_limiter_adapter import allow_operation
-
-    actor = web_admin_service.get_current_user(request)
-    actor_id = web_admin_service.get_actor_id(request)
-    audit_actor = AuditActor.user(
-        actor_id or "unknown",
-        label=actor.get("name") if actor else None,
-    )
-    actor_metadata = {
-        key: value
-        for key, value in {
-            "actor_name": actor.get("name") if actor else None,
-            "actor_email": actor.get("email") if actor else None,
-        }.items()
-        if value
-    }
-
-    decision = allow_operation(
-        f"pppoe-reveal:{actor_id or 'unknown'}",
-        limit=30,
-        window_seconds=3600,
-    )
-    if not decision.allowed:
-        record_audit_event(
-            db,
-            action="customer.pppoe_password_reveal",
-            entity_type="subscriber",
-            entity_id=str(customer_id),
-            actor=audit_actor,
-            metadata={
-                "credential_id": credential_id,
-                "reason": "rate_limited",
-                **actor_metadata,
-            },
-            status_code=429,
-            is_success=False,
-        )
-        return JSONResponse(
-            {"password": "", "detail": "Reveal rate limit reached. Try again later."},
-            status_code=429,
-        )
-
-    password, found = web_customer_details_service.reveal_customer_pppoe_password(
+    return audited_reveal(
+        request,
         db,
-        customer_id,
-        credential_id=credential_id,
+        subscriber_id=str(customer_id),
+        metadata={"credential_id": credential_id},
+        lookup=lambda: web_customer_details_service.reveal_customer_pppoe_password(
+            db, customer_id, credential_id=credential_id
+        ),
     )
-    record_audit_event(
-        db,
-        action="customer.pppoe_password_reveal",
-        entity_type="subscriber",
-        entity_id=str(customer_id),
-        actor=audit_actor,
-        metadata={
-            "credential_id": credential_id,
-            "found": bool(found),
-            **actor_metadata,
-        },
-        status_code=200 if found else 404,
-        is_success=bool(found),
-    )
-    if not found:
-        return JSONResponse({"password": ""}, status_code=404)
-    return JSONResponse({"password": password})
 
 
 @router.get(
@@ -1834,10 +1817,7 @@ def customer_user_send_invite(
     db: Session = Depends(get_db),
 ):
     redirect_url = f"/admin/customers/{customer_type}/{customer_id}"
-    from app.web.admin import get_current_user
-
-    actor = get_current_user(request)
-    actor_id = str(actor.get("subscriber_id")) if actor else None
+    actor_id = _get_actor_id(request)
     try:
         result = web_customer_user_access_service.send_customer_invite(
             db,
@@ -1884,10 +1864,7 @@ def customer_user_send_reset_link(
     db: Session = Depends(get_db),
 ):
     redirect_url = f"/admin/customers/{customer_type}/{customer_id}"
-    from app.web.admin import get_current_user
-
-    actor = get_current_user(request)
-    actor_id = str(actor.get("subscriber_id")) if actor else None
+    actor_id = _get_actor_id(request)
     try:
         result = web_customer_user_access_service.send_customer_reset_link(
             db,
@@ -1934,41 +1911,69 @@ def customer_user_reset_mfa(
     db: Session = Depends(get_db),
 ):
     redirect_url = f"/admin/customers/{customer_type}/{customer_id}"
-    from app.web.admin import get_current_user
+    from app.services import credential_administration as credentials
 
-    actor = get_current_user(request)
-    actor_id = str(actor.get("subscriber_id")) if actor else None
     try:
-        result = web_customer_user_access_service.reset_customer_mfa(
-            db,
-            customer_type=customer_type,
-            customer_id=customer_id,
-            request=request,
-            actor_id=actor_id,
+        auth = getattr(request.state, "auth", None)
+        if (
+            not isinstance(auth, Mapping)
+            or auth.get("principal_type") != "system_user"
+            or auth.get("impersonated_by")
+        ):
+            raise credentials.error(
+                "invalid_command_context", "Trusted customer recovery actor required."
+            )
+        try:
+            actor_id = UUID(str(auth.get("principal_id")))
+            target_id = UUID(customer_id)
+            kind = credentials.CustomerKind(customer_type)
+        except (ValueError, TypeError) as exc:
+            raise credentials.error(
+                "invalid_command_context", "Invalid customer recovery request."
+            ) from exc
+        command = credentials.ResetCustomerMfaCommand(
+            context=CommandContext.system(
+                actor=str(actor_id),
+                scope=credentials.CUSTOMER_MFA_RESET_SCOPE,
+                reason=credentials.CUSTOMER_MFA_RESET_REASON,
+            ),
+            customer_id=target_id,
+            customer_kind=kind,
+            provenance=credentials.AdminCustomerRecovery(actor_id),
+        )
+        with db_session_adapter.owner_command_session() as command_db:
+            outcome = web_customer_user_access_service.reset_customer_mfa(
+                command_db, command=command
+            )
+        message = (
+            "Two-factor authentication has been disabled for this customer. "
+            "They can re-enroll from the portal profile page."
+            if outcome.changed
+            else "Two-factor authentication is already reset for this customer."
         )
         return _toast_response(
             request=request,
             redirect_url=redirect_url,
-            ok=bool(result["ok"]),
-            title=str(result["title"]),
-            message=str(result["message"]),
+            ok=True,
+            title="MFA reset",
+            message=message,
         )
-    except Exception as exc:
-        web_customer_user_access_service.log_customer_user_access_error(
-            db=db,
-            request=request,
-            action=web_customer_user_access_service.MFA_RESET_AUDIT_ACTION,
-            customer_type=customer_type,
-            customer_id=customer_id,
-            actor_id=actor_id,
-            error=exc,
-        )
+    except DomainError as exc:
         return _toast_response(
             request=request,
             redirect_url=redirect_url,
             ok=False,
             title="MFA reset",
-            message=str(exc),
+            message=exc.message,
+        )
+    except Exception:
+        logger.exception("Customer MFA reset failed")
+        return _toast_response(
+            request=request,
+            redirect_url=redirect_url,
+            ok=False,
+            title="MFA reset",
+            message="MFA reset could not be completed. Please try again.",
         )
 
 
@@ -1984,10 +1989,7 @@ def customer_user_activate_login(
     db: Session = Depends(get_db),
 ):
     redirect_url = f"/admin/customers/{customer_type}/{customer_id}"
-    from app.web.admin import get_current_user
-
-    actor = get_current_user(request)
-    actor_id = str(actor.get("subscriber_id")) if actor else None
+    actor_id = _get_actor_id(request)
     try:
         result = web_customer_user_access_service.set_customer_login_active(
             db,
@@ -2036,10 +2038,7 @@ def customer_user_deactivate_login(
     db: Session = Depends(get_db),
 ):
     redirect_url = f"/admin/customers/{customer_type}/{customer_id}"
-    from app.web.admin import get_current_user
-
-    actor = get_current_user(request)
-    actor_id = str(actor.get("subscriber_id")) if actor else None
+    actor_id = _get_actor_id(request)
     try:
         result = web_customer_user_access_service.set_customer_login_active(
             db,
@@ -2209,6 +2208,7 @@ def person_edit(
             "current_user": current_user,
             "sidebar_stats": sidebar_stats,
             **_reseller_form_context(db, customer.reseller_id),
+            **_connection_type_form_context(db, current_code=customer.connection_type),
             "inbox_conversation_id": inbox_conversation_id,
         },
     )
@@ -2256,6 +2256,7 @@ def business_edit(
             "current_user": current_user,
             "sidebar_stats": sidebar_stats,
             **_reseller_form_context(db, customer.reseller_id),
+            **_connection_type_form_context(db, current_code=customer.connection_type),
         },
     )
 
@@ -2346,7 +2347,6 @@ def person_update(
     payment_due_days: str | None = Form(None),
     grace_period_days: str | None = Form(None),
     min_balance: str | None = Form(None),
-    captive_redirect_enabled: str | None = Form(None),
     tax_rate_id: str | None = Form(None),
     withholding_tax_enabled: str | None = Form(None),
     vat_exempt: str | None = Form(None),
@@ -2404,7 +2404,6 @@ def person_update(
             payment_due_days=payment_due_days,
             grace_period_days=grace_period_days,
             min_balance=min_balance,
-            captive_redirect_enabled=captive_redirect_enabled,
             tax_rate_id=tax_rate_id,
             withholding_tax_enabled=withholding_tax_enabled,
             vat_exempt=vat_exempt,
@@ -2414,16 +2413,13 @@ def person_update(
             reseller_id=reseller_id,
         )
         metadata_payload = build_changes_metadata(before, after)
-        from app.web.admin import get_current_user
-
-        current_user = get_current_user(request)
         log_audit_event(
             db=db,
             request=request,
             action="update",
             entity_type="subscriber",
             entity_id=str(customer_id),
-            actor_id=str(current_user.get("subscriber_id")) if current_user else None,
+            actor_id=_get_actor_id(request),
             metadata=metadata_payload,
         )
         destination = (
@@ -2464,6 +2460,13 @@ def person_update(
                 **_reseller_form_context(
                     db, customer.reseller_id if customer is not None else None
                 ),
+                **_connection_type_form_context(
+                    db,
+                    current_code=(
+                        customer.connection_type if customer is not None else None
+                    ),
+                    selected_code=connection_type or "",
+                ),
                 "inbox_conversation_id": inbox_conversation_id,
             },
             status_code=400,
@@ -2491,7 +2494,6 @@ def business_update(
     payment_due_days: str | None = Form(None),
     grace_period_days: str | None = Form(None),
     min_balance: str | None = Form(None),
-    captive_redirect_enabled: str | None = Form(None),
     tax_rate_id: str | None = Form(None),
     withholding_tax_enabled: str | None = Form(None),
     vat_exempt: str | None = Form(None),
@@ -2518,7 +2520,6 @@ def business_update(
             payment_due_days=payment_due_days,
             grace_period_days=grace_period_days,
             min_balance=min_balance,
-            captive_redirect_enabled=captive_redirect_enabled,
             tax_rate_id=tax_rate_id,
             withholding_tax_enabled=withholding_tax_enabled,
             vat_exempt=vat_exempt,
@@ -2528,16 +2529,13 @@ def business_update(
             reseller_id=reseller_id,
         )
         metadata_payload = build_changes_metadata(before, after)
-        from app.web.admin import get_current_user
-
-        current_user = get_current_user(request)
         log_audit_event(
             db=db,
             request=request,
             action="update",
             entity_type="subscriber",
             entity_id=str(customer_id),
-            actor_id=str(current_user.get("subscriber_id")) if current_user else None,
+            actor_id=_get_actor_id(request),
             metadata=metadata_payload,
         )
         return RedirectResponse(
@@ -2573,6 +2571,13 @@ def business_update(
                 **_reseller_form_context(
                     db, customer.reseller_id if customer is not None else None
                 ),
+                **_connection_type_form_context(
+                    db,
+                    current_code=(
+                        customer.connection_type if customer is not None else None
+                    ),
+                    selected_code=connection_type or "",
+                ),
             },
             status_code=400,
         )
@@ -2607,16 +2612,13 @@ def person_convert_to_business(
             )
         )
         metadata_payload = build_changes_metadata(before, after)
-        from app.web.admin import get_current_user
-
-        current_user = get_current_user(request)
         log_audit_event(
             db=db,
             request=request,
             action="convert_to_business",
             entity_type="subscriber",
             entity_id=str(customer_id),
-            actor_id=str(current_user.get("subscriber_id")) if current_user else None,
+            actor_id=_get_actor_id(request),
             metadata=metadata_payload,
         )
         return RedirectResponse(
@@ -2648,6 +2650,12 @@ def person_convert_to_business(
                 "customer_audit_items": _customer_audit_items(db, customer),
                 "current_user": current_user,
                 "sidebar_stats": sidebar_stats,
+                **_connection_type_form_context(
+                    db,
+                    current_code=(
+                        customer.connection_type if customer is not None else None
+                    ),
+                ),
             },
             status_code=400,
         )
@@ -2670,16 +2678,13 @@ def person_deactivate(
         actor_id=_get_actor_id(request),
     )
     metadata_payload = build_changes_metadata(before, after)
-    from app.web.admin import get_current_user
-
-    current_user = get_current_user(request)
     log_audit_event(
         db=db,
         request=request,
         action="update",
         entity_type="subscriber",
         entity_id=str(customer_id),
-        actor_id=str(current_user.get("subscriber_id")) if current_user else None,
+        actor_id=_get_actor_id(request),
         metadata=metadata_payload,
     )
     if request.headers.get("HX-Request"):
@@ -2705,16 +2710,13 @@ def business_deactivate(
         customer_id=customer_id,
         actor_id=_get_actor_id(request),
     )
-    from app.web.admin import get_current_user
-
-    current_user = get_current_user(request)
     log_audit_event(
         db=db,
         request=request,
         action="update",
         entity_type="subscriber",
         entity_id=str(customer_id),
-        actor_id=str(current_user.get("subscriber_id")) if current_user else None,
+        actor_id=_get_actor_id(request),
         metadata={"changes": {"is_active": {"from": True, "to": False}}},
     )
     if request.headers.get("HX-Request"):
@@ -2940,18 +2942,7 @@ def person_delete(
     """Delete a person."""
     try:
         web_customer_actions_service.delete_person_customer(
-            db=db, customer_id=customer_id
-        )
-        from app.web.admin import get_current_user
-
-        current_user = get_current_user(request)
-        log_audit_event(
-            db=db,
-            request=request,
-            action="delete",
-            entity_type="subscriber",
-            entity_id=str(customer_id),
-            actor_id=str(current_user.get("subscriber_id")) if current_user else None,
+            db=db, customer_id=customer_id, actor=customer_deletion_actor(request)
         )
         if request.headers.get("HX-Request"):
             return HTMLResponse(content="", headers={"HX-Redirect": "/admin/customers"})
@@ -2961,13 +2952,11 @@ def person_delete(
             return _htmx_error_response(str(exc.detail), status_code=200, reswap="none")
         raise
     except IntegrityError:
-        db.rollback()
         message = "Cannot delete customer. Linked records exist."
         if request.headers.get("HX-Request"):
             return _htmx_error_response(message, status_code=200, reswap="none")
         raise HTTPException(status_code=409, detail=message)
     except Exception as e:
-        db.rollback()
         from app.web.admin import get_current_user, get_sidebar_stats
 
         sidebar_stats = get_sidebar_stats(db)
@@ -3004,17 +2993,7 @@ def business_delete(
         web_customer_actions_service.delete_business_customer(
             db=db,
             customer_id=customer_id,
-        )
-        from app.web.admin import get_current_user
-
-        current_user = get_current_user(request)
-        log_audit_event(
-            db=db,
-            request=request,
-            action="delete",
-            entity_type="subscriber",
-            entity_id=str(customer_id),
-            actor_id=str(current_user.get("subscriber_id")) if current_user else None,
+            actor=customer_deletion_actor(request),
         )
         if request.headers.get("HX-Request"):
             return HTMLResponse(content="", headers={"HX-Redirect": "/admin/customers"})
@@ -3024,13 +3003,11 @@ def business_delete(
             return _htmx_error_response(str(exc.detail), status_code=200, reswap="none")
         raise
     except IntegrityError:
-        db.rollback()
         message = "Cannot delete business customer. Linked records exist."
         if request.headers.get("HX-Request"):
             return _htmx_error_response(message, status_code=200, reswap="none")
         raise HTTPException(status_code=409, detail=message)
     except Exception as e:
-        db.rollback()
         from app.web.admin import get_current_user, get_sidebar_stats
 
         sidebar_stats = get_sidebar_stats(db)
@@ -3441,7 +3418,9 @@ def bulk_send_customer_message(
         from app.services import customer_bulk_messages
         from app.services.customer_bulk_message_contracts import BulkMessageSpec
 
-        actor_id = UUID(_get_actor_id(request) or "")
+        actor_id = _get_bulk_message_actor_id(request)
+        if actor_id is None:
+            raise HTTPException(status_code=401, detail="Sign in to send this message.")
         request_id = UUID(str(data.get("request_id") or ""))
         spec = BulkMessageSpec.model_validate(
             {key: value for key, value in data.items() if key != "request_id"}
@@ -3530,15 +3509,15 @@ def customer_bulk_message_status(
 ):
     from app.services import customer_bulk_messages
 
-    actor_id = _get_actor_id(request)
-    if not actor_id:
+    actor_id = _get_bulk_message_actor_id(request)
+    if actor_id is None:
         raise HTTPException(status_code=401, detail="Sign in to check this send.")
     try:
         result = customer_bulk_messages.status(
             db=db,
             query=customer_bulk_messages.BulkMessageStatusQuery(
                 request_id=request_id,
-                actor_id=UUID(actor_id),
+                actor_id=actor_id,
             ),
         )
         return JSONResponse(content=result.model_dump(mode="json"))
@@ -3577,7 +3556,7 @@ def bulk_delete_customers(
     """Bulk delete customers (only inactive customers without subscribers)."""
     try:
         return web_customer_actions_service.bulk_delete_customers_from_payload(
-            db=db, payload=data
+            db=db, payload=data, actor=customer_deletion_actor(request)
         )
     except HTTPException:
         raise

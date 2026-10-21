@@ -31,6 +31,28 @@ def test_the_binding_names_the_accepted_revision() -> None:
     assert programme.BINDING.cohort_sequence == 1
 
 
+def test_the_binding_names_in_place_authority_and_current_controls() -> None:
+    assert programme.BINDING.source_assembly_id == "asm-dotmac-sub-legacy-domains"
+    assert programme.BINDING.target_assembly_id == "asm-dotmac-sub-composed"
+    assert programme.BINDING.revision == ("dbd9cec107ee5125a8d41f75065d3823f69d6b8e")
+    assert {
+        control.control_id: control.state for control in programme.BINDING.controls
+    } == {
+        "ctl-isp-001": "verified",
+        "ctl-isp-002": "superseded",
+        "ctl-isp-003": "blocked",
+        "ctl-isp-004": "blocked",
+        "ctl-isp-005": "superseded",
+        "ctl-isp-006": "blocked",
+        "ctl-isp-007": "superseded",
+        "ctl-isp-008": "superseded",
+        "ctl-isp-009": "blocked",
+        "ctl-isp-010": "blocked",
+        "ctl-isp-011": "blocked",
+        "ctl-isp-012": "blocked",
+    }
+
+
 def test_a_mutable_revision_cannot_bind_the_programme() -> None:
     """A tag is a pointer its publisher can move after acceptance."""
 
@@ -68,9 +90,13 @@ def test_readiness_claims_cannot_spell_adoption_or_cutover() -> None:
 
 def test_sub_is_named_as_an_evidence_producer_for_real_controls() -> None:
     assert programme.BINDING.evidence_control_ids == (
+        "ctl-isp-003",
+        "ctl-isp-004",
         "ctl-isp-006",
-        "ctl-isp-007",
         "ctl-isp-009",
+        "ctl-isp-010",
+        "ctl-isp-011",
+        "ctl-isp-012",
     )
 
 
@@ -89,10 +115,18 @@ def test_a_decision_cannot_be_open_and_resolved() -> None:
     """Sub's view mirrors the Governance rule rather than restating it loosely."""
 
     payload = programme.BINDING.model_dump()
-    payload["resolved_decision_ids"] = ("dec-isp-002",)
+    payload["unresolved_decision_ids"] = ("dec-isp-003",)
     with pytest.raises(ValidationError) as caught:
         programme.GovernanceBinding.model_validate(payload)
-    assert "open or answered, never both" in str(caught.value)
+    assert "never more than one" in str(caught.value)
+
+
+@pytest.mark.parametrize("field", ["unresolved_decision_ids", "resolved_decision_ids"])
+def test_a_superseded_question_cannot_be_open_or_answered(field: str) -> None:
+    payload = programme.BINDING.model_dump()
+    payload[field] = ("dec-isp-002",)
+    with pytest.raises(ValidationError, match="never more than one"):
+        programme.GovernanceBinding.model_validate(payload)
 
 
 def test_the_binding_records_the_answered_decisions() -> None:
@@ -105,7 +139,8 @@ def test_the_binding_records_the_answered_decisions() -> None:
         "dec-isp-006",
         "dec-isp-007",
     )
-    assert programme.BINDING.unresolved_decision_ids == ("dec-isp-002",)
+    assert programme.BINDING.unresolved_decision_ids == ()
+    assert programme.BINDING.superseded_decision_ids == ("dec-isp-002",)
 
 
 def test_a_binding_with_no_sub_evidence_is_refused() -> None:

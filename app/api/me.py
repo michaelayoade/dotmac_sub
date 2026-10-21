@@ -29,6 +29,11 @@ from fastapi import (
 from fastapi.responses import Response, StreamingResponse
 from sqlalchemy.orm import Session
 
+from app.api.customer_field_identity import router as customer_field_identity_router
+from app.api.customer_support_attachments import (
+    router as customer_support_attachments_router,
+)
+from app.csrf import require_browser_csrf_header
 from app.db import get_db
 from app.models.subscriber import Subscriber
 from app.models.support import TicketChannel, TicketCommentAuthorType
@@ -185,6 +190,8 @@ from app.services.sales import selfserve as selfserve_service
 from app.services.topup_intents import DirectTransferCancellationSource
 
 router = APIRouter(prefix="/me", tags=["me"])
+router.include_router(customer_field_identity_router)
+router.include_router(customer_support_attachments_router)
 logger = logging.getLogger(__name__)
 PAYMENT_CHARGE_ERROR_MESSAGE = (
     "We could not charge that saved card. Please use another payment method or "
@@ -1260,7 +1267,10 @@ def my_projects(
 ):
     """The caller's typed native project/task/field/support lifecycle."""
     subscriber_id = _subscriber_id(principal)
-    return customer_experience_lifecycle.projects_for_subscriber(db, subscriber_id)
+    return customer_experience_lifecycle.projects_for_subscriber(
+        db,
+        query=customer_experience_lifecycle.CustomerLifecycleQuery(UUID(subscriber_id)),
+    )
 
 
 @router.get("/projects/{project_id}", response_model=ProjectItem)
@@ -1270,7 +1280,10 @@ def my_project(
     principal: dict = Depends(require_user_auth),
 ):
     project = customer_experience_lifecycle.project_for_subscriber(
-        db, _subscriber_id(principal), project_id
+        db,
+        query=customer_experience_lifecycle.CustomerProjectQuery(
+            UUID(_subscriber_id(principal)), project_id
+        ),
     )
     if project is None:
         raise HTTPException(status_code=404, detail="Project not found")
@@ -1284,7 +1297,10 @@ def my_work_orders(
 ):
     """The caller's Sub-owned field visits and native lifecycle links."""
     subscriber_id = _subscriber_id(principal)
-    return customer_experience_lifecycle.work_orders_for_subscriber(db, subscriber_id)
+    return customer_experience_lifecycle.work_orders_for_subscriber(
+        db,
+        query=customer_experience_lifecycle.CustomerLifecycleQuery(UUID(subscriber_id)),
+    )
 
 
 @router.get("/work-orders/{work_order_id}", response_model=WorkOrderItem)
@@ -1294,7 +1310,10 @@ def my_work_order(
     principal: dict = Depends(require_user_auth),
 ):
     work_order = customer_experience_lifecycle.work_order_for_subscriber(
-        db, _subscriber_id(principal), work_order_id
+        db,
+        query=customer_experience_lifecycle.CustomerWorkOrderQuery(
+            UUID(_subscriber_id(principal)), work_order_id
+        ),
     )
     if work_order is None:
         raise HTTPException(status_code=404, detail="Work order not found")
@@ -1315,7 +1334,11 @@ def my_work_order_technician_location(
     be hidden."""
     subscriber_id = _subscriber_id(principal)
     return customer_work_order_selfcare.technician_location(
-        db, subscriber_id, work_order_id
+        db,
+        query=customer_work_order_selfcare.TechnicianLocationQuery(
+            subscriber_id=UUID(subscriber_id) if subscriber_id else None,
+            work_order_public_id=work_order_id,
+        ),
     )
 
 
@@ -1328,21 +1351,59 @@ def my_work_order_chat(
     limit: int = Query(default=50, ge=1, le=200),
     db: Session = Depends(get_db),
     principal: dict = Depends(require_user_auth),
-):
+) -> CustomerFieldJobChatThread:
     """The chat with the technician on their way to this visit.
 
     ``available=False`` with ``reason="not_departed"`` until the technician
     sets off — a technician holds several assigned jobs at once, and the chat
     belongs to the one they are actually travelling to.
     """
-    subscriber_id = _subscriber_id(principal)
-    return customer_field_job_chat.get_thread(
-        db, subscriber_id, work_order_id, limit=limit
+    subscriber_id = _customer_chat_subscriber_id(principal)
+    thread = customer_field_job_chat.get_thread(
+        db,
+        query=customer_field_job_chat.CustomerChatThreadQuery(
+            subscriber_id=subscriber_id,
+            work_order_public_id=work_order_id,
+            limit=limit,
+        ),
     )
+    return CustomerFieldJobChatThread(
+        available=thread.available,
+        reason=thread.reason.value if thread.reason else None,
+        can_send=thread.can_send,
+        work_order_id=thread.work_order_id,
+        conversation_id=str(thread.conversation_id) if thread.conversation_id else None,
+        technician_name=thread.technician_name,
+        messages=[
+            _customer_chat_message_response(message) for message in thread.messages
+        ],
+    )
+
+
+def _customer_chat_message_response(
+    message: customer_field_job_chat.CustomerChatMessage,
+) -> CustomerFieldJobChatMessage:
+    return CustomerFieldJobChatMessage(
+        id=str(message.id),
+        body=message.body,
+        from_customer=message.from_customer,
+        author_name=message.author_name,
+        created_at=message.created_at,
+    )
+
+
+def _customer_chat_subscriber_id(principal: dict) -> UUID:
+    try:
+        return UUID(_subscriber_id(principal))
+    except (KeyError, TypeError, ValueError) as exc:
+        raise HTTPException(
+            status_code=403, detail="A customer account is required"
+        ) from exc
 
 
 @router.post(
     "/work-orders/{work_order_id}/chat/messages",
+    dependencies=[Depends(require_browser_csrf_header)],
     response_model=CustomerFieldJobChatMessage,
     status_code=status.HTTP_201_CREATED,
 )
@@ -1351,20 +1412,40 @@ def send_my_work_order_chat_message(
     payload: CustomerFieldJobChatMessageCreate,
     db: Session = Depends(get_db),
     principal: dict = Depends(require_user_auth),
-):
+) -> CustomerFieldJobChatMessage:
     """Send a message to the technician travelling to this visit."""
-    subscriber_id = _subscriber_id(principal)
+    subscriber_id = _customer_chat_subscriber_id(principal)
+    request_id = payload.request_id or uuid4()
     try:
-        return customer_field_job_chat.send_message(
-            db, subscriber_id, work_order_id, body=payload.body
+        message = customer_field_job_chat.send_message(
+            db,
+            command=customer_field_job_chat.SendCustomerChatMessageCommand(
+                subscriber_id=subscriber_id,
+                work_order_public_id=work_order_id,
+                body=payload.body,
+                context=CommandContext(
+                    command_id=request_id,
+                    correlation_id=request_id,
+                    actor=f"subscriber:{subscriber_id}",
+                    scope="customer:field-job-chat:write",
+                    reason="Authenticated customer sends a visit conversation message",
+                    idempotency_key=str(request_id),
+                ),
+            ),
         )
+        return _customer_chat_message_response(message)
     except customer_field_job_chat.FieldJobChatError as exc:
-        status_code = 404 if exc.code == "not_found" else 409
+        status_code = (
+            404
+            if exc.reason is customer_field_job_chat.CustomerChatErrorReason.not_found
+            else 409
+        )
         raise HTTPException(status_code=status_code, detail=str(exc)) from exc
 
 
 @router.post(
     "/work-orders/{work_order_id}/rate-technician",
+    dependencies=[Depends(require_browser_csrf_header)],
     response_model=TechnicianRatingResponse,
 )
 def my_rate_technician(
@@ -1375,20 +1456,34 @@ def my_rate_technician(
 ):
     """Rate the technician after a completed work order (1-5 + optional comment)."""
     subscriber_id = _subscriber_id(principal)
+    command = customer_work_order_selfcare.RateTechnicianCommand(
+        context=CommandContext.system(
+            actor=f"subscriber:{subscriber_id}",
+            scope="customer:work_order:rating",
+            reason="Customer technician feedback",
+        ),
+        subscriber_id=UUID(subscriber_id),
+        work_order_public_id=work_order_id,
+        rating=payload.rating,
+        comment=payload.comment,
+    )
+    db_session_adapter.release_read_transaction(db)
     try:
-        return customer_work_order_selfcare.rate_technician(
-            db,
-            subscriber_id,
-            work_order_id,
-            rating=payload.rating,
-            comment=payload.comment,
-        )
-    except LookupError as exc:
-        raise HTTPException(status_code=404, detail="Work order not found") from exc
-    except ValueError as exc:
+        result = customer_work_order_selfcare.rate_technician(db, command=command)
+    except customer_work_order_selfcare.TechnicianRatingError as exc:
         raise HTTPException(
-            status_code=409, detail="Work order is not completed"
+            status_code=404
+            if exc.code.endswith("work_order_not_found")
+            else 422
+            if exc.code.endswith("invalid_rating")
+            else 409,
+            detail=exc.message,
         ) from exc
+    return TechnicianRatingResponse(
+        work_order_id=result.work_order_id,
+        rating=result.rating,
+        already_rated=result.already_rated,
+    )
 
 
 @router.get("/quotes", response_model=MyQuotesResponse)
@@ -2041,7 +2136,10 @@ def my_confirm_ticket_resolution(
     ticket = _owned_ticket(db, _subscriber_id(principal), ticket_id)
     db_session_adapter.release_read_transaction(db)
     return support_service.tickets.respond_to_resolution_for_customer(
-        db, ticket, confirm=True
+        db,
+        ticket,
+        confirm=True,
+        expected_subscriber_ids=(UUID(_subscriber_id(principal)),),
     )
 
 
@@ -2062,6 +2160,7 @@ def my_dispute_ticket_resolution(
         ticket,
         confirm=False,
         reason=payload.reason,
+        expected_subscriber_ids=(UUID(_subscriber_id(principal)),),
     )
 
 

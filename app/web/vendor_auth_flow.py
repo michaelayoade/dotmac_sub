@@ -7,6 +7,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Literal
 from urllib.parse import quote, urlencode
+from uuid import UUID
 
 from fastapi import Depends, Request
 from fastapi.responses import RedirectResponse, Response
@@ -14,8 +15,10 @@ from fastapi.templating import Jinja2Templates
 from sqlalchemy.orm import Session
 
 from app.db import get_db
+from app.models.system_user import SystemUser
 from app.services import auth_flow as auth_flow_service
 from app.services import credential_recovery
+from app.services import password_authentication as pa
 from app.services.auth_flow import AuthFlow, decode_access_token
 from app.services.domain_errors import DomainError
 from app.services.field.vendor_auth import (
@@ -159,11 +162,34 @@ def _issued_tokens(result: Mapping[str, object]) -> _IssuedTokens:
     )
 
 
-def _require_access_token_vendor(db: Session, access_token: str) -> dict[str, object]:
+def _require_access_token_vendor(
+    db: Session, access_token: str, *, request: Request | None = None
+) -> dict[str, object]:
     payload = decode_access_token(db, access_token)
     principal_id = str(payload.get("principal_id") or payload.get("sub") or "")
     principal_type = str(payload.get("principal_type") or "")
+    resolved_target = None
+    try:
+        principal_uuid = UUID(principal_id)
+    except ValueError:
+        pass
+    else:
+        principal = db.get(SystemUser, principal_uuid)
+        if principal is not None:
+            resolved_target = pa.DenialTarget(
+                pa.DenialTargetKind.PRINCIPAL, principal.id
+            )
     if not principal_id or principal_type != "system_user":
+        pa.record_authentication_denial(
+            pa.denial_for_request(
+                reason=pa.DenialReason.SESSION_ADMISSION,
+                surface=pa.DenialSurface.VENDOR_WEB,
+                phase=pa.DenialPhase.SESSION_ADMISSION,
+                target=resolved_target,
+                status_code=403,
+                request=request,
+            )
+        )
         raise VendorWebAccessError()
     try:
         return vendor_context(
@@ -179,6 +205,16 @@ def _require_access_token_vendor(db: Session, access_token: str) -> dict[str, ob
         )
     except Exception as exc:
         if _auth_failure(exc).status_code == 403:
+            pa.record_authentication_denial(
+                pa.denial_for_request(
+                    reason=pa.DenialReason.SESSION_ADMISSION,
+                    surface=pa.DenialSurface.VENDOR_WEB,
+                    phase=pa.DenialPhase.SESSION_ADMISSION,
+                    target=resolved_target,
+                    status_code=403,
+                    request=request,
+                )
+            )
             raise VendorWebAccessError from exc
         raise
 
@@ -295,6 +331,20 @@ def vendor_login_submit(
         db, VendorLoginEligibilityQuery(identifier=username)
     )
     if eligibility.status is VendorLoginEligibilityStatus.VENDOR_ACCESS_REQUIRED:
+        pa.record_authentication_denial(
+            pa.denial_for_request(
+                reason=pa.DenialReason.AUDIENCE,
+                surface=pa.DenialSurface.VENDOR_WEB,
+                phase=pa.DenialPhase.PASSWORD,
+                target=pa.DenialTarget(
+                    pa.DenialTargetKind.CREDENTIAL, eligibility.resolved_credential_id
+                )
+                if eligibility.resolved_credential_id
+                else None,
+                request=request,
+                status_code=403,
+            )
+        )
         return templates.TemplateResponse(
             request,
             "vendor/auth/login.html",
@@ -310,6 +360,7 @@ def vendor_login_submit(
             password=password,
             request=request,
             provider=None,
+            denial_surface=pa.DenialSurface.VENDOR_WEB,
         )
         result: Mapping[str, object] = raw_result
         if result.get("mfa_required") is True:
@@ -353,7 +404,7 @@ def vendor_login_submit(
             _set_remember_cookie(response, db, request, remember)
             return response
         tokens = _issued_tokens(result)
-        _require_access_token_vendor(db, tokens.access_token)
+        _require_access_token_vendor(db, tokens.access_token, request=request)
         response = RedirectResponse(url=target, status_code=303)
         _set_login_cookies(response, db, request, tokens, remember=remember)
         _set_remember_cookie(response, db, request, remember)
@@ -419,11 +470,15 @@ def vendor_mfa_submit(
         return RedirectResponse(url=_vendor_login_url(target), status_code=303)
     try:
         raw_result = auth_flow_service.auth_flow.mfa_verify(
-            db=db, mfa_token=mfa_token, code=code, request=request
+            db=db,
+            mfa_token=mfa_token,
+            code=code,
+            request=request,
+            denial_surface=pa.DenialSurface.VENDOR_WEB,
         )
         result: Mapping[str, object] = raw_result
         tokens = _issued_tokens(result)
-        _require_access_token_vendor(db, tokens.access_token)
+        _require_access_token_vendor(db, tokens.access_token, request=request)
         remember = request.cookies.get(_REMEMBER_COOKIE) == "1"
         response = RedirectResponse(url=target, status_code=303)
         response.delete_cookie(_MFA_COOKIE)
@@ -489,7 +544,7 @@ def vendor_refresh(
         )
         result: Mapping[str, object] = raw_result.model_dump()
         tokens = _issued_tokens(result)
-        _require_access_token_vendor(db, tokens.access_token)
+        _require_access_token_vendor(db, tokens.access_token, request=request)
     except Exception as exc:
         failure = _auth_failure(exc)
         error = (

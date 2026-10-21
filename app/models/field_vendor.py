@@ -45,6 +45,7 @@ class FieldVendor(Base):
         UniqueConstraint("party_id", name="uq_field_vendors_party_id"),
         UniqueConstraint("code", name="uq_field_vendors_code"),
         UniqueConstraint("crm_vendor_id", name="uq_field_vendors_crm_vendor_id"),
+        UniqueConstraint("native_vendor_id", name="uq_field_vendors_native_vendor_id"),
         Index("ix_field_vendors_active", "is_active"),
     )
 
@@ -57,6 +58,9 @@ class FieldVendor(Base):
     party_bound_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     party_binding_source: Mapped[str | None] = mapped_column(String(80))
     party_binding_reason: Mapped[str | None] = mapped_column(Text)
+    native_vendor_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("vendors.id", ondelete="RESTRICT")
+    )
     crm_vendor_id: Mapped[str | None] = mapped_column(String(64))
     name: Mapped[str] = mapped_column(String(160), nullable=False)
     code: Mapped[str | None] = mapped_column(String(60))
@@ -77,6 +81,7 @@ class FieldVendor(Base):
 
     users = relationship("FieldVendorUser", back_populates="vendor")
     party = relationship("Party", back_populates="field_vendor_profile")
+    native_vendor = relationship("Vendor")
 
 
 class FieldVendorUser(Base):

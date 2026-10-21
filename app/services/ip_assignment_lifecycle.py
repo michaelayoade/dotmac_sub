@@ -24,12 +24,14 @@ import ipaddress
 import json
 import secrets
 from collections import Counter, defaultdict
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+from datetime import UTC, datetime
 from enum import StrEnum
 from typing import NoReturn
 from uuid import UUID
 
 from sqlalchemy import or_, select, text
+from sqlalchemy.exc import OperationalError
 from sqlalchemy.orm import Session, joinedload
 
 from app.models.audit import AuditActorType, AuditEvent
@@ -47,13 +49,16 @@ from app.models.radius import RadiusClient
 from app.models.radius_active_session import RadiusActiveSession
 from app.models.router_management import Router
 from app.models.subscriber import Subscriber
-from app.services.audit_adapter import stage_audit_event
+from app.services.audit_adapter import AuditActor, stage_audit_event
 from app.services.domain_errors import DomainError
 from app.services.events import EventType, emit_event
 from app.services.owner_commands import (
     CommandContext,
     OwnerCommandDefinition,
+    current_command_context,
+    current_command_definition,
     execute_owner_command,
+    owner_command_active,
 )
 
 _OWNER = "network.ip_assignment_lifecycle"
@@ -75,6 +80,11 @@ _PROJECTION_COMMAND = OwnerCommandDefinition(
     concern=_PROJECTION_CONCERN,
     name="repair_service_ipv4_projection",
 )
+_REPLACE_COMMAND = OwnerCommandDefinition(
+    owner=_OWNER,
+    concern=_LIFECYCLE_CONCERN,
+    name="replace_service_ipv4",
+)
 _ITEM_AUDIT_ACTION = "network.ip_assignment.service_ownership_linked"
 _BATCH_AUDIT_ACTION = "network.ip_assignment.service_ownership_reconciled"
 _LIFECYCLE_ITEM_AUDIT_ACTION = "network.ip_assignment.lifecycle_item_changed"
@@ -91,6 +101,16 @@ _RETAINING_STATUSES = frozenset(
         SubscriptionStatus.paused,
         SubscriptionStatus.suspended,
         SubscriptionStatus.stopped,
+    }
+)
+# Statuses a retention-expired release may free. Deliberately separate from
+# both sets above: active, blocked, suspended, pending, paused and stopped are
+# never released by retention.
+_RETENTION_RELEASE_STATUSES = frozenset(
+    {
+        SubscriptionStatus.archived,
+        SubscriptionStatus.disabled,
+        SubscriptionStatus.hidden,
     }
 )
 _TERMINAL_STATUSES = frozenset(
@@ -121,6 +141,10 @@ class IPv4AssignmentRepairDecision(StrEnum):
     ready_link = "ready_link"
     ready_keep = "ready_keep"
     ready_release = "ready_release"
+    ready_release_retention_expired = "ready_release_retention_expired"
+    retention_not_expired = "retention_not_expired"
+    address_in_live_use = "address_in_live_use"
+    address_not_releasable = "address_not_releasable"
     noop = "noop"
     subscription_not_found = "subscription_not_found"
     subscriber_not_found = "subscriber_not_found"
@@ -185,6 +209,7 @@ class ServiceIPv4AssignmentRepairPreview:
             IPv4AssignmentRepairDecision.ready_link,
             IPv4AssignmentRepairDecision.ready_keep,
             IPv4AssignmentRepairDecision.ready_release,
+            IPv4AssignmentRepairDecision.ready_release_retention_expired,
         }
 
 
@@ -195,6 +220,9 @@ class RepairServiceIPv4AssignmentCommand:
     desired_address_id: UUID | None
     deactivate_assignment_ids: tuple[UUID, ...]
     preview_fingerprint: str
+    #: Retention-expiry release only. Computed by the caller from the retention
+    #: setting (now - days). Required for a disabled/hidden/archived release.
+    retention_cutoff: datetime | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -453,8 +481,9 @@ def _repair_preview_payload(
     deactivate_assignment_ids: tuple[UUID, ...],
     active_assignments: tuple[ActiveIPv4AssignmentEvidence, ...],
     decision: IPv4AssignmentRepairDecision,
+    retention_cutoff: datetime | None = None,
 ) -> dict[str, object]:
-    return {
+    payload: dict[str, object] = {
         "subscription_id": str(subscription_id),
         "subscriber_id": str(subscriber_id) if subscriber_id is not None else None,
         "desired_address_id": (
@@ -482,6 +511,11 @@ def _repair_preview_payload(
         ],
         "decision": decision.value,
     }
+    if retention_cutoff is not None:
+        # Only present for a retention release, so existing fingerprints are
+        # unchanged.
+        payload["retention_cutoff"] = _aware(retention_cutoff).isoformat()
+    return payload
 
 
 def _repair_fingerprint(payload: dict[str, object]) -> str:
@@ -491,6 +525,176 @@ def _repair_fingerprint(payload: dict[str, object]) -> str:
         separators=(",", ":"),
     ).encode("utf-8")
     return hashlib.sha256(encoded).hexdigest()
+
+
+def _aware(value: datetime) -> datetime:
+    return value if value.tzinfo is not None else value.replace(tzinfo=UTC)
+
+
+def _address_candidates(addresses: set[str]) -> set[str]:
+    return addresses | {f"{value}/32" for value in addresses}
+
+
+@dataclass(frozen=True, slots=True)
+class IPv4LiveUseEvidence:
+    live_session: bool
+    sibling_subscription_ids: tuple[UUID, ...]
+
+    @property
+    def in_use(self) -> bool:
+        return self.live_session or bool(self.sibling_subscription_ids)
+
+
+def find_ipv4_live_use(
+    db: Session,
+    *,
+    subscription_id: UUID,
+    addresses: set[str],
+    exclude_own_sessions: bool = False,
+) -> IPv4LiveUseEvidence:
+    """Read-only: is any of these addresses in use by a live session or by the
+    served column of another non-terminal subscription?
+
+    ``exclude_own_sessions`` ignores sessions attributed to ``subscription_id``
+    itself (an allocator re-checking its own service's address); sessions with
+    no subscription attribution still count.
+    """
+
+    candidates = _address_candidates(
+        {str(value).strip().split("/", 1)[0] for value in addresses if value}
+    )
+    if not candidates:
+        return IPv4LiveUseEvidence(False, ())
+    session_query = select(RadiusActiveSession.id).where(
+        RadiusActiveSession.framed_ip_address.in_(candidates)
+    )
+    if exclude_own_sessions:
+        session_query = session_query.where(
+            or_(
+                RadiusActiveSession.subscription_id.is_(None),
+                RadiusActiveSession.subscription_id != subscription_id,
+            )
+        )
+    live_session = db.scalar(session_query.limit(1)) is not None
+    siblings = tuple(
+        db.scalars(
+            select(Subscription.id)
+            .where(
+                Subscription.ipv4_address.in_(candidates),
+                Subscription.id != subscription_id,
+                Subscription.status.not_in(_TERMINAL_STATUSES),
+            )
+            .order_by(Subscription.id)
+        )
+    )
+    return IPv4LiveUseEvidence(live_session, siblings)
+
+
+def project_initial_served_ipv4(
+    db: Session, *, subscription: Subscription, address: str
+) -> Subscription:
+    """Owner write for a just-created service: set the served column from its
+    own active primary IPAM assignment. Refuses unless the column is empty and the
+    address is that subscription's active primary IPv4 assignment, so it can
+    never move a served customer."""
+
+    bare = str(address).strip().split("/", 1)[0]
+    if str(subscription.ipv4_address or "").strip():
+        _lifecycle_error(
+            "served_ipv4_already_set",
+            "The service already has a served IPv4; use Replace IPv4.",
+        )
+    held = [
+        (str(value).split("/", 1)[0], bool(primary))
+        for value, primary in db.execute(
+            select(IPv4Address.address, IPAssignment.is_primary)
+            .join(IPAssignment, IPAssignment.ipv4_address_id == IPv4Address.id)
+            .where(
+                IPAssignment.subscription_id == subscription.id,
+                IPAssignment.ip_version == IPVersion.ipv4,
+                IPAssignment.is_active.is_(True),
+            )
+        ).all()
+    ]
+    if (bare, True) not in held:
+        _lifecycle_error(
+            "address_not_own_assignment",
+            "The address is not this service's active primary IPv4 assignment.",
+        )
+    if find_ipv4_live_use(
+        db,
+        subscription_id=subscription.id,
+        addresses={bare},
+        exclude_own_sessions=True,
+    ).in_use:
+        _lifecycle_error(
+            "served_ipv4_held_elsewhere",
+            "The address is held by another live service; not projecting it.",
+        )
+    _project_served_ipv4(subscription, bare)
+    db.flush()
+    return subscription
+
+
+def ipv4_held_by_other_service_ipam(
+    db: Session, *, subscription_id: UUID, address: str
+) -> bool:
+    """Read-only: does another non-terminal service hold ``address`` as an
+    active IPAM assignment? ``x/32`` stored forms match."""
+
+    bare = str(address).strip().split("/", 1)[0]
+    if not bare:
+        return False
+    return (
+        db.scalar(
+            select(IPAssignment.id)
+            .join(IPv4Address, IPAssignment.ipv4_address_id == IPv4Address.id)
+            .join(Subscription, IPAssignment.subscription_id == Subscription.id)
+            .where(
+                IPAssignment.is_active.is_(True),
+                IPAssignment.ip_version == IPVersion.ipv4,
+                IPAssignment.subscription_id != subscription_id,
+                Subscription.status.not_in(_TERMINAL_STATUSES),
+                IPv4Address.address.in_(_address_candidates({bare})),
+            )
+            .limit(1)
+        )
+        is not None
+    )
+
+
+def _retention_release_decision(
+    db: Session,
+    *,
+    subscription: Subscription,
+    exact_rows: list[ActiveIPv4AssignmentEvidence],
+    retention_cutoff: datetime,
+) -> IPv4AssignmentRepairDecision:
+    """Gate a retention release on age, live use and address class.
+
+    Status-change evidence is ``Subscription.updated_at`` for every status:
+    ``canceled_at``/``end_at`` can predate the status change, and no
+    timestamp exists for disabled/hidden/archived. Any later edit moves
+    ``updated_at`` forward, so it can only DELAY a release, never hasten one.
+    """
+
+    changed_at = subscription.updated_at
+    if changed_at is None or _aware(changed_at) > _aware(retention_cutoff):
+        return IPv4AssignmentRepairDecision.retention_not_expired
+    addresses = {item.address for item in exact_rows}
+    for address_id in {item.address_id for item in exact_rows}:
+        row = db.get(IPv4Address, address_id)
+        if (
+            row is None
+            or row.ont_unit_id is not None
+            or row.is_reserved
+            or (str(row.allocation_type or "").strip().lower() == "management")
+        ):
+            return IPv4AssignmentRepairDecision.address_not_releasable
+    live = find_ipv4_live_use(db, subscription_id=subscription.id, addresses=addresses)
+    if live.in_use:
+        return IPv4AssignmentRepairDecision.address_in_live_use
+    return IPv4AssignmentRepairDecision.ready_release_retention_expired
 
 
 def _active_assignment_evidence(
@@ -688,6 +892,7 @@ def preview_service_ipv4_assignment_repair(
     subscription_id: UUID,
     desired_address_id: UUID | None,
     deactivate_assignment_ids: tuple[UUID, ...] = (),
+    retention_cutoff: datetime | None = None,
 ) -> ServiceIPv4AssignmentRepairPreview:
     """Read-only, exact-service plan for one reviewed IPv4 assignment repair."""
 
@@ -734,12 +939,25 @@ def preview_service_ipv4_assignment_repair(
                 for item in exact_rows
                 if item.assignment_id not in normalized_deactivate_ids
             ]
-            if subscription.status not in _TERMINAL_STATUSES:
+            # With a cutoff, canceled/expired releases take the same gated path
+            # (age, live-use, reserved/management refusal) as the others.
+            retention_release = retention_cutoff is not None and (
+                subscription.status in _RETENTION_RELEASE_STATUSES | _TERMINAL_STATUSES
+            )
+            if subscription.status not in _TERMINAL_STATUSES and not retention_release:
                 decision = IPv4AssignmentRepairDecision.subscription_not_terminal
             elif remaining_exact:
                 decision = IPv4AssignmentRepairDecision.incomplete_deactivation_set
             elif not exact_rows:
                 decision = IPv4AssignmentRepairDecision.noop
+            elif retention_release:
+                assert retention_cutoff is not None
+                decision = _retention_release_decision(
+                    db,
+                    subscription=subscription,
+                    exact_rows=exact_rows,
+                    retention_cutoff=retention_cutoff,
+                )
             else:
                 decision = IPv4AssignmentRepairDecision.ready_release
         else:
@@ -809,6 +1027,7 @@ def preview_service_ipv4_assignment_repair(
         deactivate_assignment_ids=normalized_deactivate_ids,
         active_assignments=active_assignments,
         decision=decision,
+        retention_cutoff=retention_cutoff,
     )
     return ServiceIPv4AssignmentRepairPreview(
         subscription_id=subscription_id,
@@ -1373,6 +1592,34 @@ def _repair_service_ipv4_assignment(
         ).all()
     )
 
+    if command.desired_address_id is None:
+        # Release: lock the freed address rows too, so the allocator
+        # (skip_locked) waits and the re-preview below sees a stable address.
+        released_address_ids = [
+            row.ipv4_address_id
+            for row in locked_assignments
+            if row.is_active
+            and row.ip_version == IPVersion.ipv4
+            and row.ipv4_address_id is not None
+        ]
+        if released_address_ids:
+            try:
+                db.scalars(
+                    select(IPv4Address)
+                    .where(IPv4Address.id.in_(released_address_ids))
+                    .order_by(IPv4Address.id)
+                    .with_for_update(nowait=True)
+                ).all()
+            except OperationalError as exc:
+                if "55P03" not in str(getattr(exc.orig, "sqlstate", "")) and (
+                    "could not obtain lock" not in str(exc.orig).lower()
+                ):
+                    raise
+                _lifecycle_error(
+                    "address_lock_unavailable",
+                    "A released address is locked by another writer; retry later.",
+                )
+
     prior = _prior_lifecycle_outcome(
         db,
         idempotency_key=idempotency_key,
@@ -1386,6 +1633,7 @@ def _repair_service_ipv4_assignment(
         subscription_id=command.subscription_id,
         desired_address_id=command.desired_address_id,
         deactivate_assignment_ids=command.deactivate_assignment_ids,
+        retention_cutoff=command.retention_cutoff,
     )
     if not secrets.compare_digest(current.fingerprint, command.preview_fingerprint):
         _lifecycle_error(
@@ -1417,6 +1665,18 @@ def _repair_service_ipv4_assignment(
             action="deactivated",
             fingerprint=current.fingerprint,
         )
+    if current.decision is IPv4AssignmentRepairDecision.ready_release_retention_expired:
+        # A released hold must not stay served: on reactivation RADIUS would
+        # re-pin the stale column and recreate the collision. Clear it only
+        # when it still names a released address.
+        released = {
+            item.address
+            for item in current.active_assignments
+            if item.assignment_id in current.deactivate_assignment_ids
+        }
+        served = _normalized_ip(subscription.ipv4_address).removesuffix("/32")
+        if served and served in released:
+            _project_served_ipv4(subscription, None)
     if deactivated_count:
         db.flush()
 
@@ -1543,6 +1803,22 @@ def _repair_service_ipv4_assignment(
     )
 
 
+def _project_served_ipv4(subscription: Subscription, value: str | None) -> None:
+    """THE one write of the served-IPv4 column (projection and retention release)."""
+
+    from app.services.connectivity_reconciler import (
+        note_connectivity_write,
+        reconciler_write_scope,
+    )
+
+    with reconciler_write_scope():
+        subscription.ipv4_address = value
+        note_connectivity_write(
+            "subscription.ipv4_address",
+            "ip_assignment_lifecycle",
+        )
+
+
 def _repair_service_ipv4_projection(
     db: Session,
     command: RepairServiceIPv4ProjectionCommand,
@@ -1619,17 +1895,7 @@ def _repair_service_ipv4_projection(
             "The reviewed IPv4 projection evidence is incomplete.",
         )
 
-    from app.services.connectivity_reconciler import (
-        note_connectivity_write,
-        reconciler_write_scope,
-    )
-
-    with reconciler_write_scope():
-        subscription.ipv4_address = current.desired_address
-        note_connectivity_write(
-            "subscription.ipv4_address",
-            "ip_assignment_lifecycle",
-        )
+    _project_served_ipv4(subscription, current.desired_address)
 
     event = emit_event(
         db,
@@ -1722,6 +1988,73 @@ def apply_service_ipv4_assignment_participant(
     return _repair_service_ipv4_assignment(db, command)
 
 
+def _replace_service_ipv4(
+    db: Session,
+    command: RepairServiceIPv4AssignmentCommand,
+) -> ServiceIPv4AssignmentRepairOutcome:
+    assignment_outcome = apply_service_ipv4_assignment_participant(db, command)
+    if assignment_outcome.desired_assignment_id is None:
+        _lifecycle_error(
+            "incomplete_outcome",
+            "IPv4 assignment owner did not return a desired assignment.",
+        )
+    # The assignment change is flushed, so this preview sees the new IPAM
+    # state. Any refusal raises and rolls back the assignment change too.
+    projection_preview = preview_service_ipv4_projection_repair(
+        db,
+        subscription_id=command.subscription_id,
+        assignment_id=assignment_outcome.desired_assignment_id,
+    )
+    if projection_preview.decision is IPv4ServedProjectionDecision.noop:
+        return assignment_outcome
+    if not projection_preview.applicable:
+        _lifecycle_error(
+            "unsafe_projection_repair",
+            "The served IPv4 projection cannot be completed in this "
+            "replacement; IPAM was not changed.",
+            decision=projection_preview.decision.value,
+        )
+    base_key = str(command.context.idempotency_key or "").strip()
+    apply_service_ipv4_projection_participant(
+        db,
+        RepairServiceIPv4ProjectionCommand(
+            context=CommandContext(
+                command_id=command.context.command_id,
+                correlation_id=command.context.correlation_id,
+                causation_id=command.context.causation_id,
+                actor=command.context.actor,
+                scope=command.context.scope,
+                reason=command.context.reason,
+                idempotency_key=f"{base_key}:ipv4-projection",
+            ),
+            subscription_id=command.subscription_id,
+            assignment_id=assignment_outcome.desired_assignment_id,
+            preview_fingerprint=projection_preview.fingerprint,
+        ),
+    )
+    return assignment_outcome
+
+
+def replace_service_ipv4(
+    db: Session,
+    command: RepairServiceIPv4AssignmentCommand,
+) -> ServiceIPv4AssignmentRepairOutcome:
+    """Move IPAM and the served projection in ONE transaction, or neither.
+
+    Tactical stopgap (pre-Starter dotmac-ipam): the assignment participant and
+    the projection participant run in a single owner command, so a projection
+    refusal rolls the IPAM move back instead of leaving the old address looking
+    free while the customer is still served on it.
+    """
+
+    return execute_owner_command(
+        db,
+        definition=_REPLACE_COMMAND,
+        context=command.context,
+        operation=lambda: _replace_service_ipv4(db, command),
+    )
+
+
 def repair_service_ipv4_projection(
     db: Session,
     command: RepairServiceIPv4ProjectionCommand,
@@ -1745,7 +2078,74 @@ def apply_service_ipv4_projection_participant(
     return _repair_service_ipv4_projection(db, command)
 
 
+@dataclass(frozen=True, slots=True)
+class ReleaseSubscriberIPAssignmentsCommand:
+    context: CommandContext = field(repr=False)
+    subscriber_id: UUID
+    actor: AuditActor = field(repr=False)
+
+
+@dataclass(frozen=True, slots=True)
+class SubscriberIPAssignmentReleaseOutcome:
+    released_assignment_ids: tuple[UUID, ...]
+
+
+def stage_subscriber_ip_assignment_release(
+    db: Session, *, command: ReleaseSubscriberIPAssignmentsCommand
+) -> SubscriberIPAssignmentReleaseOutcome:
+    """Release active IPv4/IPv6 rows within exact customer hard deletion.
+
+    The coordinator must first lock and refresh the exact Subscriber. Child
+    locks never wait while holding that parent; a lock error aborts the entire
+    root command. History stays attached until the migrated SET NULL FK runs.
+    No projection, transport, repair, audit, or transaction is owned here.
+    """
+    if (
+        not isinstance(command, ReleaseSubscriberIPAssignmentsCommand)
+        or not isinstance(command.subscriber_id, UUID)
+        or not isinstance(command.context, CommandContext)
+        or not isinstance(command.actor, AuditActor)
+        or command.actor.actor_type not in {AuditActorType.user, AuditActorType.api_key}
+        or command.context.actor
+        != f"{command.actor.actor_type.value}:{command.actor.actor_id}"
+        or not owner_command_active(db, owner="customer.account_deletion")
+        or current_command_definition(db)
+        != OwnerCommandDefinition(
+            owner="customer.account_deletion",
+            concern="customer account hard deletion",
+            name="delete_customer_account",
+        )
+        or current_command_context(db) != command.context
+    ):
+        raise IPv4AssignmentLifecycleError(
+            code=f"{_OWNER}.invalid_customer_deletion_participant",
+            message="Exact trusted customer deletion command required.",
+        )
+    with db.no_autoflush:
+        assignments = tuple(
+            db.scalars(
+                select(IPAssignment)
+                .where(IPAssignment.subscriber_id == command.subscriber_id)
+                .order_by(IPAssignment.id)
+                .with_for_update(nowait=True)
+                .execution_options(populate_existing=True)
+            )
+        )
+    released: list[UUID] = []
+    for assignment in assignments:
+        if assignment.is_active:
+            assignment.is_active = False
+            released.append(assignment.id)
+    db.flush()
+    return SubscriberIPAssignmentReleaseOutcome(tuple(released))
+
+
 __all__ = [
+    "IPv4LiveUseEvidence",
+    "find_ipv4_live_use",
+    "ReleaseSubscriberIPAssignmentsCommand",
+    "SubscriberIPAssignmentReleaseOutcome",
+    "stage_subscriber_ip_assignment_release",
     "ActiveIPv4AssignmentEvidence",
     "IPAssignmentOwnershipDecision",
     "IPAssignmentOwnershipError",

@@ -1,5 +1,5 @@
 from dataclasses import asdict
-from uuid import UUID, uuid4
+from uuid import NAMESPACE_URL, UUID, uuid4, uuid5
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Query
 from sqlalchemy.orm import Session
@@ -48,7 +48,11 @@ from app.schemas.vendor_purchase_invoice import (
 )
 from app.services import field_maps as field_maps_service
 from app.services import technician_satisfaction
-from app.services.auth_dependencies import require_any_permission, require_permission
+from app.services.auth_dependencies import (
+    require_any_permission,
+    require_permission,
+    require_permission_admission,
+)
 from app.services.db_session_adapter import db_session_adapter
 from app.services.domain_errors import DomainError
 from app.services.field.equipment_custody import field_equipment_custody
@@ -79,6 +83,7 @@ from app.services.field.expense_requests import (
 from app.services.field.manager import field_manager
 from app.services.field.material_requests import field_material_requests
 from app.services.owner_commands import CommandContext
+from app.services.permission_admission import PermissionAdmission
 from app.services.vendor_portal_operations import (
     ReviewVendorQuoteCommand,
     vendor_portal_operations,
@@ -155,6 +160,19 @@ def _invoice_review_context(auth: dict, *, invoice_id: str) -> CommandContext:
         actor=str(auth["principal_id"]),
         scope=invoice_id,
         reason="field_manager_vendor_purchase_invoice_review",
+    )
+
+
+def _assignment_context(
+    access: PermissionAdmission, *, command_id: UUID, request_id: str | None
+) -> CommandContext:
+    return CommandContext(
+        command_id=command_id,
+        correlation_id=uuid5(NAMESPACE_URL, request_id) if request_id else command_id,
+        actor=str(access.principal_id),
+        scope="operations:dispatch:assign",
+        reason="Manager work-order assignment",
+        idempotency_key=str(command_id),
     )
 
 
@@ -419,19 +437,20 @@ def field_manager_recover_expense_payment_delivery(
 def field_manager_assign_job(
     crm_work_order_id: str,
     payload: FieldManagerJobAssignRequest,
-    auth: dict = Depends(_dispatch_write),
+    access: PermissionAdmission = Depends(
+        require_permission_admission("operations:dispatch:assign")
+    ),
     request_id: str | None = Header(default=None, alias="X-Request-ID"),
     db: Session = Depends(get_db),
 ):
     return field_manager.assign_job(
         db,
         crm_work_order_id,
-        person_id=payload.person_id,
-        scheduled_start=payload.scheduled_start,
-        scheduled_end=payload.scheduled_end,
-        status=payload.status,
-        auth=auth,
-        request_id=request_id,
+        payload=payload,
+        access=access,
+        context=_assignment_context(
+            access, command_id=payload.command_id, request_id=request_id
+        ),
     )
 
 
@@ -442,10 +461,19 @@ def field_manager_assign_job(
 def field_manager_unassign_job(
     assignment_queue_id: UUID,
     payload: FieldManagerJobUnassignRequest,
-    auth: dict = Depends(_dispatch_write),
+    access: PermissionAdmission = Depends(
+        require_permission_admission("operations:dispatch:assign")
+    ),
     request_id: str | None = Header(default=None, alias="X-Request-ID"),
     db: Session = Depends(get_db),
 ):
+    command_id = (
+        uuid5(NAMESPACE_URL, f"work-order-unassign:{request_id}")
+        if request_id
+        else uuid4()
+    )
+    context = _assignment_context(access, command_id=command_id, request_id=request_id)
+    db_session_adapter.release_read_transaction(db)
     return work_order_commands.update_queue_entry(
         db=db,
         queue_id=str(assignment_queue_id),
@@ -453,8 +481,8 @@ def field_manager_unassign_job(
             status="skipped",
             reason=payload.reason,
         ),
-        auth=auth,
-        request_id=request_id,
+        context=context,
+        access=access,
     )
 
 

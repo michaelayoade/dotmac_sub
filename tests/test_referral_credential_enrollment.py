@@ -399,7 +399,7 @@ def test_completion_creates_chosen_credential_and_preserves_account_identity_sta
     )
     assert completed.subscriber_id == subscriber.id
     assert completed.username == subscriber.email.lower()
-    assert auth_flow.verify_password(
+    assert auth_flow.verify_user_password(
         "Secure-customer-password-42", credential.password_hash
     )
     assert credential.must_change_password is False
@@ -437,10 +437,10 @@ def test_enrollment_capability_is_single_use_and_does_not_change_password_on_rep
         .filter(UserCredential.subscriber_id == subscriber.id)
         .one()
     )
-    assert auth_flow.verify_password(
+    assert auth_flow.verify_user_password(
         "Secure-customer-password-42", credential.password_hash
     )
-    assert not auth_flow.verify_password(
+    assert not auth_flow.verify_user_password(
         "A-different-secure-password-84", credential.password_hash
     )
 

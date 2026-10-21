@@ -6,9 +6,11 @@ Owner: `access.test_connection`; network projection writer: `access.radius_proje
 
 ## Product behavior
 
-Authorized staff open Test Connection below Invoice in the customer detail
-page's All Subscriptions section. The action is outside the active-only Invoice
-condition. It displays the administrator-configured system-wide duration and
+Authorized staff open Test Connection in the customer detail page's All
+Subscriptions section. The action requires its dedicated permission and remains
+independent of subscription status and invoice actions, including after the
+manual service-invoice workflow is retired. It displays the
+administrator-configured system-wide duration and
 expected UTC expiry before submission. Initiators cannot override the duration
 for an individual customer or subscription.
 

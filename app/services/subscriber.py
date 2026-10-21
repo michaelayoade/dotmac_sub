@@ -1,6 +1,7 @@
 import builtins
 import logging
-from datetime import UTC, datetime
+from dataclasses import dataclass
+from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from ipaddress import IPv4Address as ParsedIPv4Address
 from typing import cast as typing_cast
@@ -68,40 +69,6 @@ _BILLABLE_SUBSCRIPTION_STATUSES = (
     SubscriptionStatus.blocked,
     SubscriptionStatus.suspended,
 )
-
-
-def _release_subscriber_network_records(db: Session, subscriber_id) -> None:
-    """Deactivate a subscriber's active IP assignments and retire its active CPE
-    before a hard-delete.
-
-    ``ip_assignments.subscriber_id`` and ``cpe_devices.subscriber_id`` are
-    ``ON DELETE SET NULL``; without this, deleting a subscriber would null the
-    owner while leaving ``is_active``/``status=active`` set — an orphaned active
-    assignment that the partial-unique index keeps the IP locked behind (a leak),
-    and an ownerless active CPE. Deactivating first means SET NULL only ever
-    touches already-released rows.
-    """
-    from app.models.network import CPEDevice, DeviceStatus, IPAssignment
-
-    for assignment in (
-        db.query(IPAssignment)
-        .filter(
-            IPAssignment.subscriber_id == subscriber_id,
-            IPAssignment.is_active.is_(True),
-        )
-        .all()
-    ):
-        assignment.is_active = False
-    for cpe in (
-        db.query(CPEDevice)
-        .filter(
-            CPEDevice.subscriber_id == subscriber_id,
-            CPEDevice.status == DeviceStatus.active,
-        )
-        .all()
-    ):
-        cpe.status = DeviceStatus.retired
-    db.flush()
 
 
 def _parse_ipv4_search(value: str | None) -> str | None:
@@ -464,6 +431,68 @@ def _default_reseller_id(db: Session):
     return any_reseller[0] if any_reseller else None
 
 
+def _apply_validated_connection_type(
+    db: Session,
+    data: dict,
+    *,
+    current_code: str | None = None,
+) -> dict:
+    """Validate an explicit customer classification against its managed owner."""
+
+    if "connection_type" not in data:
+        return data
+    from app.services.customer_connection_types import validate_assignment
+
+    data["connection_type"] = validate_assignment(
+        db,
+        connection_type=data.get("connection_type"),
+        current_code=current_code,
+    )
+    return data
+
+
+@dataclass(frozen=True, slots=True)
+class OnboardingAttentionQuery:
+    """Typed aging rule for customer accounts still awaiting activation."""
+
+    as_of: datetime
+    waiting_too_long_after: timedelta = timedelta(hours=72)
+
+
+@dataclass(frozen=True, slots=True)
+class OnboardingAttentionSummary:
+    waiting_too_long_count: int
+    waiting_before: datetime
+    observed_at: datetime
+
+
+def onboarding_attention_summary(
+    db: Session, *, query: OnboardingAttentionQuery
+) -> OnboardingAttentionSummary:
+    """Count visible new accounts older than the explicit onboarding window."""
+
+    as_of = query.as_of
+    if as_of.tzinfo is None:
+        as_of = as_of.replace(tzinfo=UTC)
+    else:
+        as_of = as_of.astimezone(UTC)
+    waiting_before = as_of - query.waiting_too_long_after
+    count = (
+        db.query(func.count(Subscriber.id))
+        .filter(visible_subscriber_clause())
+        .filter(Subscriber.is_active.is_(True))
+        .filter(Subscriber.status == SubscriberStatus.new)
+        .filter(Subscriber.created_at <= waiting_before)
+        .scalar()
+        or 0
+    )
+    return OnboardingAttentionSummary(
+        waiting_too_long_count=int(count),
+        waiting_before=waiting_before,
+        observed_at=as_of,
+    )
+
+
 class Subscribers(ListResponseMixin):
     @staticmethod
     def prepare_new_account(db: Session, payload: SubscriberCreate) -> Subscriber:
@@ -484,6 +513,7 @@ class Subscribers(ListResponseMixin):
             )
         data = _normalize_subscriber_identity_fields(payload.model_dump())
         data = _apply_validated_lga(data, transport_errors=False)
+        data = _apply_validated_connection_type(db, data)
         requested_status = data.pop("status", SubscriberStatus.active)
         if not bool(data.get("billing_enabled", True)):
             # Approval is an admission fact. An unapproved account may be
@@ -587,6 +617,9 @@ class Subscribers(ListResponseMixin):
             )
             data = _apply_validated_lga(
                 data, current_region=subscriber.region, current_lga=subscriber.lga
+            )
+            data = _apply_validated_connection_type(
+                db, data, current_code=subscriber.connection_type
             )
             requested_status = data.pop("status", None)
             requested_is_active = data.pop("is_active", None)
@@ -1126,6 +1159,9 @@ class Subscribers(ListResponseMixin):
         data = _apply_validated_lga(
             data, current_region=subscriber.region, current_lga=subscriber.lga
         )
+        data = _apply_validated_connection_type(
+            db, data, current_code=subscriber.connection_type
+        )
         updated_fields = list(data.keys())
         # The column's key space is closed. An undeclared key is REFUSED here
         # rather than dropped: silently stripping it would report success and
@@ -1231,15 +1267,6 @@ class Subscribers(ListResponseMixin):
         )
 
         return subscriber
-
-    @staticmethod
-    def delete(db: Session, subscriber_id: str):
-        subscriber = db.get(Subscriber, subscriber_id)
-        if not subscriber:
-            raise HTTPException(status_code=404, detail="Subscriber not found")
-        _release_subscriber_network_records(db, subscriber_id)
-        db.delete(subscriber)
-        db.commit()
 
     @staticmethod
     def count_stats(db: Session) -> dict:
@@ -1462,7 +1489,6 @@ class Subscribers(ListResponseMixin):
         All aggregations use SQL-level queries for performance.
         """
         import calendar
-        from datetime import timedelta
 
         from sqlalchemy import extract
 
@@ -1498,7 +1524,15 @@ class Subscribers(ListResponseMixin):
             db.query(
                 func.count(Subscriber.id).label("total"),
                 func.count(Subscriber.id)
-                .filter(Subscriber.is_active.is_(True))
+                .filter(
+                    and_(
+                        Subscriber.is_active.is_(True),
+                        Subscriber.status == SubscriberStatus.active,
+                        Subscriber.subscriptions.any(
+                            Subscription.status == SubscriptionStatus.active
+                        ),
+                    )
+                )
                 .label("active"),
                 func.count(Subscriber.id)
                 .filter(Subscriber.status == SubscriberStatus.suspended)
@@ -1664,15 +1698,6 @@ class Accounts(ListResponseMixin):
         if not subscriber:
             raise HTTPException(status_code=404, detail="Subscriber not found")
         return subscriber
-
-    @staticmethod
-    def delete(db: Session, account_id: str):
-        subscriber = db.get(Subscriber, account_id)
-        if not subscriber:
-            raise HTTPException(status_code=404, detail="Subscriber not found")
-        _release_subscriber_network_records(db, account_id)
-        db.delete(subscriber)
-        db.commit()
 
 
 class AddressOwnerError(DomainError):

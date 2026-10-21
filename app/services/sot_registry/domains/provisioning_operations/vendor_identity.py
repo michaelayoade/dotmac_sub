@@ -34,7 +34,9 @@ SERVICES: tuple[SOTService, ...] = (
             "identity, so all three are staged together. This owner never "
             "mints or delivers a usable secret. Capability for the "
             "assigned role is declared by field.vendor_capabilities; this "
-            "owner stores the role and never decides what it may do."
+            "owner stores the role and never decides what it may do. "
+            "FieldVendor.native_vendor_id is the authoritative unique link; "
+            "the string CRM-shaped value is written only for compatibility."
         ),
         contract=ServiceContract(
             concerns=(

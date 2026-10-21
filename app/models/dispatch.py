@@ -4,6 +4,7 @@ from datetime import UTC, datetime
 from sqlalchemy import (
     JSON,
     Boolean,
+    CheckConstraint,
     DateTime,
     ForeignKey,
     Index,
@@ -11,6 +12,7 @@ from sqlalchemy import (
     String,
     Text,
     UniqueConstraint,
+    text,
 )
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
@@ -221,6 +223,21 @@ class DispatchRule(Base):
 class WorkOrderAssignmentQueue(Base):
     __tablename__ = "work_order_assignment_queue"
     __table_args__ = (
+        CheckConstraint(
+            "assigned_vendor_user_id IS NULL OR (assigned_vendor_id IS NOT NULL AND assigned_technician_id IS NULL)",
+            name="ck_work_order_selected_vendor_user",
+        ),
+        CheckConstraint(
+            "status != 'assigned' OR ((assigned_technician_id IS NOT NULL AND assigned_vendor_id IS NULL) OR (assigned_technician_id IS NULL AND assigned_vendor_id IS NOT NULL))",
+            name="ck_work_order_assignment_target",
+        ),
+        Index(
+            "uq_work_order_current_assignment",
+            "work_order_mirror_id",
+            unique=True,
+            postgresql_where=text("status = 'assigned'"),
+            sqlite_where=text("status = 'assigned'"),
+        ),
         Index(
             "ix_work_order_assignment_queue_status_created",
             "status",
@@ -237,12 +254,19 @@ class WorkOrderAssignmentQueue(Base):
     status: Mapped[str] = mapped_column(
         String(20), default=DispatchQueueStatus.queued, nullable=False
     )
+    assignment_generation: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
+    assignment_effective_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True)
+    )
     reason: Mapped[str | None] = mapped_column(Text)
     dispatch_rule_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True), ForeignKey("dispatch_rules.id")
     )
     assigned_technician_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True), ForeignKey("technician_profiles.id")
+    )
+    assigned_vendor_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("vendors.id")
     )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=lambda: datetime.now(UTC)
@@ -256,8 +280,23 @@ class WorkOrderAssignmentQueue(Base):
     work_order = relationship("WorkOrder")
     dispatch_rule = relationship("DispatchRule")
     assigned_technician = relationship("TechnicianProfile")
+    assigned_vendor_user_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("field_vendor_users.id", ondelete="RESTRICT")
+    )
+    assigned_vendor = relationship("Vendor")
+    assigned_vendor_user = relationship("FieldVendorUser")
 
     @property
     def crm_work_order_id(self) -> str:
         """Compatibility projection; never a stored child-table identifier."""
         return self.work_order.public_id
+
+
+class WorkOrderAssignmentReceipt(Base):
+    """Immutable command identity and result for assignment retries."""
+
+    __tablename__ = "work_order_assignment_receipts"
+    command_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True)
+    idempotency_key: Mapped[str | None] = mapped_column(String(160), unique=True)
+    fingerprint: Mapped[str] = mapped_column(String(64), nullable=False)
+    outcome: Mapped[dict] = mapped_column(JSON, nullable=False)

@@ -44,7 +44,7 @@ def test_domain_sot_relationships_cover_expected_domains():
     ]
 
 
-def test_domain_sot_relationships_encode_cross_domain_dependencies():
+def test_domain_sot_relationships_encode_cross_domain_dependencies() -> None:
     assert sot_relationships.dependencies_for("customer.accounts") == (
         "access.subscription_lifecycle",
         "events.dispatcher",
@@ -306,6 +306,7 @@ def test_domain_sot_relationships_encode_cross_domain_dependencies():
         "network.fiber_field_verification_job_scope",
         "operations.work_order_commands",
         "observability.audit_log",
+        "auth.permission_gate",
     )
     assert sot_relationships.dependencies_for(
         "network.fiber_field_verification_map"
@@ -408,6 +409,9 @@ def test_domain_sot_relationships_encode_cross_domain_dependencies():
         "network.forwarding_topology",
     )
     assert sot_relationships.dependencies_for("network.outage_lifecycle") == (
+        "auth.permission_gate",
+        "access.subscription_lifecycle",
+        "observability.audit_log",
         "network.outage_impact",
         "events.dispatcher",
         "events.owner_outputs",
@@ -530,11 +534,13 @@ def test_domain_sot_relationships_encode_cross_domain_dependencies():
     )
     assert sot_relationships.dependencies_for("financial.prepaid_service_renewals") == (
         "access.subscription_lifecycle",
+        "auth.permission_gate",
         "billing.contracts",
         "customer.accounts",
         "financial.account_adjustments",
         "financial.customer_subledger",
         "financial.invoices",
+        "financial.ledger",
         "financial.payments",
         "financial.billing_tax_resolution",
         "financial.prepaid_funding_reconstruction",
@@ -780,6 +786,7 @@ def test_domain_sot_relationships_encode_cross_domain_dependencies():
         "observability.recording",
     )
     assert sot_relationships.dependencies_for("communications.team_inbox_commands") == (
+        "operations.work_order_commands",
         "auth.permission_gate",
         "communications.nextcloud_talk_staff",
         "communications.staff_notifications",
@@ -818,7 +825,12 @@ def test_domain_sot_relationships_encode_cross_domain_dependencies():
     )
     assert sot_relationships.dependencies_for("operations.work_order_commands") == (
         "customer.identity_scope",
+        "auth.permission_gate",
+        "auth.staff_permission_admission",
+        "auth.vendor_user_provisioning",
+        "operations.work_order_templates",
         "communications.staff_notifications",
+        "communications.work_order_assignment_updates",
         "operations.work_order_status",
         "observability.audit_log",
     )
@@ -826,6 +838,16 @@ def test_domain_sot_relationships_encode_cross_domain_dependencies():
         "operations.work_orders",
         "operations.work_order_status",
         "control.domain_settings",
+        "network.outage_completion_evidence",
+        "operations.project_work_order_handoff",
+        "operations.work_order_commands",
+        "operations.project_engineering_plans",
+        "operations.project_lifecycle",
+        "auth.staff_permission_admission",
+        "operations.field_work_order_access",
+        "events.dispatcher",
+        "observability.audit_log",
+        "files.evidence_retention",
     )
     assert sot_relationships.dependencies_for("network.nas_lifecycle") == (
         "network.identity",

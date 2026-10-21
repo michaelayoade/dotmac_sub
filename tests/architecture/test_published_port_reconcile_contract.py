@@ -184,13 +184,36 @@ def test_the_reconcile_never_reads_the_container_environment_block() -> None:
 
 
 def _app_services() -> set[str]:
-    """The exact service names deploy.sh recreates."""
+    """The service names deploy.sh recreates (same rule as deploy.sh).
+
+    Compose services on the release ``${APP_IMAGE}`` filtered by
+    ``recreate_set``, with a modelled host override that adds a privileged
+    ``app-backup`` service nobody has run: it must not be in the set.
+    """
+    from scripts.deploy_app_image_services import app_image_services, recreate_set
+
     deploy = DEPLOY.read_text(encoding="utf-8")
-    block = deploy[
-        deploy.index("APP_SERVICES=(") : deploy.index("CELERY_WORKER_SERVICES=(")
-    ]
-    inner = block[block.index("(") + 1 : block.rindex(")")]
-    return set(re.findall(r"[a-z0-9][a-z0-9-]*", inner.replace("\\\n", " ")))
+    assert "scripts.deploy_app_image_services" in deploy
+    exclusions = re.search(r"^APP_IMAGE_DEPLOY_EXCLUSIONS=\(([^)]*)\)", deploy, re.M)
+    assert exclusions
+    excluded = re.sub(r"#.*", "", exclusions.group(1)).split()
+    release = "registry.example.invalid/app@sha256:" + "a" * 64
+    compose = yaml.safe_load((ROOT / "docker-compose.yml").read_text(encoding="utf-8"))
+    services = dict(compose["services"])
+    services["app-backup"] = {"image": "${APP_IMAGE}"}  # host override
+    resolved = {
+        "services": {
+            name: {
+                "image": release
+                if str(service.get("image", "")).startswith("${APP_IMAGE")
+                else service.get("image")
+            }
+            for name, service in services.items()
+        }
+    }
+    chosen = set(recreate_set(app_image_services(resolved, release), [], excluded))
+    assert "app-backup" not in chosen
+    return chosen
 
 
 def test_the_app_services_list_is_still_parseable() -> None:

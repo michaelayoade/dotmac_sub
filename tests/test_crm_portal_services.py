@@ -11,10 +11,15 @@ from app.models.subscriber import Subscriber
 from app.models.support import ticket_status_display_value
 from app.schemas.support import TicketCreate
 from app.services import crm_portal
+from app.services.audit_adapter import AuditActor
 from app.services.support import TicketCreationRoutingMode
 from app.services.support_ticket_settings import (
     PortalTicketTeamRoutingSource,
     SupportTeamRoutingResolution,
+)
+from tests.customer_profile_owner_support import (
+    profile_command_context,
+    profile_owner_session,
 )
 
 
@@ -586,7 +591,7 @@ def test_profile_save_preserves_undeclared_historical_metadata(
     db_session: Session, subscriber: Subscriber
 ) -> None:
     """Frozen import provenance survives a live profile/preferences save."""
-    from app.services.web_customer_actions import (
+    from app.services.customer_portal_profile_commands import (
         UpdateCustomerProfileCommand,
         update_customer_profile,
     )
@@ -605,21 +610,25 @@ def test_profile_save_preserves_undeclared_historical_metadata(
     subscriber.metadata_ = dict(historical)
     db_session.commit()
 
-    outcome = update_customer_profile(
-        db_session,
-        command=UpdateCustomerProfileCommand(
-            subscriber_id=subscriber.id,
-            first_name="Updated",
-            last_name="Customer",
-            email=subscriber.email,
-            phone="+2348000000012",
-            billing_notifications=False,
-            sms_updates=True,
-        ),
-    )
+    with profile_owner_session(db_session) as owner_db:
+        outcome = update_customer_profile(
+            owner_db,
+            command=UpdateCustomerProfileCommand(
+                context=profile_command_context(actor_id=subscriber.id),
+                actor=AuditActor.user(str(subscriber.id)),
+                subscriber_id=subscriber.id,
+                first_name="Updated",
+                last_name="Customer",
+                email=subscriber.email,
+                phone="+2348000000012",
+                billing_notifications=False,
+                sms_updates=True,
+            ),
+        )
+    db_session.refresh(subscriber)
 
     assert outcome is not None
-    updated = outcome.subscriber
+    updated = subscriber
     assert updated.first_name == "Updated"
     assert updated.phone == "+2348000000012"
     assert {key: (updated.metadata_ or {}).get(key) for key in historical} == historical

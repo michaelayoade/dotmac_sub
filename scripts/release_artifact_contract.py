@@ -549,7 +549,7 @@ def resolve_backup_policy(
     """Resolve environment-owned backup policy, failing safe to a backup."""
 
     if target is DeploymentTarget.STAGING:
-        issues = (
+        staging_issues: tuple[BackupPolicyIssue, ...] = (
             (BackupPolicyIssue.HOTFIX_EXCEPTION_NOT_ALLOWED_ON_STAGING,)
             if hotfix is not None
             else ()
@@ -557,7 +557,7 @@ def resolve_backup_policy(
         return BackupPolicyDecision(
             target=target,
             mode=BackupMode.SKIP_STAGING,
-            issues=issues,
+            issues=staging_issues,
         )
 
     if hotfix is None:

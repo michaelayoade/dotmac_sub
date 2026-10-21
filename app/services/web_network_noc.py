@@ -158,25 +158,25 @@ def noc_queue_data(db: Session) -> dict:
     for failure in operational_checks_service.bandwidth_device_failures(
         poller_snapshot
     ):
-        category = str(failure.get("error_category") or "transport_error")
+        category = failure.error_category.value
         items.append(
             {
                 "kind": "collector",
-                "id": str(failure.get("device_id") or ""),
-                "title": str(failure.get("name") or failure.get("device_id") or "NAS"),
+                "id": str(failure.device_id),
+                "title": failure.name or str(failure.device_id),
                 "subtitle": (
-                    f"Live bandwidth collection cannot reach {failure.get('host') or 'the router'}. "
+                    f"Live bandwidth collection cannot reach {failure.host or 'the router'}. "
                     "This does not prove customer service is down."
                 ),
                 "status": None,
                 "result": _POLLER_RESULT_LABELS.get(
                     category, "RouterOS polling failed"
                 ),
-                "next_attempt_at": _parse_datetime(failure.get("next_attempt_at")),
-                "count": int(failure.get("services_without_live_bandwidth") or 0),
+                "next_attempt_at": failure.next_attempt_at,
+                "count": failure.services_without_live_bandwidth,
                 "count_label": "services without live bandwidth",
-                "when": _parse_datetime(failure.get("last_attempt_at")),
-                "url": f"/admin/network/nas/{failure.get('device_id')}",
+                "when": failure.last_attempt_at,
+                "url": f"/admin/network/nas/{failure.device_id}",
                 "_rank": 0,
             }
         )

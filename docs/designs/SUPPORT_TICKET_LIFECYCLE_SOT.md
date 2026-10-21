@@ -29,6 +29,20 @@ authorized admin and portal streaming routes; the storage key is evidence and
 must not replace that identity. Legacy or imported metadata may lack the UUID,
 but every new local upload must preserve it through comment creation.
 
+The bearer-authenticated customer content route
+`GET /api/v1/me/support/tickets/{ticket_id}/attachments/{file_id}` consumes
+`CustomerTicketAttachmentQuery` through the existing support read projection.
+It refreshes and locks the exact Ticket before checking its subscriber owner,
+then reuses the canonical customer-visible attachment resolver against fresh
+comment and active file state. Internal descriptions/comments, unrelated files,
+deleted metadata and missing objects all return the same safe not-found result.
+The owner consumes bytes within the existing 5MiB support-upload limit, closes
+provider resources before returning and revalidates visible/active scope after
+provider I/O. The adapter returns authenticated bytes with attachment disposition,
+`Cache-Control: private, no-store` and `X-Content-Type-Options: nosniff`; it never
+returns a storage key, public URL or general file grant. The legacy portal
+stream remains available through the same visibility policy.
+
 Adapters may create/close sessions and map `DomainError` values. They do not
 commit lifecycle changes. Every public mutation enters
 `execute_owner_command` once on a transaction-free session; nested helpers use
@@ -121,17 +135,12 @@ seed data and cleaned from deployed grant tables by migration. Historical
 migrations may still mention it because they preserve the already-applied
 schema history, but current code no longer creates, grants, checks, or depends
 on that permission.
-Automation has the same separation:
+The legacy ticket automation-rule engine (`support_ticket_automation_rules`)
+was retired; the table and ORM model remain until a later migration drops them.
+Automation now lives only in the Automation Center.
 
-- `support.ticket_automation_rule_configuration` owns typed automation rules;
-- `support.ticket_automation_evaluation` returns immutable
-  `TicketAutomationProposal` values and never writes a Ticket or rule firing
-  timestamp;
-- the Ticket owner validates and applies accepted consequences.
-
-Manual-review identity evidence fails closed for sensitive assignment and
-automation. A policy never becomes a lifecycle writer merely because its
-proposal is accepted.
+Manual-review identity evidence fails closed for sensitive assignment. A policy
+never becomes a lifecycle writer merely because its proposal is accepted.
 
 Customer-portal creation uses a distinct, typed configuration resolution.
 `support.ticket_configuration` resolves the first active Service Team whose
@@ -381,11 +390,17 @@ starts at the effective lifecycle commit time, not at Ticket creation or the
 start of the SLA window.
 
 The linked cause becomes administratively resume-eligible only while the
-Ticket is `pending_confirmation` or `closed`. Resume uses a fingerprinted
-preview and remains a subscription-lifecycle command; changing the Ticket,
+effective Ticket is `pending_confirmation` or `closed`. When the cause points
+to an immutable merged source, the consequence resolver follows the complete
+`merged_into_ticket_id` chain and uses the final destination's lifecycle state.
+The original Ticket remains the cause evidence and is never reopened or
+rewritten. Missing destinations, merge cycles, or a customer-account mismatch
+at any hop fail closed and remain visible in the preview. Resume uses a
+fingerprinted preview containing every merge hop and remains a
+subscription-lifecycle command; changing the source, destination, chain,
 pause, billing anchor, or restriction evidence makes the preview stale. A
-reopened, disputed, or otherwise unresolved Ticket cannot be resumed through
-this path.
+reopened, disputed, or otherwise unresolved effective Ticket cannot be resumed
+through this path.
 
 ## Cutover and repair
 

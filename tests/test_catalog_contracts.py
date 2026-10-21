@@ -129,6 +129,55 @@ def test_catalog_grid_composes_without_a_duplicate_actions_header():
     assert "px-3 py-3" in html
 
 
+def test_catalog_grid_search_requires_submit_and_preserves_filters():
+    html = templates.env.get_template("admin/catalog/_grid.html").render(
+        offers=(),
+        plan_category="internet",
+        status="active",
+        plan_kind="standard",
+        plan_family="residential",
+        offer_statuses=("active",),
+        plan_families=("residential",),
+        search="Home",
+        total=0,
+        page=3,
+        total_pages=3,
+        per_page=25,
+        offer_plan_metadata={},
+        offer_active_subscription_counts={},
+    )
+
+    form_start = html.index('id="catalog-grid-search-form"')
+    form_end = html.index("</form>", form_start)
+    search_form = html[form_start:form_end]
+
+    assert 'hx-trigger="submit"' in search_form
+    assert 'hx-push-url="true"' in search_form
+    assert 'hx-sync="#catalog-grid-wrapper:replace"' in search_form
+    assert 'name="search"' in search_form
+    assert 'name="page"' not in search_form
+    assert 'hx-trigger="input changed delay:300ms, search"' not in search_form
+    assert ">\n                Search\n" in search_form
+    assert ">\n                Clear\n" in search_form
+    assert "requestSubmit()" in search_form
+    for field in ("status", "plan_kind", "plan_family", "plan_category"):
+        assert f'name="{field}"' in search_form
+
+
+def test_data_grid_live_search_remains_the_default():
+    html = templates.env.get_template(
+        "components/data/data_grid.html"
+    ).module.data_grid(
+        table_id="other-grid",
+        items=(),
+        columns=({"key": "name", "label": "Name"},),
+        htmx_url="/admin/other",
+    )
+
+    assert 'hx-trigger="input changed delay:300ms, search"' in html
+    assert 'id="other-grid-search-form"' not in html
+
+
 def test_catalog_detail_retains_edit_archive_and_restore_actions():
     source = (
         Path(__file__).resolve().parents[1]

@@ -147,6 +147,12 @@ from app.models.billing_shadow_verification import (  # noqa: F401
 # contract's proration enum is imported from app.models.billing_contract
 # directly to avoid shadowing it here.
 from app.models.branding import BrandProfile  # noqa: F401
+from app.models.captive_access_policy import (  # noqa: F401
+    CaptiveAccessPolicyChange,
+    CaptiveAccessRule,
+    CaptiveCustomerSet,
+    CaptiveCustomerSetMember,
+)
 from app.models.carried_source_identity import (  # noqa: F401
     CarriedSourceIdentityAdjudication,
     CarriedSourceIdentityAdjudicationImmutableError,
@@ -272,6 +278,9 @@ from app.models.custom_fields import (  # noqa: F401
     CustomFieldDefinitionStatus,
     CustomFieldType,
     CustomFieldValue,
+)
+from app.models.customer_connection_type import (  # noqa: F401
+    CustomerConnectionTypeDefinition,
 )
 from app.models.customer_experience import (  # noqa: F401
     CustomerExperienceHandoff,
@@ -412,6 +421,21 @@ from app.models.field_asset import (  # noqa: F401
 )
 from app.models.field_attachment import FieldAttachment  # noqa: F401
 from app.models.field_chat import FieldJobChatMessage  # noqa: F401
+from app.models.field_completion_review import (  # noqa: F401
+    CompletionCriteriaHead,
+    CompletionCriteriaRevision,
+    CompletionCriterion,
+    CompletionCriterionResult,
+    CompletionEnrollment,
+    CompletionEvidenceFile,
+    CompletionObservation,
+    CompletionReviewDecision,
+    CompletionReviewHead,
+    CompletionReviewPolicy,
+    CompletionReviewPolicyHead,
+    CompletionReviewReceipt,
+    CompletionSubmission,
+)
 from app.models.field_erp_sync import (  # noqa: F401
     FieldErpSyncEvent,
     FieldErpSyncFlow,
@@ -424,6 +448,10 @@ from app.models.field_expense import (  # noqa: F401
     FieldExpenseRequestItem,
 )
 from app.models.field_fiber import FieldFiberTestResult  # noqa: F401
+from app.models.field_identity import (  # noqa: F401
+    FieldIdentityReceipt,
+    FieldIdentityRevision,
+)
 from app.models.field_job_event import FieldJobEvent  # noqa: F401
 from app.models.field_location import (  # noqa: F401
     FieldTechLocationPing,
@@ -442,6 +470,11 @@ from app.models.field_vendor import (  # noqa: F401
     FieldVendor,
     FieldVendorDeviceToken,
     FieldVendorUser,
+)
+from app.models.field_visit_followup import (  # noqa: F401
+    FieldVisitFollowup,
+    FieldVisitFollowupReceipt,
+    FieldVisitFollowupRevision,
 )
 from app.models.field_worklog import FieldWorkLog  # noqa: F401
 from app.models.forwarding_topology import (  # noqa: F401
@@ -743,6 +776,9 @@ from app.models.organization import (  # noqa: F401
     OrganizationMembership,
     OrganizationMembershipRole,
 )
+from app.models.outage_complaint_correlation import (
+    OutageComplaintCorrelationReceipt,  # noqa: F401
+)
 from app.models.owner_output import (  # noqa: F401
     OwnerOutputReceipt,
     ReceiptOutcome,
@@ -830,6 +866,25 @@ from app.models.project import (  # noqa: F401
     ProjectTemplateTaskDependency,
     ProjectType,
 )
+from app.models.project_engineering_plan import (  # noqa: F401
+    EngineeringPlanCriterion,
+    EngineeringPlanDecision,
+    EngineeringPlanReceipt,
+    EngineeringPlanRevision,
+    EngineeringPolicyHead,
+    EngineeringPolicyRevision,
+    ProjectEngineeringPlan,
+)
+from app.models.project_field_completion import (  # noqa: F401
+    ProjectFieldCompletionApplication,
+    ProjectFieldCompletionBasis,
+    ProjectFieldCompletionLineage,
+    ProjectFieldCompletionReceipt,
+    ProjectFieldCompletionRequirement,
+)
+from app.models.project_work_order_issuance import (
+    ProjectWorkOrderIssuance,  # noqa: F401
+)
 from app.models.provisioning import (  # noqa: F401
     AppointmentStatus,
     ProvisioningReadinessCheck,
@@ -899,6 +954,10 @@ from app.models.referral_native import (  # noqa: F401
     ReferralCode,
     ReferralRewardStatus,
     ReferralStatus,
+)
+from app.models.router_health import (  # noqa: F401
+    NasCoaOutcomeBucket,
+    RouterHealthSignal,
 )
 from app.models.router_management import (  # noqa: F401
     JumpHost,
@@ -990,6 +1049,11 @@ from app.models.service_team import (  # noqa: F401
     ServiceTeamScopeType,
     ServiceTeamType,
 )
+from app.models.shared_outage_completion import (  # noqa: F401
+    CompletionReplacementOutageProof,
+    SupportResolutionSharedIncident,
+    SupportResolutionSharedWorkScope,
+)
 from app.models.sla import (  # noqa: F401
     SlaEligibilityInterval,
     SlaMonitoringInterval,
@@ -1007,6 +1071,7 @@ from app.models.snmp import (  # noqa: F401
 )
 from app.models.splynx_transaction import SplynxBillingTransaction  # noqa: F401
 from app.models.stored_file import StoredFile  # noqa: F401
+from app.models.stored_file_retention import StoredFileRetention  # noqa: F401
 from app.models.subscriber import (  # noqa: F401
     Address,
     AddressType,
@@ -1197,3 +1262,8 @@ from app.models.work_link import (  # noqa: F401
 )
 from app.models.work_order import WorkOrder  # noqa: F401
 from app.models.workqueue import WorkqueueItemKind, WorkqueueSnooze  # noqa: F401
+
+# Refuse secret references on infrastructure credential columns (F3).
+from app.services.credential_crypto import install_write_guards  # noqa: E402
+
+install_write_guards()

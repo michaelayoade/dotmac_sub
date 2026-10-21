@@ -52,6 +52,7 @@ class SubscriptionPauseBillingPolicy(str, enum.Enum):
 
 class SubscriptionPauseResumePolicy(str, enum.Enum):
     manual_after_ticket_resolution = "manual_after_ticket_resolution"
+    auto_on_ticket_resolution = "auto_on_ticket_resolution"
     scheduled_or_customer_requested = "scheduled_or_customer_requested"
     manual = "manual"
 

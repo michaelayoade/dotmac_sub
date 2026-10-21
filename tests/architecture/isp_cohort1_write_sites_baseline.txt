@@ -34,6 +34,32 @@
 # 2026-10-10 — migration 664 adds one write site: the single UPDATE that
 # removes retired Splynx keys from `subscribers.metadata` (contract step, no
 # new fact). Total 122 -> 123.
+#
+# 2026-10-10 — migration 665 adds two write sites: the billing-contact INSERT
+# (the typed home for `splynx_billing_email`) and the UPDATE that removes the
+# moved key from `subscribers.metadata`. Total 123 -> 125.
+
+#
+# 2026-10-11 — `customer.registration_metadata` is the registered flush-only
+# participant restricted to `auth.credential_administration`. Existing optional-
+# login form fields (subscriber_number, category, notes) previously passed via
+# SubscriberUpdate to the generic Subscribers.update loop. Four explicit ORM
+# assignments (number, two category branches, notes) are newly counted; the
+# generic owner remains for its other consumers. This is existing behavior
+# moved into the atomic metadata/login/audit/outbox coordinator, not four new
+# facts. Census 125 -> 129; cutover disposition RETIRE_AFTER_CUTOVER.
+#
+# 2026-10-11 â€” migration 671 adds one downgrade-only write site that clears
+# connection-type values outside the former closed vocabulary before restoring
+# its check constraint. Alembic owns this one-time schema lineage operation;
+# it does not add a runtime writer. Census 129 -> 130.
+#
+
+# 2026-10-12 — count tracked Session.delete(instance) writes as well. The
+# accepted tree had three previously uncounted subscriber.py deletions (133
+# total with this detector). Retiring two parent writers and adding the typed
+# deletion coordinator reduces that corrected census to 132. The remaining
+# address deletion is existing debt; no runtime write behavior was added.
 
 2 cli_script|scripts/migration/backfill_crm_subscriber_links.py
 2 cli_script|scripts/migration/backfill_party_status.py
@@ -47,28 +73,31 @@
 2 migration|alembic/versions/277_lifecycle_communications_sot.py
 2 migration|alembic/versions/383_replaceable_backoffice_boundary.py
 1 migration|alembic/versions/664_purge_retired_splynx_metadata_keys.py
+2 migration|alembic/versions/665_backfill_splynx_billing_email_contacts.py
+1 migration|alembic/versions/671_customer_connection_type_definitions.py
 1 service|app/services/account_deletion.py
 10 service|app/services/account_lifecycle.py
 1 service|app/services/billing_cleanup_remediation.py
 2 service|app/services/brand_profiles.py
 1 service|app/services/crm_customer_name_repair.py
 1 service|app/services/crm_portal.py
+1 service|app/services/customer_account_deletion.py
 20 service|app/services/customer_canonical_profile_patch.py
 1 service|app/services/customer_location_requests.py
 1 service|app/services/customer_portal_contacts.py
 1 service|app/services/customer_portal_notifications.py
 2 service|app/services/customer_portal_profile_commands.py
+4 service|app/services/customer_registration_metadata.py
 3 service|app/services/gis_sync.py
 1 service|app/services/mrr_snapshot.py
 1 service|app/services/network_subscriber_bridge.py
 1 service|app/services/nin_verifications.py
 23 service|app/services/party.py
-14 service|app/services/subscriber.py
+15 service|app/services/subscriber.py
 2 service|app/services/subscriber_profile_cleanup.py
 3 service|app/services/team_inbox_commands.py
 1 web_presenter|app/services/web_admin_resellers.py
 7 web_presenter|app/services/web_customer_actions.py
-1 web_presenter|app/services/web_customer_details.py
 1 web_presenter|app/services/web_system_import_wizard.py
 3 web_presenter|app/services/web_system_restore_tool.py
-TOTAL 123
+TOTAL 131

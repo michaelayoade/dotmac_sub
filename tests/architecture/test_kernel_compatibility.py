@@ -23,7 +23,7 @@ What this file proves, with zero skips:
 - the Sub app builds with the kernel installed, and every ``dotmac_kernel``
   module in its import graph is one the ledger allowlist admits OR one the
   kernel reaches for itself (``TRANSITIVE_KERNEL_MODULES``, a reviewed
-  snapshot — thirty-one of them, which is worth knowing) — and no kernel
+  snapshot — fifty-eight of them, which is worth knowing) — and no kernel
   middleware is mounted, no kernel route endpoint is served, and the top-level
   route prefix set is exactly the reviewed pin.
 
@@ -40,10 +40,13 @@ from __future__ import annotations
 
 import importlib.metadata
 import os
+import signal
 import subprocess
 import sys
+import time
 from decimal import Decimal
 from pathlib import Path
+from tempfile import TemporaryFile
 from uuid import uuid4
 
 import pytest
@@ -57,9 +60,9 @@ PYPROJECT = PROJECT_ROOT / "pyproject.toml"
 
 #: The reviewed kernel pin. Changing it is a ledger amendment
 #: (docs/PLATFORM_ADOPTION_LEDGER.md), never a lockfile side effect.
-KERNEL_PIN = "0.1.0a97"
-KERNEL_WHEEL_SHA256 = "f4a460db0daf855c50a4336da1f0c9294af38c12e7588e49be9b80027cf37f11"
-KERNEL_SDIST_SHA256 = "7d79f309df646dfff46be5eee49ff3c34ae9f2ee2af089e546cc58f6d973350d"
+KERNEL_PIN = "0.1.0a105"
+KERNEL_WHEEL_SHA256 = "f8937e5525c3efd27e2030bf69ed0c37e137c345e376668a79e00ebf349b6ffa"
+KERNEL_SDIST_SHA256 = "76a3ccb7d0344befe565681b710edfd3a563e64127b801e43bb239d5bc5b80d2"
 
 #: The private index source name pyproject must route the kernel through.
 KERNEL_SOURCE = "forgejo"
@@ -96,6 +99,25 @@ KERNEL_SOURCE = "forgejo"
 #: Sub will pass strictness explicitly at its content cutover; loading this
 #: helper does not install Studio's Kernel-owned route or flag policy in Sub.
 #:
+#: a98 adds capability_composition and capability_contract via the package root.
+#: Their imports only reach the already-reviewed product_manifest contract.
+#: a105's public API documentation, auth, catalog and session-runtime imports
+#: are captured below as an exact transitive snapshot. Loading
+#: session_runtime does not construct or bind a runtime; its reference factory
+#: and DatabaseRuntime construction remain excluded from Sub boot.
+#:
+#: The 2026-10-17 money-pack pins (billing 0.1.0a8, payments 0.1.0a3) widen the
+#: snapshot by thirteen: their model/service imports reach the kernel's
+#: fingerprints, idempotency ledger and messaging (inbox/outbox/relay/worker)
+#: modules at app import time. Loading them constructs no relay, worker or
+#: ledger writer in Sub; the boot-construction sibling test still holds.
+#:
+#: Slice 6a (Starter issuance) adds `transactions`: `dotmac_billing.service`
+#: imports `conflict_savepoint_requires_rollback` from it, and the issuance
+#: lane now imports the billing service at app import time. The helper only
+#: classifies savepoint conflicts inside the billing writer's own calls; Sub
+#: constructs no transaction owner from it.
+#:
 #: Being LOADED is not being USED: a module in `sys.modules` creates no second
 #: authority, mounts no route, and answers no question Sub asks. The sibling
 #: test below proves that separately, on middleware and routes. But the cost of
@@ -111,33 +133,61 @@ TRANSITIVE_KERNEL_MODULES = frozenset(
         "dotmac_kernel._transactions",
         "dotmac_kernel.audit",
         "dotmac_kernel.audit_actions",
+        "dotmac_kernel.api_documentation",
+        "dotmac_kernel.branding",
         "dotmac_kernel.cache",
+        "dotmac_kernel.capability_composition",
+        "dotmac_kernel.capability_contract",
         "dotmac_kernel.config",
+        "dotmac_kernel.database_catalog_comparator",
+        "dotmac_kernel.deps",
+        "dotmac_kernel.display",
         "dotmac_kernel.entitlements",
         "dotmac_kernel.exceptions",
         "dotmac_kernel.external_identity",
+        "dotmac_kernel.facet_principal",
+        "dotmac_kernel.fingerprints",
         "dotmac_kernel.flag_models",
         "dotmac_kernel.flags",
+        "dotmac_kernel.idempotency",
+        "dotmac_kernel.idempotency_models",
         "dotmac_kernel.identity",
         "dotmac_kernel.machine_auth",
         "dotmac_kernel.machine_models",
         "dotmac_kernel.machine_rotation",
+        "dotmac_kernel.messaging",
+        "dotmac_kernel.messaging.envelope",
+        "dotmac_kernel.messaging.inbox",
+        "dotmac_kernel.messaging.models",
+        "dotmac_kernel.messaging.outbox",
+        "dotmac_kernel.messaging.platform",
+        "dotmac_kernel.messaging.platform_relay",
+        "dotmac_kernel.messaging.platform_worker",
+        "dotmac_kernel.messaging.relay",
+        "dotmac_kernel.messaging.worker",
         "dotmac_kernel.models_platform",
         "dotmac_kernel.modules",
         "dotmac_kernel.namespaces",
         "dotmac_kernel.outbox_event_types",
         "dotmac_kernel.permissions",
+        "dotmac_kernel.permission_provisioning",
+        "dotmac_kernel.platform_auth",
         "dotmac_kernel.planes",
         "dotmac_kernel.prerequisites",
+        "dotmac_kernel.product_database_catalog",
         "dotmac_kernel.product_manifest",
         "dotmac_kernel.query",
         "dotmac_kernel.route_metadata",
+        "dotmac_kernel.semantic_encoding",
         "dotmac_kernel.security",
+        "dotmac_kernel.session_runtime",
         "dotmac_kernel.setting_domains",
         "dotmac_kernel.setting_scopes",
         "dotmac_kernel.settings_cache",
         "dotmac_kernel.settings_crypto",
         "dotmac_kernel.source_applications",
+        "dotmac_kernel.transactions",
+        "dotmac_kernel.web_deps",
         "dotmac_kernel.web_surfaces",
     }
 )
@@ -214,6 +264,7 @@ def test_pure_surface_imports_without_database(module: str) -> None:
 def test_installed_kernel_is_the_reviewed_pin_and_ships_py_typed() -> None:
     import dotmac_kernel
 
+    assert "site-packages" in Path(dotmac_kernel.__file__).parts
     assert dotmac_kernel.__version__ == KERNEL_PIN
     dist = importlib.metadata.distribution("dotmac-kernel")
     assert dist.version == KERNEL_PIN
@@ -270,7 +321,7 @@ def test_pyproject_pins_kernel_exactly_from_the_named_index() -> None:
 
 
 def test_lock_carries_the_reviewed_kernel_release_bytes() -> None:
-    """The current pin resolves to the exact reviewed a97 lock artifacts."""
+    """The current pin resolves to the exact reviewed a105 lock artifacts."""
     import tomllib
 
     with (PROJECT_ROOT / "poetry.lock").open("rb") as lock_file:
@@ -497,3 +548,171 @@ def test_app_middleware_and_routes_are_kernel_free_and_prefixes_unchanged() -> N
         timeout=300,
     )
     assert result.returncode == 0, result.stderr
+
+
+def _read_probe_diagnostics(diagnostics) -> str:
+    """Bounded (32 KiB) stack/phase text only; no locals, no environment."""
+    diagnostics.seek(0)
+    return diagnostics.read(32 * 1024).decode("utf-8", errors="replace")
+
+
+def test_a105_sub_boot_does_not_construct_or_resolve_kernel_runtime() -> None:
+    """K105 may load its runtime facility, but Sub must not use it at boot.
+
+    The pre-import traps are sensitivity-planted before importing ``app``.
+    They reject Kernel-attributed engine/session-factory construction and
+    DatabaseRuntime construction, binding, reference claims or resolution,
+    while allowing Sub's own ``app.db`` engine and session factory.
+
+    Fixed phases and one stack-only dump precede the unchanged 120s deadline.
+    Timeout reports read at most 32 KiB from a dedicated diagnostic stream;
+    diagnostics never inspect local values or the process environment.
+    """
+    with TemporaryFile() as diagnostics:
+        try:
+            process = subprocess.Popen(  # noqa: S603 — fixed argv, our own interpreter
+                [
+                    sys.executable,
+                    "-c",
+                    "import faulthandler\n"
+                    "import signal\n"
+                    "import sys\n"
+                    "diagnostics = open(int(sys.argv[1]), 'w', closefd=False)\n"
+                    "faulthandler.enable(file=diagnostics, all_threads=True)\n"
+                    "faulthandler.register(signal.SIGUSR1, file=diagnostics, all_threads=True)\n"
+                    "print('K105 boot probe: dependency imports', file=diagnostics, flush=True)\n"
+                    "import sqlalchemy\n"
+                    "import sqlalchemy.engine\n"
+                    "import sqlalchemy.engine.create\n"
+                    "import sqlalchemy.orm\n"
+                    "import sqlalchemy.orm.session\n"
+                    "print('K105 boot probe: sensitivity plants', file=diagnostics, flush=True)\n"
+                    "kernel_engine_calls = []\n"
+                    "kernel_sessionmaker_calls = []\n"
+                    "kernel_runtime_operations = []\n"
+                    "sub_engine_calls = []\n"
+                    "sub_sessionmaker_calls = []\n"
+                    "def caller_module():\n"
+                    "    frame = sys._getframe(2)\n"
+                    "    return frame.f_globals.get('__name__', '')\n"
+                    "original_create_engine = sqlalchemy.create_engine\n"
+                    "original_sessionmaker = sqlalchemy.orm.sessionmaker\n"
+                    "def guarded_create_engine(*args, **kwargs):\n"
+                    "    module = caller_module()\n"
+                    "    if module.startswith('dotmac_kernel'):\n"
+                    "        kernel_engine_calls.append(module)\n"
+                    "        raise RuntimeError('Kernel engine construction is forbidden')\n"
+                    "    if module == 'app.db':\n"
+                    "        sub_engine_calls.append(module)\n"
+                    "    return original_create_engine(*args, **kwargs)\n"
+                    "def guarded_sessionmaker(*args, **kwargs):\n"
+                    "    module = caller_module()\n"
+                    "    if module.startswith('dotmac_kernel'):\n"
+                    "        kernel_sessionmaker_calls.append(module)\n"
+                    "        raise RuntimeError('Kernel sessionmaker construction is forbidden')\n"
+                    "    if module == 'app.db':\n"
+                    "        sub_sessionmaker_calls.append(module)\n"
+                    "    return original_sessionmaker(*args, **kwargs)\n"
+                    "sqlalchemy.create_engine = guarded_create_engine\n"
+                    "sqlalchemy.engine.create_engine = guarded_create_engine\n"
+                    "sqlalchemy.engine.create.create_engine = guarded_create_engine\n"
+                    "sqlalchemy.orm.sessionmaker = guarded_sessionmaker\n"
+                    "sqlalchemy.orm.session.sessionmaker = guarded_sessionmaker\n"
+                    "runtime_operations = {\n"
+                    "    '__init__', 'from_urls', 'bind_database_runtime',\n"
+                    "    '_claim_reference_runtime_import', 'resolve_database_runtime',\n"
+                    "}\n"
+                    "def runtime_profile(frame, event, arg):\n"
+                    "    if (event == 'call'\n"
+                    "        and frame.f_globals.get('__name__') == 'dotmac_kernel.session_runtime'\n"
+                    "        and frame.f_code.co_name in runtime_operations):\n"
+                    "        kernel_runtime_operations.append(frame.f_code.co_name)\n"
+                    "        raise RuntimeError('Kernel DatabaseRuntime operation is forbidden')\n"
+                    "def expect_plant_rejected(call, message):\n"
+                    "    try:\n"
+                    "        call()\n"
+                    "    except RuntimeError as exc:\n"
+                    "        assert str(exc) == message, exc\n"
+                    "    else:\n"
+                    "        raise AssertionError('sensitivity plant escaped its trap')\n"
+                    "kernel_db = {'__name__': 'dotmac_kernel.db', "
+                    "'sqlalchemy': sqlalchemy}\n"
+                    "exec(compile(\n"
+                    "    \"def plant(): return sqlalchemy.create_engine('postgresql://unused')\",\n"
+                    "    'dotmac_kernel/db.py', 'exec'), kernel_db)\n"
+                    "expect_plant_rejected(kernel_db['plant'], "
+                    "'Kernel engine construction is forbidden')\n"
+                    "kernel_runtime = {'__name__': 'dotmac_kernel.session_runtime', "
+                    "'sqlalchemy': sqlalchemy}\n"
+                    "exec(compile(\n"
+                    "    \"def engine_plant(): return sqlalchemy.create_engine('postgresql://unused')\\n\"\n"
+                    '    "def factory_plant(): return sqlalchemy.orm.sessionmaker()\\n"\n'
+                    '    "def resolve_database_runtime(): return None\\n"\n'
+                    '    "def from_urls(): return None\\n"\n'
+                    '    "def bind_database_runtime(): return None\\n"\n'
+                    '    "def _claim_reference_runtime_import(): return None\\n"\n'
+                    '    "class DatabaseRuntime:\\n    def __init__(self): return None\\n",\n'
+                    "    'dotmac_kernel/session_runtime.py', 'exec'), kernel_runtime)\n"
+                    "expect_plant_rejected(kernel_runtime['engine_plant'], "
+                    "'Kernel engine construction is forbidden')\n"
+                    "expect_plant_rejected(kernel_runtime['factory_plant'], "
+                    "'Kernel sessionmaker construction is forbidden')\n"
+                    "sys.setprofile(runtime_profile)\n"
+                    "try:\n"
+                    "    for name, args in (\n"
+                    "        ('resolve_database_runtime', ()), ('from_urls', ()),\n"
+                    "        ('bind_database_runtime', ()),\n"
+                    "        ('_claim_reference_runtime_import', ()), ('DatabaseRuntime', ()),\n"
+                    "    ):\n"
+                    "        sys.setprofile(runtime_profile)\n"
+                    "        expect_plant_rejected(lambda: kernel_runtime[name](*args),\n"
+                    "            'Kernel DatabaseRuntime operation is forbidden')\n"
+                    "finally:\n"
+                    "    sys.setprofile(None)\n"
+                    "kernel_engine_calls.clear()\n"
+                    "kernel_sessionmaker_calls.clear()\n"
+                    "kernel_runtime_operations.clear()\n"
+                    "sub_engine_calls.clear()\n"
+                    "sub_sessionmaker_calls.clear()\n"
+                    "print('K105 boot probe: profiled app import', file=diagnostics, flush=True)\n"
+                    "sys.setprofile(runtime_profile)\n"
+                    "try:\n"
+                    "    import app.main\n"
+                    "finally:\n"
+                    "    sys.setprofile(None)\n"
+                    "print('K105 boot probe: import complete; assertions', file=diagnostics, flush=True)\n"
+                    "forbidden = {'dotmac_kernel.app_factory', 'dotmac_kernel.db', "
+                    "'dotmac_kernel.database_runtime'}\n"
+                    "assert forbidden.isdisjoint(sys.modules), forbidden & set(sys.modules)\n"
+                    "assert not kernel_engine_calls, kernel_engine_calls\n"
+                    "assert not kernel_sessionmaker_calls, kernel_sessionmaker_calls\n"
+                    "assert not kernel_runtime_operations, kernel_runtime_operations\n"
+                    "assert sub_engine_calls, 'Sub app.db engine construction was not observed'\n"
+                    "assert sub_sessionmaker_calls, 'Sub app.db sessionmaker was not observed'\n"
+                    "runtime = sys.modules.get('dotmac_kernel.session_runtime')\n"
+                    "assert runtime is not None, 'K105 session_runtime was not observed'\n"
+                    "assert runtime._binding is None, runtime._binding\n"
+                    "assert runtime._reference_claimed is False, runtime._reference_claimed\n",
+                    str(diagnostics.fileno()),
+                ],
+                cwd=PROJECT_ROOT,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                pass_fds=(diagnostics.fileno(),),
+            )
+            _stdout, stderr = process.communicate(timeout=120)
+        except subprocess.TimeoutExpired:
+            # Stack-only dump from the child's own handler, then kill.
+            process.send_signal(signal.SIGUSR1)
+            time.sleep(2)
+            process.kill()
+            process.communicate()
+            raise AssertionError(
+                "K105 boot probe exceeded the unchanged 120s deadline:\n"
+                + _read_probe_diagnostics(diagnostics)
+            ) from None
+        assert process.returncode == 0, (
+            f"K105 boot probe exit {process.returncode}:\n{stderr}\n"
+            + _read_probe_diagnostics(diagnostics)
+        )

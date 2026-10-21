@@ -1,0 +1,145 @@
+{
+  "public_id": "brief-fixture",
+  "work_order_id": "00000000-0000-4000-8000-000000000001",
+  "issue": "Shared feeder fault",
+  "instructions": "Inspect and repair the feeder",
+  "access_notes": "Use the service gate",
+  "references": [],
+  "tasks": [
+    {
+      "id": "00000000-0000-4000-8000-000000000002",
+      "title": "Replace damaged section",
+      "instructions": "Check continuity",
+      "status": "in_progress",
+      "completed_at": null,
+      "template_plan_state": "current"
+    }
+  ],
+  "signoff": {
+    "evidence_required": true,
+    "minimum_photo_count": 2,
+    "customer_signoff_required": true,
+    "signature_unavailable_reason_allowed": true,
+    "requires_as_built_evidence": true
+  },
+  "directions": [
+    {
+      "label": "Shared cabinet",
+      "source": "issued_outage_target",
+      "entity_id": "00000000-0000-4000-8000-000000000003",
+      "latitude": 9.1,
+      "longitude": 7.4,
+      "address_text": null,
+      "coordinate_provenance": "native_plant_record"
+    }
+  ],
+  "outage_audience": {
+    "link_id": "00000000-0000-4000-8000-000000000004",
+    "incident_id": "00000000-0000-4000-8000-000000000005",
+    "issued": {
+      "id": "00000000-0000-4000-8000-000000000006",
+      "sequence": 1,
+      "effective_at": "2026-10-11T08:00:00Z",
+      "scope_type": "fdh-cabinet",
+      "scope_id": "00000000-0000-4000-8000-000000000003",
+      "membership_token": "fixture-issued-audience",
+      "subscription_count": 3,
+      "knowledge": "known"
+    },
+    "current": {
+      "id": "00000000-0000-4000-8000-000000000007",
+      "sequence": 2,
+      "effective_at": "2026-10-11T09:00:00Z",
+      "scope_type": "fdh-cabinet",
+      "scope_id": "00000000-0000-4000-8000-000000000003",
+      "membership_token": "fixture-current-audience",
+      "subscription_count": 2,
+      "knowledge": "known"
+    },
+    "selected_scope": "current",
+    "subscription_ids": [
+      "00000000-0000-4000-8000-000000000008"
+    ],
+    "next_after_subscription_id": "00000000-0000-4000-8000-000000000008",
+    "knowledge": "known"
+  },
+  "affected_customers": [
+    {
+      "subscription_id": "00000000-0000-4000-8000-000000000008",
+      "subscriber_id": "00000000-0000-4000-8000-000000000009",
+      "name": "Customer One",
+      "service_address": "Service road",
+      "details_available": true,
+      "details_provenance": "current_subscription_record"
+    }
+  ],
+  "affected_subscription_count": 2,
+  "template_recommendation": {
+    "identity": {
+      "kind": "infrastructure",
+      "purpose": "infrastructure_rollout",
+      "access_technology": "radio",
+      "version": 1
+    },
+    "classification": {
+      "purpose": "infrastructure_rollout",
+      "access_technology": "radio",
+      "source": "explicit_operator_selection"
+    },
+    "requirements": [
+      {
+        "code": "scope_and_target",
+        "gate": "before_dispatch",
+        "evidence": "Record the customer/service or shared infrastructure target, location, scope and accountable team."
+      },
+      {
+        "code": "supervisor_dispatch",
+        "gate": "before_dispatch",
+        "evidence": "Supervisor confirms scope and explicitly dispatches an eligible technician or vendor through the assignment owner."
+      },
+      {
+        "code": "safety_and_permits",
+        "gate": "before_field_work",
+        "evidence": "Record site risk assessment, safe access, applicable permits/wayleaves and isolation approvals; explain any not-applicable item."
+      },
+      {
+        "code": "materials",
+        "gate": "before_field_work",
+        "evidence": "Confirm approved materials/tools and record consumption, returns and asset identities through their existing owners."
+      },
+      {
+        "code": "rollout_design",
+        "gate": "before_dispatch",
+        "evidence": "Link approved project/route/site design, rollout scope, shared assets and accountable network acceptance owner."
+      },
+      {
+        "code": "radio_survey_and_mount",
+        "gate": "before_field_work",
+        "evidence": "Confirm line of sight, approved link/spectrum plan, mounting, grounding, power and applicable working-at-height controls."
+      },
+      {
+        "code": "radio_tests",
+        "gate": "before_handover",
+        "evidence": "Attach applicable alignment, signal/link quality, interference and service test results against approved engineering acceptance criteria; record defects and reviewer decision."
+      },
+      {
+        "code": "as_built",
+        "gate": "before_handover",
+        "evidence": "Record actual route/site, installed or removed asset identities, photos and deviations; submit topology/inventory changes to their canonical owners."
+      },
+      {
+        "code": "handover",
+        "gate": "before_handover",
+        "evidence": "Submit field evidence, outstanding defects and customer/network handover for supervisor review; acceptance, provisioning, billing and ticket closure remain separate owner decisions."
+      }
+    ],
+    "source": "checked_in_approved_catalog",
+    "use": "recommendation_only"
+  },
+  "classification": {
+    "purpose": "infrastructure_rollout",
+    "access_technology": "radio",
+    "source": "explicit_operator_selection"
+  },
+  "template_recommendation_status": "available"
+}

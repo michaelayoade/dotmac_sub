@@ -92,20 +92,36 @@ from app.services.billing_tax_resolution import (
     resolve_catalog_price_tax,
     resolve_subscription_tax,
 )
-from app.services.credential_crypto import decrypt_credential
+from app.services.credential_crypto import (
+    decrypt_credential,
+    is_secret_reference_value,
+    reject_reserved_service_password,
+)
 from app.services.ip_assignment_lifecycle import (
     IPv4ServedProjectionDecision,
     RepairServiceIPv4AssignmentCommand,
-    RepairServiceIPv4ProjectionCommand,
+    ipv4_held_by_other_service_ipam,
     preview_service_ipv4_assignment_repair,
     preview_service_ipv4_projection_repair,
-    repair_service_ipv4_assignment,
-    repair_service_ipv4_projection,
+    project_initial_served_ipv4,
+    replace_service_ipv4,
 )
 from app.services.network.radius_sessions import (
     latest_open_accounting_session_for_subscription,
 )
 from app.services.owner_commands import CommandContext
+from app.services.pppoe_credentials import (
+    legacy_unbound_candidate,
+    plan_change_provisioning,
+    stage_pending_credential,
+    subscription_bound_credential,
+    username_in_use,
+)
+from app.services.pppoe_password_reveal import (
+    UNUSABLE_MESSAGE,
+    CredentialUnusable,
+    refuse_secret_reference,
+)
 from app.services.subscription_ipv4_projection import (
     ServiceIPv4Source,
     SubscriptionServiceIPv4,
@@ -1226,6 +1242,7 @@ def _upsert_access_credential(
     radius_profile_id: str | None = None,
     subscription_id: UUID | None = None,
 ) -> None:
+    reject_reserved_service_password(plain_password)
     normalized_username = str(username or "").strip()
     same_username_query = db.query(AccessCredential).filter(
         AccessCredential.subscriber_id == subscriber_id,
@@ -1286,6 +1303,7 @@ def _upsert_access_credential(
         if secret_hash:
             credential.secret_hash = secret_hash
         credential.is_active = True
+        credential.deactivation_reason = None
         if radius_profile_uuid:
             credential.radius_profile_id = radius_profile_uuid
         try:
@@ -1319,6 +1337,69 @@ def _upsert_access_credential(
         ) from exc
 
 
+CREDENTIAL_UPDATE_PERMISSION = "subscription:credential:update"
+CREDENTIAL_PERMISSION_DENIED = (
+    "You do not have permission to change service credentials "
+    f"({CREDENTIAL_UPDATE_PERMISSION})."
+)
+RADIUS_PENDING_WARNING = (
+    "Saved, but the RADIUS update is pending and will be retried by the nightly "
+    "sweep. The previous login may keep authenticating until then."
+)
+
+
+def commit_credential(db: Session, username: str) -> None:
+    try:
+        db.commit()
+    except IntegrityError as exc:
+        db.rollback()
+        raise ValueError(
+            f"Service login {username} is already used by another customer or "
+            "credential."
+        ) from exc
+
+
+def _project_credential_change(db: Session, usernames: set[str]) -> bool:
+    """Project a credential edit; True only when every target converged."""
+    try:
+        from app.services.radius_population import reconcile_usernames
+
+        result = reconcile_usernames(usernames, dry_run=False, source_db=db)
+    except Exception:
+        logger.warning(
+            "RADIUS projection failed after a service credential edit",
+            exc_info=True,
+        )
+        return False
+    targets = result.get("projection_targets")
+    return (
+        result.get("projection_complete") is True
+        and isinstance(targets, int)
+        and targets >= 1
+    )
+
+
+def _disconnect_after_projection(
+    db: Session, subscription_id: str, logins: list[str]
+) -> int:
+    from app.services.enforcement import disconnect_subscription_sessions
+    from app.services.pppoe_credentials import _resolve_radius_setting
+
+    if _resolve_radius_setting(db, "pppoe_credential_change_disconnect") != (
+        "immediate_after_projection"
+    ):
+        return 0
+    kicked = 0
+    for login in logins:
+        kicked += int(
+            disconnect_subscription_sessions(
+                db, subscription_id, reason="credential_update", login=login
+            )
+            or 0
+        )
+    return kicked
+
+
 def _current_access_credential(
     db: Session,
     subscriber_id: str | UUID | None,
@@ -1346,12 +1427,55 @@ def _current_access_credential(
     ).first()
 
 
-def _current_service_password(
-    db: Session, subscriber_id: str | UUID | None
+def _legacy_candidate_for_form(
+    db: Session,
+    subscriber_id: object,
+    subscription_id: object,
+    has_bound_credential: bool,
+) -> dict[str, str] | None:
+    """Staff-visible choice to adopt the customer's single unbound credential."""
+    if has_bound_credential or not subscriber_id or not subscription_id:
+        return None
+    try:
+        candidate = legacy_unbound_candidate(
+            db, UUID(str(subscriber_id)), UUID(str(subscription_id))
+        )
+    except ValueError:
+        return None
+    if candidate is None:
+        return None
+    return {"id": str(candidate.id), "username": str(candidate.username)}
+
+
+def _decrypt_credential_row(
+    credential: AccessCredential | None, owner_ref: object
 ) -> str | None:
-    credential = _current_access_credential(db, subscriber_id)
     if not credential or not credential.secret_hash:
         return None
+    refuse_secret_reference(credential.secret_hash)
+    try:
+        return decrypt_credential(credential.secret_hash)
+    except Exception:
+        logger.warning(
+            "Failed to decrypt service credential for %s",
+            owner_ref,
+            exc_info=True,
+        )
+        return None
+
+
+def _current_service_password(
+    db: Session,
+    subscriber_id: str | UUID | None,
+    *,
+    subscription_id: str | UUID | None = None,
+) -> str | None:
+    credential = _current_access_credential(
+        db, subscriber_id, subscription_id=subscription_id
+    )
+    if not credential or not credential.secret_hash:
+        return None
+    refuse_secret_reference(credential.secret_hash)
     try:
         return decrypt_credential(credential.secret_hash)
     except Exception:
@@ -1361,6 +1485,59 @@ def _current_service_password(
             exc_info=True,
         )
         return None
+
+
+def _own_service_credential_view(
+    db: Session, subscriber_id: object, subscription: object
+) -> tuple[str, bool, str]:
+    """Return ``(login, has_password, problem)`` from this subscription's own credential."""
+    subscription_id = subscription.get("id") if isinstance(subscription, dict) else None
+    if not subscriber_id or not subscription_id:
+        return "", False, ""
+    try:
+        credential = subscription_bound_credential(
+            db, str(subscriber_id), str(subscription_id)
+        )
+    except CredentialUnusable:
+        return "", False, UNUSABLE_MESSAGE
+    if credential is None:
+        return "", False, ""
+    if is_secret_reference_value(getattr(credential, "secret_hash", None)):
+        return credential.username or "", False, UNUSABLE_MESSAGE
+    return (
+        credential.username or "",
+        bool(getattr(credential, "secret_hash", None)),
+        "",
+    )
+
+
+def subscription_subscriber_id(db: Session, subscription_id: str) -> str | None:
+    """Return the owning subscriber id for audit attribution, or None."""
+    try:
+        subscription = catalog_service.subscriptions.get(
+            db=db, subscription_id=subscription_id
+        )
+    except Exception:
+        return None
+    return str(subscription.subscriber_id)
+
+
+def reveal_subscription_service_password(
+    db: Session, subscription_id: str
+) -> tuple[str, bool]:
+    """Return ``(password, found)`` for an explicit reveal action.
+
+    Bound strictly to this subscription's own credential; raises
+    ``CredentialUnusable`` for a secret reference or an ambiguous binding.
+    Callers must enforce the reveal permission, CSRF and audit; this never logs
+    the secret.
+    """
+    subscriber_id = subscription_subscriber_id(db, subscription_id)
+    if subscriber_id is None:
+        return "", False
+    credential = subscription_bound_credential(db, subscriber_id, subscription_id)
+    password = _decrypt_credential_row(credential, f"subscription {subscription_id}")
+    return password or "", bool(password)
 
 
 def _credential_contact_targets(subscriber: Subscriber) -> dict[str, list[str]]:
@@ -1384,10 +1561,28 @@ def _credential_contact_targets(subscriber: Subscriber) -> dict[str, list[str]]:
     return {"email": emails, "sms": phones}
 
 
+CREDENTIAL_MASK = "********"
+CREDENTIAL_RESEND_WINDOW_SECONDS = 120
+
+
+def _credential_email_text(subscriber: Subscriber, username: str, password: str) -> str:
+    return (
+        f"Hello {subscriber.full_name},\n\n"
+        f"Your service login is: {username}\n"
+        f"Your service password is: {password}\n\n"
+        "Please keep these details secure."
+    )
+
+
+def _credential_sms_text(username: str, password: str) -> str:
+    return f"Service login: {username} | Password: {password}. Keep it secure."
+
+
 def send_subscription_credentials(
     db: Session,
     *,
     subscription_id: str,
+    actor_id: str | None = None,
 ) -> dict[str, object]:
     subscription = catalog_service.subscriptions.get(
         db=db, subscription_id=subscription_id
@@ -1400,7 +1595,26 @@ def send_subscription_credentials(
     if not credential or not credential.username:
         raise ValueError("No service credential is stored for this subscriber.")
 
-    password = _current_service_password(db, subscription.subscriber_id)
+    try:
+        password = _current_service_password(db, subscription.subscriber_id)
+    except CredentialUnusable as exc:
+        from app.services.audit_adapter import AuditActor, record_audit_event
+
+        record_audit_event(
+            db,
+            action="subscription.credentials_send_refused",
+            entity_type="subscriber",
+            entity_id=str(subscription.subscriber_id),
+            actor=(
+                AuditActor.user(actor_id)
+                if actor_id
+                else AuditActor.system("send_subscription_credentials")
+            ),
+            metadata={"subscription_id": str(subscription_id), "reason": exc.reason},
+            status_code=409,
+            is_success=False,
+        )
+        raise ValueError(UNUSABLE_MESSAGE) from exc
     if not password:
         raise ValueError("Current service password is not available for delivery.")
 
@@ -1408,12 +1622,26 @@ def send_subscription_credentials(
     if not targets["email"] and not targets["sms"]:
         raise ValueError("Subscriber has no email or SMS contact targets.")
 
+    # Sends are synchronous (one SMTP/SMS timeout per target, which can exceed
+    # the proxy read timeout with many targets); refuse a repeat so a retried
+    # click cannot deliver the password twice.
+    from app.services.notification import notifications as notification_records
+
+    recent = notification_records.recent_credential_send_exists(
+        db, subscriber.id, CREDENTIAL_RESEND_WINDOW_SECONDS
+    )
+    if recent:
+        raise ValueError(
+            "Credentials were already sent to this subscriber moments ago. "
+            "Wait two minutes before sending again."
+        )
+
     subject = "Your Internet service credentials"
-    body_text = (
-        f"Hello {subscriber.full_name},\n\n"
-        f"Your service login is: {credential.username}\n"
-        f"Your service password is: {password}\n\n"
-        "Please keep these details secure."
+    # The delivered message carries the password (until D9 replaces delivery);
+    # the copy persisted in ``notifications`` / deliveries has it masked.
+    body_text = _credential_email_text(subscriber, credential.username, password)
+    stored_text = _credential_email_text(
+        subscriber, credential.username, CREDENTIAL_MASK
     )
     from html import escape
 
@@ -1434,22 +1662,54 @@ def send_subscription_credentials(
     email_sent = 0
     sms_sent = 0
     for email in targets["email"]:
-        email_service.send_email(
+        if email_service.send_email(
             db=db,
             to_email=email,
             subject=subject,
             body_html=body_html,
             body_text=body_text,
             activity="subscription_welcome",
-        )
-        email_sent += 1
+            stored_body=stored_text,
+            subscriber_id=str(subscriber.id),
+        ):
+            email_sent += 1
 
-    sms_body = (
-        f"Service login: {credential.username} | Password: {password}. Keep it secure."
-    )
+    sms_body = _credential_sms_text(credential.username, password)
+    stored_sms = _credential_sms_text(credential.username, CREDENTIAL_MASK)
     for phone in targets["sms"]:
-        if sms_service.send_sms(db, phone, sms_body, track=True):
+        if sms_service.send_sms(
+            db,
+            phone,
+            sms_body,
+            track=True,
+            stored_body=stored_sms,
+            subscriber_id=str(subscriber.id),
+        ):
             sms_sent += 1
+
+    from app.services.audit_adapter import AuditActor, record_audit_event
+
+    record_audit_event(
+        db,
+        action="subscription.credentials_sent",
+        entity_type="subscriber",
+        entity_id=str(subscription.subscriber_id),
+        actor=(
+            AuditActor.user(actor_id)
+            if actor_id
+            else AuditActor.system("send_subscription_credentials")
+        ),
+        # Counts only; never the credential or the contact addresses.
+        metadata={
+            "subscription_id": str(subscription_id),
+            "email_sent": email_sent,
+            "sms_sent": sms_sent,
+            "email_targets": len(targets["email"]),
+            "sms_targets": len(targets["sms"]),
+        },
+        status_code=200 if (email_sent or sms_sent) else 502,
+        is_success=bool(email_sent or sms_sent),
+    )
 
     return {
         "email_sent": email_sent,
@@ -2004,6 +2264,41 @@ def replace_subscription_ipv4_with_owner(
         if current_assignment is not None and current_assignment.ipv4_address
         else None
     )
+    # Guard: the customer is already served correctly (live sessions and the
+    # served column agree) and only IPAM differs. Moving them would break a
+    # working service; the IPAM record is what needs repairing.
+    served_ip = str(subscription.ipv4_address or "").strip()
+    if (
+        current_assignment is not None
+        and current_address is not None
+        and served_ip
+        and current_address != served_ip
+        and normalized_ip != served_ip
+    ):
+        evidence = preview_service_ipv4_projection_repair(
+            db,
+            subscription_id=subscription_uuid,
+            assignment_id=current_assignment.id,
+        )
+        live_sessions = evidence.active_session_count
+        # If another non-terminal service's IPAM already holds the served IP,
+        # this is a collision, not an IPAM-only repair: do not trap staff in
+        # a "repair IPAM" message that cannot be carried out.
+        served_held_elsewhere = ipv4_held_by_other_service_ipam(
+            db, subscription_id=subscription_uuid, address=served_ip
+        )
+        if (
+            not served_held_elsewhere
+            and live_sessions > 0
+            and evidence.old_address_session_count == live_sessions
+        ):
+            raise ValueError(
+                f"Customer is served correctly on {served_ip} (live session and "
+                f"served IP agree) but IPAM records {current_address}; repair "
+                f"the IPAM record instead. Replacing with {served_ip} re-points "
+                "IPAM without moving the customer. If another service's IPAM "
+                f"holds {served_ip}, escalate this as an IP collision instead."
+            )
     if current_address == normalized_ip:
         if current_assignment is None:
             raise ValueError("The current IPv4 assignment could not be resolved.")
@@ -2066,15 +2361,15 @@ def replace_subscription_ipv4_with_owner(
     assignment_fingerprint = assignment_preview.fingerprint
     deactivate_assignment_ids = assignment_preview.deactivate_assignment_ids
     command_id = uuid4()
-    correlation_id = command_id
     db.commit()
 
-    assignment_outcome = repair_service_ipv4_assignment(
+    # One owner transaction: IPAM move + served projection, or neither.
+    replace_service_ipv4(
         db,
         RepairServiceIPv4AssignmentCommand(
             context=CommandContext(
                 command_id=command_id,
-                correlation_id=correlation_id,
+                correlation_id=command_id,
                 actor=actor,
                 scope="catalog:subscription:ipv4:replace",
                 reason=(
@@ -2087,49 +2382,6 @@ def replace_subscription_ipv4_with_owner(
             desired_address_id=target_id,
             deactivate_assignment_ids=deactivate_assignment_ids,
             preview_fingerprint=assignment_fingerprint,
-        ),
-    )
-    if assignment_outcome.desired_assignment_id is None:
-        raise ValueError("IPv4 assignment owner did not return a desired assignment.")
-
-    projection_preview = preview_service_ipv4_projection_repair(
-        db,
-        subscription_id=subscription_uuid,
-        assignment_id=assignment_outcome.desired_assignment_id,
-    )
-    if projection_preview.decision is IPv4ServedProjectionDecision.noop:
-        db.commit()
-        return normalized_ip
-    if not projection_preview.applicable:
-        decision = projection_preview.decision.value
-        db.rollback()
-        raise ValueError(
-            "IPAM was updated, but the served-IP projection requires operator "
-            f"review ({decision})."
-        )
-    projection_fingerprint = projection_preview.fingerprint
-    desired_assignment_id = assignment_outcome.desired_assignment_id
-    db.commit()
-
-    projection_command_id = uuid4()
-    repair_service_ipv4_projection(
-        db,
-        RepairServiceIPv4ProjectionCommand(
-            context=CommandContext(
-                command_id=projection_command_id,
-                correlation_id=correlation_id,
-                causation_id=command_id,
-                actor=actor,
-                scope="catalog:subscription:ipv4:replace",
-                reason=(
-                    f"Project the exact service IPv4 replacement to {normalized_ip}; "
-                    "commercial IP entitlement unchanged"
-                ),
-                idempotency_key=f"admin-ipv4-projection:{command_id}",
-            ),
-            subscription_id=subscription_uuid,
-            assignment_id=desired_assignment_id,
-            preview_fingerprint=projection_fingerprint,
         ),
     )
     return normalized_ip
@@ -3962,7 +4214,9 @@ def subscription_detail_context(
         subscription=subscription,
         routes=active_additional_routes,
     )
-    credential = _current_access_credential(db, subscription.subscriber_id)
+    credential = _current_access_credential(
+        db, subscription.subscriber_id, subscription_id=subscription.id
+    )
     password_sync = _password_sync_evidence(credential)
     commercial_policy = _subscription_commercial_policy(db, subscription)
     reply_attributes = build_radius_reply_attributes(
@@ -4118,8 +4372,9 @@ def subscription_form_context(
     )
     route_range_options = _route_range_parent_options_for_ipam(db)
     subscriber_label = _resolve_subscriber_label(db, str(subscriber_id or ""))
-    current_password = _current_service_password(db, str(subscriber_id or ""))
-    current_credential = _current_access_credential(db, str(subscriber_id or ""))
+    own_login, own_has_password, credential_problem = _own_service_credential_view(
+        db, subscriber_id, subscription
+    )
     credential_targets = None
     if subscriber_id:
         try:
@@ -4258,11 +4513,19 @@ def subscription_form_context(
             db, SettingDomain.catalog, "billing_mode_postpaid_notice"
         )
         or "This subscription follows dunning steps.",
-        "current_service_login": getattr(current_credential, "username", "")
-        if current_credential
-        else "",
-        "current_service_password": current_password or "",
+        "current_service_login": own_login,
+        "credential_problem": credential_problem,
+        # The stored password is never rendered into page HTML; the page only
+        # learns whether one exists. Revealing it is a separate audited action.
+        "has_current_service_password": own_has_password,
         "credential_targets": credential_targets or {"email": [], "sms": []},
+        "credential_unusable": bool(credential_problem),
+        "legacy_credential_candidate": _legacy_candidate_for_form(
+            db,
+            subscriber_id,
+            subscription.get("id") if isinstance(subscription, dict) else None,
+            bool(own_login) or bool(credential_problem),
+        ),
         "commercial_policy": {"rows": []},
     }
     if subscriber_id:
@@ -4577,9 +4840,21 @@ def create_subscription_with_audit(
     _, generate_invoice, send_welcome_email = apply_create_quick_options(
         payload_data, form
     )
+    typed_login = str(form.get("login") or "").strip()
+    typed_password = str(form.get("service_password") or "").strip()
+    reject_reserved_service_password(typed_password)
+    if typed_login:
+        # Refuse a taken login before anything is created.
+        if username_in_use(db, typed_login):
+            raise ValueError(
+                f"Service login {typed_login} is already used by another "
+                "customer or credential."
+            )
     created = create_subscription(db, payload_data)
 
     subscriber = db.get(Subscriber, created.subscriber_id)
+    selected_login = ""
+    selected_password: str | None = None
     if subscriber:
         pppoe_auto_generate = _pppoe_auto_generate_enabled(db)
         existing_credential = _current_access_credential(
@@ -4647,13 +4922,11 @@ def create_subscription_with_audit(
         selected_ips=selected_ips,
     )
     if allocated_ips:
-        created = update_subscription(
-            db,
-            str(created.id),
-            {
-                "ipv4_address": allocated_ips[0],
-            },
+        created = project_initial_served_ipv4(
+            db, subscription=created, address=allocated_ips[0]
         )
+        db.commit()
+        db.refresh(created)
     additional_routes = sync_additional_routes_for_subscription(
         db,
         subscription_obj=created,
@@ -4709,6 +4982,34 @@ def create_subscription_with_audit(
             ) from exc
         else:
             _reconcile_active_subscription_after_credential_sync(db, str(created.id))
+    elif (
+        subscriber
+        and (typed_login or typed_password)
+        and created.status != SubscriptionStatus.active
+    ):
+        if not typed_login:
+            from app.services.pppoe_credentials import generate_pppoe_username
+
+            selected_login = (
+                generate_pppoe_username(db, created.subscriber_id) or selected_login
+            )
+        elif not selected_login:
+            selected_login = typed_login
+        if not selected_login:
+            raise ValueError("Enter a service login to stage the typed password.")
+        # Typed login/password are honoured at activation: stage them on this
+        # service's own inactive credential instead of discarding them.
+        stage_pending_credential(
+            db,
+            subscriber_id=created.subscriber_id,
+            subscription_id=created.id,
+            username=selected_login,
+            plain_password=typed_password or None,
+            radius_profile_id=created.radius_profile_id,
+        )
+        commit_credential(db, selected_login)
+        if additional_routes:
+            _reconcile_active_subscription_after_credential_sync(db, str(created.id))
     elif additional_routes:
         _reconcile_active_subscription_after_credential_sync(db, str(created.id))
 
@@ -4757,10 +5058,16 @@ def update_subscription_with_audit(
     ip_addon_id: str | None = None,
     ip_addon_quantity: str | int | None = None,
     ipv4_assignment_submitted: bool = False,
+    credential_update_allowed: bool = False,
+    feedback: list[str] | None = None,
+    adopt_legacy_credential_id: str | None = None,
 ) -> object:
     """Update subscription, compute diff, and log audit.
 
-    Returns the updated subscription ORM object.
+    Returns the updated subscription ORM object. Non-fatal operator warnings
+    (for example a pending RADIUS projection) are appended to ``feedback``.
+    Service-credential changes need ``credential_update_allowed`` and only ever
+    touch the credential bound to this exact subscription.
     """
     before = catalog_service.subscriptions.get(db=db, subscription_id=subscription_id)
     manage_ipv4_assignment = ipv4_assignment_submitted or bool(
@@ -4787,6 +5094,66 @@ def update_subscription_with_audit(
         "cancel_reason",
     ):
         payload_data.pop(protected_field, None)
+    entered_password = str(service_password or "").strip()
+    requested_login = str(payload_data.get("login") or "").strip()
+    bound_credential = _current_access_credential(
+        db, before.subscriber_id, subscription_id=before.id
+    )
+    current_username = (
+        bound_credential.username if bound_credential else str(before.login or "")
+    )
+    # Only an explicit change counts: the form prefills S.login, which can drift
+    # from the credential, so a value equal to either is "no change".
+    username_changed = bool(requested_login) and requested_login not in {
+        current_username,
+        str(before.login or ""),
+    }
+    credential_change = username_changed or bool(entered_password)
+    old_username = str(bound_credential.username) if bound_credential else None
+    stage_only = False
+    if credential_change:
+        if not credential_update_allowed:
+            raise ValueError(CREDENTIAL_PERMISSION_DENIED)
+        if plan_change_provisioning(db, before.id):
+            raise ValueError(
+                "A plan change is provisioning on this service; change its "
+                "credentials after it completes."
+            )
+        if entered_password:
+            reject_reserved_service_password(entered_password)
+        if bound_credential is None and before.status != SubscriptionStatus.pending:
+            legacy = legacy_unbound_candidate(db, before.subscriber_id, before.id)
+            if legacy is None:
+                raise ValueError(
+                    "This service has no credential of its own, so its login "
+                    "cannot be changed here."
+                )
+            if str(adopt_legacy_credential_id or "") != str(legacy.id):
+                raise ValueError(
+                    "This service has no credential of its own. The customer has "
+                    f"one unbound legacy login ({legacy.username}); tick 'Use the "
+                    "legacy login for this service' and save to adopt it."
+                )
+            legacy.subscription_id = before.id
+            db.flush()
+            bound_credential = legacy
+            old_username = str(legacy.username)
+            current_username = old_username
+            username_changed = bool(requested_login) and requested_login not in {
+                current_username,
+                str(before.login or ""),
+            }
+        if bound_credential is None:
+            stage_only = True
+            if not (requested_login or current_username):
+                raise ValueError("Enter a service login to stage the password.")
+        elif username_changed and username_in_use(
+            db, requested_login, exclude_id=bound_credential.id
+        ):
+            raise ValueError(
+                f"Service login {requested_login} is already used by another "
+                "customer or credential."
+            )
     update_subscription(db, subscription_id, payload_data)
     after = catalog_service.subscriptions.get(db=db, subscription_id=subscription_id)
     allocated_ips: list[str] = []
@@ -4822,17 +5189,36 @@ def update_subscription_with_audit(
             add_on_id=ip_addon_id,
             quantity=ip_addon_quantity,
         )
-    entered_password = str(service_password or "").strip()
+    radius_projected: bool | None = None
+    sessions_disconnected = 0
+    new_username = requested_login or current_username
     try:
-        _upsert_access_credential(
-            db,
-            subscriber_id=after.subscriber_id,
-            username=str(after.login or ""),
-            plain_password=entered_password or None,
-            radius_profile_id=str(after.radius_profile_id)
-            if after.radius_profile_id
-            else None,
-        )
+        if credential_change and stage_only:
+            stage_pending_credential(
+                db,
+                subscriber_id=after.subscriber_id,
+                subscription_id=after.id,
+                username=new_username,
+                plain_password=entered_password or None,
+                radius_profile_id=after.radius_profile_id,
+            )
+            commit_credential(db, new_username)
+        elif credential_change and bound_credential is not None:
+            bound_credential.username = new_username
+            if entered_password:
+                bound_credential.secret_hash = auth_flow_service.hash_service_secret(
+                    entered_password
+                )
+            if after.radius_profile_id:
+                bound_credential.radius_profile_id = after.radius_profile_id
+            commit_credential(db, new_username)
+        elif (
+            bound_credential is not None
+            and after.radius_profile_id
+            and bound_credential.radius_profile_id != after.radius_profile_id
+        ):
+            bound_credential.radius_profile_id = after.radius_profile_id
+            commit_credential(db, current_username)
     except ValueError:
         db.rollback()
         raise
@@ -4847,7 +5233,35 @@ def update_subscription_with_audit(
             "Unable to update the service credential. Please check the service "
             "login and try again."
         ) from exc
-    else:
+    if credential_change and not stage_only:
+        names = {new_username} | ({old_username} if old_username else set())
+        radius_projected = _project_credential_change(db, names)
+        if radius_projected:
+            _reconcile_active_subscription_after_credential_sync(db, subscription_id)
+            logins: list[str] = []
+            if old_username and old_username != new_username:
+                logins.append(old_username)
+            if entered_password:
+                logins.append(new_username)
+            try:
+                sessions_disconnected = _disconnect_after_projection(
+                    db, subscription_id, logins
+                )
+            except Exception:
+                logger.warning(
+                    "Session disconnect failed after a credential edit for %s",
+                    subscription_id,
+                    exc_info=True,
+                )
+                if feedback is not None:
+                    feedback.append(
+                        "Saved and projected to RADIUS, but the live session "
+                        "could not be disconnected; it will pick up the change "
+                        "on its next reconnect."
+                    )
+        elif feedback is not None:
+            feedback.append(RADIUS_PENDING_WARNING)
+    elif not credential_change:
         _reconcile_active_subscription_after_credential_sync(db, subscription_id)
     if additional_routes_supplied or public_ip_addon_supplied:
         _refresh_subscription_radius_session(
@@ -4857,6 +5271,13 @@ def update_subscription_with_audit(
         )
     metadata_payload = build_changes_metadata(before, after) or {}
     metadata_payload["service_password_changed"] = bool(entered_password)
+    if credential_change:
+        metadata_payload["password_changed"] = bool(entered_password)
+        metadata_payload["username_changed"] = username_changed
+        metadata_payload["old_username"] = old_username
+        metadata_payload["new_username"] = new_username
+        metadata_payload["radius_projected"] = radius_projected
+        metadata_payload["sessions_disconnected"] = sessions_disconnected
     if allocated_ips:
         metadata_payload["allocated_ipv4_count"] = len(allocated_ips)
         metadata_payload["allocated_ipv4_addresses"] = allocated_ips

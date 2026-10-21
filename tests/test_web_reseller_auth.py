@@ -24,6 +24,96 @@ def _request() -> Request:
     )
 
 
+def test_reseller_refresh_storage_failure_is_503_without_cookie(monkeypatch):
+    from sqlalchemy.exc import OperationalError
+
+    request = Request(
+        {
+            "type": "http",
+            "method": "POST",
+            "path": "/reseller/auth/refresh",
+            "headers": [(b"cookie", b"reseller_session=bound-cookie")],
+            "query_string": b"",
+        }
+    )
+    db = MagicMock()
+    monkeypatch.setattr(
+        web_reseller_auth_service.db_session_adapter, "create_session", lambda: db
+    )
+
+    def unavailable(*_args):
+        raise OperationalError("unavailable", None, None)
+
+    monkeypatch.setattr(
+        web_reseller_auth_service.reseller_portal, "refresh_session", unavailable
+    )
+    response = web_reseller_auth_service.reseller_refresh(request)
+    assert response.status_code == 503
+    assert "set-cookie" not in response.headers
+    db.rollback.assert_not_called()
+    db.commit.assert_not_called()
+    db.close.assert_called_once()
+
+
+def test_reseller_login_page_standing_outage_is_503(monkeypatch):
+    from sqlalchemy.exc import OperationalError
+
+    db = MagicMock()
+    monkeypatch.setattr(
+        web_reseller_auth_service.db_session_adapter, "create_session", lambda: db
+    )
+
+    def unavailable(*_args):
+        raise OperationalError("unavailable", None, None)
+
+    monkeypatch.setattr(
+        web_reseller_auth_service.reseller_portal, "get_context", unavailable
+    )
+    response = web_reseller_auth_service.reseller_login_page(_request())
+    assert response.status_code == 503
+    assert "set-cookie" not in response.headers
+    db.rollback.assert_not_called()
+    db.commit.assert_not_called()
+
+
+def test_reseller_refresh_cookie_is_capped_at_projection_deadline(monkeypatch):
+    from datetime import UTC, datetime, timedelta
+
+    request = Request(
+        {
+            "type": "http",
+            "method": "POST",
+            "path": "/reseller/auth/refresh",
+            "headers": [(b"cookie", b"reseller_session=bound-cookie")],
+            "query_string": b"",
+        }
+    )
+    monkeypatch.setattr(
+        web_reseller_auth_service.db_session_adapter, "create_session", MagicMock
+    )
+    monkeypatch.setattr(
+        web_reseller_auth_service.reseller_portal,
+        "refresh_session",
+        lambda *_: {
+            "expires_at": (datetime.now(UTC) + timedelta(seconds=30)).isoformat(),
+            "remember": False,
+            "is_impersonation": False,
+        },
+    )
+    monkeypatch.setattr(
+        web_reseller_auth_service.reseller_portal,
+        "get_session_max_age",
+        lambda *_: 86400,
+    )
+    response = web_reseller_auth_service.reseller_refresh(request)
+    assert response.status_code == 204
+    from http.cookies import SimpleCookie
+
+    cookie = SimpleCookie()
+    cookie.load(response.headers["set-cookie"])
+    assert 1 <= int(cookie["reseller_session"]["max-age"]) <= 30
+
+
 def test_invalidate_session_revokes_backing_auth_session(db_session, person):
     """Logout revokes the underlying auth_flow session, not just the local one."""
     from datetime import UTC, datetime, timedelta
@@ -233,7 +323,7 @@ def test_reseller_forgot_password_sends_reseller_reset_link(monkeypatch):
     db = object()
     recovery_request = MagicMock()
     monkeypatch.setattr(
-        web_reseller_auth_service.credential_recovery,
+        web_reseller_auth_service.anonymous_recovery_adapter,
         "request_password_recovery",
         recovery_request,
     )
@@ -247,7 +337,6 @@ def test_reseller_forgot_password_sends_reseller_reset_link(monkeypatch):
     assert response.status_code == 200
     assert "Check your email" in response.body.decode()
     recovery_request.assert_called_once()
-    called_db, command = recovery_request.call_args.args
-    assert called_db is db
+    command = recovery_request.call_args.kwargs["command"]
     assert command.email == "reseller@example.com"
     assert command.next_login_path == "/reseller/auth/login?next=/reseller/dashboard"

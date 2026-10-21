@@ -4,7 +4,7 @@ from collections.abc import Iterator
 from unittest.mock import Mock
 
 import pytest
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
 from fastapi.responses import HTMLResponse
 from fastapi.testclient import TestClient
 
@@ -21,7 +21,7 @@ PATHS = (
 
 
 @pytest.fixture
-def payment_client(monkeypatch) -> Iterator[tuple[TestClient, Mock, Mock]]:
+def payment_client(monkeypatch) -> Iterator[tuple[TestClient, Mock, Mock, Mock]]:
     app = FastAPI()
     app.include_router(billing_payments.router, prefix="/admin")
     app.dependency_overrides[get_db] = lambda: None
@@ -33,8 +33,14 @@ def payment_client(monkeypatch) -> Iterator[tuple[TestClient, Mock, Mock]]:
     service = billing_payments.web_billing_payments_service
     list_read = Mock(return_value={})
     csv_read = Mock(return_value=iter(("reference,amount\n",)))
+    stream_session = Mock()
     monkeypatch.setattr(service, "build_payments_list_data", list_read)
     monkeypatch.setattr(service, "stream_payments_csv", csv_read)
+    monkeypatch.setattr(
+        billing_payments.db_session_adapter,
+        "create_session",
+        Mock(return_value=stream_session),
+    )
     monkeypatch.setattr(admin, "get_current_user", lambda request: {})
     monkeypatch.setattr(admin, "get_sidebar_stats", lambda db: {})
     monkeypatch.setattr(
@@ -43,7 +49,7 @@ def payment_client(monkeypatch) -> Iterator[tuple[TestClient, Mock, Mock]]:
         lambda *args, **kwargs: HTMLResponse("payments"),
     )
     with TestClient(app) as client:
-        yield client, list_read, csv_read
+        yield client, list_read, csv_read, stream_session
 
 
 @pytest.mark.parametrize("path", PATHS)
@@ -64,7 +70,7 @@ def payment_client(monkeypatch) -> Iterator[tuple[TestClient, Mock, Mock]]:
 def test_payment_http_dates_preserve_typed_filter_scope(
     payment_client, path, dates, expected_start, expected_end
 ):
-    client, list_read, csv_read = payment_client
+    client, list_read, csv_read, stream_session = payment_client
     response = client.get(
         path,
         params={**dates, "status": "succeeded", "method": "cash", "search": "bank"},
@@ -83,6 +89,10 @@ def test_payment_http_dates_preserve_typed_filter_scope(
     assert query.filter_value("unallocated_only") == (
         "true" if path.endswith("/unallocated") else None
     )
+    if path.endswith(".csv"):
+        stream_session.close.assert_called_once_with()
+    else:
+        stream_session.close.assert_not_called()
 
 
 @pytest.mark.parametrize("path", PATHS)
@@ -95,8 +105,36 @@ def test_payment_http_dates_preserve_typed_filter_scope(
     ],
 )
 def test_invalid_payment_http_dates_fail_before_reading(payment_client, path, dates):
-    client, list_read, csv_read = payment_client
+    client, list_read, csv_read, _stream_session = payment_client
 
     assert client.get(path, params=dates).status_code == 422
     list_read.assert_not_called()
+    csv_read.assert_not_called()
+
+
+def test_payment_export_permission_dependency_blocks_before_stream(monkeypatch):
+    app = FastAPI()
+    app.include_router(billing_payments.router, prefix="/admin")
+    export_route = next(
+        route
+        for route in billing_payments.router.routes
+        if getattr(route, "path", "") == "/billing/payments/export.csv"
+    )
+    permission_dependency = export_route.dependencies[0].dependency
+
+    def _deny() -> None:
+        raise HTTPException(status_code=403, detail="Forbidden")
+
+    app.dependency_overrides[permission_dependency] = _deny
+    csv_read = Mock()
+    monkeypatch.setattr(
+        billing_payments.web_billing_payments_service,
+        "stream_payments_csv",
+        csv_read,
+    )
+
+    with TestClient(app) as client:
+        response = client.get("/admin/billing/payments/export.csv")
+
+    assert response.status_code == 403
     csv_read.assert_not_called()

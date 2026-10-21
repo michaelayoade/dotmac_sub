@@ -1,4 +1,7 @@
-from fastapi import APIRouter, Depends, Query, Request, status
+from collections.abc import Callable, Generator, Mapping
+from uuid import UUID
+
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from sqlalchemy.orm import Session
 
 from app.db import get_db
@@ -8,19 +11,22 @@ from app.schemas.auth import (
     ApiKeyGenerateResponse,
     ApiKeyRead,
     ApiKeyUpdate,
-    MFAMethodCreate,
     MFAMethodRead,
-    MFAMethodUpdate,
-    SessionCreate,
     SessionRead,
-    SessionUpdate,
     UserCredentialCreate,
     UserCredentialRead,
     UserCredentialUpdate,
 )
 from app.schemas.common import ListResponse
 from app.services import auth as auth_service
-from app.services.auth_dependencies import require_permission, require_role
+from app.services import credential_administration as credential_admin
+from app.services.auth_dependencies import (
+    require_permission,
+    require_role,
+    require_user_auth,
+)
+from app.services.db_session_adapter import db_session_adapter
+from app.services.owner_commands import CommandContext
 
 router = APIRouter()
 
@@ -41,17 +47,76 @@ router = APIRouter()
 _credential_admin = Depends(require_role("admin"))
 
 
+def _credential_command_session() -> Generator[Session, None, None]:
+    # Authorization uses its own request session. Public command ownership
+    # begins on a fresh session; no caller transaction is committed/discarded.
+    with db_session_adapter.owner_command_session() as db:
+        yield db
+
+
+def _credential_context(auth: Mapping[str, object]) -> CommandContext:
+    principal = auth.get("principal_id")
+    if not principal:
+        raise HTTPException(
+            status_code=403, detail="Credential administrator identity is required"
+        )
+    return CommandContext.system(
+        actor=str(principal),
+        scope=credential_admin.SCOPE,
+        reason="administrative credential command",
+    )
+
+
+def _credential_result(
+    operation: Callable[[], credential_admin.CredentialOutcome],
+) -> credential_admin.CredentialView:
+    try:
+        return operation().credential
+    except credential_admin.CredentialAdministrationError as exc:
+        suffix = exc.code.rsplit(".", 1)[-1]
+        code = (
+            503
+            if suffix == "lock_timeout"
+            else 409
+            if suffix in {"conflict", "stale_credential"}
+            else 404
+            if suffix
+            in {"principal_not_found", "credential_not_found", "radius_not_found"}
+            else 422
+        )
+        raise HTTPException(
+            status_code=code,
+            detail=exc.message,
+            headers={"Retry-After": "1"} if code == 503 else None,
+        ) from exc
+
+
 @router.post(
     "/user-credentials",
     response_model=UserCredentialRead,
     status_code=status.HTTP_201_CREATED,
     tags=["user-credentials"],
-    dependencies=[Depends(require_permission("auth:credential:write"))],
+    dependencies=[
+        Depends(require_permission("auth:credential:write")),
+        _credential_admin,
+    ],
 )
 def create_user_credential(
-    payload: UserCredentialCreate, db: Session = Depends(get_db)
-):
-    return auth_service.user_credentials.create(db, payload)
+    payload: UserCredentialCreate,
+    auth: Mapping[str, object] = _credential_admin,
+    db: Session = Depends(_credential_command_session),
+) -> credential_admin.CredentialView:
+    command = credential_admin.CreateCredential(
+        context=_credential_context(auth),
+        subscriber_id=payload.subscriber_id,
+        username=payload.username,
+        provider=payload.provider,
+        radius_server_id=payload.radius_server_id,
+        password=payload.password,
+    )
+    return _credential_result(
+        lambda: credential_admin.create_credential(db, command=command)
+    )
 
 
 @router.get(
@@ -96,32 +161,52 @@ def list_user_credentials(
     "/user-credentials/{credential_id}",
     response_model=UserCredentialRead,
     tags=["user-credentials"],
-    dependencies=[Depends(require_permission("auth:credential:write"))],
+    dependencies=[
+        Depends(require_permission("auth:credential:write")),
+        _credential_admin,
+    ],
 )
 def update_user_credential(
-    credential_id: str, payload: UserCredentialUpdate, db: Session = Depends(get_db)
-):
-    return auth_service.user_credentials.update(db, credential_id, payload)
+    credential_id: UUID,
+    payload: UserCredentialUpdate,
+    auth: Mapping[str, object] = _credential_admin,
+    db: Session = Depends(_credential_command_session),
+) -> credential_admin.CredentialView:
+    command = credential_admin.UpdateCredential(
+        context=_credential_context(auth),
+        credential_id=credential_id,
+        submitted_fields=frozenset(
+            credential_admin.CredentialField(name) for name in payload.model_fields_set
+        ),
+        username=payload.username,
+        radius_server_id=payload.radius_server_id,
+        password=payload.password,
+    )
+    return _credential_result(
+        lambda: credential_admin.update_credential(db, command=command)
+    )
 
 
 @router.delete(
     "/user-credentials/{credential_id}",
     status_code=status.HTTP_204_NO_CONTENT,
     tags=["user-credentials"],
-    dependencies=[Depends(require_permission("auth:credential:write"))],
+    dependencies=[
+        Depends(require_permission("auth:credential:write")),
+        _credential_admin,
+    ],
 )
-def delete_user_credential(credential_id: str, db: Session = Depends(get_db)):
-    auth_service.user_credentials.delete(db, credential_id)
-
-
-@router.post(
-    "/mfa-methods",
-    response_model=MFAMethodRead,
-    status_code=status.HTTP_201_CREATED,
-    tags=["mfa-methods"],
-)
-def create_mfa_method(payload: MFAMethodCreate, db: Session = Depends(get_db)):
-    return auth_service.mfa_methods.create(db, payload)
+def delete_user_credential(
+    credential_id: UUID,
+    auth: Mapping[str, object] = _credential_admin,
+    db: Session = Depends(_credential_command_session),
+) -> None:
+    command = credential_admin.DeactivateCredential(
+        context=_credential_context(auth), credential_id=credential_id
+    )
+    _credential_result(
+        lambda: credential_admin.deactivate_credential(db, command=command)
+    )
 
 
 @router.get(
@@ -164,34 +249,39 @@ def list_mfa_methods(
     )
 
 
-@router.patch(
-    "/mfa-methods/{method_id}",
-    response_model=MFAMethodRead,
-    tags=["mfa-methods"],
-)
-def update_mfa_method(
-    method_id: str, payload: MFAMethodUpdate, db: Session = Depends(get_db)
-):
-    return auth_service.mfa_methods.update(db, method_id, payload)
-
-
 @router.delete(
     "/mfa-methods/{method_id}",
     status_code=status.HTTP_204_NO_CONTENT,
     tags=["mfa-methods"],
+    dependencies=[
+        Depends(require_permission("auth:credential:write")),
+        _credential_admin,
+    ],
 )
-def delete_mfa_method(method_id: str, db: Session = Depends(get_db)):
-    auth_service.mfa_methods.delete(db, method_id)
-
-
-@router.post(
-    "/sessions",
-    response_model=SessionRead,
-    status_code=status.HTTP_201_CREATED,
-    tags=["sessions"],
-)
-def create_session(payload: SessionCreate, db: Session = Depends(get_db)):
-    return auth_service.sessions.create(db, payload)
+def delete_mfa_method(
+    method_id: str,
+    reason: str = Query(
+        ...,
+        min_length=3,
+        max_length=500,
+        description=(
+            "Why the factor is removed: verification channel and ticket "
+            "reference. Stored in the audit evidence."
+        ),
+    ),
+    auth: Mapping[str, object] = _credential_admin,
+    db: Session = Depends(get_db),
+) -> None:
+    # Disabling a second factor is credential administration: admin role AND
+    # the credential write permission, with the audit staged by the owner.
+    principal = auth.get("principal_id")
+    if not principal:
+        raise HTTPException(
+            status_code=403, detail="Credential administrator identity is required"
+        )
+    auth_service.mfa_methods.delete(
+        db, method_id, actor_id=str(principal), reason=reason
+    )
 
 
 @router.get(
@@ -228,24 +318,44 @@ def list_sessions(
     )
 
 
-@router.patch(
-    "/sessions/{session_id}",
-    response_model=SessionRead,
-    tags=["sessions"],
-)
-def update_session(
-    session_id: str, payload: SessionUpdate, db: Session = Depends(get_db)
-):
-    return auth_service.sessions.update(db, session_id, payload)
-
-
 @router.delete(
     "/sessions/{session_id}",
     status_code=status.HTTP_204_NO_CONTENT,
     tags=["sessions"],
 )
-def delete_session(session_id: str, db: Session = Depends(get_db)):
-    auth_service.sessions.delete(db, session_id)
+def delete_session(
+    session_id: str,
+    db: Session = Depends(get_db),
+    auth: dict = Depends(require_user_auth),
+):
+    from fastapi import HTTPException
+    from sqlalchemy.exc import OperationalError
+
+    from app.services.audit_adapter import AuditActor
+    from app.services.db_session_adapter import db_session_adapter
+    from app.services.session_manager import SessionRevocationError
+
+    actor = (
+        AuditActor.api_key(str(auth["api_key_id"]))
+        if auth.get("api_key_id")
+        else AuditActor.user(str(auth["principal_id"]))
+    )
+    with db_session_adapter.owner_command_session() as command_db:
+        try:
+            auth_service.sessions.delete(command_db, session_id=session_id, actor=actor)
+        except SessionRevocationError as exc:
+            raise HTTPException(status_code=404, detail=exc.message) from exc
+        except OperationalError as exc:
+            if (
+                getattr(exc.orig, "sqlstate", None) == "55P03"
+                or getattr(exc.orig, "pgcode", None) == "55P03"
+            ):
+                raise HTTPException(
+                    status_code=503,
+                    detail="Session revocation busy",
+                    headers={"Retry-After": "5"},
+                ) from exc
+            raise
 
 
 @router.post(
@@ -255,8 +365,48 @@ def delete_session(session_id: str, db: Session = Depends(get_db)):
     tags=["api-keys"],
     dependencies=[_credential_admin],
 )
-def create_api_key(payload: ApiKeyCreate, db: Session = Depends(get_db)):
-    return auth_service.api_keys.create(db, payload)
+def create_api_key(
+    payload: ApiKeyCreate, auth: dict = Depends(require_role("admin"))
+) -> ApiKeyRead:
+    from app.services import api_key_administration as api_key_admin
+    from app.services.audit_adapter import AuditActor
+
+    actor = (
+        AuditActor.api_key(str(auth["api_key_id"]))
+        if auth.get("api_key_id")
+        else AuditActor.user(str(auth["principal_id"]))
+    )
+    command = api_key_admin.CreateApiKeyCommand(
+        context=CommandContext.system(
+            actor=str(actor.actor_id),
+            scope=api_key_admin.CREATE_SCOPE,
+            reason="Administrative API-key creation",
+        ),
+        actor=actor,
+        supplied_secret=payload.key_hash,
+        subscriber_id=payload.subscriber_id,
+        label=payload.label,
+        scopes=tuple(payload.scopes),
+        is_active=payload.is_active,
+        last_used_at=payload.last_used_at,
+        expires_at=payload.expires_at,
+        revoked_at=payload.revoked_at,
+    )
+    with db_session_adapter.owner_command_session() as command_db:
+        try:
+            issued = api_key_admin.create(command_db, command=command)
+        except api_key_admin.ApiKeyIssuanceError as exc:
+            raise HTTPException(
+                status_code=(
+                    404
+                    if exc.code.endswith(".subscriber_not_found")
+                    else 500
+                    if exc.code.endswith(".storage_unavailable")
+                    else 403
+                ),
+                detail=exc.message,
+            ) from exc
+    return ApiKeyRead.model_validate(issued)
 
 
 @router.post(
@@ -270,8 +420,47 @@ def generate_api_key(
     payload: ApiKeyGenerateRequest,
     request: Request,
     db: Session = Depends(get_db),
-):
-    return auth_service.api_keys.generate_with_rate_limit(db, payload, request)
+    auth: dict = Depends(require_role("admin")),
+) -> ApiKeyGenerateResponse:
+    from app.services import api_key_administration as api_key_admin
+    from app.services.audit_adapter import AuditActor
+
+    # Preserve admission before generating material or opening the owner transaction.
+    auth_service.api_keys.enforce_generation_rate_limit(db, request=request)
+    actor = (
+        AuditActor.api_key(str(auth["api_key_id"]))
+        if auth.get("api_key_id")
+        else AuditActor.user(str(auth["principal_id"]))
+    )
+    command = api_key_admin.GenerateApiKeyCommand(
+        context=CommandContext.system(
+            actor=str(actor.actor_id),
+            scope=api_key_admin.GENERATE_SCOPE,
+            reason="Administrative API-key generation",
+        ),
+        actor=actor,
+        subscriber_id=payload.subscriber_id,
+        label=payload.label,
+        scopes=tuple(payload.scopes),
+        expires_at=payload.expires_at,
+    )
+    with db_session_adapter.owner_command_session() as command_db:
+        try:
+            outcome = api_key_admin.generate(command_db, command=command)
+        except api_key_admin.ApiKeyIssuanceError as exc:
+            raise HTTPException(
+                status_code=(
+                    404
+                    if exc.code.endswith(".subscriber_not_found")
+                    else 500
+                    if exc.code.endswith(".storage_unavailable")
+                    else 403
+                ),
+                detail=exc.message,
+            ) from exc
+    return ApiKeyGenerateResponse(
+        key=outcome.key, api_key=ApiKeyRead.model_validate(outcome.api_key)
+    )
 
 
 @router.get(
@@ -314,8 +503,68 @@ def list_api_keys(
     tags=["api-keys"],
     dependencies=[_credential_admin],
 )
-def update_api_key(key_id: str, payload: ApiKeyUpdate, db: Session = Depends(get_db)):
-    return auth_service.api_keys.update(db, key_id, payload)
+def update_api_key(
+    key_id: str, payload: ApiKeyUpdate, auth: dict = Depends(require_role("admin"))
+) -> ApiKeyRead:
+    from pydantic import ValidationError
+
+    from app.services import api_key_administration as api_key_admin
+    from app.services.audit_adapter import AuditActor
+
+    try:
+        target = UUID(key_id)
+    except ValueError:
+        raise HTTPException(
+            status_code=500, detail="Invalid API-key identifier."
+        ) from None
+    actor = (
+        AuditActor.api_key(str(auth["api_key_id"]))
+        if auth.get("api_key_id")
+        else AuditActor.user(str(auth["principal_id"]))
+    )
+    command = api_key_admin.UpdateApiKeyCommand(
+        context=CommandContext.system(
+            actor=str(actor.actor_id),
+            scope=api_key_admin.UPDATE_SCOPE,
+            reason="Administrative API-key update",
+        ),
+        key_id=target,
+        actor=actor,
+        fields=frozenset(
+            api_key_admin.ApiKeyUpdateField(name) for name in payload.model_fields_set
+        ),
+        subscriber_id=payload.subscriber_id,
+        label=payload.label,
+        supplied_secret=payload.key_hash,
+        scopes=tuple(payload.scopes) if payload.scopes is not None else None,
+        is_active=payload.is_active,
+        last_used_at=payload.last_used_at,
+        expires_at=payload.expires_at,
+        revoked_at=payload.revoked_at,
+    )
+    with db_session_adapter.owner_command_session() as command_db:
+        try:
+            outcome = api_key_admin.update(command_db, command=command)
+        except api_key_admin.ApiKeyUpdateError as exc:
+            if exc.code.endswith(".busy"):
+                raise HTTPException(
+                    status_code=503, detail=exc.message, headers={"Retry-After": "5"}
+                ) from exc
+            raise HTTPException(
+                status_code=404
+                if exc.code.endswith((".not_found", ".subscriber_not_found"))
+                else 500
+                if exc.code.endswith(".storage_unavailable")
+                else 403,
+                detail=exc.message,
+            ) from exc
+    try:
+        return ApiKeyRead.model_validate(outcome)
+    except ValidationError:
+        # Legacy scopes=None commits JSON null but fails the non-null read schema.
+        raise HTTPException(
+            status_code=500, detail="API-key response unavailable."
+        ) from None
 
 
 @router.delete(
@@ -323,5 +572,42 @@ def update_api_key(key_id: str, payload: ApiKeyUpdate, db: Session = Depends(get
     status_code=status.HTTP_204_NO_CONTENT,
     tags=["api-keys"],
 )
-def delete_api_key(key_id: str, db: Session = Depends(get_db)):
-    auth_service.api_keys.revoke(db, key_id)
+def delete_api_key(key_id: UUID, auth: dict = Depends(require_role("admin"))):
+    from sqlalchemy.exc import OperationalError
+
+    from app.services import api_key_administration as api_key_admin
+    from app.services.audit_adapter import AuditActor
+
+    actor = (
+        AuditActor.api_key(str(auth["api_key_id"]))
+        if auth.get("api_key_id")
+        else AuditActor.user(str(auth["principal_id"]))
+    )
+    command = api_key_admin.RevokeApiKeyCommand(
+        context=CommandContext.system(
+            actor=str(actor.actor_id),
+            scope=api_key_admin.SCOPE,
+            reason="Administrative API-key revocation",
+        ),
+        key_id=key_id,
+        actor=actor,
+    )
+    with db_session_adapter.owner_command_session() as command_db:
+        try:
+            api_key_admin.revoke(command_db, command=command)
+        except api_key_admin.ApiKeyRevocationError as exc:
+            raise HTTPException(
+                status_code=404 if exc.code.endswith(".not_found") else 403,
+                detail=exc.message,
+            ) from exc
+        except OperationalError as exc:
+            if (
+                getattr(exc.orig, "sqlstate", None) == "55P03"
+                or getattr(exc.orig, "pgcode", None) == "55P03"
+            ):
+                raise HTTPException(
+                    status_code=503,
+                    detail="API key revocation busy",
+                    headers={"Retry-After": "5"},
+                ) from exc
+            raise

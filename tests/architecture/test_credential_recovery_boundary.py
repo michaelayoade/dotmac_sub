@@ -93,3 +93,34 @@ def test_production_adapters_do_not_call_retired_auth_flow_recovery_paths() -> N
     assert not offenders, "retired credential recovery calls:\n  " + "\n  ".join(
         offenders
     )
+
+
+def test_anonymous_surfaces_share_safe_lifecycle_and_failure_mapping() -> None:
+    targets = {
+        "app/api/auth_flow.py": "forgot_password",
+        "app/services/web_auth.py": "forgot_password_submit",
+        "app/services/web_customer_auth.py": "customer_forgot_password_submit",
+        "app/services/web_reseller_auth.py": "reseller_forgot_password_submit",
+    }
+    for relative, function in targets.items():
+        tree = ast.parse((PROJECT_ROOT / relative).read_text(encoding="utf-8"))
+        handler = next(
+            node
+            for node in ast.walk(tree)
+            if isinstance(node, ast.FunctionDef) and node.name == function
+        )
+        source = ast.unparse(handler)
+        assert "anonymous_recovery_adapter.request_password_recovery" in source
+        assert "credential_recovery.request_password_recovery(" not in source
+        assert "logger." not in source
+        assert ".rollback(" not in source
+    adapter = PROJECT_ROOT / "app/services/anonymous_recovery_adapter.py"
+    source = adapter.read_text(encoding="utf-8")
+    assert "owner_command_session" in _calls(adapter)
+    assert not {
+        "commit",
+        "rollback",
+        "send_email",
+        "send_password_reset_email",
+    } & _calls(adapter)
+    assert "exc_info" not in source

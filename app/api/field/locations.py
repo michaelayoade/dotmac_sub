@@ -1,9 +1,12 @@
+from collections.abc import Iterator
+from contextlib import contextmanager
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from sqlalchemy.orm import Session
 
 from app.api.deps import get_db
+from app.api.field.execution import field_domain_errors, field_system_user_id
 from app.schemas.field import (
     FieldPresenceRead,
     FieldRouteResponse,
@@ -15,6 +18,9 @@ from app.services.auth_dependencies import require_user_auth
 from app.services.db_session_adapter import db_session_adapter
 from app.services.field.location_tracking import (
     LocationPingCommand,
+    LocationPingRejected,
+    LocationRequester,
+    LocationSharingCommand,
     field_location_tracking,
 )
 from app.services.field.routing import field_routing
@@ -24,6 +30,17 @@ from app.services.workforce_attendance import (
 )
 
 router = APIRouter(prefix="/locations", tags=["field-locations"])
+
+
+@contextmanager
+def _location_errors() -> Iterator[None]:
+    with field_domain_errors():
+        try:
+            yield
+        except LocationPingRejected as exc:
+            raise HTTPException(
+                status_code=422, detail={"code": exc.code, "message": exc.detail}
+            ) from exc
 
 
 @router.post("", response_model=LocationIngestResponse)
@@ -37,11 +54,25 @@ def ingest_locations(
     # read transaction on this request-scoped session; release it (it holds
     # no pending mutation) before entering the owner command boundary.
     db_session_adapter.release_read_transaction(db)
-    outcome = field_location_tracking.record_batch(
-        db,
-        auth,
-        [LocationPingCommand(**ping.model_dump()) for ping in payload.pings],
-    )
+    with _location_errors():
+        outcome = field_location_tracking.record_batch(
+            db,
+            LocationRequester(field_system_user_id(auth)),
+            [
+                LocationPingCommand(
+                    latitude=ping.latitude,
+                    longitude=ping.longitude,
+                    assignment_generation=ping.assignment_generation,
+                    accuracy_m=ping.accuracy_m,
+                    captured_at=ping.captured_at,
+                    work_order_public_id=ping.crm_work_order_id,
+                    source=ping.source,
+                    status=ping.status,
+                    client_observation_id=ping.client_observation_id,
+                )
+                for ping in payload.pings
+            ],
+        )
     return {
         "accepted": outcome.accepted,
         "errors": [
@@ -109,12 +140,14 @@ def update_sharing(
     # The attendance query may also have opened a read transaction, so release
     # it only after the gate has consumed the authoritative attendance facts.
     db_session_adapter.release_read_transaction(db)
-    return field_location_tracking.set_sharing(
-        db,
-        auth,
-        enabled=payload.enabled,
-        status=payload.status,
-    )
+    with _location_errors():
+        return field_location_tracking.set_sharing(
+            db,
+            LocationRequester(field_system_user_id(auth)),
+            command=LocationSharingCommand(
+                enabled=payload.enabled, status=payload.status
+            ),
+        )
 
 
 @router.get("/me", response_model=FieldPresenceRead)
@@ -122,7 +155,11 @@ def get_my_presence(
     auth: dict = Depends(require_user_auth),
     db: Session = Depends(get_db),
 ):
-    return field_location_tracking.get_or_create_presence(db, auth)
+    db_session_adapter.release_read_transaction(db)
+    with _location_errors():
+        return field_location_tracking.get_or_create_presence(
+            db, LocationRequester(field_system_user_id(auth))
+        )
 
 
 @router.get("/route", response_model=FieldRouteResponse)

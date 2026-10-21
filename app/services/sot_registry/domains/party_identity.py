@@ -29,6 +29,70 @@ DOMAIN = DomainSOT(
     domain="party_identity",
     services=(
         SOTService(
+            name="party.kernel_import",
+            module="app.services.party_kernel_import",
+            owns=("rollback-only historical Party root and Sub context import",),
+            depends_on=("party.registry", "tenancy.operator_tenant_history"),
+            notes=(
+                "Historical fixture participant only; existing runtime authority remains. "
+                "Reserved event schema is unemitted in this rollback-only phase; "
+                "returned typed observations are outcomes, never dispatched events."
+            ),
+            contract=ServiceContract(
+                concerns=(
+                    ConcernContract(
+                        name="rollback-only historical Party root and Sub context import",
+                        role=OwnerRole.COMMAND_WRITER,
+                        input_names=("reviewed complete Party fixture cohort",),
+                        canonical_writer="party.kernel_import",
+                    ),
+                ),
+                authoritative_inputs=(
+                    AuthorityInput(
+                        name="reviewed complete Party fixture cohort",
+                        owner="party.registry",
+                        kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                        source="Exact locked source rows plus explicit typed fixture dispositions; no live population acceptance",
+                    ),
+                ),
+                transaction=TransactionContract(
+                    mode=TransactionMode.PARTICIPANT,
+                    boundary="Only kernel_party_import rehearsal calls this participant on the same supplied PostgreSQL root; caller always rolls back",
+                    locking="Entry locks all actual source and destination tables until caller rollback; source fingerprints revalidated under locks; complete destination keysets and exact fields verified before outcomes",
+                    idempotency="Replay, populated destination and partial history refuse; no repair or upsert",
+                    retries="Rollback entire fixture and reobserve complete catalog and cohort before retry",
+                ),
+                errors=ErrorContract(
+                    domain_codes=("party.kernel_import.refused",),
+                    mapping_owner="hosted fixture caller",
+                    fail_closed_on=(
+                        "stale or conflicting disposition, wrong tenant, OID/history drift, populated destination, suppressed or corrupted destination rows",
+                    ),
+                ),
+                events=EventContract(
+                    event_types=("party.kernel_import.import_verified.v1",),
+                    schema_version=1,
+                    delivery_owner="party.kernel_import",
+                    compatibility="RESERVED and unemitted: rollback-only fixtures stage no event, outbox or durable delivery",
+                    replay="No event replay; returned observations are uncommitted outcomes only",
+                ),
+                migration=MigrationContract(
+                    state=AuthorityMigrationState.INVENTORIED,
+                    old_owner="party.registry",
+                    new_owner="party.kernel_import",
+                    verification="Hosted real-chain rollback, exact destination verification and nonprivileged-role RLS tests; fixtures do not prove operational adoption",
+                    cutover_gate="Complete dispositions, reference and writer transfer, runtime acceptance and reverse recovery remain required",
+                    fallback_retirement="Existing runtime readers, writers and incoming FKs retain original source authority",
+                ),
+                steward="Sub identity and platform operations",
+                design_refs=("docs/designs/KERNEL_LINEAGE_ENTRY_PROTOTYPE.md",),
+                test_refs=(
+                    "tests/integration/test_kernel_party_import.py",
+                    "tests/architecture/test_kernel_party_import_boundary.py",
+                ),
+            ),
+        ),
+        SOTService(
             name="party.registry",
             module="app.services.party",
             owns=(
@@ -257,7 +321,9 @@ DOMAIN = DomainSOT(
                 "SERIALIZABLE transaction and calls party.registry for "
                 "predetermined Party creation and Subscriber binding. It "
                 "records a PII-free receipt, never commits inside the owner, "
-                "and cannot merge, repoint, assign roles, copy contacts, or "
+                "and locks Subscribers before Parties in UUID order for both "
+                "fresh execution and replay, refreshing locked ORM state. It "
+                "cannot merge, repoint, assign roles, copy contacts, or "
                 "change lifecycle, billing, access, or authorization state."
             ),
         ),
@@ -355,14 +421,14 @@ DOMAIN = DomainSOT(
                 transaction=TransactionContract(
                     mode=TransactionMode.COORDINATOR_MANAGED,
                     boundary=(
-                        "The public command locks the selected Party before the "
-                        "Subscriber where applicable, delegates native writes to "
+                        "The public command locks the Subscriber before any selected "
+                        "Party, refreshes locked state, delegates native writes to "
                         "party.registry, stages PII-free audit evidence and commits "
                         "once before returning."
                     ),
                     locking=(
-                        "Lock the exact existing Party before the Subscriber; Party "
-                        "creation and Subscriber binding occur in one owner command."
+                        "Lock and refresh the exact Subscriber before an existing Party; "
+                        "Party creation and Subscriber binding occur in one owner command."
                     ),
                     idempotency=(
                         "An exact existing-Party command replays only with the same "
@@ -419,7 +485,10 @@ DOMAIN = DomainSOT(
                     "docs/UI_INFORMATION_AND_ACTION_STANDARD.md",
                     "docs/SOT_RELATIONSHIP_MAP.md",
                 ),
-                test_refs=("tests/test_subscriber_party_binding_repair.py",),
+                test_refs=(
+                    "tests/test_subscriber_party_binding_repair.py",
+                    "tests/test_identity_lock_order.py",
+                ),
             ),
         ),
         SOTService(
@@ -487,9 +556,9 @@ DOMAIN = DomainSOT(
                         "PII-free audit evidence, and commits before return."
                     ),
                     locking=(
-                        "Lock the reviewed Person Party before its SystemUser to "
-                        "match the credential-projection lock suffix; native Party "
-                        "validation repeats under the same transaction."
+                        "Lock and refresh the exact SystemUser before its reviewed Person "
+                        "Party; native Party validation repeats under the same "
+                        "transaction, matching the principal-first identity order."
                     ),
                     idempotency=(
                         "Only the exact Party, source, reason, approval digest and "
@@ -547,6 +616,8 @@ DOMAIN = DomainSOT(
                 ),
                 test_refs=(
                     "tests/test_staff_party_credential_adoption.py",
+                    "tests/test_identity_lock_order.py",
+                    "tests/integration/test_identity_lock_order_concurrency.py",
                     "tests/architecture/test_credential_party_binding_boundary.py",
                 ),
             ),
@@ -625,8 +696,8 @@ DOMAIN = DomainSOT(
                         "return; the operator adapter owns no business write."
                     ),
                     locking=(
-                        "Lock the reviewed Person Party, then SystemUser, then "
-                        "session; repeat exact binding, eligibility and conflict "
+                        "Lock and refresh SystemUser, then the reviewed Person Party, "
+                        "then session; repeat exact binding, eligibility and conflict "
                         "checks while all three locks are held."
                     ),
                     idempotency=(
@@ -736,7 +807,11 @@ DOMAIN = DomainSOT(
                     "docs/PARTY_PRINCIPAL_CONTEXT_BINDING.md",
                     "docs/SOT_RELATIONSHIP_MAP.md",
                 ),
-                test_refs=("tests/test_staff_session_party_adoption.py",),
+                test_refs=(
+                    "tests/test_staff_session_party_adoption.py",
+                    "tests/test_identity_lock_order.py",
+                    "tests/integration/test_identity_lock_order_concurrency.py",
+                ),
             ),
         ),
         SOTService(
@@ -874,9 +949,11 @@ DOMAIN = DomainSOT(
                         "Binding installation locks an existing binding key and uses "
                         "uq_auth_bindings_binding_key as the concurrent-create "
                         "arbiter inside an owner-authorized savepoint. Credential "
-                        "projection locks the credential, Person Party and verifier "
-                        "binding; the Party lock serializes competing credentials "
-                        "for one person before the tuple uniqueness backstop."
+                        "projection locks and refreshes the exact typed principal, then "
+                        "credential, Person Party and verifier binding. The exact "
+                        "binding lock serializes projection competitors after Party; no incumbent "
+                        "credential is locked after the binding. The tenant-Party-"
+                        "binding unique constraint is the final backstop."
                     ),
                     idempotency=(
                         "An exact binding key, mechanism and reviewed metadata "
@@ -1044,6 +1121,8 @@ DOMAIN = DomainSOT(
                     "tests/test_authentication_binding_installation.py",
                     "tests/test_credential_party_binding.py",
                     "tests/test_credential_party_binding_migration.py",
+                    "tests/test_identity_lock_order.py",
+                    "tests/integration/test_identity_lock_order_concurrency.py",
                     "tests/architecture/test_credential_party_binding_boundary.py",
                     "tests/test_staff_party_credential_adoption.py",
                 ),

@@ -236,12 +236,16 @@ DOMAIN = DomainSOT(
         SOTService(
             name="integration.installations",
             module="app.services.integrations.installations",
+            implementation_modules=(
+                "app.services.integrations.nextcloud_talk_installation",
+            ),
             owns=(
                 "version-pinned integration installation lifecycle",
                 "explicit integration manifest adoption",
                 "immutable integration configuration revisions",
                 "integration capability grants and bindings",
                 "payment webhook ingress traffic policy",
+                "Nextcloud Talk installation credential configuration",
                 "Meta social installation configuration",
                 "pre-activation integration webhook verification",
             ),
@@ -254,6 +258,17 @@ DOMAIN = DomainSOT(
             ),
             contract=ServiceContract(
                 concerns=(
+                    ConcernContract(
+                        name="Nextcloud Talk installation credential configuration",
+                        role=OwnerRole.COMMAND_WRITER,
+                        input_names=(
+                            "deployed connector manifest",
+                            "approved integration secret references",
+                            "integration installation protocol",
+                            "canonical integration installation aggregate",
+                        ),
+                        canonical_writer="integration.installations",
+                    ),
                     ConcernContract(
                         name="version-pinned integration installation lifecycle",
                         role=OwnerRole.COMMAND_WRITER,
@@ -370,22 +385,27 @@ DOMAIN = DomainSOT(
                         "installation commit boundary completes the unit of work."
                     ),
                     locking=(
-                        "Lifecycle transitions resolve one installation; manifest "
+                        "All aggregate writers acquire the installation row lock and refresh once after acquisition; manifest "
                         "adoption locks that installation row and immutable "
                         "configuration revisions serialize by installation revision."
                     ),
                     idempotency=(
-                        "Configuration digests replay to an existing immutable revision; "
+                        "Talk credential operation UUIDs replay only the current matching configuration and password; stale operations cannot resurrect revisions. Configuration digests replay to an existing immutable revision; "
                         "capability synchronization converges by capability id; manifest "
                         "adoption converges by exact target version and digest."
                     ),
                     retries=(
                         "Manifest, secret-reference, or lifecycle violations are "
-                        "terminal; database conflicts retry the whole mutation."
+                        "terminal; database conflicts retry the whole mutation. Talk CAS0 writes precede SQL commit and may leave immutable orphans; retry the same operation or request safe owner review, never automatic deletion."
                     ),
                 ),
                 errors=ErrorContract(
                     domain_codes=(
+                        "integration.installations.talk_credential_invalid",
+                        "integration.installations.talk_credential_stale",
+                        "integration.installations.talk_credential_conflict",
+                        "integration.installations.talk_credential_binding_invalid",
+                        "integration.installations.talk_credential_scope_invalid",
                         "integration.installations.not_found",
                         "integration.installations.invalid_manifest",
                         "integration.installations.invalid_configuration",
@@ -428,6 +448,7 @@ DOMAIN = DomainSOT(
                 ),
                 events=EventContract(
                     event_types=(
+                        "integration.installation.talk_credential_configured",
                         "integration.installation.lifecycle.v1",
                         "integration.installation.manifest_adopted",
                         "integration.installation.capability_provisioned",
@@ -471,10 +492,12 @@ DOMAIN = DomainSOT(
                 ),
                 steward="platform integrations",
                 design_refs=(
+                    "docs/designs/NEXTCLOUD_TALK_CREDENTIAL_SETUP.md",
                     "docs/designs/INTEGRATION_PLATFORM_SOT.md",
                     "docs/SOT_RELATIONSHIP_MAP.md",
                 ),
                 test_refs=(
+                    "tests/test_nextcloud_talk_credential_setup.py",
                     "tests/test_integration_installations.py",
                     "tests/test_integration_installation_api.py",
                     "tests/test_integration_meta_social.py",

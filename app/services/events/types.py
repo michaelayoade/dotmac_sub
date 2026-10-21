@@ -20,11 +20,21 @@ class EventType(enum.Enum):
     Event naming convention: {entity}.{action}
     """
 
+    field_identity_changed = "field_identity.changed"
+
     customer_bulk_message_changed = "customer_bulk_message.changed"
 
     # Staff notification events
     staff_notification_opened = "staff_notification.opened"
     field_work_order_note_created = "field_work_order_note.created"
+    field_worklogs_submitted = "field.worklogs_submitted"
+    field_attachment_created = "field.attachment_created"
+    field_attachment_deleted = "field.attachment_deleted"
+    field_job_location_corrected = "field.job_location_corrected"
+    work_order_classified = "work_order.classified"
+    field_job_customer_message_created = "field_job.customer_message_created"
+
+    authentication_sessions_revoked = "authentication_sessions.revoked"
 
     # Authentication-session security events
     authentication_session_rotated = "authentication_session.rotated"
@@ -49,6 +59,7 @@ class EventType(enum.Enum):
     subscriber_service_location_updated = "subscriber.service_location_updated"
     subscriber_location_confirmed = "subscriber.location_confirmed"
     subscriber_location_prompt_snoozed = "subscriber.location_prompt_snoozed"
+    customer_connection_type_changed = "customer.connection_type_changed"
     field_location_history_pruned = "field_location.history_pruned"
     subscriber_billing_approval_changed = "subscriber.billing_approval_changed"
     subscriber_billing_mode_changed = "subscriber.billing_mode_changed"
@@ -129,6 +140,9 @@ class EventType(enum.Enum):
     integration_installation_capability_provisioned = (
         "integration.installation.capability_provisioned"
     )
+    integration_installation_talk_credential_configured = (
+        "integration.installation.talk_credential_configured"
+    )
     integration_installation_meta_social_configured = (
         "integration.installation.meta_social_configured"
     )
@@ -195,6 +209,14 @@ class EventType(enum.Enum):
     prepaid_proforma_adopted = "prepaid_proforma.adopted"
     prepaid_paid_invoice_repaired = "prepaid_paid_invoice.repaired"
     prepaid_paid_invoice_coverage_corrected = "prepaid_paid_invoice.coverage_corrected"
+    prepaid_paid_invoice_period_repair_requested = (
+        "prepaid_paid_invoice_period_repair.requested"
+    )
+    prepaid_paid_invoice_period_repaired = "prepaid_paid_invoice_period.repaired"
+    prepaid_renewal_origin_corrected = "prepaid_renewal_origin.corrected"
+    payment_allocation_over_allocation_returned = (
+        "payment_allocation.over_allocation_returned"
+    )
     prepaid_draft_reconciled = "prepaid_draft.reconciled"
     prepaid_reviewed_draft_settled = "prepaid_reviewed_draft.settled"
     prepaid_invoice_sequence_reconstructed = "prepaid_invoice_sequence.reconstructed"
@@ -219,8 +241,7 @@ class EventType(enum.Enum):
     service_extension_anchor_repaired = "billing.service_extension_anchor_repaired"
     service_extended = "billing.service_extended"
 
-    # Usage events (5)
-    usage_recorded = "usage.recorded"
+    # Usage events
     usage_warning = "usage.warning"
     usage_exhausted = "usage.exhausted"
     usage_topped_up = "usage.topped_up"
@@ -300,9 +321,8 @@ class EventType(enum.Enum):
     vendor_as_built_accepted = "vendor_as_built.accepted"
     vendor_as_built_rejected = "vendor_as_built.rejected"
 
-    # Operations - Appointment events (2)
+    # Operations - Appointment events
     appointment_scheduled = "appointment.scheduled"
-    appointment_missed = "appointment.missed"
 
     # Native sales vertical events. Future agent/inbox
     # lead/quote lifecycle was webhook-silent in the CRM's event system;
@@ -327,6 +347,9 @@ class EventType(enum.Enum):
     sales_order_funding_satisfied = "sales_order.funding_satisfied"
     sales_order_fulfilled = "sales_order.fulfilled"
     project_created = "project.created"
+    field_completion_review_recorded = "field.completion_review_recorded"
+    project_work_order_issued = "project_work_order.issued"
+    project_engineering_plan_changed = "project_engineering_plan.changed"
     installation_scope_created = "installation_scope.created"
     implementation_released = "implementation.released"
     service_order_released = "service_order.released"
@@ -335,13 +358,9 @@ class EventType(enum.Enum):
     customer_experience_needs_attention = "customer_experience.needs_attention"
 
     # Network events
-    device_offline = "device.offline"
-    device_online = "device.online"
     network_device_archived = "network_device.archived"
     network_device_restored = "network_device.restored"
     device_projection_reconciled = "device_projection.reconciled"
-    session_started = "session.started"
-    session_ended = "session.ended"
     network_map_asset_change_proposed = "network_map_asset_change.proposed"
     network_map_asset_change_applied = "network_map_asset_change.applied"
     network_map_asset_change_rejected = "network_map_asset_change.rejected"
@@ -354,29 +373,25 @@ class EventType(enum.Enum):
     olt_deleted = "olt.deleted"
     olt_topology_imported = "olt.topology_imported"
     lldp_observations_reconciled = "lldp.observations_reconciled"
+    router_health_reconciled = "router_health.reconciled"
 
     # ONT events (5)
     ont_discovered = "ont.discovered"
     ont_online = "ont.online"
     ont_offline = "ont.offline"
     ont_signal_degraded = "ont.signal_degraded"
-    ont_signal_delta = "ont.signal_delta"
     ont_config_updated = "ont.config_updated"
     ont_service_configuration_queued = "ont.service_configuration.queued"
     ont_service_configuration_phase_changed = "ont.service_configuration.phase_changed"
     ont_service_configuration_retired = "ont.service_configuration.retired"
     ont_moved = "ont.moved"
     ont_feature_toggled = "ont.feature_toggled"
-    ont_ddm_alert = "ont.ddm_alert"
 
     # ONT destructive operations (audit events)
-    ont_authorized = "ont.authorized"
     ont_deauthorized = "ont.deauthorized"
     ont_factory_reset = "ont.factory_reset"
     ont_rebooted = "ont.rebooted"
-    ont_service_port_created = "ont.service_port_created"
     ont_service_port_deleted = "ont.service_port_deleted"
-    ont_tr069_bound = "ont.tr069_bound"
     ont_commissioning_requested = "ont.commissioning_requested"
     ont_commissioning_state_changed = "ont.commissioning_state_changed"
 
@@ -405,26 +420,26 @@ class EventType(enum.Enum):
     # every is_active-filtered plant and map read.
     fiber_segment_activated = "fiber_segment.activated"
 
-    # OLT circuit breaker events
-    olt_circuit_opened = "olt.circuit_opened"
-    olt_circuit_closed = "olt.circuit_closed"
-
     # Collections - Dunning events (4)
     dunning_started = "dunning.started"
     dunning_action_executed = "dunning.action_executed"
     dunning_resolved = "dunning.resolved"
     dunning_paused = "dunning.paused"
 
-    # Enforcement locks (2)
+    # Enforcement locks (3)
     enforcement_lock_created = "enforcement_lock.created"
     enforcement_lock_resolved = "enforcement_lock.resolved"
+    # The effective network treatment of an active lock was re-evaluated
+    # (captive <-> hard reject) by access.captive_access_policy_change.
+    enforcement_lock_access_mode_changed = "enforcement_lock.access_mode_changed"
+
+    # Captive access policy rules or customer sets changed.
+    captive_access_policy_changed = "captive_access_policy.changed"
 
     # Network alert (legacy, kept for compatibility)
     network_alert = "network.alert"
 
-    # Customer portal events (4)
-    customer_login = "customer.login"
-    customer_logout = "customer.logout"
+    # Customer portal events
     customer_ticket_created = "customer.ticket_created"
 
     # Identity / onboarding invitation lifecycle
@@ -440,11 +455,9 @@ class EventType(enum.Enum):
     ticket_resolution_requested = "ticket.resolution_requested"
     ticket_resolution_confirmed = "ticket.resolution_confirmed"
     ticket_resolution_disputed = "ticket.resolution_disputed"
-    ticket_merged = "ticket.merged"
     ticket_work_order_issued = "ticket.work_order_issued"
     outage_infrastructure_work_order_issued = "outage.infrastructure_work_order_issued"
     work_order_field_outcome_recorded = "work_order.field_outcome_recorded"
-    customer_password_changed = "customer.password_changed"  # noqa: S105
 
     # Reseller events (6)
     reseller_created = "reseller.created"
@@ -471,6 +484,7 @@ class EventType(enum.Enum):
     # Credential recovery lifecycle (2)
     password_recovery_requested = "password_recovery.requested"
     password_recovery_completed = "password_recovery.completed"
+    credential_administration_completed = "credential_administration.completed"
 
     # Field-mobile OIDC federation lifecycle (2). Payloads carry the ceremony,
     # binding and deployment identities and the admitted principal — never a
@@ -514,7 +528,6 @@ class EventType(enum.Enum):
     nas_device_updated = "nas_device.updated"
     nas_device_deleted = "nas_device.deleted"
     nas_backup_completed = "nas_backup.completed"
-    nas_backup_failed = "nas_backup.failed"
     nas_provisioning_completed = "nas_provisioning.completed"
     nas_provisioning_failed = "nas_provisioning.failed"
 
@@ -562,6 +575,8 @@ class EventType(enum.Enum):
     outage_rerooted = "outage.rerooted"
     outage_discarded = "outage.discarded"
     outage_resolved = "outage.resolved"
+    outage_complaint_reviewed = "outage.complaint_reviewed.v1"
+    outage_complaint_linked = "outage.complaint_linked.v1"
     outage_compensation_proposed = "outage_compensation.proposed"
     outage_compensation_approved = "outage_compensation.approved"
     time_credit_attested = "time_credit.attested"

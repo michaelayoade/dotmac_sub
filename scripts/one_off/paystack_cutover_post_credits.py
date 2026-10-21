@@ -37,6 +37,7 @@ from app.services import billing as billing_service
 from app.services.common import round_money
 from app.services.integrations import payment_capability
 from app.services.notification_suppression import suppress_notifications
+from scripts.billing._mutation_policy import refuse_apply
 
 DEFAULT_INPUT = "scratchpad/paystack_cutover_reconcile.csv"
 
@@ -192,6 +193,7 @@ def main() -> None:
         help="Write payments. Without this flag the script is read-only.",
     )
     args = parser.parse_args()
+    refuse_apply(args.apply)
 
     candidates = _load_candidates(Path(args.input))
     if args.limit is not None:

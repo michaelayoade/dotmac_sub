@@ -551,6 +551,9 @@ def _initialize_handlers(dispatcher: EventDispatcher) -> None:
     from app.services.events.handlers.materials_lifecycle_projection import (
         MaterialsLifecycleProjectionHandler,
     )
+    from app.services.events.handlers.mfa_removal_notice import (
+        MfaRemovalNoticeHandler,
+    )
     from app.services.events.handlers.notification import NotificationHandler
     from app.services.events.handlers.outage_lifecycle_projection import (
         OutageLifecycleProjectionHandler,
@@ -585,6 +588,11 @@ def _initialize_handlers(dispatcher: EventDispatcher) -> None:
     dispatcher.register_handler(EnforcementHandler())
     dispatcher.register_handler(TestConnectionHandler())
     dispatcher.register_handler(IPAssignmentProjectionHandler())
+    from app.services.events.handlers.session_revocation_projection import (
+        SessionRevocationProjectionHandler,
+    )
+
+    dispatcher.register_handler(SessionRevocationProjectionHandler())
     dispatcher.register_handler(CredentialSessionProjectionHandler())
     dispatcher.register_handler(ArrangementHandler())
     dispatcher.register_handler(AutomationEventHandler())
@@ -599,6 +607,7 @@ def _initialize_handlers(dispatcher: EventDispatcher) -> None:
     dispatcher.register_handler(StaffInviteHandler())
     dispatcher.register_handler(ResellerInviteHandler())
     dispatcher.register_handler(PasswordRecoveryHandler())
+    dispatcher.register_handler(MfaRemovalNoticeHandler())
 
     from app.services.control_relationships import (
         validate_and_order_handlers,

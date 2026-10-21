@@ -1085,3 +1085,29 @@ class TestTemplatesListContext:
         )
         beta = next(t for t in context["template_tasks"] if t.title == "Beta")
         assert context["dependency_labels"][str(beta.id)] == ["Alpha"]
+
+
+@pytest.mark.parametrize(
+    "project_type",
+    [ProjectType.fiber_optics_installation, ProjectType.air_fiber_installation],
+)
+def test_physical_project_form_context_uses_owner_infrastructure_policy(
+    db_session, project_type
+):
+    from app.services.projects import PHYSICAL_INFRASTRUCTURE_PROJECT_TYPES
+
+    context = web_projects.build_project_form_context(
+        db_session, form={"project_type": project_type.value}
+    )
+    assert context["prefill"]["project_type"] == project_type.value
+    assert context["infrastructure_project_types"] == [
+        kind.value for kind in PHYSICAL_INFRASTRUCTURE_PROJECT_TYPES
+    ]
+    assert set(context["infrastructure_project_types"]) == {
+        "cable_rerun",
+        "fiber_optics_relocation",
+        "air_fiber_relocation",
+        "fiber_optics_installation",
+        "air_fiber_installation",
+        "cross_connect",
+    }

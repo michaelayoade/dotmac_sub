@@ -117,3 +117,12 @@ restoration.
 
 Never use raw SQL, edit a balance or billing date, create a fake payment, or
 create an invoice to represent this repair.
+
+## Correcting an opening after capture
+
+This repair captures a missing opening; it never changes one that already
+exists. When Finance later confirms that a captured opening is wrong (for
+example a 2026-10-08/09 capture recorded as zero because no opening balance
+existed), use the admin **Correct opening** screen on the account's billing
+page, described in `docs/runbooks/CUSTOMER_SUBLEDGER_OPENING_CORRECTION.md`.
+Do not capture a second opening or re-run this repair as a workaround.

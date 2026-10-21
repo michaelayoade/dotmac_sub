@@ -9,6 +9,7 @@ never closes support Tickets or WorkOrders.
 
 from __future__ import annotations
 
+import ast
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -92,18 +93,66 @@ def test_handler_is_registered_and_scoped():
 
 def test_outage_resolution_never_touches_tickets_or_work_orders():
     # Recovery evidence is emitted; Support and Field owners transition
-    # their own cases. Neither the lifecycle owner nor its projection
-    # handler may import or reference the ticket/work-order domains.
+    # their own cases. Complaint correlation may read exact Ticket facts;
+    # transitions and the projection handler cannot use that association to
+    # mutate a support or field lifecycle.
     for relative in (
         "app/services/topology/outage.py",
         "app/services/events/handlers/outage_lifecycle_projection.py",
     ):
         src = _source(relative)
         assert "from app.models.work_order" not in src
-        assert "from app.models.support" not in src
+        if relative.endswith("outage_lifecycle_projection.py"):
+            assert "from app.models.support" not in src
         assert "from app.services import support" not in src
         assert "from app.services.support" not in src
         assert "ticket_work_order_handoff" not in src
+
+
+def test_outage_transition_functions_cannot_access_ticket_or_work_order_models():
+    tree = ast.parse(_source("app/services/topology/outage.py"))
+    transitions = {
+        "set_outage_status",
+        "declare_outage",
+        "resolve_outage",
+        "open_classifier_incident",
+        "confirm_incident",
+        "discard_incident",
+        "start_clearing",
+        "reopen_incident",
+        "resolve_classifier_incident",
+        "repoint_root",
+    }
+    checked = set()
+    for node in tree.body:
+        if isinstance(node, ast.FunctionDef) and node.name in transitions:
+            checked.add(node.name)
+            for child in ast.walk(node):
+                if isinstance(child, ast.Name):
+                    assert child.id not in {
+                        "Ticket",
+                        "WorkOrder",
+                        "ticket",
+                        "work_order",
+                    }
+                if isinstance(child, (ast.Assign, ast.AnnAssign, ast.AugAssign)):
+                    targets = (
+                        child.targets
+                        if isinstance(child, ast.Assign)
+                        else [child.target]
+                    )
+                    for target in targets:
+                        assert not (
+                            isinstance(target, ast.Attribute)
+                            and isinstance(target.value, ast.Name)
+                            and target.value.id in {"ticket", "work_order", "complaint"}
+                        )
+    assert {
+        "resolve_outage",
+        "set_outage_status",
+        "declare_outage",
+        "repoint_root",
+    } <= checked
 
 
 def test_typed_outage_event_types_are_declared():

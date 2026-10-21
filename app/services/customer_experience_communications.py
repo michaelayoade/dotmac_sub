@@ -8,6 +8,8 @@ owned by the communications control plane.
 from __future__ import annotations
 
 from collections.abc import Iterable
+from dataclasses import dataclass
+from enum import StrEnum
 from uuid import UUID
 
 from sqlalchemy.orm import Session
@@ -17,8 +19,14 @@ from app.models.notification import NotificationChannel
 from app.models.work_order import WorkOrder
 from app.schemas.settings import DomainSettingUpdate
 from app.services import settings_spec
-from app.services.communication_intents import CommunicationIntent, submit
+from app.services.communication_intents import (
+    CommunicationIntent,
+    CommunicationIntentResult,
+    submit,
+)
 from app.services.domain_settings import DomainSettings
+from app.services.work_order_assignment_contracts import WorkOrderAssignmentPreview
+from app.services.work_order_errors import WorkOrderCommandError
 
 DOCUMENT_CHANGE_NOTIFICATION_EVENTS: tuple[str, ...] = (
     "project_status_changed",
@@ -33,6 +41,9 @@ DOCUMENT_CHANGE_NOTIFICATION_EVENTS: tuple[str, ...] = (
     "support_ticket_updated",
     "support_ticket_resolution_confirmation",
     "support_csat_request",
+    "work_order_assigned",
+    "work_order_reassigned",
+    "work_order_schedule_changed",
     "work_order_en_route",
     "work_order_arrived",
     "work_order_complete",
@@ -225,5 +236,123 @@ def request_field_event(
             )
             if terminal
             else (NotificationChannel.whatsapp, NotificationChannel.push)
+        ),
+    )
+
+
+class AssignmentCommunicationEvent(StrEnum):
+    assigned = "work_order_assigned"
+    reassigned = "work_order_reassigned"
+    schedule_changed = "work_order_schedule_changed"
+
+
+@dataclass(frozen=True, kw_only=True)
+class AssignmentCommunicationRequest:
+    subscriber_id: UUID | None
+    work_order_id: UUID
+    work_order_public_id: str
+    title: str
+    command_id: UUID
+    queue_id: UUID
+    preview: WorkOrderAssignmentPreview
+    project_id: UUID | None = None
+    project_task_id: UUID | None = None
+    ticket_id: UUID | None = None
+
+
+def request_assignment_update(
+    db: Session, *, request: AssignmentCommunicationRequest
+) -> CommunicationIntentResult | None:
+    """Stage a customer intent inside the authoritative assignment transaction."""
+    if not db.in_transaction():
+        raise WorkOrderCommandError(
+            "assignment_communication_transaction_required",
+            "Assignment communication requires its authoritative transaction",
+        )
+    if request.preview.work_order_id != request.work_order_public_id:
+        raise WorkOrderCommandError(
+            "assignment_communication_scope_mismatch",
+            "Assignment preview does not match the communication scope",
+        )
+    if request.subscriber_id is None:
+        return None
+    previous, result = request.preview.previous, request.preview.result
+    previous_target = (
+        previous.technician_id,
+        previous.vendor_id,
+        previous.vendor_user_id,
+    )
+    result_target = (result.technician_id, result.vendor_id, result.vendor_user_id)
+    if previous_target != result_target:
+        event = (
+            AssignmentCommunicationEvent.assigned
+            if previous_target == (None, None, None)
+            else AssignmentCommunicationEvent.reassigned
+        )
+    elif (previous.scheduled_start, previous.scheduled_end) != (
+        result.scheduled_start,
+        result.scheduled_end,
+    ):
+        event = AssignmentCommunicationEvent.schedule_changed
+    else:
+        return None
+    if not document_change_notification_enabled(db, event.value):
+        return None
+    name = result.technician_name or result.vendor_name or "Your field team"
+    schedule = (
+        f" Scheduled start: {result.scheduled_start.isoformat()}."
+        if result.scheduled_start is not None
+        else " The visit schedule will be confirmed."
+    )
+    subject = {
+        AssignmentCommunicationEvent.assigned: "Your technician visit is assigned",
+        AssignmentCommunicationEvent.reassigned: "Your technician visit assignment changed",
+        AssignmentCommunicationEvent.schedule_changed: "Your technician visit schedule changed",
+    }[event]
+    return submit(
+        db,
+        CommunicationIntent(
+            subscriber_id=request.subscriber_id,
+            event_type=event.value,
+            category="service",
+            template_code=event.value,
+            subject=subject,
+            body=f"{name} will handle {request.title}.{schedule}",
+            default_channels=(
+                NotificationChannel.email,
+                NotificationChannel.whatsapp,
+                NotificationChannel.push,
+            ),
+            include_reseller=False,
+            persist_policy_suppressions=True,
+            metadata={
+                "customer_experience": True,
+                "type": "work_order",
+                "work_order_id": request.work_order_public_id,
+                "work_order_pk": str(request.work_order_id),
+                "assignment_command_id": str(request.command_id),
+                "assignment_queue_id": str(request.queue_id),
+                "technician_id": str(result.technician_id)
+                if result.technician_id
+                else None,
+                "vendor_id": str(result.vendor_id) if result.vendor_id else None,
+                "vendor_user_id": str(result.vendor_user_id)
+                if result.vendor_user_id
+                else None,
+                "technician_name": result.technician_name,
+                "vendor_name": result.vendor_name,
+                "scheduled_start": result.scheduled_start.isoformat()
+                if result.scheduled_start
+                else None,
+                "scheduled_end": result.scheduled_end.isoformat()
+                if result.scheduled_end
+                else None,
+                "project_id": str(request.project_id) if request.project_id else None,
+                "project_task_id": str(request.project_task_id)
+                if request.project_task_id
+                else None,
+                "ticket_id": str(request.ticket_id) if request.ticket_id else None,
+            },
+            dedupe_key=f"work-order-assignment:{request.command_id}",
         ),
     )

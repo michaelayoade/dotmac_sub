@@ -14,6 +14,11 @@ from fastapi import (
 from sqlalchemy.orm import Session
 
 from app.api.deps import get_db
+from app.api.field.execution import (
+    field_command_context,
+    field_domain_errors,
+    field_system_user_id,
+)
 from app.api.field.work_order_compat import resolve_work_order_id
 from app.schemas.common import ListResponse
 from app.schemas.field import (
@@ -36,6 +41,7 @@ from app.services.auth_dependencies import require_user_auth
 from app.services.db_session_adapter import db_session_adapter
 from app.services.dotmac_erp.expense_form_contracts import ExpenseDestinationMode
 from app.services.field.attachments import field_attachments
+from app.services.field.execution_contracts import CreateFieldAttachment
 from app.services.field.expense_categories import (
     ExpenseCategoryQueryError,
     ListExpenseCategories,
@@ -297,16 +303,26 @@ def upload_field_expense_receipt(
     )
     if resolved_work_order_id is None:
         raise HTTPException(status_code=422, detail="work_order_id is required")
-    return field_attachments.create(
-        db,
-        auth,
-        kind="document",
-        file_name=file.filename or "receipt",
-        mime_type=file.content_type,
-        content=file.file.read(),
-        client_ref=client_ref,
-        crm_work_order_id=resolved_work_order_id,
-    )
+    principal_id = field_system_user_id(auth)
+    with field_domain_errors():
+        db_session_adapter.release_read_transaction(db)
+        return field_attachments.create(
+            db=db,
+            command=CreateFieldAttachment(
+                context=field_command_context(
+                    principal_id,
+                    reason="field_expense_receipt_upload",
+                    request_id=client_ref,
+                ),
+                requester_system_user_id=principal_id,
+                kind="document",
+                file_name=file.filename or "receipt",
+                mime_type=file.content_type,
+                content=file.file.read(),
+                client_ref=client_ref,
+                public_id=resolved_work_order_id,
+            ),
+        )
 
 
 @router.get("", response_model=ListResponse[FieldExpenseRequestRead])

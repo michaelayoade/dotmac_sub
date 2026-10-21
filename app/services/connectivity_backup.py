@@ -351,6 +351,8 @@ def restore_connectivity_state(
         snap = by_username_cred.get(cred.username)
         if snap is not None and snap.get("credential_active") is not None:
             cred.is_active = bool(snap["credential_active"])
+            if cred.is_active:
+                cred.deactivation_reason = None
     for ru in db.scalars(
         select(RadiusUser).where(RadiusUser.subscriber_id == backup.subscriber_id)
     ).all():

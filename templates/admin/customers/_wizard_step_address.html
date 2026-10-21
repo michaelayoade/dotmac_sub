@@ -66,10 +66,11 @@
             <select id="connection_type" x-model="connectionType"
                     class="block w-full rounded-xl border-0 bg-slate-100 px-4 py-3 text-sm text-slate-900 ring-1 ring-inset ring-slate-200 focus:bg-white focus:ring-2 focus:ring-primary-500 transition dark:bg-slate-900 dark:text-white dark:ring-slate-700">
                 <option value="">Not specified</option>
-                <option value="wireless">Wireless</option>
-                <option value="wired">Wired</option>
+                {% for item in customer_connection_types|default([]) %}
+                <option value="{{ item.code }}">{{ item.name }}</option>
+                {% endfor %}
             </select>
-            <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">Optional radio or fibre/cable classification for regional reporting.</p>
+            <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">Optional configured last-mile classification for regional reporting.</p>
         </div>
     </div>
 

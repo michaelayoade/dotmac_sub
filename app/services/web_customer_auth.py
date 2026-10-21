@@ -2,8 +2,10 @@
 
 import html
 import logging
-import secrets
+from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
+from typing import Literal
+from uuid import UUID
 
 import pyotp
 from fastapi import HTTPException, Request, status
@@ -12,29 +14,29 @@ from jose import JWTError
 from sqlalchemy.orm import Session
 
 from app.csrf import renew_csrf_cookie
+from app.customer_authentication_http import customer_login_evidence
+from app.metrics import record_portal_authentication_success
 
 logger = logging.getLogger(__name__)
 
-from app.models.auth import MFAMethod, UserCredential
-from app.models.catalog import AccessCredential
-from app.models.domain_settings import SettingDomain
-from app.models.radius import RadiusUser
-from app.models.subscriber import Subscriber, SubscriberStatus
-from app.services import auth_flow as auth_flow_service
+from app.models.auth import MFAMethod
 from app.services import (
+    anonymous_recovery_adapter,
     credential_recovery,
+    customer_authentication,
     customer_credential_enrollment,
     customer_login_identity,
     customer_portal,
-    radius_auth,
 )
+from app.services import auth_flow as auth_flow_service
 from app.services import module_manager as module_manager_service
-from app.services.auth_flow import verify_password
+from app.services import (
+    password_authentication as pa,
+)
+from app.services.auth_flow import StagedSession
 from app.services.db_session_adapter import db_session_adapter
 from app.services.domain_errors import DomainError
 from app.services.owner_commands import CommandContext
-from app.services.rate_limiter_adapter import allow_operation
-from app.services.settings_spec import resolve_value
 from app.web.customer.branding import get_customer_templates
 
 templates = get_customer_templates()
@@ -59,30 +61,26 @@ def _safe_next(next_url: str | None, fallback: str = "/portal/dashboard") -> str
     return fallback
 
 
-def _setting_int(db: Session, domain: SettingDomain, key: str, default: int) -> int:
-    raw = resolve_value(db, domain, key)
-    if raw is None:
-        return default
-    try:
-        return int(str(raw))
-    except (TypeError, ValueError):
-        return default
-
-
-def _record_customer_local_login_failure(
-    db: Session, credential: UserCredential, *, now: datetime | None = None
+def _portal_denial(
+    request: Request,
+    *,
+    reason: pa.DenialReason,
+    target: pa.DenialTarget | None,
+    phase: pa.DenialPhase = pa.DenialPhase.PASSWORD,
+    effect: pa.MfaFailureEffect | None = None,
+    status_code: Literal[401, 429, 503] = 401,
 ) -> None:
-    now = now or datetime.now(UTC)
-    credential.failed_login_attempts += 1
-    max_attempts = _setting_int(
-        db, SettingDomain.auth, "customer_login_max_attempts", 5
+    pa.record_authentication_denial(
+        pa.denial_for_request(
+            reason=reason,
+            surface=pa.DenialSurface.CUSTOMER_PORTAL,
+            phase=phase,
+            target=target,
+            request=request,
+            effect=effect,
+            status_code=status_code,
+        )
     )
-    lockout_minutes = _setting_int(
-        db, SettingDomain.auth, "customer_lockout_minutes", 15
-    )
-    if credential.failed_login_attempts >= max_attempts:
-        credential.locked_until = now + timedelta(minutes=lockout_minutes)
-    db.commit()
 
 
 def _customer_mfa_context_token(
@@ -114,7 +112,9 @@ def _customer_mfa_context_token(
     )
 
 
-def _decode_customer_mfa_context(db: Session, token: str) -> dict:
+def _decode_customer_mfa_context(
+    db: Session, token: str, *, request: Request | None = None
+) -> dict:
     try:
         payload = auth_flow_service._jwt_decode_token(  # noqa: SLF001
             token,
@@ -122,8 +122,26 @@ def _decode_customer_mfa_context(db: Session, token: str) -> dict:
             auth_flow_service._jwt_algorithm(db),  # noqa: SLF001
         )
     except JWTError as exc:
+        pa.record_authentication_denial(
+            pa.denial_for_request(
+                reason=pa.DenialReason.INVALID_CHALLENGE,
+                surface=pa.DenialSurface.CUSTOMER_PORTAL,
+                phase=pa.DenialPhase.MFA,
+                target=None,
+                request=request,
+            )
+        )
         raise ValueError("Invalid MFA session") from exc
     if payload.get("typ") != "customer_mfa_context":
+        pa.record_authentication_denial(
+            pa.denial_for_request(
+                reason=pa.DenialReason.INVALID_CHALLENGE,
+                surface=pa.DenialSurface.CUSTOMER_PORTAL,
+                phase=pa.DenialPhase.MFA,
+                target=None,
+                request=request,
+            )
+        )
         raise ValueError("Invalid MFA session")
     return payload
 
@@ -164,13 +182,10 @@ def list_active_mfa_methods(db: Session, subscriber_id: object) -> list[MFAMetho
     )
 
 
-def _primary_customer_totp_enabled(db: Session, subscriber_id: object) -> bool:
-    return (
-        auth_flow_service._primary_totp_method(  # noqa: SLF001
-            db, "subscriber", str(subscriber_id)
-        )
-        is not None
-    )
+@dataclass(frozen=True, slots=True)
+class _PortalMfaCompletion:
+    session: StagedSession
+    src: str
 
 
 def _verify_customer_mfa_token(
@@ -179,28 +194,127 @@ def _verify_customer_mfa_token(
     mfa_token: str,
     context: dict,
     code: str,
-) -> None:
-    payload = auth_flow_service._decode_jwt(db, mfa_token, "mfa")  # noqa: SLF001
-    principal_id = str(payload.get("principal_id") or payload.get("sub") or "")
+    request: Request,
+) -> _PortalMfaCompletion:
+    try:
+        challenge = pa.decode_challenge(db, mfa_token, expected_typ="mfa")
+    except pa.PasswordAuthenticationError:
+        _portal_denial(
+            request,
+            reason=pa.DenialReason.INVALID_CHALLENGE,
+            target=None,
+            phase=pa.DenialPhase.MFA,
+        )
+        raise
+    target = pa.challenge_denial_target(db, challenge)
     subscriber_id = str(context.get("subscriber_id") or "")
-    if not principal_id or principal_id != subscriber_id:
+    if (
+        challenge.principal_type != "subscriber"
+        or challenge.audience != "general"
+        or challenge.principal_id != subscriber_id
+        or str(context.get("account_id") or "") != subscriber_id
+    ):
+        _portal_denial(
+            request,
+            reason=pa.DenialReason.INVALID_CHALLENGE,
+            target=target,
+            phase=pa.DenialPhase.MFA,
+        )
         raise ValueError("Invalid MFA session")
-
-    method = auth_flow_service._primary_totp_method(  # noqa: SLF001
-        db, "subscriber", subscriber_id
-    )
+    method = auth_flow_service._primary_totp_method(db, "subscriber", subscriber_id)  # noqa: SLF001
     if not method:
+        _portal_denial(
+            request,
+            reason=pa.DenialReason.METHOD,
+            target=target,
+            phase=pa.DenialPhase.MFA,
+        )
         raise ValueError("MFA method not found")
-
-    auth_flow_service.ensure_mfa_not_locked(method)
+    method_id = method.id
+    method_target = pa.DenialTarget(pa.DenialTargetKind.METHOD, method_id)
+    try:
+        auth_flow_service.ensure_mfa_not_locked(method)
+    except HTTPException:
+        _portal_denial(
+            request,
+            reason=pa.DenialReason.MFA_LOCKED,
+            target=method_target,
+            phase=pa.DenialPhase.MFA,
+            status_code=429,
+        )
+        raise
     secret = auth_flow_service._decrypt_secret(db, method.secret or "")  # noqa: SLF001
-    if not pyotp.TOTP(secret).verify(code.strip(), valid_window=0):
-        auth_flow_service.record_mfa_failure(db, method)
-        raise ValueError("Invalid verification code")
-    auth_flow_service.record_mfa_success(method)
+    totp_ok = pyotp.TOTP(secret).verify(code.strip(), valid_window=0)
+    failure_policy = auth_flow_service._mfa_failure_policy(db)  # noqa: SLF001
+    try:
+        staged = pa.complete_mfa(
+            db,
+            challenge,
+            request=request,
+            method_id=method.id,
+            totp_ok=totp_ok,
+            recovery_code_hash=None,
+            failure_policy=failure_policy,
+            session_sink="customer_portal",
+            expires_at=_portal_expiry(db, bool(context.get("remember"))),
+        )
+        return _PortalMfaCompletion(session=staged, src=challenge.src)
+    except pa.PasswordAuthenticationError as exc:
+        effect = (
+            pa.MfaFailureEffect(method_id, failure_policy)
+            if exc.kind == "invalid_mfa_code"
+            else None
+        )
+        _portal_denial(
+            request,
+            reason=auth_flow_service._owner_denial_reason(exc),
+            target=method_target if effect else target,
+            phase=pa.DenialPhase.OWNER,
+            effect=effect,
+            status_code=503 if exc.kind == "lock_timeout" else 401,
+        )  # noqa: SLF001
+        raise
 
-    method.last_used_at = datetime.now(UTC)
-    db.commit()
+
+def _portal_expiry(db: Session, remember: bool) -> datetime:
+    ttl = (
+        customer_portal.get_remember_max_age(db)
+        if remember
+        else customer_portal.get_session_max_age(db)
+    )
+    return datetime.now(UTC) + timedelta(seconds=ttl)
+
+
+def _deliver_customer_session(
+    db: Session,
+    *,
+    staged: StagedSession,
+    username: str,
+    account_id: UUID | str,
+    subscriber_id: UUID | str,
+    subscription_id: UUID | str | None,
+    remember: bool,
+) -> str:
+    try:
+        return customer_portal.create_customer_session(
+            username=username,
+            account_id=account_id,
+            subscriber_id=subscriber_id,
+            subscription_id=subscription_id,
+            remember=remember,
+            db=db,
+            auth_session_id=UUID(staged.session_id),
+        )
+    except Exception as exc:
+        try:
+            pa.revoke_undelivered_customer_session(
+                db,
+                session_id=UUID(staged.session_id),
+                subscriber_id=UUID(str(subscriber_id)),
+            )
+        except Exception:
+            logger.warning("undelivered_customer_session_revoke_failed", exc_info=True)
+        raise RuntimeError("Customer session delivery unavailable") from exc
 
 
 def get_current_customer_from_request(request: Request, db: Session) -> dict | None:
@@ -250,21 +364,15 @@ def customer_forgot_password_page(request: Request, db: Session, success: bool =
 
 
 def customer_forgot_password_submit(request: Request, db: Session, email: str):
-    try:
-        credential_recovery.request_password_recovery(
-            db,
-            credential_recovery.RequestPasswordRecoveryCommand(
-                context=_credential_recovery_context(
-                    "Customer portal password recovery request"
-                ),
-                email=email,
-                next_login_path=_CUSTOMER_RESET_LOGIN_PATH,
+    anonymous_recovery_adapter.request_password_recovery(
+        command=credential_recovery.RequestPasswordRecoveryCommand(
+            context=_credential_recovery_context(
+                "Customer portal password recovery request"
             ),
-        )
-    except Exception:
-        logger.info(
-            "Customer password reset request failed for %s", email, exc_info=True
-        )
+            email=email,
+            next_login_path=_CUSTOMER_RESET_LOGIN_PATH,
+        ),
+    )
     return templates.TemplateResponse(
         "customer/auth/forgot-password.html",
         {"request": request, "success": True},
@@ -367,27 +475,43 @@ def customer_credential_enrollment_submit(
 
 
 def customer_verify_email_page(request: Request, db: Session, token: str):
-    """Verify an email address from the link in the verification email."""
+    """Complete the capability in a fresh owner; retain the existing GET route."""
+    from app.services import email_verification
+
+    error_msg = "This verification link is invalid or has expired."
+    response_status = 400
+    headers = None
     try:
-        auth_flow_service.verify_email(db, token)
+        with db_session_adapter.owner_command_session() as owner_db:
+            email_verification.complete_email_verification(
+                owner_db,
+                command=email_verification.CompleteEmailVerificationCommand(
+                    context=CommandContext.system(
+                        actor="capability:email-verification",
+                        scope=email_verification.EMAIL_VERIFICATION_SCOPE,
+                        reason="Customer email capability completion",
+                    ),
+                    token=token,
+                ),
+            )
         return templates.TemplateResponse(
             "customer/auth/verify-email.html",
             {"request": request, "success": True},
         )
-    except Exception as exc:
-        logger.info("Customer email verification failed", exc_info=True)
-        error_msg = "This verification link is invalid or has expired."
-        if (
-            isinstance(exc, HTTPException)
-            and isinstance(exc.detail, str)
-            and exc.detail
-        ):
-            error_msg = exc.detail
-        return templates.TemplateResponse(
-            "customer/auth/verify-email.html",
-            {"request": request, "success": False, "error": error_msg},
-            status_code=400,
-        )
+    except DomainError as exc:
+        if exc.code != "auth.email_verification.invalid_capability":
+            response_status = 503
+    except Exception:
+        response_status = 503
+    if response_status == 503:
+        error_msg = "Email verification is temporarily unavailable. Please try again."
+        headers = {"Retry-After": "5"}
+    return templates.TemplateResponse(
+        "customer/auth/verify-email.html",
+        {"request": request, "success": False, "error": error_msg},
+        status_code=response_status,
+        headers=headers,
+    )
 
 
 def customer_login_submit(
@@ -398,210 +522,64 @@ def customer_login_submit(
     remember: bool,
     next_url: str | None,
 ):
+    denial_target: pa.DenialTarget | None = None
     try:
-        normalized_username = username.strip()
-        if not normalized_username:
-            raise ValueError("Username is required")
-
-        account_id = None
-        subscriber_id = None
-        subscription_id = None
-        authenticated_locally = False
-        local_password_failed = False
-        local_login_is_email_alias = False
-
-        local_resolution = customer_login_identity.resolve_customer_login_identity(
-            db,
-            customer_login_identity.ResolveCustomerLoginIdentity(
-                identifier=normalized_username
+        prepared = customer_authentication.prepare_customer_login(
+            db=db,
+            query=customer_authentication.PrepareCustomerLogin(
+                identifier=username,
+                password=password,
+                evidence=customer_login_evidence(
+                    request, pa.DenialSurface.CUSTOMER_PORTAL
+                ),
+                audience=customer_authentication.CustomerLoginAudience.BROWSER,
             ),
         )
-        refusal = customer_login_identity.resolution_error(local_resolution)
-        if refusal is not None:
-            raise refusal
-        local_credential = (
-            db.get(UserCredential, local_resolution.credential_id)
-            if local_resolution.status
-            is customer_login_identity.CustomerLoginResolutionStatus.matched
-            and local_resolution.credential_id is not None
+        normalized_username = prepared.identifier
+        subscriber_id = account_id = prepared.subscriber_id
+        subscription_id = prepared.subscription_id
+        verified = prepared.verified
+        denial_target = prepared.denial_target
+        mfa_required = verified.mfa_required
+        # Resolve delivery inputs before entering the transaction-free owner.
+        context_token = (
+            _customer_mfa_context_token(
+                db,
+                username=normalized_username,
+                account_id=account_id,
+                subscriber_id=subscriber_id,
+                subscription_id=subscription_id,
+                remember=remember,
+                next_url=next_url,
+            )
+            if mfa_required
             else None
         )
-        local_login_is_email_alias = (
-            local_credential is not None and "@" in normalized_username
+        outcome = pa.complete_password_step(
+            db,
+            verified,
+            request=request,
+            session_sink="customer_portal",
+            expires_at=_portal_expiry(db, remember),
         )
-        if local_credential:
-            now = datetime.now(UTC)
-            locked_until = local_credential.locked_until
-            if locked_until and locked_until.tzinfo is None:
-                locked_until = locked_until.replace(tzinfo=UTC)
-            if locked_until and locked_until > now:
-                raise ValueError(
-                    auth_flow_service.lockout_detail(
-                        "Account locked", locked_until=locked_until
-                    )
-                )
-            if not verify_password(password, local_credential.password_hash):
-                local_password_failed = True
-            else:
-                if local_credential.must_change_password:
-                    raise ValueError("Password reset required. Please contact support.")
-
-                local_credential.failed_login_attempts = 0
-                local_credential.locked_until = None
-                local_credential.last_login_at = now
-                db.commit()
-                authenticated_locally = True
-
-                subscriber = db.get(Subscriber, local_credential.subscriber_id)
-                if subscriber:
-                    subscriber_id = subscriber.id
-                    account_id = subscriber.id
-
-        if not authenticated_locally:
-
-            def raise_invalid_login() -> None:
-                if local_credential and local_password_failed:
-                    _record_customer_local_login_failure(db, local_credential)
-                raise ValueError("Invalid username or password")
-
-            if local_password_failed and local_login_is_email_alias:
-                raise_invalid_login()
-
-            # The RADIUS/PPPoE path has no per-credential lockout columns, so
-            # throttle total attempts per username instead (in-memory,
-            # per-worker — a backstop against online brute force, not a
-            # substitute for the DB-backed local-credential lockout).
-            decision = allow_operation(
-                f"portal:radius-login:{normalized_username.lower()}",
-                limit=10,
-                window_seconds=900,
-            )
-            if not decision.allowed:
-                raise ValueError(
-                    auth_flow_service.lockout_detail(
-                        "Account locked",
-                        retry_after_seconds=decision.retry_after_seconds,
-                    )
-                )
-
-            # Try RADIUS server authentication first
-            radius_authenticated = False
-            try:
-                radius_auth.authenticate(
-                    db=db, username=normalized_username, password=password
-                )
-                radius_authenticated = True
-            except Exception:
-                logger.debug(
-                    "RADIUS auth failed for %s, trying access credential",
-                    normalized_username,
-                )
-
-            if radius_authenticated:
-                radius_user = (
-                    db.query(RadiusUser)
-                    .filter(RadiusUser.username == normalized_username)
-                    .filter(RadiusUser.is_active.is_(True))
-                    .first()
-                )
-
-                if radius_user:
-                    account_id = radius_user.subscriber_id
-                    subscription_id = radius_user.subscription_id
-                    subscriber_id = radius_user.subscriber_id
-                    if radius_user.subscription_id and not subscriber_id:
-                        from app.models.catalog import Subscription
-
-                        subscription = db.get(Subscription, radius_user.subscription_id)
-                        if subscription and subscription.subscriber_id:
-                            subscriber_id = subscription.subscriber_id
-                    if account_id and not subscriber_id:
-                        account = db.get(Subscriber, account_id)
-                        if account:
-                            subscriber_id = account.id
-                else:
-                    credential = (
-                        db.query(AccessCredential)
-                        .filter(AccessCredential.username == normalized_username)
-                        .filter(AccessCredential.is_active.is_(True))
-                        .first()
-                    )
-                    if credential:
-                        account_id = credential.subscriber_id
-                        subscriber_id = credential.subscriber_id
-                    if account_id and not subscriber_id:
-                        account = db.get(Subscriber, account_id)
-                        if account:
-                            subscriber_id = account.id
-            else:
-                # Fallback: authenticate directly against PPPoE/access credentials.
-                # This allows portal login even when the RADIUS server is unreachable
-                # or the password format isn't compatible with RADIUS (e.g. migrated hashes).
-                credential = (
-                    db.query(AccessCredential)
-                    .filter(AccessCredential.username == normalized_username)
-                    .filter(AccessCredential.is_active.is_(True))
-                    .first()
-                )
-                if credential and credential.secret_hash:
-                    from app.services.credential_crypto import decrypt_credential
-
-                    stored_password = decrypt_credential(credential.secret_hash)
-                    if stored_password and secrets.compare_digest(
-                        stored_password, password
-                    ):
-                        account_id = credential.subscriber_id
-                        subscriber_id = credential.subscriber_id
-                        logger.info(
-                            "Portal login via access credential for %s",
-                            normalized_username,
-                        )
-                    else:
-                        raise_invalid_login()
-                else:
-                    raise_invalid_login()
-
-        if not account_id or not subscriber_id:
-            raise ValueError("Customer account not found. Please contact support.")
-
-        # Status gate for every auth path (local, RADIUS, access-credential
-        # fallback): canceled subscribers are gone, disabled ones are told so.
-        # Suspended/blocked/delinquent stay able to log in and pay.
-        portal_subscriber = db.get(Subscriber, subscriber_id)
-        if (
-            not portal_subscriber
-            or portal_subscriber.status == SubscriberStatus.canceled
-        ):
-            raise ValueError("Customer account not found. Please contact support.")
-        if portal_subscriber.status == SubscriberStatus.disabled:
-            raise ValueError("Account disabled. Please contact support.")
-
-        if _primary_customer_totp_enabled(db, subscriber_id):
+        if outcome.kind == "mfa_challenge":
             response = RedirectResponse(url="/portal/auth/mfa", status_code=303)
             _set_customer_mfa_cookies(
                 response,
-                mfa_token=auth_flow_service._issue_mfa_token(  # noqa: SLF001
-                    db, str(subscriber_id), "subscriber"
-                ),
-                context_token=_customer_mfa_context_token(
-                    db,
-                    username=normalized_username,
-                    account_id=account_id,
-                    subscriber_id=subscriber_id,
-                    subscription_id=subscription_id,
-                    remember=remember,
-                    next_url=next_url,
-                ),
+                mfa_token=outcome.challenge_token or "",
+                context_token=context_token or "",
             )
             return response
-
-        session_token = customer_portal.create_customer_session(
+        if outcome.staged_session is None:
+            raise RuntimeError("Customer session was not issued")
+        session_token = _deliver_customer_session(
+            db,
+            staged=outcome.staged_session,
             username=normalized_username,
             account_id=account_id,
             subscriber_id=subscriber_id,
             subscription_id=subscription_id,
             remember=remember,
-            db=db,
         )
 
         redirect_url = _safe_next(next_url)
@@ -621,9 +599,32 @@ def customer_login_submit(
             max_age=max_age,
         )
 
+        record_portal_authentication_success(src=verified.src)
         return response
 
-    except RuntimeError:
+    except (RuntimeError, pa.PasswordAuthenticationError) as exc:
+        if isinstance(exc, pa.PasswordAuthenticationError):
+            _portal_denial(
+                request,
+                reason=auth_flow_service._owner_denial_reason(exc),
+                target=denial_target,
+                phase=pa.DenialPhase.OWNER,
+                status_code=503 if exc.kind == "lock_timeout" else 401,
+            )  # noqa: SLF001
+        if (
+            isinstance(exc, pa.PasswordAuthenticationError)
+            and exc.kind != "lock_timeout"
+        ):
+            return templates.TemplateResponse(
+                "customer/auth/login.html",
+                {
+                    "request": request,
+                    "error": exc.message,
+                    "next": next_url,
+                    "username": username,
+                },
+                status_code=401,
+            )
         error_msg = "Session service unavailable. Please try again."
         return templates.TemplateResponse(
             "customer/auth/login.html",
@@ -634,6 +635,10 @@ def customer_login_submit(
                 "username": username,
             },
             status_code=503,
+            headers={"Retry-After": "5"}
+            if isinstance(exc, pa.PasswordAuthenticationError)
+            and exc.kind == "lock_timeout"
+            else None,
         )
     except Exception as exc:
         error_msg = "Invalid username or password"
@@ -671,7 +676,7 @@ def customer_mfa_page(request: Request, db: Session, error: str | None = None):
     if not mfa_token or not context_token:
         return RedirectResponse(url="/portal/auth/login", status_code=303)
     try:
-        _decode_customer_mfa_context(db, context_token)
+        _decode_customer_mfa_context(db, context_token, request=request)
     except Exception:
         response = RedirectResponse(url="/portal/auth/login", status_code=303)
         _clear_customer_mfa_cookies(response)
@@ -690,20 +695,22 @@ def customer_mfa_submit(request: Request, db: Session, code: str):
         return RedirectResponse(url="/portal/auth/login", status_code=303)
 
     try:
-        context = _decode_customer_mfa_context(db, context_token)
-        _verify_customer_mfa_token(
+        context = _decode_customer_mfa_context(db, context_token, request=request)
+        completion = _verify_customer_mfa_token(
             db,
             mfa_token=mfa_token,
             context=context,
             code=code,
+            request=request,
         )
-        session_token = customer_portal.create_customer_session(
+        session_token = _deliver_customer_session(
+            db,
+            staged=completion.session,
             username=str(context.get("username") or ""),
-            account_id=context.get("account_id"),
-            subscriber_id=context.get("subscriber_id"),
+            account_id=UUID(str(context["account_id"])),
+            subscriber_id=UUID(str(context["subscriber_id"])),
             subscription_id=context.get("subscription_id"),
             remember=bool(context.get("remember")),
-            db=db,
         )
         response = RedirectResponse(
             url=_safe_next(str(context.get("next") or "")),
@@ -720,7 +727,26 @@ def customer_mfa_submit(request: Request, db: Session, code: str):
             if context.get("remember")
             else customer_portal.get_session_max_age(db),
         )
+        record_portal_authentication_success(src=completion.src)
         return response
+    except RuntimeError:
+        return templates.TemplateResponse(
+            request,
+            "customer/auth/mfa.html",
+            {
+                "request": request,
+                "error": "Session service unavailable. Please try again.",
+            },
+            status_code=503,
+        )
+    except pa.PasswordAuthenticationError as exc:
+        return templates.TemplateResponse(
+            request,
+            "customer/auth/mfa.html",
+            {"request": request, "error": exc.message},
+            status_code=503 if exc.kind == "lock_timeout" else 401,
+            headers={"Retry-After": "5"} if exc.kind == "lock_timeout" else None,
+        )
     except HTTPException as exc:
         error_msg = "Invalid verification code"
         status_code = 401
@@ -807,6 +833,11 @@ def customer_refresh(request: Request, db: Session):
         customer_portal.get_remember_max_age(db)
         if session.get("remember")
         else customer_portal.get_session_max_age(db)
+    )
+
+    expires_at = datetime.fromisoformat(str(session["expires_at"]))
+    max_age = min(
+        max_age, max(1, int((expires_at - datetime.now(UTC)).total_seconds()))
     )
 
     response = Response(status_code=204, headers={"Cache-Control": "no-store"})

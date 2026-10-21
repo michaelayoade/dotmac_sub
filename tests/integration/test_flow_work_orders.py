@@ -11,6 +11,8 @@ from __future__ import annotations
 from datetime import UTC, datetime, timedelta
 from uuid import uuid4
 
+from sqlalchemy.orm import Session
+
 from app.models.dispatch import TechnicianProfile
 from app.models.domain_settings import DomainSetting, SettingDomain, SettingValueType
 from app.models.field_job_event import FieldJobEvent
@@ -18,9 +20,17 @@ from app.models.field_note import FieldWorkOrderNote
 from app.models.field_worklog import FieldWorkLog
 from app.models.subscriber import Subscriber, UserType
 from app.models.system_user import SystemUser
+from app.models.work_order import WorkOrder
 from app.schemas.dispatch import WorkOrderAssignmentQueueCreate, WorkOrderHeaderCreate
+from app.schemas.field import FieldTransitionResponse, FieldWorkLogResult
 from app.services import dispatch as dispatch_service
 from app.services.db_session_adapter import db_session_adapter
+from app.services.field.execution_contracts import (
+    ApplyFieldTransition,
+    FieldEvent,
+    FieldWorkLogEntry,
+    SubmitFieldWorkLogs,
+)
 from app.services.field.note_commands import (
     CreateFieldWorkOrderNote,
     create_field_work_order_note,
@@ -28,7 +38,10 @@ from app.services.field.note_commands import (
 from app.services.field.transitions import field_transitions
 from app.services.field.worklogs import field_worklogs
 from app.services.owner_commands import CommandContext
+from app.services.permission_admission import PermissionAdmission
 from app.services.subscriber import _default_reseller_id
+from app.services.work_order_assignment_contracts import CurrentWorkOrderAssignmentQuery
+from app.services.work_order_commands import work_order_commands
 
 
 def _user(db) -> SystemUser:
@@ -122,20 +135,42 @@ def test_work_order_lifecycle_native(db_session):
             assigned_technician_id=profile.id,
             status="assigned",
         ),
+        context=CommandContext.system(
+            actor=str(user.id),
+            scope="operations:dispatch:assign",
+            reason="test assignment",
+        ),
+        access=PermissionAdmission(
+            user.id, "system_user", frozenset({"operations:dispatch:assign"})
+        ),
     )
     assert queue.work_order_mirror_id == row.id
     assert queue.crm_work_order_id == row.public_id
+    current_assignment = work_order_commands.current_assignment(
+        db_session, query=CurrentWorkOrderAssignmentQuery(row.id)
+    )
+    assert current_assignment is not None
+    assignment_generation = current_assignment.generation
 
     # 3. Start — transition engine keyed on public_id; the job event lands
     # FK-linked to the work order.
-    started = field_transitions.apply(
-        db_session,
-        _auth(user),
-        row.public_id,
-        event="start",
-        client_event_id=uuid4(),
+    started = _transitions_apply(
+        db=db_session,
+        command=ApplyFieldTransition(
+            requester_system_user_id=user.id,
+            public_id=row.public_id,
+            event=FieldEvent("start"),
+            assignment_generation=assignment_generation,
+            client_event_id=uuid4(),
+            context=CommandContext.system(
+                actor=f"user:{user.id}",
+                scope="field:test",
+                reason="test_field_execution",
+                idempotency_key=str(uuid4()),
+            ),
+        ),
     )
-    assert started["job"].status == "in_progress"
+    assert started.job.status == "in_progress"
     event = (
         db_session.query(FieldJobEvent)
         .filter(FieldJobEvent.work_order_mirror_id == row.id)
@@ -146,16 +181,29 @@ def test_work_order_lifecycle_native(db_session):
 
     # 4. Evidence — worklog + note join only through the native FK.
     start_at = datetime.now(UTC) - timedelta(hours=1)
-    submitted = field_worklogs.submit(
-        db_session,
-        _auth(user),
-        row.public_id,
-        [{"start_at": start_at, "end_at": start_at + timedelta(minutes=45)}],
+    submitted = _worklogs_submit(
+        db=db_session,
+        command=SubmitFieldWorkLogs(
+            requester_system_user_id=user.id,
+            public_id=row.public_id,
+            entries=tuple(
+                FieldWorkLogEntry(**entry)
+                for entry in [
+                    {"start_at": start_at, "end_at": start_at + timedelta(minutes=45)}
+                ]
+            ),
+            context=CommandContext.system(
+                actor=f"user:{user.id}",
+                scope="field:test",
+                reason="test_field_execution",
+                idempotency_key=str(uuid4()),
+            ),
+        ),
     )
-    assert len(submitted) == 1 and not submitted[0]["duplicate"]
+    assert len(submitted) == 1 and not submitted[0].duplicate
     # The start transition auto-opens a timer worklog too, so resolve the
     # submitted entry by its own id rather than .one() over the FK.
-    worklog = db_session.get(FieldWorkLog, submitted[0]["worklog"]["id"])
+    worklog = db_session.get(FieldWorkLog, submitted[0].worklog.id)
     assert worklog is not None
     assert worklog.work_order_mirror_id == row.id
 
@@ -192,18 +240,41 @@ def test_work_order_lifecycle_native(db_session):
     # unit-covered) — status lands terminal with a timestamp and the native
     # activity marker.
     completed_at = datetime.now(UTC)
-    completed = field_transitions.apply(
-        db_session,
-        _auth(user),
-        row.public_id,
-        event="complete",
-        client_event_id=uuid4(),
-        occurred_at=completed_at,
+    completed = _transitions_apply(
+        db=db_session,
+        command=ApplyFieldTransition(
+            requester_system_user_id=user.id,
+            public_id=row.public_id,
+            event=FieldEvent("complete"),
+            assignment_generation=assignment_generation,
+            client_event_id=uuid4(),
+            occurred_at=completed_at,
+            context=CommandContext.system(
+                actor=f"user:{user.id}",
+                scope="field:test",
+                reason="test_field_execution",
+                idempotency_key=str(uuid4()),
+            ),
+        ),
     )
-    assert completed["job"].status == "completed"
-    assert completed["job"].completed_at is not None
-    assert completed["job"].metadata_["native_field_source"] == "sub"
+    assert completed.job.status == "completed"
+    assert completed.job.completed_at is not None
+    assert db_session.get(WorkOrder, row.id).metadata_["native_field_source"] == "sub"
 
     # 6. Identity invariant — public_id resolves through the owner service.
     fetched = dispatch_service.work_order_headers.get(db_session, row.public_id)
     assert fetched.id == row.id
+
+
+def _transitions_apply(
+    db: Session, command: ApplyFieldTransition
+) -> FieldTransitionResponse:
+    db_session_adapter.release_read_transaction(db)
+    return field_transitions.apply(db=db, command=command)
+
+
+def _worklogs_submit(
+    db: Session, command: SubmitFieldWorkLogs
+) -> tuple[FieldWorkLogResult, ...]:
+    db_session_adapter.release_read_transaction(db)
+    return field_worklogs.submit(db=db, command=command)

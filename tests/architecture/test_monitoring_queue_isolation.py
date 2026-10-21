@@ -12,6 +12,7 @@ PROJECT_ROOT = Path(__file__).resolve().parents[2]
 MONITORING_TASKS = {
     "app.tasks.infrastructure_polling.run_infrastructure_poll",
     "app.tasks.topology_sync.warm_topology_status",
+    "app.tasks.radius_health.run_radius_health_check",
 }
 MAC_HARVEST_TASKS = {
     "app.tasks.olt_mac_harvest.run_olt_mac_harvest",
@@ -26,7 +27,7 @@ def test_monitoring_tasks_have_a_reserved_declared_queue():
     for task_name in MONITORING_TASKS:
         assert celery_app.conf.task_routes[task_name] == {"queue": "monitoring"}
     for task_name in MAC_HARVEST_TASKS:
-        assert celery_app.conf.task_routes[task_name] == {"queue": "ingestion"}
+        assert celery_app.conf.task_routes[task_name] == {"queue": "inventory"}
 
 
 def test_compose_has_a_dedicated_monitoring_consumer():
@@ -52,5 +53,10 @@ def test_all_runtime_workflows_include_the_monitoring_worker():
     assert "celery-worker-monitoring:" in dev_compose
     assert "prod-restart" in makefile
     assert "celery-worker-monitoring" in makefile
-    assert "APP_SERVICES=" in deploy
+    # deploy.sh derives its recreate set from Compose: the monitoring worker
+    # must run the release app image, and deploy must still gate on it.
+    assert "scripts.deploy_app_image_services" in deploy
     assert "celery-worker-monitoring" in deploy
+    compose = (PROJECT_ROOT / "docker-compose.yml").read_text()
+    block = compose[compose.index("  celery-worker-monitoring:") :]
+    assert "image: ${APP_IMAGE" in block[:400]

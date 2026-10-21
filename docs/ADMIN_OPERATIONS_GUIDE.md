@@ -186,6 +186,35 @@ Keep branding minimal until operations are stable. Invoice identity, contact det
 - TOTP issuer name configurable (default: `dotmac_sm`)
 - Admin can disable MFA for a locked-out user via User Management
 
+### Deleting inactive staff accounts
+
+Deactivate a staff account first, then use Delete with `rbac:assign` permission.
+Successful deletion removes its local credentials, MFA factors, sessions, grants
+and staff-bound API keys together and records audit evidence. Linked recovery
+codes, technician records or other history can block deletion; a blocked request
+leaves the account and keys unchanged. Native Party identity history is retained.
+
+Bulk Delete skips active or missing users and repeated selections. The deleted
+count reports distinct accounts. If any selected inactive account has a blocker,
+the entire batch stays unchanged. Review the blocker before retrying; after an
+uncertain response, inspect current state and audit evidence first.
+
+### API Keys
+
+Open `/admin/system/api-keys` with administrative access. Creation, rotation and
+revocation require `system:settings:write`. Use a descriptive purpose, narrow
+scopes and an expiry. System-owned keys are shared with permissioned admins;
+subscriber-owned keys are shown to their owner alongside shared keys. Staff
+accounts without a subscriber identity should select System-owned when creating.
+
+Create and Rotate reveal the secret once in the submitted page, never in the
+redirect URL. Store it securely before leaving. Rotation replaces the previous
+secret immediately; revocation disables the key. Successful changes have audit
+evidence. A failed save presents no new secret; inspect current state and audit
+evidence before retrying an uncertain request. Web creation checks the configured
+owner count and lifetime caps; concurrent requests and other administrative
+surfaces can exceed the owner count, so it is not a global quota.
+
 ### Security Baseline for Production
 
 - Enable secure cookies under HTTPS
@@ -1342,9 +1371,9 @@ Rotate non-customer-facing secrets first, then payment, then authentication or n
 | Subscription | created, activated, suspended, resumed, canceled, upgraded, downgraded, expiring |
 | Invoice | created, sent, paid, overdue |
 | Payment | received, failed, refunded |
-| Usage | recorded, warning, exhausted, topped_up |
+| Usage | warning, exhausted, topped_up |
 | Provisioning | started, completed, failed |
-| Network | device.offline, device.online, session.started, session.ended, network.alert |
+| Network | network.alert |
 
 ### Webhook Security
 

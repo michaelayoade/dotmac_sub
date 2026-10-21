@@ -19,6 +19,10 @@ from app.models.system_user import SystemUser
 from app.services.auth_dependencies import has_permission
 from app.services.db_session_adapter import db_session_adapter
 from app.services.owner_commands import CommandContext
+from app.services.prepaid_calendar_contracts import (
+    ReviewedPrepaidCalendarBasis,
+    ReviewedPrepaidCalendarSelection,
+)
 from app.services.prepaid_draft_reconciliation import (
     REPAIR_SCOPE,
     AdoptFundedPrepaidProformaCommand,
@@ -50,6 +54,7 @@ from app.services.prepaid_draft_reconciliation import (
     repair_historical_paid_prepaid_invoice,
 )
 from app.services.system_user_assignments import system_user_role_names
+from scripts.billing._mutation_policy import refuse_apply
 
 
 def _resolve_repair_permission_granted(
@@ -326,6 +331,13 @@ def main() -> int:
     parser.add_argument("--next-billing-on", type=_date)
     parser.add_argument("--expected-total", type=_money)
     parser.add_argument("--expected-remaining-credit", type=_money)
+    parser.add_argument(
+        "--calendar-basis",
+        choices=[item.value for item in ReviewedPrepaidCalendarBasis],
+        default=ReviewedPrepaidCalendarBasis.business_midnight.value,
+    )
+    parser.add_argument("--expected-initial-anchor-at", type=_timestamp)
+    parser.add_argument("--documentary-entitlement-id", type=_uuid)
     parser.add_argument("--expected-confirmed-balance", type=_money)
     parser.add_argument("--apply", action="store_true")
     parser.add_argument("--fingerprint")
@@ -336,6 +348,7 @@ def main() -> int:
     parser.add_argument("--actor-system-user-id", type=_uuid)
     parser.add_argument("--reason")
     args = parser.parse_args()
+    refuse_apply(args.apply)
 
     document_modes = sum(
         bool(value)
@@ -357,6 +370,8 @@ def main() -> int:
         args.next_billing_on,
         args.expected_total,
         args.expected_remaining_credit,
+        args.expected_initial_anchor_at,
+        args.documentary_entitlement_id,
     )
     if not args.repair_missing_paid_invoice and any(
         value is not None for value in missing_only_values
@@ -365,6 +380,11 @@ def main() -> int:
             "payment, business-date, and expected-credit arguments require "
             "--repair-missing-paid-invoice"
         )
+    if (
+        not args.repair_missing_paid_invoice
+        and args.calendar_basis != ReviewedPrepaidCalendarBasis.business_midnight.value
+    ):
+        parser.error("--calendar-basis requires --repair-missing-paid-invoice")
     opening_only_values = (args.allocation_id, args.expected_confirmed_balance)
     if not args.repair_opening_settlement and any(
         value is not None for value in opening_only_values
@@ -447,10 +467,37 @@ def main() -> int:
             next_billing_on=args.next_billing_on,
             expected_total=args.expected_total,
             expected_remaining_credit=args.expected_remaining_credit,
+            calendar=ReviewedPrepaidCalendarSelection(
+                basis=ReviewedPrepaidCalendarBasis(args.calendar_basis),
+                expected_initial_anchor_at=args.expected_initial_anchor_at,
+            ),
+            documentary_entitlement_id=args.documentary_entitlement_id,
         )
         if args.repair_missing_paid_invoice
         else None
     )
+
+    if args.repair_missing_paid_invoice:
+        documented = (
+            args.calendar_basis
+            == ReviewedPrepaidCalendarBasis.documented_anniversary.value
+        )
+        if documented and (
+            args.expected_initial_anchor_at is None
+            or args.documentary_entitlement_id is None
+        ):
+            parser.error(
+                "documented_anniversary requires --expected-initial-anchor-at "
+                "and --documentary-entitlement-id"
+            )
+        if not documented and (
+            args.expected_initial_anchor_at is not None
+            or args.documentary_entitlement_id is not None
+        ):
+            parser.error(
+                "business_midnight rejects --expected-initial-anchor-at and "
+                "--documentary-entitlement-id"
+            )
 
     if args.limit is not None and args.limit <= 0:
         parser.error("--limit must be positive")

@@ -37,6 +37,7 @@ from app.services.network.customer_outage_accrual import (
 )
 from app.services.service_impact_contracts import ImpactState
 from app.services.topology import outage
+from app.services.topology.outage_complaint_contracts import RecordOutageScopeRevision
 
 NOW = datetime(2026, 8, 20, 12, 0, 0, tzinfo=UTC)
 
@@ -200,7 +201,10 @@ def test_combined_outage_sla_flow(db_session, catalog_offer):
     db_session.flush()
     entry_at = NOW + timedelta(minutes=30)
     drift = outage.record_scope_revision(
-        db_session, incident, reason="audience_drift", effective_at=entry_at
+        db_session,
+        command=RecordOutageScopeRevision(
+            incident_id=incident.id, reason="audience_drift", effective_at=entry_at
+        ),
     )
     assert drift is not None and drift.sequence == 2
     reconcile_incident_accrual(db_session, incident, now=NOW + timedelta(minutes=31))

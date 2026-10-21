@@ -9,6 +9,9 @@ import pytest
 from fastapi import HTTPException
 
 from app.services import auth_dependencies
+from tests.test_api_key_authentication_maintenance import (
+    local_auth_owner_session,  # noqa: F401
+)
 
 # =============================================================================
 # Helper Function Tests

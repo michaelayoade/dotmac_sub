@@ -1,8 +1,12 @@
 import builtins
+import hashlib
+import json
 from dataclasses import dataclass
 from typing import Any
+from uuid import UUID
 
 from fastapi import HTTPException
+from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -37,6 +41,47 @@ _APPLY_ADMIN_SETTINGS_FORM_COMMAND = OwnerCommandDefinition(
 )
 
 
+def read_active_setting_rows(
+    db: Session, domain: SettingDomain, keys: builtins.list[str] | tuple[str, ...]
+) -> dict[str, DomainSetting]:
+    """Read the active rows for ``keys`` uncached, in the caller's session.
+
+    One query, one snapshot. For governance switches whose change must apply at
+    the next command (the cached resolver can serve a stale value).
+    """
+
+    rows = db.scalars(
+        select(DomainSetting).where(
+            DomainSetting.domain == domain,
+            DomainSetting.key.in_(keys),
+            DomainSetting.is_active.is_(True),
+        )
+    ).all()
+    return {row.key: row for row in rows}
+
+
+def refuse_owner_command_only_key(domain: SettingDomain | None, key: str) -> None:
+    """Refuse a generic write to a key declared ``owner_command_only``.
+
+    Such a key (the sole-approver exception switches) may change only through
+    ``apply_admin_settings_form_updates``, which audits the write.
+    """
+
+    if domain is None:
+        return
+    from app.services.settings_spec import get_spec
+
+    spec = get_spec(domain, key)
+    if spec is not None and spec.owner_command_only:
+        raise HTTPException(
+            status_code=403,
+            detail=(
+                f"Setting '{key}' is governed: it can only be changed through "
+                "the audited admin settings command."
+            ),
+        )
+
+
 class AdminSettingsFormUpdateError(DomainError):
     """Safe, transport-neutral failure for the admin settings form."""
 
@@ -57,6 +102,12 @@ class AdminSettingWrite:
     domain: SettingDomain
     key: str
     payload: DomainSettingUpdate
+    #: Optional optimistic-concurrency precondition. When set, the owner locks
+    #: the setting rows and refuses the whole batch unless their stored value
+    #: still has this fingerprint (see ``admin_setting_value_fingerprint``).
+    #: Read-modify-write editors (a list edited one entry at a time) set it so
+    #: a concurrent edit is refused instead of silently overwritten.
+    expected_value_fingerprint: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -68,6 +119,56 @@ class ApplyAdminSettingsFormCommand:
 @dataclass(frozen=True, slots=True)
 class ApplyAdminSettingsFormOutcome:
     updated_keys: tuple[str, ...]
+
+
+# Operational state rows (cursors, counters, job logs) that are rewritten by
+# background work, not configuration. Exact (domain, key) pairs pinned in code;
+# never selected by a caller flag or by configuration.
+_UNAUDITED_OPERATIONAL_KEYS = frozenset(
+    {
+        ("usage", "radius_accounting_last_radacctid"),
+        ("billing", "invoice_pdf_cache_metrics"),
+        ("gis", "last_sync_run"),
+        ("geocoding", "batch_geocode_jobs_log"),
+        ("network", "vpn_control_jobs_log"),
+        ("imports", "import_jobs_log"),
+        ("imports", "import_history_log"),
+        ("provisioning", "service_migration_jobs_log"),
+        ("provisioning", "bulk_activation_jobs_log"),
+    }
+)
+
+
+def _stage_setting_write_audit(
+    db: Session,
+    *,
+    domain: object,
+    key: str,
+    operation: str,
+    is_secret: bool,
+    changed_fields: builtins.list[str],
+) -> None:
+    """Stage required audit evidence in the SAME transaction as a setting write.
+
+    Names only: never the value, so a secret setting cannot leak through audit.
+    Not swallowed: if the row cannot be staged or flushed the write rolls back
+    with it (S12 - settings writes fail atomically).
+    """
+
+    if (str(getattr(domain, "value", domain)), key) in _UNAUDITED_OPERATIONAL_KEYS:
+        return
+    stage_audit_event(
+        db,
+        actor=AuditActor.system("domain_settings"),
+        action="control.setting_written",
+        entity_type="domain_setting",
+        entity_id=f"{getattr(domain, 'value', domain)}.{key}",
+        metadata={
+            "operation": operation,
+            "is_secret": bool(is_secret),
+            "changed_fields": sorted(changed_fields),
+        },
+    )
 
 
 class DomainSettings(ListResponseMixin):
@@ -229,6 +330,10 @@ class DomainSettings(ListResponseMixin):
         raise HTTPException(status_code=400, detail="Setting domain is required")
 
     def create(self, db: Session, payload: DomainSettingCreate):
+        refuse_owner_command_only_key(self.domain or payload.domain, payload.key)
+        return self._create(db, payload)
+
+    def _create(self, db: Session, payload: DomainSettingCreate, *, audit: bool = True):
         payload = self._prepare_create_payload(db, payload.key, payload)
         data = payload.model_dump()
         data["domain"] = self._resolve_domain(payload.domain)
@@ -242,6 +347,15 @@ class DomainSettings(ListResponseMixin):
         )
         setting = DomainSetting(**data)
         db.add(setting)
+        if audit:
+            _stage_setting_write_audit(
+                db,
+                domain=data["domain"],
+                key=payload.key,
+                operation="create",
+                is_secret=bool(data.get("is_secret")),
+                changed_fields=["value"],
+            )
         db.commit()
         db.refresh(setting)
         # Invalidate cache for this setting
@@ -283,6 +397,7 @@ class DomainSettings(ListResponseMixin):
         setting = db.get(DomainSetting, coerce_uuid(setting_id))
         if not setting or (self.domain and setting.domain != self.domain):
             raise HTTPException(status_code=404, detail="Setting not found")
+        refuse_owner_command_only_key(setting.domain, setting.key)
         payload = self._prepare_update_payload(
             db,
             setting.key,
@@ -301,6 +416,14 @@ class DomainSettings(ListResponseMixin):
         )
         for key, value in data.items():
             setattr(setting, key, value)
+        _stage_setting_write_audit(
+            db,
+            domain=setting.domain,
+            key=setting.key,
+            operation="update",
+            is_secret=setting.is_secret,
+            changed_fields=builtins.list(data),
+        )
         db.commit()
         db.refresh(setting)
         # Invalidate cache for this setting
@@ -335,6 +458,7 @@ class DomainSettings(ListResponseMixin):
     def upsert_by_key(self, db: Session, key: str, payload: DomainSettingUpdate):
         if not self.domain:
             raise HTTPException(status_code=400, detail="Setting domain is required")
+        refuse_owner_command_only_key(self.domain, key)
         setting = (
             db.query(DomainSetting)
             .filter(DomainSetting.domain == self.domain)
@@ -358,6 +482,14 @@ class DomainSettings(ListResponseMixin):
             self._validate_relationship_change(db, self.domain, key, pending_value)
             for field, value in data.items():
                 setattr(setting, field, value)
+            _stage_setting_write_audit(
+                db,
+                domain=setting.domain,
+                key=key,
+                operation="update",
+                is_secret=setting.is_secret,
+                changed_fields=builtins.list(data),
+            )
             db.commit()
             db.refresh(setting)
             # Invalidate cache for this setting
@@ -375,11 +507,22 @@ class DomainSettings(ListResponseMixin):
         return self.create(db, create_payload)
 
     def stage_upsert_by_key(
-        self, db: Session, key: str, payload: DomainSettingUpdate
+        self,
+        db: Session,
+        key: str,
+        payload: DomainSettingUpdate,
+        *,
+        owner_command: bool = False,
     ) -> DomainSetting:
-        """Upsert one setting without completing the caller-owned transaction."""
+        """Upsert one setting without completing the caller-owned transaction.
+
+        ``owner_command`` is passed only by ``apply_admin_settings_form_updates``,
+        the one audited writer allowed to change ``owner_command_only`` keys.
+        """
         if not self.domain:
             raise HTTPException(status_code=400, detail="Setting domain is required")
+        if not owner_command:
+            refuse_owner_command_only_key(self.domain, key)
         setting = (
             db.query(DomainSetting)
             .filter(DomainSetting.domain == self.domain)
@@ -474,7 +617,7 @@ class DomainSettings(ListResponseMixin):
             is_active=True,
         )
         try:
-            return self.create(db, payload)
+            return self._create(db, payload, audit=False)
         except IntegrityError:
             db.rollback()
             raced = (
@@ -491,7 +634,16 @@ class DomainSettings(ListResponseMixin):
         setting = db.get(DomainSetting, setting_id)
         if not setting or (self.domain and setting.domain != self.domain):
             raise HTTPException(status_code=404, detail="Setting not found")
+        refuse_owner_command_only_key(setting.domain, setting.key)
         setting.is_active = False
+        _stage_setting_write_audit(
+            db,
+            domain=setting.domain,
+            key=setting.key,
+            operation="deactivate",
+            is_secret=setting.is_secret,
+            changed_fields=["is_active"],
+        )
         db.commit()
         # Invalidate cache for this setting
 
@@ -508,6 +660,57 @@ def _audit_actor(context: CommandContext) -> AuditActor:
     return AuditActor.system(actor_id)
 
 
+def _setting_rows_fingerprint(rows: builtins.list[DomainSetting]) -> str:
+    material = [
+        {
+            "id": str(row.id),
+            "is_active": bool(row.is_active),
+            "value_json": row.value_json,
+            "value_text": row.value_text,
+        }
+        for row in sorted(rows, key=lambda item: str(item.id))
+    ]
+    encoded = json.dumps(material, sort_keys=True, separators=(",", ":"), default=str)
+    return hashlib.sha256(encoded.encode("utf-8")).hexdigest()
+
+
+def _setting_rows_statement(domain: SettingDomain, key: str):
+    return select(DomainSetting).where(
+        DomainSetting.domain == domain, DomainSetting.key == key
+    )
+
+
+def admin_setting_value_fingerprint(
+    db: Session, *, domain: SettingDomain, key: str
+) -> str:
+    """Return the opaque fingerprint of one setting's stored rows (read-only).
+
+    An editor renders this with the value it shows and returns it as
+    ``AdminSettingWrite.expected_value_fingerprint``. "No row" has its own
+    stable fingerprint, so a first write is also guarded.
+    """
+
+    rows = builtins.list(db.scalars(_setting_rows_statement(domain, key)).all())
+    return _setting_rows_fingerprint(rows)
+
+
+def _require_unchanged_setting(db: Session, update: AdminSettingWrite) -> None:
+    if update.expected_value_fingerprint is None:
+        return
+    rows = builtins.list(
+        db.scalars(
+            _setting_rows_statement(update.domain, update.key).with_for_update()
+        ).all()
+    )
+    if _setting_rows_fingerprint(rows) != update.expected_value_fingerprint:
+        raise _admin_settings_error(
+            "stale_update",
+            "This setting changed after the page was loaded. Reload and try again.",
+            domain=str(update.domain),
+            key=update.key,
+        )
+
+
 def _setting_value(payload: DomainSettingUpdate) -> object:
     if payload.value_json is not None:
         return payload.value_json
@@ -519,11 +722,85 @@ def _setting_value(payload: DomainSettingUpdate) -> object:
     )
 
 
+def _is_disable_write(spec, payload: DomainSettingUpdate) -> bool:
+    """True only when the coerced value is an explicit boolean False.
+
+    Decided from the parsed, coerced value (never the raw form string); any
+    unparseable or missing value fails closed to "not a disable write".
+    """
+    from app.services import settings_spec
+
+    raw = payload.value_json if payload.value_json is not None else payload.value_text
+    value, error = settings_spec.coerce_value(spec, raw)
+    return error is None and value is False
+
+
+def _required_permissions(
+    command: ApplyAdminSettingsFormCommand,
+) -> dict[str, str]:
+    """Setting identity -> dedicated permission, for keys that declare one."""
+    from app.services import settings_spec
+
+    required: dict[str, str] = {}
+    for update in command.updates:
+        spec = settings_spec.get_spec(update.domain, update.key)
+        if spec is None or not spec.required_permission:
+            continue
+        if spec.required_permission_enable_only and _is_disable_write(
+            spec, update.payload
+        ):
+            continue
+        required[f"{update.domain}.{update.key}"] = spec.required_permission
+    return required
+
+
+def _missing_required_permissions(
+    db: Session, command: ApplyAdminSettingsFormCommand
+) -> dict[str, str]:
+    """Required permissions the acting system user does not hold (fail closed)."""
+    from app.services.permission_authorization import (
+        system_user_holds_exact_permission,
+    )
+
+    required = _required_permissions(command)
+    if not required:
+        return {}
+    prefix, _, identifier = command.context.actor.partition(":")
+    actor_id: UUID | None = None
+    if prefix == "user":
+        try:
+            actor_id = UUID(identifier)
+        except ValueError:
+            actor_id = None
+    return {
+        identity: permission
+        for identity, permission in required.items()
+        if actor_id is None
+        or not system_user_holds_exact_permission(db, actor_id, permission)
+    }
+
+
+def _permission_denied_error(missing: dict[str, str]) -> AdminSettingsFormUpdateError:
+    return _admin_settings_error(
+        "permission_denied",
+        "A dedicated permission is required to change this setting.",
+        setting_keys=sorted(missing),
+        required_permissions=sorted(set(missing.values())),
+    )
+
+
 def _apply_admin_settings_form_operation(
     db: Session,
     command: ApplyAdminSettingsFormCommand,
 ) -> ApplyAdminSettingsFormOutcome:
     from app.services import settings_spec
+
+    # Re-checked inside the owner transaction (the pre-check in
+    # apply_admin_settings_form_updates audits the refusal; a rollback here
+    # cannot, so this is only the fail-closed backstop).
+    missing = _missing_required_permissions(db, command)
+    if missing:
+        raise _permission_denied_error(missing)
 
     if command.context.scope != ADMIN_SETTINGS_FORM_WRITE_SCOPE:
         raise _admin_settings_error(
@@ -550,6 +827,7 @@ def _apply_admin_settings_form_operation(
                     key=update.key,
                 )
             seen.add(identity)
+            _require_unchanged_setting(db, update)
             spec = settings_spec.get_spec(update.domain, update.key)
             if spec is None or update.payload.value_type != spec.value_type:
                 raise _admin_settings_error(
@@ -568,7 +846,9 @@ def _apply_admin_settings_form_operation(
             services.append((service, update))
 
         for service, update in services:
-            service.stage_upsert_by_key(db, update.key, update.payload)
+            service.stage_upsert_by_key(
+                db, update.key, update.payload, owner_command=True
+            )
     except HTTPException as exc:
         detail = exc.detail if isinstance(exc.detail, str) else "Invalid setting value."
         raise _admin_settings_error("invalid_update", detail) from exc
@@ -581,9 +861,10 @@ def _apply_admin_settings_form_operation(
         actor=_audit_actor(command.context),
         request_id=str(command.context.correlation_id),
         metadata={
-            "schema_version": 1,
+            "schema_version": 2,
             "setting_count": len(identities),
             "setting_keys": identities,
+            "reason": command.context.reason,
             "command_id": str(command.context.command_id),
             "correlation_id": str(command.context.correlation_id),
         },
@@ -597,6 +878,33 @@ def apply_admin_settings_form_updates(
 ) -> ApplyAdminSettingsFormOutcome:
     """Atomically persist one fully validated admin settings submission."""
 
+    if _required_permissions(command) and not db.in_transaction():
+        missing = _missing_required_permissions(db, command)
+        if missing:
+            # Audit the refusal in its own committed event (the owner
+            # transaction would roll it back). Names only, no values.
+            stage_audit_event(
+                db,
+                action="control.settings_form_updated",
+                entity_type="domain_settings",
+                actor=_audit_actor(command.context),
+                request_id=str(command.context.correlation_id),
+                is_success=False,
+                status_code=403,
+                metadata={
+                    "schema_version": 2,
+                    "outcome": "refused",
+                    "refusal": "required_permission_missing",
+                    "setting_keys": sorted(missing),
+                    "required_permissions": sorted(set(missing.values())),
+                    "reason": command.context.reason,
+                    "command_id": str(command.context.command_id),
+                    "correlation_id": str(command.context.correlation_id),
+                },
+            )
+            db.commit()
+            raise _permission_denied_error(missing)
+        db.commit()  # end the read-only permission check; the command needs a clean session
     return execute_owner_command(
         db,
         definition=_APPLY_ADMIN_SETTINGS_FORM_COMMAND,

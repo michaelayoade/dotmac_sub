@@ -34,20 +34,27 @@ SERVICES: tuple[SOTService, ...] = (
                     name="native inventory identities",
                     owner="network.identity",
                     kind=AuthorityKind.AUTHORITATIVE_RECORD,
-                    source="Native NAS, POP, AP, OLT, PON and FDH records; role and active flags qualify new selections",
+                    source="Native NAS, POP, AP, OLT, PON and FDH records; role and active flags qualify new selections. PON parent OLT is a native identity-bearing eligibility dependency returned in typed LockedInfrastructureScope, never inferred from display context.",
                 ),
             ),
             transaction=TransactionContract(
                 mode=TransactionMode.READ_ONLY,
-                boundary="Bounded typed search and exact-reference query in the caller's read or project-owner transaction",
-                locking="No inventory writes; project foreign keys protect persisted referents",
+                boundary="Bounded typed search, exact-reference query and lock_reference participant in the caller's read or owner transaction; no inventory writes or transaction completion",
+                locking="lock_reference acquires native target and reviewed related POP location locks in stable table/UUID order; PON also locks its parent OLT and rechecks parent identity after acquisition. Caller holds locks through its owner command.",
                 idempotency="Identical queries over identical inventory return identical ordered results",
-                retries="Caller may retry transient database read failures",
+                retries="Caller retries its whole owner command on transient database concurrency failure or changed parent during lock acquisition; no internal transaction retry.",
             ),
             errors=ErrorContract(
-                domain_codes=(),
-                mapping_owner="customer and project adapters",
-                fail_closed_on=("invalid query or reference",),
+                domain_codes=(
+                    "network.infrastructure_catalogue.stale_scope",
+                    "network.infrastructure_catalogue.unavailable",
+                ),
+                mapping_owner="customer/project adapters and calling engineering owner",
+                fail_closed_on=(
+                    "invalid query or reference",
+                    "inactive or role-mismatched locked target",
+                    "PON parent changed during lock acquisition",
+                ),
             ),
             projections=(
                 ProjectionContract(
@@ -70,9 +77,13 @@ SERVICES: tuple[SOTService, ...] = (
                 fallback_retirement="Customer-specific search SQL removed",
             ),
             steward="network inventory and service delivery",
-            design_refs=("docs/designs/PROJECT_INFRASTRUCTURE_SCOPE.md",),
+            design_refs=(
+                "docs/designs/PROJECT_INFRASTRUCTURE_SCOPE.md",
+                "docs/designs/PROJECT_ENGINEERING_PLANS.md",
+            ),
             test_refs=(
                 "tests/test_project_infrastructure.py",
+                "tests/test_project_engineering_plans.py",
                 "tests/architecture/test_project_infrastructure_boundary.py",
             ),
         ),

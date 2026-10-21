@@ -1,0 +1,540 @@
+{
+  "comment": "Approved exceptions to the Sub feature freeze (docs/FEATURE_FREEZE.md). Every entry requires approved_by=michaelayoade and is reviewed via CODEOWNERS on this file. kinds: feature-exception (must name starter_contract), schema (corrective migration), transitional-tool (must name deletion_trigger), approved-growth (owner-approved pinned-surface growth, no new capability).",
+  "exceptions": [
+    {
+      "id": "THIN-3624",
+      "kind": "approved-growth",
+      "paths": [
+        "app/services/billing/opening_export.py",
+        "app/services/billing/opening_export_contracts.py",
+        "scripts/migration/billing_opening_export.py",
+        "scripts/billing/*.py"
+      ],
+      "reason": "Michael explicitly approved Sub #3624 and its scoped thin-client exception on 2026-10-14 (merged 2fd54e6d; recorded in Knowledge dotmac-billing-cutover-orchestration-2026-10-14 v9): net +232 billing lines on the same 137-file inventory (92265 -> 92497), of which +175 in three existing transitional opening-evidence tools and +57 of repair-CLI freeze guards in existing scripts. No new capability, no new files. This entry reconciles the ratchet baseline deliberately to the accepted source; it does not authorize further growth.",
+      "deletion_trigger": "Transitional opening-evidence tools delete at the opening seal (see billing_transitional_tools.json); this exception entry is removed when the baseline next shrinks past 92265.",
+      "approved_by": "michaelayoade"
+    },
+    {
+      "id": "THIN-3628",
+      "kind": "approved-growth",
+      "paths": [
+        "app/services/billing_numbering_activation_proof.py"
+      ],
+      "reason": "Michael explicitly approved PR #3628 (abb1a8e2) on 2026-10-14: +4 lines for the stale ORM snapshot correction on the same 137-file inventory (92497 -> 92501). No new capability; no further growth is authorized. Provenance: canonical global Knowledge record dotmac-billing-cutover-orchestration-2026-10-14 v22.",
+      "deletion_trigger": "Remove this exception with the proof when Starter numbering is activated for Sub and the disjointness proof is archived.",
+      "approved_by": "michaelayoade"
+    },
+    {
+      "id": "ROUTER-CONTROL-3630",
+      "kind": "feature-exception",
+      "paths": [
+        "app/services/composition/__init__.py",
+        "app/services/composition/compose.py",
+        "app/services/composition/derive.py",
+        "app/services/composition/document.py",
+        "app/services/composition/drift.py",
+        "app/services/composition/evaluate.py",
+        "app/services/composition/exceptions.py",
+        "app/services/composition/fields.py",
+        "app/services/composition/layers.py",
+        "app/services/composition/merge.py",
+        "app/services/composition/plugin.py",
+        "app/services/composition/widening.py",
+        "app/services/router_control/__init__.py",
+        "app/services/router_control/inputs.py",
+        "app/services/router_control/modules/__init__.py",
+        "app/services/router_control/modules/_support.py",
+        "app/services/router_control/modules/ntp.py",
+        "app/services/router_control/modules/services_hardening.py",
+        "app/services/router_control/modules/snmp.py",
+        "app/services/router_control/plugin.py",
+        "app/services/router_control/report.py",
+        "app/services/router_control/seed_layers.py",
+        "app/services/router_control/surfaces.py"
+      ],
+      "reason": "Michael explicitly approved this scoped exception for PR #3630 on 2026-10-14. It covers only the listed network control-plane composition and router-control modules; CODEOWNERS review of this file remains required before merge.",
+      "starter_contract": "Starter network control-plane composition API v1: typed layers, deterministic composition with provenance, and read-only drift reporting.",
+      "approved_by": "michaelayoade"
+    },
+    {
+      "id": "PAYMENTS-OBSERVATION-3640",
+      "kind": "feature-exception",
+      "paths": [
+        "app/services/payment_intent_module_shadow.py"
+      ],
+      "reason": "Michael explicitly approved the scoped exception for Sub PR #3640 at 189d0722a38a92602dc6843653a9f00af92f51e9 on 2026-10-15. Owner: financial.payment_intent_module_shadow; steward: finance operations. Actual production growth is 246 lines: 151 adapter, 5 caller, 6 metrics and 84 SOT declaration. This covers only a read-only consumer of the published Payments intent contract, with no settlement authority, cap relaxation or additional capability. Source merge requires current green CI and separate billing-owner approval.",
+      "starter_contract": "Published dotmac-payments 0.1.0a2 GetPaymentIntentV1 / get_payment_intent_v1: caller-owned tenant-scoped Session, persisted immutable intent binding observation, no autoflush or settlement authority.",
+      "deletion_trigger": "Delete the adapter, caller hook, metric, SOT entry and this exception when approved Payments ownership and complete backfill/parity permit retirement of legacy checkout bindings.",
+      "approved_by": "michaelayoade"
+    },
+    {
+      "id": "THIN-3655",
+      "kind": "feature-exception",
+      "paths": [
+        "app/services/platform_health_observations.py"
+      ],
+      "reason": "Michael directed the thin-client health goal on 2026-10-16: keep the existing poller/syslog probes and product semantics Sub-local, serialize Starter Platform Health observations at the source edge, and create no Sub health subsystem or deployment authority. He approved commit, push and draft PR #3655 for hosted CI. This entry covers only the listed bounded serialization module; modifications to the existing probe owners need no exception. CODEOWNERS review of this file remains required before merge.",
+      "starter_contract": "Starter dotmac-platform-health HealthObservationInput: source_ref, observation_key, component_code, healthy/degraded/unhealthy/unknown state, observed_at, received_at, summary and bounded labels; Platform Health remains the future sole durable observation/evidence owner and Integrator remains the authenticated transport boundary.",
+      "approved_by": "michaelayoade"
+    },
+    {
+      "id": "THIN-STARTER-POLICIES",
+      "kind": "feature-exception",
+      "paths": [
+        "app/services/billing/starter_policies.py",
+        "app/services/settings_spec.py"
+      ],
+      "reason": "Michael directed on 2026-10-17 (money-pack cutover session): full cutover to Starter related modules, billing policies composable with defaults, no hardcoding, composable policies with settings. This exempts one new composition-wiring module that resolves the Starter billing issuance policy surface (account-ref convention at Subscriber granularity for linked radio/fiber accounts, obligation identity templates, tax/due/numbering/document-profile defaults) from domain settings with typed defaults. No writer is wired by the exempted PR; issuance switching remains a separately approved slice. The billing thin-client ratchet baseline grows deliberately by this module only and resumes shrinking as writers retire.",
+      "starter_contract": "Published dotmac-billing 0.1.0a8 issuance contracts: IssueRatedInvoiceV1 / AcceptRatedObligationV1 / DueDateBasisV1 / AppliedTaxSnapshotV1 and create_billing_account (external_account_ref + currency get-or-create), consumed as composition wiring only.",
+      "approved_by": "michaelayoade"
+    },
+    {
+      "id": "THIN-STARTER-INVOICE-LINK",
+      "kind": "feature-exception",
+      "paths": [
+        "alembic/versions/691_starter_invoice_links.py",
+        "app/models/billing.py"
+      ],
+      "reason": "Michael approved the money-pack cutover continuation on 2026-10-17 (merge approval for the thin-client slice stack after confirming the composable-policy direction, ADR 0031). Slice 6a issuance switching needs a structural Sub<->Starter invoice link (ADR 0007 forbids metadata as financial identity): one tenant-scoped table recording, per Sub invoice, the Starter billing account, obligation and document identities. Schema-only change; no writer behavior changes in the exempted PR, and the table retires with the legacy Invoice writer at cutover seal.",
+      "starter_contract": "Published dotmac-billing 0.1.0a8 issuance receipts: IssuedRatedInvoiceV1 (billing_account_id, obligation_id, invoice_id) persisted as the structural link target; Starter remains sole ledger authority once the slice gate passes.",
+      "approved_by": "michaelayoade"
+    },
+    {
+      "id": "THIN-STARTER-INVOICE-LINK-SCHEMA",
+      "kind": "schema",
+      "paths": [
+        "alembic/versions/691_starter_invoice_links.py"
+      ],
+      "reason": "Schema half of THIN-STARTER-INVOICE-LINK (Michael approved the money-pack cutover continuation and merges on 2026-10-18): migration 691 creates the tenant-scoped starter_invoice_links table, the structural Sub<->Starter invoice identity link required by Slice 6a issuance switching (ADR 0007/0031). Corrective composition schema only; no writer behavior changes in the exempted PR.",
+      "approved_by": "michaelayoade"
+    },
+    {
+      "id": "THIN-STARTER-ISSUANCE-6A",
+      "kind": "feature-exception",
+      "paths": [
+        "app/services/billing/starter_issuance.py",
+        "app/services/billing/starter_policies.py",
+        "app/services/settings_spec.py",
+        "app/services/web_billing_invoices.py",
+        "app/web/admin/billing_invoice_actions.py",
+        "app/services/admin_workflow_guidance.py",
+        "app/services/sot_registry/domains/financial_access/invoicing_tax.py"
+      ],
+      "reason": "Michael approved the money-pack cutover continuation and merges on 2026-10-18 under the confirmed composable-policy direction (ADR 0031). Slice 6a adds the thin-client issuance composition module that routes eligible admin drafts (web detail Issue: postpaid, single-line, quantity-one, undiscounted, non-proforma, complete party evidence) through Starter dotmac-billing as sole ledger writer, mirroring number/status onto the Sub row with a structural link. This is consumer wiring for a published Starter contract; the legacy writer keeps every ineligible lane until its own slice. Policy surface grows deliberately under ADR 0031 and shrinks as legacy writers retire. The SOT registry path is covered because the lane must declare its canonical owner (financial.starter_issuance) in the financial-access registry before the architecture liveness guard accepts the new writer.",
+      "starter_contract": "Published dotmac-billing 0.1.0a8 issue_rated_invoice + create_billing_account + get_invoice_document_fact, and dotmac-numbering 0.1.0a3 allocate/configure_series, consumed exactly as registered in the commercial composition import allowlist.",
+      "approved_by": "michaelayoade"
+    },
+    {
+      "id": "THIN-STARTER-SETTLEMENT-BACKHALF",
+      "kind": "feature-exception",
+      "paths": [
+        "app/services/billing/starter_settlement.py",
+        "app/services/billing/starter_policies.py",
+        "app/services/settings_spec.py",
+        "app/services/payment_webhook_commands.py",
+        "app/services/sot_registry/domains/financial_access/invoicing_tax.py"
+      ],
+      "reason": "Michael approved the money-pack cutover continuation and merges on 2026-10-18 under the confirmed composable-policy direction (ADR 0031) and the pay-then-record constraint for the renewal pay link. This slice completes the settlement back-half for Starter-issued invoices: an authenticated provider webhook records confirmation in Starter dotmac-payments, Starter dotmac-billing accepts and allocates the confirmed cash against the Starter document, and Sub mirrors balance/status from the Starter collectible position. No legacy Payment is created for Starter-linked invoices and no billing logic is built in Sub; the legacy provider-event money staging keeps every non-Starter lane until its own slice. Settlement policy values resolve from settings under ADR 0031.",
+      "starter_contract": "Published dotmac-payments 0.1.0a3 get_payment_intent_v1 + record_confirmation + get_confirmed_cash_v1, and dotmac-billing 0.1.0a8 accept_settlement + allocate_settlement + get_current_receivable_position, consumed exactly as registered in the commercial composition import allowlist.",
+      "approved_by": "michaelayoade"
+    },
+    {
+      "id": "THIN-STARTER-ISSUANCE-MULTILINE",
+      "kind": "feature-exception",
+      "paths": [
+        "app/services/billing/starter_issuance.py",
+        "app/services/billing/starter_policies.py",
+        "app/services/settings_spec.py",
+        "app/services/sot_registry/domains/financial_access/invoicing_tax.py",
+        "app/models/billing.py"
+      ],
+      "reason": "Michael approved the money-pack cutover continuation and merges on 2026-10-18 under the confirmed composable-policy direction (ADR 0031), including running remaining steps in parallel. This slice extends the Slice 6a web-detail Issue switch from single-line to homogeneous multi-line admin drafts (accept-per-line plus create_multi_line_draft_document plus issue_document, the composition proven in #3681), still with Starter dotmac-billing as sole ledger writer and the Sub row as mirror plus structural links. Eligibility remains pre-write and a Starter refusal never falls back to the legacy writer.",
+      "starter_contract": "Published dotmac-billing 0.1.0a8 accept_rated_obligation + create_multi_line_draft_document + issue_document, and dotmac-numbering 0.1.0a3 allocate/configure_series, consumed exactly as registered in the commercial composition import allowlist.",
+      "approved_by": "michaelayoade"
+    },
+    {
+      "id": "THIN-STARTER-ISSUANCE-MULTILINE-SCHEMA",
+      "kind": "schema",
+      "reason": "Migration 692 adds starter_invoice_line_links (per-line Starter obligation identity) and makes starter_invoice_links.obligation_id nullable, because a multi-line Starter document carries one obligation per line while the invoice-level link holds account and document identity only. Structural identity only (ADR 0007); retires with the legacy Invoice writer.",
+      "approved_by": "michaelayoade",
+      "paths": [
+        "alembic/versions/692_starter_invoice_line_links.py"
+      ]
+    },
+    {
+      "id": "THIN-OPENING-REHEARSAL-ASSEMBLY",
+      "kind": "transitional-tool",
+      "paths": [
+        "app/services/billing/opening_rehearsal_assembly.py"
+      ],
+      "reason": "Michael directed Step 5 (opening-balance rehearsal) to run in parallel with the remaining Step 4 lanes on 2026-10-18. This adds the read-only census-to-observation assembly that translates Sub's opening census preview onto the pinned dotmac-billing rehearsal observation contract, field for field, so rehearsal runs can count blockers into the manual exceptions queue. It verifies nothing, qualifies no cash, invents no originals, and writes no money state; manifest/command assembly and verifiers follow as their own slices.",
+      "approved_by": "michaelayoade",
+      "deletion_trigger": "Delete after the opening import is sealed in dotmac-billing and the final rehearsal artifact is archived."
+    },
+    {
+      "id": "THIN-OPENING-CENSUS-WIRE",
+      "kind": "transitional-tool",
+      "paths": [
+        "app/services/billing/opening_census_wire.py"
+      ],
+      "reason": "Step 5 (opening-balance rehearsal) continues in parallel at Michael's direction. Starter's read-only rehearsal adapter consumes Sub's serialized opening census (sub-billing-opening-census-v2/-v3 JSON), which Sub does not yet emit. This adds a pure evidence renderer that serializes the typed census preview (BillingOpeningExportPreviewV3) to that exact wire document field for field, with Decimals as exact strings. It verifies nothing, qualifies no cash, invents no originals, and writes no money state.",
+      "approved_by": "michaelayoade",
+      "deletion_trigger": "Delete after the opening import is sealed in dotmac-billing and the final rehearsal artifact is archived."
+    },
+    {
+      "id": "THIN-STARTER-ISSUANCE-RECURRING",
+      "kind": "feature-exception",
+      "paths": [
+        "app/services/billing_automation.py",
+        "app/services/billing/starter_issuance.py",
+        "app/services/billing/starter_policies.py",
+        "app/services/settings_spec.py",
+        "app/services/sot_registry/domains/financial_access/invoicing_tax.py",
+        "app/services/billing/account_credit.py"
+      ],
+      "reason": "Next Step 4 caller-migration lane after the admin issuance slices (6a #3691, multi-line #3697): switch the scheduled invoice cycle's newly created postpaid invoices to Starter issuance at end-of-run. The cycle stages drafts, appends lines, then issues eligible groups (single-subscription homogeneous line sets, no available account credit) through the existing starter_issuance service; ineligible groups keep the legacy issuance path. A reuse guard excludes Starter-linked invoices from the cycle's existing-invoice line appends. Sub remains caller-only: no new billing logic, no dual-write. The account_credit path carries the structural guard excluding Starter-linked invoices from legacy account-credit settlement.",
+      "approved_by": "michaelayoade",
+      "starter_contract": "Published dotmac-billing 0.1.0a8 issue_rated_invoice + accept_rated_obligation + create_multi_line_draft_document + issue_document + create_billing_account, and dotmac-numbering 0.1.0a3 allocate/configure_series, consumed exactly as registered in the commercial composition import allowlist."
+    },
+    {
+      "id": "PREPAID-STALE-DRAFT-3699",
+      "kind": "approved-growth",
+      "paths": [
+        "app/services/prepaid_draft_reconciliation.py"
+      ],
+      "reason": "Michael explicitly approved Sub #3699 on 2026-10-19 under the freeze carve-out 'root-cause the settlement auto-repair' (PAID-NOT-REACTIVATED 2026-10-18, SUB-005060): +62 money-writer lines (TOTAL 24013 -> 24075) in one existing file. A prepaid draft whose billing_period_end precedes the funding event, or which has no service period, no longer receives new funding; it is recorded once (insert-if-absent) in prepaid_draft_reconciliation_exceptions for manual review and the existing current-period renewal proceeds. No new money path, migration or data repair; no further growth authorized.",
+      "deletion_trigger": "Remove when prepaid funding/renewal moves to Starter dotmac-billing (ADR 0020) and prepaid_draft_reconciliation.py is retired, or when the money-writer baseline next shrinks below 24013.",
+      "approved_by": "michaelayoade"
+    },
+    {
+      "id": "THIN-STARTER-CREDIT-NOTES",
+      "kind": "feature-exception",
+      "paths": [
+        "app/services/billing/starter_credit_notes.py",
+        "app/services/billing/credit_notes.py",
+        "app/services/billing/starter_policies.py",
+        "app/services/settings_spec.py",
+        "app/services/sot_registry/domains/financial_access/invoicing_tax.py"
+      ],
+      "reason": "Step 4 caller migration: credit notes against Starter-issued invoices are issued by pinned dotmac-billing as sole ledger writer through a new thin-client module; the legacy credit-note writer keeps only non-Starter invoices. Eligibility is structural (the invoice carries a StarterInvoiceLink) and decided before any write; Sub remains caller-only.",
+      "approved_by": "michaelayoade",
+      "starter_contract": "Published dotmac-billing 0.1.0a8 issue_credit_note and dotmac-numbering 0.1.0a3 allocate/configure_series, consumed exactly as registered in the commercial composition import allowlist."
+    },
+    {
+      "id": "THIN-STARTER-MANUAL-PAYMENTS",
+      "kind": "feature-exception",
+      "paths": [
+        "app/services/billing/starter_manual_settlement.py",
+        "app/services/manual_payment_recording.py",
+        "app/services/billing/account_credit.py",
+        "app/services/billing/starter_policies.py",
+        "app/services/settings_spec.py",
+        "app/services/sot_registry/domains/financial_access/invoicing_tax.py"
+      ],
+      "reason": "Step 4 caller migration: staff-recorded manual payments and account-credit applications against Starter-issued invoices settle through dotmac-payments confirmation into dotmac-billing (pay-then-record), never through legacy money writers. Legacy credit application to Starter receivables is closed structurally; Sub remains caller-only.",
+      "approved_by": "michaelayoade",
+      "starter_contract": "Published dotmac-payments 0.1.0a3 record_confirmation + get_confirmed_cash_v1 and dotmac-billing 0.1.0a8 accept_settlement + allocate_settlement + credit-lane commands, consumed exactly as registered in the commercial composition import allowlist."
+    },
+    {
+      "id": "THIN-STARTER-INVOICE-READERS",
+      "kind": "feature-exception",
+      "paths": [
+        "app/services/billing/starter_positions.py",
+        "app/services/billing_invoice_pdf.py",
+        "app/services/web_billing_documents.py",
+        "app/services/billing/reporting.py",
+        "app/services/billing/starter_policies.py",
+        "app/services/settings_spec.py",
+        "app/services/sot_registry/domains/financial_access/invoicing_tax.py"
+      ],
+      "reason": "Step 4 reader repoint: for Starter-issued invoices, balance/position reads, invoice PDF facts, and reporting read the Starter ledger position and document fact instead of legacy projections. Read-only lane; legacy invoices keep legacy readers until cutover.",
+      "approved_by": "michaelayoade",
+      "starter_contract": "Published dotmac-billing 0.1.0a8 get_current_receivable_position + get_invoice_document_fact, consumed exactly as registered in the commercial composition import allowlist."
+    },
+    {
+      "id": "THIN-STARTER-PREPAID-RENEWALS",
+      "kind": "feature-exception",
+      "paths": [
+        "app/services/billing/starter_prepaid.py",
+        "app/services/prepaid_service_renewals.py",
+        "app/services/prepaid_draft_reconciliation.py",
+        "app/services/billing/starter_policies.py",
+        "app/services/settings_spec.py",
+        "app/services/sot_registry/domains/financial_access/invoicing_tax.py"
+      ],
+      "reason": "Step 4 caller migration, gated by the ADR 0032 incident acceptance tests at the Starter boundary (a payment bound to one intent cannot settle another obligation; full settlement yields exactly one access signal even when replayed; only the access owner switches service). Prepaid renewals then fund and issue through Starter earmarks and advance-collection issuance; Sub remains caller-only and the legacy prepaid writers retire under the ratchet.",
+      "approved_by": "michaelayoade",
+      "starter_contract": "Published dotmac-billing 0.1.0a8 earmark commands + issue_rated_invoice (advance collection) + accept/allocate settlement, and dotmac-payments 0.1.0a3 intent-bound confirmation, consumed exactly as registered in the commercial composition import allowlist."
+    },
+    {
+      "id": "THIN-STARTER-CREDIT-LINK-SCHEMA",
+      "kind": "schema",
+      "paths": [
+        "alembic/versions/693_starter_credit_note_links.py"
+      ],
+      "reason": "Structural identity storage for the credits and readers lanes (ADR 0007: no metadata as financial identity): starter_credit_note_links records the Starter credit document identity for credit notes issued through dotmac-billing, and starter_invoice_links gains the issued document fact version so readers can read the exact frozen document fact. Identity only, never financial state.",
+      "approved_by": "michaelayoade"
+    },
+    {
+      "id": "LEARNING-KERNEL-ENTRY-3674",
+      "kind": "feature-exception",
+      "paths": [
+        "app/services/operator_tenant_kernel_import.py",
+        "app/services/party_kernel_import.py",
+        "app/services/sot_registry/domains/party_identity.py",
+        "app/services/sot_registry/domains/tenancy.py"
+      ],
+      "reason": "Michael set the Academy learning extraction/adoption goal on 2026-10-16, including preservation of Kernel tenancy/identity boundaries, genuine migration lineage, one authoritative writer and rollback safety. This scope records the necessary Sub-owned, rollback-only identity-entry preparation in PR #3674: two exact historical-import participants and their existing-owner declarations, currently +429 app lines. It creates no runtime caller, CLI, credential/provider conversion, reference transfer or writer activation. It does not authorize another Sub capability or further growth. CODEOWNERS review of this exception remains required before merge; this entry is not a record of that review.",
+      "starter_contract": "Published dotmac-kernel 0.1.0a105: genuine unchanged 28-revision Kernel chain through 0028_machine_attribution, independent Kernel migration history, public Tenant/Party identity storage and tenant-scoped composite Party references. The product-specific historical lifecycle/JSON context remains Sub-owned; no new Kernel API is introduced.",
+      "deletion_trigger": "Remove this scoped exception and retire the rollback-only prototype participants when the qualified canonical Sub Kernel-identity adoption path replaces them and preserves their rollback, losslessness and lineage regression evidence.",
+      "approved_by": "michaelayoade"
+    },
+    {
+      "id": "INTEGRATION-LANDING-20261019",
+      "kind": "feature-exception",
+      "paths": [
+        "app/api/inbox_webhooks.py",
+        "app/celery_app.py",
+        "app/config.py",
+        "app/db.py",
+        "app/services/audit.py",
+        "app/services/domain_errors.py",
+        "app/services/event_store.py",
+        "app/services/infrastructure_health.py",
+        "app/services/network/ont_runtime_status.py",
+        "app/services/network_operation_dispatch.py",
+        "app/services/operator_tenant_kernel_import.py",
+        "app/services/party_kernel_import.py",
+        "app/services/poller_health.py",
+        "app/services/queue_adapter.py",
+        "app/services/queue_strategy_adapter.py",
+        "app/services/scheduler_config.py",
+        "app/services/sot_registry/domains/observability.py",
+        "app/services/sot_registry/domains/party_identity.py",
+        "app/services/sot_registry/domains/runtime_infrastructure.py",
+        "app/services/sot_registry/domains/tenancy.py",
+        "app/services/sot_registry/domains/ui_list_projection.py",
+        "app/services/support.py",
+        "app/services/web_customer_actions.py",
+        "app/services/web_system_audit.py",
+        "app/services/worker_control.py",
+        "app/syslog/health.py",
+        "app/tasks/events.py",
+        "app/tasks/notifications.py",
+        "app/tasks/olt_mac_harvest.py",
+        "app/tasks/ont_runtime_status.py",
+        "app/tasks/team_inbox.py",
+        "app/web/admin/catalog.py",
+        "app/web/admin/customers.py",
+        "app/web/admin/system.py",
+        "static/js/admin-audit.js",
+        "templates/admin/billing/ar_aging.html",
+        "templates/admin/catalog/subscription_form.html",
+        "templates/admin/network/map.html",
+        "templates/admin/system/_audit_filter_error.html",
+        "templates/admin/system/_audit_table.html",
+        "templates/admin/system/audit.html"
+      ],
+      "reason": "Michael approved 2026-10-19 landing the reviewed open branches via one integration PR (#3716) instead of 17 separate merges: Learning/Kernel party and operator-tenant imports (#3672-#3678), audit visibility fixes (#3660/#3661), billing kill-switch and ingestion split (#3708/#3709), and small fixes (#3631-#3635, #3671). The combined diff exceeds the per-PR size threshold and adds two kernel-import modules plus one audit template; each constituent branch was reviewed on its own PR. No new capability beyond those branches.",
+      "starter_contract": "Starter kernel party-identity and operator-tenancy import contracts consumed by party_kernel_import/operator_tenant_kernel_import (Learning/Kernel #3672-#3678); remaining paths are corrections to existing Sub audit/admin surfaces (#3660/#3661, #3708/#3709, #3631-#3635, #3671) landed under the same approval, consuming no new Starter contract.",
+      "approved_by": "michaelayoade"
+    },
+    {
+      "id": "THIN-D1-HOLD-3721",
+      "kind": "approved-growth",
+      "paths": [
+        "app/services/billing/starter_policies.py"
+      ],
+      "reason": "Approved by Michael 2026-10-19. PR #3721 puts the #3680 payments-module intent under the D1 hold: starter_policies.py gains has_starter_invoice_link (+23 lines), so the thin-client billing surface grows 94519 -> 94542 (money-writer baseline unchanged at 24075). It routes the module intent by the invoice's own Starter link row, as settlement does. No new capability and no new files; no further growth is authorized. The billing_thin_client_baseline.txt TOTAL edit (94519 -> 94542) is committed in #3721 (eada43662).",
+      "deletion_trigger": "Remove this entry with has_starter_invoice_link when the legacy Invoice writer retires at the cutover seal.",
+      "approved_by": "michaelayoade"
+    },
+    {
+      "id": "THIN-D1-PERMISSION-SCHEMA-3722",
+      "kind": "schema",
+      "paths": [
+        "alembic/versions/694_starter_ledger_live_permission.py"
+      ],
+      "reason": "Approved by Michael 2026-10-19. PR #3722 restricts the D1 switch billing.starter_ledger_live_enabled to users holding billing:starter_ledger_live:write. Migration 694 only inserts that permission row (granted to no role or user) and downgrade removes it. Corrective access-control schema/data only; no billing data or writer behavior changes.",
+      "approved_by": "michaelayoade"
+    },
+    {
+      "id": "THIN-D1-PERMISSION-3722",
+      "kind": "approved-growth",
+      "paths": [
+        "app/services/domain_settings.py",
+        "app/services/permission_authorization.py",
+        "app/services/rbac_catalog.py",
+        "app/services/settings_spec.py",
+        "app/services/system_user_assignments.py",
+        "app/services/web_system_settings_forms.py",
+        "app/services/web_system_settings_views.py",
+        "app/web/admin/system.py",
+        "templates/admin/system/settings.html"
+      ],
+      "reason": "Approved by Michael 2026-10-19. PR #3722 restricts the D1 switch: SettingSpec.required_permission (enable-only) enforced in the owner-command settings write, a dedicated switch form/route, the generic Settings tab skipping gated specs, and admin-only grant/revoke of billing:starter_ledger_live:write enforced in the RBAC owner services. Existing files only (+473 lines in app/ and templates/, above the 400-line size threshold); no new modules or templates, no billing writers.",
+      "deletion_trigger": "Remove with the D1 switch once the Starter ledger is live for all postpaid invoices and the hold is lifted.",
+      "approved_by": "michaelayoade"
+    },
+    {
+      "id": "SEC-PPPOE-REVEAL-SCHEMA",
+      "kind": "schema",
+      "paths": [
+        "alembic/versions/695_subscription_credential_reveal.py"
+      ],
+      "reason": "Security correction D10 (Michael approved 2026-10-19): migration 695 registers the dedicated subscription:credential:reveal permission so revealing a stored PPPoE service password is no longer gated by customer:read. Permission row only, UI-assignable, no role grants, downgrade refuses while grants exist.",
+      "approved_by": "michaelayoade"
+    },
+    {
+      "id": "SEC-PPPOE-REVEAL",
+      "kind": "feature-exception",
+      "paths": [
+        "app/services/pppoe_password_reveal.py"
+      ],
+      "reason": "Security correction D10 (Michael approved 2026-10-19): one shared helper so both reveal endpoints (customer detail and subscription edit page) run the same permission-gated, rate-limited, audited and no-store reveal, replacing duplicated inline code in app/web/admin/customers.py. Adds no capability: the page no longer renders the password, and the reveal that already existed becomes POST, CSRF-protected and gated by subscription:credential:reveal.",
+      "starter_contract": "None: security correction to an existing Sub surface, not a new capability. The credential reveal and projection move to the Starter credential owner (dotmac-access-credentials) in the PPPoE credential bridge scope.",
+      "deletion_trigger": "Delete with the Sub PPPoE credential surfaces when the Starter credential owner takes over reveal.",
+      "approved_by": "michaelayoade"
+    },
+    {
+      "id": "PPPOE-CREDENTIAL-INHERIT-20261019",
+      "kind": "feature-exception",
+      "paths": [
+        "app/services/pppoe_credentials.py",
+        "app/services/settings_spec.py",
+        "app/services/web_catalog_subscriptions.py",
+        "app/services/web_catalog_subscription_workflows.py",
+        "app/services/enforcement.py",
+        "app/web/admin/catalog.py",
+        "templates/admin/catalog/subscription_form.html",
+        "app/services/admin_workflow_guidance.py",
+        "app/services/access_credential_secret.py",
+        "app/services/radius.py",
+        "app/services/radius_population.py",
+        "app/services/customer_authentication.py",
+        "app/services/test_connection.py",
+        "app/services/web_customer_details.py",
+        "app/services/cpe_dialer_credential_reconcile.py",
+        "app/services/network/provisioning_enforcement.py"
+      ],
+      "reason": "Michael approved option C on 2026-10-19 (D3 ended-service credential may be inherited by the same customer only; D6 new permission subscription:credential:update; D7 disconnect after RADIUS projection). Minimal Sub bridge until the Starter access-credentials owner exists: setting-gated inherit of a replacement service's credential (default 'new', behaviour unchanged until flipped), reactivation keeps the existing password, typed create-form login/password honoured, and the edit path corrected to touch only this service's credential, remove the old username from RADIUS, disconnect only after projection succeeds and surface failure. No new Python module, no new template, no OpenAPI change. The workflow guidance gate also requires a one-line guidance update in app/services/admin_workflow_guidance.py. The review follow-ups also touch the existing secret-reference guard readers (access_credential_secret, radius, radius_population, customer_authentication, test_connection, web_customer_details, cpe_dialer_credential_reconcile, provisioning_enforcement); they add no capability.",
+      "starter_contract": "proposed dotmac-access-credentials on_replacement_service / inherit_from_service_states / change_disconnect policy keys (ADR-00NN, pending); the bridge settings map 1:1 and the bridge branch is deleted at the Starter cutover.",
+      "approved_by": "michaelayoade"
+    },
+    {
+      "id": "PPPOE-CREDENTIAL-PERMISSION-SCHEMA",
+      "kind": "schema",
+      "paths": [
+        "alembic/versions/697_subscription_credential_permission.py"
+      ],
+      "reason": "Permission-only migration registering subscription:credential:update (Michael decision D6, 2026-10-19): the credential edit path currently has no dedicated permission, so any actor holding subscription:update can rename or re-password a PPPoE credential. No tables, no role grants; additive and reversible unless operators have assigned it. Exact path; it is updated if the migration is renumbered on merge order.",
+      "approved_by": "michaelayoade"
+    },
+    {
+      "id": "IPV4-COLLISION-STOPGAPS-20261020",
+      "kind": "approved-growth",
+      "paths": [
+        "app/metrics.py",
+        "app/services/catalog/subscriptions.py",
+        "app/services/ip_assignment_lifecycle.py",
+        "app/services/ip_consistency_audit.py",
+        "app/services/ip_lifecycle.py",
+        "app/services/provisioning_helpers.py",
+        "app/services/scheduler_config.py",
+        "app/services/settings_spec.py",
+        "app/services/task_reliability.py",
+        "app/services/web_catalog_subscriptions.py",
+        "app/tasks/radius.py",
+        "deploy/observability/ip_consistency.rules.yml",
+        "scripts/architecture/sot_debt.py"
+      ],
+      "reason": "IPv4 collision stopgaps (tactical, pre-Starter dotmac-ipam cut). Michael approved 2026-10-20 as tactical safety fixes after a real address collision: Replace IPv4 committed the IPAM move separately from the served projection, so a refused projection left IPAM on the new IP while the column, radreply and live session stayed on the old one, the old IP looked free and the allocator reissued it. PR-1 makes Replace IPv4 one owner transaction (assignment + projection participants) with a guard against moving a correctly served customer; PR-2 stops the allocator reissuing an IP that is another live service's served column or live framed IP and stops a new service inheriting a sibling's assignment; PR-3 widens the served-IPv4 writer ratchet to dict-driven writes and rejects ipv4_address changes on subscription update/PATCH; PR-4 adds collision classes to the ip_consistency_audit metric with an alert rule. All IPv4 writes stay in the canonical owner app/services/ip_assignment_lifecycle.py. No new abstraction, no new Python module under app/services or app/web, no migration, no billing code. Retention PR #3738 (about 490 app lines, above the 400-line size threshold) is covered via its named existing paths: app/metrics.py, app/services/ip_assignment_lifecycle.py, app/services/ip_lifecycle.py, app/services/scheduler_config.py, app/services/settings_spec.py, app/tasks/radius.py, app/services/task_reliability.py. approved-growth covers the size-threshold rule only; no new module, template or migration is authorised. These are tactical stopgaps, to be deleted by the Starter dotmac-ipam extraction cut.",
+      "deletion_trigger": "Delete with the Sub IPAM allocator, ip_assignment_lifecycle writers and the retention task when the Starter dotmac-ipam extraction cut lands.",
+      "approved_by": "michaelayoade"
+    },
+    {
+      "id": "THIN-STARTER-PREPAID-FUNDING-LINK-SCHEMA",
+      "kind": "schema",
+      "paths": [
+        "alembic/versions/696_starter_prepaid_funding_links.py",
+        "app/models/billing.py"
+      ],
+      "reason": "Structural identity storage for the prepaid renewals lane (ADR 0007: no metadata as financial identity): starter_prepaid_funding_links binds one prepaid period (subscription + renewal billing_line_key) to the Starter billing account, settlement, and confirmation that earmarked its funding, so the renewal cycle can discover its earmarked settlement. Identity only, never financial state; balances and funding availability are read from Starter.",
+      "approved_by": "michaelayoade"
+    },
+    {
+      "id": "INTEGRATION-CLEANUP-SECURITY-20261020",
+      "kind": "feature-exception",
+      "paths": [
+        "app/api/deps.py",
+        "app/api/reconcile_webhooks.py",
+        "app/api/tr069_inform.py",
+        "app/errors.py",
+        "app/main.py",
+        "app/models/__init__.py",
+        "app/models/catalog.py",
+        "app/models/support.py",
+        "app/models/team_inbox.py",
+        "app/monitoring.py",
+        "app/services/automation_rules.py",
+        "app/services/catalog/credentials.py",
+        "app/services/connectivity_backup.py",
+        "app/services/credential_crypto.py",
+        "app/services/email.py",
+        "app/services/events/types.py",
+        "app/services/network/olt_ssh.py",
+        "app/services/network/olt_tr069_admin.py",
+        "app/services/network/reconcile/applier.py",
+        "app/services/network/reconcile/secrets.py",
+        "app/services/notification.py",
+        "app/services/provisioning_context.py",
+        "app/services/sms.py",
+        "app/services/sot_registry/domains/customer_context.py",
+        "app/services/subscription_lifecycle_commands.py",
+        "app/services/ticket_assignment/rules.py",
+        "app/services/tr069.py",
+        "app/services/tr069_auth.py",
+        "app/services/web_system_restore_tool.py",
+        "app/services/web_system_secrets.py",
+        "app/tasks/enforcement.py",
+        "templates/admin/design_system/modules.html",
+        "templates/components/navigation/admin_sidebar.html"
+      ],
+      "reason": "Michael decided 2026-10-20 to land the approved cleanup and security batch as one integrated branch instead of nine separate merges: retirements (#3750, #3748, #3744), fail-closed audit (#3751), dead event-type pruning (#3749), webhook and credential-handling security corrections (#3733, #3734, #3737) and the PPPoE credential bridge (#3727). The combined diff exceeds the per-PR size threshold; each constituent branch was reviewed on its own PR. No new capability beyond those branches.",
+      "starter_contract": "None: retirements and security corrections to existing Sub surfaces; the PPPoE credential bridge is covered by PPPOE-CREDENTIAL-INHERIT-20261019. Credential handling moves to the Starter credential owner later.",
+      "approved_by": "michaelayoade"
+    },
+    {
+      "id": "PPPOE-DEACTIVATION-REASON-SCHEMA",
+      "kind": "schema",
+      "paths": [
+        "alembic/versions/698_credential_deactivation_reason.py"
+      ],
+      "reason": "Records why an access credential was deactivated (M1) so password retention on restore can be gated; part of the PPPoE credential bridge (#3727), landed through the integration branch (Michael, 2026-10-20). Additive column only.",
+      "approved_by": "michaelayoade"
+    },
+    {
+      "id": "THIN-STARTER-PREPAID-GATEWAY",
+      "kind": "feature-exception",
+      "paths": [
+        "app/services/gateway_topup_intents.py",
+        "app/services/payment_webhook_commands.py",
+        "app/services/prepaid_period_purchases.py"
+      ],
+      "reason": "Step 4 caller migration (gateway slice of THIN-STARTER-PREPAID-RENEWALS): prepaid period-purchase checkouts open a Starter payments PURCHASE_FUNDING intent bound to the purchase identity, and only the authenticated provider confirmation for that intent funds the purchase through dotmac-billing earmarks (pay-then-record; the browser return records nothing). Sub builds no billing logic: it opens the bound intent and hands the confirmed cash to the approved starter_prepaid owner; ineligible purchases stay on the legacy path and Starter refusal never falls back.",
+      "approved_by": "michaelayoade",
+      "starter_contract": "Published dotmac-payments 0.1.0a3 open_payment_intent (PaymentPurpose.PURCHASE_FUNDING) + intent-bound confirmation/qualification, and dotmac-billing 0.1.0a8 accept-on-prepaid-funding-lane + earmark_settlement, consumed through the already-excepted app/services/billing/starter_prepaid.py owner."
+    },
+    {
+      "id": "THIN-KERNEL-SAVEPOINT-GUARD",
+      "kind": "feature-exception",
+      "paths": [
+        "app/services/owner_commands.py",
+        "app/services/kernel_savepoint_guard.py"
+      ],
+      "reason": "Step 4 composition fix surfaced by the gateway prepaid lane: Starter kernel services run expected-conflict mutations inside conflict_savepoint(), whose RELEASE fires Sub's before_commit owner guard. Without claiming that exact release via the kernel's claim_conflict_savepoint_commit (and classifying its recovered rollbacks via current_conflict_savepoint), every Starter lane executing inside an owner command fails closed at the boundary. The owner boundary stays kernel-free (test_owner_command_boundary): it gains a participant-hook registry, and a new kernel-admitted module registers the kernel claim/classifiers. Arbitrary nested transactions still never qualify, and the boundary keeps sole completion authority.",
+      "approved_by": "michaelayoade",
+      "starter_contract": "Published dotmac-kernel 0.1.0a105 dotmac_kernel.transactions: claim_conflict_savepoint_commit + current_conflict_savepoint + conflict_savepoint_requires_rollback, consumed exactly as the kernel's caller-owned-session contract specifies."
+    }
+  ]
+}

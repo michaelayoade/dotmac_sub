@@ -54,6 +54,7 @@
    - searchable: Show search input (default: true)
    - search_placeholder: Search input placeholder text
    - search_value: Current search term (echo back for HTMX)
+   - submit_search: Require an explicit form submit instead of searching while typing
    - create_url: URL for "Add New" button (omit to hide)
    - create_label: Label for create button (default: "Add New")
    - filters: Pre-rendered HTML for filter controls in toolbar
@@ -101,7 +102,8 @@
     selectable=false,
     column_picker=true,
     show_count=true,
-    compact=false
+    compact=false,
+    submit_search=false
 ) %}
 {# Compute default visible columns #}
 {% set ns = namespace(visible=[]) %}
@@ -129,20 +131,44 @@
 
     {# ──── Toolbar ──── #}
     <div class="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+        {% if submit_search and searchable and htmx_url %}
+        <form id="{{ table_id }}-search-form"
+              method="get"
+              action="{{ htmx_url }}"
+              hx-get="{{ htmx_url }}"
+              hx-trigger="submit"
+              hx-target="#{{ hx_tgt }}"
+              hx-swap="outerHTML"
+              hx-push-url="true"
+              hx-sync="#{{ hx_tgt }}:replace"
+              hx-disabled-elt="find button"
+              x-data='{ query: {{ search_value | tojson }} }'
+              x-ref="searchForm"
+              class="flex flex-wrap items-center gap-3">
+        {% else %}
         <div class="flex flex-wrap items-center gap-3">
+        {% endif %}
             {# Search #}
             {% if searchable and htmx_url %}
             <div class="relative">
                 <input type="search"
+                       id="{{ table_id }}-search"
                        name="search"
                        value="{{ search_value }}"
                        placeholder="{{ search_placeholder }}"
+                       aria-label="{{ search_placeholder | replace('...', '') }}"
+                       {% if submit_search %}
+                       x-model="query"
+                       x-ref="searchInput"
+                       autocomplete="off"
+                       {% else %}
                        hx-get="{{ htmx_url }}"
                        hx-trigger="input changed delay:300ms, search"
                        hx-target="#{{ hx_tgt }}"
                        hx-swap="outerHTML"
                        hx-include="#{{ hx_tgt }} [name]:not([name='search'])"
-                       class="w-full rounded-xl border border-slate-200 bg-white py-2.5 pl-10 pr-4 text-sm placeholder-slate-400 shadow-sm transition-all focus:border-{{ color }}-400 focus:outline-none focus:ring-2 focus:ring-{{ color }}-500/20 dark:border-slate-600 dark:bg-slate-800 dark:text-white dark:placeholder-slate-500 dark:focus:border-{{ color }}-500 sm:w-72" />
+                       {% endif %}
+                       class="min-h-11 w-full rounded-xl border border-slate-200 bg-white py-2.5 pl-10 pr-4 text-sm placeholder-slate-400 shadow-sm transition-all focus:border-{{ color }}-400 focus:outline-none focus:ring-2 focus:ring-{{ color }}-500/20 dark:border-slate-600 dark:bg-slate-800 dark:text-white dark:placeholder-slate-500 dark:focus:border-{{ color }}-500 sm:w-72" />
                 <svg class="absolute left-3 top-3 h-4 w-4 text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                     <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"/>
                 </svg>
@@ -152,13 +178,32 @@
             {# Filters slot #}
             {% if filters %}{{ filters | safe }}{% endif %}
 
+            {% if submit_search and searchable and htmx_url %}
+            <button type="submit"
+                    class="inline-flex min-h-11 items-center rounded-xl bg-{{ color }}-600 px-4 py-2.5 text-sm font-semibold text-white shadow-sm transition-colors hover:bg-{{ color }}-700 focus:outline-none focus:ring-2 focus:ring-{{ color }}-500 focus:ring-offset-2 disabled:cursor-wait disabled:opacity-60 dark:focus:ring-offset-slate-900">
+                Search
+            </button>
+            <button type="button"
+                    :disabled="!query"
+                    @click="query = ''; $nextTick(() => $refs.searchForm.requestSubmit())"
+                    class="inline-flex min-h-11 items-center rounded-xl border border-slate-200 bg-white px-4 py-2.5 text-sm font-medium text-slate-600 shadow-sm transition-colors hover:border-slate-300 hover:bg-slate-50 focus:outline-none focus:ring-2 focus:ring-{{ color }}-500 focus:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-50 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-300 dark:hover:bg-slate-700 dark:focus:ring-offset-slate-900">
+                Clear
+            </button>
+            <input type="hidden" name="sort" value="{{ current_sort }}" />
+            <input type="hidden" name="dir" value="{{ current_dir }}" />
+            {% endif %}
+
             {# Count badge #}
             {% if show_count and total %}
             <span class="text-sm text-slate-500 dark:text-slate-400">
                 <span class="font-semibold text-slate-700 dark:text-slate-300">{{ total }}</span> results
             </span>
             {% endif %}
+        {% if submit_search and searchable and htmx_url %}
+        </form>
+        {% else %}
         </div>
+        {% endif %}
 
         <div class="flex items-center gap-2">
             {# Extra actions slot #}
@@ -211,8 +256,10 @@
     </div>
 
     {# Hidden sort state for HTMX includes #}
-    <input type="hidden" name="sort" value="{{ current_sort }}" />
-    <input type="hidden" name="dir" value="{{ current_dir }}" />
+    {% if not (submit_search and searchable and htmx_url) %}
+        <input type="hidden" name="sort" value="{{ current_sort }}" />
+        <input type="hidden" name="dir" value="{{ current_dir }}" />
+    {% endif %}
 
     {# ──── Table ──── #}
     <div class="overflow-hidden rounded-2xl border border-slate-200/60 bg-white shadow-sm dark:border-slate-700/60 dark:bg-slate-800">

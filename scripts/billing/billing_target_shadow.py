@@ -23,7 +23,7 @@ Subcommands::
     poetry run python -m scripts.billing.billing_target_shadow correct-unused-prepaid-renewal --account <id> --subscription <id> --adjustment <id> --entitlement <id> --preview-fingerprint <sha256> --actor user:<id> --reason <approval-ref> --idempotency-key <key>
     poetry run python -m scripts.billing.billing_target_shadow correct-renewal-terms --subscription <id> --action apply_reviewed_term --source finance_review --expected-amount <amount> --amount <amount> --reference <ref> --actor <system-user-uuid> --idempotency-key <key>
     poetry run python -m scripts.billing.billing_target_shadow request-renewal-term-record --subscription <id> --amount <amount> --expected-current-amount none --reason <text> --evidence-ref <ref> --evidence-sha256 <sha256> --actor <system-user-uuid> --idempotency-key <key>
-    poetry run python -m scripts.billing.billing_target_shadow approve-renewal-term-record --request <request-id> --amount <amount> --approver <different-system-user-uuid> --idempotency-key <key>
+    poetry run python -m scripts.billing.billing_target_shadow approve-renewal-term-record --request <request-id> --amount <amount> --approver <different-system-user-uuid> --idempotency-key <key> [--sole-approver-justification <text>]
     poetry run python -m scripts.billing.billing_target_shadow list-renewal-term-record-requests [--subscription <id>] [--include-recorded]
 
 The renewal-term commands take real staff identities (SystemUser UUIDs)
@@ -71,6 +71,7 @@ from app.services.dotmac_erp.billing_adapter import pending_exports
 from app.services.owner_commands import CommandContext
 from app.services.runtime_durable_timers import fire_due_timers
 from app.services.sales_order_funding import SalesOrderFunding
+from scripts.billing._mutation_policy import refuse_apply
 
 if TYPE_CHECKING:
     from app.services.prepaid_service_renewals import (
@@ -472,6 +473,7 @@ def _cmd_approve_renewal_term_record(db, args) -> int:
             approved_amount=args.amount,
             approved_by=args.approver,
             permission_granted=granted,
+            sole_approver_justification=args.sole_approver_justification,
         ),
         context=_staff_context(
             f"four-eyes approval of renewal-term record request {args.request}",
@@ -746,6 +748,7 @@ def _cmd_preview_migrated_account_opening(db, args) -> int:
 
 def _cmd_preview_prepaid_service_renewal(db, args) -> int:
     from app.services.prepaid_service_renewals import (
+        PrepaidRenewalEligibilityContext,
         preview_prepaid_service_renewal,
     )
 
@@ -756,6 +759,7 @@ def _cmd_preview_prepaid_service_renewal(db, args) -> int:
         ends_at=_instant(args.ends_at),
         amount=Decimal(args.amount),
         currency=args.currency,
+        eligibility_context=PrepaidRenewalEligibilityContext(args.eligibility_context),
     )
     _emit(
         {
@@ -780,6 +784,7 @@ def _cmd_preview_prepaid_service_renewal(db, args) -> int:
 def _cmd_execute_reviewed_prepaid_service_renewal(db, args) -> int:
     from app.services.prepaid_service_renewals import (
         ExecuteReviewedPrepaidServiceRenewalCommand,
+        PrepaidRenewalEligibilityContext,
         execute_reviewed_prepaid_service_renewal,
     )
 
@@ -798,6 +803,9 @@ def _cmd_execute_reviewed_prepaid_service_renewal(db, args) -> int:
             currency=args.currency,
             expected_preview_fingerprint=args.preview_fingerprint,
             evidence_ref=args.evidence_ref,
+            eligibility_context=PrepaidRenewalEligibilityContext(
+                args.eligibility_context
+            ),
         ),
     )
     renewal = result.renewal
@@ -1318,6 +1326,28 @@ def _cmd_pending_erp_exports(db, args) -> int:
     return 0
 
 
+def _cmd_preview_module_accounting_export(args: argparse.Namespace) -> int:
+    """Captured evidence preview only; no session, owner command or staging."""
+    from pathlib import Path
+
+    from app.services.dotmac_erp.billing_accounting_fact import (
+        map_billing_accounting_fact,
+        parse_billing_accounting_fact,
+    )
+
+    captured = Path(args.fact_file).read_text(encoding="utf-8")
+    fact = parse_billing_accounting_fact(captured)
+    envelope = map_billing_accounting_fact(fact)
+    _emit(
+        {
+            "mode": "captured-preview-only",
+            "runtime_consumer": "pending",
+            "export": envelope.to_payload(),
+        }
+    )
+    return 0
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     sub = parser.add_subparsers(dest="command", required=True)
@@ -1446,6 +1476,11 @@ def main() -> int:
         help="SystemUser UUID of the approving staff member",
     )
     p.add_argument("--idempotency-key", required=True)
+    p.add_argument(
+        "--sole-approver-justification",
+        default=None,
+        help="justification for approving your own request under the governed sole-approver exception (see docs/runbooks/SOLE_APPROVER_EXCEPTION.md); refused unless the exception is enabled, unexpired and names you",
+    )
     p.set_defaults(func=_cmd_approve_renewal_term_record)
 
     p = sub.add_parser(
@@ -1516,6 +1551,11 @@ def main() -> int:
     p.add_argument("--ends-at", required=True)
     p.add_argument("--amount", required=True)
     p.add_argument("--currency", default="NGN")
+    p.add_argument(
+        "--eligibility-context",
+        choices=("recurring", "funding_recovery"),
+        default="recurring",
+    )
     p.set_defaults(func=_cmd_preview_prepaid_service_renewal)
 
     p = sub.add_parser(
@@ -1527,6 +1567,11 @@ def main() -> int:
     p.add_argument("--ends-at", required=True)
     p.add_argument("--amount", required=True)
     p.add_argument("--currency", default="NGN")
+    p.add_argument(
+        "--eligibility-context",
+        choices=("recurring", "funding_recovery"),
+        default="recurring",
+    )
     p.add_argument("--preview-fingerprint", required=True)
     p.add_argument("--evidence-ref", required=True)
     p.add_argument("--actor", required=True)
@@ -1675,7 +1720,25 @@ def main() -> int:
     p.add_argument("--limit", type=int, default=50)
     p.set_defaults(func=_cmd_pending_erp_exports)
 
+    p = sub.add_parser(
+        "preview-module-accounting-export",
+        help="preview captured Billing AccountingFactV1 without persistence or source trust",
+    )
+    p.add_argument("--fact-file", required=True)
+
     args = parser.parse_args()
+    refuse_apply(
+        args.command
+        in {
+            "capture-renewal-terms",
+            "correct-renewal-terms",
+            "execute-reviewed-prepaid-service-renewal",
+            "correct-legacy-renewal-tax-invoice",
+            "correct-unused-prepaid-renewal",
+        }
+    )
+    if args.command == "preview-module-accounting-export":
+        return _cmd_preview_module_accounting_export(args)
     db = SessionLocal()
     try:
         return args.func(db, args)

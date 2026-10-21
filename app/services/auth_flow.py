@@ -5,11 +5,13 @@ import secrets
 import string
 import warnings
 from collections.abc import Mapping
+from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from enum import Enum
-from typing import Any, cast
+from typing import Any, Literal, cast
 from uuid import UUID
 
+import bcrypt
 import pyotp
 from cryptography.fernet import Fernet, InvalidToken
 
@@ -27,6 +29,7 @@ from sqlalchemy.exc import IntegrityError, OperationalError
 from sqlalchemy.orm import Session
 
 from app.config import settings
+from app.metrics import CREDENTIAL_FORMAT_REJECTIONS
 from app.models.auth import (
     AuthProvider,
     MFAMethod,
@@ -55,15 +58,22 @@ from app.schemas.auth_flow import LoginResponse, LogoutResponse, TokenResponse
 from app.services import (
     auth_cache,
     auth_session_refresh,
+    auth_session_staging,
     auth_token_signing,
     customer_login_identity,
+    password_authentication,
     staff_party_authentication,
-    team_inbox_assignment,
+    user_passwords,
 )
 from app.services import radius_auth as radius_auth_service
+from app.services.auth_session_staging import StagedSession
 from app.services.capability_recipient import resolve_capability_recipient
 from app.services.common import coerce_uuid
-from app.services.credential_crypto import decrypt_credential, encrypt_credential
+from app.services.credential_crypto import (
+    decrypt_credential,
+    encrypt_credential,
+    reject_reserved_service_password,
+)
 from app.services.db_session_adapter import db_session_adapter
 from app.services.owner_commands import CommandContext
 from app.services.response import ListResponseMixin
@@ -73,10 +83,20 @@ from app.services.settings_spec import resolve_value
 logger = logging.getLogger(__name__)
 
 PASSWORD_CONTEXT = CryptContext(
-    schemes=["pbkdf2_sha256", "bcrypt", "sha512_crypt"],
+    # "bcrypt" is deliberately NOT a passlib scheme: with bcrypt>=5 passlib's
+    # backend self-test passes a >72-byte secret and raises ValueError, which
+    # breaks every bcrypt verification. Legacy bcrypt hashes are verified by
+    # `_verify_legacy_bcrypt` via `bcrypt.checkpw` instead (see verify_user_password).
+    schemes=["pbkdf2_sha256", "sha512_crypt"],
     default="pbkdf2_sha256",
     deprecated="auto",
 )
+
+# bcrypt 5 `checkpw` accepts $2a$, $2b$, $2y$ (and, technically, $2x$). $2x$ is
+# the known-buggy PHP crypt_blowfish variant and is deliberately unsupported.
+_BCRYPT_VERIFY_PREFIXES = ("$2a$", "$2b$", "$2y$")
+_BCRYPT_UNSUPPORTED_PREFIXES = ("$2x$",)
+_BCRYPT_MAX_PASSWORD_BYTES = 72
 
 
 class LoginAudience(str, Enum):
@@ -84,6 +104,7 @@ class LoginAudience(str, Enum):
 
     general = "general"
     admin = "admin"
+    customer = "customer"
 
 
 def is_admin_portal_principal(principal_type: str, principal: object | None) -> bool:
@@ -94,6 +115,42 @@ def is_admin_portal_principal(principal_type: str, principal: object | None) -> 
         and isinstance(principal, SystemUser)
         and principal.user_type is UserType.system_user
     )
+
+
+def principal_refusal(
+    principal_type: str,
+    principal: object | None,
+    audience: LoginAudience,
+) -> str | None:
+    """Why a verified principal may not receive a session, or ``None``.
+
+    Pure, so phase A (login) and the in-transaction re-check (phase B) apply
+    the identical rule: ``account_disabled`` | ``admin_required``.
+    """
+
+    if not principal or not getattr(principal, "is_active", False):
+        return "account_disabled"
+    if (
+        principal_type == "subscriber"
+        and isinstance(principal, Subscriber)
+        and principal.status
+        in {
+            SubscriberStatus.disabled,
+            SubscriberStatus.canceled,
+        }
+    ):
+        return "account_disabled"
+    if audience is LoginAudience.admin and not is_admin_portal_principal(
+        principal_type, principal
+    ):
+        return "admin_required"
+    if audience is LoginAudience.customer and (
+        principal_type != "subscriber"
+        or not isinstance(principal, Subscriber)
+        or principal.user_type is not UserType.customer
+    ):
+        return "customer_required"
+    return None
 
 
 def _env_value(name: str) -> str | None:
@@ -514,37 +571,6 @@ def _issue_mfa_token(
     return _jwt_encode_token(payload, _jwt_secret(db), _jwt_algorithm(db))
 
 
-def _issue_mfa_enrollment_token(
-    db: Session | None,
-    principal_id: str,
-    principal_type: str = "system_user",
-    *,
-    staff_binding: staff_party_authentication.StaffSessionBinding | None = None,
-) -> str:
-    now = _now()
-    payload = {
-        "sub": principal_id,
-        "principal_id": principal_id,
-        "principal_type": principal_type,
-        "typ": "mfa_enrollment",
-        "iat": int(now.timestamp()),
-        "exp": int((now + timedelta(minutes=5)).timestamp()),
-    }
-    if principal_type == "system_user":
-        if staff_binding is None:
-            raise staff_party_authentication.StaffProjectionError(
-                staff_party_authentication.StaffProjectionRefusal.projection_missing,
-                principal_id,
-            )
-        if str(staff_binding.system_user_id) != str(principal_id):
-            raise staff_party_authentication.StaffProjectionError(
-                staff_party_authentication.StaffProjectionRefusal.projection_conflict,
-                principal_id,
-            )
-        payload["party_id"] = str(staff_binding.party_id)
-    return _jwt_encode_token(payload, _jwt_secret(db), _jwt_algorithm(db))
-
-
 def staff_binding_from_token_payload(
     payload: Mapping[str, object],
     *,
@@ -666,6 +692,59 @@ def _issue_email_verification_token(
 
 def _decode_email_verification_token(db: Session | None, token: str) -> dict:
     return _decode_jwt(db, token, "email_verification")
+
+
+class InvalidEmailVerificationCapability(ValueError):
+    """Safe boundary for the legacy JWT decoder's transport exception."""
+
+
+class EmailVerificationCapabilityUnavailable(RuntimeError):
+    """Safe operational refusal from the legacy decoder boundary."""
+
+
+@dataclass(frozen=True, slots=True)
+class EmailVerificationCapability:
+    principal_id: str
+    principal_type: str
+    subject: str
+    purpose: str
+    expires_at: int
+    email: str = field(repr=False)
+
+
+def decode_email_verification_capability(
+    db: Session, *, token: str
+) -> EmailVerificationCapability:
+    try:
+        payload = _decode_email_verification_token(db, token)
+    except HTTPException as exc:
+        if exc.status_code != 401:
+            raise EmailVerificationCapabilityUnavailable(
+                "Email verification capability validation is unavailable"
+            ) from None
+        raise InvalidEmailVerificationCapability(
+            "Invalid verification capability"
+        ) from None
+    except (TypeError, ValueError, AttributeError):
+        # python-jose can raise these for malformed registered claim shapes.
+        # Storage/configuration exceptions retain their operational category.
+        raise InvalidEmailVerificationCapability(
+            "Invalid verification capability"
+        ) from None
+    keys = ("principal_id", "principal_type", "sub", "typ", "email")
+    if (
+        any(not isinstance(payload.get(key), str) for key in keys)
+        or type(payload.get("exp")) is not int
+    ):
+        raise InvalidEmailVerificationCapability("Invalid verification capability")
+    return EmailVerificationCapability(
+        principal_id=payload["principal_id"],
+        principal_type=payload["principal_type"],
+        subject=payload["sub"],
+        purpose=payload["typ"],
+        expires_at=payload["exp"],
+        email=payload["email"],
+    )
 
 
 def _decode_jwt(db: Session | None, token: str, expected_type: str) -> dict:
@@ -881,38 +960,102 @@ def _principal_for_credential(
     return "subscriber", "", None
 
 
+class AccessCredentialVerificationStatus(str, Enum):
+    MATCHED = "matched"
+    DENIED = "denied"
+    UNKNOWN = "unknown"
+    AMBIGUOUS = "ambiguous"
+
+
+@dataclass(frozen=True, slots=True)
+class AccessCredentialVerificationQuery:
+    identifier: str = field(repr=False)
+    password: str = field(repr=False)
+
+
+@dataclass(frozen=True, slots=True)
+class AccessCredentialVerificationOutcome:
+    status: AccessCredentialVerificationStatus
+    resolved_credential_id: UUID | None = None
+    snapshot: password_authentication.PortalAccessSnapshot | None = field(
+        default=None, repr=False
+    )
+    subscriber: Subscriber | None = field(default=None, repr=False)
+
+
 def _resolve_access_credential_login(
     db: Session, *, identifier: str, password: str
 ) -> tuple[str, str, Subscriber] | None:
-    normalized_identifier = identifier.strip()
-    if not normalized_identifier:
-        return None
-
-    credential = (
-        db.query(AccessCredential)
-        .filter(AccessCredential.username == normalized_identifier)
-        .filter(AccessCredential.is_active.is_(True))
-        .order_by(AccessCredential.created_at.desc())
-        .first()
+    outcome = _resolve_access_credential_match(
+        db,
+        query=AccessCredentialVerificationQuery(
+            identifier=identifier.strip(), password=password
+        ),
     )
-    if not credential or not credential.secret_hash:
+    if (
+        outcome.status is not AccessCredentialVerificationStatus.MATCHED
+        or outcome.subscriber is None
+    ):
         return None
+    return "subscriber", str(outcome.subscriber.id), outcome.subscriber
 
-    try:
-        password_matches = verify_password(password, credential.secret_hash)
-    except ValueError:
-        logger.info(
-            "Access credential login refused: stored PPPoE secret unavailable",
-            extra={"access_credential_id": str(credential.id)},
+
+def _resolve_access_credential_match(
+    db: Session,
+    *,
+    query: AccessCredentialVerificationQuery,
+) -> AccessCredentialVerificationOutcome:
+    if not query.identifier:
+        return AccessCredentialVerificationOutcome(
+            AccessCredentialVerificationStatus.UNKNOWN
         )
-        return None
+    candidates = db.scalars(
+        sa_select(AccessCredential)
+        .where(AccessCredential.username == query.identifier)
+        .where(AccessCredential.is_active.is_(True))
+        .order_by(AccessCredential.created_at.desc())
+        .limit(2)
+    ).all()
+    if not candidates:
+        return AccessCredentialVerificationOutcome(
+            AccessCredentialVerificationStatus.UNKNOWN
+        )
+    if len(candidates) != 1:
+        return AccessCredentialVerificationOutcome(
+            AccessCredentialVerificationStatus.AMBIGUOUS
+        )
+    credential = candidates[0]
+    denied = AccessCredentialVerificationOutcome(
+        AccessCredentialVerificationStatus.DENIED,
+        resolved_credential_id=credential.id,
+    )
+    if not credential.secret_hash:
+        return denied
+    try:
+        # Preserve the existing PPPoE bcrypt refusal; user verification does
+        # not expand the set of admitted network/service secret formats.
+        if _is_bcrypt_hash(credential.secret_hash):
+            raise ValueError("bcrypt-format PPPoE secret not accepted")
+        password_matches = verify_service_secret(query.password, credential.secret_hash)
+    except ValueError:
+        logger.info("access_credential_verification_unavailable")
+        return denied
     if not password_matches:
-        return None
-
+        return denied
     subscriber = db.get(Subscriber, credential.subscriber_id)
-    if not subscriber:
-        return None
-    return "subscriber", str(subscriber.id), subscriber
+    if subscriber is None:
+        return denied
+    return AccessCredentialVerificationOutcome(
+        AccessCredentialVerificationStatus.MATCHED,
+        resolved_credential_id=credential.id,
+        snapshot=password_authentication.PortalAccessSnapshot(
+            credential.id,
+            credential.updated_at,
+            credential.secret_hash,
+            credential.subscriber_id,
+        ),
+        subscriber=subscriber,
+    )
 
 
 def _primary_totp_method(
@@ -955,17 +1098,111 @@ def hash_service_secret(password: str) -> str:
     PPPoE and other RADIUS flows may require Cleartext-Password or NT-Password
     for MS-CHAP-compatible auth. We therefore store service credentials using
     the shared credential encryption layer instead of a one-way hash.
+
+    This is the choke point for typed service passwords: a value that the
+    secret resolver would dereference (``env://``, ``bao://`` ...) or that
+    carries an at-rest wrapper (``enc:``, ``plain:``, ``cleartext:``) is
+    refused, so a stored credential can never make the app read a secret.
     """
+    reject_reserved_service_password(password)
     return cast(str, encrypt_credential(password))
 
 
-def verify_password(password: str, password_hash: str | None) -> bool:
-    if not password_hash:
+def _is_bcrypt_hash(password_hash: str) -> bool:
+    return password_hash.startswith(
+        _BCRYPT_VERIFY_PREFIXES + _BCRYPT_UNSUPPORTED_PREFIXES
+    )
+
+
+def _verify_legacy_bcrypt(password: str, password_hash: str) -> bool:
+    """Verify a legacy bcrypt hash directly with `bcrypt.checkpw`. Never raises.
+
+    Behaviour:
+    - $2a$/$2b$/$2y$ hash: bcrypt result (True/False).
+    - $2x$ hash: False (unsupported variant).
+    - Malformed/truncated hash or bad salt/cost: False.
+    - Password longer than 72 UTF-8 *bytes*: False (fail closed; the user must
+      reset their password). bcrypt 5 refuses such input and we do not
+      truncate or prehash. A structured warning is logged without the
+      password or hash.
+    """
+    if password_hash.startswith(_BCRYPT_UNSUPPORTED_PREFIXES):
+        CREDENTIAL_FORMAT_REJECTIONS.inc()
         return False
-    decrypted = decrypt_credential(password_hash)
-    if decrypted != password_hash:
-        return secrets.compare_digest(password, decrypted or "")
-    return cast(bool, PASSWORD_CONTEXT.verify(password, password_hash))
+    password_bytes = password.encode("utf-8", errors="surrogatepass")
+    if len(password_bytes) > _BCRYPT_MAX_PASSWORD_BYTES:
+        logger.warning(
+            "bcrypt verification refused: password exceeds 72 bytes",
+            extra={
+                "event": "auth.bcrypt_password_too_long",
+                "hash_scheme": password_hash[:4],
+            },
+        )
+        return False
+    try:
+        return bool(bcrypt.checkpw(password_bytes, password_hash.encode("utf-8")))
+    except (ValueError, TypeError):
+        CREDENTIAL_FORMAT_REJECTIONS.inc()
+        return False
+
+
+def _verify_legacy_stored_credential(password: str, stored: str | None) -> bool:
+    """Verification-only compatibility; no representation or protocol writes."""
+    if not stored:
+        return False
+    try:
+        decrypted = decrypt_credential(stored)
+        if decrypted != stored:
+            return secrets.compare_digest(password, decrypted or "")
+        if _is_bcrypt_hash(stored):
+            return _verify_legacy_bcrypt(password, stored)
+        return cast(bool, PASSWORD_CONTEXT.verify(password, stored))
+    except (ValueError, TypeError, UnicodeError):
+        # Includes unknown/malformed hashes and unavailable reversible values.
+        # Never attach the submitted identifier, secret or hash to telemetry.
+        CREDENTIAL_FORMAT_REJECTIONS.inc()
+        return False
+
+
+def verify_user_password_outcome(
+    request: user_passwords.UserPasswordVerification,
+) -> user_passwords.PasswordVerificationOutcome:
+    """Typed user-only policy boundary; no upgrade, notice, or persistence."""
+    return user_passwords.verify_user_password(
+        request, legacy_verify=_verify_legacy_stored_credential
+    )
+
+
+def verify_user_password(
+    password: str,
+    password_hash: str | None,
+    *,
+    reversible_policy: user_passwords.ReversiblePasswordPolicy = (
+        user_passwords.ReversiblePasswordPolicy.COMPAT
+    ),
+    argon2_limits: user_passwords.Argon2idVerificationLimits | None = None,
+) -> bool:
+    """Compatibility adapter; refusal is explicit, never a runtime policy flip."""
+    return verify_user_password_outcome(
+        user_passwords.UserPasswordVerification(
+            password=password,
+            stored=password_hash,
+            reversible_policy=reversible_policy,
+            argon2_limits=argon2_limits,
+        )
+    ).accepted
+
+
+def verify_service_secret(password: str, secret_hash: str | None) -> bool:
+    """Verify AccessCredential material without changing storage or protocols.
+
+    The existing shared PPPoE fallback refuses bcrypt; keep that acceptance
+    boundary even though user-password verification supports legacy bcrypt.
+    The portal's separate decrypt-and-compare fallback remains unchanged.
+    """
+    if secret_hash and _is_bcrypt_hash(secret_hash):
+        return False
+    return _verify_legacy_stored_credential(password, secret_hash)
 
 
 LOGIN_MAX_FAILED_ATTEMPTS = 5
@@ -988,13 +1225,11 @@ def _admin_login_lockout_minutes(db: Session | None) -> int:
     )
 
 
-def _record_login_failure(db: Session, credential: UserCredential, now) -> None:
-    credential.failed_login_attempts += 1
-    if credential.failed_login_attempts >= _admin_login_max_failed_attempts(db):
-        credential.locked_until = now + timedelta(
-            minutes=_admin_login_lockout_minutes(db)
-        )
-    db.commit()
+def _login_failure_policy(db: Session | None) -> password_authentication.FailurePolicy:
+    return password_authentication.FailurePolicy(
+        max_attempts=_admin_login_max_failed_attempts(db),
+        lock_minutes=_admin_login_lockout_minutes(db),
+    )
 
 
 MFA_MAX_FAILED_ATTEMPTS = 5
@@ -1064,6 +1299,17 @@ def password_policy_violations(password: str, minimum: int) -> tuple[str, ...]:
     return tuple(violations)
 
 
+def _refuse_revoked_mfa_method(method: MFAMethod) -> None:
+    """Confirm flows activate only pending setup rows, never revoked factors.
+
+    An administratively disabled method (inactive, secret cleared) must not be
+    revived by whoever still holds its old seed.
+    """
+
+    if not method.is_active or not method.secret:
+        raise HTTPException(status_code=403, detail="MFA method not allowed")
+
+
 def ensure_mfa_not_locked(method: MFAMethod) -> None:
     locked_until = _as_utc(method.locked_until)
     if locked_until and locked_until > _now():
@@ -1075,12 +1321,79 @@ def ensure_mfa_not_locked(method: MFAMethod) -> None:
         )
 
 
-def record_mfa_failure(db: Session, method: MFAMethod) -> None:
-    method.failed_attempts = (method.failed_attempts or 0) + 1
-    if method.failed_attempts >= _mfa_max_failed_attempts(db):
-        method.locked_until = _now() + timedelta(minutes=_mfa_lockout_minutes(db))
-        method.failed_attempts = 0
-    db.commit()
+def _mfa_failure_policy(db: Session | None) -> password_authentication.FailurePolicy:
+    return password_authentication.FailurePolicy(
+        max_attempts=_mfa_max_failed_attempts(db),
+        lock_minutes=_mfa_lockout_minutes(db),
+    )
+
+
+def record_mfa_failure(
+    db: Session, method: MFAMethod, *, request: Request | None = None
+) -> None:
+    """Enrollment failure uses the independent counter-and-audit owner."""
+    password_authentication.record_mfa_failure(
+        db,
+        method.id,
+        _mfa_failure_policy(db),
+        request=request,
+        surface=password_authentication.DenialSurface.ENROLLMENT,
+    )
+
+
+def _record_denial(
+    *,
+    reason: password_authentication.DenialReason,
+    target: password_authentication.DenialTarget | None,
+    request: Request | None = None,
+    phase: password_authentication.DenialPhase = password_authentication.DenialPhase.PASSWORD,
+    surface: password_authentication.DenialSurface = password_authentication.DenialSurface.LOGIN,
+    status_code: Literal[400, 401, 403, 404, 409, 428, 429, 503] = 401,
+    effect: password_authentication.PasswordFailureEffect
+    | password_authentication.MfaFailureEffect
+    | None = None,
+) -> None:
+    password_authentication.record_authentication_denial(
+        password_authentication.denial_for_request(
+            reason=reason,
+            surface=surface,
+            phase=phase,
+            target=target,
+            request=request,
+            status_code=status_code,
+            effect=effect,
+        )
+    )
+
+
+def _owner_denial_status(
+    exc: password_authentication.PasswordAuthenticationError,
+) -> Literal[401, 403, 409, 428, 429, 503]:
+    if exc.kind in {
+        "locked",
+        "account_disabled",
+        "admin_required",
+        "customer_required",
+    }:
+        return 403
+    if exc.kind == "must_change_password":
+        return 428
+    if exc.kind == "mfa_locked":
+        return 429
+    if exc.kind == "credential_changed":
+        return 409
+    if exc.kind == "lock_timeout":
+        return 503
+    return 401
+
+
+def _owner_denial_reason(
+    exc: password_authentication.PasswordAuthenticationError,
+) -> password_authentication.DenialReason:
+    try:
+        return password_authentication.DenialReason(exc.kind)
+    except ValueError:
+        return password_authentication.DenialReason.OWNER_UNAVAILABLE
 
 
 def record_mfa_success(method: MFAMethod) -> None:
@@ -1102,22 +1415,19 @@ def _new_recovery_code() -> str:
     return f"{raw[:5]}-{raw[5:]}"
 
 
-def generate_mfa_recovery_codes(
+def stage_mfa_recovery_codes(
     db: Session,
-    method: MFAMethod | str,
+    method_id: UUID | str,
     count: int = MFA_RECOVERY_CODE_COUNT,
 ) -> list[str]:
-    """Replace recovery codes for an MFA method and return plaintext once."""
-    mfa_method = (
-        method
-        if isinstance(method, MFAMethod)
-        else db.get(MFAMethod, coerce_uuid(method))
-    )
-    if not mfa_method:
-        raise HTTPException(status_code=404, detail="MFA method not found")
+    """Replace a method's recovery codes WITHOUT committing; plaintext returned.
+
+    The caller owns the transaction: forced enrollment stages these inside the
+    credential-gated owner transaction so a refusal discards them.
+    """
 
     db.query(MFARecoveryCode).filter(
-        MFARecoveryCode.mfa_method_id == mfa_method.id,
+        MFARecoveryCode.mfa_method_id == coerce_uuid(method_id),
         MFARecoveryCode.is_active.is_(True),
         MFARecoveryCode.used_at.is_(None),
     ).update({"is_active": False})
@@ -1134,32 +1444,107 @@ def generate_mfa_recovery_codes(
         codes.append(code)
         db.add(
             MFARecoveryCode(
-                mfa_method_id=mfa_method.id,
+                mfa_method_id=coerce_uuid(method_id),
                 code_hash=code_hash,
                 is_active=True,
             )
         )
+    return codes
+
+
+def generate_mfa_recovery_codes(
+    db: Session,
+    method: MFAMethod | str,
+    count: int = MFA_RECOVERY_CODE_COUNT,
+) -> list[str]:
+    """Replace recovery codes for an MFA method and return plaintext once."""
+    mfa_method = (
+        method
+        if isinstance(method, MFAMethod)
+        else db.get(MFAMethod, coerce_uuid(method))
+    )
+    if not mfa_method:
+        raise HTTPException(status_code=404, detail="MFA method not found")
+
+    codes = stage_mfa_recovery_codes(db, mfa_method.id, count)
     db.commit()
     return codes
 
 
-def _consume_mfa_recovery_code(db: Session, method: MFAMethod, code: str) -> bool:
+def _candidate_recovery_code_hash(code: str) -> str | None:
+    """Hash of a well-formed recovery-code candidate, else ``None``.
+
+    The code is SPENT only inside the MFA completion transaction by a
+    conditional UPDATE (``password_authentication.complete_mfa``), so two
+    concurrent submissions cannot both consume one code.
+    """
+
     normalized = _normalize_recovery_code(code)
     if len(normalized) < 8:
-        return False
-    recovery_code = (
-        db.query(MFARecoveryCode)
-        .filter(MFARecoveryCode.mfa_method_id == method.id)
-        .filter(MFARecoveryCode.code_hash == _recovery_code_hash(normalized))
-        .filter(MFARecoveryCode.is_active.is_(True))
-        .filter(MFARecoveryCode.used_at.is_(None))
-        .first()
-    )
-    if not recovery_code:
-        return False
-    recovery_code.used_at = _now()
-    recovery_code.is_active = False
-    return True
+        return None
+    return _recovery_code_hash(normalized)
+
+
+def _http_from_refusal(
+    exc: password_authentication.PasswordAuthenticationError,
+) -> HTTPException:
+    """Adapter mapping for the credential-standing owner's refusals."""
+
+    kind = exc.kind
+    if kind == "locked":
+        return HTTPException(
+            status_code=403,
+            detail=lockout_detail(
+                "Account locked", locked_until=exc.details.get("locked_until")
+            ),
+        )
+    if kind == "must_change_password":
+        return HTTPException(
+            status_code=428,
+            detail={
+                "code": "PASSWORD_RESET_REQUIRED",
+                "message": "Password reset required",
+            },
+        )
+    if kind == "account_disabled":
+        return HTTPException(status_code=403, detail="Account disabled")
+    if kind == "customer_required":
+        return HTTPException(
+            status_code=403,
+            detail={"code": exc.code, "message": exc.message},
+        )
+    if kind == "admin_required":
+        return HTTPException(
+            status_code=403,
+            detail="Administrator access is required for this area.",
+        )
+    if kind == "invalid_mfa_token":
+        return HTTPException(status_code=401, detail="Invalid MFA token")
+    if kind == "invalid_mfa_code":
+        return HTTPException(status_code=401, detail="Invalid MFA code")
+    if kind == "mfa_locked":
+        return HTTPException(
+            status_code=429,
+            detail=lockout_detail(
+                "Too many incorrect codes",
+                locked_until=exc.details.get("locked_until"),
+            ),
+        )
+    if kind == "credential_changed":
+        return HTTPException(
+            status_code=409, detail="Credential changed; sign in again"
+        )
+    if kind == "lock_timeout":
+        return HTTPException(
+            status_code=503,
+            detail="Service busy; retry shortly",
+            headers={
+                "Retry-After": str(
+                    password_authentication.LOCK_TIMEOUT_RETRY_AFTER_SECONDS
+                )
+            },
+        )
+    return HTTPException(status_code=401, detail="Invalid credentials")
 
 
 class AuthFlow(ListResponseMixin):
@@ -1241,6 +1626,7 @@ class AuthFlow(ListResponseMixin):
         provider: str | None,
         *,
         audience: LoginAudience = LoginAudience.general,
+        denial_surface: password_authentication.DenialSurface = password_authentication.DenialSurface.LOGIN,
     ):
         if isinstance(provider, AuthProvider):
             provider_value = provider.value
@@ -1261,31 +1647,59 @@ class AuthFlow(ListResponseMixin):
                 identifier=username,
             )
         except customer_login_identity.CustomerLoginIdentityError as exc:
+            _record_denial(
+                reason=password_authentication.DenialReason.INVALID_CREDENTIALS,
+                target=None,
+                request=request,
+                surface=denial_surface,
+            )
             if exc.code == customer_login_identity.AMBIGUOUS_EMAIL_CODE:
                 raise HTTPException(status_code=409, detail=exc.message) from exc
             raise HTTPException(status_code=401, detail="Invalid credentials") from exc
 
-        # Check the lock before verifying the password: a locked account must
-        # answer identically to right and wrong passwords (no correctness
-        # oracle), and attempts made while locked must not extend the lock.
+        # Phase A (read-only). Check the lock before verifying the password: a
+        # locked account must answer identically to right and wrong passwords
+        # (no correctness oracle), and attempts made while locked must not
+        # extend the lock. An EXPIRED lock is not reset here: the dirty ORM
+        # write this used to make was committed by whatever ran next. The
+        # atomic statements in `password_authentication` handle expiry.
         now = _now()
         authenticated_access_credential = False
+        access_credential: password_authentication.PortalAccessSnapshot | None = None
         principal_type: str
         principal_id: str
         principal: object | None
+        failure_policy = _login_failure_policy(db)
+        # Snapshot the standing this verification is about, from the SAME row
+        # read as the hash we verify. Nothing between here and the commit gate
+        # may re-read it: a refreshed ORM attribute would silently adopt a
+        # newer version and turn the gate into a no-op.
+        credential_id = credential.id if credential else None
+        snapshot_version = int(credential.credential_version) if credential else None
+        snapshot_hash = credential.password_hash if credential else None
+        snapshot_provider = credential.provider if credential else None
 
+        denial_target = (
+            password_authentication.DenialTarget(
+                password_authentication.DenialTargetKind.CREDENTIAL, credential_id
+            )
+            if credential_id is not None
+            else None
+        )
         if credential:
             locked_until = _as_utc(credential.locked_until)
             if locked_until and locked_until > now:
+                _record_denial(
+                    reason=password_authentication.DenialReason.LOCKED,
+                    target=denial_target,
+                    request=request,
+                    surface=denial_surface,
+                    status_code=403,
+                )
                 raise HTTPException(
                     status_code=403,
                     detail=lockout_detail("Account locked", locked_until=locked_until),
                 )
-            if locked_until:
-                # Lock expired: start a fresh window so a single wrong attempt
-                # doesn't immediately re-lock for another full period.
-                credential.failed_login_attempts = 0
-                credential.locked_until = None
 
         if credential and resolved_provider == AuthProvider.radius:
             try:
@@ -1299,37 +1713,74 @@ class AuthFlow(ListResponseMixin):
                 )
             except HTTPException as exc:
                 if exc.status_code in (401, 403):
-                    _record_login_failure(db, credential, now)
+                    password_authentication.record_password_failure(
+                        db,
+                        credential_id,
+                        failure_policy,
+                        request=request,
+                        surface=denial_surface,
+                    )
                 raise
-        elif credential and verify_password(password, credential.password_hash):
+        elif credential and verify_user_password(password, snapshot_hash):
             pass
         else:
-            access_result = None
+            access_match = AccessCredentialVerificationOutcome(
+                AccessCredentialVerificationStatus.UNKNOWN
+            )
             if (
                 resolved_provider == AuthProvider.local
                 and not customer_email_alias
                 and (credential is None or credential.subscriber_id is not None)
             ):
-                access_result = _resolve_access_credential_login(
-                    db, identifier=username, password=password
+                access_match = _resolve_access_credential_match(
+                    db,
+                    query=AccessCredentialVerificationQuery(
+                        identifier=username.strip(), password=password
+                    ),
                 )
-            if access_result is None:
+            if access_match.status is not AccessCredentialVerificationStatus.MATCHED:
                 if credential:
-                    _record_login_failure(db, credential, now)
+                    password_authentication.record_password_failure(
+                        db,
+                        credential_id,
+                        failure_policy,
+                        request=request,
+                        surface=denial_surface,
+                    )
+                else:
+                    _record_denial(
+                        reason=password_authentication.DenialReason.INVALID_CREDENTIALS,
+                        target=password_authentication.DenialTarget(
+                            password_authentication.DenialTargetKind.ACCESS,
+                            access_match.resolved_credential_id,
+                        )
+                        if access_match.resolved_credential_id is not None
+                        else None,
+                        request=request,
+                        surface=denial_surface,
+                    )
                 raise HTTPException(status_code=401, detail="Invalid credentials")
-            principal_type, principal_id, principal = access_result
+            assert (
+                access_match.snapshot is not None
+                and access_match.subscriber is not None
+            )
+            access_credential = access_match.snapshot
+            principal_type, principal_id, principal = (
+                "subscriber",
+                str(access_match.subscriber.id),
+                access_match.subscriber,
+            )
+            access_secret_hash = access_credential.secret_hash
+            access_updated_at = access_credential.updated_at
             authenticated_access_credential = True
+            denial_target = password_authentication.DenialTarget(
+                password_authentication.DenialTargetKind.ACCESS, access_credential.id
+            )
 
-        # Eligibility is decided BEFORE any successful-login mutation. It used to
-        # run after `db.commit()` below, so a correct password against a disabled
-        # principal still cleared the lockout window and stamped `last_login_at`:
-        # no token was issued, but the write happened, which both corrupted
-        # last-login evidence and left a credential-validity oracle in the data.
-        #
-        # It stays AFTER password verification deliberately. Checking eligibility
-        # first would answer an unauthenticated caller differently for a disabled
-        # account than for a wrong password, which is the account-state oracle the
-        # lock check above is careful to avoid.
+        # Eligibility is decided BEFORE any successful-login mutation, and
+        # AFTER password verification deliberately: checking it first would
+        # answer an unauthenticated caller differently for a disabled account
+        # than for a wrong password (an account-state oracle).
         if not authenticated_access_credential:
             assert credential is not None
             try:
@@ -1342,27 +1793,32 @@ class AuthFlow(ListResponseMixin):
                 # back to the legacy principal key. The refusal code is logged for
                 # the operator; the caller is told only "Account disabled", so this
                 # cannot be used to probe projection state.
-                logger.error(
-                    "Staff login refused: %s (credential=%s)",
-                    exc.refusal.value,
-                    exc.credential_id,
+                _record_denial(
+                    reason=password_authentication.DenialReason.PROJECTION,
+                    target=denial_target,
+                    request=request,
+                    surface=denial_surface,
+                    status_code=403,
                 )
                 raise HTTPException(status_code=403, detail="Account disabled") from exc
-        if not principal or not getattr(principal, "is_active", False):
+        refusal = principal_refusal(principal_type, principal, audience)
+        if refusal == "account_disabled":
+            _record_denial(
+                reason=password_authentication.DenialReason.DISABLED,
+                target=denial_target,
+                request=request,
+                surface=denial_surface,
+                status_code=403,
+            )
             raise HTTPException(status_code=403, detail="Account disabled")
-        if (
-            principal_type == "subscriber"
-            and isinstance(principal, Subscriber)
-            and principal.status
-            in {
-                SubscriberStatus.disabled,
-                SubscriberStatus.canceled,
-            }
-        ):
-            raise HTTPException(status_code=403, detail="Account disabled")
-        if audience is LoginAudience.admin and not is_admin_portal_principal(
-            principal_type, principal
-        ):
+        if refusal == "admin_required":
+            _record_denial(
+                reason=password_authentication.DenialReason.AUDIENCE,
+                target=denial_target,
+                request=request,
+                surface=denial_surface,
+                status_code=403,
+            )
             # Verify credentials before this refusal to avoid turning the admin
             # login into an account-type oracle. The rejection still happens
             # before any successful-login mutation or session issuance.
@@ -1381,6 +1837,13 @@ class AuthFlow(ListResponseMixin):
             and not authenticated_access_credential
             and credential.must_change_password
         ):
+            _record_denial(
+                reason=password_authentication.DenialReason.RESET_REQUIRED,
+                target=denial_target,
+                request=request,
+                surface=denial_surface,
+                status_code=428,
+            )
             raise HTTPException(
                 status_code=428,
                 detail={
@@ -1389,39 +1852,70 @@ class AuthFlow(ListResponseMixin):
                 },
             )
 
-        if credential:
-            credential.failed_login_attempts = 0
-            credential.locked_until = None
-            credential.last_login_at = now
-            db.commit()
-        if _primary_totp_method(db, principal_type, principal_id):
-            return {
-                "mfa_required": True,
-                "mfa_token": _issue_mfa_token(
-                    db,
-                    principal_id,
-                    principal_type,
-                    staff_binding=staff_binding,
-                ),
-            }
-        if principal_type == "system_user" and _force_admin_mfa(db):
+        mfa_required = (
+            _primary_totp_method(db, principal_type, principal_id) is not None
+        )
+        enrollment_required = (
+            not mfa_required
+            and principal_type == "system_user"
+            and _force_admin_mfa(db)
+        )
+        if authenticated_access_credential:
+            # R8: a PPPoE-secret login never reads or writes the local
+            # UserCredential counters, last_login_at or version.
+            assert access_credential is not None
+            verified = password_authentication.VerifiedCredential(
+                src=password_authentication.SRC_ACCESS_CREDENTIAL,
+                principal_type=principal_type,
+                principal_id=principal_id,
+                audience=audience.value,
+                staff_binding=staff_binding,
+                mfa_required=mfa_required,
+                enrollment_required=enrollment_required,
+                verified_hash=access_secret_hash,
+                access_credential_id=access_credential.id,
+                access_credential_updated_at=access_updated_at,
+            )
+        else:
+            assert credential is not None
+            verified = password_authentication.VerifiedCredential(
+                src=password_authentication.SRC_USER_CREDENTIAL,
+                principal_type=principal_type,
+                principal_id=principal_id,
+                audience=audience.value,
+                staff_binding=staff_binding,
+                mfa_required=mfa_required,
+                enrollment_required=enrollment_required,
+                credential_id=credential_id,
+                credential_version=snapshot_version,
+                provider=snapshot_provider,
+                verified_hash=snapshot_hash,
+            )
+
+        # Phase B: one owner transaction (credential-standing gate, then the
+        # session or challenge, plus audit). Tokens leave only after commit.
+        try:
+            outcome = password_authentication.complete_password_step(
+                db, verified, request=request
+            )
+        except password_authentication.PasswordAuthenticationError as exc:
+            _record_denial(
+                reason=_owner_denial_reason(exc),
+                status_code=_owner_denial_status(exc),
+                target=denial_target,
+                request=request,
+                surface=denial_surface,
+                phase=password_authentication.DenialPhase.OWNER,
+            )
+            raise _http_from_refusal(exc) from exc
+        if outcome.kind == "mfa_challenge":
+            return {"mfa_required": True, "mfa_token": outcome.challenge_token}
+        if outcome.kind == "enrollment_challenge":
             return {
                 "mfa_enrollment_required": True,
-                "mfa_enrollment_token": _issue_mfa_enrollment_token(
-                    db,
-                    principal_id,
-                    principal_type,
-                    staff_binding=staff_binding,
-                ),
+                "mfa_enrollment_token": outcome.challenge_token,
             }
-
-        return AuthFlow._issue_tokens(
-            db,
-            principal_type,
-            principal_id,
-            request,
-            staff_binding=staff_binding,
-        )
+        return tokens_for_staged_session(outcome.staged_session)
 
     @staticmethod
     def admin_mfa_setup(db: Session, system_user_id: str, label: str | None):
@@ -1451,6 +1945,7 @@ class AuthFlow(ListResponseMixin):
             .filter(MFAMethod.method_type == MFAMethodType.totp)
             .filter(MFAMethod.enabled.is_(False))
             .filter(MFAMethod.verified_at.is_(None))
+            .filter(MFAMethod.is_active.is_(True))
             .order_by(MFAMethod.created_at.desc())
             .first()
         )
@@ -1475,22 +1970,76 @@ class AuthFlow(ListResponseMixin):
         return {"method_id": method.id, "secret": secret, "otpauth_uri": otpauth_uri}
 
     @staticmethod
-    def admin_mfa_confirm(db: Session, method_id: str, code: str, system_user_id: str):
+    def admin_mfa_confirm(
+        db: Session,
+        method_id: str,
+        code: str,
+        system_user_id: str,
+        *,
+        request: Request | None = None,
+    ):
         method = db.get(MFAMethod, coerce_uuid(method_id))
         if not method:
+            _record_denial(
+                request=request,
+                reason=password_authentication.DenialReason.METHOD,
+                target=None,
+                phase=password_authentication.DenialPhase.ENROLLMENT,
+                surface=password_authentication.DenialSurface.ENROLLMENT,
+                status_code=404,
+            )
             raise HTTPException(status_code=404, detail="MFA method not found")
+        denial_target = password_authentication.DenialTarget(
+            password_authentication.DenialTargetKind.METHOD, method.id
+        )
         if method.subscriber_id is not None:
+            _record_denial(
+                request=request,
+                reason=password_authentication.DenialReason.METHOD,
+                target=denial_target,
+                phase=password_authentication.DenialPhase.ENROLLMENT,
+                surface=password_authentication.DenialSurface.ENROLLMENT,
+                status_code=403,
+            )
             raise HTTPException(status_code=403, detail="MFA method not allowed")
         if str(method.system_user_id) != str(system_user_id):
+            _record_denial(
+                request=request,
+                reason=password_authentication.DenialReason.METHOD,
+                target=denial_target,
+                phase=password_authentication.DenialPhase.ENROLLMENT,
+                surface=password_authentication.DenialSurface.ENROLLMENT,
+                status_code=403,
+            )
             raise HTTPException(status_code=403, detail="MFA method not allowed")
         if method.method_type != MFAMethodType.totp:
+            _record_denial(
+                request=request,
+                reason=password_authentication.DenialReason.METHOD,
+                target=denial_target,
+                phase=password_authentication.DenialPhase.ENROLLMENT,
+                surface=password_authentication.DenialSurface.ENROLLMENT,
+                status_code=400,
+            )
             raise HTTPException(status_code=400, detail="Unsupported MFA method")
 
-        ensure_mfa_not_locked(method)
+        _refuse_revoked_mfa_method(method)
+        try:
+            ensure_mfa_not_locked(method)
+        except HTTPException:
+            _record_denial(
+                request=request,
+                reason=password_authentication.DenialReason.MFA_LOCKED,
+                target=denial_target,
+                phase=password_authentication.DenialPhase.ENROLLMENT,
+                surface=password_authentication.DenialSurface.ENROLLMENT,
+                status_code=429,
+            )
+            raise
         secret = _decrypt_secret(db, method.secret or "")
         totp = pyotp.TOTP(secret)
         if not totp.verify(code, valid_window=0):
-            record_mfa_failure(db, method)
+            record_mfa_failure(db, method, request=request)
             raise HTTPException(status_code=401, detail="Invalid MFA code")
         record_mfa_success(method)
 
@@ -1540,6 +2089,7 @@ class AuthFlow(ListResponseMixin):
             .filter(MFAMethod.method_type == MFAMethodType.totp)
             .filter(MFAMethod.enabled.is_(False))
             .filter(MFAMethod.verified_at.is_(None))
+            .filter(MFAMethod.is_active.is_(True))
             .order_by(MFAMethod.created_at.desc())
             .first()
         )
@@ -1565,111 +2115,70 @@ class AuthFlow(ListResponseMixin):
 
     @staticmethod
     def reseller_mfa_confirm(
-        db: Session, method_id: str, code: str, reseller_user_id: str
+        db: Session,
+        method_id: str,
+        code: str,
+        reseller_user_id: str,
+        *,
+        request: Request | None = None,
     ):
         method = db.get(MFAMethod, coerce_uuid(method_id))
         if not method:
+            _record_denial(
+                request=request,
+                reason=password_authentication.DenialReason.METHOD,
+                target=None,
+                phase=password_authentication.DenialPhase.ENROLLMENT,
+                surface=password_authentication.DenialSurface.ENROLLMENT,
+                status_code=404,
+            )
             raise HTTPException(status_code=404, detail="MFA method not found")
+        denial_target = password_authentication.DenialTarget(
+            password_authentication.DenialTargetKind.METHOD, method.id
+        )
         if str(method.reseller_user_id) != str(reseller_user_id):
+            _record_denial(
+                request=request,
+                reason=password_authentication.DenialReason.METHOD,
+                target=denial_target,
+                phase=password_authentication.DenialPhase.ENROLLMENT,
+                surface=password_authentication.DenialSurface.ENROLLMENT,
+                status_code=403,
+            )
             raise HTTPException(status_code=403, detail="MFA method not allowed")
         if method.method_type != MFAMethodType.totp:
+            _record_denial(
+                request=request,
+                reason=password_authentication.DenialReason.METHOD,
+                target=denial_target,
+                phase=password_authentication.DenialPhase.ENROLLMENT,
+                surface=password_authentication.DenialSurface.ENROLLMENT,
+                status_code=400,
+            )
             raise HTTPException(status_code=400, detail="Unsupported MFA method")
 
-        ensure_mfa_not_locked(method)
+        _refuse_revoked_mfa_method(method)
+        try:
+            ensure_mfa_not_locked(method)
+        except HTTPException:
+            _record_denial(
+                request=request,
+                reason=password_authentication.DenialReason.MFA_LOCKED,
+                target=denial_target,
+                phase=password_authentication.DenialPhase.ENROLLMENT,
+                surface=password_authentication.DenialSurface.ENROLLMENT,
+                status_code=429,
+            )
+            raise
         secret = _decrypt_secret(db, method.secret or "")
         totp = pyotp.TOTP(secret)
         if not totp.verify(code, valid_window=0):
-            record_mfa_failure(db, method)
+            record_mfa_failure(db, method, request=request)
             raise HTTPException(status_code=401, detail="Invalid MFA code")
         record_mfa_success(method)
 
         db.query(MFAMethod).filter(
             MFAMethod.reseller_user_id == method.reseller_user_id,
-            MFAMethod.id != method.id,
-            MFAMethod.is_primary.is_(True),
-        ).update({"is_primary": False})
-
-        method.enabled = True
-        method.is_primary = True
-        method.is_active = True
-        method.verified_at = _now()
-        try:
-            db.commit()
-        except IntegrityError as exc:
-            db.rollback()
-            raise HTTPException(
-                status_code=409,
-                detail="Primary MFA method already exists for this user",
-            ) from exc
-        db.refresh(method)
-        return method
-
-    @staticmethod
-    def mfa_setup(db: Session, subscriber_id: str, label: str | None):
-        subscriber = _subscriber_or_404(db, subscriber_id)
-        username = subscriber.email
-        credential = (
-            db.query(UserCredential)
-            .filter(UserCredential.subscriber_id == subscriber.id)
-            .filter(UserCredential.provider == AuthProvider.local)
-            .first()
-        )
-        if credential and credential.username:
-            username = credential.username
-
-        secret = pyotp.random_base32()
-        encrypted = _encrypt_secret(db, secret)
-        # Reuse a pending (never confirmed) setup row instead of inserting a
-        # new one on every visit to the setup page.
-        method = (
-            db.query(MFAMethod)
-            .filter(MFAMethod.subscriber_id == subscriber.id)
-            .filter(MFAMethod.method_type == MFAMethodType.totp)
-            .filter(MFAMethod.enabled.is_(False))
-            .filter(MFAMethod.verified_at.is_(None))
-            .order_by(MFAMethod.created_at.desc())
-            .first()
-        )
-        if method:
-            method.label = label
-            method.secret = encrypted
-        else:
-            method = MFAMethod(
-                subscriber_id=subscriber.id,
-                method_type=MFAMethodType.totp,
-                label=label,
-                secret=encrypted,
-                enabled=False,
-                is_primary=False,
-            )
-            db.add(method)
-        db.commit()
-        db.refresh(method)
-
-        totp = pyotp.TOTP(secret)
-        otpauth_uri = totp.provisioning_uri(name=username, issuer_name=_totp_issuer(db))
-        return {"method_id": method.id, "secret": secret, "otpauth_uri": otpauth_uri}
-
-    @staticmethod
-    def mfa_confirm(db: Session, method_id: str, code: str, subscriber_id: str):
-        method = db.get(MFAMethod, coerce_uuid(method_id))
-        if not method:
-            raise HTTPException(status_code=404, detail="MFA method not found")
-        if str(method.subscriber_id) != str(subscriber_id):
-            raise HTTPException(status_code=403, detail="MFA method not allowed")
-        if method.method_type != MFAMethodType.totp:
-            raise HTTPException(status_code=400, detail="Unsupported MFA method")
-
-        ensure_mfa_not_locked(method)
-        secret = _decrypt_secret(db, method.secret or "")
-        totp = pyotp.TOTP(secret)
-        if not totp.verify(code, valid_window=0):
-            record_mfa_failure(db, method)
-            raise HTTPException(status_code=401, detail="Invalid MFA code")
-        record_mfa_success(method)
-
-        db.query(MFAMethod).filter(
-            MFAMethod.subscriber_id == method.subscriber_id,
             MFAMethod.id != method.id,
             MFAMethod.is_primary.is_(True),
         ).update({"is_primary": False})
@@ -1697,19 +2206,54 @@ class AuthFlow(ListResponseMixin):
         request: Request,
         *,
         audience: LoginAudience = LoginAudience.general,
+        denial_surface: password_authentication.DenialSurface = password_authentication.DenialSurface.LOGIN,
     ):
-        payload = _decode_jwt(db, mfa_token, "mfa")
-        principal_id = payload.get("principal_id") or payload.get("sub")
-        principal_type = payload.get("principal_type") or "subscriber"
-        if not principal_id:
+        # Phase A (read-only): validate the v2 challenge (no legacy fallback:
+        # a token without the credential binding is refused), resolve the
+        # principal and method, and check the second factor. Nothing is
+        # consumed or counted here.
+        try:
+            challenge = password_authentication.decode_challenge(
+                db, mfa_token, expected_typ="mfa"
+            )
+        except password_authentication.PasswordAuthenticationError as exc:
+            _record_denial(
+                reason=password_authentication.DenialReason.INVALID_CHALLENGE,
+                target=None,
+                request=request,
+                surface=denial_surface,
+                phase=password_authentication.DenialPhase.MFA,
+            )
+            raise _http_from_refusal(exc) from exc
+        denial_target = password_authentication.challenge_denial_target(db, challenge)
+        if challenge.audience != audience.value:
+            _record_denial(
+                reason=password_authentication.DenialReason.AUDIENCE,
+                target=denial_target,
+                request=request,
+                surface=denial_surface,
+                phase=password_authentication.DenialPhase.MFA,
+            )
             raise HTTPException(status_code=401, detail="Invalid MFA token")
+        principal_id = challenge.principal_id
+        principal_type = challenge.principal_type
         principal: object | None = None
         staff_binding: staff_party_authentication.StaffSessionBinding | None = None
         if principal_type == "system_user":
-            staff_binding = staff_binding_from_token_payload(
-                payload,
-                invalid_detail="Invalid MFA token",
-            )
+            try:
+                staff_binding = staff_binding_from_token_payload(
+                    {"principal_id": principal_id, "party_id": challenge.party_id},
+                    invalid_detail="Invalid MFA token",
+                )
+            except HTTPException:
+                _record_denial(
+                    reason=password_authentication.DenialReason.INVALID_CHALLENGE,
+                    target=denial_target,
+                    request=request,
+                    surface=denial_surface,
+                    phase=password_authentication.DenialPhase.MFA,
+                )
+                raise
             try:
                 principal = staff_party_authentication.resolve_staff_principal_by_party(
                     db,
@@ -1718,10 +2262,12 @@ class AuthFlow(ListResponseMixin):
                     reference=staff_binding.system_user_id,
                 )
             except staff_party_authentication.StaffProjectionError as exc:
-                logger.error(
-                    "Staff MFA verification refused: %s (subject=%s)",
-                    exc.refusal.value,
-                    exc.credential_id,
+                _record_denial(
+                    reason=password_authentication.DenialReason.PROJECTION,
+                    target=denial_target,
+                    request=request,
+                    surface=denial_surface,
+                    phase=password_authentication.DenialPhase.MFA,
                 )
                 raise HTTPException(
                     status_code=401,
@@ -1732,6 +2278,14 @@ class AuthFlow(ListResponseMixin):
         if audience is LoginAudience.admin and not is_admin_portal_principal(
             str(principal_type), principal
         ):
+            _record_denial(
+                reason=password_authentication.DenialReason.AUDIENCE,
+                target=denial_target,
+                request=request,
+                surface=denial_surface,
+                phase=password_authentication.DenialPhase.MFA,
+                status_code=403,
+            )
             raise HTTPException(
                 status_code=403,
                 detail="Administrator access is required for this area.",
@@ -1739,27 +2293,148 @@ class AuthFlow(ListResponseMixin):
 
         method = _primary_totp_method(db, principal_type, str(principal_id))
         if not method:
+            _record_denial(
+                reason=password_authentication.DenialReason.METHOD,
+                target=denial_target,
+                request=request,
+                surface=denial_surface,
+                phase=password_authentication.DenialPhase.MFA,
+                status_code=404,
+            )
             raise HTTPException(status_code=404, detail="MFA method not found")
 
-        ensure_mfa_not_locked(method)
+        method_id = method.id
+        method_target = password_authentication.DenialTarget(
+            password_authentication.DenialTargetKind.METHOD, method_id
+        )
+        try:
+            ensure_mfa_not_locked(method)
+        except HTTPException:
+            _record_denial(
+                reason=password_authentication.DenialReason.MFA_LOCKED,
+                target=method_target,
+                request=request,
+                surface=denial_surface,
+                phase=password_authentication.DenialPhase.MFA,
+                status_code=429,
+            )
+            raise
         secret = _decrypt_secret(db, method.secret or "")
         totp = pyotp.TOTP(secret)
-        if totp.verify(code, valid_window=0):
-            record_mfa_success(method)
-        elif _consume_mfa_recovery_code(db, method, code):
-            record_mfa_success(method)
-        else:
-            record_mfa_failure(db, method)
-            raise HTTPException(status_code=401, detail="Invalid MFA code")
+        # Customer native login keeps the customer portal's TOTP-only policy
+        # and whitespace handling. Other audiences retain recovery-code login.
+        customer_audience = audience is LoginAudience.customer
+        totp_ok = bool(
+            totp.verify(code.strip() if customer_audience else code, valid_window=0)
+        )
+        recovery_hash = (
+            None
+            if totp_ok or customer_audience
+            else _candidate_recovery_code_hash(code)
+        )
+        failure_policy = _mfa_failure_policy(db)
 
-        method.last_used_at = _now()
-        db.commit()
-        return AuthFlow._issue_tokens(
-            db,
-            principal_type,
-            str(principal_id),
-            request,
-            staff_binding=staff_binding,
+        # Phase B: one owner transaction (credential gate, eligibility,
+        # atomic recovery-code spend, method update, session, audit).
+        try:
+            staged = password_authentication.complete_mfa(
+                db,
+                challenge,
+                request=request,
+                method_id=method_id,
+                totp_ok=totp_ok,
+                recovery_code_hash=recovery_hash,
+                failure_policy=failure_policy,
+            )
+        except password_authentication.PasswordAuthenticationError as exc:
+            effect = (
+                password_authentication.MfaFailureEffect(method_id, failure_policy)
+                if exc.kind == "invalid_mfa_code"
+                else None
+            )
+            _record_denial(
+                reason=_owner_denial_reason(exc),
+                status_code=_owner_denial_status(exc),
+                target=method_target if effect else denial_target,
+                request=request,
+                surface=denial_surface,
+                phase=password_authentication.DenialPhase.OWNER,
+                effect=effect,
+            )
+            raise _http_from_refusal(exc) from exc
+        return tokens_for_staged_session(staged)
+
+    @staticmethod
+    def confirm_mfa_enrollment(
+        db: Session,
+        enrollment_token: str,
+        method_id: str,
+        code: str,
+        request: Request,
+    ) -> tuple[dict[str, str], list[str]]:
+        """Forced enrollment: verify the code, then ONE credential-gated commit.
+
+        The enrollment token is a v2 challenge bound to the credential id and
+        version (no legacy fallback). Phase A only reads; the factor, recovery
+        codes, session and audit are all written inside the owner transaction,
+        so a reset since the password step leaves nothing behind.
+        """
+
+        try:
+            challenge = password_authentication.decode_challenge(
+                db, enrollment_token, expected_typ="mfa_enrollment"
+            )
+        except password_authentication.PasswordAuthenticationError as exc:
+            _record_denial(
+                reason=password_authentication.DenialReason.INVALID_CHALLENGE,
+                target=None,
+                request=request,
+                phase=password_authentication.DenialPhase.ENROLLMENT,
+                surface=password_authentication.DenialSurface.ENROLLMENT,
+            )
+            raise _http_from_refusal(exc) from exc
+        if challenge.principal_type != "system_user":
+            raise HTTPException(status_code=401, detail="Invalid MFA token")
+        method = db.get(MFAMethod, coerce_uuid(method_id))
+        if (
+            not method
+            or method.subscriber_id is not None
+            or str(method.system_user_id) != str(challenge.principal_id)
+        ):
+            raise HTTPException(status_code=403, detail="MFA method not allowed")
+        if method.method_type != MFAMethodType.totp:
+            raise HTTPException(status_code=400, detail="Unsupported MFA method")
+        ensure_mfa_not_locked(method)
+        resolved_method_id = method.id
+        phase_a_secret = method.secret or ""
+        totp_ok = bool(
+            pyotp.TOTP(_decrypt_secret(db, method.secret or "")).verify(
+                code, valid_window=0
+            )
+        )
+        failure_policy = _mfa_failure_policy(db)
+        try:
+            outcome = password_authentication.confirm_mfa_enrollment(
+                db,
+                challenge,
+                request=request,
+                method_id=resolved_method_id,
+                expected_secret=phase_a_secret,
+                totp_ok=totp_ok,
+                failure_policy=failure_policy,
+            )
+        except password_authentication.PasswordAuthenticationError as exc:
+            _record_denial(
+                reason=_owner_denial_reason(exc),
+                status_code=_owner_denial_status(exc),
+                target=password_authentication.challenge_denial_target(db, challenge),
+                request=request,
+                phase=password_authentication.DenialPhase.OWNER,
+                surface=password_authentication.DenialSurface.ENROLLMENT,
+            )
+            raise _http_from_refusal(exc) from exc
+        return tokens_for_staged_session(outcome.staged_session), list(
+            outcome.recovery_codes
         )
 
     @staticmethod
@@ -1833,27 +2508,45 @@ class AuthFlow(ListResponseMixin):
         )
 
     @staticmethod
-    def logout(db: Session, refresh_token: str):
-        token_hash = _hash_token(refresh_token)
-        session = (
-            db.query(AuthSession)
-            .filter(AuthSession.token_hash == token_hash)
-            .filter(AuthSession.revoked_at.is_(None))
-            .first()
+    def logout(db: Session, refresh_token: str, *, compensation: bool = False):
+        from app.services import session_manager
+        from app.services.db_session_adapter import db_session_adapter
+
+        intent = (
+            session_manager.RevocationIntent.COMPENSATE
+            if compensation
+            else session_manager.RevocationIntent.LOGOUT
         )
-        if not session:
-            raise HTTPException(status_code=404, detail="Session not found")
-        principal_type = "system_user" if session.system_user_id else "subscriber"
-        principal_id = str(session.system_user_id or session.subscriber_id)
-        session.status = SessionStatus.revoked
-        session.revoked_at = _now()
-        db.commit()
-        auth_cache.invalidate_session_context(
-            str(session.id),
-            principal_type=principal_type,
-            principal_id=principal_id,
-        )
-        return {"revoked_at": session.revoked_at}
+        with db_session_adapter.owner_command_session() as command_db:
+            try:
+                outcome = session_manager.revoke_authentication_sessions(
+                    command_db,
+                    session_manager.RevokeSessionsCommand(
+                        context=CommandContext.system(
+                            actor="vendor_admission"
+                            if compensation
+                            else "refresh_bearer",
+                            scope="authentication_session",
+                            reason=intent.value,
+                        ),
+                        intent=intent,
+                        refresh_token=refresh_token,
+                    ),
+                )
+            except session_manager.SessionRevocationError as exc:
+                raise HTTPException(status_code=404, detail=exc.message) from exc
+            except OperationalError as exc:
+                if (
+                    getattr(exc.orig, "sqlstate", None) == "55P03"
+                    or getattr(exc.orig, "pgcode", None) == "55P03"
+                ):
+                    raise HTTPException(
+                        status_code=503,
+                        detail="Session revocation busy",
+                        headers={"Retry-After": "5"},
+                    ) from exc
+                raise
+        return {"revoked_at": outcome.revoked_at}
 
     @staticmethod
     def logout_response(db: Session, refresh_token: str | None, request: Request):
@@ -1895,9 +2588,17 @@ class AuthFlow(ListResponseMixin):
     ) -> dict[str, str]:
         """Issue one session, retrying a transaction-level deadlock once.
 
-        Credential and MFA success evidence is committed before this boundary.
-        A deadlock rollback therefore discards only the incomplete session and
-        presence projection; the complete attempt can safely be replayed.
+        Legacy seam for callers that have already authenticated a principal by
+        other means (``issue_session_tokens``, e.g. OIDC mobile federation):
+        it stages and commits the session in its own transaction.
+
+        The password and MFA paths no longer use it. Their credential-standing
+        gate, session and audit are one owner transaction
+        (``password_authentication``) built on ``stage_session_issue``, so the
+        old assumption that credential evidence is committed before this
+        boundary does not hold for them. For this seam, a deadlock rollback
+        discards only the incomplete session and presence projection and the
+        attempt can safely be replayed.
         """
 
         for attempt in range(2):
@@ -1961,107 +2662,48 @@ class AuthFlow(ListResponseMixin):
             principal_id = cast(str, principal_id_or_request)
             active_request = request
 
-        principal_uuid = coerce_uuid(principal_id)
-        if principal_type == "system_user":
-            if staff_binding is None:
-                raise staff_party_authentication.StaffProjectionError(
-                    staff_party_authentication.StaffProjectionRefusal.projection_missing,
-                    principal_uuid,
-                )
-            # Validate the Party-keyed identity/context pair before revoking a
-            # prior device session or performing any other write.
-            staff_principal = (
-                staff_party_authentication.resolve_staff_principal_by_party(
-                    db,
-                    staff_binding.party_id,
-                    staff_binding.system_user_id,
-                    reference=principal_uuid,
-                )
-            )
-            if staff_principal.id != principal_uuid:
-                raise staff_party_authentication.StaffProjectionError(
-                    staff_party_authentication.StaffProjectionRefusal.projection_conflict,
-                    principal_uuid,
-                )
-        refresh_token = secrets.token_urlsafe(48)
-        now = _now()
-        expires_at = now + timedelta(days=_refresh_ttl_days(db))
-        # Resolve every signing input while this issuance transaction owns the
-        # session. Reading settings after commit would start an implicit caller
-        # transaction and make the next owner command fail its entry guard.
-        access_ttl_minutes = _access_ttl_minutes(db)
-        access_secret = _jwt_secret(db)
-        access_algorithm = _jwt_algorithm(db)
-        device_id = _clean_device_id(active_request.headers.get("x-device-id"))
-        session_kwargs = dict(
-            status=SessionStatus.active,
-            token_hash=_hash_token(refresh_token),
-            ip_address=client_ip(active_request),
-            user_agent=_truncate_user_agent(active_request.headers.get("user-agent")),
-            device_id=device_id,
-            created_at=now,
-            last_seen_at=now,
-            expires_at=expires_at,
-        )
-        principal_column = {
-            "system_user": AuthSession.system_user_id,
-            "reseller_user": AuthSession.reseller_user_id,
-        }.get(principal_type, AuthSession.subscriber_id)
-        # Per-device replace: a re-login from a known device supersedes that
-        # device's prior active session instead of stacking a new row. Revoked in
-        # the same transaction as the insert, so the principal always has at most
-        # one active session per device.
-        if device_id:
-            db.query(AuthSession).filter(
-                principal_column == principal_uuid,
-                AuthSession.device_id == device_id,
-                AuthSession.status == SessionStatus.active,
-                AuthSession.revoked_at.is_(None),
-            ).update(
-                {
-                    AuthSession.status: SessionStatus.revoked,
-                    AuthSession.revoked_at: now,
-                },
-                synchronize_session=False,
-            )
-        if principal_type == "system_user":
-            # Write BOTH halves of the bound pair. `party_id` is the identity
-            # the later ratchet will validate from; `system_user_id` stays as
-            # the Sub-owned staff context and is not being retired. The typed
-            # binding was resolved from Party before any mutation above.
-            assert staff_binding is not None
-            session = AuthSession(
-                system_user_id=principal_uuid,
-                party_id=staff_binding.party_id,
-                **session_kwargs,
-            )
-        elif principal_type == "reseller_user":
-            session = AuthSession(reseller_user_id=principal_uuid, **session_kwargs)
-        else:
-            session = AuthSession(subscriber_id=principal_uuid, **session_kwargs)
-        db.add(session)
-        db.flush()
-        if principal_type == "system_user":
-            team_inbox_assignment.record_agent_signed_in_presence(
-                db,
-                command=team_inbox_assignment.AgentSignedInPresenceCommand(
-                    system_user_id=principal_uuid,
-                    auth_session_id=session.id,
-                    signed_in_at=now,
-                ),
-            )
-        session_id = str(session.id)
-        db.commit()
-        access_token = _encode_access_token(
-            principal_id=str(principal_uuid),
+        staged = stage_session_issue(
+            db,
             principal_type=principal_type,
-            session_id=session_id,
-            issued_at=now,
-            ttl_minutes=access_ttl_minutes,
-            secret=access_secret,
-            algorithm=access_algorithm,
+            principal_id=principal_id,
+            request=active_request,
+            staff_binding=staff_binding,
         )
-        return {"access_token": access_token, "refresh_token": refresh_token}
+        db.commit()
+        return tokens_for_staged_session(staged)
+
+
+def stage_session_issue(
+    db: Session,
+    *,
+    principal_type: str,
+    principal_id: str,
+    request: Request,
+    staff_binding: staff_party_authentication.StaffSessionBinding | None = None,
+    expires_at: datetime | None = None,
+) -> StagedSession:
+    """Typed compatibility adapter; session writes belong to session staging."""
+    if principal_type not in {"system_user", "reseller_user", "subscriber"}:
+        raise auth_session_staging.SessionStagingError()
+    return auth_session_staging.stage_session_issue(
+        db,
+        command=auth_session_staging.StageSessionCommand(
+            principal_type=cast(auth_session_staging.PrincipalType, principal_type),
+            principal_id=coerce_uuid(principal_id),
+            client=auth_session_staging.SessionClientEvidence(
+                ip_address=client_ip(request),
+                user_agent=_truncate_user_agent(request.headers.get("user-agent")),
+                device_id=_clean_device_id(request.headers.get("x-device-id")),
+            ),
+            staff_binding=staff_binding,
+            expires_at=expires_at,
+        ),
+    )
+
+
+def tokens_for_staged_session(staged: StagedSession) -> dict[str, str]:
+    """Encode only after the calling owner commits; no session access."""
+    return auth_session_staging.tokens_for_staged_session(staged)
 
 
 auth_flow = AuthFlow()
@@ -2131,9 +2773,28 @@ def change_password(
     credential = db.scalars(stmt).first()
 
     if not credential:
+        _record_denial(
+            reason=password_authentication.DenialReason.INVALID_CREDENTIALS,
+            target=None,
+            phase=password_authentication.DenialPhase.STEP_UP,
+            surface=password_authentication.DenialSurface.PASSWORD_CHANGE,
+            status_code=404,
+        )
         raise HTTPException(status_code=404, detail="No credentials found")
 
-    if not verify_password(current_password, credential.password_hash):
+    # Snapshot the version with the hash being verified (same row read); the
+    # write below is gated on it.
+    expected_version = int(credential.credential_version)
+    credential_id = credential.id
+    if not verify_user_password(current_password, credential.password_hash):
+        _record_denial(
+            reason=password_authentication.DenialReason.INVALID_CREDENTIALS,
+            target=password_authentication.DenialTarget(
+                password_authentication.DenialTargetKind.CREDENTIAL, credential_id
+            ),
+            surface=password_authentication.DenialSurface.PASSWORD_CHANGE,
+            phase=password_authentication.DenialPhase.STEP_UP,
+        )
         raise HTTPException(status_code=401, detail="Current password is incorrect")
 
     if current_password == new_password:
@@ -2151,11 +2812,6 @@ def change_password(
     if violations:
         raise HTTPException(status_code=400, detail=violations[0])
 
-    now = _now()
-    credential.password_hash = hash_password(new_password)
-    credential.password_updated_at = now
-    credential.must_change_password = False
-
     if credential.system_user_id is not None:
         principal_type = "system_user"
         session_principal_filter = (
@@ -2169,29 +2825,48 @@ def change_password(
     else:
         principal_type = "subscriber"
         session_principal_filter = AuthSession.subscriber_id == credential.subscriber_id
-    revoke_query = (
-        db.query(AuthSession)
-        .filter(session_principal_filter)
-        .filter(AuthSession.status == SessionStatus.active)
-        .filter(AuthSession.revoked_at.is_(None))
+    portal_subscriber_id = (
+        str(credential.subscriber_id) if credential.subscriber_id else None
     )
-    if current_session_id:
-        revoke_query = revoke_query.filter(AuthSession.id != current_session_id)
-    revoked = revoke_query.all()
-    for session in revoked:
-        session.status = SessionStatus.revoked
-        session.revoked_at = now
-    db.commit()
-    for session in revoked:
+    new_hash = hash_password(new_password)
+
+    # Phase B: gate on the credential version the current password was
+    # verified against. A reset that committed since returns zero rows and the
+    # change is refused (409) instead of silently overwriting the reset.
+    try:
+        outcome = password_authentication.apply_password_change(
+            db,
+            credential_id=credential_id,
+            expected_version=expected_version,
+            new_hash=new_hash,
+            principal_type=principal_type,
+            principal_id=str(principal_uuid),
+            session_filter=session_principal_filter,
+            current_session_id=(
+                coerce_uuid(current_session_id) if current_session_id else None
+            ),
+        )
+    except password_authentication.PasswordAuthenticationError as exc:
+        _record_denial(
+            reason=_owner_denial_reason(exc),
+            status_code=_owner_denial_status(exc),
+            target=password_authentication.DenialTarget(
+                password_authentication.DenialTargetKind.CREDENTIAL, credential_id
+            ),
+            phase=password_authentication.DenialPhase.OWNER,
+            surface=password_authentication.DenialSurface.PASSWORD_CHANGE,
+        )
+        raise _http_from_refusal(exc) from exc
+    for revoked_session_id in outcome.revoked_session_ids:
         auth_cache.invalidate_session_context(
-            str(session.id),
+            revoked_session_id,
             principal_type=principal_type,
             principal_id=str(principal_uuid),
         )
-    if principal_type == "subscriber":
-        _revoke_portal_sessions_for_subscriber(db, str(credential.subscriber_id))
+    if principal_type == "subscriber" and portal_subscriber_id:
+        _revoke_portal_sessions_for_subscriber(db, portal_subscriber_id)
 
-    return now
+    return outcome.changed_at
 
 
 def _revoke_portal_sessions_for_subscriber(db: Session, subscriber_id: str) -> None:
@@ -2348,6 +3023,9 @@ def reset_password(db: Session, token: str, new_password: str) -> datetime:
 
 def send_email_verification(db: Session, subscriber_id: str) -> bool:
     """
+    Legacy mobile-profile compatibility path, pending a partial-profile owner.
+    New request adapters must call email_verification.request_email_verification.
+
     Mint an email-verification token and send the verification email to the
     subscriber's address. No-op (returns False) when the subscriber is missing,
     has no email, or is already verified.
@@ -2393,46 +3071,6 @@ def send_email_verification(db: Session, subscriber_id: str) -> bool:
         person_name=subscriber.display_name or subscriber.first_name,
         expires_minutes=ttl_minutes,
     )
-
-
-def verify_email(db: Session, token: str) -> Subscriber:
-    """
-    Verify a subscriber's email using a valid verification token.
-
-    Idempotent: an already-verified subscriber is a success no-op. Raises
-    HTTPException on an invalid/expired token or mismatched subscriber.
-    Returns the (verified) Subscriber.
-    """
-    from app.models.audit import AuditActorType
-    from app.services.audit_adapter import record_audit_event
-
-    payload = _decode_email_verification_token(db, token)
-    principal_id = payload.get("principal_id") or payload.get("sub")
-    email = payload.get("email")
-    if not principal_id or not email:
-        raise HTTPException(status_code=401, detail="Invalid verification token")
-
-    subscriber = cast(Subscriber | None, db.get(Subscriber, coerce_uuid(principal_id)))
-    if not subscriber or subscriber.email != email:
-        raise HTTPException(status_code=401, detail="Invalid verification token")
-
-    if subscriber.email_verified:
-        return subscriber
-
-    subscriber.email_verified = True
-    record_audit_event(
-        db,
-        action="auth.email_verified",
-        entity_type="subscriber",
-        entity_id=str(subscriber.id),
-        actor_type=AuditActorType.user,
-        actor_id=str(subscriber.id),
-        metadata={"email": subscriber.email},
-        defer_until_commit=True,
-    )
-    db.commit()
-    db.refresh(subscriber)
-    return subscriber
 
 
 def set_subscriber_email(

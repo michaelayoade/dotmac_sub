@@ -8,12 +8,14 @@ import 'package:dotmac_field/core/api/token_store.dart';
 import 'package:dotmac_field/core/offline/draft_store.dart';
 import 'package:dotmac_field/features/auth/auth_state.dart';
 import 'package:dotmac_field/features/expenses/expense_models.dart';
+import 'package:dotmac_field/features/expenses/expense_description_field.dart';
 import 'package:dotmac_field/features/expenses/expenses_providers.dart';
 import 'package:dotmac_field/features/expenses/expenses_screen.dart';
 import 'package:dotmac_field/features/jobs/job_models.dart';
 import 'package:dotmac_field/features/jobs/jobs_providers.dart';
 import 'package:dotmac_field/features/manager/manager_providers.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:go_router/go_router.dart';
@@ -71,6 +73,19 @@ JobList _testAssignedJobs() => JobList([
   ),
 ]);
 
+class _SavedExpenseDraftStore extends DraftStore {
+  const _SavedExpenseDraftStore(this.item);
+
+  final ExpenseItemDraft item;
+
+  @override
+  Future<Map<String, dynamic>?> load(String id) async => {
+    'purpose': 'Site logistics',
+    'work_order_id': 'wo-1',
+    'items': [item.toDraftJson()],
+  };
+}
+
 void main() {
   late ProviderContainer container;
   late FakeHttpAdapter adapter;
@@ -122,6 +137,221 @@ void main() {
   });
 
   tearDown(() => container.dispose());
+
+  testWidgets('description counter enforces typing and resets after clearing', (
+    tester,
+  ) async {
+    final description = TextEditingController();
+    addTearDown(description.dispose);
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(body: ExpenseDescriptionField(controller: description)),
+      ),
+    );
+    final field = find.byKey(const Key('expense-description'));
+    expect(find.text('Maximum 500 characters.'), findsOneWidget);
+    expect(find.text('0 / 500'), findsOneWidget);
+
+    final boundary = 'x' * 500;
+    await tester.enterText(field, boundary);
+    await tester.pump();
+    expect(description.text, boundary);
+    expect(find.text('500 / 500'), findsOneWidget);
+    tester.testTextInput.updateEditingValue(
+      TextEditingValue(
+        text: '${boundary}y',
+        selection: const TextSelection.collapsed(offset: 501),
+      ),
+    );
+    await tester.pump();
+    expect(description.text, boundary);
+
+    description.selection = const TextSelection.collapsed(offset: 0);
+    tester.testTextInput.updateEditingValue(
+      TextEditingValue(
+        text: 'y$boundary',
+        selection: const TextSelection.collapsed(offset: 1),
+      ),
+    );
+    await tester.pump();
+    expect(description.text, boundary);
+
+    await tester.enterText(field, 'x' * 499);
+    await tester.pump();
+    expect(find.text('499 / 500'), findsOneWidget);
+    await tester.enterText(field, '${'x' * 499}y');
+    await tester.pump();
+    expect(description.text, '${'x' * 499}y');
+    description.clear();
+    await tester.pump();
+    expect(find.text('0 / 500'), findsOneWidget);
+  });
+
+  testWidgets('pasting a description keeps only the first 500 characters', (
+    tester,
+  ) async {
+    var clipboardText = '';
+    tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(
+      SystemChannels.platform,
+      (call) async {
+        switch (call.method) {
+          case 'Clipboard.setData':
+            clipboardText = (call.arguments as Map)['text'] as String;
+            return null;
+          case 'Clipboard.getData':
+            return {'text': clipboardText};
+          case 'Clipboard.hasStrings':
+            return {'value': clipboardText.isNotEmpty};
+          default:
+            return null;
+        }
+      },
+    );
+    addTearDown(
+      () => tester.binding.defaultBinaryMessenger.setMockMethodCallHandler(
+        SystemChannels.platform,
+        null,
+      ),
+    );
+    final description = TextEditingController(text: 'Taxi ');
+    addTearDown(description.dispose);
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(body: ExpenseDescriptionField(controller: description)),
+      ),
+    );
+    await tester.showKeyboard(find.byKey(const Key('expense-description')));
+    description.selection = const TextSelection.collapsed(offset: 5);
+    await tester.runAsync(() async {
+      await Clipboard.setData(ClipboardData(text: 'x' * 600));
+      await tester
+          .state<EditableTextState>(find.byType(EditableText))
+          .pasteText(SelectionChangedCause.toolbar);
+    });
+    await tester.pump();
+    expect(description.text, 'Taxi ${'x' * 495}');
+    expect(find.text('500 / 500'), findsOneWidget);
+  });
+
+  testWidgets('description limit counts Unicode without splitting graphemes', (
+    tester,
+  ) async {
+    final description = TextEditingController();
+    addTearDown(description.dispose);
+    await tester.pumpWidget(
+      MaterialApp(
+        home: Scaffold(body: ExpenseDescriptionField(controller: description)),
+      ),
+    );
+    final field = find.byKey(const Key('expense-description'));
+    await tester.enterText(field, '${'x' * 498}e\u0301');
+    await tester.pump();
+    expect(description.text.runes.length, 500);
+    expect(find.text('500 / 500'), findsOneWidget);
+    await tester.enterText(field, '');
+    await tester.enterText(field, '${'x' * 499}e\u0301');
+    await tester.pump();
+    expect(description.text, 'x' * 499);
+    expect(find.text('499 / 500'), findsOneWidget);
+
+    await tester.enterText(field, '${'x' * 499}😀');
+    await tester.pump();
+    expect(description.text.runes.length, 500);
+    expect(find.text('500 / 500'), findsOneWidget);
+    await tester.enterText(field, '');
+    await tester.enterText(field, '${'x' * 498}👩‍🔧');
+    await tester.pump();
+    expect(description.text, 'x' * 498);
+    expect(find.text('498 / 500'), findsOneWidget);
+  });
+
+  test('expense drafts validate the backend description boundary', () {
+    for (final length in [499, 500, 501]) {
+      final item = ExpenseItemDraft.fromDraftJson(
+        ExpenseItemDraft(
+          categoryCode: 'TRANSPORT',
+          description: 'x' * length,
+          amount: 100,
+        ).toDraftJson(),
+      );
+      expect(item.description, 'x' * length);
+      expect(
+        item.descriptionError,
+        length <= 500 ? null : 'Description must be 500 characters or fewer.',
+      );
+    }
+    const blank = ExpenseItemDraft(
+      categoryCode: 'TRANSPORT',
+      description: '   ',
+      amount: 100,
+    );
+    expect(blank.descriptionError, 'Describe what the expense was for.');
+  });
+
+  testWidgets('oversized saved description is preserved and blocks submission', (
+    tester,
+  ) async {
+    await tester.binding.setSurfaceSize(const Size(800, 1600));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
+    final savedItem = ExpenseItemDraft(
+      categoryCode: 'TRANSPORT',
+      description: 'x' * 501,
+      amount: 100,
+    );
+    var submissions = 0;
+    adapter.on('POST', '/api/v1/field/expense-requests/submit', (_) {
+      submissions += 1;
+      return (500, {'detail': 'Unexpected submission'});
+    });
+    await tester.pumpWidget(
+      ProviderScope(
+        overrides: [
+          apiClientProvider.overrideWithValue(client),
+          draftStoreProvider.overrideWithValue(
+            _SavedExpenseDraftStore(savedItem),
+          ),
+          expenseCategoriesProvider.overrideWith(
+            (ref) async => const [
+              ExpenseCategory(
+                categoryCode: 'TRANSPORT',
+                categoryName: 'Transport',
+              ),
+            ],
+          ),
+          expenseVendorsProvider.overrideWith((ref) async => const []),
+          expenseFormContextProvider.overrideWith(
+            (ref) async => _testFormContext,
+          ),
+        ],
+        child: const MaterialApp(
+          home: NewExpenseRequestScreen(
+            initialWorkOrderId: 'wo-1',
+            initialWorkOrderLabel: 'Campus fiber repair',
+          ),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+    await tester.ensureVisible(find.text('Submit request'));
+    await tester.pumpAndSettle();
+    expect(find.text(savedItem.description), findsOneWidget);
+    expect(
+      find.text(
+        'Description must be 500 characters or fewer. Remove this expense and add it again.',
+      ),
+      findsOneWidget,
+    );
+    await tester.tap(find.text('Submit request'));
+    await tester.pump();
+    expect(
+      find.text(
+        'Expense 1: Description must be 500 characters or fewer. '
+        'Remove it and add it again with a valid description.',
+      ),
+      findsOneWidget,
+    );
+    expect(submissions, 0);
+  });
 
   test('fetchRequests reads paginated expense request items', () async {
     adapter.on('GET', '/api/v1/field/expense-requests', (options) {

@@ -1,7 +1,16 @@
 import uuid
 from datetime import UTC, datetime
 
-from sqlalchemy import Boolean, DateTime, Float, ForeignKey, Index, Integer, String
+from sqlalchemy import (
+    Boolean,
+    CheckConstraint,
+    DateTime,
+    Float,
+    ForeignKey,
+    Index,
+    Integer,
+    String,
+)
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -15,6 +24,10 @@ class FieldAttachment(Base):
 
     __tablename__ = "field_attachments"
     __table_args__ = (
+        CheckConstraint(
+            "(uploaded_by_vendor_user_id IS NULL AND uploaded_by_person_id IS NOT NULL) OR (uploaded_by_vendor_user_id IS NOT NULL AND uploaded_by_technician_id IS NULL AND uploaded_by_person_id IS NULL AND uploaded_by_system_user_id IS NOT NULL)",
+            name="ck_field_attachments_actor",
+        ),
         Index(
             "ix_field_attachments_mirror_created",
             "work_order_mirror_id",
@@ -47,11 +60,14 @@ class FieldAttachment(Base):
     longitude: Mapped[float | None] = mapped_column(Float)
     captured_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     signer_name: Mapped[str | None] = mapped_column(String(160))
+    uploaded_by_vendor_user_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("field_vendor_users.id")
+    )
     uploaded_by_technician_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True), ForeignKey("technician_profiles.id"), nullable=True
     )
-    uploaded_by_person_id: Mapped[uuid.UUID] = mapped_column(
-        UUID(as_uuid=True), nullable=False
+    uploaded_by_person_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), nullable=True
     )
     uploaded_by_system_user_id: Mapped[uuid.UUID | None] = mapped_column(
         UUID(as_uuid=True), ForeignKey("system_users.id")

@@ -5,7 +5,7 @@ from app.models.party import Party, PartyDataClassification, PartyType
 from app.models.rbac import Role, SystemUserRole
 from app.models.subscriber import Subscriber
 from app.models.system_user import SystemUser
-from app.services.auth_flow import verify_password
+from app.services.auth_flow import verify_user_password
 from app.services.operator_tenant import OPERATOR_TENANT_ID, provision_operator_tenant
 from scripts.seed.seed_admin import seed_admin_user
 from scripts.seed.seed_rbac import _ensure_system_user_role
@@ -79,7 +79,7 @@ def test_seed_admin_user_creates_canonical_system_user(db_session):
         credential.party_binding_reason
         == "Operator-seeded local administrator credential"
     )
-    assert verify_password("AdminPass123!", credential.password_hash) is True
+    assert verify_user_password("AdminPass123!", credential.password_hash) is True
     assert credential.must_change_password is False
     assert credential.password_updated_at is not None
     assert role_link.role_id == admin_role.id
@@ -136,7 +136,7 @@ def test_seed_admin_user_updates_existing_system_user_and_role(db_session):
     assert system_user.person_party_id is not None
     assert system_user.party_binding_source == "admin_seeder"
     assert existing.username == "admin"
-    assert verify_password("NewAdminPass123!", existing.password_hash) is True
+    assert verify_user_password("NewAdminPass123!", existing.password_hash) is True
     assert existing.password_updated_at is not None
     assert existing.must_change_password is True
     assert existing.is_active is True

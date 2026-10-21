@@ -17,6 +17,31 @@ class AccessCredentialSecretFormat(StrEnum):
     pbkdf2_hash = "pbkdf2_hash"
     opaque_hash = "opaque_hash"
     legacy_cleartext = "legacy_cleartext"
+    #: A stored secret-store reference (``env://``, ``bao://`` ...). A subscriber
+    #: service password is never a reference: it is unusable, never resolved.
+    secret_reference = "secret_reference"
+
+
+# One predicate and one set of messages: the canonical copies live in
+# credential_crypto (also used by the CPE and reveal guards). Re-exported here
+# so access-credential callers keep a single import.
+from app.services.credential_crypto import (  # noqa: E402
+    RESERVED_SERVICE_PASSWORD_MESSAGE,
+    UNUSABLE_STORED_SECRET_MESSAGE,
+    is_secret_reference_value,
+    reject_reserved_service_password,
+)
+
+__all__ = [
+    "RESERVED_SERVICE_PASSWORD_MESSAGE",
+    "UNUSABLE_STORED_SECRET_MESSAGE",
+    "AccessCredentialSecretFormat",
+    "classify_access_credential_secret",
+    "explicit_cleartext_value",
+    "is_one_way_access_credential_secret",
+    "is_secret_reference_value",
+    "reject_reserved_service_password",
+]
 
 
 _ONE_WAY_FORMATS = frozenset(
@@ -36,6 +61,8 @@ def classify_access_credential_secret(
     if not text:
         return AccessCredentialSecretFormat.empty
     lowered = text.lower()
+    if is_secret_reference_value(text):
+        return AccessCredentialSecretFormat.secret_reference
     if lowered.startswith("enc:"):
         return AccessCredentialSecretFormat.encrypted
     if lowered.startswith(("plain:", "cleartext:")):

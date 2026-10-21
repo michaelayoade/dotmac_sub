@@ -77,6 +77,9 @@ def test_network_sot_relationships_come_from_the_canonical_graph():
         "observability.recording",
     )
     assert dependencies_for("network.outage_lifecycle") == (
+        "auth.permission_gate",
+        "access.subscription_lifecycle",
+        "observability.audit_log",
         "network.outage_impact",
         "events.dispatcher",
         "events.owner_outputs",

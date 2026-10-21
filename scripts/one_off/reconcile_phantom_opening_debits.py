@@ -45,6 +45,7 @@ from app.models.billing import (
 )
 from app.models.subscriber import Subscriber, SubscriberStatus
 from app.services.common import round_money, to_decimal
+from scripts.billing._mutation_policy import refuse_apply
 
 OPENING_MEMO = "Prepaid opening balance @ cutover"
 LEGACY_REVERSAL_MEMO = "Reversal of prepaid opening balance cutover debit [id={id}]"
@@ -374,6 +375,7 @@ def main() -> None:
         help="Write compensating credits. Without this flag the script is read-only.",
     )
     args = parser.parse_args()
+    refuse_apply(args.apply)
 
     db = SessionLocal()
     applied = 0

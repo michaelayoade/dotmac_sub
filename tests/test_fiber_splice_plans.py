@@ -6,6 +6,7 @@ from uuid import uuid4
 import pytest
 from fastapi import HTTPException
 from fastapi.routing import APIRoute
+from sqlalchemy.orm import Session
 
 from app.models.dispatch import TechnicianProfile
 from app.models.fiber_change_request import FiberChangeRequest
@@ -23,11 +24,13 @@ from app.models.network import (
 from app.models.subscriber import Subscriber, UserType
 from app.models.system_user import SystemUser
 from app.models.work_order import WorkOrder
-from app.schemas.field import FieldSplicePlanResponse
+from app.schemas.field import FieldSplicePlanResponse, FieldTransitionResponse
 from app.services import fiber_change_requests
 from app.services.db_session_adapter import db_session_adapter
 from app.services.field import fiber as field_fiber
+from app.services.field.execution_contracts import ApplyFieldTransition, FieldEvent
 from app.services.field.transitions import field_transitions
+from app.services.field.work_order_access import FieldAccessError
 from app.services.network import fiber_splice_plans
 from app.services.network.fiber_splice_plans import SplicePlanError
 from app.services.owner_commands import CommandContext
@@ -446,16 +449,24 @@ def test_completion_gate_requires_plan_execution(db_session, monkeypatch):
         ),
     )
 
-    with pytest.raises(HTTPException) as exc:
-        field_transitions.apply(
-            db_session,
-            _auth(user),
-            work_order.public_id,
-            event="complete",
-            client_event_id=uuid4(),
+    with pytest.raises(FieldAccessError) as exc:
+        _transitions_apply(
+            db=db_session,
+            command=ApplyFieldTransition(
+                requester_system_user_id=user.id,
+                public_id=work_order.public_id,
+                event=FieldEvent("complete"),
+                client_event_id=uuid4(),
+                context=CommandContext.system(
+                    actor=f"user:{user.id}",
+                    scope="field:test",
+                    reason="test_field_execution",
+                    idempotency_key=str(uuid4()),
+                ),
+            ),
         )
-    assert exc.value.status_code == 422
-    assert "splice plan" in exc.value.detail
+    assert exc.value.code.endswith("invalid_request")
+    assert "splice plan" in exc.value.message
 
     for index in range(2):
         field_fiber.propose_splice(
@@ -471,14 +482,22 @@ def test_completion_gate_requires_plan_execution(db_session, monkeypatch):
             plan_item_id=str(items[index].id),
         )
 
-    completed = field_transitions.apply(
-        db_session,
-        _auth(user),
-        work_order.public_id,
-        event="complete",
-        client_event_id=uuid4(),
+    completed = _transitions_apply(
+        db=db_session,
+        command=ApplyFieldTransition(
+            requester_system_user_id=user.id,
+            public_id=work_order.public_id,
+            event=FieldEvent("complete"),
+            client_event_id=uuid4(),
+            context=CommandContext.system(
+                actor=f"user:{user.id}",
+                scope="field:test",
+                reason="test_field_execution",
+                idempotency_key=str(uuid4()),
+            ),
+        ),
     )
-    assert completed["job"].status == "completed"
+    assert completed.job.status == "completed"
 
 
 def test_field_splice_plan_read_is_scoped_and_typed(db_session):
@@ -531,3 +550,10 @@ def test_admin_plan_routes_are_permission_guarded():
             for cell in getattr(dependency.call, "__closure__", None) or ():
                 captured.append(str(cell.cell_contents))
         assert any("network:fiber:" in value for value in captured), route.path
+
+
+def _transitions_apply(
+    db: Session, command: ApplyFieldTransition
+) -> FieldTransitionResponse:
+    db_session_adapter.release_read_transaction(db)
+    return field_transitions.apply(db=db, command=command)

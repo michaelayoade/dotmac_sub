@@ -32,7 +32,7 @@ from datetime import UTC, datetime
 
 from sqlalchemy.orm import Session
 
-from app.models.network_monitoring import OutageIncident
+from app.models.network_monitoring import OutageIncident, OutageScopeRevision
 from app.models.radius_active_session import RadiusActiveSession
 from app.services.service_impact_contracts import (
     ImpactEvidence,
@@ -46,6 +46,7 @@ from app.services.topology.outage import (
     record_scope_revision,
     revision_audience_subscription_ids,
 )
+from app.services.topology.outage_complaint_contracts import RecordOutageScopeRevision
 
 logger = logging.getLogger(__name__)
 
@@ -136,8 +137,18 @@ def resolve_incident_impacts(
     evaluated_at = now or datetime.now(UTC)
     revision = latest_scope_revision(db, incident.id)
     if revision is None:
-        revision = record_scope_revision(
-            db, incident, reason="audience_drift", effective_at=evaluated_at
+        recorded = record_scope_revision(
+            db,
+            command=RecordOutageScopeRevision(
+                incident_id=incident.id,
+                reason="audience_drift",
+                effective_at=evaluated_at,
+            ),
+        )
+        revision = (
+            db.get(OutageScopeRevision, recorded.revision_id)
+            if recorded
+            else latest_scope_revision(db, incident.id)
         )
     if revision is None:
         return ()

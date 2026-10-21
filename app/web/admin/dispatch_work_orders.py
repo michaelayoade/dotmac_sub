@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import secrets
 from collections.abc import Callable
+from datetime import datetime
 from decimal import Decimal, InvalidOperation
 from urllib.parse import urlencode
 from uuid import UUID, uuid4, uuid5
@@ -27,6 +28,7 @@ from app.services.auth_dependencies import (
     grant_scopes_for_permission,
     load_permission_keys,
     require_permission,
+    require_permission_admission,
     require_scoped_permission,
 )
 from app.services.db_session_adapter import db_session_adapter
@@ -56,6 +58,12 @@ from app.services.field.note_commands import (
 from app.services.file_storage import build_content_disposition, file_uploads
 from app.services.object_storage import ObjectNotFoundError
 from app.services.owner_commands import CommandContext
+from app.services.permission_admission import PermissionAdmission
+from app.services.work_order_assignment_contracts import (
+    VendorAssignmentTarget,
+    WorkOrderAssignmentCommand,
+)
+from app.services.work_order_errors import WorkOrderCommandError
 from app.services.work_order_views import get_work_order_row
 from app.web.admin.field_note_access import resolve_staff_field_note_access
 from app.web.request_parsing import parse_form_data_sync
@@ -610,32 +618,171 @@ def update_dispatch_work_order(
 @router.post(
     "/work-orders/{work_order_id}/queue",
     response_class=HTMLResponse,
-    dependencies=[Depends(require_permission("operations:dispatch:assign"))],
 )
 def queue_dispatch_work_order(
     request: Request,
     work_order_id: str,
-    assigned_technician_id: str = Form(...),
-    status: str = Form("queued"),
+    target_selection: str = Form(...),
     reason: str = Form(""),
+    vendor_user_id: UUID | None = Form(None),
+    expected_revision: datetime | None = Form(None),
+    expected_assignment_generation: UUID | None = Form(None),
+    command_id: UUID | None = Form(None),
+    reload_current: bool = Form(False),
+    access: PermissionAdmission = Depends(
+        require_permission_admission("operations:dispatch:assign")
+    ),
     db: Session = Depends(get_db),
 ):
+    selection = None
+    review_id = uuid4() if reload_current else command_id or uuid4()
     try:
-        work_orders_service.queue_assignment_from_form(
-            db,
-            work_order_id,
-            {
-                "assigned_technician_id": assigned_technician_id,
-                "status": status,
-                "reason": reason,
-            },
-            auth=getattr(request.state, "auth", None),
-            request_id=request.headers.get("X-Request-ID"),
+        selection = work_orders_service.WorkOrderAssignmentFormInput(
+            target_selection=target_selection,
+            reason=reason.strip() or None,
+            vendor_user_id=vendor_user_id,
+            expected_revision=None if reload_current else expected_revision,
+            expected_assignment_generation=None
+            if reload_current
+            else expected_assignment_generation,
         )
-    except (HTTPException, ValidationError, ValueError) as exc:
-        detail = getattr(exc, "detail", None) or str(exc)
-        return _redirect(error=detail)
-    return _detail_redirect(work_order_id, notice=f"Work order {work_order_id} queued")
+        if (
+            isinstance(selection.assignment_target, VendorAssignmentTarget)
+            and vendor_user_id is None
+        ):
+            candidates = work_orders_service.vendor_candidates_from_form(
+                db, work_order_id=work_order_id, selection=selection
+            )
+            context = _ctx(request, db)
+            context.update(
+                {
+                    "candidates": candidates,
+                    "selection": selection,
+                    "command_id": review_id,
+                }
+            )
+            return templates.TemplateResponse(
+                "admin/dispatch/work_order_vendor_selection.html", context
+            )
+        preview = work_orders_service.preview_assignment_from_form(
+            db, work_order_id=work_order_id, selection=selection
+        )
+    except (HTTPException, ValidationError, ValueError, DomainError) as exc:
+        if selection is not None:
+            return _assignment_problem(
+                request,
+                db,
+                work_order_id=work_order_id,
+                selection=selection,
+                command_id=review_id,
+                error=exc,
+            )
+        return _detail_redirect(
+            work_order_id, error=str(getattr(exc, "detail", None) or exc)
+        )
+    context = _ctx(request, db)
+    context.update(
+        {"preview": preview, "selection": selection, "command_id": review_id}
+    )
+    return templates.TemplateResponse(
+        "admin/dispatch/work_order_assignment_preview.html", context
+    )
+
+
+@router.post(
+    "/work-orders/{work_order_id}/assignment",
+    response_class=HTMLResponse,
+)
+def confirm_dispatch_work_order_assignment(
+    request: Request,
+    work_order_id: str,
+    target_selection: str = Form(...),
+    expected_revision: datetime = Form(...),
+    command_id: UUID = Form(...),
+    reason: str = Form(""),
+    vendor_user_id: UUID | None = Form(None),
+    expected_assignment_generation: UUID | None = Form(None),
+    scheduled_start: datetime | None = Form(None),
+    scheduled_end: datetime | None = Form(None),
+    access: PermissionAdmission = Depends(
+        require_permission_admission("operations:dispatch:assign")
+    ),
+    db: Session = Depends(get_db),
+):
+    selection = None
+    try:
+        selection = work_orders_service.WorkOrderAssignmentFormInput(
+            target_selection=target_selection,
+            reason=reason.strip() or None,
+            vendor_user_id=vendor_user_id,
+            expected_revision=expected_revision,
+            expected_assignment_generation=expected_assignment_generation,
+        )
+        command = WorkOrderAssignmentCommand(
+            access=access,
+            work_order_public_id=work_order_id,
+            target=selection.assignment_target,
+            reason=selection.reason,
+            expected_revision=expected_revision,
+            expected_assignment_generation=expected_assignment_generation,
+            scheduled_start=scheduled_start,
+            scheduled_end=scheduled_end,
+        )
+        context = CommandContext(
+            command_id=command_id,
+            correlation_id=command_id,
+            actor=str(access.principal_id),
+            scope="operations:dispatch:assign",
+            reason=selection.reason or "Dispatch assignment",
+            idempotency_key=str(command_id),
+        )
+        work_orders_service.queue_assignment_from_form(
+            db, command=command, context=context
+        )
+    except (HTTPException, ValidationError, ValueError, DomainError) as exc:
+        if selection is not None:
+            return _assignment_problem(
+                request,
+                db,
+                work_order_id=work_order_id,
+                selection=selection,
+                command_id=command_id,
+                error=exc,
+            )
+        return _detail_redirect(
+            work_order_id, error=str(getattr(exc, "detail", None) or exc)
+        )
+    return _detail_redirect(work_order_id, notice="Work order assignment confirmed")
+
+
+def _assignment_problem(
+    request: Request,
+    db: Session,
+    *,
+    work_order_id: str,
+    selection: work_orders_service.WorkOrderAssignmentFormInput,
+    command_id: UUID,
+    error: HTTPException | ValidationError | ValueError | DomainError,
+) -> HTMLResponse:
+    status = 409
+    if isinstance(error, HTTPException):
+        status = error.status_code
+    elif isinstance(error, WorkOrderCommandError):
+        status = {"invalid": 422, "forbidden": 403, "not_found": 404, "conflict": 409}[
+            error.kind
+        ]
+    context = _ctx(request, db)
+    context.update(
+        {
+            "work_order_id": work_order_id,
+            "selection": selection,
+            "command_id": command_id,
+            "error": str(getattr(error, "detail", None) or error),
+        }
+    )
+    return templates.TemplateResponse(
+        "admin/dispatch/work_order_assignment_problem.html", context, status_code=status
+    )
 
 
 def _detail_redirect(

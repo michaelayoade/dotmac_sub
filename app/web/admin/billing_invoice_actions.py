@@ -169,12 +169,23 @@ def invoice_detail(
     "/invoices/{invoice_id:uuid}/issue",
     dependencies=[Depends(require_permission("billing:invoice:update"))],
 )
-def invoice_issue_from_detail(invoice_id: UUID, db: Session = Depends(get_db)):
+def invoice_issue_from_detail(
+    invoice_id: UUID,
+    auth: dict | None = Depends(require_permission("billing:invoice:update")),
+    db: Session = Depends(get_db),
+):
     try:
-        web_billing_invoices_service.issue_invoice_from_detail(
-            db,
-            invoice_id=invoice_id,
-        )
+        if isinstance(auth, dict):
+            web_billing_invoices_service.issue_invoice_from_detail(
+                db,
+                invoice_id=invoice_id,
+                actor_ref=_principal_actor(auth),
+            )
+        else:
+            web_billing_invoices_service.issue_invoice_from_detail(
+                db,
+                invoice_id=invoice_id,
+            )
     except (HTTPException, DomainError) as exc:
         message = exc.message if isinstance(exc, DomainError) else str(exc.detail)
         return RedirectResponse(
