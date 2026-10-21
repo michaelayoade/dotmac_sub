@@ -9,6 +9,12 @@
 # pg_dump and can reach the DB whether it's postgres-local or external).
 set -euo pipefail
 
+# Single source for dump flags / bundle shape. Resolved from this script's
+# own directory, NOT ROOT_DIR: on the production runner ROOT_DIR is the host
+# deploy dir, which has no scripts/backup/.
+# shellcheck disable=SC1091
+. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/backup/recovery_bundle_lib.sh"
+
 ROOT_DIR="${ROOT_DIR:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}"
 
 # Capture explicit shell-env overrides BEFORE sourcing .env, so the precedence
@@ -78,21 +84,70 @@ fi
 mkdir -p "${BACKUP_DIR}"
 STAMP=$(date +"%F_%H%M%S")
 OUT_FILE="${BACKUP_DIR}/${BACKUP_BASENAME}_${STAMP}.sql.gz"
+# Recovery bundle: the DB dump alone cannot restore the isolation model
+# (roles + ownership + grants). Globals and a manifest ride alongside;
+# manifest presence is what marks a bundle complete. See
+# scripts/backup/recovery_bundle_lib.sh and docs/RECOVERY_BUNDLE.md.
+GLOBALS_FILE="${BACKUP_DIR}/${BACKUP_BASENAME}_${STAMP}.globals.sql.gz"
+MANIFEST_FILE="${BACKUP_DIR}/${BACKUP_BASENAME}_${STAMP}.manifest.json"
+TMP_SUFFIX=".tmp.$$"
+cleanup_bundle_temps() {
+  rm -f "${OUT_FILE}${TMP_SUFFIX}" "${GLOBALS_FILE}${TMP_SUFFIX}" "${MANIFEST_FILE}${TMP_SUFFIX}"
+}
+trap cleanup_bundle_temps EXIT
 
-echo "Starting DB backup to ${OUT_FILE}"
-# -Fp (plain) piped through gzip. Dump from inside the DB container as the
-# container-local backup user so non-app schemas are included too.
+recovery_refuse_identity_stripping "${RECOVERY_PG_DUMP_FLAGS}" || exit 1
+
+echo "Starting DB backup bundle for ${OUT_FILE}"
+# Globals FIRST, fail-closed: roles/memberships/tablespaces are cheap to
+# capture and are exactly what `pg_dump -d` omits. If this step fails there
+# is no bundle — distinct exit + .FAILED marker, no dump left behind.
 set -o pipefail
-docker exec "${DB_CONTAINER}" pg_dump -U "${BACKUP_DB_USER}" -d "${BACKUP_DB_NAME}" \
-  --no-owner --no-privileges \
-  | gzip > "${OUT_FILE}"
+# shellcheck disable=SC2086 # flags are a fixed word list from the lib
+if ! docker exec "${DB_CONTAINER}" pg_dumpall -U "${BACKUP_DB_USER}" \
+    ${RECOVERY_GLOBALS_FLAGS} \
+    | gzip > "${GLOBALS_FILE}${TMP_SUFFIX}"; then
+  cleanup_bundle_temps
+  recovery_fail_globals "${OUT_FILE}" "pg_dumpall ${RECOVERY_GLOBALS_FLAGS} failed"
+fi
+if [[ ! -s "${GLOBALS_FILE}${TMP_SUFFIX}" ]]; then
+  cleanup_bundle_temps
+  recovery_fail_globals "${OUT_FILE}" "pg_dumpall produced an empty file"
+fi
+if ! recovery_assert_no_password_material "${GLOBALS_FILE}${TMP_SUFFIX}"; then
+  cleanup_bundle_temps
+  recovery_fail_globals "${OUT_FILE}" "globals contained password verifier material"
+fi
+mv "${GLOBALS_FILE}${TMP_SUFFIX}" "${GLOBALS_FILE}"
 
-if [[ ! -s "${OUT_FILE}" ]]; then
+# -Fp (plain) piped through gzip. Dump from inside the DB container as the
+# container-local backup user so non-app schemas are included too. Ownership
+# and GRANTs are RETAINED (no --no-owner/--no-privileges): they are bundle
+# evidence, and the globals step above supplies the roles they name.
+# shellcheck disable=SC2086 # flags are a fixed word list from the lib
+docker exec "${DB_CONTAINER}" pg_dump -U "${BACKUP_DB_USER}" -d "${BACKUP_DB_NAME}" \
+  ${RECOVERY_PG_DUMP_FLAGS} \
+  | gzip > "${OUT_FILE}${TMP_SUFFIX}"
+
+if [[ ! -s "${OUT_FILE}${TMP_SUFFIX}" ]]; then
   echo "Backup produced an empty file — aborting" >&2
-  rm -f "${OUT_FILE}"
+  cleanup_bundle_temps
+  rm -f "${GLOBALS_FILE}"
   exit 1
 fi
-echo "Backup complete: ${OUT_FILE} ($(du -h "${OUT_FILE}" | cut -f1))"
+mv "${OUT_FILE}${TMP_SUFFIX}" "${OUT_FILE}"
+
+PG_VERSION="$(docker exec "${DB_CONTAINER}" pg_dump --version 2>/dev/null || echo unknown)"
+BUNDLE_GIT_SHA="${GIT_SHA:-}"
+if [[ -z "${BUNDLE_GIT_SHA}" ]]; then
+  BUNDLE_GIT_SHA="$(git -C "${ROOT_DIR}" rev-parse HEAD 2>/dev/null || echo unknown)"
+fi
+# Manifest lands last: its presence certifies a complete, hash-verifiable bundle.
+recovery_write_manifest "${MANIFEST_FILE}${TMP_SUFFIX}" "${BACKUP_DB_NAME}" \
+  "${GLOBALS_FILE}" "${OUT_FILE}" "${PG_VERSION}" "${BUNDLE_GIT_SHA}"
+mv "${MANIFEST_FILE}${TMP_SUFFIX}" "${MANIFEST_FILE}"
+trap - EXIT
+echo "Backup complete: ${OUT_FILE} ($(du -h "${OUT_FILE}" | cut -f1)) + ${GLOBALS_FILE} + ${MANIFEST_FILE}"
 
 retention_inventory() {
   local directory
@@ -104,8 +159,11 @@ retention_inventory() {
 
   for directory in "${directories[@]}"; do
     [[ -d "${directory}" ]] || continue
+    # Bundle sidecars (*.globals.sql.gz) are not standalone backups: they are
+    # inventoried and pruned with their database dump, never counted alone.
     find "${directory}" -maxdepth 1 -type f \
-      -name "${BACKUP_RETENTION_PREFIX}*.sql.gz" -printf '%T@ %p\n'
+      -name "${BACKUP_RETENTION_PREFIX}*.sql.gz" \
+      ! -name "${BACKUP_RETENTION_PREFIX}*.globals.sql.gz" -printf '%T@ %p\n'
   done | sort -n | cut -d' ' -f2-
 }
 
@@ -129,6 +187,10 @@ if [[ "${DELETE_COUNT}" -gt 0 ]]; then
   for ((i = 0; i < DELETE_COUNT; i++)); do
     echo "Pruning old backup: ${EXISTING_BACKUPS[$i]}"
     rm -f "${EXISTING_BACKUPS[$i]}"
+    # Prune the rest of that bundle with it; absent for legacy lone dumps.
+    rm -f "${EXISTING_BACKUPS[$i]%.sql.gz}.globals.sql.gz" \
+      "${EXISTING_BACKUPS[$i]%.sql.gz}.manifest.json" \
+      "${EXISTING_BACKUPS[$i]%.sql.gz}.FAILED"
     REMOVED_COUNT=$((REMOVED_COUNT + 1))
   done
 fi
