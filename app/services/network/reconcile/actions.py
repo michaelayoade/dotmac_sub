@@ -274,6 +274,12 @@ class OltReset:
 
 # ── ACS-side actions ────────────────────────────────────────────────────────
 
+#: Typed "no WCD index configured: select a non-management WANConnectionDevice
+#: or create one" marker for ``wcd_index``. WCD instance numbers start at 1, so
+#: 0 can never be a real index. The applier resolves it (parent ``AcsAddObject``
+#: arm) and refuses any downstream action still carrying it.
+SELECT_OR_CREATE_WCD = 0
+
 
 @dataclass(frozen=True)
 class AcsAddObject:
@@ -571,6 +577,7 @@ Action = OltAction | AcsAction
 
 
 __all__ = (
+    "SELECT_OR_CREATE_WCD",
     "AcsAction",
     "Action",
     "OltAction",

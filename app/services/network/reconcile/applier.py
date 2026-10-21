@@ -70,6 +70,7 @@ from app.services.credential_crypto import is_secret_reference_value
 from app.services.network.huawei_cli_response import project_huawei_result_evidence
 
 from .actions import (
+    SELECT_OR_CREATE_WCD,
     AcsAction,
     AcsAddObject,
     AcsArmDiagnostic,
@@ -617,8 +618,16 @@ def _execute(action: Action, ctx: ApplyContext) -> AppliedAction:
             if _is_wcd_parent_path(action.object_path):
                 return _apply_wcd_parent(action, ctx, started)
             wcd_index = _require_add_object_layout(action)
-            if wcd_index is not None and wcd_index in ctx.wan_wcd_indexes:
-                wcd_index = ctx.wan_wcd_indexes[wcd_index]
+            if wcd_index is not None:
+                wcd_index = _mapped_wcd(action, ctx, wcd_index)
+            if wcd_index is not None and wcd_index != action.wcd_index:
+                existing_child = _existing_ppp_child(ctx, action.device_id, wcd_index)
+                if existing_child is not None:
+                    # Adopted WCD already holds the PPP child: do not add another.
+                    ctx.wan_ppp_instances[wcd_index] = existing_child
+                    return _ok(
+                        action, "ppp_child_present", None, str(existing_child), started
+                    )
                 action = AcsAddObject(
                     device_id=action.device_id,
                     object_path=(
@@ -685,7 +694,7 @@ def _execute(action: Action, ctx: ApplyContext) -> AppliedAction:
             password = _resolve_or_fail(
                 ctx, action, action.password_ref, refuse_reference=True
             )
-            wcd = ctx.wan_wcd_indexes.get(action.wcd_index, action.wcd_index)
+            wcd = _mapped_wcd(action, ctx, action.wcd_index)
             inst = ctx.wan_ppp_instances.get(wcd, action.instance_index)
             base = (
                 "InternetGatewayDevice.WANDevice.1.WANConnectionDevice."
@@ -850,7 +859,7 @@ def _execute(action: Action, ctx: ApplyContext) -> AppliedAction:
 
         case AcsSetNatEnabled():
             _refuse_unset(action, ("wan_pppoe_wcd_index", action.wcd_index))
-            nat_wcd = ctx.wan_wcd_indexes.get(action.wcd_index, action.wcd_index)
+            nat_wcd = _mapped_wcd(action, ctx, action.wcd_index)
             inst = ctx.wan_ppp_instances.get(nat_wcd, action.instance_index)
             params = {
                 f"InternetGatewayDevice.WANDevice.1.WANConnectionDevice.{nat_wcd}.WANPPPConnection.{inst}.NATEnabled": action.enabled
@@ -1053,6 +1062,32 @@ _WCD_PARENT_RE = re.compile(r"WANDevice\.1\.WANConnectionDevice\.?$")
 _WCD_PENDING_TTL_SECONDS = 10 * 60
 
 
+def _mapped_wcd(action: Action, ctx: ApplyContext, wcd: int) -> int:
+    """WCD index actually used this pass; refuses an unresolved select marker."""
+    mapped = ctx.wan_wcd_indexes.get(wcd, wcd)
+    if mapped == SELECT_OR_CREATE_WCD:
+        raise ApplyError(
+            action,
+            ReconcileFailureReason.INVALID_CHANGE,
+            "WANConnectionDevice was not selected or created before this write",
+        )
+    return mapped
+
+
+def _existing_ppp_child(ctx: ApplyContext, device_id: str, wcd: int) -> int | None:
+    nodes = _wcd_nodes(
+        ctx, device_id, "InternetGatewayDevice.WANDevice.1.WANConnectionDevice"
+    )
+    node = (nodes or {}).get(wcd)
+    children = node.get("WANPPPConnection") if isinstance(node, dict) else None
+    keys = (
+        [int(k) for k in children if str(k).isdigit()]
+        if isinstance(children, dict)
+        else []
+    )
+    return min(keys) if keys else None
+
+
 def _is_wcd_parent_path(object_path: str) -> bool:
     return bool(_WCD_PARENT_RE.search(object_path))
 
@@ -1133,7 +1168,7 @@ def _apply_wcd_parent(action: AcsAddObject, ctx: ApplyContext, started: float):
             ReconcileFailureReason.ACS_WRITE_FAULTED,
             "cannot read WANConnectionDevice layout; refusing to create one blind",
         )
-    if desired in before:
+    if desired != SELECT_OR_CREATE_WCD and desired in before:
         if _igd_wcd_is_management(before[desired]):
             raise ApplyError(
                 action,
@@ -1142,6 +1177,16 @@ def _apply_wcd_parent(action: AcsAddObject, ctx: ApplyContext, started: float):
             )
         ctx.wan_wcd_indexes[desired] = desired
         return _ok(action, "wcd_parent_present", None, str(desired), started)
+    # An index created by an earlier pass whose child/params did not finish:
+    # adopt it rather than creating another WCD.
+    remembered = ctx.state_get("created_wcd_index") if ctx.state_get else None
+    if (
+        isinstance(remembered, int)
+        and remembered in before
+        and not _igd_wcd_is_management(before[remembered])
+    ):
+        ctx.wan_wcd_indexes[desired] = remembered
+        return _ok(action, "wcd_parent_adopted", None, str(remembered), started)
     blank = [
         i
         for i, n in sorted(before.items())
@@ -1159,10 +1204,13 @@ def _apply_wcd_parent(action: AcsAddObject, ctx: ApplyContext, started: float):
             _WCD_PENDING_TTL_SECONDS
         ):
             _refresh_quiet(ctx, action.device_id, parent)
+            # Waiting state (same recovery as a queued CR failure), not a
+            # terminal fault: resumes on the next inform.
             raise ApplyError(
                 action,
-                ReconcileFailureReason.ACS_WRITE_FAULTED,
-                "WANConnectionDevice creation already pending; waiting for inform",
+                ReconcileFailureReason.ACS_CR_FAILED,
+                "WANConnectionDevice creation already pending; waiting for the "
+                "next Inform",
             )
     try:
         ctx.acs_client.add_object(action.device_id, parent)
@@ -1182,12 +1230,13 @@ def _apply_wcd_parent(action: AcsAddObject, ctx: ApplyContext, started: float):
     if len(created) != 1:
         raise ApplyError(
             action,
-            ReconcileFailureReason.ACS_WRITE_FAULTED,
+            ReconcileFailureReason.ACS_CR_FAILED,
             "WANConnectionDevice creation queued but the new index is not "
-            "identifiable yet; will adopt it on the next pass",
+            "identifiable yet; waiting for the next Inform, then it is adopted",
         )
     if ctx.state_set is not None:
         ctx.state_set("pending_wcd_add", None)
+        ctx.state_set("created_wcd_index", created[0])
     ctx.wan_wcd_indexes[desired] = created[0]
     return _ok(action, "wcd_parent_created", None, str(created[0]), started)
 

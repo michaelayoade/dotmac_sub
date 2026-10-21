@@ -935,7 +935,7 @@ def set_pppoe_credentials(
     *,
     username: str,
     password: str,
-    instance_index: int = 1,
+    instance_index: int | None = 1,
     wan_vlan: int | None = None,
     timeout_sec: int | None = None,
     request: Request | None = None,
@@ -975,7 +975,7 @@ def set_pppoe_credentials(
     }
     if wan_vlan is not None:
         proposed["wan_vlan"] = wan_vlan
-    if instance_index != 1:
+    if instance_index not in (None, 1):
         proposed["wan_pppoe_instance_index"] = instance_index
 
     kwargs: dict[str, object] = {}
