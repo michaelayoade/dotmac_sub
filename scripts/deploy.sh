@@ -1378,6 +1378,16 @@ case "$(env_value APP_ENV):$(env_value SERVER_NAME)" in
     ;;
 esac
 
+# Optional process-only predecessor contract, checked under the existing fd9
+# lock before deploy-token lookup, pull, backup, traps or deployment mutation.
+if [[ "${DEPLOY_EXPECTED_FROM_IMAGE+x}" == "x" ]]; then
+  predecessor_observation="$(docker inspect "${APP_CONTAINER}" \
+    --format '{{.State.Running}}|{{.Config.Image}}' 2>/dev/null)" || predecessor_observation=""
+  run_repo_module scripts.deploy_transition_gate \
+    --expected="${DEPLOY_EXPECTED_FROM_IMAGE}" --repository="${IMAGE_REPO}" \
+    --previous="${PREV_IMAGE}" --observation="${predecessor_observation}"
+fi
+
 # A public repository needs no token. Private/restricted installations inject
 # a read-only token through the process environment or the host's untracked
 # .env. Never echo it or place it on the command line.
