@@ -1150,6 +1150,8 @@ def test_wan_worker_restores_typed_revision_delivery_scope(db_session, monkeypat
         wan_static_dns=None,
         wan_static_ip_is_public=None,
         ipv6_enabled=False,
+        wan_vlan=None,
+        wan_service_port_index=None,
     )
     monkeypatch.setattr(
         "app.services.network.reconcile.adapters.desired_from_ont_unit",
@@ -1185,7 +1187,9 @@ def test_wan_worker_restores_typed_revision_delivery_scope(db_session, monkeypat
         ),
     )
 
-    assert outcome.phase is OntServiceConfigurationPhase.verified
+    # A PPPoE revision is only verified with a live RADIUS session (turn-up
+    # G9); this test has none, so delivery completes unverified.
+    assert outcome.phase is OntServiceConfigurationPhase.delivered_unverified
     scope = calls[-1]["proposed_change"]
     assert scope is not None
     # Blank (None) evidence keys are not part of the scope, and a revision
@@ -2826,6 +2830,8 @@ def test_wan_scope_forces_only_fields_the_revision_changed(db_session, monkeypat
         wan_static_dns="192.0.2.53",
         wan_static_ip_is_public=None,
         ipv6_enabled=False,
+        wan_vlan=None,
+        wan_service_port_index=None,
     )
     monkeypatch.setattr(
         "app.services.network.reconcile.adapters.desired_from_ont_unit",
@@ -2941,6 +2947,8 @@ def test_scoped_readback_that_matches_is_verified_even_when_ont_stays_out_of_syn
         wan_static_dns=None,
         wan_static_ip_is_public=None,
         ipv6_enabled=False,
+        wan_vlan=None,
+        wan_service_port_index=None,
     )
     monkeypatch.setattr(
         "app.services.network.reconcile.adapters.desired_from_ont_unit",

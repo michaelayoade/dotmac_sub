@@ -3172,3 +3172,188 @@ def test_sync_wan_apply_with_pppoe_field_change_pushes_pppoe(
     )
 
     assert "AcsSetPppoe" in planned
+
+
+# ── H1: Connection Request failure chain through the real reconciler ───────
+
+
+def _cr_chain_setup(db_session, monkeypatch, ont, stub_desired, *, queued_tasks):
+    """A WAN revision whose PPPoE write is accepted by ACS but whose Connection
+    Request fails. ``reconcile_ont`` itself is real; only the ACS/OLT adapters
+    are injected (the lifecycle does not pass them)."""
+    from app.models.network import OntAssignment
+    from app.models.network_operation import NetworkOperationStatus
+    from app.models.ont_service_configuration import OntServiceConfigurationPhase
+    from app.services.db_session_adapter import db_session_adapter
+    from app.services.network import ont_turnup_gaps
+    from tests.test_ont_service_configuration import _lifecycle
+
+    assignment = OntAssignment(ont_unit_id=ont.id, active=True)
+    db_session.add(assignment)
+    db_session.flush()
+    head, revision, operation = _lifecycle(
+        db_session,
+        ont,
+        assignment,
+        phase=OntServiceConfigurationPhase.queued,
+        suffix="h1-chain",
+        desired_change_evidence={
+            "wan.mode": "pppoe",
+            "wan.changed_keys": ["wan.mode"],
+        },
+    )
+    operation.status = NetworkOperationStatus.pending
+    operation.input_payload = {
+        "ont_id": str(ont.id),
+        "configuration_head_id": str(head.id),
+        "configuration_revision": revision.revision,
+    }
+    db_session.commit()
+
+    # A plain (non-reference) test credential so the PPPoE write is deliverable.
+    desired = replace(stub_desired, wan_pppoe_password_ref="test-pppoe-secret")
+    monkeypatch.setattr(
+        "app.services.network.reconcile.adapters.desired_from_ont_unit",
+        lambda *_a, **_k: desired,
+    )
+    monkeypatch.setattr(
+        "app.services.network.reconcile.core.desired_from_ont_unit",
+        lambda *_a, **_k: desired,
+    )
+    acs = _StubAcsClient(
+        device=_acs_device_missing_pppoe(ont),
+        spv_cr_error="Connection Request failed: device unreachable",
+    )
+    # PPP delivery authorization is its own gate (covered by
+    # test_ppp_delivery_authorization); authorize it so the write reaches ACS.
+    monkeypatch.setattr(
+        "app.services.network.reconcile.core.authorize_ppp_delivery",
+        lambda *_a, **_k: SimpleNamespace(
+            authorized=True,
+            refusal=None,
+            authorizes=lambda _scope: True,
+            as_log_extra=dict,
+        ),
+    )
+    monkeypatch.setattr(
+        "app.services.network.reconcile.core.derive_delivery_scope",
+        lambda *_a, **_k: object(),
+    )
+    real = reconcile_core.reconcile_ont
+
+    def _real_with_adapters(*args, **kwargs):
+        kwargs.setdefault("olt_adapter", _StubOltAdapter(present=True))
+        kwargs.setdefault("acs_client", acs)
+        return real(*args, **kwargs)
+
+    monkeypatch.setattr(
+        "app.services.network.reconcile.core.reconcile_ont", _real_with_adapters
+    )
+    monkeypatch.setattr(
+        ont_turnup_gaps, "acs_queued_task_count", lambda *_a, **_k: queued_tasks
+    )
+    ids = (ont.id, operation.id, head.id, revision.revision)
+    db_session_adapter.release_read_transaction(db_session)
+    return head, operation, ids
+
+
+def _run_hop(db_session, ids, attempt):
+    from app.services.db_session_adapter import db_session_adapter
+    from app.services.network.ont_service_configuration import (
+        ExecuteOntServiceConfigurationCommand,
+        execute_ont_service_configuration,
+    )
+    from app.services.owner_commands import CommandContext
+
+    db_session.commit()
+    db_session_adapter.release_read_transaction(db_session)
+    ont_id, operation_id, head_id, rev = ids
+    return execute_ont_service_configuration(
+        db_session,
+        ExecuteOntServiceConfigurationCommand(
+            context=CommandContext.system(
+                actor="test:worker",
+                scope="network:ont:execute",
+                reason="h1 chain",
+                command_id=uuid.uuid4(),
+                correlation_id=operation_id,
+                idempotency_key=f"h1-chain-{attempt}-{uuid.uuid4().hex}",
+            ),
+            ont_unit_id=ont_id,
+            operation_id=operation_id,
+            configuration_head_id=head_id,
+            revision=rev,
+            verification_attempt=attempt,
+        ),
+    )
+
+
+def test_cr_failure_drain_wait_survives_verify_retries_and_inform_resumes(
+    db_session, ont, stub_desired, stub_ont_status, monkeypatch
+):
+    """H1: CR failure -> verify:1..3 (readback-only, real reconciler) keep the
+    ``awaiting_acs_task_drain`` reason, the exhausted head is resumable, and a
+    fresh Inform stages the resume write pass."""
+    from datetime import timedelta
+
+    from sqlalchemy import select
+
+    from app.models.network_operation import NetworkOperationDispatch
+    from app.models.ont_service_configuration import OntServiceConfigurationPhase
+    from app.services.network import ont_turnup_gaps
+    from app.services.tr069 import _resume_apply_after_inform
+
+    head, operation, ids = _cr_chain_setup(
+        db_session, monkeypatch, ont, stub_desired, queued_tasks=2
+    )
+
+    first = _run_hop(db_session, ids, 0)
+    assert first.phase is OntServiceConfigurationPhase.readback_pending
+    assert head.waiting_reason == "awaiting_acs_task_drain"
+
+    for attempt in (1, 2):
+        outcome = _run_hop(db_session, ids, attempt)
+        assert outcome.phase is OntServiceConfigurationPhase.readback_pending
+        # Not overwritten by the generic fresh-readback reason.
+        assert head.waiting_reason == "awaiting_acs_task_drain"
+
+    # Exhaustion: ends parked for the next Inform (not verification_mismatch).
+    last = _run_hop(db_session, ids, 3)
+    assert last.phase is OntServiceConfigurationPhase.readback_pending
+    assert head.waiting_reason == ont_turnup_gaps.WAITING_INFORM_CR_FAILED
+    assert head.failure_code is None
+
+    # Inform with a drained queue resumes it as a write pass.
+    monkeypatch.setattr(ont_turnup_gaps, "acs_queued_task_count", lambda *_a, **_k: 0)
+    now = datetime.now(UTC)
+    operation.updated_at = now - timedelta(minutes=5)
+    ont.acs_last_inform_at = now
+    db_session.commit()
+    assert _resume_apply_after_inform(db_session, ont_id=ids[0], inform_at=now) is True
+    staged = list(
+        db_session.scalars(
+            select(NetworkOperationDispatch).where(
+                NetworkOperationDispatch.operation_id == ids[1],
+                NetworkOperationDispatch.dispatch_key.like("resume:%"),
+            )
+        )
+    )
+    assert [row.command_name for row in staged] == ["ont_service_config_apply.v1"]
+
+
+def test_cr_failure_without_queued_task_exhausts_as_acs_cr_failed(
+    db_session, ont, stub_desired, stub_ont_status, monkeypatch
+):
+    """H1: when ACS holds no queued task, the exhausted drain wait is
+    classified ``acs_cr_failed`` (picked up by the Inform CR-failure hook),
+    not ``verification_mismatch``."""
+    from app.models.ont_service_configuration import OntServiceConfigurationPhase
+
+    head, _operation, ids = _cr_chain_setup(
+        db_session, monkeypatch, ont, stub_desired, queued_tasks=0
+    )
+    _run_hop(db_session, ids, 0)
+    for attempt in (1, 2, 3):
+        outcome = _run_hop(db_session, ids, attempt)
+    assert outcome.phase is OntServiceConfigurationPhase.failed
+    assert head.failure_code == "acs_cr_failed"

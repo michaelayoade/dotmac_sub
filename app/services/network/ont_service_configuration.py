@@ -2263,17 +2263,27 @@ def _execution_locked(
             and isinstance(failure.evidence, dict)
             and failure.evidence.get("readback_pending")
         )
-        connection_request_queued_pending = _connection_request_queued_pending(
-            result
-        ) or _connection_request_drain_still_pending(
-            waiting_reason=prior_waiting_reason,
-            result=result,
+        # A retry that began as a Connection Request drain wait stays one: a
+        # readback-pending result must not replace that reason, and an
+        # exhausted drain is classified acs_cr_failed (Inform-resumable).
+        drain_wait = prior_waiting_reason == "awaiting_acs_task_drain"
+        connection_request_queued_pending = (
+            _connection_request_queued_pending(result)
+            or _connection_request_drain_still_pending(
+                waiting_reason=prior_waiting_reason,
+                result=result,
+            )
+            or (drain_wait and readback_pending)
         )
         if readback_pending and command.verification_attempt < _MAX_READBACK_ATTEMPTS:
             next_attempt = command.verification_attempt + 1
             head.phase = OntServiceConfigurationPhase.readback_pending
             revision.phase = OntServiceConfigurationPhase.readback_pending
-            head.waiting_reason = "awaiting_fresh_device_readback"
+            head.waiting_reason = (
+                "awaiting_acs_task_drain"
+                if drain_wait
+                else "awaiting_fresh_device_readback"
+            )
             head.failure_code = None
             head.failure_message = None
             network_operations.mark_waiting(db, str(operation.id), head.waiting_reason)
