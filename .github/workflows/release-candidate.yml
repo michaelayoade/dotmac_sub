@@ -31,6 +31,14 @@ jobs:
     name: Build immutable candidate
     runs-on: ubuntu-latest
     timeout-minutes: 60
+    # Job-scoped only (Increment 1, design §4.1): restates the workflow
+    # permissions plus the two signing permissions. Never workflow-level.
+    permissions:
+      actions: read
+      contents: read
+      packages: write
+      id-token: write
+      attestations: write
     outputs:
       source_revision: ${{ steps.candidate.outputs.sha }}
       source_tree: ${{ steps.candidate.outputs.tree }}
@@ -340,6 +348,38 @@ jobs:
           secrets: |
             forgejo_token=${{ secrets.FORGEJO_READ_TOKEN }}
 
+      # Increment 1 (§4.1): keyless-sign + attest the pushed DIGEST, build
+      # mode only. The reuse path verifies below and never re-signs.
+      - name: Install cosign
+        if: steps.reconcile.outputs.mode == 'build'
+        uses: sigstore/cosign-installer@398d4b0eeef1380460a10c8013a76f728fb906ac # v3
+
+      - name: Sign candidate digest (keyless)
+        if: steps.reconcile.outputs.mode == 'build'
+        run: cosign sign --yes "${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}@${{ steps.build.outputs.digest }}"
+
+      - name: Attest build provenance
+        if: steps.reconcile.outputs.mode == 'build'
+        uses: actions/attest-build-provenance@977bb373ede98d70efdf65b84cb5f73e068dcc2a # v3
+        with:
+          subject-name: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          subject-digest: ${{ steps.build.outputs.digest }}
+          push-to-registry: true
+
+      # §7.1.5: prove verifiability at build time with the exact host
+      # identity regexp from §4.2, before any host depends on it.
+      - name: Verify signature and attestation (build mode)
+        if: steps.reconcile.outputs.mode == 'build'
+        run: |
+          set -euo pipefail
+          ref="${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}@${{ steps.build.outputs.digest }}"
+          identity='^https://github\.com/michaelayoade/dotmac_sub/\.github/workflows/release-candidate\.yml@refs/heads/main$'
+          cosign verify --certificate-identity-regexp "$identity" \
+            --certificate-oidc-issuer https://token.actions.githubusercontent.com "$ref" >/dev/null
+          cosign verify-attestation --type slsaprovenance \
+            --certificate-identity-regexp "$identity" \
+            --certificate-oidc-issuer https://token.actions.githubusercontent.com "$ref" >/dev/null
+
       # Runs in EVERY accepted mode (build or reuse), never gated: even the
       # "already done" reuse path must re-derive and re-upload evidence under
       # THIS run, because staging-deploy.yml triggers off this run's
@@ -360,6 +400,25 @@ jobs:
             echo "image_digest=$RESOLVED_DIGEST" >> "$GITHUB_OUTPUT"
             echo "build_run_id=$RESOLVED_BUILD_RUN_ID" >> "$GITHUB_OUTPUT"
           fi
+
+      # Reuse mode (§4.1): an existing candidate must already be signed.
+      # Absent signature fails the run — the candidate must rebuild, never
+      # silently promote unsigned.
+      - name: Install cosign (reuse verification)
+        if: steps.reconcile.outputs.mode != 'build'
+        uses: sigstore/cosign-installer@398d4b0eeef1380460a10c8013a76f728fb906ac # v3
+
+      - name: Verify existing candidate is signed (reuse mode)
+        if: steps.reconcile.outputs.mode != 'build'
+        run: |
+          set -euo pipefail
+          ref="${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}@${{ steps.accepted.outputs.image_digest }}"
+          identity='^https://github\.com/michaelayoade/dotmac_sub/\.github/workflows/release-candidate\.yml@refs/heads/main$'
+          cosign verify --certificate-identity-regexp "$identity" \
+            --certificate-oidc-issuer https://token.actions.githubusercontent.com "$ref" >/dev/null || {
+            echo "Existing candidate digest is unsigned; refusing reuse (rebuild required)." >&2
+            exit 1
+          }
 
       # The digest-visibility read below is the actual flaky step from the
       # 2026-09-09 incident: GHCR sometimes has not yet propagated a digest it
