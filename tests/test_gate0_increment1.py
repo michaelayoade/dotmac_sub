@@ -167,7 +167,8 @@ def test_apply_refuses_unsafe_openbao_addresses(address: str) -> None:
 
 
 @pytest.mark.parametrize(
-    "address", ["http://127.0.0.1:8200", "http://localhost:8200", "https://bao.example.com"]
+    "address",
+    ["http://127.0.0.1:8200", "http://localhost:8200", "https://bao.example.com"],
 )
 def test_apply_accepts_safe_openbao_addresses(address: str) -> None:
     assert _apply_module().validated_openbao_address(address) == address
@@ -176,8 +177,13 @@ def test_apply_accepts_safe_openbao_addresses(address: str) -> None:
 def test_apply_dry_run_prints_exact_writes_and_no_secret_values() -> None:
     env = {key: value for key, value in os.environ.items() if key != "OPENBAO_ADDR"}
     result = subprocess.run(
-        [sys.executable, str(OPENBAO / "apply.py"), "--dry-run",
-         "--addr", "http://127.0.0.1:8200"],
+        [
+            sys.executable,
+            str(OPENBAO / "apply.py"),
+            "--dry-run",
+            "--addr",
+            "http://127.0.0.1:8200",
+        ],
         capture_output=True,
         text=True,
         timeout=30,
@@ -191,14 +197,22 @@ def test_apply_dry_run_prints_exact_writes_and_no_secret_values() -> None:
         assert f"WRITE PUT /v1/sys/policies/acl/{name}" in out
         assert f"WRITE PUT /v1/auth/jwt/role/{name}" in out
     assert "SEED-IF-ABSENT POST /v1/secret/data/dotmac/sub/staging/gate0-canary" in out
-    assert "SEED-IF-ABSENT POST /v1/secret/data/dotmac/sub/production/gate0-negative" in out
+    assert (
+        "SEED-IF-ABSENT POST /v1/secret/data/dotmac/sub/production/gate0-negative"
+        in out
+    )
     assert "<generated, never printed>" in out
 
 
 def test_apply_dry_run_refuses_non_loopback_http() -> None:
     result = subprocess.run(
-        [sys.executable, str(OPENBAO / "apply.py"), "--dry-run",
-         "--addr", "http://openbao.example.com:8200"],
+        [
+            sys.executable,
+            str(OPENBAO / "apply.py"),
+            "--dry-run",
+            "--addr",
+            "http://openbao.example.com:8200",
+        ],
         capture_output=True,
         text=True,
         timeout=30,
@@ -211,7 +225,9 @@ def test_apply_dry_run_refuses_non_loopback_http() -> None:
 def test_gate0_scripts_are_posix_and_value_free() -> None:
     for script in ("proof1_oidc_openbao.sh", "verify_artifact.sh"):
         path = ROOT / "deploy/gate0" / script
-        result = subprocess.run(["sh", "-n", str(path)], capture_output=True, text=True, check=False)
+        result = subprocess.run(
+            ["sh", "-n", str(path)], capture_output=True, text=True, check=False
+        )
         assert result.returncode == 0, result.stderr
         assert path.read_text(encoding="utf-8").startswith("#!/bin/sh")
     verify = (ROOT / "deploy/gate0/verify_artifact.sh").read_text(encoding="utf-8")
@@ -231,7 +247,12 @@ def test_proof_workflow_uses_secret_for_openbao_addr_never_a_variable() -> None:
 def test_public_docs_do_not_describe_openbao_listener_posture() -> None:
     for path in (PROOF, OPENBAO / "README.md"):
         text = path.read_text(encoding="utf-8").lower()
-        for phrase in ("plaintext", "probe timed", "internet reachab", "not reachable from"):
+        for phrase in (
+            "plaintext",
+            "probe timed",
+            "internet reachab",
+            "not reachable from",
+        ):
             assert phrase not in text, (path.name, phrase)
 
 
@@ -271,7 +292,12 @@ def test_proof_script_localhost_check_is_exact(address: str) -> None:
 
 @pytest.mark.parametrize(
     "address",
-    ["http://localhost:8200", "http://127.0.0.1:8200/", "http://[::1]:8200", "https://openbao.example.com"],
+    [
+        "http://localhost:8200",
+        "http://127.0.0.1:8200/",
+        "http://[::1]:8200",
+        "https://openbao.example.com",
+    ],
 )
 def test_proof_script_accepts_exact_loopback_and_https(address: str) -> None:
     result = _proof_guard(address)
