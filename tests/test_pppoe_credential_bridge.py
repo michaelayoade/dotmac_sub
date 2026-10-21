@@ -233,7 +233,8 @@ def test_inherit_statuses_setting_narrows_the_ended_set(
 )
 def test_t5_default_new_mode_is_unchanged(db_session, numbered, catalog_offer, ended):
     """(G) Default `new`: an ended predecessor's credential is never inherited
-    (created-then-ended order)."""
+    (created-then-ended order) and the cancel-first reactivation still
+    overwrites the secret exactly as before."""
     old = _sub(db_session, numbered, catalog_offer, ended)
     new = _sub(db_session, numbered, catalog_offer, SubscriptionStatus.pending)
     active_cred = _cred(db_session, numbered, old, "10070000", active=True)
@@ -256,7 +257,7 @@ def test_t5_default_new_mode_is_unchanged(db_session, numbered, catalog_offer, e
     }
 
 
-def test_t5b_default_new_mode_reactivation_keeps_secret_when_history_unknown(
+def test_t5b_default_new_mode_reactivation_overwrites_secret(
     db_session, numbered, catalog_offer
 ):
     new = _sub(db_session, numbered, catalog_offer, SubscriptionStatus.pending)
@@ -266,8 +267,7 @@ def test_t5b_default_new_mode_reactivation_keeps_secret_when_history_unknown(
 
     db_session.refresh(credential)
     assert outcome.disposition is PppoeCredentialDisposition.reactivated
-    # Unknown history (NULL reason) keeps the password; only `manual` does not.
-    assert decrypt_credential(credential.secret_hash) == "old-secret"
+    assert decrypt_credential(credential.secret_hash) != "old-secret"
 
 
 def test_t6_ask_is_rejected_by_the_setting_spec(db_session, numbered):

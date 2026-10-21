@@ -4574,6 +4574,7 @@ def restore_tool_page(
     request: Request,
     q: str | None = None,
     selected_id: str | None = None,
+    restore_skipped: int | None = None,
     db: Session = Depends(get_db),
 ):
     from app.web.admin import get_current_user, get_sidebar_stats
@@ -4591,6 +4592,7 @@ def restore_tool_page(
             "active_menu": "system",
             "current_user": get_current_user(request),
             "sidebar_stats": get_sidebar_stats(db),
+            "restore_skipped": restore_skipped,
             **state,
         },
     )
@@ -4628,8 +4630,12 @@ def restore_tool_restore(
         actor_id=actor_id,
         metadata={"restored_counts": result.get("touched", {})},
     )
+    skipped = int((result.get("touched") or {}).get("credentials_skipped", 0))
     return RedirectResponse(
-        url=f"/admin/system/tools/restore?q={quote_plus(str(subscriber_id))}",
+        url=(
+            f"/admin/system/tools/restore?q={quote_plus(str(subscriber_id))}"
+            f"&restore_skipped={skipped}"
+        ),
         status_code=303,
     )
 

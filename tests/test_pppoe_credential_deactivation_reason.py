@@ -196,21 +196,15 @@ def test_manual_reactivation_refuses_in_inherit_mode(
     assert credential.is_active is False
 
 
-@pytest.mark.parametrize("inherit", [False, True])
-def test_unknown_history_reactivation_keeps_password_in_both_modes(
-    db_session, numbered, catalog_offer, inherit
-):
-    """NULL keeps the password on the username-collision path in `new` mode too."""
-    if inherit:
-        _setting(db_session, "pppoe_credential_on_new_service", "inherit")
+def test_unknown_history_reactivation_is_unchanged(db_session, numbered, catalog_offer):
+    """(G) NULL keeps today's behaviour per mode: `new` overwrites here."""
     new = _sub(db_session, numbered, catalog_offer, SubscriptionStatus.pending)
     credential = _inactive(db_session, numbered, None, "10070000", None)
 
     _ensure(db_session, numbered, new)
 
     db_session.refresh(credential)
-    assert credential.is_active is True
-    assert _plain(credential) == "old-secret"
+    assert _plain(credential) != "old-secret"
 
 
 # ------------------------------- inherit -----------------------------------
@@ -245,7 +239,7 @@ def test_inherit_reuses_a_service_ended_predecessor_credential(
     assert credential.deactivation_reason is None
 
 
-# --------------------- restore-tool cascade and restore (F5, F6) ----------
+# --------------------- restore-tool cascade and restore ------------------
 
 
 def _deleted_subscriber(db_session, numbered):
@@ -259,7 +253,24 @@ def _deleted_subscriber(db_session, numbered):
     return tool
 
 
-def test_restore_tool_cascade_records_manual(db_session, numbered, catalog_offer):
+def _radius_user(db_session, numbered, sub, credential, *, active):
+    from app.models.radius import RadiusUser
+
+    row = RadiusUser(
+        subscriber_id=numbered.id,
+        subscription_id=sub.id,
+        access_credential_id=credential.id,
+        username=credential.username,
+        is_active=active,
+    )
+    db_session.add(row)
+    db_session.commit()
+    return row
+
+
+def test_restore_tool_cascade_records_subscriber_deleted(
+    db_session, numbered, catalog_offer
+):
     sub = _sub(db_session, numbered, catalog_offer, SubscriptionStatus.active)
     credential = _cred(db_session, numbered, sub, "10070000")
     inactive = _inactive(db_session, numbered, sub, "other", "service_ended")
@@ -269,52 +280,70 @@ def test_restore_tool_cascade_records_manual(db_session, numbered, catalog_offer
     db_session.refresh(credential)
     db_session.refresh(inactive)
     assert credential.is_active is False
-    assert credential.deactivation_reason == "manual"
+    assert credential.deactivation_reason == "subscriber_deleted"
     assert inactive.deactivation_reason == "service_ended"
 
 
-def test_restore_tool_restore_issues_new_password_for_manual_in_new_mode(
-    db_session, numbered, catalog_offer
+@pytest.mark.parametrize("inherit", [False, True])
+def test_restore_reactivates_only_cascade_credentials_with_secret_kept(
+    db_session, numbered, catalog_offer, inherit
 ):
+    if inherit:
+        _setting(db_session, "pppoe_credential_on_new_service", "inherit")
     sub = _sub(db_session, numbered, catalog_offer, SubscriptionStatus.active)
+    live = _cred(db_session, numbered, sub, "live-login", secret="live-secret")
     manual = _inactive(db_session, numbered, sub, "manual-login", "manual")
     ended = _inactive(db_session, numbered, sub, "ended-login", "service_ended")
+    unknown = _inactive(db_session, numbered, sub, "unknown-login", None)
+    ru_live = _radius_user(db_session, numbered, sub, live, active=True)
+    ru_manual = _radius_user(db_session, numbered, sub, manual, active=False)
     tool = _deleted_subscriber(db_session, numbered)
+    db_session.refresh(ru_live)
+    ru_live.is_active = False
+    ru_manual.is_active = False
+    db_session.commit()
 
     result = tool.restore_subscriber(
         db_session, subscriber_id=str(numbered.id), actor_id=None
     )
 
-    db_session.refresh(manual)
-    db_session.refresh(ended)
-    assert result["touched"]["credentials_refused_manual"] == 0
-    assert manual.is_active is True
-    assert manual.deactivation_reason is None
-    assert _plain(manual) != "old-secret"
-    assert ended.is_active is True
-    assert _plain(ended) == "old-secret"
-
-
-def test_restore_tool_restore_refuses_manual_in_inherit_mode(
-    db_session, numbered, catalog_offer, inherit_on
-):
-    sub = _sub(db_session, numbered, catalog_offer, SubscriptionStatus.active)
-    manual = _inactive(db_session, numbered, sub, "manual-login", "manual")
-    ended = _inactive(db_session, numbered, sub, "ended-login", "service_ended")
-    tool = _deleted_subscriber(db_session, numbered)
-
-    result = tool.restore_subscriber(
-        db_session, subscriber_id=str(numbered.id), actor_id=None
-    )
-
-    db_session.refresh(manual)
-    db_session.refresh(ended)
-    assert result["touched"]["credentials_refused_manual"] == 1
-    assert manual.is_active is False
+    for row in (live, manual, ended, unknown, ru_live, ru_manual):
+        db_session.refresh(row)
+    assert live.is_active is True
+    assert live.deactivation_reason is None
+    assert _plain(live) == "live-secret"
+    for stayed in (manual, ended, unknown):
+        assert stayed.is_active is False
+        assert _plain(stayed) == "old-secret"
     assert manual.deactivation_reason == "manual"
-    assert _plain(manual) == "old-secret"
-    assert ended.is_active is True
-    assert _plain(ended) == "old-secret"
+    assert ended.deactivation_reason == "service_ended"
+    assert unknown.deactivation_reason is None
+    assert result["touched"]["credentials_skipped"] == 3
+    # RADIUS rows follow the credentials.
+    assert ru_live.is_active is True
+    assert ru_manual.is_active is False
+
+
+def test_restore_skipped_count_is_visible_to_staff(db_session, numbered, catalog_offer):
+    from app.web.admin import system as system_web
+
+    sub = _sub(db_session, numbered, catalog_offer, SubscriptionStatus.active)
+    _inactive(db_session, numbered, sub, "manual-login", "manual")
+    _deleted_subscriber(db_session, numbered)
+
+    class _Req:
+        query_params: dict = {}
+        state = type("S", (), {})()
+        headers: dict = {}
+        client = None
+
+    with (
+        patch.object(system_web, "log_audit_event"),
+        patch("app.web.admin.get_current_user", return_value={}),
+    ):
+        response = system_web.restore_tool_restore(_Req(), numbered.id, db_session)
+
+    assert "restore_skipped=1" in response.headers["location"]
 
 
 # --------------------- bulk activation and backup restore (F3, F4) --------

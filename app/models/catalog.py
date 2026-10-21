@@ -1578,6 +1578,7 @@ class OfferRadiusProfile(Base):
 
 DEACTIVATION_SERVICE_ENDED = "service_ended"
 DEACTIVATION_MANUAL = "manual"
+DEACTIVATION_SUBSCRIBER_DELETED = "subscriber_deleted"
 
 
 class AccessCredential(Base):
@@ -1602,7 +1603,9 @@ class AccessCredential(Base):
     secret_hash: Mapped[str | None] = mapped_column(String(512))
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
     # Why the credential was deactivated: "service_ended" (deactivated together
-    # with its service) or "manual" (an explicit administrative deactivation).
+    # with its service), "subscriber_deleted" (switched off by the subscriber
+    # soft-delete cascade; restore undoes exactly these) or "manual" (an
+    # explicit administrative deactivation).
     # NULL means unknown or historical. Cleared on reactivation.
     deactivation_reason: Mapped[str | None] = mapped_column(String(32))
     last_auth_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
