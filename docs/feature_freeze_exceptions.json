@@ -524,6 +524,17 @@
       "reason": "Step 4 caller migration (gateway slice of THIN-STARTER-PREPAID-RENEWALS): prepaid period-purchase checkouts open a Starter payments PURCHASE_FUNDING intent bound to the purchase identity, and only the authenticated provider confirmation for that intent funds the purchase through dotmac-billing earmarks (pay-then-record; the browser return records nothing). Sub builds no billing logic: it opens the bound intent and hands the confirmed cash to the approved starter_prepaid owner; ineligible purchases stay on the legacy path and Starter refusal never falls back.",
       "approved_by": "michaelayoade",
       "starter_contract": "Published dotmac-payments 0.1.0a3 open_payment_intent (PaymentPurpose.PURCHASE_FUNDING) + intent-bound confirmation/qualification, and dotmac-billing 0.1.0a8 accept-on-prepaid-funding-lane + earmark_settlement, consumed through the already-excepted app/services/billing/starter_prepaid.py owner."
+    },
+    {
+      "id": "THIN-KERNEL-SAVEPOINT-GUARD",
+      "kind": "feature-exception",
+      "paths": [
+        "app/services/owner_commands.py",
+        "app/services/kernel_savepoint_guard.py"
+      ],
+      "reason": "Step 4 composition fix surfaced by the gateway prepaid lane: Starter kernel services run expected-conflict mutations inside conflict_savepoint(), whose RELEASE fires Sub's before_commit owner guard. Without claiming that exact release via the kernel's claim_conflict_savepoint_commit (and classifying its recovered rollbacks via current_conflict_savepoint), every Starter lane executing inside an owner command fails closed at the boundary. The owner boundary stays kernel-free (test_owner_command_boundary): it gains a participant-hook registry, and a new kernel-admitted module registers the kernel claim/classifiers. Arbitrary nested transactions still never qualify, and the boundary keeps sole completion authority.",
+      "approved_by": "michaelayoade",
+      "starter_contract": "Published dotmac-kernel 0.1.0a105 dotmac_kernel.transactions: claim_conflict_savepoint_commit + current_conflict_savepoint + conflict_savepoint_requires_rollback, consumed exactly as the kernel's caller-owned-session contract specifies."
     }
   ]
 }
