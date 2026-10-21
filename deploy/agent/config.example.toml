@@ -1,0 +1,27 @@
+# Root-owned, no group/world write. Public configuration only.
+cp_url = "https://control.example.invalid"
+product = "dotmac_sub"
+environment = "staging"
+host = "dotmac-sub-staging"
+image_reference = "ghcr.io/michaelayoade/dotmac_sub"
+deploy_dir = "/home/dotmac/deploy-worktrees/dotmac-sub-staging"
+state_dir = "/var/lib/dotmac-deploy-agent"
+keyring_file = "/etc/dotmac-deploy-agent/signer-keyring.json"
+host_key_file = "/etc/dotmac-deploy-agent/host-private.pem"
+host_key_id = "sub-staging-host-1"
+# Fill from the exact immutable signed agent release, never a mutable alias.
+artifact_digest = "sha256:REPLACE_WITH_64_HEX_RELEASE_FILE_DIGEST"
+version = "0.1.0"
+# Pin the reviewed engine with its locked from-image precondition.
+guarded_executor_sha256 = "sha256:REPLACE_WITH_REVIEWED_ENGINE_DIGEST"
+agent_lock = "/run/dotmac-deploy-agent/agent.lock"
+deploy_lock = "/var/lock/dotmac_sub_deploy.lock"
+poll_seconds = 45
+timeout_seconds = 2700
+
+# Enable only for the approved staging refusal proof, then disable.
+allow_test_input = false
+
+# Public paths to existing root-owned, agent-readable read-only auth stores.
+gh_config_dir = "/etc/dotmac-deploy-agent/gh"
+docker_config_dir = "/etc/dotmac-deploy-agent/docker"

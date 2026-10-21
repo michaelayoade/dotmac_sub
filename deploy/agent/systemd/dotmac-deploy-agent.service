@@ -1,0 +1,29 @@
+[Unit]
+Description=Dotmac staging outbound deployment agent
+After=network-online.target docker.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=dotmac-deploy
+Group=dotmac-deploy
+SupplementaryGroups=docker
+RuntimeDirectory=dotmac-deploy-agent
+RuntimeDirectoryMode=0700
+StateDirectory=dotmac-deploy-agent
+StateDirectoryMode=0700
+UMask=0077
+ExecStart=/opt/dotmac-deploy-agent/launcher.sh
+Restart=on-failure
+RestartSec=30
+KillMode=control-group
+# Executor rollback traps own cleanup; preserve their opportunity to finish.
+TimeoutStopSec=infinity
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full
+ProtectHome=read-only
+ReadWritePaths=/home/dotmac/deploy-worktrees/dotmac-sub-staging /var/lib/dotmac-deploy-agent /var/lock /run/dotmac-deploy-agent
+
+[Install]
+WantedBy=multi-user.target
