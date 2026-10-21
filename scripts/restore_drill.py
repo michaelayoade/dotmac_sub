@@ -40,6 +40,11 @@ import uuid
 from pathlib import Path
 from typing import Any
 
+if __package__:
+    from .restore_inventory import Inventory, collect_inventory, first_divergence
+else:
+    from restore_inventory import Inventory, collect_inventory, first_divergence
+
 EXIT_OK = 0
 EXIT_ASSERTION = 1
 EXIT_USAGE = 2
@@ -475,7 +480,9 @@ def assert_isolation_model(
     return checks
 
 
-def drill_bundle(manifest_path: Path, image: str) -> dict[str, Any]:
+def drill_bundle(
+    manifest_path: Path, image: str, *, expected_inventory: Inventory | None = None
+) -> dict[str, Any]:
     """Restore one bundle into scratch postgres and assert the model."""
 
     manifest, artifacts = load_bundle(manifest_path)
@@ -519,11 +526,21 @@ def drill_bundle(manifest_path: Path, image: str) -> dict[str, Any]:
             restored.returncode == 0,
             "dump applied with ON_ERROR_STOP=1"
             if restored.returncode == 0
-            else f"dump failed: {restored.stderr.decode(errors='replace')[:500]}",
+            else "dump failed with ON_ERROR_STOP=1",
             checks,
         )
         if restored.returncode == 0:
             checks.extend(assert_isolation_model(pg, globals_roles=globals_roles))
+            if expected_inventory is not None:
+                try:
+                    divergence = first_divergence(
+                        expected_inventory, collect_inventory(pg)
+                    )
+                    detail = divergence or "all inventoried metadata matches source"
+                    matched = divergence is None
+                except (RuntimeError, ValueError):
+                    matched, detail = False, "metadata collection failed"
+                _check("source_metadata_parity", matched, detail, checks)
     passed = all(c["passed"] for c in checks)
     return {
         "verdict": "PASS" if passed else "FAIL",

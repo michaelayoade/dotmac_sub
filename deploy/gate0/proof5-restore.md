@@ -1,8 +1,22 @@
 # Gate 0 proof 5: restore comparison gap
 
-Status: **not implemented; no live proof recorded** (2026-10-21). This
+Status: **partial source; full proof unimplemented; no live proof recorded** (2026-10-21). This
 document records the bounded follow-up needed before a proof5 adapter can
 honestly report acceptance. No fail-only executable is shipped.
+
+Partial source now exists in `scripts/restore_inventory.py`: one metadata SQL
+query, typed strict decoding, complete catalog-derived effective schema/table
+privilege matrices, and a metadata-only first-divergence comparator. The existing
+`drill_bundle(..., expected_inventory=...)` owner optionally collects restored
+metadata with that same query, compares before cleanup, and fails on collection
+error or divergence. Schema/table ownership, RLS ENABLE/FORCE flags, policy
+identities and public Alembic heads are compared as well as non-builtin roles.
+Eight offline inventory/owner tests and eleven cleanup tests pass. SQL execution
+against migrated PostgreSQL remains unproved; mocked results are not database
+acceptance. There is no source capture command, snapshot/freeze binding, trusted
+host enrollment/guard, CLI inventory option or Gate0 PASS adapter in this partial
+slice. Its optional comparison does not establish staging provenance. Existing
+drill PASS remains insufficient for proof5.
 
 The approved agent design §6, “Proof 5”, requires a real staging backup
 through the production backup path, globals-first scratch restore, source
@@ -15,14 +29,14 @@ Its behavior is outside this increment's change scope.
 | Requirement | Existing source | Remaining gap |
 | --- | --- | --- |
 | Real staging production-path bundle | `scripts/backup/recovery_bundle_lib.sh:119` emits bundle metadata; `scripts/restore_drill.py:132` loads manifests | The manifest does not establish staging provenance, approved capture, or source inventory binding. Artifact hashes prove consistency with a manifest, not staging origin. |
-| Roles and attributes match source | `scripts/restore_drill.py:286` checks globals role presence; `:296` checks selected role contracts | No captured source role attributes for comparison. Other roles' login/bypass posture can differ undetected. |
-| Alembic heads match source | `scripts/restore_drill.py:268` defines the isolation assertions | No Alembic-head assertion or source-head inventory. |
-| RLS-enabled table and policy counts match source | `scripts/restore_drill.py:317` checks positive RLS count, FORCE, and policies without RLS | No source RLS count or total-policy-count comparison. |
-| Bidirectional schema/table privilege spot matrix matches source | `scripts/restore_drill.py:343` probes one app role against one platform table | No `has_schema_privilege` matrix, reverse-direction matrix, or source privilege observations. Missing plane is accepted at `:363`. |
-| Ownership not collapsed | `scripts/restore_drill.py:403` detects all application tables owned by postgres | Useful existing check; no source ownership inventory. Empty tables do not establish meaningful restored ownership. |
+| Roles and attributes match source | Optional inventory comparison covers non-builtin role login/bypass/superuser attributes alongside existing role contracts | Trusted source capture and real PostgreSQL comparison remain unproved. |
+| Alembic heads match source | Optional inventory compares public Alembic heads | Source capture binding and real query execution remain unproved. |
+| RLS-enabled table and policy counts match source | Optional inventory compares per-table RLS ENABLE/FORCE and policy identities, retaining existing isolation assertions | Trusted capture and real source/restore parity remain unproved. |
+| Bidirectional schema/table privilege spot matrix matches source | Optional inventory covers effective schema/table privileges across the catalog-derived role/object matrix, including allowed and denied observations | Source capture, actual SQL execution and real parity remain unproved. |
+| Ownership not collapsed | Existing collapse assertion plus optional schema/table owner comparison | Trusted source ownership capture and real parity remain unproved. |
 | Cleanup completed before acceptance | `scripts/restore_drill.py` scratch lifecycle now labels each run, cleans startup/readiness failures, refuses unowned resources, checks removal and independently observes absence | Eleven offline mocked lifecycle tests pass. Dedicated-host execution and real scratch absence evidence remain unproved. |
 | Dedicated test server enforced before subprocesses | `scripts/restore_drill.py:176` executes subprocesses; `:194` starts Docker | Generated scratch names and network isolation do not enforce execution host. There is no dedicated-host guard. |
-| Metadata-only diagnostics | `scripts/restore_drill.py:470` includes raw restore stderr | PostgreSQL error text may include restored statement/data context. A Gate0 adapter must not forward raw drill output as safe evidence. |
+| Metadata-only diagnostics | Dump-restore errors and optional inventory errors are sanitized; existing `ScratchPostgres.scalar()` can still include raw query stderr outside that path | A Gate0 adapter must sanitize every remaining infrastructure path before forwarding evidence. |
 
 The present drill's `PASS` is therefore insufficient for Gate0 proof5.
 `--self-test` (`scripts/restore_drill.py:513`), `--dry-run` (`:572`), fixtures,
@@ -59,8 +73,8 @@ an equality gate over unrelated external state.
 
 The probe set must explicitly cover application-to-platform and
 platform-to-application permissions, including the designated denied schema
-and table privileges. Agree its exact role/object coverage with the owning
-isolation contracts before implementation. Do not infer approval or matrix
+and table privileges. Derive exact role/object coverage from the owning
+isolation contracts. Do not infer approval or matrix
 completeness from an arbitrary operator-supplied JSON list. This document
 does not add password, role-membership, or database-property acceptance gates.
 The existing database-property capture limitation remains documented in
@@ -72,8 +86,8 @@ Implement a thin typed proof adapter over the existing restore owner, with
 source inventory collection/comparison and verified cleanup in that owner.
 Before any operational subprocess, establish the authorized dedicated test
 host and reject local/production execution and Docker endpoint redirection.
-The exact host identity mechanism needs agreement; an environment declaration
-alone is not host evidence. Never accept arbitrary restore commands or target
+The host identity mechanism needs enrolled, independently observed host evidence;
+an environment declaration alone is insufficient. Never accept arbitrary restore commands or target
 containers from a manifest.
 
 After explicit authorization naming the host, run the bounded scratch restore
