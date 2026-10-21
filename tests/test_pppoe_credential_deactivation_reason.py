@@ -196,15 +196,21 @@ def test_manual_reactivation_refuses_in_inherit_mode(
     assert credential.is_active is False
 
 
-def test_unknown_history_reactivation_is_unchanged(db_session, numbered, catalog_offer):
-    """(G) NULL keeps today's behaviour per mode: `new` overwrites here."""
+@pytest.mark.parametrize("inherit", [False, True])
+def test_unknown_history_reactivation_keeps_password_in_both_modes(
+    db_session, numbered, catalog_offer, inherit
+):
+    """NULL keeps the password on the username-collision path in `new` mode too."""
+    if inherit:
+        _setting(db_session, "pppoe_credential_on_new_service", "inherit")
     new = _sub(db_session, numbered, catalog_offer, SubscriptionStatus.pending)
     credential = _inactive(db_session, numbered, None, "10070000", None)
 
     _ensure(db_session, numbered, new)
 
     db_session.refresh(credential)
-    assert _plain(credential) != "old-secret"
+    assert credential.is_active is True
+    assert _plain(credential) == "old-secret"
 
 
 # ------------------------------- inherit -----------------------------------
@@ -237,3 +243,129 @@ def test_inherit_reuses_a_service_ended_predecessor_credential(
     assert outcome.credential_id == credential.id
     assert _plain(credential) == "old-secret"
     assert credential.deactivation_reason is None
+
+
+# --------------------- restore-tool cascade and restore (F5, F6) ----------
+
+
+def _deleted_subscriber(db_session, numbered):
+    from app.services import web_system_restore_tool as tool
+
+    numbered.is_active = False
+    db_session.commit()
+    tool.mark_subscriber_deleted(
+        db_session, subscriber_id=str(numbered.id), actor_id=None
+    )
+    return tool
+
+
+def test_restore_tool_cascade_records_manual(db_session, numbered, catalog_offer):
+    sub = _sub(db_session, numbered, catalog_offer, SubscriptionStatus.active)
+    credential = _cred(db_session, numbered, sub, "10070000")
+    inactive = _inactive(db_session, numbered, sub, "other", "service_ended")
+
+    _deleted_subscriber(db_session, numbered)
+
+    db_session.refresh(credential)
+    db_session.refresh(inactive)
+    assert credential.is_active is False
+    assert credential.deactivation_reason == "manual"
+    assert inactive.deactivation_reason == "service_ended"
+
+
+def test_restore_tool_restore_issues_new_password_for_manual_in_new_mode(
+    db_session, numbered, catalog_offer
+):
+    sub = _sub(db_session, numbered, catalog_offer, SubscriptionStatus.active)
+    manual = _inactive(db_session, numbered, sub, "manual-login", "manual")
+    ended = _inactive(db_session, numbered, sub, "ended-login", "service_ended")
+    tool = _deleted_subscriber(db_session, numbered)
+
+    result = tool.restore_subscriber(
+        db_session, subscriber_id=str(numbered.id), actor_id=None
+    )
+
+    db_session.refresh(manual)
+    db_session.refresh(ended)
+    assert result["touched"]["credentials_refused_manual"] == 0
+    assert manual.is_active is True
+    assert manual.deactivation_reason is None
+    assert _plain(manual) != "old-secret"
+    assert ended.is_active is True
+    assert _plain(ended) == "old-secret"
+
+
+def test_restore_tool_restore_refuses_manual_in_inherit_mode(
+    db_session, numbered, catalog_offer, inherit_on
+):
+    sub = _sub(db_session, numbered, catalog_offer, SubscriptionStatus.active)
+    manual = _inactive(db_session, numbered, sub, "manual-login", "manual")
+    ended = _inactive(db_session, numbered, sub, "ended-login", "service_ended")
+    tool = _deleted_subscriber(db_session, numbered)
+
+    result = tool.restore_subscriber(
+        db_session, subscriber_id=str(numbered.id), actor_id=None
+    )
+
+    db_session.refresh(manual)
+    db_session.refresh(ended)
+    assert result["touched"]["credentials_refused_manual"] == 1
+    assert manual.is_active is False
+    assert manual.deactivation_reason == "manual"
+    assert _plain(manual) == "old-secret"
+    assert ended.is_active is True
+    assert _plain(ended) == "old-secret"
+
+
+# --------------------- bulk activation and backup restore (F3, F4) --------
+
+
+def test_bulk_activation_reactivation_clears_the_reason(
+    db_session, numbered, catalog_offer
+):
+    from app.services import web_provisioning_bulk_activate as bulk
+
+    sub = _sub(db_session, numbered, catalog_offer, SubscriptionStatus.active)
+    credential = _inactive(db_session, numbered, sub, "10070000", "manual")
+
+    bulk._upsert_access_credential(
+        db_session,
+        subscriber=numbered,
+        username="10070000",
+        password="new-pass",  # noqa: S106
+    )
+    db_session.commit()
+
+    db_session.refresh(credential)
+    assert credential.is_active is True
+    assert credential.deactivation_reason is None
+
+
+def test_backup_restore_that_deactivates_records_manual(
+    db_session, numbered, catalog_offer
+):
+    from app.services.connectivity_backup import (
+        capture_connectivity_state,
+        restore_connectivity_state,
+    )
+
+    sub = _sub(db_session, numbered, catalog_offer, SubscriptionStatus.active)
+    credential = _inactive(db_session, numbered, sub, "10070000", None)
+    backup = capture_connectivity_state(
+        db_session, numbered.id, reason="test", include_radius=False
+    )
+    db_session.commit()
+    credential.is_active = True
+    db_session.commit()
+
+    restore_connectivity_state(
+        db_session,
+        backup.id,
+        dry_run=False,
+        include_radius=False,
+        restored_by="tester",
+    )
+
+    db_session.refresh(credential)
+    assert credential.is_active is False
+    assert credential.deactivation_reason == "manual"

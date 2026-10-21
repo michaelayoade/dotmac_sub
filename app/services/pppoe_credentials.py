@@ -284,6 +284,24 @@ def _has_usable_secret(credential: AccessCredential) -> bool:
         return False
 
 
+def reactivation_secret_policy(db: Session, credential: AccessCredential) -> bool:
+    """Apply the M1 password rule when a restore reactivates a credential.
+
+    Returns True when the credential may be reactivated. A manually
+    deactivated credential never comes back with its old password: in
+    ``inherit`` mode it is refused (False, left untouched); otherwise a fresh
+    password is issued. Any other history (service ended, unknown) keeps it.
+    """
+    if credential.deactivation_reason != _MANUAL:
+        return True
+    if _inherit_enabled(db):
+        return False
+    credential.secret_hash = encrypt_credential(
+        _generate_random_password(_default_password_length(db))
+    )
+    return True
+
+
 def _default_password_length(db: Session) -> int:
     raw = _resolve_radius_setting(db, "pppoe_default_password_length")
     return max(8, min(64, _resolve_int_setting(raw, 12)))
@@ -727,9 +745,9 @@ def ensure_pppoe_credential(
         and _has_usable_secret(credential)
         and (
             # Keep the password when the credential was deactivated together with
-            # its service; inherit mode keeps it for history (NULL) too. A manual
-            # deactivation never keeps it (a new password is issued below).
-            reason == _SERVICE_ENDED or (_inherit_enabled(db) and reason != _MANUAL)
+            # its service or the history is unknown (NULL), in both modes. A
+            # manual deactivation never keeps it (a new password is issued below).
+            reason != _MANUAL
         )
     ):
         pass

@@ -380,6 +380,7 @@ def _upsert_access_credential(
         credential.username = username
         credential.secret_hash = hash_service_secret(password)
         credential.is_active = True
+        credential.deactivation_reason = None
         return
     db.add(
         AccessCredential(

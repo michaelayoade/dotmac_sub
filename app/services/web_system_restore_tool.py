@@ -370,6 +370,7 @@ def restore_subscriber(
         "ip_assignments": 0,
         "ont_assignments": 0,
         "splitter_assignments": 0,
+        "credentials_refused_manual": 0,
     }
 
     subscriber.is_active = True
@@ -468,8 +469,13 @@ def restore_subscriber(
             access_credential_service.model.subscriber_id == subscriber.id
         )
     ).all()
+    from app.services.pppoe_credentials import reactivation_secret_policy
+
     for credential in credentials:
         if not credential.is_active:
+            if not reactivation_secret_policy(db, credential):
+                touched["credentials_refused_manual"] += 1
+                continue
             credential.is_active = True
             credential.deactivation_reason = None
             touched["radius_accounts"] += 1
