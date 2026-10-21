@@ -59,7 +59,9 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.models.billing import Invoice, InvoiceStatus, StarterPrepaidFundingLink
+from app.models.catalog import BillingMode
 from app.models.event_store import EventStore
+from app.models.subscriber import Subscriber
 from app.schemas.audit import AuditEventCreate
 from app.services.audit import AuditEvents
 from app.services.billing.starter_issuance import issue_prepaid_invoice_via_starter
@@ -68,6 +70,7 @@ from app.services.billing.starter_policies import (
     resolve_starter_billing_policies,
     resolve_starter_prepaid_funding_policies,
     resolve_starter_settlement_policies,
+    starter_ledger_live_enabled,
 )
 from app.services.domain_errors import DomainError
 from app.services.events import emit_event
@@ -81,6 +84,8 @@ __all__ = [
     "StarterPrepaidSettlement",
     "fund_prepaid_purchase",
     "funding_link_for_invoice",
+    "prepaid_funding_checkout_eligible",
+    "purchase_has_funding_intent",
     "settle_prepaid_period_invoice",
 ]
 
@@ -148,6 +153,52 @@ def _funding_lane(policies: StarterPrepaidFundingPolicies) -> SettlementFundingL
             "Prepaid funding lane is not a Starter funding lane",
             funding_lane=policies.prepaid_funding_lane,
         ) from exc
+
+
+def prepaid_funding_checkout_eligible(db: Session, *, subscriber_id: UUID) -> bool:
+    """Whether a period-purchase checkout may open a funding intent.
+
+    Checkout eligibility is deliberately the subscriber-level subset of
+    settle-time issuance eligibility: the Starter ledger is live and the
+    subscriber bills prepaid (advance collection). Per-invoice evidence
+    is re-proven at settlement, where refusal holds the purchase for
+    review instead of falling back to legacy writers.
+    """
+    if not starter_ledger_live_enabled(db):
+        return False
+    subscriber = db.get(Subscriber, subscriber_id)
+    return subscriber is not None and subscriber.billing_mode is BillingMode.prepaid
+
+
+def purchase_has_funding_intent(
+    db: Session, *, intent_reference: str, purchase_ref: str, subscriber_id: UUID
+) -> bool:
+    """Whether this checkout opened a bound purchase-funding intent.
+
+    Route selection is read-only and pre-write: an intent that exists
+    under the checkout reference but binds anything else refuses the
+    settlement rather than silently taking the legacy path. With the
+    Starter live switch OFF the payments schema is never touched (D1
+    hold), so the answer is exactly the legacy path.
+    """
+    if not starter_ledger_live_enabled(db):
+        return False
+    observed = get_payment_intent_v1(
+        db, scope=_SCOPE, query=GetPaymentIntentV1(reference=intent_reference)
+    )
+    if observed is None:
+        return False
+    if (
+        observed.purpose is not PaymentPurpose.PURCHASE_FUNDING
+        or observed.target_reference != purchase_ref
+        or observed.payer_reference != str(subscriber_id)
+    ):
+        raise _error(
+            "intent_binding_mismatch",
+            "Payment intent is not bound to this prepaid purchase",
+            reference=intent_reference,
+        )
+    return True
 
 
 def funding_link_for_invoice(

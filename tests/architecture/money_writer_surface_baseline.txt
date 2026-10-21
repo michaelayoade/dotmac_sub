@@ -7,7 +7,7 @@
 # Michael's explicit approval.
 # Regenerate with tests.architecture.billing_thin_client_inventory
 # .render_money_writer_baseline(<repo root>).
-TOTAL 24075
+TOTAL 24151
 app/services/account_credit_deposits.py
 app/services/autopay.py
 app/services/cutover_balance_audit.py
