@@ -312,3 +312,11 @@ def test_proof_script_keeps_secrets_off_curl_argv() -> None:
     assert "bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" not in text
     assert 'jwt\\":\\"$JWT' not in text
     assert "curl -K -" in text and "--data @-" in text
+    # The JWT must not be on any argv, jq included (it travels via env/stdin).
+    assert "--arg jwt" not in text
+    for line in text.splitlines():
+        if line.lstrip().startswith("#"):
+            continue
+        if "jq " in line or "curl " in line:
+            assert "$JWT" not in line.replace('JWT="$JWT" jq', "jq"), line
+    assert 'JWT="$JWT" jq -nc' in text and "jwt:env.JWT" in text

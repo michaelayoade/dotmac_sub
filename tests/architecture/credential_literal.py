@@ -54,6 +54,7 @@ SCANNED_ROOTS: tuple[str, ...] = (
     "scripts",
     "alembic",
     "alembic_kernel_adoption",
+    "deploy",
 )
 
 #: `tests/` is scanned by nothing here, on a stated premise: test fixtures are

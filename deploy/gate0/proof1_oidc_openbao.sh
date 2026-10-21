@@ -45,7 +45,7 @@ esac
 JWT=$(printf 'header = "Authorization: bearer %s"\n' "$ACTIONS_ID_TOKEN_REQUEST_TOKEN" \
   | curl -fsS -K - "${ACTIONS_ID_TOKEN_REQUEST_URL}&audience=${AUD}" | jq -er '.value')
 [ "${PROOF_SLEEP_SECONDS:-0}" != "0" ] && { echo "row 6: waiting ${PROOF_SLEEP_SECONDS}s for JWT expiry"; sleep "$PROOF_SLEEP_SECONDS"; }
-LOGIN_JSON=$(jq -nc --arg role "$PROOF_ROLE" --arg jwt "$JWT" '{role:$role,jwt:$jwt}' \
+LOGIN_JSON=$(JWT="$JWT" jq -nc --arg role "$PROOF_ROLE" '{role:$role,jwt:env.JWT}' \
   | curl -sS -X POST -H 'Content-Type: application/json' --data @- \
     "$OPENBAO_ADDR/v1/auth/jwt/login" || true)
 TOKEN=$(printf '%s' "$LOGIN_JSON" | jq -r '.auth.client_token // empty')
