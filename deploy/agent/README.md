@@ -55,8 +55,14 @@ Example keyring shape (public material only):
 One-pass inspection: `agent.pyz --config <config> --once` prints exactly
 `disposition`, `reason`, `report_id`, `executor_spawned`. The staging proof
 may add `--desired-file <root-owned envelope>` only with the root-owned
-config switch `allow_test_input = true`. It enters the same verification
-path. Disable the switch after proof collection.
+config switch `allow_test_input = true` (disabled by default). This hook also
+works without `--once`: the running daemon rereads and checks the root-owned,
+non-symlink envelope on every poll, so the proof owner can replace it between
+cases. The file must not be group/world writable and is limited to 1 MiB.
+Missing or unsafe input fails the poll without fetching desired-state from CP.
+It enters the same verification path. Disable the switch after proof collection.
+Staging health requires `app` and `celery-worker`; its Compose deployment has
+no `celery-beat`. Every observed container must still be running.
 
 `--answer-challenge <challenge.json>` returns the public sealed possession
 response; the host observes its own current digest.
