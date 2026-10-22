@@ -12,14 +12,13 @@ from __future__ import annotations
 
 import gzip
 import hashlib
-import importlib.util
 import json
 import os
 import shlex
 import shutil
 import subprocess
-import sys
 from pathlib import Path
+from types import ModuleType
 
 import pytest
 
@@ -27,15 +26,13 @@ ROOT = Path(__file__).resolve().parents[1]
 LIB = ROOT / "scripts/backup/recovery_bundle_lib.sh"
 DB_BACKUP = ROOT / "scripts/db_backup.sh"
 RCLONE_BACKUP = ROOT / "scripts/backup/backup_dotmac_sub_dbs_to_rclone.sh"
-DRILL = ROOT / "scripts/restore_drill.py"
 
 
-def _drill_module():
-    spec = importlib.util.spec_from_file_location("restore_drill", DRILL)
-    module = importlib.util.module_from_spec(spec)
-    sys.modules["restore_drill"] = module
-    spec.loader.exec_module(module)
-    return module
+def _drill_module() -> ModuleType:
+    # Exercise the supported package boundary, including sibling dependencies.
+    from scripts import restore_drill
+
+    return restore_drill
 
 
 # --- static: dump command lines --------------------------------------------
