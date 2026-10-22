@@ -51,6 +51,7 @@ from app.services import (
     lead_intake_ai,
     settings_api,
     settings_spec,
+    system_user_assignments,
     team_inbox_agent_introduction,
     team_inbox_assignment,
     team_inbox_commands,
@@ -100,6 +101,37 @@ INBOX_HTML_RESPONSE_HEADERS: dict[str, str] = {
     "Pragma": "no-cache",
     "Expires": "0",
 }
+
+
+def _is_identity_admin(request: Request, db: Session) -> bool:
+    user_id = getattr(getattr(request.state, "user", None), "id", None)
+    try:
+        staff_id = UUID(str(user_id))
+    except (TypeError, ValueError):
+        return False
+    return "admin" in system_user_assignments.system_user_role_names(db, staff_id)
+
+
+@router.get(
+    "/identity-corrections",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("support:ticket:read"))],
+)
+def inbox_identity_corrections(
+    request: Request,
+    offset: int = Query(default=0, ge=0),
+    db: Session = Depends(get_db),
+):
+    if not _is_identity_admin(request, db):
+        raise HTTPException(status_code=403, detail="Administrator role required.")
+    context = _ctx(request, db)
+    context["corrections"] = team_inbox_contact_links.open_identity_corrections(
+        db, limit=50, offset=offset
+    )
+    context["offset"] = offset
+    return templates.TemplateResponse("admin/inbox/identity_corrections.html", context)
+
+
 ReplyPresentationOutcome = Literal[
     "queued", "scheduled", "sent", "retried", "failed", "replayed", "error"
 ]
@@ -463,6 +495,7 @@ def team_inbox_queue(
             "can_manage_inbox": can_manage_inbox,
             "can_manage_inbox_capacity": can(request, "system:settings:write"),
             "can_manage_leads": can(request, "crm:lead:write"),
+            "can_review_identity_corrections": _is_identity_admin(request, db),
             "manager_dashboard": manager_dashboard,
             "selected": (
                 projection.selected.timeline
@@ -1231,6 +1264,217 @@ def team_inbox_contact_context(
         }
     )
     return templates.TemplateResponse("admin/inbox/_contact_drawer.html", context)
+
+
+@router.get(
+    "/{conversation_id}/identity-review",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("support:ticket:read"))],
+)
+def team_inbox_identity_review(
+    conversation_id: UUID,
+    request: Request,
+    db: Session = Depends(get_db),
+):
+    try:
+        review = team_inbox_contact_links.identity_review(
+            db,
+            conversation_id,
+            can_read_customers=can(request, "customer:read"),
+            can_read_leads=can(request, "crm:lead:read"),
+        )
+    except team_inbox_contact_links.ConversationContactLinkError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    context = _ctx(request, db)
+    lead_action = inbox_lead_actions.resolve_action(
+        db,
+        conversation_id=conversation_id,
+        intent=inbox_lead_actions.InboxActionIntent.lead,
+        permissions=_inbox_action_permissions(request),
+    )
+    context.update(
+        {
+            "review": review,
+            "lead_action": lead_action,
+            "can_link_customer": can(request, "support:ticket:update")
+            and can(request, "customer:read"),
+            "can_link_lead": can(request, "support:ticket:update")
+            and can(request, "crm:lead:read")
+            and can(request, "crm:lead:write"),
+            "can_request_correction": can(request, "support:ticket:update"),
+            "is_identity_admin": _is_identity_admin(request, db),
+        }
+    )
+    return templates.TemplateResponse("admin/inbox/identity_review.html", context)
+
+
+@router.post(
+    "/{conversation_id}/identity-review/select-lead",
+    dependencies=[
+        Depends(require_permission("support:ticket:update")),
+        Depends(require_permission("crm:lead:write")),
+    ],
+)
+def team_inbox_reviewed_lead_selection(
+    conversation_id: UUID,
+    request: Request,
+    lead_id: UUID = Form(...),
+    evidence_digest: str = Form(...),
+    db: Session = Depends(get_db),
+):
+    if not can(request, "crm:lead:read"):
+        raise HTTPException(status_code=403, detail="Lead read access required.")
+    actor_id = _system_user_uuid_from_request(request)
+    _prepare_mutation(db)
+    try:
+        inbox_lead_actions.link_reviewed_lead(
+            db,
+            inbox_lead_actions.LinkReviewedLeadCommand(
+                context=CommandContext.system(
+                    actor=f"user:{actor_id}",
+                    scope="inbox:reviewed-lead-selection",
+                    reason="Selected matching Lead after reviewing sender identity",
+                    idempotency_key=f"inbox:{conversation_id}:reviewed-lead:{lead_id}",
+                ),
+                conversation_id=conversation_id,
+                lead_id=lead_id,
+                expected_evidence_digest=evidence_digest,
+                actor_system_user_id=actor_id,
+                actor_person_id=_actor_uuid_from_request(request),
+            ),
+        )
+    except DomainError as exc:
+        return RedirectResponse(
+            f"/admin/inbox/{conversation_id}/identity-review?status=error&message={quote_plus(exc.message)}",
+            status_code=303,
+        )
+    return _detail_redirect(
+        conversation_id,
+        status="success",
+        message="Lead linked. You can review Resolve.",
+    )
+
+
+@router.post(
+    "/{conversation_id}/identity-review/request-correction",
+    dependencies=[Depends(require_permission("support:ticket:update"))],
+)
+def team_inbox_request_identity_correction(
+    conversation_id: UUID,
+    request: Request,
+    evidence_digest: str = Form(...),
+    reason: str = Form(...),
+    db: Session = Depends(get_db),
+):
+    actor_id = _system_user_uuid_from_request(request)
+    _prepare_mutation(db)
+    try:
+        team_inbox_contact_links.request_identity_correction(
+            db,
+            team_inbox_contact_links.RequestIdentityCorrectionCommand(
+                context=CommandContext.system(
+                    actor=f"user:{actor_id}",
+                    scope="inbox:identity-correction-request",
+                    reason="Sender matches no displayed contact record",
+                ),
+                conversation_id=conversation_id,
+                actor_system_user_id=actor_id,
+                expected_evidence_digest=evidence_digest,
+                reason=reason,
+            ),
+        )
+    except DomainError as exc:
+        return RedirectResponse(
+            f"/admin/inbox/{conversation_id}/identity-review?status=error&message={quote_plus(exc.message)}",
+            status_code=303,
+        )
+    return RedirectResponse(
+        f"/admin/inbox/{conversation_id}/identity-review?status=success&message=Correction%20requested",
+        status_code=303,
+    )
+
+
+@router.post(
+    "/{conversation_id}/identity-review/remove-contact",
+    dependencies=[Depends(require_permission("support:ticket:update"))],
+)
+def team_inbox_remove_incorrect_contact(
+    conversation_id: UUID,
+    request: Request,
+    contact_point_id: UUID = Form(...),
+    evidence_digest: str = Form(...),
+    reason: str = Form(...),
+    db: Session = Depends(get_db),
+):
+    if not _is_identity_admin(request, db):
+        raise HTTPException(status_code=403, detail="Administrator role required.")
+    actor_id = _system_user_uuid_from_request(request)
+    _prepare_mutation(db)
+    try:
+        team_inbox_contact_links.remove_incorrect_party_contact(
+            db,
+            team_inbox_contact_links.RemoveIncorrectPartyContactCommand(
+                context=CommandContext.system(
+                    actor=f"user:{actor_id}",
+                    scope="inbox:identity-correction",
+                    reason="Administrator removed incorrect Party contact claim",
+                ),
+                conversation_id=conversation_id,
+                contact_point_id=contact_point_id,
+                actor_system_user_id=actor_id,
+                expected_evidence_digest=evidence_digest,
+                reason=reason,
+            ),
+        )
+    except DomainError as exc:
+        return RedirectResponse(
+            f"/admin/inbox/{conversation_id}/identity-review?status=error&message={quote_plus(exc.message)}",
+            status_code=303,
+        )
+    return RedirectResponse(
+        f"/admin/inbox/{conversation_id}/identity-review?status=success&message=Contact%20match%20removed",
+        status_code=303,
+    )
+
+
+@router.post(
+    "/{conversation_id}/identity-review/clear-correction",
+    dependencies=[Depends(require_permission("support:ticket:update"))],
+)
+def team_inbox_clear_identity_correction(
+    conversation_id: UUID,
+    request: Request,
+    reason: str = Form(...),
+    db: Session = Depends(get_db),
+):
+    if not _is_identity_admin(request, db):
+        raise HTTPException(status_code=403, detail="Administrator role required.")
+    actor_id = _system_user_uuid_from_request(request)
+    _prepare_mutation(db)
+    try:
+        team_inbox_contact_links.clear_identity_correction(
+            db,
+            team_inbox_contact_links.ClearIdentityCorrectionCommand(
+                context=CommandContext.system(
+                    actor=f"user:{actor_id}",
+                    scope="inbox:identity-correction-clear",
+                    reason="Administrator verified sender contact claims were corrected",
+                ),
+                conversation_id=conversation_id,
+                actor_system_user_id=actor_id,
+                reason=reason,
+            ),
+        )
+    except DomainError as exc:
+        return RedirectResponse(
+            f"/admin/inbox/{conversation_id}/identity-review?status=error&message={quote_plus(exc.message)}",
+            status_code=303,
+        )
+    return _detail_redirect(
+        conversation_id,
+        status="success",
+        message="Identity correction cleared. Create Lead is available if no other blocker remains.",
+    )
 
 
 @router.get(
@@ -2738,10 +2982,17 @@ def team_inbox_contact_link(
     subscriber_id_manual: str | None = Form(default=None),
     reseller_id_manual: str | None = Form(default=None),
     note: str | None = Form(default=None),
+    expected_identity_evidence_digest: str | None = Form(default=None),
     db: Session = Depends(get_db),
 ):
     _prepare_mutation(db)
     try:
+        reviewed_digest = (
+            expected_identity_evidence_digest.strip()
+            if isinstance(expected_identity_evidence_digest, str)
+            and expected_identity_evidence_digest.strip()
+            else None
+        )
         actor_person_id = _actor_uuid_from_request(request)
         if target_type == "subscriber":
             try:
@@ -2767,10 +3018,17 @@ def team_inbox_contact_link(
             raise team_inbox_contact_links.ContactLinkError(
                 "Choose the Customer or reseller to link."
             )
+        actor_system_user_id = (
+            _system_user_uuid_from_request(request)
+            if reviewed_digest is not None
+            else None
+        )
         context = CommandContext.system(
             actor=(
-                f"person:{actor_person_id}"
-                if actor_person_id is not None
+                f"user:{actor_system_user_id}"
+                if actor_system_user_id
+                else f"person:{actor_person_id}"
+                if actor_person_id
                 else "system:team-inbox-admin"
             ),
             scope="team-inbox:contact-link",
@@ -2787,6 +3045,8 @@ def team_inbox_contact_link(
                 ),
                 actor_person_id=actor_person_id,
                 note=note,
+                expected_identity_evidence_digest=reviewed_digest,
+                actor_system_user_id=actor_system_user_id,
             ),
         )
     except team_inbox_commands.ConversationNotFoundError:
