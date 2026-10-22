@@ -224,11 +224,11 @@ jobs:
 
       - name: Ruff check
         if: needs.changes.outputs.docs-only != 'true'
-        run: poetry run ruff check app tests scripts alembic
+        run: poetry run ruff check app tests scripts alembic deploy/agent/build.py deploy/agent/provision.py deploy/egress/provision.py deploy/gate0/proof1_runner.py deploy/openbao/loopback_transport.py
 
       - name: Ruff format check
         if: needs.changes.outputs.docs-only != 'true'
-        run: poetry run ruff format --check app tests scripts alembic
+        run: poetry run ruff format --check app tests scripts alembic deploy/agent/build.py deploy/agent/provision.py deploy/egress/provision.py deploy/gate0/proof1_runner.py deploy/openbao/loopback_transport.py
 
       # Strict-JSON evidence documents (docs/kernel-runtime-composition.json,
       # docs/kernel-runtime-readiness.json) are excluded from the two Ruff
