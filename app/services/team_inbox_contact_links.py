@@ -24,6 +24,7 @@ from app.models.party import (
 )
 from app.models.sales import Lead, LeadStatus
 from app.models.subscriber import Reseller, Subscriber
+from app.models.system_user import SystemUser
 from app.models.team_inbox import (
     InboxContactLink,
     InboxConversation,
@@ -34,7 +35,12 @@ from app.models.team_inbox import (
     InboxParticipantAdmissionSource,
 )
 from app.services import party as party_service
-from app.services import team_inbox_participants
+from app.services import (
+    staff_provisioning,
+    system_user_assignments,
+    team_inbox_participants,
+)
+from app.services.audit_adapter import AuditActor, stage_audit_event
 from app.services.common import coerce_uuid
 from app.services.domain_errors import DomainError
 from app.services.events import emit_event
@@ -104,6 +110,7 @@ class LinkConversationContactCommand:
     source: ContactLinkSource
     note: str | None = None
     expected_active_link_id: UUID | None = None
+    expected_identity_evidence_digest: str | None = None
 
 
 class CustomerLinkOptionSource(StrEnum):
@@ -176,6 +183,88 @@ class IdentityEvidence:
             and item.party_contact_point_id is not None
         }
         return min(point_ids, default=None, key=str)
+
+
+class IdentityCorrectionStatus(StrEnum):
+    open = "open"
+    cleared = "cleared"
+    resolved_existing = "resolved_existing"
+
+
+@dataclass(frozen=True, slots=True)
+class IdentityReviewLead:
+    id: UUID
+    title: str
+
+
+@dataclass(frozen=True, slots=True)
+class IdentityReviewMatch:
+    party_id: UUID
+    display_name: str
+    customer_id: UUID | None
+    editable_customer_id: UUID | None
+    reseller_id: UUID | None
+    can_remove_directly: bool
+    leads: tuple[IdentityReviewLead, ...]
+    editable_leads: tuple[IdentityReviewLead, ...]
+    contact_point_ids: tuple[UUID, ...]
+    reason: str
+
+
+@dataclass(frozen=True, slots=True)
+class IdentityReview:
+    conversation_id: UUID
+    disposition: IdentityEvidenceDisposition
+    channel_type: str
+    endpoint: str
+    conflict_reason: str | None
+    evidence_digest: str
+    matches: tuple[IdentityReviewMatch, ...]
+    correction_status: IdentityCorrectionStatus | None
+    correction_reason: str | None
+
+
+@dataclass(frozen=True, slots=True)
+class RequestIdentityCorrectionCommand:
+    context: CommandContext
+    conversation_id: UUID
+    actor_system_user_id: UUID
+    expected_evidence_digest: str
+    reason: str
+
+
+@dataclass(frozen=True, slots=True)
+class ClearIdentityCorrectionCommand:
+    context: CommandContext
+    conversation_id: UUID
+    actor_system_user_id: UUID
+    reason: str
+
+
+@dataclass(frozen=True, slots=True)
+class RemoveIncorrectPartyContactCommand:
+    context: CommandContext
+    conversation_id: UUID
+    contact_point_id: UUID
+    actor_system_user_id: UUID
+    expected_evidence_digest: str
+    reason: str
+
+
+@dataclass(frozen=True, slots=True)
+class IdentityCorrectionOutcome:
+    conversation_id: UUID
+    status: IdentityCorrectionStatus
+    replayed: bool
+
+
+@dataclass(frozen=True, slots=True)
+class IdentityCorrectionQueueItem:
+    conversation_id: UUID
+    subject: str
+    channel_type: str
+    requested_at: str
+    reason: str
 
 
 class LeadEndpointRepairDisposition(StrEnum):
@@ -305,6 +394,11 @@ _CONTACT_LINK_COMMAND = OwnerCommandDefinition(
     owner=OWNER,
     concern="reviewed contact association and projection repair",
     name="execute_team_inbox_contact_link_command",
+)
+_IDENTITY_CORRECTION_COMMAND = OwnerCommandDefinition(
+    owner=OWNER,
+    concern="reviewed Inbox identity correction requests",
+    name="execute_inbox_identity_correction",
 )
 
 
@@ -864,6 +958,625 @@ def conversation_identity_evidence(
             "recorded_contact_resolution_ambiguous",
         )
     return canonical
+
+
+def identity_correction_status(
+    conversation: InboxConversation,
+) -> IdentityCorrectionStatus | None:
+    metadata = (
+        conversation.metadata_ if isinstance(conversation.metadata_, dict) else {}
+    )
+    request = metadata.get("identity_correction")
+    if not isinstance(request, dict):
+        return None
+    try:
+        return IdentityCorrectionStatus(str(request.get("status")))
+    except ValueError:
+        return None
+
+
+def identity_evidence_digest(evidence: IdentityEvidence) -> str:
+    parts = (
+        evidence.disposition.value,
+        evidence.identity.channel_type,
+        evidence.identity.normalized_endpoint,
+        evidence.identity.provider or "",
+        evidence.identity.provider_account_scope,
+        evidence.identity.external_subject_id or "",
+        evidence.conflict_reason or "",
+        *(str(party_id) for party_id in evidence.authoritative_party_ids),
+        *(str(subject.party_contact_point_id) for subject in evidence.subjects),
+    )
+    return hashlib.sha256("\x1f".join(parts).encode()).hexdigest()
+
+
+def identity_review(
+    db: Session,
+    conversation_id: UUID,
+    *,
+    can_read_customers: bool,
+    can_read_leads: bool,
+) -> IdentityReview:
+    """Show exact sender matches, provenance, and the durable review request."""
+    conversation = db.get(InboxConversation, conversation_id)
+    if conversation is None or not conversation.is_active:
+        raise ConversationContactLinkError()
+    evidence = conversation_identity_evidence(db, conversation)
+    party_ids = evidence.authoritative_party_ids
+    parties = (
+        {
+            row.id: row
+            for row in db.scalars(select(Party).where(Party.id.in_(party_ids))).all()
+        }
+        if party_ids
+        else {}
+    )
+    customer_rows = (
+        db.scalars(
+            select(Subscriber).where(
+                Subscriber.party_id.in_(party_ids), Subscriber.is_active.is_(True)
+            )
+        ).all()
+        if party_ids
+        else ()
+    )
+    all_customer_rows = (
+        db.scalars(select(Subscriber).where(Subscriber.party_id.in_(party_ids))).all()
+        if party_ids
+        else ()
+    )
+    all_customer_party_ids = frozenset(row.party_id for row in all_customer_rows)
+    reseller_rows = (
+        db.scalars(select(Reseller).where(Reseller.party_id.in_(party_ids))).all()
+        if party_ids
+        else ()
+    )
+    all_lead_rows = (
+        db.scalars(select(Lead).where(Lead.party_id.in_(party_ids))).all()
+        if party_ids
+        else ()
+    )
+    all_lead_party_ids = frozenset(row.party_id for row in all_lead_rows)
+
+    lead_rows = (
+        db.scalars(
+            select(Lead).where(
+                Lead.party_id.in_(party_ids),
+                Lead.is_active.is_(True),
+                Lead.status.in_(_OPEN_LEAD_STATUSES),
+            )
+        ).all()
+        if party_ids
+        else ()
+    )
+    reason = {
+        "email": "Exact sender email address",
+        "phone": "Exact sender phone number",
+        "whatsapp": "Exact sender WhatsApp number",
+        "facebook_messenger": "Exact sender and Facebook account",
+        "instagram_dm": "Exact sender and Instagram account",
+    }.get(evidence.identity.channel_type, "Exact sender contact detail")
+    matches = tuple(
+        IdentityReviewMatch(
+            party_id=party_id,
+            display_name=parties[party_id].display_name,
+            customer_id=next(
+                (row.id for row in customer_rows if row.party_id == party_id), None
+            )
+            if can_read_customers
+            else None,
+            editable_customer_id=next(
+                (row.id for row in all_customer_rows if row.party_id == party_id), None
+            )
+            if can_read_customers
+            else None,
+            reseller_id=next(
+                (row.id for row in reseller_rows if row.party_id == party_id), None
+            ),
+            can_remove_directly=(
+                evidence.identity.channel_type in _PROVIDER_SCOPED_IDENTITY_CHANNELS
+                or (
+                    party_id not in all_customer_party_ids
+                    and not any(row.party_id == party_id for row in reseller_rows)
+                    and party_id not in all_lead_party_ids
+                )
+            ),
+            leads=tuple(
+                IdentityReviewLead(row.id, row.title or "Untitled Lead")
+                for row in lead_rows
+                if row.party_id == party_id
+            )
+            if can_read_leads
+            else (),
+            editable_leads=tuple(
+                IdentityReviewLead(row.id, row.title or "Untitled Lead")
+                for row in all_lead_rows
+                if row.party_id == party_id
+            )
+            if can_read_leads
+            else (),
+            contact_point_ids=tuple(
+                sorted(
+                    {
+                        subject.party_contact_point_id
+                        for subject in evidence.subjects
+                        if subject.party_id == party_id
+                        and subject.party_contact_point_id is not None
+                    },
+                    key=str,
+                )
+            ),
+            reason=reason,
+        )
+        for party_id in party_ids
+        if party_id in parties
+    )
+    metadata = (
+        conversation.metadata_ if isinstance(conversation.metadata_, dict) else {}
+    )
+    correction = metadata.get("identity_correction")
+    correction_data = correction if isinstance(correction, dict) else {}
+    return IdentityReview(
+        conversation_id=conversation_id,
+        disposition=evidence.disposition,
+        channel_type=evidence.identity.channel_type,
+        endpoint=evidence.identity.normalized_endpoint,
+        conflict_reason=evidence.conflict_reason,
+        evidence_digest=identity_evidence_digest(evidence),
+        matches=matches,
+        correction_status=identity_correction_status(conversation),
+        correction_reason=str(correction_data.get("reason") or "") or None,
+    )
+
+
+def open_identity_corrections(
+    db: Session, *, limit: int = 50, offset: int = 0
+) -> tuple[IdentityCorrectionQueueItem, ...]:
+    """Bounded administrator worklist of durable open correction requests."""
+    rows = db.scalars(
+        select(InboxConversation)
+        .where(
+            InboxConversation.is_active.is_(True),
+            InboxConversation.metadata_["identity_correction"]["status"].as_string()
+            == IdentityCorrectionStatus.open.value,
+        )
+        .order_by(InboxConversation.updated_at.desc(), InboxConversation.id)
+        .limit(max(1, min(limit, 50)))
+        .offset(max(0, offset))
+    ).all()
+    result: list[IdentityCorrectionQueueItem] = []
+    for conversation in rows:
+        metadata = (
+            conversation.metadata_ if isinstance(conversation.metadata_, dict) else {}
+        )
+        correction = metadata.get("identity_correction")
+        data = correction if isinstance(correction, dict) else {}
+        result.append(
+            IdentityCorrectionQueueItem(
+                conversation_id=conversation.id,
+                subject=conversation.subject or "Untitled conversation",
+                channel_type=conversation.channel_type,
+                requested_at=str(data.get("requested_at") or ""),
+                reason=str(data.get("reason") or ""),
+            )
+        )
+    return tuple(result)
+
+
+def _correction_actor(
+    db: Session,
+    *,
+    context: CommandContext,
+    actor_system_user_id: UUID,
+    admin_required: bool,
+) -> AuditActor:
+    if context.actor != f"user:{actor_system_user_id}":
+        raise ContactLinkError(
+            "An authenticated staff identity is required.", suffix="actor_required"
+        )
+    staff_user = db.get(SystemUser, actor_system_user_id)
+    if staff_user is None or not staff_user.is_active:
+        raise ContactLinkError(
+            "An active staff account is required.", suffix="actor_required"
+        )
+    identity = staff_provisioning.resolve_staff_display_identities(
+        db,
+        query=staff_provisioning.StaffDisplayIdentityQuery(
+            user_ids=frozenset({actor_system_user_id})
+        ),
+    ).identities
+    if len(identity) != 1 or not identity[0].display_name.strip():
+        raise ContactLinkError(
+            "The staff account needs a canonical display name.",
+            suffix="actor_required",
+        )
+    if admin_required and "admin" not in system_user_assignments.system_user_role_names(
+        db, actor_system_user_id
+    ):
+        raise ContactLinkError(
+            "Only an administrator may correct Inbox identity matches.",
+            suffix="admin_required",
+        )
+    return AuditActor.user(str(actor_system_user_id), label=identity[0].display_name)
+
+
+def request_identity_correction(
+    db: Session, command: RequestIdentityCorrectionCommand
+) -> IdentityCorrectionOutcome:
+    """Durably flag an incorrect exact match for administrator review."""
+
+    def operation() -> IdentityCorrectionOutcome:
+        conversation = db.scalar(
+            select(InboxConversation)
+            .where(
+                InboxConversation.id == command.conversation_id,
+                InboxConversation.is_active.is_(True),
+            )
+            .with_for_update()
+        )
+        if conversation is None:
+            raise ConversationContactLinkError()
+        if (
+            conversation.subscriber_id is not None
+            or db.scalar(
+                select(InboxConversationLeadLink.id).where(
+                    InboxConversationLeadLink.conversation_id == conversation.id,
+                    InboxConversationLeadLink.is_active.is_(True),
+                )
+            )
+            is not None
+        ):
+            raise ContactLinkError(
+                "This conversation already has a reviewed Customer or Lead.",
+                suffix="already_identified",
+            )
+        actor = _correction_actor(
+            db,
+            context=command.context,
+            actor_system_user_id=command.actor_system_user_id,
+            admin_required=False,
+        )
+        reason = command.reason.strip()
+        if len(reason) < 10 or len(reason) > 2000:
+            raise ContactLinkError(
+                "Explain why none of the matching records belongs to the sender (10–2000 characters).",
+                suffix="review_reason_required",
+            )
+        evidence = lock_conversation_identity_evidence(db, conversation)
+        if identity_evidence_digest(evidence) != command.expected_evidence_digest:
+            raise ContactLinkError(
+                "Contact matches changed. Refresh the review before continuing.",
+                suffix="stale_identity_review",
+            )
+        if evidence.disposition is IdentityEvidenceDisposition.no_match:
+            raise ContactLinkError(
+                "No matching record currently needs correction.",
+                suffix="no_match",
+            )
+        if identity_correction_status(conversation) is IdentityCorrectionStatus.open:
+            return IdentityCorrectionOutcome(
+                conversation.id, IdentityCorrectionStatus.open, True
+            )
+        metadata = dict(conversation.metadata_ or {})
+        metadata["identity_correction"] = {
+            "status": IdentityCorrectionStatus.open.value,
+            "reason": reason,
+            "requested_by_principal_id": str(command.actor_system_user_id),
+            "requested_at": datetime.now(UTC).isoformat(),
+            "evidence_digest": command.expected_evidence_digest,
+        }
+        conversation.metadata_ = metadata
+        stage_audit_event(
+            db,
+            action="inbox.identity_correction_requested",
+            entity_type="inbox_conversation",
+            entity_id=str(conversation.id),
+            actor=actor,
+            request_id=str(command.context.command_id),
+            metadata={"evidence_digest": command.expected_evidence_digest},
+            details={"reason": reason},
+        )
+        emit_event(
+            db,
+            EventType.custom,
+            {
+                "name": "team_inbox.identity_correction_requested.v1",
+                "conversation_id": str(conversation.id),
+            },
+            actor=command.context.actor,
+        )
+        db.flush()
+        return IdentityCorrectionOutcome(
+            conversation.id, IdentityCorrectionStatus.open, False
+        )
+
+    return execute_owner_command(
+        db,
+        definition=_IDENTITY_CORRECTION_COMMAND,
+        context=command.context,
+        operation=operation,
+    )
+
+
+def clear_identity_correction(
+    db: Session, command: ClearIdentityCorrectionCommand
+) -> IdentityCorrectionOutcome:
+    """Administrator confirms that exact endpoint ownership is clear."""
+
+    def operation() -> IdentityCorrectionOutcome:
+        conversation = db.scalar(
+            select(InboxConversation)
+            .where(
+                InboxConversation.id == command.conversation_id,
+                InboxConversation.is_active.is_(True),
+            )
+            .with_for_update()
+        )
+        if conversation is None:
+            raise ConversationContactLinkError()
+        actor = _correction_actor(
+            db,
+            context=command.context,
+            actor_system_user_id=command.actor_system_user_id,
+            admin_required=True,
+        )
+        if (
+            identity_correction_status(conversation)
+            is not IdentityCorrectionStatus.open
+        ):
+            raise ContactLinkError(
+                "There is no open identity correction request.",
+                suffix="correction_not_open",
+            )
+        reason = command.reason.strip()
+        if len(reason) < 10 or len(reason) > 2000:
+            raise ContactLinkError(
+                "Record what was corrected (10–2000 characters).",
+                suffix="review_reason_required",
+            )
+        evidence = lock_conversation_identity_evidence(db, conversation)
+        canonical = endpoint_identity_evidence(db, evidence.identity)
+        if canonical.disposition is not IdentityEvidenceDisposition.no_match:
+            raise ContactLinkError(
+                "The sender detail still matches another record. Correct all wrong matches first.",
+                suffix="identity_still_matched",
+            )
+        metadata = dict(conversation.metadata_ or {})
+        correction = dict(metadata["identity_correction"])
+        correction.update(
+            {
+                "status": IdentityCorrectionStatus.cleared.value,
+                "cleared_by_principal_id": str(command.actor_system_user_id),
+                "cleared_at": datetime.now(UTC).isoformat(),
+                "clear_reason": reason,
+            }
+        )
+        metadata["identity_correction"] = correction
+        resolution = metadata.get("contact_resolution")
+        if isinstance(resolution, dict) and resolution.get("status") == "ambiguous":
+            updated_resolution = dict(resolution)
+            updated_resolution["status"] = "reviewed_no_match"
+            metadata["contact_resolution"] = updated_resolution
+        conversation.metadata_ = metadata
+        stage_audit_event(
+            db,
+            action="inbox.identity_correction_cleared",
+            entity_type="inbox_conversation",
+            entity_id=str(conversation.id),
+            actor=actor,
+            request_id=str(command.context.command_id),
+            metadata={"requested_evidence_digest": correction.get("evidence_digest")},
+            details={"reason": reason},
+        )
+        emit_event(
+            db,
+            EventType.custom,
+            {
+                "name": "team_inbox.identity_correction_cleared.v1",
+                "conversation_id": str(conversation.id),
+            },
+            actor=command.context.actor,
+        )
+        db.flush()
+        return IdentityCorrectionOutcome(
+            conversation.id, IdentityCorrectionStatus.cleared, False
+        )
+
+    return execute_owner_command(
+        db,
+        definition=_IDENTITY_CORRECTION_COMMAND,
+        context=command.context,
+        operation=operation,
+    )
+
+
+def resolve_identity_correction_by_selection(
+    db: Session,
+    *,
+    conversation: InboxConversation,
+    context: CommandContext,
+    actor_system_user_id: UUID,
+    selected_kind: str,
+    selected_id: UUID,
+) -> None:
+    """Flush-only participant when a reviewed existing identity ends a request."""
+    if not owner_command_active(db):
+        raise ContactLinkError(
+            "Identity review requires an active owner command.",
+            suffix="owner_command_required",
+        )
+    if identity_correction_status(conversation) is not IdentityCorrectionStatus.open:
+        return
+    if selected_kind not in {"customer", "lead"}:
+        raise ContactLinkError(
+            "Unsupported identity selection.", suffix="invalid_selection"
+        )
+    actor = _correction_actor(
+        db,
+        context=context,
+        actor_system_user_id=actor_system_user_id,
+        admin_required=False,
+    )
+    metadata = dict(conversation.metadata_ or {})
+    correction = dict(metadata["identity_correction"])
+    correction.update(
+        {
+            "status": IdentityCorrectionStatus.resolved_existing.value,
+            "selected_kind": selected_kind,
+            "selected_id": str(selected_id),
+            "cleared_by_principal_id": str(actor_system_user_id),
+            "cleared_at": datetime.now(UTC).isoformat(),
+        }
+    )
+    metadata["identity_correction"] = correction
+    conversation.metadata_ = metadata
+    stage_audit_event(
+        db,
+        action="inbox.identity_correction_resolved_existing",
+        entity_type="inbox_conversation",
+        entity_id=str(conversation.id),
+        actor=actor,
+        request_id=str(context.command_id),
+        metadata={"selected_kind": selected_kind, "selected_id": str(selected_id)},
+    )
+    emit_event(
+        db,
+        EventType.custom,
+        {
+            "name": "team_inbox.identity_correction_resolved_existing.v1",
+            "conversation_id": str(conversation.id),
+            "selected_kind": selected_kind,
+            "selected_id": str(selected_id),
+        },
+        actor=context.actor,
+    )
+    db.flush()
+
+
+def remove_incorrect_party_contact(
+    db: Session, command: RemoveIncorrectPartyContactCommand
+) -> IdentityCorrectionOutcome:
+    """Let an administrator remove a wrong match on a Party without a CRM role."""
+
+    def operation() -> IdentityCorrectionOutcome:
+        conversation = db.scalar(
+            select(InboxConversation)
+            .where(
+                InboxConversation.id == command.conversation_id,
+                InboxConversation.is_active.is_(True),
+            )
+            .with_for_update()
+        )
+        if conversation is None:
+            raise ConversationContactLinkError()
+        actor = _correction_actor(
+            db,
+            context=command.context,
+            actor_system_user_id=command.actor_system_user_id,
+            admin_required=True,
+        )
+        if (
+            identity_correction_status(conversation)
+            is not IdentityCorrectionStatus.open
+        ):
+            raise ContactLinkError(
+                "Request a correction before changing a contact match.",
+                suffix="correction_not_open",
+            )
+        reason = command.reason.strip()
+        if len(reason) < 10 or len(reason) > 2000:
+            raise ContactLinkError(
+                "Record why this contact detail is wrong (10–2000 characters).",
+                suffix="review_reason_required",
+            )
+        evidence = lock_conversation_identity_evidence(db, conversation)
+        if identity_evidence_digest(evidence) != command.expected_evidence_digest:
+            raise ContactLinkError(
+                "Contact matches changed. Refresh the review before continuing.",
+                suffix="stale_identity_review",
+            )
+        subject = next(
+            (
+                item
+                for item in evidence.subjects
+                if item.party_contact_point_id == command.contact_point_id
+            ),
+            None,
+        )
+        if subject is None or subject.party_id is None:
+            raise ContactLinkError(
+                "The selected contact point no longer matches the sender.",
+                suffix="stale_identity_review",
+            )
+        party_id = subject.party_id
+        if (
+            evidence.identity.channel_type not in _PROVIDER_SCOPED_IDENTITY_CHANNELS
+            and (
+                db.scalar(select(Subscriber.id).where(Subscriber.party_id == party_id))
+                or db.scalar(select(Reseller.id).where(Reseller.party_id == party_id))
+                or db.scalar(select(Lead.id).where(Lead.party_id == party_id))
+            )
+        ):
+            raise ContactLinkError(
+                "Edit this Customer or Lead in its own record to correct the contact detail.",
+                suffix="canonical_editor_required",
+            )
+        point = db.get(PartyContactPoint, command.contact_point_id)
+        if point is None:
+            raise ContactLinkError(
+                "The selected contact point is unavailable.",
+                suffix="stale_identity_review",
+            )
+        try:
+            party_service.revoke_incorrect_contact_point(
+                db,
+                party_service.RevokeIncorrectContactPoint(
+                    point_id=point.id,
+                    party_id=party_id,
+                    channel_type=PartyContactPointType(point.channel_type),
+                    normalized_value=point.normalized_value,
+                    source=OWNER,
+                ),
+            )
+        except (party_service.PartyInvariantError, ValueError) as exc:
+            raise ContactLinkError(
+                "The contact record changed. Refresh and review it again.",
+                suffix="stale_identity_review",
+            ) from exc
+        stage_audit_event(
+            db,
+            action="inbox.incorrect_party_contact_removed",
+            entity_type="party_contact_point",
+            entity_id=str(point.id),
+            actor=actor,
+            request_id=str(command.context.command_id),
+            metadata={
+                "conversation_id": str(conversation.id),
+                "party_id": str(party_id),
+            },
+            details={"reason": reason},
+        )
+        emit_event(
+            db,
+            EventType.custom,
+            {
+                "name": "team_inbox.incorrect_party_contact_removed.v1",
+                "conversation_id": str(conversation.id),
+                "party_id": str(party_id),
+                "contact_point_id": str(point.id),
+            },
+            actor=command.context.actor,
+        )
+        return IdentityCorrectionOutcome(
+            conversation.id, IdentityCorrectionStatus.open, False
+        )
+
+    return execute_owner_command(
+        db,
+        definition=_IDENTITY_CORRECTION_COMMAND,
+        context=command.context,
+        operation=operation,
+    )
 
 
 def lock_conversation_identity_evidence(
@@ -1514,6 +2227,16 @@ def link_conversation_contact(
         conversation_id=command.conversation_id,
     )
     identity = observed_inbound_identity(db, conversation)
+    if command.expected_identity_evidence_digest is not None:
+        evidence = lock_conversation_identity_evidence(db, conversation)
+        if (
+            identity_evidence_digest(evidence)
+            != command.expected_identity_evidence_digest
+        ):
+            raise ContactLinkError(
+                "Contact matches changed. Refresh the review before continuing.",
+                suffix="stale_identity_review",
+            )
     subscriber, reseller = _target(
         db,
         subscriber_id=(
@@ -1527,6 +2250,19 @@ def link_conversation_contact(
             else None
         ),
     )
+    if command.expected_identity_evidence_digest is not None:
+        selected_party_id = (
+            subscriber.party_id
+            if subscriber is not None
+            else reseller.party_id
+            if reseller is not None
+            else None
+        )
+        if selected_party_id not in evidence.authoritative_party_ids:
+            raise ContactLinkError(
+                "The selected Customer no longer matches the sender.",
+                suffix="customer_not_matched",
+            )
 
     now = datetime.now(UTC)
     deactivated: list[UUID] = []

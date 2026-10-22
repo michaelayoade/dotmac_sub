@@ -102,6 +102,22 @@ lazy drawer request recomputes current authoritative context. A projection
 failure after a successful mutation therefore permits a read retry without
 replaying the command.
 
+### Identity review page contract
+
+`admin.inbox.identity_review` is an investigation page for Inbox agents with
+conversation read access. Its first view shows the observed sender detail, the
+exact reason for each Party match, permitted Customer and Lead choices, and the
+next action. Customer and Lead roles obey their separate read/write permissions.
+An agent can submit a reasoned "none of these" correction request; the page
+shows its open status. The administrator-only worklist
+`admin.inbox.identity_corrections` lists bounded open requests and links to
+the exact conversation review. Only the canonical `admin` role may clear a
+request or remove a wrong contact point on a Party without a CRM record.
+Administrators use canonical Customer, Reseller, and Lead editors for those
+records, including inactive Customer and Lead records that still own a match.
+The page refreshes exact evidence after every action and returns to the
+conversation for the completion owner's current Resolve verdict.
+
 ## Historical data and repair
 
 Migration 475 is expand-only and performs no speculative backfill. Existing

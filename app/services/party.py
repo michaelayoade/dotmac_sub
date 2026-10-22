@@ -136,6 +136,17 @@ class PartyContactPointSet:
 
 
 @dataclass(frozen=True, slots=True)
+class RevokeIncorrectContactPoint:
+    """Reviewed removal of one stale exact Party contact claim."""
+
+    point_id: UUID
+    party_id: UUID
+    channel_type: PartyContactPointType
+    normalized_value: str
+    source: str
+
+
+@dataclass(frozen=True, slots=True)
 class ProspectPartyProfileEnrichment:
     """Explicit profile fields supplied after provisional prospect creation."""
 
@@ -1723,6 +1734,38 @@ def reconcile_contact_points(
         result.append(point)
     db.flush()
     return tuple(result)
+
+
+def revoke_incorrect_contact_point(
+    db: Session, command: RevokeIncorrectContactPoint
+) -> PartyContactPoint:
+    """Flush-only Party participant for a reviewed stale contact-point claim."""
+    from app.services.owner_commands import owner_command_active
+
+    if not owner_command_active(db):
+        raise PartyInvariantError("Contact correction requires an owner command")
+    point = db.scalar(
+        select(PartyContactPoint)
+        .where(PartyContactPoint.id == command.point_id)
+        .with_for_update()
+    )
+    if (
+        point is None
+        or not point.is_active
+        or point.party_id != command.party_id
+        or point.channel_type != command.channel_type.value
+        or point.normalized_value != command.normalized_value
+    ):
+        raise PartyInvariantError(
+            "The reviewed contact point changed; refresh the review"
+        )
+    point.is_active = False
+    point.is_primary = False
+    metadata = dict(point.metadata_ or {})
+    metadata["last_updated_by"] = command.source
+    point.metadata_ = metadata
+    db.flush()
+    return point
 
 
 def set_contact_organization(
