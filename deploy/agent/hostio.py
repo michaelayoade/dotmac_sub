@@ -205,7 +205,7 @@ class Snapshot:
             and background.get("celery_inspect_ok") is True
             and background.get("restart_counts_zero") is True
             and isinstance(containers, dict)
-            and {"app", "celery-worker", "celery-beat"} <= set(containers)
+            and {"app", "celery-worker"} <= set(containers)
             and all(value == "running" for value in containers.values())
         )
 

@@ -22,6 +22,15 @@ from .state import State, atomic, single_instance
 LOG = logging.getLogger("dotmac.deploy_agent")
 
 
+def read_override(path: Path | None) -> bytes | None:
+    if path is None:
+        return None
+    protected(path)
+    raw = path.read_bytes()
+    wire.require(len(raw) <= 1024 * 1024)
+    return raw
+
+
 @dataclass
 class Signer:
     key_id: str
@@ -352,11 +361,11 @@ class Agent:
         self.report(doc, disposition, reason, after, execution)
         self.retry_outbox()
 
-    def run(self) -> None:
+    def run(self, desired_file: Path | None = None) -> None:
         delay = self.config.poll_seconds
         while True:
             try:
-                self.poll()
+                self.poll(read_override(desired_file))
                 delay = (
                     min(delay * 2, 300)
                     if self.result.disposition == "retry"
@@ -416,18 +425,13 @@ def main() -> None:
             Signer.load(config),
             Keyring.load(config, state),
         )
-        if args.desired_file and (not args.once or not config.allow_test_input):
+        if args.desired_file and not config.allow_test_input:
             raise ValueError("test_input_not_enabled")
         if args.once:
-            override = None
-            if args.desired_file:
-                protected(args.desired_file)
-                override = args.desired_file.read_bytes()
-                wire.require(len(override) <= 1024 * 1024)
-            agent.poll(override)
+            agent.poll(read_override(args.desired_file))
             print(wire.canonical_json(asdict(agent.result)).decode())
         else:
-            agent.run()
+            agent.run(args.desired_file)
 
 
 if __name__ == "__main__":

@@ -2,12 +2,16 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
 from datetime import UTC, datetime, timedelta
+from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
+from deploy.agent import agent as agent_module
 from deploy.agent import contracts as wire
 from deploy.agent.agent import Agent, Keyring, Signer
 from deploy.agent.hostio import Config, Execution, HostIO, Snapshot
@@ -518,6 +522,100 @@ def test_file_override_still_uses_same_verifier_and_result(harness):
     assert not agent.result.executor_spawned
 
 
+def test_running_daemon_rereads_replaced_override(harness, tmp_path, monkeypatch):
+    agent, host, state, issue = harness
+    issue()
+    path = tmp_path / "desired.json"
+    path.write_bytes(host.raw)
+    checks, results = [], []
+    monkeypatch.setattr(agent_module, "protected", checks.append)
+    monkeypatch.setattr(host, "fetch", lambda: pytest.fail("unexpected CP fetch"))
+
+    def next_poll(delay):
+        results.append(agent.result.disposition)
+        if len(results) == 2:
+            raise KeyboardInterrupt
+        replacement = path.with_suffix(".next")
+        replacement.write_bytes(b"invalid envelope")
+        replacement.replace(path)
+
+    monkeypatch.setattr(agent_module.time, "sleep", next_poll)
+    with pytest.raises(KeyboardInterrupt):
+        agent.run(path)
+    assert results == ["applied", "quarantined"]
+    assert checks == [path, path]
+    assert host.executions == [DIGEST]
+
+
+@pytest.mark.parametrize(
+    "case", ["missing", "owner", "writable", "symlink", "oversize"]
+)
+def test_override_failure_retries_without_cp(harness, tmp_path, monkeypatch, case):
+    agent, host, state, issue = harness
+    path = tmp_path / "desired.json"
+    if case != "missing":
+        path.write_bytes(b"x" * (1024 * 1024 + 1) if case == "oversize" else b"x")
+    if case == "writable":
+        path.chmod(0o666)
+    elif case == "symlink":
+        link = tmp_path / "desired-link"
+        link.symlink_to(path)
+        path = link
+    lstat = Path.lstat
+    monkeypatch.setattr(
+        Path,
+        "lstat",
+        lambda path: SimpleNamespace(
+            st_mode=lstat(path).st_mode, st_uid=1 if case == "owner" else 0
+        ),
+    )
+    monkeypatch.setattr(host, "fetch", lambda: pytest.fail("unexpected CP fetch"))
+    delays = []
+
+    def stop(delay):
+        delays.append(delay)
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr(agent_module.time, "sleep", stop)
+    with pytest.raises(KeyboardInterrupt):
+        agent.run(path)
+    assert delays == [min(agent.config.poll_seconds * 2, 300)]
+    assert not host.executions and not host.posts
+
+
+@pytest.mark.parametrize("once", [False, True])
+@pytest.mark.parametrize("enabled", [False, True])
+def test_desired_file_cli_requires_switch(
+    harness, tmp_path, monkeypatch, once, enabled
+):
+    agent, host, state, issue = harness
+    agent.config = replace(agent.config, allow_test_input=enabled)
+    path = tmp_path / "desired.json"
+    path.write_bytes(b"test envelope")
+    monkeypatch.setattr(
+        agent_module.sys,
+        "argv",
+        [str(path), "--config", str(path), "--desired-file", str(path)]
+        + (["--once"] if once else []),
+    )
+    monkeypatch.setattr(Config, "load", lambda _: agent.config)
+    monkeypatch.setattr(agent_module, "digest", lambda _: agent.config.artifact_digest)
+    monkeypatch.setattr(Signer, "load", lambda _: agent.signer)
+    monkeypatch.setattr(Keyring, "load", lambda *_: agent.keyring)
+    monkeypatch.setattr(agent_module, "Agent", lambda *_: agent)
+    monkeypatch.setattr(agent_module, "protected", lambda _: None)
+    calls = []
+    monkeypatch.setattr(agent, "poll", lambda raw: calls.append(raw))
+    monkeypatch.setattr(agent, "run", lambda source: calls.append(source))
+    if enabled:
+        agent_module.main()
+        assert calls == [b"test envelope" if once else path]
+    else:
+        with pytest.raises(ValueError, match="test_input_not_enabled"):
+            agent_module.main()
+        assert not calls
+
+
 def test_registry_outage_leaves_nonce_unconsumed(harness):
     agent, host, state, issue = harness
     doc = issue()
@@ -531,6 +629,18 @@ def test_registry_outage_leaves_nonce_unconsumed(harness):
 def test_nonrunning_or_missing_worker_prevents_healthy_success():
     observed = snapshot(DIGEST)
     observed.health["background"]["containers"].pop("celery-worker")
+    assert not observed.healthy()
+
+
+@pytest.mark.parametrize("missing", [None, "app", "celery-worker"])
+def test_staging_health_without_beat(missing):
+    observed = snapshot(DIGEST)
+    containers = observed.health["background"]["containers"]
+    containers.pop("celery-beat")
+    if missing:
+        containers.pop(missing)
+    assert observed.healthy() is (missing is None)
+    containers["optional-service"] = "exited"
     assert not observed.healthy()
 
 
