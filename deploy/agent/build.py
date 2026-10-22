@@ -16,7 +16,7 @@ def main() -> None:
         files = {
             f"deploy/agent/{path.name}": path.read_bytes()
             for path in sorted(source.glob("*.py"))
-            if path.name != "build.py"
+            if path.name not in {"build.py", "provision.py"}
         }
         files["__main__.py"] = b"from deploy.agent.agent import main\nmain()\n"
         files["deploy/__init__.py"] = b""
