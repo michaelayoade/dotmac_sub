@@ -16,8 +16,8 @@ owners contribute their reviewed keyless changes; complete files introduced by
 the gate are counted in full. The corrected baseline is 10,168 counted lines,
 including 3,601 test lines: the earlier 10,053 subtotal omitted a distinct
 115-line private test. Markdown headings and both physical contracts count;
-the shared Sub evidence dependency counts once. The completed source count is
-19,575, including 7,443 required test lines.
+the shared Sub evidence dependency counts once. The approval snapshot measured
+19,534, including 7,443 required test lines; later corrections remain counted.
 
 | Component | Earlier ceiling | Completion ceiling |
 | --- | ---: | ---: |
