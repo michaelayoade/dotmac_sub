@@ -338,7 +338,7 @@ def dropped_fresh_flow(
     with socket.socket(
         socket.AF_INET if address.version == 4 else socket.AF_INET6, socket.SOCK_STREAM
     ) as stream:
-        stream.bind(("0.0.0.0" if address.version == 4 else "::", 0))  # noqa: S104 - outbound socket only, never listens
+        stream.bind(("0.0.0.0" if address.version == 4 else "::", 0))  # noqa: S104  # nosec B104 - reserves an outbound source port; never listens
         source = stream.getsockname()[1]
         c.require(32768 <= source <= 60999)
         family = "ip" if address.version == 4 else "ip6"

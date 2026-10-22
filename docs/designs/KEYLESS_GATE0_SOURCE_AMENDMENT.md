@@ -17,7 +17,7 @@ the gate are counted in full. The corrected baseline is 10,168 counted lines,
 including 3,601 test lines: the earlier 10,053 subtotal omitted a distinct
 115-line private test. Markdown headings and both physical contracts count;
 the shared Sub evidence dependency counts once. The completed source count is
-19,542, including 7,443 required test lines.
+19,575, including 7,443 required test lines.
 
 | Component | Earlier ceiling | Completion ceiling |
 | --- | ---: | ---: |
