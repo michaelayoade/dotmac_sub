@@ -32,17 +32,23 @@ import hashlib
 import json
 import re
 import shutil
+import stat
 import subprocess
 import sys
 import tempfile
 import time
 import uuid
+import zlib
+from dataclasses import asdict, dataclass
+from enum import StrEnum
 from pathlib import Path
 from typing import Any
 
 if __package__:
+    from .restore_guard import HostPurpose, enrolled
     from .restore_inventory import Inventory, collect_inventory, first_divergence
 else:
+    from restore_guard import HostPurpose, enrolled
     from restore_inventory import Inventory, collect_inventory, first_divergence
 
 EXIT_OK = 0
@@ -134,39 +140,119 @@ def sha256_file(path: Path) -> str:
     return digest.hexdigest()
 
 
-def load_bundle(manifest_path: Path) -> tuple[dict[str, Any], dict[str, Path]]:
-    """Load and shape-check a bundle manifest; resolve artifact paths."""
-
-    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
-    if manifest.get("schema") != "dotmac_sub.recovery_bundle.v1":
-        raise ValueError(f"unsupported bundle schema: {manifest.get('schema')!r}")
-    artifacts: dict[str, Path] = {}
-    for entry in manifest.get("artifacts", []):
-        artifacts[str(entry["role"])] = manifest_path.parent / str(entry["file"])
-    for required in ("globals", "database_dump"):
-        if required not in artifacts:
-            raise ValueError(f"manifest is missing the {required!r} artifact")
-        if not artifacts[required].is_file():
-            raise ValueError(f"artifact file not found: {artifacts[required]}")
-    return manifest, artifacts
+@dataclass(frozen=True)
+class BundleArtifact:
+    role: str
+    path: Path
+    sha256: str
+    size: int
 
 
-def verify_hashes(manifest: dict[str, Any], artifacts: dict[str, Path]) -> list[str]:
-    failures = []
-    for entry in manifest.get("artifacts", []):
-        role = str(entry["role"])
-        actual = sha256_file(artifacts[role])
-        if actual != entry.get("sha256"):
-            failures.append(
-                f"{role}: sha256 mismatch (manifest {entry.get('sha256')}, actual {actual})"
-            )
-    return failures
+@dataclass(frozen=True)
+class RecoveryBundle:
+    database: str
+    created_at: str
+    git_sha: str
+    artifacts: tuple[BundleArtifact, ...]
+
+
+def _unique(pairs: list[tuple[str, object]]) -> dict[str, object]:
+    if len({key for key, _ in pairs}) != len(pairs):
+        raise ValueError("duplicate_bundle_field")
+    return dict(pairs)
+
+
+def load_bundle(manifest_path: Path) -> tuple[RecoveryBundle, dict[str, Path]]:
+    """Validate complete artifact identities before opening private payloads."""
+    if manifest_path.is_symlink() or manifest_path.stat().st_size > 65536:
+        raise ValueError("invalid_bundle_manifest")
+    raw = json.loads(
+        manifest_path.read_text(encoding="utf-8"), object_pairs_hook=_unique
+    )
+    allowed = {
+        "schema",
+        "database",
+        "created_at",
+        "git_sha",
+        "artifacts",
+        "facility_target",
+        "pg_dump_version",
+        "restore_order",
+        "login_material",
+    }
+    if (
+        not isinstance(raw, dict)
+        or set(raw) - allowed
+        or raw.get("schema") != "dotmac_sub.recovery_bundle.v1"
+    ):
+        raise ValueError("invalid_bundle_manifest")
+    if any(
+        not isinstance(raw.get(k), str) or not 0 < len(raw[k]) <= 256
+        for k in ("database", "created_at")
+    ):
+        raise ValueError("invalid_bundle_identity")
+    entries = raw.get("artifacts")
+    if not isinstance(entries, list) or len(entries) != 2:
+        raise ValueError("invalid_bundle_artifacts")
+    artifacts: list[BundleArtifact] = []
+    for entry in entries:
+        if (
+            not isinstance(entry, dict)
+            or not {"role", "file", "sha256", "bytes"} <= set(entry)
+            or set(entry) - {"role", "file", "sha256", "bytes", "command"}
+        ):
+            raise ValueError("invalid_bundle_artifact")
+        if type(entry["role"]) is not str or entry["role"] not in {
+            "globals",
+            "database_dump",
+        }:
+            raise ValueError("invalid_bundle_artifact")
+        name = entry["file"]
+        if (
+            not isinstance(name, str)
+            or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,199}", name)
+            or ".." in name
+        ):
+            raise ValueError("bundle_path")
+        path = manifest_path.parent / name
+        info = path.lstat()
+        if (
+            not stat.S_ISREG(info.st_mode)
+            or not isinstance(entry["sha256"], str)
+            or not re.fullmatch(r"[0-9a-f]{64}", entry["sha256"])
+            or type(entry["bytes"]) is not int
+            or entry["bytes"] <= 0
+            or info.st_size != entry["bytes"]
+        ):
+            raise ValueError("invalid_bundle_artifact")
+        artifacts.append(
+            BundleArtifact(entry["role"], path, entry["sha256"], entry["bytes"])
+        )
+    if {a.role for a in artifacts} != {"globals", "database_dump"} or len(
+        {a.path for a in artifacts}
+    ) != 2:
+        raise ValueError("duplicate_bundle_artifact")
+    revision = raw.get("git_sha", "")
+    if not isinstance(revision, str) or len(revision) > 64:
+        raise ValueError("invalid_bundle_identity")
+    bundle = RecoveryBundle(
+        raw["database"], raw["created_at"], revision, tuple(artifacts)
+    )
+    return bundle, {a.role: a.path for a in artifacts}
+
+
+def verify_hashes(manifest: RecoveryBundle, artifacts: dict[str, Path]) -> list[str]:
+    return [
+        "artifact_hash"
+        for a in manifest.artifacts
+        if sha256_file(artifacts[a.role]) != a.sha256
+    ]
 
 
 _ROLE_RE = re.compile(
     r'^(?:CREATE|ALTER) ROLE (?:"([^"]+)"|([A-Za-z0-9_]+))', re.MULTILINE
 )
-_PASSWORD_RE = re.compile(r"PASSWORD '(SCRAM-SHA-256\$|md5[0-9a-f]{32})")
+_PASSWORD_RE = re.compile(r"\bPASSWORD\s+'", re.IGNORECASE)
 
 
 def parse_globals_roles(globals_path: Path) -> tuple[set[str], bool]:
@@ -181,8 +267,16 @@ def parse_globals_roles(globals_path: Path) -> tuple[set[str], bool]:
 def run(
     cmd: list[str], *, input_bytes: bytes | None = None, timeout: int = 600
 ) -> subprocess.CompletedProcess[bytes]:
+    enrolled(HostPurpose.RESTORE)
+    if not cmd or cmd[0] != "docker":
+        raise RuntimeError("restore_executable")
     return subprocess.run(
-        cmd, input=input_bytes, capture_output=True, timeout=timeout, check=False
+        ["/usr/bin/docker", "--host", "unix:///var/run/docker.sock", *cmd[1:]],
+        input=input_bytes,
+        capture_output=True,
+        timeout=timeout,
+        check=False,
+        env={"PATH": "/usr/bin:/bin", "LANG": "C"},
     )
 
 
@@ -312,22 +406,51 @@ class ScratchPostgres:
     def scalar(self, sql_text: str, *, db: str = SCRATCH_DB) -> str:
         result = self.psql(sql_text, db=db, tuples_only=True)
         if result.returncode != 0:
-            raise RuntimeError(
-                f"query failed: {result.stderr.decode(errors='replace')[:500]}"
-            )
+            raise RuntimeError("scratch_query_failed")
         return result.stdout.decode().strip()
 
 
-def _check(name: str, passed: bool, detail: str, checks: list[dict[str, Any]]) -> None:
-    checks.append({"name": name, "passed": passed, "detail": detail})
+class RestoreVerdict(StrEnum):
+    PASS = "PASS"
+    FAIL = "FAIL"
+
+
+@dataclass(frozen=True)
+class RestoreCheck:
+    name: str
+    passed: bool
+    detail: str
+
+
+@dataclass(frozen=True)
+class RestoreOutcome:
+    verdict: RestoreVerdict
+    stage: str
+    checks: tuple[RestoreCheck, ...]
+    source_parity: bool
+    scratch_absent: bool
+    restored_inventory_sha256: str = ""
+
+    def document(self) -> dict[str, object]:
+        return {
+            "verdict": self.verdict.value,
+            "stage": self.stage,
+            "checks": [asdict(c) for c in self.checks],
+            "source_parity": self.source_parity,
+            "scratch_absent": self.scratch_absent,
+        }
+
+
+def _check(name: str, passed: bool, detail: str, checks: list[RestoreCheck]) -> None:
+    checks.append(RestoreCheck(name, passed, detail))
 
 
 def assert_isolation_model(
     pg: ScratchPostgres, *, globals_roles: set[str]
-) -> list[dict[str, Any]]:
+) -> list[RestoreCheck]:
     """Assert roles, RLS, revocation, cross-tenant and ownership invariants."""
 
-    checks: list[dict[str, Any]] = []
+    checks: list[RestoreCheck] = []
     contract, presence_only = expected_role_contract()
 
     rows = pg.scalar(
@@ -338,7 +461,10 @@ def assert_isolation_model(
         if not line.strip():
             continue
         name, login, bypass, superuser = line.split("|")
-        observed[name] = (login == "t", bypass == "t", superuser == "t")
+        flags = (login, bypass, superuser)
+        if name in observed or any(flag not in {"true", "false"} for flag in flags):
+            raise RuntimeError("role_posture_invalid")
+        observed[name] = (login == "true", bypass == "true", superuser == "true")
 
     # 1. Every non-builtin role the globals artifact defines must now exist.
     expected_from_globals = {r for r in globals_roles if not r.startswith("pg_")}
@@ -480,13 +606,20 @@ def assert_isolation_model(
     return checks
 
 
+def inventory_digest(inventory: Inventory) -> str:
+    return hashlib.sha256(
+        json.dumps(asdict(inventory), sort_keys=True, separators=(",", ":")).encode()
+    ).hexdigest()
+
+
 def drill_bundle(
     manifest_path: Path, image: str, *, expected_inventory: Inventory | None = None
-) -> dict[str, Any]:
+) -> RestoreOutcome:
     """Restore one bundle into scratch postgres and assert the model."""
 
     manifest, artifacts = load_bundle(manifest_path)
-    checks: list[dict[str, Any]] = []
+    restored_digest = ""
+    checks: list[RestoreCheck] = []
     hash_failures = verify_hashes(manifest, artifacts)
     _check(
         "manifest_sha256",
@@ -509,8 +642,10 @@ def drill_bundle(
         f"roles defined in globals: {sorted(globals_roles)}",
         checks,
     )
-    if any(not c["passed"] for c in checks):
-        return {"verdict": "FAIL", "stage": "bundle_validation", "checks": checks}
+    if any(not c.passed for c in checks):
+        return RestoreOutcome(
+            RestoreVerdict.FAIL, "bundle_validation", tuple(checks), False, True
+        )
 
     with ScratchPostgres(image) as pg:
         with gzip.open(artifacts["globals"], "rb") as handle:
@@ -533,28 +668,34 @@ def drill_bundle(
             checks.extend(assert_isolation_model(pg, globals_roles=globals_roles))
             if expected_inventory is not None:
                 try:
+                    restored_inventory = collect_inventory(pg)
+                    restored_digest = inventory_digest(restored_inventory)
                     divergence = first_divergence(
-                        expected_inventory, collect_inventory(pg)
+                        expected_inventory, restored_inventory
                     )
                     detail = divergence or "all inventoried metadata matches source"
                     matched = divergence is None
                 except (RuntimeError, ValueError):
                     matched, detail = False, "metadata collection failed"
                 _check("source_metadata_parity", matched, detail, checks)
-    passed = all(c["passed"] for c in checks)
-    return {
-        "verdict": "PASS" if passed else "FAIL",
-        "stage": "restore_and_assert",
-        "database": manifest.get("database"),
-        "bundle_created_at": manifest.get("created_at"),
-        "checks": checks,
-    }
+    passed = expected_inventory is not None and all(c.passed for c in checks)
+    parity = any(c.name == "source_metadata_parity" and c.passed for c in checks)
+    return RestoreOutcome(
+        RestoreVerdict.PASS if passed else RestoreVerdict.FAIL,
+        "restore_and_assert",
+        tuple(checks),
+        parity,
+        True,
+        restored_digest,
+    )
 
 
 #: Synthetic fixture mirroring Sub's isolation shape in miniature: every
 #: contract role, a FORCEd-RLS tenant plane, a revoked platform plane, and
 #: non-superuser ownership. Used by --self-test so CI needs no prod data.
 FIXTURE_SQL = """
+CREATE TABLE public.alembic_version (version_num text PRIMARY KEY);
+INSERT INTO public.alembic_version VALUES ('synthetic-fixture');
 CREATE ROLE dotmac_app LOGIN NOBYPASSRLS NOSUPERUSER;
 CREATE ROLE app_admin LOGIN BYPASSRLS NOSUPERUSER;
 CREATE ROLE app_user LOGIN NOBYPASSRLS NOSUPERUSER;
@@ -587,9 +728,8 @@ def self_test(image: str) -> dict[str, Any]:
         with ScratchPostgres(image) as source:
             applied = source.psql(FIXTURE_SQL, db=SCRATCH_DB)
             if applied.returncode != 0:
-                raise RuntimeError(
-                    f"fixture failed: {applied.stderr.decode(errors='replace')[:500]}"
-                )
+                raise RuntimeError("fixture_failed")
+            expected_inventory = collect_inventory(source)
             globals_gz = bundle_dir / "fixture.globals.sql.gz"
             dump_gz = bundle_dir / "fixture.sql.gz"
             for out_path, tool_args in (
@@ -607,9 +747,7 @@ def self_test(image: str) -> dict[str, Any]:
             ):
                 result = run(["docker", "exec", source.name, *tool_args], timeout=300)
                 if result.returncode != 0:
-                    raise RuntimeError(
-                        f"{tool_args[0]} failed: {result.stderr.decode(errors='replace')[:500]}"
-                    )
+                    raise RuntimeError("fixture_dump_failed")
                 with gzip.open(out_path, "wb") as handle:
                     handle.write(result.stdout)
         manifest = {
@@ -633,7 +771,9 @@ def self_test(image: str) -> dict[str, Any]:
         }
         manifest_path = bundle_dir / "fixture.manifest.json"
         manifest_path.write_text(json.dumps(manifest, indent=2), encoding="utf-8")
-        verdict = drill_bundle(manifest_path, image)
+        verdict = drill_bundle(
+            manifest_path, image, expected_inventory=expected_inventory
+        ).document()
         verdict["mode"] = "self-test"
         return verdict
 
@@ -648,7 +788,7 @@ def dry_run(manifest_path: Path) -> dict[str, Any]:
     return {
         "verdict": "FAIL" if hash_failures or has_passwords else "DRY_RUN_OK",
         "mode": "dry-run",
-        "database": manifest.get("database"),
+        "database": manifest.database,
         "hash_failures": hash_failures,
         "globals_has_password_material": has_passwords,
         "globals_roles": sorted(globals_roles),
@@ -719,23 +859,36 @@ def main() -> int:
                     )
                 )
                 return EXIT_INFRA
-            verdict = drill_bundle(args.manifest, args.image)
-    except ValueError as exc:
+            verdict = drill_bundle(args.manifest, args.image).document()
+    except (ValueError, OSError) as exc:
         print(
             json.dumps(
-                {"verdict": "FAIL", "stage": "bundle_validation", "reason": str(exc)},
+                {
+                    "verdict": "FAIL",
+                    "stage": "bundle_validation",
+                    "reason": "restore_validation_failed",
+                },
                 indent=2,
             )
         )
         return EXIT_ASSERTION
-    except RuntimeError as exc:
-        print(json.dumps({"verdict": "INFRA_FAILURE", "reason": str(exc)}, indent=2))
+    except (RuntimeError, EOFError, zlib.error, subprocess.SubprocessError):
+        print(
+            json.dumps(
+                {"verdict": "INFRA_FAILURE", "reason": "restore_validation_failed"},
+                indent=2,
+            )
+        )
         return EXIT_INFRA
 
     rendered = json.dumps(verdict, indent=2)
-    print(rendered)
     if args.out:
-        args.out.write_text(rendered + "\n", encoding="utf-8")
+        try:
+            args.out.write_text(rendered + "\n", encoding="utf-8")
+        except OSError:
+            print(json.dumps({"verdict": "FAIL", "reason": "restore_output_failed"}))
+            return EXIT_INFRA
+    print(rendered)
     return (
         EXIT_OK if verdict.get("verdict") in {"PASS", "DRY_RUN_OK"} else EXIT_ASSERTION
     )

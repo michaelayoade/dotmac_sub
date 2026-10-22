@@ -184,7 +184,9 @@ class InventoryTests(unittest.TestCase):
                         ScratchPostgres=Mock(return_value=pg),
                         load_bundle=Mock(
                             return_value=(
-                                {},
+                                drill.RecoveryBundle(
+                                    "dotmac_sub", "fixture", "a" * 40, ()
+                                ),
                                 {
                                     "globals": Path("globals"),
                                     "database_dump": Path("dump"),
@@ -206,6 +208,6 @@ class InventoryTests(unittest.TestCase):
                     )
                 self.assertEqual(events, ["inventory", "cleanup"])
                 self.assertEqual(
-                    result["verdict"], "PASS" if observed == self.raw else "FAIL"
+                    result.verdict.value, "PASS" if observed == self.raw else "FAIL"
                 )
-                self.assertNotIn("private SQL payload", json.dumps(result))
+                self.assertNotIn("private SQL payload", json.dumps(result.document()))
