@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 import pytest
 
@@ -72,9 +72,9 @@ def _conflict(db_session):
     return conversation, tuple(parties), tuple(points)
 
 
-def _context(user: SystemUser, scope: str) -> CommandContext:
+def _context(user_id: UUID, scope: str) -> CommandContext:
     return CommandContext.system(
-        actor=f"user:{user.id}",
+        actor=f"user:{user_id}",
         scope=scope,
         reason="Reviewed Inbox sender identity",
     )
@@ -98,12 +98,15 @@ def test_review_shows_exact_matches_and_refuses_stale_correction(db_session):
         party_binding_reason="Existing Customer fixture",
         first_name="Old",
         last_name="Owner",
+        email=conversation.contact_address,
         status=SubscriberStatus.active,
         is_active=True,
     )
     db_session.add(customer)
     db_session.commit()
     user = _staff(db_session, admin=False)
+    conversation_id = conversation.id
+    user_id = user.id
     review = _review(db_session, conversation)
     assert review.disposition.value == "ambiguous_match"
     assert {row.party_id for row in review.matches} == {p.id for p in parties}
@@ -118,9 +121,9 @@ def test_review_shows_exact_matches_and_refuses_stale_correction(db_session):
         team_inbox_contact_links.request_identity_correction(
             db_session,
             team_inbox_contact_links.RequestIdentityCorrectionCommand(
-                context=_context(user, "inbox:identity-correction-request"),
-                conversation_id=conversation.id,
-                actor_system_user_id=user.id,
+                context=_context(user_id, "inbox:identity-correction-request"),
+                conversation_id=conversation_id,
+                actor_system_user_id=user_id,
                 expected_evidence_digest="stale",
                 reason="Neither old owner is the sender.",
             ),
@@ -132,21 +135,25 @@ def test_only_administrator_can_clear_after_all_wrong_matches_are_removed(db_ses
     conversation, _, points = _conflict(db_session)
     agent = _staff(db_session, admin=False)
     admin = _staff(db_session, admin=True)
+    conversation_id = conversation.id
+    point_ids = tuple(point.id for point in points)
+    agent_id = agent.id
+    admin_id = admin.id
     review = _review(db_session, conversation)
     finish_read_transaction(db_session)
     requested = team_inbox_contact_links.request_identity_correction(
         db_session,
         team_inbox_contact_links.RequestIdentityCorrectionCommand(
-            context=_context(agent, "inbox:identity-correction-request"),
-            conversation_id=conversation.id,
-            actor_system_user_id=agent.id,
+            context=_context(agent_id, "inbox:identity-correction-request"),
+            conversation_id=conversation_id,
+            actor_system_user_id=agent_id,
             expected_evidence_digest=review.evidence_digest,
             reason="Both old records use a reassigned address.",
         ),
     )
     assert requested.status is team_inbox_contact_links.IdentityCorrectionStatus.open
     assert any(
-        item.conversation_id == conversation.id
+        item.conversation_id == conversation_id
         for item in team_inbox_contact_links.open_identity_corrections(db_session)
     )
     finish_read_transaction(db_session)
@@ -156,9 +163,9 @@ def test_only_administrator_can_clear_after_all_wrong_matches_are_removed(db_ses
         team_inbox_contact_links.clear_identity_correction(
             db_session,
             team_inbox_contact_links.ClearIdentityCorrectionCommand(
-                context=_context(agent, "inbox:identity-correction-clear"),
-                conversation_id=conversation.id,
-                actor_system_user_id=agent.id,
+                context=_context(agent_id, "inbox:identity-correction-clear"),
+                conversation_id=conversation_id,
+                actor_system_user_id=agent_id,
                 reason="Verified address was reassigned.",
             ),
         )
@@ -169,29 +176,29 @@ def test_only_administrator_can_clear_after_all_wrong_matches_are_removed(db_ses
         team_inbox_contact_links.clear_identity_correction(
             db_session,
             team_inbox_contact_links.ClearIdentityCorrectionCommand(
-                context=_context(admin, "inbox:identity-correction-clear"),
-                conversation_id=conversation.id,
-                actor_system_user_id=admin.id,
+                context=_context(admin_id, "inbox:identity-correction-clear"),
+                conversation_id=conversation_id,
+                actor_system_user_id=admin_id,
                 reason="Verified address was reassigned.",
             ),
         )
-    for point in points:
+    for point_id in point_ids:
         review = _review(db_session, conversation)
         finish_read_transaction(db_session)
         team_inbox_contact_links.remove_incorrect_party_contact(
             db_session,
             team_inbox_contact_links.RemoveIncorrectPartyContactCommand(
-                context=_context(admin, "inbox:identity-correction"),
-                conversation_id=conversation.id,
-                contact_point_id=point.id,
-                actor_system_user_id=admin.id,
+                context=_context(admin_id, "inbox:identity-correction"),
+                conversation_id=conversation_id,
+                contact_point_id=point_id,
+                actor_system_user_id=admin_id,
                 expected_evidence_digest=review.evidence_digest,
                 reason="This old Party no longer owns the address.",
             ),
         )
     action = inbox_lead_actions.resolve_action(
         db_session,
-        conversation_id=conversation.id,
+        conversation_id=conversation_id,
         intent=inbox_lead_actions.InboxActionIntent.lead,
         permissions=inbox_lead_actions.InboxActionPermissions(
             can_read_profile=True,
@@ -208,15 +215,15 @@ def test_only_administrator_can_clear_after_all_wrong_matches_are_removed(db_ses
     team_inbox_contact_links.clear_identity_correction(
         db_session,
         team_inbox_contact_links.ClearIdentityCorrectionCommand(
-            context=_context(admin, "inbox:identity-correction-clear"),
-            conversation_id=conversation.id,
-            actor_system_user_id=admin.id,
+            context=_context(admin_id, "inbox:identity-correction-clear"),
+            conversation_id=conversation_id,
+            actor_system_user_id=admin_id,
             reason="Both wrong contact claims were removed.",
         ),
     )
     action = inbox_lead_actions.resolve_action(
         db_session,
-        conversation_id=conversation.id,
+        conversation_id=conversation_id,
         intent=inbox_lead_actions.InboxActionIntent.lead,
         permissions=inbox_lead_actions.InboxActionPermissions(
             can_read_profile=True,
@@ -245,17 +252,20 @@ def test_reviewed_existing_lead_is_linked_and_enables_lead_classification(db_ses
     )
     db_session.add(lead)
     db_session.commit()
+    conversation_id = conversation.id
+    user_id = user.id
+    lead_id = lead.id
     review = _review(db_session, conversation)
     assert any(lead.id in {item.id for item in row.leads} for row in review.matches)
     finish_read_transaction(db_session)
     outcome = inbox_lead_actions.link_reviewed_lead(
         db_session,
         inbox_lead_actions.LinkReviewedLeadCommand(
-            context=_context(user, "inbox:reviewed-lead-selection"),
-            conversation_id=conversation.id,
-            lead_id=lead.id,
+            context=_context(user_id, "inbox:reviewed-lead-selection"),
+            conversation_id=conversation_id,
+            lead_id=lead_id,
             expected_evidence_digest=review.evidence_digest,
-            actor_system_user_id=user.id,
+            actor_system_user_id=user_id,
             actor_person_id=None,
         ),
     )

@@ -942,6 +942,8 @@ WORKFLOW_GUIDANCE: tuple[AdminWorkflowGuidance, ...] = (
             "Reply auto-claim uses the same active team membership, availability, capacity, and queue-order checks as assignment.",
             "AI-owned conversations have a separate AI Intake count and do not contribute to normal human workload counts until handoff, queueing, or assignment.",
             "Take Over stops the active AI session and acquires the conversation through the existing Team Inbox assignment rules; if it fails, refresh and leave AI ownership unchanged.",
+            "When Resolve asks you to identify a sender, open Review Identity to see the exact matching contact records and why they match. Choose the correct Customer or Lead, then return to the conversation to check Resolve again.",
+            "If none of the records is correct, request a correction with a reason. An administrator checks the wrong contact details, clears the request when the match is gone, and then Create Lead becomes available if the conversation has no other identity blocker.",
             "Awaiting-customer AI sessions remain resumable for ten minutes. After that, normal assignment selects an available agent or admits the conversation to the team's FIFO queue.",
             "SLA policies define response and resolution targets, working hours, and warning time. Use a unique policy name and check the saved values before relying on them.",
             "Turning an SLA policy off prevents it being selected for new conversations; existing conversation deadlines continue. Scheduled checks record each warning once, before the response deadline.",

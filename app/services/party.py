@@ -1744,7 +1744,7 @@ def revoke_incorrect_contact_point(
 
     if not owner_command_active(db):
         raise PartyInvariantError("Contact correction requires an owner command")
-    point = db.scalar(
+    point: PartyContactPoint | None = db.scalar(
         select(PartyContactPoint)
         .where(PartyContactPoint.id == command.point_id)
         .with_for_update()

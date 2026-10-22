@@ -1206,7 +1206,7 @@ def request_identity_correction(
     """Durably flag an incorrect exact match for administrator review."""
 
     def operation() -> IdentityCorrectionOutcome:
-        conversation = db.scalar(
+        conversation: InboxConversation | None = db.scalar(
             select(InboxConversation)
             .where(
                 InboxConversation.id == command.conversation_id,
@@ -1304,7 +1304,7 @@ def clear_identity_correction(
     """Administrator confirms that exact endpoint ownership is clear."""
 
     def operation() -> IdentityCorrectionOutcome:
-        conversation = db.scalar(
+        conversation: InboxConversation | None = db.scalar(
             select(InboxConversation)
             .where(
                 InboxConversation.id == command.conversation_id,
@@ -1456,10 +1456,10 @@ def resolve_identity_correction_by_selection(
 def remove_incorrect_party_contact(
     db: Session, command: RemoveIncorrectPartyContactCommand
 ) -> IdentityCorrectionOutcome:
-    """Let an administrator remove a wrong match on a Party without a CRM role."""
+    """Let an administrator remove a wrong match on a Party without a sales role."""
 
     def operation() -> IdentityCorrectionOutcome:
-        conversation = db.scalar(
+        conversation: InboxConversation | None = db.scalar(
             select(InboxConversation)
             .where(
                 InboxConversation.id == command.conversation_id,
