@@ -243,13 +243,21 @@ def test_drill_dry_run_verifies_manifest_hashes(tmp_path: Path) -> None:
     manifest = {
         "schema": "dotmac_sub.recovery_bundle.v1",
         "database": "dotmac_sub",
+        "created_at": "2026-10-22T08:00:00Z",
+        "git_sha": "a" * 40,
         "artifacts": [
             {
                 "role": "globals",
                 "file": globals_path.name,
                 "sha256": drill.sha256_file(globals_path),
+                "bytes": globals_path.stat().st_size,
             },
-            {"role": "database_dump", "file": dump_path.name, "sha256": "0" * 64},
+            {
+                "role": "database_dump",
+                "file": dump_path.name,
+                "sha256": "0" * 64,
+                "bytes": dump_path.stat().st_size,
+            },
         ],
     }
     manifest_path = tmp_path / "s.manifest.json"
@@ -271,8 +279,16 @@ def test_drill_rejects_lone_dump_manifest(tmp_path: Path) -> None:
     drill = _drill_module()
     manifest_path = tmp_path / "s.manifest.json"
     manifest_path.write_text(
-        json.dumps({"schema": "dotmac_sub.recovery_bundle.v1", "artifacts": []}),
+        json.dumps(
+            {
+                "schema": "dotmac_sub.recovery_bundle.v1",
+                "database": "dotmac_sub",
+                "created_at": "2026-10-22T08:00:00Z",
+                "git_sha": "a" * 40,
+                "artifacts": [],
+            }
+        ),
         encoding="utf-8",
     )
-    with pytest.raises(ValueError, match="globals"):
+    with pytest.raises(ValueError, match="^invalid_bundle_artifacts$"):
         drill.load_bundle(manifest_path)

@@ -1,120 +1,166 @@
-# Gate 0 proof 5: restore comparison gap
+# Gate0 proof5 controlled recovery draft
 
-Status: **partial source; full proof unimplemented; no live proof recorded** (2026-10-21). This
-document records the bounded follow-up needed before a proof5 adapter can
-honestly report acceptance. No fail-only executable is shipped.
+Status (2026-10-22): complete source draft under the isolated measurement-only
+exception; unpublished, unintegrated, and **not PostgreSQL acceptance**. Shipping
+caps remain unchanged. No host, Docker daemon, credential store, or database was
+contacted for this draft. The live catalog-locking contract below remains an
+explicit prerequisite to operational use.
 
-Partial source now exists in `scripts/restore_inventory.py`: one metadata SQL
-query, typed strict decoding, complete catalog-derived effective schema/table
-privilege matrices, and a metadata-only first-divergence comparator. The existing
-`drill_bundle(..., expected_inventory=...)` owner optionally collects restored
-metadata with that same query, compares before cleanup, and fails on collection
-error or divergence. Schema/table ownership, RLS ENABLE/FORCE flags, policy
-identities and public Alembic heads are compared as well as non-builtin roles.
-Eight offline inventory/owner tests and eleven cleanup tests pass. SQL execution
-against migrated PostgreSQL remains unproved; mocked results are not database
-acceptance. There is no source capture command, snapshot/freeze binding, trusted
-host enrollment/guard, CLI inventory option or Gate0 PASS adapter in this partial
-slice. Its optional comparison does not establish staging provenance. Existing
-drill PASS remains insufficient for proof5.
+`scripts/db_backup.sh` remains the sole capture owner and
+`scripts/restore_drill.py` the sole restore owner. `restore_capture.py` adds the
+controlled interval and private evidence binding. `proof5_restore.py` consumes
+that protected bundle on the enrolled dedicated test host. There is no second
+backup/restore engine. Existing metadata inventory owns comparison of roles,
+schema/table ownership, RLS ENABLE/FORCE, policy identities, Alembic heads and
+complete effective privilege matrices, with only fixed divergence categories
+in public output. The database-property limitation in `docs/RECOVERY_BUNDLE.md`
+remains; this adapter adds no password, database-property or membership parity
+acceptance claim.
 
-The approved agent design §6, “Proof 5”, requires a real staging backup
-through the production backup path, globals-first scratch restore, source
-comparison of isolation metadata, and scratch cleanup. The production path
-already calls `scripts/db_backup.sh` in `scripts/deploy.sh:1676`.
-Its behavior is outside this increment's change scope.
+## Enrollment and private transport
 
-## Existing evidence and missing acceptance checks
+A human must independently enroll root-protected `/etc/dotmac/gate0-host.json`
+with exactly `purpose`, `hostname`, `machine_sha256`, `docker_sha256`. Capture is
+restricted to `capture` / `hp-server`; restore to `restore` / `vmi3537655`
+(dedicated server `85.190.246.211`). Identity compares the actual hostname and
+machine-id hash, requires root, and pins `/usr/bin/docker` bytes. Writable or
+symlink inputs/parents and alternate Docker environment endpoints are refused.
+Docker always uses the explicit local Unix socket with a scrubbed environment.
+The configuration contains public identity hashes, never credentials. Root
+control remains privileged; this is an enrollment boundary, not containment
+against an already compromised root principal.
 
-| Requirement | Existing source | Remaining gap |
-| --- | --- | --- |
-| Real staging production-path bundle | `scripts/backup/recovery_bundle_lib.sh:119` emits bundle metadata; `scripts/restore_drill.py:132` loads manifests | The manifest does not establish staging provenance, approved capture, or source inventory binding. Artifact hashes prove consistency with a manifest, not staging origin. |
-| Roles and attributes match source | Optional inventory comparison covers non-builtin role login/bypass/superuser attributes alongside existing role contracts | Trusted source capture and real PostgreSQL comparison remain unproved. |
-| Alembic heads match source | Optional inventory compares public Alembic heads | Source capture binding and real query execution remain unproved. |
-| RLS-enabled table and policy counts match source | Optional inventory compares per-table RLS ENABLE/FORCE and policy identities, retaining existing isolation assertions | Trusted capture and real source/restore parity remain unproved. |
-| Bidirectional schema/table privilege spot matrix matches source | Optional inventory covers effective schema/table privileges across the catalog-derived role/object matrix, including allowed and denied observations | Source capture, actual SQL execution and real parity remain unproved. |
-| Ownership not collapsed | Existing collapse assertion plus optional schema/table owner comparison | Trusted source ownership capture and real parity remain unproved. |
-| Cleanup completed before acceptance | `scripts/restore_drill.py` scratch lifecycle now labels each run, cleans startup/readiness failures, refuses unowned resources, checks removal and independently observes absence | Eleven offline mocked lifecycle tests pass. Dedicated-host execution and real scratch absence evidence remain unproved. |
-| Dedicated test server enforced before subprocesses | `scripts/restore_drill.py:176` executes subprocesses; `:194` starts Docker | Generated scratch names and network isolation do not enforce execution host. There is no dedicated-host guard. |
-| Metadata-only diagnostics | Dump-restore errors and optional inventory errors are sanitized; existing `ScratchPostgres.scalar()` can still include raw query stderr outside that path | A Gate0 adapter must sanitize every remaining infrastructure path before forwarding evidence. |
+Capture's parent must already exist, root-owned and mode0700. A fresh mode0700
+workdir isolates retention from all existing backups. Only the existing backup
+owner reads its documented, protected deployment `.env` at runtime; adapters do
+not source or print it. Owner output is discarded. The runtime Docker wrapper
+pins the executable/socket and clears inherited environment. Transfer the
+whole capture directory through the approved human-held private channel;
+preserve root ownership/private modes and verify the protected capture digest
+against the approved source observation. Never upload dumps, globals, source
+inventory, `.env`, credentials or customer rows to Git, public evidence or chat.
 
-The present drill's `PASS` is therefore insufficient for Gate0 proof5.
-`--self-test` (`scripts/restore_drill.py:513`), `--dry-run` (`:572`), fixtures,
-and mocked subprocess results cannot substitute for the live proof. The CLI
-also exits zero for `DRY_RUN_OK` (`:671`), so exit status alone is insufficient.
+## Protected campaign and capture plan
 
-## Proposed minimal inventory contract (not an accepted schema)
+Both CLIs require `--plan <root-protected-json>`. `CapturePlan` strictly decodes
+one closed typed document. Its `context` is exactly the shared `GateContext`:
+run_id, phase, prior_run_id, source_revision, source_tree, deployment_ref,
+tool_revision, host_key_id, action_refs and deadline. All public times use
+canonical UTC `Z`. Additional fields are observation_not_before, source_identity,
+test_host_identity, owner_sha256, library_sha256, source_permit_sha256,
+restore_permit_sha256, capture_tool_sha256, restore_tool_sha256, image and
+capture_sha256. Hash fields use `sha256:` plus 64 lowercase hex characters.
+This is an installed protected plan, never an untrusted CLI boolean or a
+self-approved capture assertion.
 
-Keep the existing recovery-bundle format and producer unchanged. Add a
-separately versioned, typed metadata sidecar owned by the restore-proof
-implementation. Suggested schema identifier:
-`dotmac_sub.gate0_restore_inventory.v1`. Reject unknown versions, missing or
-duplicate entries, unsupported probe kinds, invalid values, and empty required
-probe sets. Suggested fields:
+The source plan has capture_sha256=null. Before any Docker work, capture checks
+the independently reviewed backup owner/library byte pins, source enrollment
+permit pin, capture/restore adapter pins, actual clean source Git HEAD/tree and
+actual clean tool checkout revision against that plan. It records those actual
+identities, full context and byte hashes in capture.json, and repeats source and
+tool checks before closing the capture. Dirty checkouts, changed sources and
+unreviewed backup tools refuse. The existing backup manifest must name
+`dotmac_sub`, the observed source revision and a real UTC creation time inside
+the enforced interval (allowing only its existing whole-second timestamp
+rounding). Capture time must lie inside the protected campaign window and
+cannot be future-dated.
 
-| Field | Type and meaning |
-| --- | --- |
-| `schema` | Exact version identifier above |
-| `bundle_manifest_sha256` | SHA-256 of the exact approved recovery manifest |
-| `source` | Explicit staging host identifier, database name, capture UTC time, deployed source revision, and backup-path identifier `scripts/db_backup.sh` |
-| `capture_evidence_ref` | Reference to approved capture evidence binding this staging source and backup; no credentials or customer payloads |
-| `roles` | Sorted records `{name, can_login, bypass_rls, superuser}` for the declared non-builtin source role set; boolean attributes |
-| `alembic_heads` | Sorted unique revision identifiers from source `alembic_version` |
-| `rls_enabled_table_count` | Nonnegative integer, using the same declared schema/table scope on source and restore |
-| `policy_count` | Nonnegative integer, using that scope on source and restore |
-| `privilege_probes` | Sorted records `{role, object_kind, schema, object_name, privilege, allowed}`; kinds `schema` or `table`, schema object name null, allowed boolean |
-| `table_owners` | Sorted records `{schema, table, owner}` in the same declared application-table scope |
+After governed review and private transfer, install a protected restore plan
+with that same context/pins and capture_sha256 set to the **independently
+approved exact capture.json bytes hash**. Restore checks its enrolled permit
+and current tool revision/bytes, the approved capture hash, record context and
+all recorded pins, source HEAD/tree, bundle database/revision/time and inventory
+hashes before invoking the restore owner. The image must match the plan's exact
+immutable image. Current execution and the recorded capture both must fall
+inside the approved observation/deadline window.
 
-Capture role, schema, privilege, and migration metadata in a controlled backup
-window with no concurrent role/schema changes; establish and record how the
-inventory corresponds to the database dump's snapshot. Matching timestamps
-alone do not prove consistency. Source capture is observational; do not add
-an equality gate over unrelated external state.
+The main harness campaign context must exactly equal plan.context. CP's
+protected CampaignScope.context must equal that same context, and its
+restore_capture_sha256 must equal plan.capture_sha256; its separately approved
+bundle/inventory/source/test-host pins remain mandatory. This exact approved
+capture hash transitively binds the private plan and observed source context;
+the public RestoreEvidence schema is unchanged. Installing a new plan or
+approving a different capture remains a governed human operation, not something
+the source adapter silently performs.
 
-The probe set must explicitly cover application-to-platform and
-platform-to-application permissions, including the designated denied schema
-and table privileges. Derive exact role/object coverage from the owning
-isolation contracts. Do not infer approval or matrix
-completeness from an arbitrary operator-supplied JSON list. This document
-does not add password, role-membership, or database-property acceptance gates.
-The existing database-property capture limitation remains documented in
-`docs/RECOVERY_BUNDLE.md`.
+## Observed noDDL contract
 
-## Required implementation and live evidence
+A persistent privileged `psql -X` transaction derives **every heap/partitioned
+pg_catalog relation**, including shared `pg_authid`, `pg_auth_members` and
+`pg_database`, acquires SHARE locks in OID order, and SHARE-locks
+`public.alembic_version` to block migration-head DML. SHARE conflicts with the
+RowExclusive locks required for catalog writes while permitting dump SELECTs.
+The adapter observes its backend PID and the exact required versus granted
+ShareLock relation sets. Missing, duplicated or extra locks fail closed.
 
-Implement a thin typed proof adapter over the existing restore owner, with
-source inventory collection/comparison and verified cleanup in that owner.
-Before any operational subprocess, establish the authorized dedicated test
-host and reject local/production execution and Docker endpoint redirection.
-The host identity mechanism needs enrolled, independently observed host evidence;
-an environment declaration alone is insufficient. Never accept arbitrary restore commands or target
-containers from a manifest.
+The observed interval starts after successful lock observation, covers globals
+FIRST, database dump, hash validation and source metadata collection, and ends
+after a second identical observation on the same live backend. This binds role,
+grant, ownership, RLS/policy, schema and migration metadata across separately
+captured artifacts. It does not rely on a caller boolean, timestamps alone,
+or a cooperative advisory lock. Lock acquisition waits at most five seconds;
+queries use nonblocking pipe reads with an absolute forty-second deadline and
+a 64MiB record bound; partial lines, oversized records and EOF refuse. Buffered
+complete subsequent records are preserved across queries. Owner execution waits
+at most thirty minutes.
+Every exception rolls back/closes the holder, killing/waiting if necessary.
+A failed workdir stays private for governed diagnosis, has no valid capture
+record, and cannot be consumed as proof5. No cleanup deletes existing backups.
 
-After explicit authorization naming the host, run the bounded scratch restore
-on dedicated test server `85.190.246.211`, using a fresh exact-revision checkout
-and environment. Preserve network-none scratch isolation, add bounded resources
-appropriate to the approved backup, and clean only this run's resources.
-Successful cleanup must be observed even after startup, restore, assertion,
-or timeout failures. Do not use local Docker or shared host databases.
+**Unproved:** PostgreSQL 16's actual support and writer lock behavior for this
+catalog set, including shared catalog updates, must be demonstrated using the
+following packet. SQL refusal, inability to prove a blocked writer, or a gap in
+coverage means stop and retain the live gate. Do not weaken the freeze or
+substitute an assertion to obtain acceptance.
 
-Acceptance needs the real staging capture and approved manifest binding,
-source and restored metadata comparisons above, safe first-divergence metadata,
-and scratch absence evidence. Credentials, dumps, and customer data rows do
-not belong in the proof output or Git. Emit exactly one terminal
-`GATE0 PROOF 5: PASS` or `GATE0 PROOF 5: FAIL`, with nonzero exit on refusal,
-missing comparisons, mismatch, infrastructure failure, or failed cleanup.
-Only the complete real run can emit PASS.
+## Dedicated PostgreSQL acceptance packet (requires separate host authorization)
 
-Planning estimate: 300–500 production Python/shell lines and 200–350 focused
-test lines, roughly 1–2 engineering days plus review and the approved live
-window. This includes strict typed input parsing, safe output, host refusal,
-metadata collection/comparison, failure cleanup, and refusal/mismatch tests;
-it is an estimate, not permission to expand this source increment. Offline
-stub tests can verify refusal and cleanup plumbing; actual restore evidence
-still requires the named server and real staging bundle.
+1. Use an exact source/tool checkout on the enrolled dedicated server and
+   PostgreSQL16 image pinned by immutable digest. Create a fresh disposable
+   database through the real Alembic migration chain at that exact revision;
+   retain the repository's approved backup/role bootstrap owner. No local
+   Docker, SQLite or metadata.create_all acceptance lane is permitted.
+2. Exercise the persistent freeze on that migrated disposable source. In
+   independent sessions set a short `lock_timeout` and attempt CREATE/ALTER
+   ROLE, GRANT/REVOKE membership and table/schema privilege, ALTER OWNER,
+   ENABLE/DISABLE/FORCE RLS, CREATE/ALTER/DROP POLICY, CREATE/ALTER/DROP schema
+   objects, and Alembic head UPDATE. Include role operations connected through
+   another database to exercise shared catalogs. Every mutation must time out
+   while the holder is live; verify no state changed. Dump/inventory SELECTs
+   must still finish. Record exact required/granted locks before and after.
+3. Kill/disconnect the holder during globals, during dump and before inventory;
+   simulate lock timeout, owner timeout/failure and malformed lock output.
+   Every capture must fail with no admissible capture record. Verify the
+   control backend and its locks disappear after success and every failure.
+4. Only after that packet passes, separately authorize Seabone capture on
+   `hp-server`, container `dotmac_sub_db`, database `dotmac_sub` (existing DB
+   alias `db`). Enroll source identity and use a root-only private parent.
+   Run `python -m deploy.gate0.restore_capture --root <protected-checkout>
+   --private-parent <root-only-parent> --plan <protected-source-plan>` under the governed window. Never run
+   the fault/mutation tests on that source.
+5. Privately transfer that exact approved bundle to `vmi3537655`. Run
+   `python -m deploy.gate0.proof5_restore --capture <private-directory>
+   --image <postgres-image@sha256:digest> --plan <protected-restore-plan>`. Verify exact metadata parity and
+   scratch absence. Repeat real failure cases for startup, malformed dump,
+   inventory mismatch and cleanup failure; none may produce pass. Independently
+   observe no owned scratch container remains; never remove foreign resources.
+6. The root-only, exclusive-create `proof5-outcome.json` contains only the
+   closed public contract, inventory digests and capture identity/interval.
+   After an admitted capture, a restore exception preserves known source/capture
+   facts, records unknown restored digest/parity/scratch observations as null, and
+   produces terminal failure with cleanup unproved; no all-zero digest or
+   fabricated absence is emitted. An ordinary result lacking restored inventory
+   carries a null digest. Its pass requires the typed restore owner's real comparison, matching
+   source/restored digest and observed cleanup. Send only the hash-pinned
+   public outcome through the main proof harness's protected campaign transport.
+   CP append/push receipt and authoritative identical replay readback remain
+   mandatory. This module never prints `GATE0 PROOF 5: PASS` on its own.
 
-Knowledge consulted with scope `project:dotmac_sub`: canonical records
-`dotmac-dedicated-test-server` (v8) and
-`observer-test-evidence-requires-a-fresh-install-per-commit` (v3).
-No hosts contacted, credentials retrieved, tests run, or Docker used for this
-documentation-only inspection. Current runtime remains unchanged.
+Offline verification covers strict paths/duplicates/sizes, enrollment before
+processes/private reads, pinned image refusal, SQL-control failure, lost session,
+rollback/kill/wait, failed owner capture, hash corruption, exact parity/digest and
+cleanup requirements, PostgreSQL canonical true/false role decoding, protected
+provenance mismatches, and sanitized output/DEFLATE failures. Existing cleanup and metadata comparison regressions stay
+in the focused set. These tests establish adapter behavior, not PostgreSQL lock,
+restore or migrated-schema acceptance. Full prescribed CI, independent source
+review, live proof1–5, signoff and next-morning proof2–4 remain separate gates.
