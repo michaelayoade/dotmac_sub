@@ -112,7 +112,8 @@ An agent can submit a reasoned "none of these" correction request; the page
 shows its open status. The administrator-only worklist
 `admin.inbox.identity_corrections` lists bounded open requests and links to
 the exact conversation review. Only the canonical `admin` role may clear a
-request or remove a wrong contact point on a Party without a CRM record.
+request or remove a wrong contact point on a Party without a Customer,
+Reseller, or Lead record.
 Administrators use canonical Customer, Reseller, and Lead editors for those
 records, including inactive Customer and Lead records that still own a match.
 The page refreshes exact evidence after every action and returns to the
