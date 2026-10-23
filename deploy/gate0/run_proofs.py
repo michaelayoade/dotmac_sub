@@ -326,7 +326,7 @@ def publish(client: CPClient, plan: RunPlan, command_id: str) -> None:
     context = plan["context"]
     run_id = context["run_id"]
     proofs = []
-    required = {2, 3, 4} if context["phase"] == "next_morning" else {1, 2, 3, 4, 5}
+    required = {2, 3, 4} if context["phase"] == "repeatability" else {1, 2, 3, 4, 5}
     for number in sorted(required):
         if number == 5:
             reference = plan["proof5"]
