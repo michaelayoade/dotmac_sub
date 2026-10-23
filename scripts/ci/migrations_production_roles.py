@@ -546,7 +546,9 @@ def main() -> int:
         positive_run(lane)
         sensitivity(lane)
     except (psycopg.Error, RuntimeError) as exc:
-        print(f"lane aborted: {type(exc).__name__}", file=sys.stderr)
+        diag = getattr(exc, "diag", None)
+        detail = getattr(diag, "message_primary", None) or str(exc).splitlines()[0]
+        print(f"lane aborted: {type(exc).__name__}: {detail}", file=sys.stderr)
         return 2
     if lane.failures:
         print(f"{len(lane.failures)} check(s) failed", file=sys.stderr)

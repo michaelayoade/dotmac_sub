@@ -14,7 +14,7 @@ transaction. The planning here is pure (no database) so it is unit-testable.
 
 from __future__ import annotations
 
-from collections.abc import Iterable, Mapping
+from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Final
@@ -251,7 +251,7 @@ SELECT current_user::text,
 """
 
 
-def _row_to_object(row: Mapping[str, Any] | Any) -> OwnedObject:
+def _row_to_object(row: Sequence[Any]) -> OwnedObject:
     return OwnedObject(
         catalog=str(row[0]),
         oid=int(row[1]),
