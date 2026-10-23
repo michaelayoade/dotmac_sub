@@ -542,13 +542,8 @@ def execute_job(db: Session, *, job_id: str) -> dict[str, Any]:
                 continue
 
             if targets.offer_id:
-                previous_offer_id = current.offer_id
                 current.offer_id = uuid.UUID(targets.offer_id)
-                apply_offer_radius_profile(
-                    db,
-                    current,
-                    previous_offer_id=previous_offer_id,
-                )
+                apply_offer_radius_profile(db, current)
             # ensure radius can be re-provisioned before committing this subscriber migration
             db.flush()
             sync_account_credentials_to_radius(db, subscriber.id)

@@ -178,7 +178,16 @@ def service_speed(subscription: Subscription) -> str | None:
         return f"{down}/{up} Mbps"
     if down:
         return f"{down} Mbps"
-    profile = subscription.radius_profile
+    from sqlalchemy.orm import object_session
+
+    from app.services import access_rate_profile
+
+    session = object_session(subscription)
+    profile = (
+        access_rate_profile.resolve_plan_profile(session, subscription)
+        if session is not None
+        else None
+    )
     if profile and (profile.download_speed or profile.upload_speed):
         profile_down = profile.download_speed
         profile_up = profile.upload_speed

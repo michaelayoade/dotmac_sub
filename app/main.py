@@ -430,6 +430,28 @@ def _assert_oidc_federation_configured() -> None:
         db.close()
 
 
+def _assert_rate_owner_switched_on() -> None:
+    """Fail closed in production until the governed rate switch has run.
+
+    Every rate is derived by the single rate owner and no plan rate is written
+    into credentials any more, so a production process that starts while the
+    switch is off would serve rates nobody verified. Rolling back is
+    redeploying the previous release.
+    """
+    from app.config import settings
+
+    if settings.app_env not in {"prod", "production"}:
+        return
+    from app.services.access_rate_profile import assert_switched_on
+
+    db = SessionLocal()
+    try:
+        assert_switched_on(db)
+    finally:
+        db.rollback()
+        db.close()
+
+
 def _check_test_environment_leakage() -> None:
     """Warn if test environment variables are set in production.
 
@@ -626,6 +648,7 @@ def _startup_preflight() -> None:
     _assert_required_schema()
     # AFTER the schema assertion, because the control and its settings are rows.
     _assert_oidc_federation_configured()
+    _assert_rate_owner_switched_on()
 
 
 def _prewarm_admin_dashboard() -> None:

@@ -18,11 +18,13 @@ that projection would write with the rates currently in every target's
 5. reads back the rate of every login that projection actually wrote, against
    the derived rate (test-access logins against the plan rate), requiring zero
    mismatches after one scoped re-projection of any that differ;
-6. on any failure, switches the owner OFF again, re-projects, and reports the
-   failure with the final state.
+6. on any failure, reports the failure with the final state. This release has
+   no legacy precedence to return to, so nothing is switched off automatically
+   and :func:`switch_off` is refused: rolling back means redeploying the
+   previous release (a production process will not start while the flag is
+   off).
 
-:func:`switch_off` is the matching rollback. Both are dry-run by default;
-``apply=True`` is explicit. Logins the projection deliberately does not write
+The dry run is the default; ``apply=True`` is explicit. Logins the projection deliberately does not write
 (preserved, unbuildable, mode none, hard-reject) are reported, never counted as
 mismatches.
 
@@ -104,7 +106,6 @@ _MISMATCH_SAMPLE = 20
 _WRITTEN_MODES = frozenset({"active", "captive"})
 
 _SWITCH_ON = OwnerCommandDefinition(owner=OWNER, concern=CONCERN, name="switch_on")
-_SWITCH_OFF = OwnerCommandDefinition(owner=OWNER, concern=CONCERN, name="switch_off")
 
 # Indirections so tests can run the wait without sleeping.
 _sleep = time.sleep
@@ -333,7 +334,13 @@ def load_approved(path: str | Path, expected_sha256: str) -> ApprovedDivergences
                 raise _invalid("decided_at is not a timestamp.") from exc
             if decided_at.tzinfo is None:
                 decided_at = decided_at.replace(tzinfo=UTC)
-            moved.append(MovedClaim(sid, str(item.get("offer_id") or ""), decided_at))
+            pre_move = str(item.get("offer_id") or "").strip()
+            if not pre_move:
+                raise _invalid(
+                    "A moved_offer entry needs the pre-move offer_id.",
+                    subscription_id=sid,
+                )
+            moved.append(MovedClaim(sid, pre_move, decided_at))
         else:
             keys.add((sid, klass, current, derived))
     if undecided:
@@ -382,7 +389,8 @@ def unverified_moves(db: Session, approved: ApprovedDivergences | None) -> list[
 
     A claim holds only when the subscription's current offer differs from the
     recorded pre-move offer AND an applied subscription change request exists
-    for it, applied before the decision was made.
+    for it whose requested offer is the current offer, applied before the
+    decision was made.
     """
     if approved is None:
         return []
@@ -396,6 +404,8 @@ def unverified_moves(db: Session, approved: ApprovedDivergences | None) -> list[
             db.scalars(
                 select(SubscriptionChangeRequest.applied_at).where(
                     SubscriptionChangeRequest.subscription_id == subscription.id,
+                    SubscriptionChangeRequest.requested_offer_id
+                    == subscription.offer_id,
                     SubscriptionChangeRequest.status
                     == SubscriptionChangeStatus.applied,
                     SubscriptionChangeRequest.applied_at.isnot(None),
@@ -806,34 +816,17 @@ def switch_on(
             read_back=report,
         )
 
-    # Automatic switch-off: restore the previous behaviour and re-project. A
-    # failure here is reported with the final state, never raised bare.
-    off_context = CommandContext.system(
-        actor=context.actor,
-        scope=SCOPE,
-        reason=f"automatic switch-off after {failure}",
-        correlation_id=context.correlation_id,
-        causation_id=context.command_id,
-    )
-    off_error: str | None = None
-    reprojected = False
-    try:
-        off = switch_off(db, context=off_context, apply=True, populate=run_populate)
-        reprojected = off.applied
-    except Exception as exc:  # noqa: BLE001 - the final state below says it all
-        off_error = exc.code if isinstance(exc, DomainError) else type(exc).__name__
-        logger.error("rate owner automatic switch-off failed: %s", off_error)
+    # This release has no legacy precedence to return to, so there is no
+    # automatic switch-off: the flag stays on (turning it off would stop a
+    # production process from starting) and the failure is reported with the
+    # final state. Rolling back means redeploying the previous release.
     final_flag = flag_from_row(db)
     trace["flag"] = final_flag
     raise _error(
         failure,
-        "The rate owner was switched off again; check the final state."
-        if final_flag is False
-        else "The rate owner could not be confirmed off; check the final state.",
-        auto_switched_off=final_flag is False,
+        "The switch ran but its verification failed; investigate before relying "
+        "on it, or redeploy the previous release.",
         flag=final_flag,
-        reprojected=reprojected,
-        switch_off_error=off_error,
         mismatches=report.mismatches if report else None,
         sample_subscription_ids=list(report.sample) if report else [],
     )
@@ -846,35 +839,16 @@ def switch_off(
     apply: bool = False,
     populate: Callable[..., object] | None = None,
 ) -> SwitchOutcome:
-    """Turn the single rate owner off and re-project (dry-run unless ``apply``)."""
-    run_populate = populate or radius_population.populate
-    if not apply:
-        enabled = access_rate_profile.rate_owner_enabled(db)
-        db.rollback()
-        return SwitchOutcome(action="switch_off", applied=False, enabled=enabled)
-    _release_reads(db)
+    """Refused: this release derives every rate through the owner.
 
-    def flip() -> SwitchOutcome:
-        _take_lock(db)
-        _write_switch(db, context, enabled=False)
-        return SwitchOutcome(action="switch_off", applied=True, enabled=False)
-
-    outcome = execute_owner_command(
-        db, definition=_SWITCH_OFF, context=context, operation=flip
-    )
-    # Symmetric with switch-on: do not trust the cache. Wait until the flag
-    # reads false and require the projection to say the owner was NOT in force.
-    for attempt in (1, 2):
-        _invalidate_switch_cache()
-        visible = _await_flag(db, expected=False)
-        result = _project_checked(run_populate)
-        if visible and result.get("rate_owner_enabled") is False:
-            return outcome
+    The flag records that the governed switch ran and a production process will
+    not start while it is off, so turning it off would only stop the service.
+    Roll back by redeploying the previous release.
+    """
     raise _error(
-        "owner_still_active",
-        "The rate owner is off in the database, but the rollback projection "
-        "still ran in owner mode; re-run the switch-off.",
-        flag=flag_from_row(db),
+        "switch_off_unavailable",
+        "The rate owner cannot be switched off in this release; redeploy the "
+        "previous release to roll back.",
     )
 
 

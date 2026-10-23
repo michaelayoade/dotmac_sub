@@ -16,7 +16,6 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session, attributes, selectinload
 
 from app.models.catalog import (
-    AccessCredential,
     BillingCycle,
     BillingMode,
     CatalogOffer,
@@ -24,10 +23,8 @@ from app.models.catalog import (
     NasDevice,
     NasDeviceStatus,
     OfferPrice,
-    OfferRadiusProfile,
     OfferVersionPrice,
     PriceType,
-    RadiusProfile,
     Subscription,
     SubscriptionAddOn,
     SubscriptionStatus,
@@ -357,137 +354,28 @@ def _select_nas_for_subscriber(db: Session, subscriber_id: str):
     return None
 
 
-def _resolve_offer_radius_profile_id(db: Session, offer_id: str | None):
-    if not offer_id:
-        return None
-    link = (
-        db.query(OfferRadiusProfile)
-        .filter(OfferRadiusProfile.offer_id == offer_id)
-        .first()
-    )
-    return link.profile_id if link else None
-
-
-def _speed_kbps_from_mbps(value: int | None) -> int | None:
-    if value is None:
-        return None
-    return int(value) * 1000
-
-
-def _profile_speeds_match(
-    profile: RadiusProfile | None,
-    *,
-    download_kbps: int | None,
-    upload_kbps: int | None,
-) -> bool:
-    if profile is None or download_kbps is None:
-        return False
-    if profile.download_speed != download_kbps:
-        return False
-    if upload_kbps is not None and profile.upload_speed != upload_kbps:
-        return False
-    return True
-
-
-def _radius_profile_matches_offer(
-    db: Session,
-    profile_id,
-    offer_id,
-) -> bool:
-    if not profile_id or not offer_id:
-        return False
-    profile = db.get(RadiusProfile, profile_id)
-    offer = db.get(CatalogOffer, offer_id)
-    if not profile or not offer:
-        return False
-    return _profile_speeds_match(
-        profile,
-        download_kbps=_speed_kbps_from_mbps(offer.speed_download_mbps),
-        upload_kbps=_speed_kbps_from_mbps(offer.speed_upload_mbps),
-    )
-
-
-def _radius_profiles_are_speed_equivalent(
-    db: Session,
-    profile_id,
-    expected_profile_id,
-) -> bool:
-    if not profile_id or not expected_profile_id:
-        return False
-    profile = db.get(RadiusProfile, profile_id)
-    expected = db.get(RadiusProfile, expected_profile_id)
-    if not profile or not expected or expected.download_speed is None:
-        return False
-    return _profile_speeds_match(
-        profile,
-        download_kbps=expected.download_speed,
-        upload_kbps=expected.upload_speed,
-    )
-
-
-def _radius_profile_inherits_previous_offer(
-    db: Session,
-    profile_id,
-    previous_offer_id,
-    previous_default_profile_id,
-) -> bool:
-    if profile_id is None:
-        return True
-    if previous_default_profile_id and profile_id == previous_default_profile_id:
-        return True
-    return _radius_profiles_are_speed_equivalent(
-        db,
-        profile_id,
-        previous_default_profile_id,
-    ) or _radius_profile_matches_offer(db, profile_id, previous_offer_id)
-
-
 def apply_offer_radius_profile(
     db: Session,
     subscription: Subscription,
     *,
-    previous_offer_id=None,
     target_profile_id=None,
-    force: bool = False,
-    sync_credentials: bool = True,
 ):
-    """Keep subscription and inherited credentials aligned to the offer profile."""
-    previous_default = _resolve_offer_radius_profile_id(
-        db, str(previous_offer_id) if previous_offer_id else None
-    )
-    resolved_target = (
-        target_profile_id
-        if target_profile_id is not None
-        else _resolve_offer_radius_profile_id(db, str(subscription.offer_id))
-    )
+    """Project the package's profile onto the subscription (compatibility field).
 
-    inherited_subscription = _radius_profile_inherits_previous_offer(
+    The package decides a service's rate (``access_rate_profile``); this field
+    only mirrors the package link for display and legacy readers. It is written
+    here and nowhere else, and it never touches a credential: a plan change on
+    one service must not rewrite another service's credential, and an edit must
+    not lift a throttle. ``target_profile_id`` is only a tie-break when the
+    package carries more than one link.
+    """
+    resolved = access_rate_profile.package_profile_id(
         db,
-        subscription.radius_profile_id,
-        previous_offer_id,
-        previous_default,
+        subscription.offer_id,
+        preferred=target_profile_id or subscription.radius_profile_id,
     )
-    if force or inherited_subscription:
-        subscription.radius_profile_id = resolved_target
-
-    if sync_credentials:
-        credentials = (
-            db.query(AccessCredential)
-            .filter(AccessCredential.subscriber_id == subscription.subscriber_id)
-            .filter(AccessCredential.is_active.is_(True))
-            .all()
-        )
-        for credential in credentials:
-            inherited_credential = _radius_profile_inherits_previous_offer(
-                db,
-                credential.radius_profile_id,
-                previous_offer_id,
-                previous_default,
-            )
-            if force or inherited_credential:
-                credential.radius_profile_id = resolved_target
-
-    return resolved_target
+    subscription.radius_profile_id = resolved
+    return resolved
 
 
 def _validate_plan_change(
@@ -1123,12 +1011,7 @@ class Subscriptions(ListResponseMixin):
             data["status"] = SubscriptionStatus.pending
         subscription = Subscription(**data)
         apply_offer_radius_profile(
-            db,
-            subscription,
-            target_profile_id=data.get("radius_profile_id"),
-            force="radius_profile_id" in fields_set
-            or not bool(data.get("radius_profile_id")),
-            sync_credentials=False,
+            db, subscription, target_profile_id=data.get("radius_profile_id")
         )
         db.add(subscription)
         try:
@@ -1689,19 +1572,13 @@ class Subscriptions(ListResponseMixin):
 
         for key, value in data.items():
             setattr(subscription, key, value)
-        if "radius_profile_id" in data:
+        if (
+            "radius_profile_id" in data
+            or "offer_id" in data
+            or subscription.radius_profile_id is None
+        ):
             apply_offer_radius_profile(
-                db,
-                subscription,
-                previous_offer_id=previous_offer_id,
-                target_profile_id=data["radius_profile_id"],
-                force=True,
-            )
-        elif "offer_id" in data or subscription.radius_profile_id is None:
-            apply_offer_radius_profile(
-                db,
-                subscription,
-                previous_offer_id=previous_offer_id,
+                db, subscription, target_profile_id=data.get("radius_profile_id")
             )
         db.commit()
         db.refresh(subscription)

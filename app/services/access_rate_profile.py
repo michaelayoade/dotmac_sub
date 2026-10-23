@@ -23,8 +23,17 @@ The input/output types are shaped to the seam the Starter packages expose later
 access-policy ``ALLOW``/``RESTRICT``/``DENY``) so this module becomes the
 composition code that feeds them. Nothing here imports Starter.
 
-The owner is dormant behind ``radius.rate_owner_enabled`` (default off): with the
-setting off every reader keeps its previous code path unchanged.
+The owner is the only resolver. ``radius.rate_owner_enabled`` is no longer a
+reader switch: it records that the governed switch ran. This release has no
+legacy precedence to fall back to, so a production process refuses to start
+while the flag is off (``assert_switched_on``): deploying it before the switch
+would serve rates nobody verified. Rolling back means redeploying the previous
+release, not flipping the flag.
+
+Credential writers: only the collections throttle path (the throttle marker and
+slot) and :func:`clear_legacy_fup_slot` here write ``radius_profile_id`` /
+``pre_throttle_radius_profile_id``. Nothing writes a plan rate into a credential
+(``tests/architecture/test_rate_owner_boundary.py`` holds that line).
 
 Read-only preflight (lists every divergence between the derived rate and what
 is projected today)::
@@ -448,6 +457,56 @@ def collections_throttle_profile(
     return ctx.profiles.get(slot) if slot is not None else None
 
 
+def package_profile_id(
+    db: Session, offer_id: object, *, preferred: object = None
+) -> uuid.UUID | None:
+    """The package's linked profile id (deterministic when there are several).
+
+    One link: that link. Several: ``preferred`` when it is one of them, else the
+    first by id (the ambiguity is logged and listed by the preflight). None when
+    the package has no link.
+    """
+    package = _as_uuid(offer_id)
+    if package is None:
+        return None
+    with db.no_autoflush:
+        links = sorted(
+            db.scalars(
+                select(OfferRadiusProfile.profile_id).where(
+                    OfferRadiusProfile.offer_id == package
+                )
+            ).all(),
+            key=str,
+        )
+    if not links:
+        return None
+    wanted = _as_uuid(preferred)
+    return wanted if wanted in links else links[0]
+
+
+def collections_throttled_credentials(
+    db: Session,
+) -> list[tuple[AccessCredential, RadiusProfile | None]]:
+    """Active credentials carrying a collections throttle, with their profile.
+
+    Recognition is the owner's own (marker set, or slot equals the configured
+    throttle profile); the profile is the one the owner would apply, or None
+    when none can be found. Read-only; used by the drift report.
+    """
+    ctx = RateContext.load(db)
+    candidates = db.scalars(
+        select(AccessCredential).where(AccessCredential.is_active.is_(True))
+    ).all()
+    found: list[tuple[AccessCredential, RadiusProfile | None]] = []
+    for credential in candidates:
+        slot = credential.radius_profile_id
+        marked = credential.pre_throttle_radius_profile_id is not None
+        if not marked and not (slot is not None and slot == ctx.collections_profile_id):
+            continue
+        found.append((credential, collections_throttle_profile(ctx, credential)))
+    return found
+
+
 def plan_profile_for(
     ctx: RateContext, subscription: Subscription
 ) -> tuple[RadiusProfile | None, bool]:
@@ -564,6 +623,45 @@ def derive(
 # --------------------------------------------------------------------------
 
 
+def clear_legacy_fup_slot(
+    db: Session,
+    credentials: Iterable[AccessCredential],
+    throttle_profile_id: object,
+) -> int:
+    """Clear a FUP throttle profile an older version left in a credential slot.
+
+    Only a slot that equals the FUP state's throttle profile and carries no
+    collections marker is cleared (it is the FUP's own old write). A slot that is
+    the configured collections throttle, or any marked slot, is left alone so an
+    active collections throttle survives the FUP lift. This is the one place
+    outside the collections throttle path that writes the slot.
+    """
+    target = _as_uuid(throttle_profile_id)
+    if target is None:
+        return 0
+    with db.no_autoflush:
+        from app.services import settings_spec
+
+        collections = _as_uuid(
+            settings_spec.resolve_value(
+                db, SettingDomain.collections, "throttle_radius_profile_id"
+            )
+        )
+    if target == collections:
+        return 0
+    cleared = 0
+    for credential in credentials:
+        if (
+            credential.radius_profile_id == target
+            and credential.pre_throttle_radius_profile_id is None
+        ):
+            credential.radius_profile_id = None
+            cleared += 1
+    if cleared:
+        db.flush()
+    return cleared
+
+
 def active_credential_for(
     db: Session, subscription: Subscription
 ) -> AccessCredential | None:
@@ -639,12 +737,11 @@ def refuse_unrecorded_override(
 
     A speed variant is a different offer; a per-service profile override has no
     recorded reason, actor or expiry and is not supported. NULL and the
-    package's linked profile are accepted. A no-op while the owner is off, so
-    the admin form and API keep their previous behaviour until the switch.
+    package's linked profile are accepted (and, for a credential, never stored).
     """
     from app.services.domain_errors import DomainError
 
-    if profile_id in (None, "") or not rate_owner_enabled(db):
+    if profile_id in (None, ""):
         return
     wanted = _as_uuid(profile_id)
     package = _as_uuid(offer_id)
@@ -667,6 +764,27 @@ def refuse_unrecorded_override(
         ),
         details={"offer_id": _s(package), "profile_id": _s(wanted)},
         retryable=False,
+    )
+
+
+class RateOwnerNotSwitchedOn(RuntimeError):
+    """The process must not serve before the governed switch has run."""
+
+
+def assert_switched_on(db: Session) -> None:
+    """Refuse to serve (production) while the governed switch has not run.
+
+    This release resolves every rate through the owner and writes no plan rate
+    into credentials, so it is only safe once the switch preflight, projection
+    and read-back have passed. Other environments (development, tests, fresh
+    databases) are not blocked; the flag is only evidence of the switch.
+    """
+    if rate_owner_enabled(db) is True:
+        return
+    raise RateOwnerNotSwitchedOn(
+        "radius.rate_owner_enabled is off: run the governed rate switch "
+        "(python -m scripts.network.access_rate_switch on) before deploying "
+        "this release, or redeploy the previous release."
     )
 
 
@@ -706,16 +824,13 @@ def refuse_throttle_profile_change(
 
     A credential is throttled on the old value when it carries a collections
     marker or its slot equals the old configured profile. Changing the setting
-    underneath it would lift those throttles silently. Dormant while the owner
-    is off.
+    underneath it would lift those throttles silently.
     """
     from sqlalchemy import func, or_
 
     from app.services import settings_spec
 
     if domain != SettingDomain.collections or key != "throttle_radius_profile_id":
-        return
-    if not rate_owner_enabled(db):
         return
     old = _as_uuid(settings_spec.resolve_value(db, SettingDomain.collections, key))
     new = _as_uuid(pending_value)

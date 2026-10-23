@@ -12,11 +12,11 @@ from app.services import radius as radius_service
 from app.services import radius_reject as radius_reject_service
 from app.services.enforcement import (
     _resolve_plan_profile,
-    apply_radius_profile_to_subscription,
     disconnect_account_sessions,
     disconnect_subscription_sessions,
     project_credentials_to_radius,
     remove_subscription_address_list_block,
+    subscription_credential_scope,
     update_subscription_sessions,
 )
 from app.services.enforcement_event_policy import (
@@ -631,9 +631,7 @@ class EnforcementHandler:
             # account moved every active credential the subscriber owned onto the
             # throttle profile, so one capped service degraded the customer's
             # unrelated services too.
-            application = apply_radius_profile_to_subscription(
-                db, str(subscription_id), str(throttle_profile_id)
-            )
+            application = subscription_credential_scope(db, str(subscription_id))
             if application.matched:
                 # Gate on MATCHED, not updated. A re-assertion after a cooldown
                 # legitimately changes nothing on the wire, but the decision
@@ -657,22 +655,24 @@ class EnforcementHandler:
                     cap_resets_at=cap_resets_at_raw,
                     notes="FUP throttle applied",
                 )
-                if application.updated:
-                    # Consequences follow the authoritative state, never precede
-                    # it: project the credential rows first, then move live
-                    # sessions onto them. Disconnecting before the state existed
-                    # meant a CoA could land with nothing recording why.
-                    #
-                    # RADIUS projection is idempotent, so a failure here is
-                    # drift a later reconcile repairs. Both still run before the
-                    # dispatcher's outer commit — true post-commit delivery
-                    # needs a durable consequence intent and a post-commit
-                    # consumer, which this handler cannot express.
-                    project_credentials_to_radius(db, application.usernames)
-                    if policy.refresh_sessions:
-                        disconnect_subscription_sessions(
-                            db, str(subscription_id), reason="fup_throttle"
-                        )
+                # The rate owner reads the recorded state, so it must be visible
+                # to the projection that follows.
+                db.flush()
+                # Consequences follow the authoritative state, never precede
+                # it: project the credential rows first, then move live
+                # sessions onto them. Disconnecting before the state existed
+                # meant a CoA could land with nothing recording why.
+                #
+                # RADIUS projection is idempotent, so a failure here is
+                # drift a later reconcile repairs. Both still run before the
+                # dispatcher's outer commit — true post-commit delivery
+                # needs a durable consequence intent and a post-commit
+                # consumer, which this handler cannot express.
+                project_credentials_to_radius(db, application.usernames)
+                if policy.refresh_sessions:
+                    disconnect_subscription_sessions(
+                        db, str(subscription_id), reason="fup_throttle"
+                    )
         except FupRuntimeStateError:
             raise
         except Exception as exc:
