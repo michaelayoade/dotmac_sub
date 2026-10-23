@@ -348,6 +348,11 @@ def _derive_prompt_regex(output: str, fallback: str) -> str:
     return fallback
 
 
+# Running-config backup read: absolute cap and idle-progress window (DESIGN s4).
+_BACKUP_COMMAND_MAX_SECONDS = 300
+_BACKUP_COMMAND_IDLE_SECONDS = 30.0
+
+
 def _send_huawei_command(
     channel: Channel,
     command: str,
@@ -542,10 +547,56 @@ def _run_huawei_cmd(channel: Channel, command: str, prompt: str = r"#\s*$") -> s
     return out
 
 
-def _run_huawei_paged_cmd(
-    channel: Channel, command: str, prompt: str = r"#\s*$", *, timeout_sec: int = 60
+def _read_until_prompt_idle(
+    channel: Channel,
+    prompt_regex: str,
+    *,
+    idle_timeout_sec: float,
+    max_timeout_sec: float,
 ) -> str:
-    """Send a paged command within one cumulative deadline."""
+    """Read until ``prompt_regex`` matches, extending while bytes keep arriving.
+
+    Gives up after ``idle_timeout_sec`` with no bytes, or ``max_timeout_sec``
+    in total. Returns whatever was read; callers check for the prompt.
+    """
+    compiled = re.compile(prompt_regex)
+    buffer = ""
+    now = time.monotonic()
+    hard_deadline = now + max_timeout_sec
+    idle_deadline = now + idle_timeout_sec
+    channel.settimeout(0.8)
+    while True:
+        now = time.monotonic()
+        if now > hard_deadline or now > idle_deadline:
+            return buffer
+        try:
+            chunk = channel.recv(4096).decode("utf-8", errors="replace")
+        except TimeoutError:
+            if compiled.search(buffer):
+                return buffer
+            continue
+        if not chunk:
+            return buffer
+        buffer += chunk
+        idle_deadline = time.monotonic() + idle_timeout_sec
+        if compiled.search(buffer):
+            return buffer
+
+
+def _run_huawei_paged_cmd(
+    channel: Channel,
+    command: str,
+    prompt: str = r"#\s*$",
+    *,
+    timeout_sec: int = 60,
+    idle_timeout_sec: float | None = None,
+) -> str:
+    """Send a paged command within one cumulative deadline.
+
+    With ``idle_timeout_sec`` the deadline is idle-progress based: each read
+    keeps going while bytes arrive and gives up after that many silent
+    seconds; ``timeout_sec`` is then the absolute cap.
+    """
     logger.debug("OLT paged command: %r", command)
     _send_huawei_command(channel, command)
     output_parts: list[str] = []
@@ -559,11 +610,19 @@ def _run_huawei_paged_cmd(
             raise TimeoutError(
                 f"Huawei command did not return a shell prompt within {timeout_sec}s"
             )
-        chunk = _read_until_prompt(
-            channel,
-            combined_pattern,
-            timeout_sec=remaining,
-        )
+        if idle_timeout_sec is None:
+            chunk = _read_until_prompt(
+                channel,
+                combined_pattern,
+                timeout_sec=remaining,
+            )
+        else:
+            chunk = _read_until_prompt_idle(
+                channel,
+                combined_pattern,
+                idle_timeout_sec=idle_timeout_sec,
+                max_timeout_sec=remaining,
+            )
         output_parts.append(chunk)
 
         # A single recv can contain an earlier continuation marker and the final
@@ -853,22 +912,17 @@ def rollback_firmware(olt: OLTDevice) -> tuple[bool, str]:
         return False, f"Connection failed: {exc}"
 
     try:
-        channel.send("enable\n")
-        _read_until_prompt(
-            channel, policy.prompt_regex, timeout_sec=_setup_prompt_timeout()
-        )
+        prompt = _prepare_huawei_read_shell(channel, policy.prompt_regex)
 
-        # First check if we have dual image support
-        ok, msg, info = get_firmware_info(olt)
+        # Reuse this channel: a second login here would hold two sessions.
+        version_output = _run_huawei_paged_cmd(
+            channel, "display version", prompt=prompt, timeout_sec=30
+        )
+        info = _parse_firmware_info(version_output)
         if not info.has_dual_image:
             return False, "OLT does not appear to have dual-image support"
         if not info.standby_version:
             return False, "No standby firmware version available for rollback"
-
-        channel.send("screen-length 0 temporary\n")
-        _read_until_prompt(
-            channel, policy.prompt_regex, timeout_sec=_setup_prompt_timeout()
-        )
 
         # Switch startup system software to standby
         # Huawei: startup system-software slave (or backup/standby depending on model)
@@ -878,7 +932,7 @@ def rollback_firmware(olt: OLTDevice) -> tuple[bool, str]:
         # Handle confirmation prompt
         if re.search(r"y/n|\[Y/N\]", output, re.IGNORECASE):
             channel.send("y\n")
-            output += _read_until_prompt(channel, policy.prompt_regex, timeout_sec=15)
+            output += _read_until_prompt(channel, prompt, timeout_sec=15)
 
         if is_error_output(output):
             logger.warning(
@@ -945,23 +999,23 @@ def fetch_running_config_ssh(olt: OLTDevice) -> tuple[bool, str, str]:
 
     try:
         with ssh_context as (channel, policy):
-            channel.send("enable\n")
-            _read_until_prompt(
-                channel, policy.prompt_regex, timeout_sec=_setup_prompt_timeout()
-            )
+            # ``enable`` moves the prompt from ``>`` to ``#``; derive the real
+            # privileged prompt and disable paging before the long read.
+            prompt = _prepare_huawei_read_shell(channel, policy.prompt_regex)
 
             output = _run_huawei_paged_cmd(
                 channel,
                 "display current-configuration",
-                prompt=policy.prompt_regex,
-                timeout_sec=60,
+                prompt=prompt,
+                timeout_sec=_BACKUP_COMMAND_MAX_SECONDS,
+                idle_timeout_sec=_BACKUP_COMMAND_IDLE_SECONDS,
             )
 
         # Strip echoed command and trailing prompt
         lines = output.splitlines()
         if lines and "display current-configuration" in lines[0]:
             lines = lines[1:]
-        if lines and re.search(policy.prompt_regex, lines[-1]):
+        if lines and re.search(prompt, lines[-1]):
             lines = lines[:-1]
         config_text = "\n".join(lines).strip()
 
@@ -999,6 +1053,76 @@ def _validate_readonly_command(command: str) -> tuple[bool, str]:
         Tuple of (is_valid, error_message).
     """
     return validate_readonly_command(command)
+
+
+class OltCliPromptError(TimeoutError):
+    """The CLI did not return to a clean prompt; the channel must be discarded.
+
+    Subclasses ``TimeoutError`` so the connection pool closes the channel
+    rather than returning it mid-pager or mid-prompt.
+    """
+
+
+_PAGER_PROMPT_RE = re.compile(r"---- More(?:\s*\([^)]*\)\s*)?----|Press any key")
+_CONFIRM_PROMPT_RE = re.compile(r"\(y/n\)|\[Y/N\]", re.IGNORECASE)
+_MAX_CR_ANSWERS = 3
+
+
+def _run_readonly_display_cmd(
+    channel: Channel,
+    command: str,
+    *,
+    prompt: str,
+    timeout_sec: float = 30.0,
+) -> str:
+    """Run one read-only display command and return only at a clean prompt.
+
+    Pager prompts get a space. A ``{ <cr>|... }:`` continuation prompt is
+    answered with Enter only when ``<cr>`` is among the offered options (at
+    most ``_MAX_CR_ANSWERS`` times); otherwise, and for any ``(y/n)``
+    question or a prompt that never returns, ``OltCliPromptError`` is raised.
+    Nothing but space/Enter is ever sent.
+    """
+    from app.services.network.parsers.cli import HUAWEI_OPTIONAL_ARG_PROMPT
+
+    _send_huawei_command(channel, command)
+    pending = (
+        f"{prompt}|{_PAGER_PROMPT_RE.pattern}|{HUAWEI_OPTIONAL_ARG_PROMPT}"
+        f"|{_CONFIRM_PROMPT_RE.pattern}"
+    )
+    deadline = time.monotonic() + timeout_sec
+    parts: list[str] = []
+    cr_answers = 0
+    while True:
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise OltCliPromptError(
+                f"Command did not return to a prompt within {timeout_sec:g}s"
+            )
+        chunk = _read_until_prompt(channel, pending, timeout_sec=remaining)
+        parts.append(chunk)
+        tail = chunk.rstrip()[-300:]
+        if re.search(prompt, chunk):
+            return "".join(parts)
+        if _CONFIRM_PROMPT_RE.search(tail):
+            raise OltCliPromptError("Command asked for confirmation; not answered")
+        if _PAGER_PROMPT_RE.search(tail):
+            channel.send(" ")
+            continue
+        option_match = re.search(HUAWEI_OPTIONAL_ARG_PROMPT, chunk)
+        if option_match:
+            options = option_match.group(0).strip()
+            if "<cr>" not in options:
+                raise OltCliPromptError(f"Command needs more arguments: {options}")
+            if cr_answers >= _MAX_CR_ANSWERS:
+                raise OltCliPromptError(
+                    f"Command still waiting for input after {_MAX_CR_ANSWERS} "
+                    f"Enter answers: {options}"
+                )
+            cr_answers += 1
+            channel.send("\n")
+            continue
+        raise OltCliPromptError("Command output ended before the shell prompt")
 
 
 def run_cli_command(olt: OLTDevice, command: str) -> tuple[bool, str, str]:
@@ -1040,24 +1164,24 @@ def run_cli_command(olt: OLTDevice, command: str) -> tuple[bool, str, str]:
 
     try:
         with ssh_context as (channel, policy):
-            channel.send("enable\n")
-            _read_until_prompt(
-                channel, policy.prompt_regex, timeout_sec=_setup_prompt_timeout()
-            )
-
-            channel.send(f"{command}\n")
-            output = _read_until_prompt(channel, policy.prompt_regex, timeout_sec=30)
+            prompt = _prepare_huawei_read_shell(channel, policy.prompt_regex)
+            # Any exception raised here (including OltCliPromptError) makes
+            # the pool discard the channel instead of reusing a dirty one.
+            output = _run_readonly_display_cmd(channel, command, prompt=prompt)
 
         # Strip the echoed command and trailing prompt from the output
         lines = output.splitlines()
         if lines and command in lines[0]:
             lines = lines[1:]
         # Remove trailing prompt line
-        if lines and re.search(policy.prompt_regex, lines[-1]):
+        if lines and re.search(prompt, lines[-1]):
             lines = lines[:-1]
         clean_output = "\n".join(lines).strip()
         olt_cache.set(str(olt.id), "running_config", clean_output, cache_params, ttl=60)
         return True, "Command executed", clean_output
+    except OltCliPromptError as exc:
+        logger.warning("CLI command on OLT %s did not complete: %s", olt.name, exc)
+        return False, str(exc), ""
     except (*_SSH_CONNECTION_ERRORS, RuntimeError, ValueError) as exc:
         logger.error(
             "Error running CLI command on OLT %s: %s", olt.name, exc, exc_info=True
