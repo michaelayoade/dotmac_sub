@@ -210,7 +210,7 @@ class FakeConnection:
         self.snapshots = snapshots
         self.executed: list[str] = []
 
-    def execute(self, _statement: object) -> _Rows:
+    def execute(self, _statement: object, _params: object = None) -> _Rows:
         snap = self.snapshots.pop(0)
         return _Rows(
             [

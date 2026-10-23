@@ -14,7 +14,8 @@ transaction. The planning here is pure (no database) so it is unit-testable.
 
 from __future__ import annotations
 
-from collections.abc import Iterable, Sequence
+import re
+from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Final
@@ -265,29 +266,44 @@ def _row_to_object(row: Sequence[Any]) -> OwnedObject:
     )
 
 
-def snapshot_owned_objects(connection: Any) -> tuple[OwnedObject, ...]:
-    from sqlalchemy import text
+_NAMED_PARAM = re.compile(r"(?<![:\w]):([A-Za-z_]\w*)")
 
-    return tuple(
-        _row_to_object(row) for row in connection.execute(text(OWNED_OBJECTS_SQL))
-    )
+
+def _query(connection: Any, sql: str, params: Mapping[str, Any] | None = None) -> list:
+    """Run a read on either a SQLAlchemy connection (Alembic) or a psycopg one
+    (the pre-deploy identity check), so neither needs its own engine."""
+    if hasattr(connection, "exec_driver_sql"):
+        from sqlalchemy import text
+
+        return list(connection.execute(text(sql), params or {}))
+    if params:
+        sql = _NAMED_PARAM.sub(r"%(\1)s", sql)
+    return list(connection.execute(sql, params).fetchall())
+
+
+def _statement(connection: Any, sql: str) -> None:
+    if hasattr(connection, "exec_driver_sql"):
+        connection.exec_driver_sql(sql)
+    else:
+        connection.execute(sql)
+
+
+def snapshot_owned_objects(connection: Any) -> tuple[OwnedObject, ...]:
+    return tuple(_row_to_object(row) for row in _query(connection, OWNED_OBJECTS_SQL))
 
 
 def assert_migrator_identity(connection: Any, *, owner: str) -> None:
-    from sqlalchemy import text
-
-    head = connection.execute(text(MIGRATOR_POSTURE_SQL), {"owner": owner}).one()
+    head = _query(connection, MIGRATOR_POSTURE_SQL, {"owner": owner})[0]
     owner_exists = bool(head[1])
     inherits = can_set = reaches = False
     if owner_exists and head[0] != owner:
-        edge = connection.execute(
-            text(
-                "SELECT pg_has_role(current_user, :o, 'USAGE'), "
-                "pg_has_role(current_user, :o, 'SET'), "
-                "pg_has_role(:o, current_user, 'MEMBER')"
-            ),
+        edge = _query(
+            connection,
+            "SELECT pg_has_role(current_user, :o, 'USAGE'), "
+            "pg_has_role(current_user, :o, 'SET'), "
+            "pg_has_role(:o, current_user, 'MEMBER')",
             {"o": owner},
-        ).one()
+        )[0]
         inherits, can_set, reaches = bool(edge[0]), bool(edge[1]), bool(edge[2])
     posture = MigratorPosture(
         current_user=str(head[0]),
@@ -334,7 +350,7 @@ def hand_back_new_objects(
             f"{owner}: " + "; ".join(plan.refusals)
         )
     for statement in plan.statements:
-        connection.exec_driver_sql(statement)
+        _statement(connection, statement)
     remaining = leftovers(
         before,
         snapshot_owned_objects(connection),

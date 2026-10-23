@@ -69,6 +69,7 @@ database_heads() {
   fi
 }
 migration_admin_credential_available() { [[ "${FAKE_ADMIN_OK-1}" == "1" ]]; }
+verify_migration_identity() { [[ "${FAKE_IDENTITY_OK-1}" == "1" ]]; }
 run_migrations() {
   MIGRATION_RUN_PREFIX=dotmac_sub_migrate_test_
   echo "migrate image=$(env_value APP_IMAGE)" >>"$CALLS"

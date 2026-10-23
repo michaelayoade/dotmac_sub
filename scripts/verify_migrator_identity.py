@@ -22,8 +22,7 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
-from sqlalchemy import create_engine
-from sqlalchemy.exc import SQLAlchemyError
+import psycopg
 
 from app.config import settings
 from app.migration_ownership import (
@@ -38,17 +37,19 @@ def main() -> int:
     if not owner:
         print(f"{OWNER_ENV_VAR} is not set", file=sys.stderr)
         return 2
-    engine = create_engine(settings.alembic_database_url)
+    url = settings.alembic_database_url.replace(
+        "postgresql+psycopg://", "postgresql://", 1
+    )
     try:
-        with engine.connect() as connection:
-            connection.exec_driver_sql("SET TRANSACTION READ ONLY")
+        with psycopg.connect(url, autocommit=False) as connection:
+            connection.execute("SET TRANSACTION READ ONLY")
             try:
                 assert_migrator_identity(connection, owner=owner)
             except MigrationOwnershipError as exc:
                 print(f"MIGRATOR IDENTITY REFUSED: {exc}", file=sys.stderr)
                 return 1
             connection.rollback()
-    except SQLAlchemyError:
+    except psycopg.Error:
         print(
             "database connection or identity query failed; connection details "
             "were deliberately not logged",

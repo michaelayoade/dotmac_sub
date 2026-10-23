@@ -65,8 +65,11 @@ def test_outbox_bootstrap_removes_the_old_direction_and_never_regrants_it(
     with psycopg.connect(_psycopg_url(isolated_database), autocommit=False) as admin:
         assert bootstrap_modules(admin, dry_run=False, repair=True) == 0
         assert bootstrap_outbox(admin, dry_run=False, repair=True) == 0
+        # PostgreSQL refuses circular membership, so the old edge can only be
+        # reproduced after the new one is removed.
+        admin.execute("REVOKE dotmac_app FROM app_admin")
         admin.execute("GRANT app_admin TO dotmac_app")
-        assert _edges(admin) == (True, True)
+        assert _edges(admin) == (False, True)
         assert verify_outbox(admin) == 1
 
         assert bootstrap_outbox(admin, dry_run=False, repair=True) == 0
