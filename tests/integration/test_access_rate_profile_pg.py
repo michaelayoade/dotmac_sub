@@ -12,13 +12,13 @@ from sqlalchemy import text
 from sqlalchemy.exc import DBAPIError
 from sqlalchemy.orm import Session
 
-from app import db as app_db
-from app.db import begin_read_only_snapshot
+from app.db import SessionLocal, begin_read_only_snapshot
 from app.services import access_rate_profile as owner
 
 
 def test_preflight_runs_in_a_read_only_snapshot(engine) -> None:
-    with Session(engine) as session:
+    assert engine is not None  # migrated PostgreSQL, same DATABASE_URL as SessionLocal
+    with SessionLocal() as session:
         begin_read_only_snapshot(session)
         owner.preflight(session)
         with pytest.raises(DBAPIError, match="read-only"):
@@ -27,6 +27,7 @@ def test_preflight_runs_in_a_read_only_snapshot(engine) -> None:
 
 
 def test_the_cli_hands_the_preflight_a_read_only_session(engine, monkeypatch) -> None:
+    assert engine is not None
     attempted: list[str] = []
 
     def probe(session: Session) -> list:
@@ -35,7 +36,6 @@ def test_the_cli_hands_the_preflight_a_read_only_session(engine, monkeypatch) ->
         attempted.append("refused")
         return []
 
-    monkeypatch.setattr(app_db, "SessionLocal", lambda: Session(engine))
     monkeypatch.setattr(owner, "preflight", probe)
 
     assert owner.main(["preflight"]) == 0
