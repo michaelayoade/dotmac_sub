@@ -73,7 +73,7 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.config import settings
-from app.models.domain_settings import DomainSetting, SettingDomain, SettingValueType
+from app.models.domain_settings import SettingDomain, SettingValueType
 from app.schemas.settings import DomainSettingUpdate
 from app.services import access_rate_profile, radius_population
 from app.services.audit_adapter import AuditActor, stage_audit_event
@@ -467,13 +467,9 @@ def _await_flag(db: Session) -> bool:
 def flag_from_row(db: Session) -> bool | None:
     """The switch as stored in its row, uncached (None when there is no row)."""
     _release_reads(db)
-    row = db.scalars(
-        select(DomainSetting).where(
-            DomainSetting.domain == SettingDomain.radius,
-            DomainSetting.key == access_rate_profile.SETTING_KEY,
-            DomainSetting.is_active.is_(True),
-        )
-    ).first()
+    row = DomainSettings(SettingDomain.radius).get_optional_by_key(
+        db, access_rate_profile.SETTING_KEY, active_only=True
+    )
     if row is None:
         return None
     value = row.value_json if row.value_json is not None else row.value_text
