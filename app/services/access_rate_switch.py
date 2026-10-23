@@ -26,6 +26,30 @@ that projection would write with the rates currently in every target's
 (preserved, unbuildable, mode none, hard-reject) are reported, never counted as
 mismatches.
 
+Exception record (``access_rate_exception_record.v1``)
+------------------------------------------------------
+
+Some services are expected to change rate when the owner is switched on (for
+example an imported profile that never matched the package). The dry run can
+write them as a reviewed record, ``--emit-approval-list FILE``::
+
+    {"schema": "access_rate_exception_record.v1",
+     "entries": [{"subscription_id": ..., "login": ..., "offer_id": ...,
+                  "current_rate": ..., "derived_rate": ...,
+                  "divergence_class": <a preflight class>,
+                  "decision": null, "decided_by": null, "decided_at": null,
+                  "reason": null}]}
+
+Reviewers fill in ``decision`` (``apply_derived``: give the service its package
+rate; ``moved_offer``: the service was already moved to another package by a
+normal plan change, recorded for audit only and never expected to diverge),
+``decided_by``, ``decided_at`` and a free-text ``reason``. ``--apply`` takes the
+file with its sha256 (``--approved-list FILE --approved-sha256 HEX``) and
+refuses unless every entry is decided and the live divergence set equals the
+``apply_derived`` entries exactly. The file's sha256 goes into the switch digest
+and the audit record. The same record is the input to the later catalog cutover
+mapping: each reviewed service is mapped to the specification of its package.
+
 CLI::
 
     python -m app.services.access_rate_switch on  --reason TEXT [--apply]
@@ -146,6 +170,9 @@ class SwitchOutcome:
     approved_list_sha256: str | None = None
     switch_digest: str | None = None
     emitted_list_sha256: str | None = None
+    record_schema: str | None = None
+    apply_derived: int = 0
+    moved_offer: int = 0
 
     def as_dict(self) -> dict[str, object]:
         return {
@@ -160,6 +187,9 @@ class SwitchOutcome:
             "approved_list_sha256": self.approved_list_sha256,
             "switch_digest": self.switch_digest,
             "emitted_list_sha256": self.emitted_list_sha256,
+            "record_schema": self.record_schema,
+            "apply_derived": self.apply_derived,
+            "moved_offer": self.moved_offer,
             "baseline": None if self.baseline is None else self.baseline.as_dict(),
             "read_back": _read_back_dict(self.read_back),
         }
@@ -175,8 +205,19 @@ def _error(suffix: str, message: str, **details: object) -> DomainError:
 
 
 # --------------------------------------------------------------------------
-# Approved divergence list (digest-bound; entries carry their class)
+# Exception record (digest-bound; the cutover mapping input)
 # --------------------------------------------------------------------------
+
+#: Schema of the reviewed list of expected rate changes. It is also the input
+#: the later catalog cutover maps from: each reviewed service is given the rate
+#: of its package.
+RECORD_SCHEMA = "access_rate_exception_record.v1"
+#: Give the service the package's derived rate (the switch applies it).
+DECISION_APPLY_DERIVED = "apply_derived"
+#: The service was moved to another package through a normal plan change before
+#: the switch. Recorded for audit only: it must NOT still diverge.
+DECISION_MOVED_OFFER = "moved_offer"
+DECISIONS = (DECISION_APPLY_DERIVED, DECISION_MOVED_OFFER)
 
 #: (subscription_id, divergence class, current rate, derived rate)
 ApprovedKey = tuple[str, str, str | None, str | None]
@@ -184,27 +225,39 @@ ApprovedKey = tuple[str, str, str | None, str | None]
 
 @dataclass(frozen=True)
 class ApprovedDivergences:
-    """A reviewed list of the exact rate changes the switch is allowed to make.
+    """The reviewed exception record, bound to the sha256 of its file bytes.
 
-    Bound to the sha256 of its file bytes, which the operator states up front.
-    Generate it from the dry run with ``--emit-approval-list``.
+    Generate it from the dry run (``--emit-approval-list``), fill in the
+    decisions, and state the file's sha256 when switching. ``entries`` are the
+    ``apply_derived`` decisions the live divergence set must equal exactly;
+    ``audit_only`` counts ``moved_offer`` entries, which are recorded for audit
+    and are never expected to diverge.
     """
 
     entries: frozenset[ApprovedKey]
     sha256: str
+    audit_only: int = 0
 
     @property
     def digest(self) -> str:
-        """Digest recorded with the switch: list hash plus its size."""
+        """Digest recorded with the switch: list hash plus its sizes."""
         material = json.dumps(
-            {"approved_list_sha256": self.sha256, "entries": len(self.entries)},
+            {
+                "approved_list_sha256": self.sha256,
+                "apply_derived": len(self.entries),
+                "moved_offer": self.audit_only,
+            },
             sort_keys=True,
         )
         return hashlib.sha256(material.encode("utf-8")).hexdigest()
 
 
+def _invalid(message: str, **details: object) -> DomainError:
+    return _error("approved_list_invalid", message, **details)
+
+
 def load_approved(path: str | Path, expected_sha256: str) -> ApprovedDivergences:
-    """Read the approved list, refusing unless its bytes match the stated digest."""
+    """Read and validate the exception record against its stated sha256."""
     raw = Path(path).read_bytes()
     actual = hashlib.sha256(raw).hexdigest()
     if actual != expected_sha256.strip().lower():
@@ -213,48 +266,82 @@ def load_approved(path: str | Path, expected_sha256: str) -> ApprovedDivergences
             "The approved list does not match the stated sha256.",
         )
     try:
-        entries = json.loads(raw)["entries"]
-        keys = frozenset(
-            (
-                str(item["subscription_id"]),
-                str(item["class"]),
-                item["current_rate"],
-                item["derived_rate"],
-            )
-            for item in entries
-        )
+        document = json.loads(raw)
+        schema = document["schema"]
+        entries = document["entries"]
     except (ValueError, KeyError, TypeError) as exc:
-        raise _error(
-            "approved_list_invalid", "The approved list is not valid."
-        ) from exc
-    if len(keys) != len(entries) or len({k[0] for k in keys}) != len(keys):
-        raise _error(
-            "approved_list_invalid", "The approved list repeats a subscription."
+        raise _invalid("The approved list is not a valid record.") from exc
+    if schema != RECORD_SCHEMA:
+        raise _invalid("Unsupported record schema.", schema=str(schema))
+    if not isinstance(entries, list):
+        raise _invalid("The record entries are not a list.")
+
+    keys: set[ApprovedKey] = set()
+    audit_only = 0
+    seen: set[str] = set()
+    undecided = 0
+    for item in entries:
+        try:
+            sid = str(item["subscription_id"])
+            klass = str(item["divergence_class"])
+            current, derived = item["current_rate"], item["derived_rate"]
+            decision = item.get("decision")
+        except (KeyError, TypeError, AttributeError) as exc:
+            raise _invalid("A record entry is missing a field.") from exc
+        for required in ("login", "offer_id"):
+            if required not in item:
+                raise _invalid("A record entry is missing a field.", field=required)
+        if klass not in access_rate_profile.DIVERGENCE_CLASSES:
+            raise _invalid("Unknown divergence class.", divergence_class=klass)
+        if sid in seen:
+            raise _invalid("The record repeats a subscription.")
+        seen.add(sid)
+        if decision in (None, ""):
+            undecided += 1
+            continue
+        if decision not in DECISIONS:
+            raise _invalid("Unknown decision.", decision=str(decision))
+        for required in ("decided_by", "decided_at"):
+            if not str(item.get(required) or "").strip():
+                raise _invalid("A decided entry needs who and when.", field=required)
+        if decision == DECISION_MOVED_OFFER:
+            audit_only += 1
+        else:
+            keys.add((sid, klass, current, derived))
+    if undecided:
+        raise _invalid(
+            "Every entry needs a decision before the switch.", undecided=undecided
         )
-    unknown = {k[1] for k in keys} - set(access_rate_profile.DIVERGENCE_CLASSES)
-    if unknown:
-        raise _error(
-            "approved_list_invalid",
-            "The approved list names an unknown divergence class.",
-            classes=sorted(unknown),
-        )
-    return ApprovedDivergences(entries=keys, sha256=actual)
+    return ApprovedDivergences(
+        entries=frozenset(keys), sha256=actual, audit_only=audit_only
+    )
 
 
 def emit_approval_list(
     rows: Sequence[access_rate_profile.Divergence], path: str | Path
 ) -> str:
-    """Write the live divergences as an approval list; return its sha256."""
+    """Write the live divergences as an exception record with blank decisions."""
     entries = [
         {
             "subscription_id": r.subscription_id,
-            "class": r.klass,
+            "login": r.login,
+            "offer_id": r.offer_id,
             "current_rate": r.projected_rate,
             "derived_rate": r.derived_rate,
+            "divergence_class": r.klass,
+            "decision": None,
+            "decided_by": None,
+            "decided_at": None,
+            "reason": None,
         }
         for r in sorted(rows, key=lambda r: r.subscription_id)
     ]
-    raw = (json.dumps({"entries": entries}, indent=2, sort_keys=True) + "\n").encode()
+    raw = (
+        json.dumps(
+            {"schema": RECORD_SCHEMA, "entries": entries}, indent=2, sort_keys=True
+        )
+        + "\n"
+    ).encode()
     Path(path).write_bytes(raw)
     return hashlib.sha256(raw).hexdigest()
 
@@ -568,6 +655,9 @@ def switch_on(
             divergences=len(rows),
             approved_list_sha256=approved.sha256 if approved else None,
             switch_digest=approved.digest if approved else None,
+            record_schema=RECORD_SCHEMA if approved else None,
+            apply_derived=len(approved.entries) if approved else 0,
+            moved_offer=approved.audit_only if approved else 0,
         )
         return SwitchOutcome(
             action="switch_on",
@@ -576,6 +666,9 @@ def switch_on(
             divergences=len(rows),
             approved_list_sha256=approved.sha256 if approved else None,
             switch_digest=approved.digest if approved else None,
+            record_schema=RECORD_SCHEMA if approved else None,
+            apply_derived=len(approved.entries) if approved else 0,
+            moved_offer=approved.audit_only if approved else 0,
         )
 
     outcome = execute_owner_command(
@@ -629,6 +722,9 @@ def switch_on(
             divergences=outcome.divergences,
             approved_list_sha256=outcome.approved_list_sha256,
             switch_digest=outcome.switch_digest,
+            record_schema=outcome.record_schema,
+            apply_derived=outcome.apply_derived,
+            moved_offer=outcome.moved_offer,
             baseline=base,
             read_back=report,
         )

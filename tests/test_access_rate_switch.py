@@ -484,7 +484,7 @@ def test_cli_is_dry_run_unless_applied(db_session, world, monkeypatch, capsys):
         switch.main(["on"])  # a reason is required
 
 
-# ------------------------------------- B4: approved list (pending decision)
+# ------------------------------------- B4: the exception record
 
 
 def _divergent(db):
@@ -496,62 +496,168 @@ def _divergent(db):
     return (str(residue.id), "credential_wins", "15M/15M", "10M/10M")
 
 
-def _approved_file(tmp_path, entries):
-    path = tmp_path / "approved.json"
-    path.write_text(
-        json.dumps(
-            {
-                "entries": [
-                    {
-                        "subscription_id": sid,
-                        "class": klass,
-                        "current_rate": current,
-                        "derived_rate": derived,
-                    }
-                    for sid, klass, current, derived in entries
-                ]
-            }
-        )
-    )
+def _entry(sid, klass="credential_wins", current="15M/15M", derived="10M/10M", **kw):
+    entry = {
+        "subscription_id": sid,
+        "login": "login",
+        "offer_id": str(uuid4()),
+        "current_rate": current,
+        "derived_rate": derived,
+        "divergence_class": klass,
+        "decision": "apply_derived",
+        "decided_by": "reviewer",
+        "decided_at": "2026-10-23T12:00:00Z",
+        "reason": "package rate",
+    }
+    entry.update(kw)
+    return entry
+
+
+def _record(tmp_path, entries, schema=switch.RECORD_SCHEMA, name="record.json"):
+    path = tmp_path / name
+    path.write_text(json.dumps({"schema": schema, "entries": entries}))
     return path, hashlib.sha256(path.read_bytes()).hexdigest()
 
 
-def test_the_list_comes_from_the_dry_run_and_lets_the_switch_through(
-    db_session, world, tmp_path
-):
+def _decide(path, **fields):
+    """Fill in the blank decisions of an emitted record; return its digest."""
+    document = json.loads(path.read_text())
+    for entry in document["entries"]:
+        entry.update(
+            decision="apply_derived",
+            decided_by="reviewer",
+            decided_at="2026-10-23T12:00:00Z",
+            reason="package rate",
+        )
+        entry.update(fields)
+    path.write_text(json.dumps(document))
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def test_round_trip_emit_decide_switch(db_session, world, tmp_path):
     key = _divergent(db_session)
-    emitted = tmp_path / "emitted.json"
+    record = tmp_path / "record.json"
     dry = switch.switch_on(
         db_session,
         context=_context(),
         populate=world.populate,
-        emit_approval_list_to=emitted,
+        emit_approval_list_to=record,
     )
-    assert dry.emitted_list_sha256 == hashlib.sha256(emitted.read_bytes()).hexdigest()
-    entry = json.loads(emitted.read_text())["entries"][0]
+    assert dry.emitted_list_sha256 == hashlib.sha256(record.read_bytes()).hexdigest()
+    document = json.loads(record.read_text())
+    assert document["schema"] == "access_rate_exception_record.v1"
+    (entry,) = document["entries"]
     assert (
         entry["subscription_id"],
-        entry["class"],
+        entry["divergence_class"],
         entry["current_rate"],
         entry["derived_rate"],
     ) == key
+    assert entry["login"] and entry["offer_id"]
+    assert entry["decision"] is None and entry["decided_by"] is None
 
-    approved = switch.load_approved(emitted, dry.emitted_list_sha256)
+    # An undecided record cannot be used.
+    with pytest.raises(DomainError) as undecided:
+        switch.load_approved(record, dry.emitted_list_sha256)
+    assert undecided.value.code == "access.rate_profile_switch.approved_list_invalid"
+    assert undecided.value.details["undecided"] == 1
+
+    digest = _decide(record)
+    approved = switch.load_approved(record, digest)
     outcome = _on(db_session, world, approved=approved)
 
     assert outcome.enabled and outcome.read_back.mismatches == 0
-    assert outcome.approved_list_sha256 == dry.emitted_list_sha256
+    assert outcome.approved_list_sha256 == digest
     assert outcome.switch_digest == approved.digest
     event = db_session.scalars(
         select(AuditEvent).where(AuditEvent.action == "access.rate_profile_switch.on")
     ).one()
-    assert event.metadata_["approved_list_sha256"] == dry.emitted_list_sha256
+    assert event.metadata_["approved_list_sha256"] == digest
     assert event.metadata_["switch_digest"] == approved.digest
+    assert event.metadata_["record_schema"] == switch.RECORD_SCHEMA
+    assert event.metadata_["apply_derived"] == 1
 
 
-def test_a_live_divergence_missing_from_the_list_refuses(db_session, world, tmp_path):
+def test_decisions_are_validated(tmp_path):
+    sid = str(uuid4())
+    for entry, field in (
+        (_entry(sid, decision=None), "undecided"),
+        (_entry(sid, decision=""), "undecided"),
+        (_entry(sid, decision="keep_override"), "decision"),
+        (_entry(sid, decided_by=""), "field"),
+        (_entry(sid, decided_at=None), "field"),
+    ):
+        path, digest = _record(tmp_path, [entry])
+        with pytest.raises(DomainError) as invalid:
+            switch.load_approved(path, digest)
+        assert invalid.value.code == "access.rate_profile_switch.approved_list_invalid"
+        assert field in invalid.value.details
+
+
+def test_schema_and_classes_are_validated(tmp_path):
+    sid = str(uuid4())
+    path, digest = _record(tmp_path, [_entry(sid)], schema="other.v1")
+    with pytest.raises(DomainError) as wrong_schema:
+        switch.load_approved(path, digest)
+    assert wrong_schema.value.details["schema"] == "other.v1"
+
+    path, digest = _record(tmp_path, [_entry(sid, klass="made_up")])
+    with pytest.raises(DomainError) as unknown:
+        switch.load_approved(path, digest)
+    assert unknown.value.details["divergence_class"] == "made_up"
+
+    path, digest = _record(tmp_path, [_entry(sid), _entry(sid)])
+    with pytest.raises(DomainError):
+        switch.load_approved(path, digest)
+
+    entry = _entry(sid)
+    del entry["login"]
+    path, digest = _record(tmp_path, [entry])
+    with pytest.raises(DomainError):
+        switch.load_approved(path, digest)
+
+    path.write_text("not json")
+    with pytest.raises(DomainError):
+        switch.load_approved(path, hashlib.sha256(path.read_bytes()).hexdigest())
+
+    with pytest.raises(DomainError) as mismatch:
+        switch.load_approved(path, "0" * 64)
+    assert (
+        mismatch.value.code
+        == "access.rate_profile_switch.approved_list_digest_mismatch"
+    )
+
+
+def test_a_moved_offer_entry_is_audit_only_and_must_not_diverge(
+    db_session, world, tmp_path
+):
+    sid, klass, current, derived = _divergent(db_session)
+    moved = _entry(str(uuid4()), decision="moved_offer")
+    path, digest = _record(tmp_path, [_entry(sid), moved])
+    approved = switch.load_approved(path, digest)
+    assert len(approved.entries) == 1 and approved.audit_only == 1
+
+    outcome = _on(db_session, world, approved=approved)
+    assert outcome.enabled and outcome.moved_offer == 1 and outcome.apply_derived == 1
+
+    # Recorded as moved, yet it still diverges live: refused.
+    other = tmp_path / "other"
+    other.mkdir()
+    path, digest = _record(
+        other, [_entry(sid, decision="moved_offer", current=current)], name="r.json"
+    )
+    again = switch.load_approved(path, digest)
+    switch.switch_off(
+        db_session, context=_context(), apply=True, populate=world.populate
+    )
+    with pytest.raises(DomainError) as refused:
+        _on(db_session, world, approved=again)
+    assert refused.value.details["unexpected"] == 1
+
+
+def test_a_live_divergence_missing_from_the_record_refuses(db_session, world, tmp_path):
     _divergent(db_session)
-    path, digest = _approved_file(tmp_path, [])
+    path, digest = _record(tmp_path, [])
     approved = switch.load_approved(path, digest)
 
     with pytest.raises(DomainError) as refused:
@@ -561,11 +667,9 @@ def test_a_live_divergence_missing_from_the_list_refuses(db_session, world, tmp_
     assert owner.rate_owner_enabled(db_session) is False
 
 
-def test_a_listed_change_that_no_longer_diverges_refuses(db_session, world, tmp_path):
+def test_a_recorded_change_that_no_longer_diverges_refuses(db_session, world, tmp_path):
     _clean_service(db_session)
-    path, digest = _approved_file(
-        tmp_path, [(str(uuid4()), "credential_wins", "15M/15M", "10M/10M")]
-    )
+    path, digest = _record(tmp_path, [_entry(str(uuid4()))])
     approved = switch.load_approved(path, digest)
 
     with pytest.raises(DomainError) as refused:
@@ -574,13 +678,13 @@ def test_a_listed_change_that_no_longer_diverges_refuses(db_session, world, tmp_
     assert refused.value.details["missing"] == 1
 
 
-def test_a_changed_rate_or_class_in_the_list_refuses(db_session, world, tmp_path):
+def test_a_class_or_rate_mismatch_refuses(db_session, world, tmp_path):
     sid, klass, current, _derived = _divergent(db_session)
     for entry in (
-        (sid, klass, current, "12M/12M"),
-        (sid, "subscription_differs", current, "10M/10M"),
+        _entry(sid, derived="12M/12M"),
+        _entry(sid, klass="subscription_differs"),
     ):
-        path, digest = _approved_file(tmp_path, [entry])
+        path, digest = _record(tmp_path, [entry], name=f"{uuid4().hex}.json")
         approved = switch.load_approved(path, digest)
         with pytest.raises(DomainError) as refused:
             _on(db_session, world, approved=approved)
@@ -588,39 +692,21 @@ def test_a_changed_rate_or_class_in_the_list_refuses(db_session, world, tmp_path
         assert refused.value.details["missing"] == 1
 
 
-def test_the_list_must_match_its_digest_and_carry_known_classes(tmp_path):
-    path, _ = _approved_file(
-        tmp_path, [(str(uuid4()), "credential_wins", "15M/15M", "10M/10M")]
-    )
-    with pytest.raises(DomainError) as refused:
-        switch.load_approved(path, "0" * 64)
-    assert (
-        refused.value.code == "access.rate_profile_switch.approved_list_digest_mismatch"
-    )
-
-    bad, bad_digest = _approved_file(
-        tmp_path, [(str(uuid4()), "made_up", "15M/15M", "10M/10M")]
-    )
-    with pytest.raises(DomainError) as invalid:
-        switch.load_approved(bad, bad_digest)
-    assert invalid.value.code == "access.rate_profile_switch.approved_list_invalid"
-
-
-def test_cli_emits_and_takes_a_digest_bound_list(
+def test_cli_emits_then_takes_the_decided_record(
     db_session, world, monkeypatch, capsys, tmp_path
 ):
-    key = _divergent(db_session)
-    emitted = tmp_path / "emitted.json"
+    _divergent(db_session)
+    record = tmp_path / "record.json"
     monkeypatch.setattr("app.db.SessionLocal", lambda: db_session)
     monkeypatch.setattr(db_session, "close", lambda: None)
     monkeypatch.setattr(radius_population, "populate", world.populate)
 
     assert (
-        switch.main(["on", "--reason", "check", "--emit-approval-list", str(emitted)])
+        switch.main(["on", "--reason", "check", "--emit-approval-list", str(record)])
         == 0
     )
-    digest = json.loads(capsys.readouterr().out)["emitted_list_sha256"]
-    assert digest == hashlib.sha256(emitted.read_bytes()).hexdigest()
+    capsys.readouterr()
+    digest = _decide(record)
 
     code = switch.main(
         [
@@ -628,7 +714,7 @@ def test_cli_emits_and_takes_a_digest_bound_list(
             "--reason",
             "check",
             "--approved-list",
-            str(emitted),
+            str(record),
             "--approved-sha256",
             digest,
         ]
@@ -638,7 +724,6 @@ def test_cli_emits_and_takes_a_digest_bound_list(
     assert code == 0
     assert (out["unexpected"], out["missing"]) == (0, 0)
     assert out["approved_list_sha256"] == digest
-    assert key
     with pytest.raises(SystemExit):
         switch.main(["on", "--reason", "x", "--apply", "--emit-approval-list", "f"])
 

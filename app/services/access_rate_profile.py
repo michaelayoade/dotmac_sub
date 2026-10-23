@@ -757,6 +757,7 @@ DIVERGENCE_CLASSES = (
 class Divergence:
     subscription_id: str
     login: str
+    offer_id: str | None
     klass: str
     derived_layer: str
     derived_profile_id: str | None
@@ -770,6 +771,7 @@ class Divergence:
         return {
             "subscription_id": self.subscription_id,
             "login": self.login,
+            "offer_id": self.offer_id,
             "class": self.klass,
             "derived_layer": self.derived_layer,
             "derived_profile_id": self.derived_profile_id,
@@ -880,6 +882,7 @@ def preflight(db: Session) -> list[Divergence]:
             Divergence(
                 subscription_id=str(subscription.id),
                 login=subscription.login or "",
+                offer_id=_s(subscription.offer_id),
                 klass=klass,
                 derived_layer=derived.layer.value,
                 derived_profile_id=_s(derived.profile_id),
