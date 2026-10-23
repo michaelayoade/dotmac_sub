@@ -225,7 +225,7 @@ def resolve_fup_throttle_profile(
     "no profile" would leave a breaching subscriber at full speed while the
     sweep counted the enforcement as done.
     """
-    from app.services.enforcement import _resolve_effective_profile
+    from app.services.enforcement import _resolve_plan_profile
 
     def _fallback(reason: str) -> ThrottleProfileDecision:
         if fallback_profile_id is None:
@@ -252,7 +252,7 @@ def resolve_fup_throttle_profile(
     if rule is None or rule.speed_reduction_percent is None:
         return _fallback("rule carries no speed_reduction_percent")
 
-    full = _resolve_effective_profile(db, subscription)
+    full = _resolve_plan_profile(db, subscription)
     if full is None or not full.download_speed or not full.upload_speed:
         return _fallback("subscriber has no full-speed profile to reduce")
 

@@ -214,7 +214,7 @@ class ProvisioningHandler:
             build_nas_provisioning_commands,
             resolve_connection_type,
         )
-        from app.services.enforcement import _resolve_effective_profile
+        from app.services.enforcement import _resolve_plan_profile
         from app.services.nas import DeviceProvisioner, local_secret_policy
 
         subscription = db.get(Subscription, coerce_uuid(subscription_id))
@@ -223,7 +223,7 @@ class ProvisioningHandler:
         nas_device = db.get(NasDevice, subscription.provisioning_nas_device_id)
         if not nas_device:
             raise ValueError("Provisioning NAS device was not found")
-        profile = _resolve_effective_profile(db, subscription)
+        profile = _resolve_plan_profile(db, subscription)
         commands = build_nas_provisioning_commands(
             db,
             subscription,
