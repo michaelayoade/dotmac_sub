@@ -77,7 +77,7 @@ DISPATCHER_CONTRACT: dict[str, tuple[bool, bool, bool]] = {
     TENANT_DISPATCHER: (True, False, False),
     PLATFORM_DISPATCHER: (True, False, False),
 }
-MIGRATION_ROLE = "dotmac_app"
+MIGRATION_ROLE = "app_admin"
 DEFINER_ROLE = "app_admin"
 RELAY_SCHEMA = "public"
 DEFINER_SCHEMA_PRIVILEGES = ("USAGE", "CREATE")
@@ -171,7 +171,7 @@ def _assert_dispatcher_roles_exist() -> None:
     bind = op.get_bind()
     if bind.dialect.name != "postgresql":
         return
-    role_names = list(DISPATCHER_CONTRACT) + [MIGRATION_ROLE, DEFINER_ROLE]
+    role_names = list(DISPATCHER_CONTRACT) + [DEFINER_ROLE]
     observed = {
         str(row[0]): (bool(row[1]), bool(row[2]), bool(row[3]))
         for row in bind.execute(
@@ -194,13 +194,17 @@ def _assert_dispatcher_roles_exist() -> None:
             )
     if DEFINER_ROLE not in observed:
         problems.append(f"database role {DEFINER_ROLE!r} is missing")
-    elif MIGRATION_ROLE not in observed:
-        problems.append(f"database role {MIGRATION_ROLE!r} is missing")
     elif not bind.execute(
-        sa.text("SELECT pg_has_role(:member, :role, 'MEMBER')"),
-        {"member": MIGRATION_ROLE, "role": DEFINER_ROLE},
+        sa.text("SELECT pg_has_role(current_user, :role, 'SET')"),
+        {"role": DEFINER_ROLE},
     ).scalar():
-        problems.append(f"{MIGRATION_ROLE} is not a member of {DEFINER_ROLE}")
+        # Revised for the migrator identity (module_database_roles.v1): the
+        # migration now runs AS app_admin, so this is trivially true there, and
+        # a runner that cannot reach app_admin still fails here, by name. The
+        # previous guard required `dotmac_app` to be a member of app_admin,
+        # which is the direction the role-graph change removes. Applied
+        # databases are unaffected; this only changes fresh-database runs.
+        problems.append(f"current_user cannot SET ROLE {DEFINER_ROLE}")
     if DEFINER_ROLE in observed:
         for privilege in DEFINER_SCHEMA_PRIVILEGES:
             if not bind.execute(
