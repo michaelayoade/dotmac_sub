@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 from uuid import uuid4
 
@@ -236,3 +237,159 @@ def test_cli_is_dry_run_unless_applied(db_session, calls, monkeypatch, capsys):
     assert owner.rate_owner_enabled(db_session) is False
     with pytest.raises(SystemExit):
         switch.main(["on"])  # a reason is required
+
+
+# ------------------------------------------------ approved divergence list
+
+
+def _divergent(db):
+    """A clean service plus one residue service; returns the residue's key."""
+    ten, offer, *_ = _clean_service(db)
+    fifteen = _profile(db, "Fifteen", rate="15M/15M")
+    residue, _ = _service(db, offer, sub_profile=ten, slot=fifteen)
+    db.commit()
+    return (str(residue.id), "15M/15M", "10M/10M")
+
+
+def _approved_file(tmp_path, entries):
+    path = tmp_path / "approved.json"
+    path.write_text(
+        json.dumps(
+            {
+                "entries": [
+                    {
+                        "subscription_id": sid,
+                        "current_rate": current,
+                        "derived_rate": derived,
+                    }
+                    for sid, current, derived in entries
+                ]
+            }
+        )
+    )
+    return path, hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def test_an_exactly_matching_approved_list_lets_the_switch_through(
+    db_session, calls, monkeypatch, tmp_path
+):
+    key = _divergent(db_session)
+    path, digest = _approved_file(tmp_path, [key])
+    approved = switch.load_approved(path, digest)
+    _observe(monkeypatch, db_session)
+
+    dry = switch.switch_on(db_session, context=_context(), approved=approved)
+    assert (dry.unexpected, dry.missing) == (0, 0)
+
+    outcome = switch.switch_on(
+        db_session,
+        context=_context(),
+        apply=True,
+        populate=calls["fn"],
+        approved=approved,
+    )
+
+    assert outcome.enabled and outcome.read_back.mismatches == 0
+    assert outcome.approved_list_sha256 == digest
+    assert outcome.switch_digest == approved.digest
+    event = db_session.scalars(
+        select(AuditEvent).where(AuditEvent.action == "access.rate_profile_switch.on")
+    ).one()
+    assert event.metadata_["approved_list_sha256"] == digest
+    assert event.metadata_["switch_digest"] == approved.digest
+
+
+def test_a_live_divergence_missing_from_the_list_refuses(db_session, calls, tmp_path):
+    key = _divergent(db_session)
+    path, digest = _approved_file(tmp_path, [])
+    approved = switch.load_approved(path, digest)
+
+    with pytest.raises(DomainError) as refused:
+        switch.switch_on(
+            db_session,
+            context=_context(),
+            apply=True,
+            populate=calls["fn"],
+            approved=approved,
+        )
+
+    assert refused.value.details["unexpected"] == 1
+    assert owner.rate_owner_enabled(db_session) is False
+    assert key  # the residue service was the unexpected one
+
+
+def test_a_listed_change_that_no_longer_diverges_refuses(db_session, calls, tmp_path):
+    _clean_service(db_session)
+    path, digest = _approved_file(tmp_path, [(str(uuid4()), "15M/15M", "10M/10M")])
+    approved = switch.load_approved(path, digest)
+
+    with pytest.raises(DomainError) as refused:
+        switch.switch_on(
+            db_session,
+            context=_context(),
+            apply=True,
+            populate=calls["fn"],
+            approved=approved,
+        )
+
+    assert refused.value.details["missing"] == 1
+    assert owner.rate_owner_enabled(db_session) is False
+
+
+def test_a_changed_rate_in_the_list_refuses(db_session, calls, tmp_path):
+    sid, current, _derived = _divergent(db_session)
+    path, digest = _approved_file(tmp_path, [(sid, current, "12M/12M")])
+    approved = switch.load_approved(path, digest)
+
+    with pytest.raises(DomainError) as refused:
+        switch.switch_on(
+            db_session,
+            context=_context(),
+            apply=True,
+            populate=calls["fn"],
+            approved=approved,
+        )
+
+    assert refused.value.details["unexpected"] == 1
+    assert refused.value.details["missing"] == 1
+
+
+def test_the_list_must_match_its_stated_digest(tmp_path):
+    path, digest = _approved_file(tmp_path, [(str(uuid4()), "15M/15M", "10M/10M")])
+
+    with pytest.raises(DomainError) as refused:
+        switch.load_approved(path, "0" * 64)
+    assert (
+        refused.value.code == "access.rate_profile_switch.approved_list_digest_mismatch"
+    )
+
+    path.write_text("{}")
+    with pytest.raises(DomainError):
+        switch.load_approved(path, hashlib.sha256(b"{}").hexdigest())
+    assert digest != hashlib.sha256(b"{}").hexdigest()
+
+
+def test_cli_takes_a_digest_bound_list(
+    db_session, calls, monkeypatch, capsys, tmp_path
+):
+    key = _divergent(db_session)
+    path, digest = _approved_file(tmp_path, [key])
+    monkeypatch.setattr("app.db.SessionLocal", lambda: db_session)
+    monkeypatch.setattr(db_session, "close", lambda: None)
+
+    code = switch.main(
+        [
+            "on",
+            "--reason",
+            "check",
+            "--approved-list",
+            str(path),
+            "--approved-sha256",
+            digest,
+        ]
+    )
+
+    out = json.loads(capsys.readouterr().out)
+    assert code == 0
+    assert (out["unexpected"], out["missing"]) == (0, 0)
+    assert out["approved_list_sha256"] == digest

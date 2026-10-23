@@ -29,7 +29,8 @@ SERVICE = SOTService(
     notes=(
         "The only way to turn radius.rate_owner_enabled on. Under one advisory "
         "lock it re-runs the read-only rate preflight in the same transaction "
-        "and refuses on any divergence, flips the setting with an audit "
+        "and refuses on any divergence outside an approved, digest-bound list of "
+        "expected changes (the live set must equal the list exactly), flips the setting with an audit "
         "record, then runs a full projection through access.radius_projection "
         "and reads every target's radreply rate back against the derived rate. "
         "Any projection failure or mismatch switches the owner off again and "
@@ -102,6 +103,8 @@ SERVICE = SOTService(
                 f"{SWITCH}.read_back_mismatch",
                 f"{SWITCH}.projection_failed",
                 f"{SWITCH}.no_target",
+                f"{SWITCH}.approved_list_digest_mismatch",
+                f"{SWITCH}.approved_list_invalid",
                 *owner_command_boundary_error_codes(SWITCH),
             ),
             mapping_owner="app.services.access_rate_switch",
