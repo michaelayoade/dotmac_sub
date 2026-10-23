@@ -45,7 +45,7 @@ from collections.abc import Iterable, Sequence
 from dataclasses import dataclass, field
 from typing import Any
 
-from sqlalchemy import select
+from sqlalchemy import ColumnElement, select
 from sqlalchemy.orm import Session
 
 from app.models.catalog import (
@@ -497,7 +497,7 @@ def derive(
         staged = ctx.staged_by_subscription.get(subscription.id)
         staged_profile = (
             ctx.profiles.get(staged.remote_radius_profile_id)
-            if staged is not None
+            if staged is not None and staged.remote_radius_profile_id is not None
             else None
         )
         if staged is not None and staged_profile is not None:
@@ -653,7 +653,9 @@ def refuse_throttle_profile_change(
     new = _as_uuid(pending_value)
     if old == new:
         return
-    on_old = AccessCredential.pre_throttle_radius_profile_id.isnot(None)
+    on_old: ColumnElement[bool] = AccessCredential.pre_throttle_radius_profile_id.isnot(
+        None
+    )
     if old is not None:
         on_old = or_(on_old, AccessCredential.radius_profile_id == old)
     throttled = db.scalar(
@@ -735,10 +737,10 @@ def preflight(db: Session) -> list[Divergence]:
         .unique()
         .all()
     )
-    logins = {s.login for s in subscriptions}
+    logins = {s.login for s in subscriptions if s.login}
     credentials_by_login: dict[str, AccessCredential] = {}
     for chunk in _chunks(sorted(logins)):
-        for credential in db.scalars(
+        for found in db.scalars(
             select(AccessCredential)
             .where(
                 AccessCredential.is_active.is_(True),
@@ -746,12 +748,12 @@ def preflight(db: Session) -> list[Divergence]:
             )
             .order_by(AccessCredential.id.desc())
         ).all():
-            credentials_by_login[credential.username] = credential
+            credentials_by_login[found.username] = found
 
     ctx = RateContext.load(db, [s.id for s in subscriptions])
     rows: list[Divergence] = []
     for subscription in sorted(subscriptions, key=lambda s: str(s.id)):
-        credential = credentials_by_login.get(subscription.login)
+        credential = credentials_by_login.get(subscription.login or "")
         derived = derive(ctx, subscription, credential)
         slot = credential.radius_profile_id if credential is not None else None
         projected_id = slot or subscription.radius_profile_id
