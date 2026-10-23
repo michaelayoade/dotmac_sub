@@ -655,9 +655,6 @@ class EnforcementHandler:
                     cap_resets_at=cap_resets_at_raw,
                     notes="FUP throttle applied",
                 )
-                # The rate owner reads the recorded state, so it must be visible
-                # to the projection that follows.
-                db.flush()
                 # Consequences follow the authoritative state, never precede
                 # it: project the credential rows first, then move live
                 # sessions onto them. Disconnecting before the state existed

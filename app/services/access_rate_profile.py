@@ -657,8 +657,6 @@ def clear_legacy_fup_slot(
         ):
             credential.radius_profile_id = None
             cleared += 1
-    if cleared:
-        db.flush()
     return cleared
 
 

@@ -67,8 +67,6 @@ READ_ALLOWED = {
     "app/services/web_catalog_subscriptions.py": "form echo of the compat field",
     "app/services/web_catalog_subscription_workflows.py": "create outcome echo",
     "app/services/web_provisioning_bulk_activate.py": "compat projection on activate",
-    "app/services/radius_population.py": "eager-load of the compat relationship",
-    "app/services/crm_api.py": "eager-load of the compat relationship",
     "app/services/catalog/credentials.py": "API payload echo for the D1 refusal",
 }
 

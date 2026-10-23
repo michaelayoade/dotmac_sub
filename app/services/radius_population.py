@@ -753,7 +753,6 @@ def populate(
             select(Subscription)
             .options(
                 joinedload(Subscription.offer),
-                joinedload(Subscription.radius_profile),
                 joinedload(Subscription.subscriber).joinedload(Subscriber.reseller),
             )
             .where(

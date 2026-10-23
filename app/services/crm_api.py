@@ -216,7 +216,6 @@ def subscriber_services(db: Session, subscriber_id: uuid.UUID) -> list[dict[str,
             .where(Subscription.subscriber_id == subscriber_id)
             .options(
                 joinedload(Subscription.offer).selectinload(CatalogOffer.prices),
-                joinedload(Subscription.radius_profile),
             )
             .order_by(Subscription.created_at.desc())
         ).all()
@@ -235,7 +234,6 @@ def services_by_subscriber(
             .where(Subscription.subscriber_id.in_(subscriber_ids))
             .options(
                 joinedload(Subscription.offer).selectinload(CatalogOffer.prices),
-                joinedload(Subscription.radius_profile),
             )
             .order_by(Subscription.created_at.desc())
         ).all()
