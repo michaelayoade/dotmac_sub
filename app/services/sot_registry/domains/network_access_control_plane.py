@@ -30,6 +30,9 @@ from app.services.sot_registry.domains.financial_access.test_connections import 
     ACTIONS as TEST_CONNECTION_ACTIONS,
 )
 from app.services.sot_registry.model import DomainSOT
+from app.services.sot_registry.rate_switch_contract import (
+    SERVICES as RATE_SWITCH_SERVICES,
+)
 from app.services.sot_registry.test_connection_contracts import (
     SERVICE as TEST_CONNECTION_SERVICE,
 )
@@ -1593,6 +1596,7 @@ DOMAIN = DomainSOT(
             ),
         ),
         *CAPTIVE_ACCESS_SERVICES,
+        *RATE_SWITCH_SERVICES,
         SOTService(
             name="access.radius_state",
             module="app.services.radius_access_state",

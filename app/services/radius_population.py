@@ -565,6 +565,41 @@ def _projection_tables(config: dict):
     return radcheck, radreply, radusergroup
 
 
+def observed_rate_limits(
+    target: Mapping[str, object], usernames: Iterable[str]
+) -> tuple[dict[str, list[str]], set[str]]:
+    """Read back the Mikrotik-Rate-Limit actually written for each login.
+
+    Returns ``({login: [values]}, {logins hard-rejected in radcheck})``. Read
+    only: a SELECT on one target, never a write.
+    """
+    radcheck, radreply, _radusergroup = _projection_tables(dict(target))
+    engine = get_external_engine(str(target["db_url"]))
+    names = sorted({str(name) for name in usernames if name})
+    rates: dict[str, list[str]] = {}
+    rejected: set[str] = set()
+    with engine.connect() as conn:
+        for start in range(0, len(names), 2000):
+            chunk = names[start : start + 2000]
+            for row in conn.execute(
+                select(radreply.c.username, radreply.c.value).where(
+                    radreply.c.username.in_(chunk),
+                    radreply.c.attribute == "Mikrotik-Rate-Limit",
+                )
+            ):
+                rates.setdefault(str(row.username), []).append(str(row.value))
+            for row in conn.execute(
+                select(radcheck.c.username).where(
+                    radcheck.c.username.in_(chunk),
+                    radcheck.c.attribute == "Auth-Type",
+                    radcheck.c.value == "Reject",
+                )
+            ):
+                rejected.add(str(row.username))
+        conn.rollback()
+    return rates, rejected
+
+
 def _write_radius_projection(
     conn,
     config: dict,
