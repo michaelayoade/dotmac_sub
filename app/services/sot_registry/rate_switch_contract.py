@@ -103,6 +103,8 @@ SERVICE = SOTService(
                 f"{SWITCH}.read_back_mismatch",
                 f"{SWITCH}.projection_failed",
                 f"{SWITCH}.no_target",
+                f"{SWITCH}.baseline_not_clean",
+                f"{SWITCH}.owner_not_active",
                 f"{SWITCH}.approved_list_digest_mismatch",
                 f"{SWITCH}.approved_list_invalid",
                 *owner_command_boundary_error_codes(SWITCH),

@@ -1,21 +1,30 @@
 """Governed switch for the single rate owner (``access.rate_profile_switch``).
 
 ``radius.rate_owner_enabled`` is owner-command-only: it can be turned on solely
-by :func:`switch_on`, which
+by :func:`switch_on`. A dry run (the default) reports the preflight divergences
+and a BASELINE read-back: it runs ``populate(dry_run=True)`` and compares what
+that projection would write with the rates currently in every target's
+``radreply``. ``--apply`` refuses unless the baseline is clean.
+
+``switch_on(apply=True)``:
 
 1. takes a transaction advisory lock (one switch at a time);
 2. re-runs the read-only preflight in the SAME transaction and refuses on any
-   divergence;
+   divergence outside the approved list;
 3. flips the setting and stages an audit record, then commits;
-4. runs a full ``radius_population.populate`` (the only FreeRADIUS writer);
-5. reads every target's ``radreply`` ``Mikrotik-Rate-Limit`` back and compares
-   it with the derived rate, requiring zero mismatches;
-6. on a projection failure or any mismatch, switches the owner OFF again and
-   re-projects, then reports the failure.
+4. invalidates the settings cache, waits until the flag is visible, and runs a
+   full ``radius_population.populate`` (the only FreeRADIUS writer), requiring
+   the result to say the owner was in force (retried once);
+5. reads back the rate of every login that projection actually wrote, against
+   the derived rate (test-access logins against the plan rate), requiring zero
+   mismatches after one scoped re-projection of any that differ;
+6. on any failure, switches the owner OFF again, re-projects, and reports the
+   failure with the final state.
 
-:func:`switch_off` is the matching rollback: it flips the setting off, audits
-it and re-projects. Both are dry-run by default; ``apply=True`` is explicit.
-No customer data is written outside the existing projection.
+:func:`switch_off` is the matching rollback. Both are dry-run by default;
+``apply=True`` is explicit. Logins the projection deliberately does not write
+(preserved, unbuildable, mode none, hard-reject) are reported, never counted as
+mismatches.
 
 CLI::
 
@@ -30,7 +39,8 @@ import hashlib
 import json
 import logging
 import sys
-from collections.abc import Callable, Sequence
+import time
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 from uuid import uuid4
@@ -38,7 +48,8 @@ from uuid import uuid4
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
-from app.models.domain_settings import SettingDomain, SettingValueType
+from app.config import settings
+from app.models.domain_settings import DomainSetting, SettingDomain, SettingValueType
 from app.schemas.settings import DomainSettingUpdate
 from app.services import access_rate_profile, radius_population
 from app.services.audit_adapter import AuditActor, stage_audit_event
@@ -59,20 +70,65 @@ SCOPE = "access:rate_profile:switch"
 #: Transaction advisory lock key serialising switch commands.
 LOCK_KEY = 3281601311
 _MISMATCH_SAMPLE = 20
+#: Modes whose reply rows (and therefore rate) the projection writes.
+_WRITTEN_MODES = frozenset({"active", "captive"})
 
 _SWITCH_ON = OwnerCommandDefinition(owner=OWNER, concern=CONCERN, name="switch_on")
 _SWITCH_OFF = OwnerCommandDefinition(owner=OWNER, concern=CONCERN, name="switch_off")
 
+# Indirections so tests can run the wait without sleeping.
+_sleep = time.sleep
+_monotonic = time.monotonic
+
 
 @dataclass(frozen=True)
 class ReadBack:
-    """Derived rate versus the rate written to every target's radreply."""
+    """Written rate versus the expected rate, for the logins actually written."""
 
     targets: int
-    logins_checked: int
-    skipped_rejected: int
+    compared: int
+    not_written: int
     mismatches: int
     sample: tuple[str, ...] = ()
+    mismatched_logins: tuple[str, ...] = field(default=(), repr=False)
+
+
+@dataclass(frozen=True)
+class Baseline:
+    """Current radreply versus what a dry-run projection would write."""
+
+    projection_complete: bool
+    read_back: ReadBack | None = None
+    error: str | None = None
+
+    @property
+    def clean(self) -> bool:
+        return (
+            self.projection_complete
+            and self.error is None
+            and self.read_back is not None
+            and self.read_back.mismatches == 0
+        )
+
+    def as_dict(self) -> dict[str, object]:
+        return {
+            "clean": self.clean,
+            "projection_complete": self.projection_complete,
+            "error": self.error,
+            "read_back": _read_back_dict(self.read_back),
+        }
+
+
+def _read_back_dict(report: ReadBack | None) -> dict[str, object] | None:
+    if report is None:
+        return None
+    return {
+        "targets": report.targets,
+        "compared": report.compared,
+        "not_written": report.not_written,
+        "mismatches": report.mismatches,
+        "sample_subscription_ids": list(report.sample),
+    }
 
 
 @dataclass(frozen=True)
@@ -83,11 +139,13 @@ class SwitchOutcome:
     divergences: int = 0
     by_class: dict[str, int] = field(default_factory=dict)
     read_back: ReadBack | None = None
+    baseline: Baseline | None = None
     auto_switched_off: bool = False
     unexpected: int = 0
     missing: int = 0
     approved_list_sha256: str | None = None
     switch_digest: str | None = None
+    emitted_list_sha256: str | None = None
 
     def as_dict(self) -> dict[str, object]:
         return {
@@ -101,27 +159,35 @@ class SwitchOutcome:
             "missing": self.missing,
             "approved_list_sha256": self.approved_list_sha256,
             "switch_digest": self.switch_digest,
-            "read_back": None
-            if self.read_back is None
-            else {
-                "targets": self.read_back.targets,
-                "logins_checked": self.read_back.logins_checked,
-                "skipped_rejected": self.read_back.skipped_rejected,
-                "mismatches": self.read_back.mismatches,
-                "sample_subscription_ids": list(self.read_back.sample),
-            },
+            "emitted_list_sha256": self.emitted_list_sha256,
+            "baseline": None if self.baseline is None else self.baseline.as_dict(),
+            "read_back": _read_back_dict(self.read_back),
         }
 
 
-ApprovedKey = tuple[str, str | None, str | None]
+def _error(suffix: str, message: str, **details: object) -> DomainError:
+    return DomainError(
+        code=f"{OWNER}.{suffix}",
+        message=message,
+        details=details,
+        retryable=False,
+    )
+
+
+# --------------------------------------------------------------------------
+# Approved divergence list (digest-bound; entries carry their class)
+# --------------------------------------------------------------------------
+
+#: (subscription_id, divergence class, current rate, derived rate)
+ApprovedKey = tuple[str, str, str | None, str | None]
 
 
 @dataclass(frozen=True)
 class ApprovedDivergences:
     """A reviewed list of the exact rate changes the switch is allowed to make.
 
-    Each entry is ``(subscription_id, current_rate, derived_rate)``. The list is
-    bound to the sha256 of its file bytes, which the operator states up front.
+    Bound to the sha256 of its file bytes, which the operator states up front.
+    Generate it from the dry run with ``--emit-approval-list``.
     """
 
     entries: frozenset[ApprovedKey]
@@ -151,6 +217,7 @@ def load_approved(path: str | Path, expected_sha256: str) -> ApprovedDivergences
         keys = frozenset(
             (
                 str(item["subscription_id"]),
+                str(item["class"]),
                 item["current_rate"],
                 item["derived_rate"],
             )
@@ -160,15 +227,49 @@ def load_approved(path: str | Path, expected_sha256: str) -> ApprovedDivergences
         raise _error(
             "approved_list_invalid", "The approved list is not valid."
         ) from exc
-    if len(keys) != len(entries):
+    if len(keys) != len(entries) or len({k[0] for k in keys}) != len(keys):
         raise _error(
             "approved_list_invalid", "The approved list repeats a subscription."
+        )
+    unknown = {k[1] for k in keys} - set(access_rate_profile.DIVERGENCE_CLASSES)
+    if unknown:
+        raise _error(
+            "approved_list_invalid",
+            "The approved list names an unknown divergence class.",
+            classes=sorted(unknown),
         )
     return ApprovedDivergences(entries=keys, sha256=actual)
 
 
+def emit_approval_list(
+    rows: Sequence[access_rate_profile.Divergence], path: str | Path
+) -> str:
+    """Write the live divergences as an approval list; return its sha256."""
+    entries = [
+        {
+            "subscription_id": r.subscription_id,
+            "class": r.klass,
+            "current_rate": r.projected_rate,
+            "derived_rate": r.derived_rate,
+        }
+        for r in sorted(rows, key=lambda r: r.subscription_id)
+    ]
+    raw = (json.dumps({"entries": entries}, indent=2, sort_keys=True) + "\n").encode()
+    Path(path).write_bytes(raw)
+    return hashlib.sha256(raw).hexdigest()
+
+
 def _live_keys(rows: Sequence[access_rate_profile.Divergence]) -> set[ApprovedKey]:
-    return {(r.subscription_id, r.projected_rate, r.derived_rate) for r in rows}
+    return {
+        (r.subscription_id, r.klass, r.projected_rate, r.derived_rate) for r in rows
+    }
+
+
+def _count(rows: Sequence[access_rate_profile.Divergence]) -> dict[str, int]:
+    counts: dict[str, int] = {}
+    for row in rows:
+        counts[row.klass] = counts.get(row.klass, 0) + 1
+    return counts
 
 
 def _check_divergence(
@@ -191,18 +292,20 @@ def _check_divergence(
     )
 
 
-def _error(suffix: str, message: str, **details: object) -> DomainError:
-    return DomainError(
-        code=f"{OWNER}.{suffix}",
-        message=message,
-        details=details,
-        retryable=False,
-    )
+# --------------------------------------------------------------------------
+# Plumbing
+# --------------------------------------------------------------------------
 
 
 def _take_lock(db: Session) -> None:
     if db.get_bind().dialect.name == "postgresql":
         db.execute(select(func.pg_advisory_xact_lock(LOCK_KEY)))
+
+
+def _release_reads(db: Session) -> None:
+    """An owner command needs a transaction-free session at entry."""
+    if db.in_transaction():
+        db.rollback()
 
 
 def _audit_actor(context: CommandContext) -> AuditActor:
@@ -245,65 +348,156 @@ def _write_switch(
     )
 
 
-def _count(rows: Sequence[access_rate_profile.Divergence]) -> dict[str, int]:
-    counts: dict[str, int] = {}
-    for row in rows:
-        counts[row.klass] = counts.get(row.klass, 0) + 1
-    return counts
+def _invalidate_switch_cache() -> bool:
+    """Drop the shared settings-cache entry for the switch (platform scope)."""
+    try:
+        from dotmac_kernel.setting_scopes import SettingScope
+        from dotmac_kernel.settings_cache import invalidate
+
+        invalidate(
+            str(SettingDomain.radius),
+            access_rate_profile.SETTING_KEY,
+            scope=SettingScope.platform(),
+        )
+    except Exception:  # noqa: BLE001 - the poll below is the real check
+        logger.warning("rate owner switch cache invalidation failed")
+        return False
+    return True
 
 
-def _release_reads(db: Session) -> None:
-    """An owner command needs a transaction-free session at entry."""
-    if db.in_transaction():
-        db.rollback()
+def _await_flag(db: Session) -> bool:
+    """Poll until the flag reads true, bounded by the cache TTL plus 5 seconds."""
+    deadline = _monotonic() + float(settings.settings_cache_ttl_seconds) + 5.0
+    while True:
+        _release_reads(db)
+        if access_rate_profile.rate_owner_enabled(db) is True:
+            return True
+        if _monotonic() >= deadline:
+            return False
+        _sleep(1.0)
 
 
-def read_back(db: Session) -> ReadBack:
-    """Compare the derived rate with every target's written radreply rate.
+def flag_from_row(db: Session) -> bool | None:
+    """The switch as stored in its row, uncached (None when there is no row)."""
+    _release_reads(db)
+    row = db.scalars(
+        select(DomainSetting).where(
+            DomainSetting.domain == SettingDomain.radius,
+            DomainSetting.key == access_rate_profile.SETTING_KEY,
+            DomainSetting.is_active.is_(True),
+        )
+    ).first()
+    if row is None:
+        return None
+    value = row.value_json if row.value_json is not None else row.value_text
+    return str(value).strip().lower() in {"true", "1"}
 
-    A login the projection hard-rejects has no radreply by design and is
-    skipped. Everything else must carry exactly the derived rate, or no rate
-    when none is derived.
+
+# --------------------------------------------------------------------------
+# Read-back
+# --------------------------------------------------------------------------
+
+
+def read_back(
+    db: Session,
+    plan: Mapping[str, Mapping[str, object]],
+    *,
+    against: str,
+    only: set[str] | None = None,
+) -> ReadBack:
+    """Compare each written login's radreply rate with the expected rate.
+
+    ``plan`` is the projection's own per-login plan. Only logins whose mode is
+    written (active or captive) are compared; every other provisioned login
+    (preserved, unbuildable, mode none, hard-reject) is counted in
+    ``not_written``. ``against="plan"`` compares with the rate the projection
+    decided to write (the baseline); ``against="derived"`` compares with the
+    rate the owner derives, test-access logins against the plan rate.
     """
     subscriptions, credentials, ctx = access_rate_profile._provisioned_state(db)
-    expected: dict[str, tuple[str, str | None]] = {}
-    for subscription in subscriptions:
-        if not subscription.login:
+    by_login = {s.login: s for s in subscriptions if s.login}
+    expected: dict[str, tuple[str, str | None, bool, str | None]] = {}
+    for login, item in plan.items():
+        if item.get("mode") not in _WRITTEN_MODES:
             continue
-        derived = access_rate_profile.derive(
-            ctx, subscription, credentials.get(subscription.login)
-        )
-        expected[subscription.login] = (str(subscription.id), derived.rate_limit)
+        if only is not None and login not in only:
+            continue
+        subscription = by_login.get(login)
+        if subscription is None:
+            continue
+        has_test = bool(item.get("test_access"))
+        if against == "derived":
+            credential = credentials.get(login)
+            rate = access_rate_profile.derive(ctx, subscription, credential).rate_limit
+            test_rate = (
+                access_rate_profile.derive(
+                    ctx, subscription, credential, include_enforcement=False
+                ).rate_limit
+                if has_test
+                else None
+            )
+        else:
+            rate = item.get("rate")  # type: ignore[assignment]
+            test_rate = item.get("test_rate") if has_test else None  # type: ignore[assignment]
+        expected[login] = (str(subscription.id), rate, has_test, test_rate)
 
     targets = active_external_radius_targets(db, capability="users")
     if not targets:
         raise _error("no_target", "No RADIUS projection target is configured.")
-    mismatched: set[str] = set()
-    skipped = 0
+    mismatched: dict[str, str] = {}
     for target in targets:
-        rates, rejected = radius_population.observed_rate_limits(target, expected)
-        skipped = max(skipped, len(rejected & set(expected)))
-        for login, (subscription_id, rate) in expected.items():
-            if login in rejected:
-                continue
-            observed = rates.get(login, [])
-            wanted = [rate] if rate else []
-            if observed != wanted:
-                mismatched.add(subscription_id)
+        rates, test_rates = radius_population.observed_rate_limits(target, expected)
+        for login, (sub_id, rate, has_test, test_rate) in expected.items():
+            if rates.get(login, []) != ([rate] if rate else []):
+                mismatched[login] = sub_id
+            if has_test and test_rates.get(login, []) != (
+                [test_rate] if test_rate else []
+            ):
+                mismatched[login] = sub_id
+    not_written = len(by_login) - len(expected) if only is None else 0
     return ReadBack(
         targets=len(targets),
-        logins_checked=len(expected) - skipped,
-        skipped_rejected=skipped,
+        compared=len(expected),
+        not_written=max(not_written, 0),
         mismatches=len(mismatched),
-        sample=tuple(sorted(mismatched)[:_MISMATCH_SAMPLE]),
+        sample=tuple(sorted(mismatched.values())[:_MISMATCH_SAMPLE]),
+        mismatched_logins=tuple(sorted(mismatched)),
     )
 
 
-def _project(populate: Callable[..., object]) -> None:
-    """Full projection; any incomplete target raises."""
-    result = populate(dry_run=False)
-    if isinstance(result, dict):
-        radius_population.require_complete_projection(result)
+def baseline_read_back(db: Session, populate: Callable[..., object]) -> Baseline:
+    """Dry-run the projection and compare it with the current radreply."""
+    try:
+        result = populate(dry_run=True, include_projection_plan=True)
+        complete = (
+            isinstance(result, dict) and result.get("projection_complete") is True
+        )
+        plan = result.get("projection_plan", {}) if isinstance(result, dict) else {}
+        report = read_back(db, plan, against="plan")
+        db.rollback()
+    except Exception as exc:  # noqa: BLE001 - reported, and --apply refuses
+        db.rollback()
+        return Baseline(projection_complete=False, error=type(exc).__name__)
+    return Baseline(projection_complete=complete, read_back=report)
+
+
+def _project_checked(
+    populate: Callable[..., object], *, only: set[str] | None = None
+) -> dict[str, object]:
+    """Full (or scoped) projection with the plan; any incomplete target raises."""
+    kwargs: dict[str, object] = {"dry_run": False, "include_projection_plan": True}
+    if only is not None:
+        kwargs["only_usernames"] = only
+    result = populate(**kwargs)
+    if not isinstance(result, dict):
+        raise _error("projection_failed", "The projection returned no result.")
+    radius_population.require_complete_projection(result)
+    return result
+
+
+# --------------------------------------------------------------------------
+# Commands
+# --------------------------------------------------------------------------
 
 
 def switch_on(
@@ -313,6 +507,8 @@ def switch_on(
     apply: bool = False,
     populate: Callable[..., object] | None = None,
     approved: ApprovedDivergences | None = None,
+    emit_approval_list_to: str | Path | None = None,
+    trace: dict[str, object] | None = None,
 ) -> SwitchOutcome:
     """Turn the single rate owner on (dry-run unless ``apply``).
 
@@ -321,9 +517,17 @@ def switch_on(
     any divergence refuses.
     """
     run_populate = populate or radius_population.populate
+    trace = trace if trace is not None else {}
+
     if not apply:
         rows = access_rate_profile.preflight(db)
         db.rollback()
+        emitted = (
+            emit_approval_list(rows, emit_approval_list_to)
+            if emit_approval_list_to
+            else None
+        )
+        base = baseline_read_back(db, run_populate)
         live = _live_keys(rows)
         wanted = set(approved.entries) if approved is not None else set()
         return SwitchOutcome(
@@ -332,9 +536,21 @@ def switch_on(
             enabled=access_rate_profile.rate_owner_enabled(db),
             divergences=len(rows),
             by_class=_count(rows),
+            baseline=base,
             unexpected=len(live - wanted),
             missing=len(wanted - live),
             approved_list_sha256=approved.sha256 if approved else None,
+            emitted_list_sha256=emitted,
+        )
+
+    base = baseline_read_back(db, run_populate)
+    trace["baseline_clean"] = base.clean
+    if not base.clean:
+        raise _error(
+            "baseline_not_clean",
+            "The current radreply does not match a dry-run projection; "
+            "nothing was changed.",
+            baseline=base.as_dict(),
         )
 
     _release_reads(db)
@@ -369,14 +585,41 @@ def switch_on(
     failure: str | None = None
     report: ReadBack | None = None
     try:
-        _project(run_populate)
-        report = read_back(db)
+        _invalidate_switch_cache()
+        if not _await_flag(db):
+            failure = "owner_not_active"
+        else:
+            result: dict[str, object] = {}
+            for attempt in (1, 2):
+                result = _project_checked(run_populate)
+                if result.get("rate_owner_enabled") is True:
+                    break
+                if attempt == 1:
+                    _invalidate_switch_cache()
+                    _await_flag(db)
+            else:
+                failure = "owner_not_active"
+            trace["projection_complete"] = result.get("projection_complete")
+            if failure is None:
+                plan = dict(result.get("projection_plan", {}))  # type: ignore[call-overload]
+                report = read_back(db, plan, against="derived")
+                if report.mismatches:
+                    # Ordinary churn (FUP events, plan changes) can land between
+                    # the projection and the read: re-project just those logins
+                    # once and read again before giving up.
+                    again = _project_checked(
+                        run_populate, only=set(report.mismatched_logins)
+                    )
+                    plan.update(again.get("projection_plan", {}))
+                    report = read_back(db, plan, against="derived")
+                trace["mismatches"] = report.mismatches
+                if report.mismatches:
+                    failure = "read_back_mismatch"
         db.rollback()
-        if report.mismatches:
-            failure = "read_back_mismatch"
     except Exception as exc:  # noqa: BLE001 - reported below, never swallowed
         db.rollback()
         failure = "projection_failed"
+        trace["projection_complete"] = False
         logger.error("rate owner switch-on projection failed: %s", type(exc).__name__)
     if failure is None:
         return SwitchOutcome(
@@ -386,10 +629,12 @@ def switch_on(
             divergences=outcome.divergences,
             approved_list_sha256=outcome.approved_list_sha256,
             switch_digest=outcome.switch_digest,
+            baseline=base,
             read_back=report,
         )
 
-    # Automatic switch-off: restore the previous behaviour and re-project.
+    # Automatic switch-off: restore the previous behaviour and re-project. A
+    # failure here is reported with the final state, never raised bare.
     off_context = CommandContext.system(
         actor=context.actor,
         scope=SCOPE,
@@ -397,17 +642,25 @@ def switch_on(
         correlation_id=context.correlation_id,
         causation_id=context.command_id,
     )
-    off = switch_off(db, context=off_context, apply=True, populate=run_populate)
+    off_error: str | None = None
+    reprojected = False
+    try:
+        off = switch_off(db, context=off_context, apply=True, populate=run_populate)
+        reprojected = off.applied
+    except Exception as exc:  # noqa: BLE001 - the final state below says it all
+        off_error = type(exc).__name__
+        logger.error("rate owner automatic switch-off failed: %s", off_error)
+    final_flag = flag_from_row(db)
+    trace["flag"] = final_flag
     raise _error(
         failure,
-        "The rate owner was switched off again: "
-        + (
-            "the written rates do not match the derived rates."
-            if failure == "read_back_mismatch"
-            else "the full projection did not complete."
-        ),
-        auto_switched_off=True,
-        reprojected=off.applied,
+        "The rate owner was switched off again; check the final state."
+        if final_flag is False
+        else "The rate owner could not be confirmed off; check the final state.",
+        auto_switched_off=final_flag is False,
+        flag=final_flag,
+        reprojected=reprojected,
+        switch_off_error=off_error,
         mismatches=report.mismatches if report else None,
         sample_subscription_ids=list(report.sample) if report else [],
     )
@@ -436,7 +689,8 @@ def switch_off(
     outcome = execute_owner_command(
         db, definition=_SWITCH_OFF, context=context, operation=flip
     )
-    _project(run_populate)
+    _invalidate_switch_cache()
+    _project_checked(run_populate)
     return outcome
 
 
@@ -450,15 +704,22 @@ def main(argv: Sequence[str] | None = None) -> int:
         "--approved-sha256", help="sha256 the approved list file must match"
     )
     parser.add_argument(
+        "--emit-approval-list",
+        help="dry run only: write the live divergences as an approval list",
+    )
+    parser.add_argument(
         "--apply",
         action="store_true",
         help="make the change; without it the command only reports",
     )
     args = parser.parse_args(list(sys.argv[1:] if argv is None else argv))
+    if args.emit_approval_list and (args.apply or args.action != "on"):
+        parser.error("--emit-approval-list is a dry-run option of 'on'")
 
     from app.db import SessionLocal
 
     db = SessionLocal()
+    trace: dict[str, object] = {}
     try:
         context = CommandContext(
             command_id=uuid4(),
@@ -477,17 +738,37 @@ def main(argv: Sequence[str] | None = None) -> int:
                         )
                     approved = load_approved(args.approved_list, args.approved_sha256)
                 outcome = switch_on(
-                    db, context=context, apply=args.apply, approved=approved
+                    db,
+                    context=context,
+                    apply=args.apply,
+                    approved=approved,
+                    emit_approval_list_to=args.emit_approval_list,
+                    trace=trace,
                 )
             else:
                 outcome = switch_off(db, context=context, apply=args.apply)
-        except DomainError as exc:
+        except Exception as exc:  # noqa: BLE001 - always end with a final state
+            try:
+                trace.setdefault("flag", flag_from_row(db))
+            except Exception:  # noqa: BLE001
+                trace.setdefault("flag", None)
             print(
                 json.dumps(
                     {
-                        "refused": exc.code,
-                        "message": exc.message,
-                        "details": exc.details,
+                        "refused" if isinstance(exc, DomainError) else "error": (
+                            exc.code
+                            if isinstance(exc, DomainError)
+                            else type(exc).__name__
+                        ),
+                        "message": exc.message
+                        if isinstance(exc, DomainError)
+                        else None,
+                        "details": exc.details if isinstance(exc, DomainError) else {},
+                        "final_state": {
+                            "flag": trace.get("flag"),
+                            "projection_complete": trace.get("projection_complete"),
+                            "mismatches": trace.get("mismatches"),
+                        },
                     },
                     sort_keys=True,
                     default=str,
