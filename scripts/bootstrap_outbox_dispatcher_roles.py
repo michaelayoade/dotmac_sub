@@ -27,6 +27,7 @@ from __future__ import annotations
 import argparse
 import os
 import sys
+from dataclasses import replace
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -249,6 +250,19 @@ def bootstrap(conn: psycopg.Connection, *, dry_run: bool, repair: bool) -> int:
             f"skipped role-graph repair: {contract.migration_role} or "
             f"{contract.owner_role} does not exist",
             file=sys.stderr,
+        )
+    if not dry_run:
+        # The old edge itself makes the owner a login role that reaches the
+        # migrator; judge reachers on the graph AFTER the repair above.
+        graph, privileges = observe_ownership(conn)
+    elif graph.owner_reaches_migrator:
+        graph = replace(
+            graph,
+            bypass_reachers=tuple(
+                r
+                for r in graph.bypass_reachers
+                if not r.startswith(f"{contract.owner_role}->")
+            ),
         )
     if graph.bypass_reachers:
         # Never auto-revoked: removing an arbitrary membership could cut a

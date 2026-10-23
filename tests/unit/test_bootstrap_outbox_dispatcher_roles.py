@@ -61,9 +61,15 @@ class FakeConn:
         self.admin = admin
         self.inherit = inherit
         self.set_option = set_option
-        self.reachers = reachers
+        self._reachers = reachers
         self.roles = set(roles)
         self.statements: list[str] = []
+
+    @property
+    def reachers(self) -> tuple[tuple[str, str], ...]:
+        # The old edge makes the runtime owner (a login role) reach the migrator.
+        old = (("dotmac_app", "app_admin"),) if self.old_edge else ()
+        return (*old, *self._reachers)
 
     def execute(self, query: Any, params: Any = None) -> _Result:
         if isinstance(query, sql.Composable):
