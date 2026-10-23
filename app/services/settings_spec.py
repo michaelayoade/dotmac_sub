@@ -1874,10 +1874,11 @@ SETTINGS_SPECS: list[SettingSpec] = [
     SettingSpec(
         domain=SettingDomain.radius,
         key="rate_owner_enabled",
-        env_var="RADIUS_RATE_OWNER_ENABLED",
+        env_var=None,
         value_type=SettingValueType.boolean,
         default=False,
         label="Derive Service Rate Through The Single Rate Owner",
+        owner_command_only=True,
     ),
     SettingSpec(
         domain=SettingDomain.radius,

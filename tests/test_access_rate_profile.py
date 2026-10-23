@@ -42,6 +42,7 @@ from app.schemas.catalog import AccessCredentialUpdate
 from app.schemas.settings import DomainSettingUpdate
 from app.services import access_rate_profile as owner
 from app.services import radius_population, settings_spec
+from app.services.access_rate_profile import SWITCH_OWNER
 from app.services.catalog.credentials import AccessCredentials
 from app.services.credential_crypto import (
     encrypt_credential_with_key,
@@ -721,6 +722,10 @@ def test_preflight_lists_every_divergence_class_and_exits_non_zero(
     amb = _service(db_session, ambiguous, sub_profile=ten)[0]
     unrecognised = _service(db_session, offer, sub_profile=ten, slot=fup_like)[0]
     not_projected = _service(db_session, offer, sub_profile=ten, pre_throttle=ten)[0]
+    # Another account on a profile that has speeds but no literal rate string.
+    speeds_only = _profile(db_session, "Speeds only", down=2000, up=2000, code="so")
+    rate_changes = _service(db_session, offer, sub_profile=ten, slot=speeds_only)[0]
+    _fup_throttle(db_session, rate_changes, speeds_only)
     projected_throttle = _service(
         db_session, offer, sub_profile=ten, slot=slow, pre_throttle=ten
     )[0]
@@ -735,6 +740,7 @@ def test_preflight_lists_every_divergence_class_and_exits_non_zero(
     assert rows[str(amb.id)] == "ambiguous_link"
     assert rows[str(unrecognised.id)] == "unrecognised_throttle"
     assert rows[str(not_projected.id)] == "throttle_not_projected"
+    assert rows[str(rate_changes.id)] == "throttle_rate_changes"
     assert set(rows.values()) == set(owner.DIVERGENCE_CLASSES)
 
     # CLI: one JSON line per row, a summary, and a non-zero exit.
@@ -844,4 +850,133 @@ def test_admin_credential_form_refuses_a_non_package_profile(db_session, owner_o
         username=sub.login,
         radius_profile_id=str(ten.id),
         subscription_id=sub.id,
+    )
+
+
+# ------------------------------------------------------- review fixes R1-R5
+
+
+def test_r1_a_marked_credential_follows_the_configured_throttle(db_session, owner_on):
+    """A live writer left the plan profile in the slot with a stale marker."""
+    ten = _profile(db_session, "Ten", rate="10M/10M")
+    slow = _profile(db_session, "Slow", rate="1M/1M", down=1000, code="coll")
+    _set_collections_profile(db_session, slow)
+    offer = _offer(db_session, "A", profile=ten)
+    sub, credential = _service(db_session, offer, slot=ten, pre_throttle=ten)
+
+    decision = owner.resolve_effective_rate(db_session, sub, credential)
+
+    assert decision.layer is owner.RateLayer.collections_throttle
+    assert decision.profile_id == slow.id
+    rows = {r.subscription_id: r.klass for r in owner.preflight(db_session)}
+    assert rows[str(sub.id)] == "throttle_not_projected"
+
+
+def test_r1_without_a_configured_profile_the_slot_is_used(db_session, owner_on):
+    ten = _profile(db_session, "Ten", rate="10M/10M")
+    slow = _profile(db_session, "Slow", rate="1M/1M")
+    offer = _offer(db_session, "A", profile=ten)
+    sub, credential = _service(db_session, offer, slot=slow, pre_throttle=ten)
+
+    assert owner.resolve_effective_rate(db_session, sub, credential).profile_id == (
+        slow.id
+    )
+
+
+def test_r2_preflight_lists_a_throttle_whose_rate_would_change(db_session):
+    """No literal on the throttle profile: it went out at full offer speed."""
+    ten = _profile(db_session, "Ten", rate="10M/10M")
+    speeds_only = _profile(db_session, "Speeds", down=1000, up=1000, code="coll")
+    _set_collections_profile(db_session, speeds_only)
+    offer = _offer(db_session, "A", profile=ten)
+    sub, _ = _service(db_session, offer, slot=speeds_only, pre_throttle=ten)
+
+    rows = {r.subscription_id: r for r in owner.preflight(db_session)}
+
+    row = rows[str(sub.id)]
+    assert row.klass == "throttle_rate_changes"
+    assert row.projected_rate == "10M/10M"
+    assert row.derived_rate == "1000k/1000k"
+
+
+def test_r3_the_switch_cannot_be_written_outside_its_command(db_session, monkeypatch):
+    spec = settings_spec.get_spec(SettingDomain.radius, "rate_owner_enabled")
+    assert spec.env_var is None
+    assert spec.owner_command_only is True
+
+    # Generic writers are refused outright.
+    with pytest.raises(HTTPException) as generic:
+        DomainSettings(SettingDomain.radius).upsert_by_key(
+            db_session,
+            "rate_owner_enabled",
+            DomainSettingUpdate(value_type=SettingValueType.boolean, value_text="true"),
+        )
+    assert generic.value.status_code == 403
+
+    # The audited admin path validates through the same check: true is
+    # refused unless the governed switch command is the caller.
+    service = DomainSettings(SettingDomain.radius)
+    for value in (True, "true", "1"):
+        with pytest.raises(HTTPException):
+            service._validate_relationship_change(
+                db_session, SettingDomain.radius, "rate_owner_enabled", value
+            )
+    service._validate_relationship_change(
+        db_session, SettingDomain.radius, "rate_owner_enabled", False
+    )
+    monkeypatch.setattr(
+        "app.services.owner_commands.owner_command_active",
+        lambda _db, owner=None: owner == SWITCH_OWNER,
+    )
+    service._validate_relationship_change(
+        db_session, SettingDomain.radius, "rate_owner_enabled", True
+    )
+
+
+def test_r4_a_literal_only_collections_profile_beats_a_faster_fup(db_session, owner_on):
+    ten = _profile(db_session, "Ten", rate="10M/10M")
+    fup = _profile(db_session, "Fup", rate="2M/2M", down=2000, code="fup")
+    coll = _profile(db_session, "Coll", rate="500k/500k", code="coll")  # literal only
+    _set_collections_profile(db_session, coll)
+    offer = _offer(db_session, "A", profile=ten)
+    sub, credential = _service(db_session, offer, slot=coll, pre_throttle=ten)
+    _fup_throttle(db_session, sub, fup)
+
+    assert owner.resolve_effective_rate(db_session, sub, credential).layer is (
+        owner.RateLayer.collections_throttle
+    )
+
+
+def test_r4_an_unknown_speed_fails_closed_to_collections(db_session, owner_on):
+    ten = _profile(db_session, "Ten", rate="10M/10M")
+    fup = _profile(db_session, "Fup", rate="2M/2M", down=2000, code="fup")
+    coll = _profile(db_session, "Coll", code="coll")  # no speed, no literal
+    _set_collections_profile(db_session, coll)
+    offer = _offer(db_session, "A", profile=ten)
+    sub, credential = _service(db_session, offer, slot=coll, pre_throttle=ten)
+    _fup_throttle(db_session, sub, fup)
+
+    assert owner.resolve_effective_rate(db_session, sub, credential).layer is (
+        owner.RateLayer.collections_throttle
+    )
+    assert owner._download_kbps(coll) is None
+    assert owner._download_kbps(fup) == 2000.0
+    assert (
+        owner._download_kbps(_profile(db_session, "Lit", rate="1M/3M", code="l"))
+        == 3000.0
+    )
+
+
+def test_r5_lookup_prefers_the_login_credential_like_the_sweep(db_session, owner_on):
+    ten = _profile(db_session, "Ten", rate="10M/10M")
+    slow = _profile(db_session, "Slow", rate="1M/1M", down=1000, code="coll")
+    _set_collections_profile(db_session, slow)
+    offer = _offer(db_session, "A", profile=ten)
+    sub, credential = _service(db_session, offer, slot=slow, pre_throttle=ten)
+    credential.subscription_id = None  # legacy unlinked credential
+    db_session.commit()
+
+    assert owner.active_credential_for(db_session, sub).id == credential.id
+    assert owner.resolve_effective_rate(db_session, sub).layer is (
+        owner.RateLayer.collections_throttle
     )

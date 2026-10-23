@@ -38,6 +38,7 @@ from __future__ import annotations
 
 import enum
 import logging
+import re
 import sys
 import uuid
 from collections import defaultdict
@@ -66,6 +67,7 @@ from app.models.subscription_change import (
 logger = logging.getLogger(__name__)
 
 SETTING_KEY = "rate_owner_enabled"
+SWITCH_OWNER = "access.rate_profile"
 _FUP_PROFILE_CODE_PREFIX = "fup-throttle-"
 
 
@@ -316,6 +318,16 @@ class RateContext:
         db: Session,
         subscription_ids: Iterable[uuid.UUID] | None = None,
     ) -> RateContext:
+        """Read the recorded state without autoflushing the caller's changes."""
+        with db.no_autoflush:
+            return cls._load(db, subscription_ids)
+
+    @classmethod
+    def _load(
+        cls,
+        db: Session,
+        subscription_ids: Iterable[uuid.UUID] | None,
+    ) -> RateContext:
         from app.services import settings_spec
 
         ids = None if subscription_ids is None else list(subscription_ids)
@@ -385,21 +397,42 @@ def _as_uuid(value: object) -> uuid.UUID | None:
         return None
 
 
-def _download_key(profile: RadiusProfile) -> float:
-    """Speed used to order throttles; an unknown speed is treated as unbounded."""
-    return float(profile.download_speed) if profile.download_speed else float("inf")
+_RATE_PART = re.compile(r"^(\d+(?:\.\d+)?)([kKmMgG]?)$")
+_UNIT_KBPS = {"": 1 / 1000, "k": 1.0, "m": 1000.0, "g": 1_000_000.0}
+
+
+def _download_kbps(profile: RadiusProfile) -> float | None:
+    """A profile's download speed in kbps, or None when it cannot be known.
+
+    Taken from ``download_speed``; failing that from the literal rate string,
+    whose second half (tx) is the subscriber's download.
+    """
+    if profile.download_speed:
+        return float(profile.download_speed)
+    literal = (profile.mikrotik_rate_limit or "").split()
+    if not literal or "/" not in literal[0]:
+        return None
+    match = _RATE_PART.match(literal[0].split("/", 1)[1].strip())
+    if match is None:
+        return None
+    value = float(match.group(1)) * _UNIT_KBPS[match.group(2).lower()]
+    return value or None
 
 
 def collections_throttle_profile(
     ctx: RateContext,
     credential: AccessCredential | None,
-    fup_profile_id: uuid.UUID | None = None,
 ) -> RadiusProfile | None:
     """The collections throttle profile carried by ``credential``, else None.
 
     The slot is recognised as a collections throttle ONLY when
     ``pre_throttle_radius_profile_id`` is set or the slot equals the configured
     collections throttle profile. Every other slot value is ignored.
+
+    A recognised throttle is always the CONFIGURED collections profile: the
+    slot is only a marker, because a live writer can overwrite it with the plan
+    profile and leave the pre-throttle marker stale. The slot is used as the
+    profile only when no throttle profile is configured.
     """
     if credential is None:
         return None
@@ -409,14 +442,10 @@ def collections_throttle_profile(
     is_configured = slot is not None and slot == configured
     if not marked and not is_configured:
         return None
-    profile_id = slot
-    if marked and (
-        slot is None or (fup_profile_id is not None and slot == fup_profile_id)
-    ):
-        # The slot is empty, or a FUP throttle overwrote the collections one:
-        # the collections throttle is the configured profile.
-        profile_id = configured
-    return ctx.profiles.get(profile_id) if profile_id is not None else None
+    configured_profile = ctx.profiles.get(configured) if configured else None
+    if configured_profile is not None:
+        return configured_profile
+    return ctx.profiles.get(slot) if slot is not None else None
 
 
 def plan_profile_for(
@@ -460,21 +489,26 @@ def derive(
             if fup_state is not None and fup_state.throttle_profile_id
             else None
         )
-        collections_profile = collections_throttle_profile(
-            ctx,
-            credential,
-            fup_profile.id if fup_profile is not None else None,
-        )
+        collections_profile = collections_throttle_profile(ctx, credential)
         signals = AccessSignals(
             fup_restrict=fup_profile is not None,
             collections_restrict=collections_profile is not None,
         )
         if fup_profile is not None or collections_profile is not None:
             # D2: the MORE RESTRICTIVE throttle applies; a tie goes to collections.
-            use_fup = fup_profile is not None and (
-                collections_profile is None
-                or _download_key(fup_profile) < _download_key(collections_profile)
-            )
+            # A speed that cannot be determined fails closed: collections wins.
+            use_fup = False
+            if fup_profile is not None:
+                if collections_profile is None:
+                    use_fup = True
+                else:
+                    fup_kbps = _download_kbps(fup_profile)
+                    coll_kbps = _download_kbps(collections_profile)
+                    use_fup = (
+                        fup_kbps is not None
+                        and coll_kbps is not None
+                        and fup_kbps < coll_kbps
+                    )
             if use_fup:
                 assert fup_profile is not None and fup_state is not None
                 layer, profile = RateLayer.fup_throttle, fup_profile
@@ -535,25 +569,30 @@ def active_credential_for(
 ) -> AccessCredential | None:
     """The subscription's active credential, deterministically chosen.
 
-    The login's own credential first, then the lowest id -- never an arbitrary
-    ``.first()``.
+    The credential whose username is the login first (as the sweep matches),
+    then one linked by ``subscription_id``, lowest id first -- never an
+    arbitrary ``.first()``.
     """
-    credentials = list(
-        db.scalars(
+    with db.no_autoflush:
+        if subscription.login:
+            by_login = db.scalars(
+                select(AccessCredential)
+                .where(
+                    AccessCredential.username == subscription.login,
+                    AccessCredential.is_active.is_(True),
+                )
+                .order_by(AccessCredential.id.asc())
+            ).first()
+            if by_login is not None:
+                return by_login
+        return db.scalars(
             select(AccessCredential)
             .where(
                 AccessCredential.subscription_id == subscription.id,
                 AccessCredential.is_active.is_(True),
             )
             .order_by(AccessCredential.id.asc())
-        ).all()
-    )
-    if not credentials:
-        return None
-    for credential in credentials:
-        if subscription.login and credential.username == subscription.login:
-            return credential
-    return credentials[0]
+        ).first()
 
 
 def resolve_effective_rate(
@@ -631,6 +670,35 @@ def refuse_unrecorded_override(
     )
 
 
+def refuse_ungoverned_switch_on(
+    db: Session, domain: object, key: str, pending_value: object
+) -> None:
+    """Refuse turning the owner on except through its governed switch command.
+
+    The switch is flipped only by ``access.rate_profile`` after it has re-run
+    the preflight in the same transaction. Turning it off is always allowed.
+    """
+    from app.services import settings_spec
+    from app.services.owner_commands import owner_command_active
+
+    if domain != SettingDomain.radius or key != SETTING_KEY:
+        return
+    spec = settings_spec.get_spec(SettingDomain.radius, SETTING_KEY)
+    value, error = (
+        settings_spec.coerce_value(spec, pending_value)
+        if spec is not None
+        else (None, "unknown")
+    )
+    if error is None and value is False:
+        return
+    if error is None and owner_command_active(db, owner=SWITCH_OWNER):
+        return
+    raise ThrottleProfileChangeRefused(
+        "The single rate owner can only be switched on by its governed switch "
+        "command, which re-checks every service first."
+    )
+
+
 def refuse_throttle_profile_change(
     db: Session, domain: object, key: str, pending_value: object
 ) -> None:
@@ -681,6 +749,7 @@ DIVERGENCE_CLASSES = (
     "credential_wins",
     "subscription_differs",
     "throttle_not_projected",
+    "throttle_rate_changes",
 )
 
 
@@ -765,6 +834,10 @@ def preflight(db: Session) -> list[Divergence]:
         if derived.layer in _RESTRICTING_LAYERS:
             if projected_id != derived.profile_id:
                 klass = "throttle_not_projected"
+            elif projected_rate != derived.rate_limit:
+                # Same profile, different rate string: e.g. a throttle profile
+                # with no literal went out at full offer speed so far.
+                klass = "throttle_rate_changes"
         elif derived.plan_ambiguous:
             klass = "ambiguous_link"
         elif not links and projected_id is not None:
