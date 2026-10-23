@@ -7,6 +7,7 @@ import subprocess
 import sys
 from collections.abc import Callable, Iterator
 from concurrent.futures import ThreadPoolExecutor
+from contextlib import contextmanager
 from dataclasses import replace
 from datetime import UTC, datetime
 from decimal import Decimal
@@ -299,6 +300,35 @@ def test_owner_rollback_removes_fact_and_export_and_delivery_failure_keeps_fact(
         engine.dispose()
 
 
+@contextmanager
+def _legacy_migrator_edge(maintenance: URL) -> Iterator[None]:
+    """The pinned historical source encodes the OLD role edge (dotmac_app a member
+    of app_admin) in its bootstrap and its 557 guard. Roles are cluster-wide and
+    PostgreSQL refuses circular membership, so the new edge is removed for the
+    duration of that immutable run and restored afterwards, even on failure."""
+
+    dsn = maintenance.render_as_string(hide_password=False)
+    with psycopg.connect(dsn, autocommit=True) as admin:
+        had_new_edge = bool(
+            admin.execute(
+                "SELECT count(*) FROM pg_auth_members m "
+                "JOIN pg_roles r ON r.oid = m.roleid JOIN pg_roles u ON u.oid = m.member "
+                "WHERE r.rolname = 'dotmac_app' AND u.rolname = 'app_admin'"
+            ).fetchone()[0]
+        )
+        if had_new_edge:
+            admin.execute("REVOKE dotmac_app FROM app_admin")
+    try:
+        yield
+    finally:
+        if had_new_edge:
+            with psycopg.connect(dsn, autocommit=True) as admin:
+                admin.execute("REVOKE app_admin FROM dotmac_app")
+                admin.execute(
+                    "GRANT dotmac_app TO app_admin WITH INHERIT TRUE, SET TRUE"
+                )
+
+
 @pytest.fixture
 def historical_predecessor_database(template_base_url: URL) -> Iterator[URL]:
     """Build real old source, including its old enum, without Git ref mutations."""
@@ -342,23 +372,24 @@ def historical_predecessor_database(template_base_url: URL) -> Iterator[URL]:
             environment["MIGRATION_DATABASE_URL"] = url.render_as_string(
                 hide_password=False
             )
-            old_upgrade = subprocess.run(
-                [
-                    sys.executable,
-                    "-c",
-                    (
-                        "import os; from sqlalchemy.engine import make_url; "
-                        "from scripts.ci.template_database import "
-                        "bootstrap_database_local_prerequisites, upgrade_to; "
-                        "url=make_url(os.environ['TEST_DATABASE_URL']); "
-                        "bootstrap_database_local_prerequisites(url); upgrade_to(url, 'heads')"
-                    ),
-                ],
-                cwd=root,
-                env=environment,
-                capture_output=True,
-                timeout=300,
-            )
+            with _legacy_migrator_edge(maintenance):
+                old_upgrade = subprocess.run(
+                    [
+                        sys.executable,
+                        "-c",
+                        (
+                            "import os; from sqlalchemy.engine import make_url; "
+                            "from scripts.ci.template_database import "
+                            "bootstrap_database_local_prerequisites, upgrade_to; "
+                            "url=make_url(os.environ['TEST_DATABASE_URL']); "
+                            "bootstrap_database_local_prerequisites(url); upgrade_to(url, 'heads')"
+                        ),
+                    ],
+                    cwd=root,
+                    env=environment,
+                    capture_output=True,
+                    timeout=300,
+                )
             assert old_upgrade.returncode == 0, (
                 "Immutable historical-source migration failed; acceptance is blocked."
             )

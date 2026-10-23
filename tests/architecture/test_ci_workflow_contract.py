@@ -442,6 +442,7 @@ TEST_LANE_JOBS = frozenset(
         "integration-shards",
         "integration-run",
         "integration-test",
+        "migrations-production-roles",
     }
 )
 
