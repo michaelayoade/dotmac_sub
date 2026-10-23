@@ -288,3 +288,75 @@ def test_rollback_firmware_reuses_one_session(monkeypatch) -> None:
 
     assert ok is False
     assert opened == [1]
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "display version\nsave",
+        "display version\rsave",
+        "display version; save",
+        "display version\tx",
+        "display version\x1b",
+        "displayx",
+        "showtime",
+        "pingx 1.1.1.1",
+    ],
+)
+def test_validator_rejects_chaining_and_loose_prefixes(command) -> None:
+    from app.services.network.parsers.cli import validate_readonly_command
+
+    assert validate_readonly_command(command)[0] is False
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "display version",
+        "DISPLAY ont info 0/1/1 1",
+        "display current-configuration | include ssh",
+        "  show version ",
+        "display",
+    ],
+)
+def test_validator_accepts_normal_display_commands(command) -> None:
+    from app.services.network.parsers.cli import validate_readonly_command
+
+    assert validate_readonly_command(command)[0] is True
+
+
+def test_api_request_rejects_newline_and_long_commands() -> None:
+    from pydantic import ValidationError
+
+    from app.schemas.network_olt_ops import OltCliCommandRequest
+
+    OltCliCommandRequest(command="display version")
+    for bad in ("display version\nsave", "display x; save", "d" * 201):
+        with pytest.raises(ValidationError):
+            OltCliCommandRequest(command=bad)
+
+
+def test_pool_discards_channel_on_any_exception(pool) -> None:
+    from app.services.network.olt_ssh_pool import pooled_ssh_connection
+
+    fake = pool(ScriptedChannel())
+    for exc in (RuntimeError("x"), ValueError("y"), KeyboardInterrupt()):
+        with pytest.raises(type(exc)):
+            with pooled_ssh_connection(OLT):
+                raise exc
+    assert fake.release_close_flags == [True, True, True]
+
+
+def test_config_read_cap_defaults_to_60_and_backup_gets_300(pool, monkeypatch) -> None:
+    caps: list[int] = []
+
+    def paged(_ch, _cmd, prompt, *, timeout_sec, idle_timeout_sec=None):
+        caps.append(timeout_sec)
+        return "x" * 60 + "\nreturn\nboi-olt#"
+
+    monkeypatch.setattr(olt_ssh, "_run_huawei_paged_cmd", paged)
+    pool(ScriptedChannel())
+    olt_ssh.fetch_running_config_ssh(OLT)
+    with olt_ssh.backup_config_read_cap():
+        olt_ssh.fetch_running_config_ssh(OLT)
+    assert caps == [60, 300]

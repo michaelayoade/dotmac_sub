@@ -10,6 +10,7 @@ provides the resolve_policy() function for backward compatibility.
 
 from __future__ import annotations
 
+import contextvars
 import logging
 import re
 import socket
@@ -350,6 +351,22 @@ def _derive_prompt_regex(output: str, fallback: str) -> str:
 
 # Running-config backup read: absolute cap and idle-progress window (DESIGN s4).
 _BACKUP_COMMAND_MAX_SECONDS = 300
+_INTERACTIVE_CONFIG_MAX_SECONDS = 60
+_config_read_cap: contextvars.ContextVar[int] = contextvars.ContextVar(
+    "olt_config_read_cap", default=_INTERACTIVE_CONFIG_MAX_SECONDS
+)
+
+
+class backup_config_read_cap:  # noqa: N801 - context manager
+    """Allow the long (300 s) config read; web/preview paths keep 60 s."""
+
+    def __enter__(self) -> None:
+        self._token = _config_read_cap.set(_BACKUP_COMMAND_MAX_SECONDS)
+
+    def __exit__(self, *_exc: object) -> None:
+        _config_read_cap.reset(self._token)
+
+
 _BACKUP_COMMAND_IDLE_SECONDS = 30.0
 
 
@@ -1007,7 +1024,7 @@ def fetch_running_config_ssh(olt: OLTDevice) -> tuple[bool, str, str]:
                 channel,
                 "display current-configuration",
                 prompt=prompt,
-                timeout_sec=_BACKUP_COMMAND_MAX_SECONDS,
+                timeout_sec=_config_read_cap.get(),
                 idle_timeout_sec=_BACKUP_COMMAND_IDLE_SECONDS,
             )
 
