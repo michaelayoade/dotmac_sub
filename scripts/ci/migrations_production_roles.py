@@ -195,11 +195,25 @@ class Lane:
                         sql.Identifier(role), sql.Literal(password)
                     )
                 )
-        with self.superuser() as admin:
+        # Production shape: postgres owns the database (and so `public`); the
+        # runtime owner and the migrator hold explicit USAGE+CREATE on `public`,
+        # and only the schema-bootstrap role holds CREATE on the database.
+        with self.superuser(name) as admin:
             admin.execute(
-                sql.SQL("ALTER DATABASE {} OWNER TO {}").format(
-                    sql.Identifier(name), sql.Identifier(OWNER)
-                )
+                "DO $$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = "
+                "'dotmac_schema_bootstrap') THEN CREATE ROLE dotmac_schema_bootstrap "
+                "LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS "
+                "NOINHERIT; END IF; END $$"
+            )
+            admin.execute("GRANT dotmac_app TO dotmac_schema_bootstrap")
+            admin.execute(
+                sql.SQL(
+                    "GRANT CONNECT, CREATE ON DATABASE {} TO dotmac_schema_bootstrap"
+                ).format(sql.Identifier(name))
+            )
+            admin.execute("REVOKE CREATE ON SCHEMA public FROM PUBLIC")
+            admin.execute(
+                "GRANT USAGE, CREATE ON SCHEMA public TO dotmac_app, app_admin"
             )
         return name
 
@@ -216,7 +230,13 @@ class Lane:
 
     # -- alembic ------------------------------------------------------------
     def alembic_upgrade(
-        self, database: str, *, migrator: str, owner_env: str | None
+        self,
+        database: str,
+        *,
+        migrator: str,
+        owner_env: str | None,
+        target: str = "heads",
+        as_superuser: bool = False,
     ) -> tuple[int, str]:
         env = {
             key: value
@@ -224,13 +244,16 @@ class Lane:
             if key not in {"MIGRATION_OBJECT_OWNER", "MIGRATION_DATABASE_URL"}
         }
         env["DATABASE_URL"] = _sqlalchemy_url(self.as_role(OWNER, database))
-        env["MIGRATION_DATABASE_URL"] = _sqlalchemy_url(
-            self.as_role(migrator, database)
+        migrator_url = (
+            self.admin_url.set(database=database)
+            if as_superuser
+            else self.as_role(migrator, database)
         )
+        env["MIGRATION_DATABASE_URL"] = _sqlalchemy_url(migrator_url)
         if owner_env is not None:
             env["MIGRATION_OBJECT_OWNER"] = owner_env
         result = subprocess.run(  # nosec B603 - fixed argv, this repo's alembic
-            [sys.executable, "-m", "alembic", "upgrade", "heads"],
+            [sys.executable, "-m", "alembic", "upgrade", target],
             cwd=REPO_ROOT,
             env=env,
             capture_output=True,
@@ -442,6 +465,94 @@ def _insert_probe(
     return [f"{who} insert probe unexpectedly succeeded"]
 
 
+#: The last Sub revision before the head: its successor ALTERs an existing table.
+EARLIER_REVISION = "697_subscription_credential_permission"
+
+_HAND_TO_OWNER_SQL = """
+SELECT format('ALTER %s %s OWNER TO dotmac_app', CASE c.relkind WHEN 'v' THEN 'VIEW'
+         WHEN 'm' THEN 'MATERIALIZED VIEW' WHEN 'f' THEN 'FOREIGN TABLE' ELSE 'TABLE' END,
+         c.oid::regclass)
+  FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
+ WHERE (n.nspname = 'public' OR n.nspname LIKE 'mod\\_%%') AND c.relkind IN ('r','p','v','m','f')
+   AND c.relowner = 'postgres'::regrole
+   AND NOT EXISTS (SELECT 1 FROM pg_depend e WHERE e.deptype='e' AND e.classid='pg_class'::regclass AND e.objid=c.oid)
+UNION ALL
+SELECT format('ALTER SEQUENCE %s OWNER TO dotmac_app', c.oid::regclass)
+  FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
+ WHERE (n.nspname = 'public' OR n.nspname LIKE 'mod\\_%%') AND c.relkind = 'S' AND c.relowner = 'postgres'::regrole
+   AND NOT EXISTS (SELECT 1 FROM pg_depend d WHERE d.classid='pg_class'::regclass AND d.objid=c.oid AND d.deptype IN ('a','i'))
+   AND NOT EXISTS (SELECT 1 FROM pg_depend e WHERE e.deptype='e' AND e.classid='pg_class'::regclass AND e.objid=c.oid)
+UNION ALL
+SELECT format('ALTER %s %s OWNER TO dotmac_app', CASE t.typtype WHEN 'd' THEN 'DOMAIN' ELSE 'TYPE' END, t.oid::regtype)
+  FROM pg_type t JOIN pg_namespace n ON n.oid = t.typnamespace
+ WHERE (n.nspname = 'public' OR n.nspname LIKE 'mod\\_%%') AND t.typtype IN ('e','d','r') AND t.typowner = 'postgres'::regrole
+   AND NOT EXISTS (SELECT 1 FROM pg_depend e WHERE e.deptype='e' AND e.classid='pg_type'::regclass AND e.objid=t.oid)
+UNION ALL
+SELECT format('ALTER ROUTINE %s OWNER TO dotmac_app', p.oid::regprocedure)
+  FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
+ WHERE (n.nspname = 'public' OR n.nspname LIKE 'mod\\_%%') AND p.proowner = 'postgres'::regrole AND NOT p.prosecdef
+   AND NOT EXISTS (SELECT 1 FROM pg_depend e WHERE e.deptype='e' AND e.classid='pg_proc'::regclass AND e.objid=p.oid)
+"""
+
+
+def existing_database_run(lane: Lane) -> None:
+    """The production path: objects already belong to dotmac_app, then app_admin
+    upgrades them through inherited membership (ALTER on owner tables, including
+    alembic_version) and hands new objects back."""
+
+    database = lane.create_database()
+    try:
+        code, output = lane.alembic_upgrade(
+            database,
+            migrator=MIGRATOR,
+            owner_env=None,
+            target=EARLIER_REVISION,
+            as_superuser=True,
+        )
+        if code != 0:
+            lane.check(
+                "earlier revision as superuser", [f"exit {code}\n{lane.tail(output)}"]
+            )
+            return
+        with lane.superuser(database) as admin:
+            statements = [r[0] for r in admin.execute(_HAND_TO_OWNER_SQL).fetchall()]
+            for statement in statements:
+                admin.execute(statement)
+            lane.check(
+                "existing database: objects handed to the owner as in production",
+                [] if statements else ["no objects were handed to the owner"],
+            )
+            lane.check("existing database: pre-state ownership", foreign_owned(admin))
+            version_owner = admin.execute(
+                "SELECT pg_get_userbyid(relowner) FROM pg_class "
+                "WHERE oid = 'public.alembic_version'::regclass"
+            ).fetchone()[0]
+            lane.check(
+                "existing database: alembic_version belongs to the owner",
+                [] if version_owner == OWNER else [f"owner is {version_owner}"],
+            )
+        code, output = lane.alembic_upgrade(
+            database, migrator=MIGRATOR, owner_env=OWNER
+        )
+        lane.check(
+            "existing database: upgrade heads as migrator through inherited membership",
+            [] if code == 0 else [f"exit {code}\n{lane.tail(output)}"],
+        )
+        if code != 0:
+            return
+        with lane.superuser(database) as admin:
+            lane.check(
+                "existing database: nothing new is owned by the migrator",
+                migrator_owned_violations(lane.migrator_owned(admin)),
+            )
+            lane.check(
+                "existing database: objects belong to the owner", foreign_owned(admin)
+            )
+            lane.check("existing database: module tables FORCE RLS", force_rls(admin))
+    finally:
+        lane.drop_database(database)
+
+
 def sensitivity(lane: Lane) -> None:
     """The lane must FAIL on the setups that broke a production deploy."""
 
@@ -481,6 +592,20 @@ def sensitivity(lane: Lane) -> None:
                 if code != 0 and "module_database_roles.v1" in output
                 else [f"exit {code}\n{lane.tail(output)}"],
             )
+            admin.execute(
+                f'GRANT "{OWNER}" TO "{MIGRATOR}" WITH INHERIT TRUE, SET TRUE'
+            )
+            # 1b. A BYPASSRLS non-superuser must not migrate without the owner variable.
+            code, output = lane.alembic_upgrade(
+                database, migrator=MIGRATOR, owner_env=None
+            )
+            lane.check(
+                "unset owner variable: BYPASSRLS migrator is refused",
+                []
+                if code != 0 and "MIGRATION_OBJECT_OWNER" in output
+                else [f"exit {code}\n{lane.tail(output)}"],
+            )
+            admin.execute(f'REVOKE "{OWNER}" FROM "{MIGRATOR}"')
             # 2. The old direction (the shape before this change).
             admin.execute(f'GRANT "{MIGRATOR}" TO "{OWNER}"')
             lane.check(
@@ -544,6 +669,7 @@ def main() -> int:
     lane = Lane(make_url(raw))
     try:
         positive_run(lane)
+        existing_database_run(lane)
         sensitivity(lane)
     except (psycopg.Error, RuntimeError) as exc:
         diag = getattr(exc, "diag", None)

@@ -5,6 +5,11 @@
 # rolls back: a definer function runs with its owner's privileges, and the
 # migrator owns BYPASSRLS.
 #
+# A migration run as app_admin also cannot create a standalone composite type
+# (refused: it has no owning table) or `CREATE SEQUENCE ... OWNED BY` a column of
+# an existing dotmac_app table (PostgreSQL refuses to move an owned sequence).
+# Both fail the run closed; restructure the migration instead of listing them.
+#
 # Adding a line here is a security decision. It needs the same review as
 # changing the role contract, never a baseline exception.
 public.claim_outbox_batch(text, integer, integer)

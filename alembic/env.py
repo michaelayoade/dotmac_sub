@@ -20,6 +20,7 @@ from app.migration_bindings import (
 from app.migration_ownership import (
     OWNER_ENV_VAR,
     assert_migrator_identity,
+    assert_owner_variable_set_for_bypass,
     hand_back_new_objects,
     load_definer_allowlist,
     snapshot_owned_objects,
@@ -230,6 +231,8 @@ def run_migrations_online() -> None:
         _set_migration_idle_transaction_timeout(connection)
 
         owner = _migration_object_owner(connection)
+        if owner is None and connection.dialect.name == "postgresql":
+            assert_owner_variable_set_for_bypass(connection)
         allowlist = frozenset()
         if owner is not None:
             assert_migrator_identity(connection, owner=owner)

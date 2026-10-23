@@ -322,6 +322,38 @@ def assert_migrator_identity(connection: Any, *, owner: str) -> None:
         )
 
 
+def unowned_bypass_violation(
+    *, current_user: str, bypassrls: bool, superuser: bool
+) -> str | None:
+    """A BYPASSRLS non-superuser migrating without a hand-back owner would leave
+    new views and SECURITY DEFINER functions owned by a role that bypasses RLS."""
+
+    if bypassrls and not superuser:
+        return (
+            f"{current_user} is a BYPASSRLS non-superuser and {OWNER_ENV_VAR} is "
+            f"not set; {CONTRACT_NAME} migrations must hand new objects back to "
+            "the runtime owner (set the variable, or migrate as the owner)"
+        )
+    return None
+
+
+def assert_owner_variable_set_for_bypass(connection: Any) -> None:
+    row = _query(
+        connection,
+        "SELECT current_user::text, rolbypassrls, rolsuper "
+        "FROM pg_roles WHERE rolname = current_user",
+    )
+    if not row:
+        return
+    message = unowned_bypass_violation(
+        current_user=str(row[0][0]),
+        bypassrls=bool(row[0][1]),
+        superuser=bool(row[0][2]),
+    )
+    if message:
+        raise MigrationOwnershipError(message)
+
+
 def hand_back_new_objects(
     connection: Any,
     *,
@@ -372,6 +404,8 @@ __all__ = [
     "MigratorPosture",
     "OwnedObject",
     "assert_migrator_identity",
+    "assert_owner_variable_set_for_bypass",
+    "unowned_bypass_violation",
     "hand_back_new_objects",
     "leftovers",
     "load_definer_allowlist",

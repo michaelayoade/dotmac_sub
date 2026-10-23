@@ -20,6 +20,7 @@ from app.migration_ownership import (
     load_definer_allowlist,
     migrator_violations,
     plan_hand_back,
+    unowned_bypass_violation,
 )
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -334,3 +335,28 @@ def test_env_hands_back_inside_the_migration_transaction_and_before_commit() -> 
 def test_env_hand_back_is_opt_in_through_the_owner_variable() -> None:
     assert "OWNER_ENV_VAR" in ENV
     assert "if owner is not None" in ENV
+
+
+def test_bypassrls_non_superuser_without_owner_variable_is_refused() -> None:
+    message = unowned_bypass_violation(
+        current_user="app_admin", bypassrls=True, superuser=False
+    )
+    assert message is not None
+    assert "MIGRATION_OBJECT_OWNER" in message and "module_database_roles.v1" in message
+
+
+def test_superuser_and_plain_roles_may_migrate_without_the_variable() -> None:
+    for bypass, superuser in ((True, True), (False, False), (False, True)):
+        assert (
+            unowned_bypass_violation(
+                current_user="x", bypassrls=bypass, superuser=superuser
+            )
+            is None
+        )
+
+
+def test_env_checks_unowned_bypass_before_any_ddl() -> None:
+    body = ENV[ENV.index("def run_migrations_online") :]
+    assert body.index("assert_owner_variable_set_for_bypass(connection)") < body.index(
+        "ensure_alembic_version_table(connection)"
+    )
