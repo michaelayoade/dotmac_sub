@@ -79,6 +79,20 @@
                 {% if op.dispatch.last_error %}&middot; {{ op.dispatch.last_error }}{% endif %}
             </p>
             {% endif %}
+            {% if can_resolve_network_dispatch and op.dispatch and op.dispatch.status == 'reconciliation_needed' %}
+            <form method="post" action="/admin/network/dispatches/{{ op.dispatch.id }}/resolve" class="mt-2 flex max-w-xl flex-wrap items-center gap-2" data-confirm="Close this dispatch as reviewed? This records your verdict and evidence only. It does not contact the device and does not change the operation outcome." data-confirm-variant="warning" data-confirm-label="Close dispatch">
+                {% include "components/forms/csrf_input.html" %}
+                <input type="hidden" name="expected_status" value="reconciliation_needed">
+                <input type="hidden" name="return_ont_id" value="{{ op.target_id if op.target_type == 'ont' else '' }}">
+                <select name="resolution" required aria-label="Resolution" class="border border-slate-300 bg-white px-2.5 py-1.5 text-xs text-slate-900 dark:border-slate-600 dark:bg-slate-900 dark:text-white">
+                    <option value="confirmed_landed">Confirmed landed</option>
+                    <option value="superseded">Superseded by later work</option>
+                    <option value="no_longer_wanted">No longer wanted</option>
+                </select>
+                <input type="text" name="evidence" required minlength="8" maxlength="2000" aria-label="Evidence for resolution" placeholder="Evidence (what you checked; no secrets)" class="min-w-0 flex-1 border border-slate-300 bg-white px-2.5 py-1.5 text-xs text-slate-900 focus:border-blue-500 focus:outline-none focus:ring-1 focus:ring-blue-500 dark:border-slate-600 dark:bg-slate-900 dark:text-white">
+                <button type="submit" class="inline-flex items-center gap-1.5 bg-slate-900 px-3 py-1.5 text-xs font-semibold text-white hover:bg-slate-700 dark:bg-white dark:text-slate-900 dark:hover:bg-slate-200">Close dispatch</button>
+            </form>
+            {% endif %}
             {% if can_redrive_network_operations and op.can_retry %}
             <form method="post" action="/admin/network/operations/{{ op.id }}/redrive" class="mt-2 flex max-w-xl flex-wrap items-center gap-2" data-confirm="Create a new recovery attempt from the current device state? The failed operation remains unchanged." data-confirm-variant="warning" data-confirm-label="Retry operation">
                 {% include "components/forms/csrf_input.html" %}

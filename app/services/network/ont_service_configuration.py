@@ -2924,13 +2924,24 @@ def _verify_locked(
             "stale_configuration",
             "Configuration lifecycle changed; refresh before verifying.",
         )
-    if (
+    # An operation that failed while the head was still in flight (the dispatch
+    # layer ended it without a lifecycle result) is an interrupted revision, not
+    # an in-flight one: the same projection that offers Retry also offers
+    # readback-only verify. A head whose latest operation is still active (or
+    # succeeded) stays refused.
+    interrupted = (
+        failed_operation.status
+        in {NetworkOperationStatus.failed, NetworkOperationStatus.canceled}
+        and head.phase in _IN_FLIGHT_PHASES
+        and revision.phase in _IN_FLIGHT_PHASES
+    )
+    if not interrupted and (
         head.phase is not OntServiceConfigurationPhase.failed
         or revision.phase is not OntServiceConfigurationPhase.failed
     ):
         raise _error(
             "verification_not_eligible",
-            "Only the owner's current terminally failed revision may be verified.",
+            "Only the owner's current failed or interrupted revision may be verified.",
         )
     if (
         head.latest_operation_id != failed_operation.id
@@ -3036,6 +3047,60 @@ def verify_ont_service_configuration_readback(
         context=command.context,
         operation=lambda: _verify_locked(db, command),
     )
+
+
+_IN_FLIGHT_PHASES = frozenset(
+    {
+        OntServiceConfigurationPhase.queued,
+        OntServiceConfigurationPhase.applying,
+        OntServiceConfigurationPhase.readback_pending,
+    }
+)
+
+
+def mark_configuration_operation_interrupted(
+    db: Session, operation: NetworkOperation
+) -> bool:
+    """Move a head out of flight when its operation ended without a result.
+
+    Called by the dispatch layer (inside its own transaction) after it fails or
+    cancels an ``ont_service_config`` operation whose worker never recorded a
+    lifecycle outcome. Only the head's *current* revision and *latest* operation
+    are touched, and only while still in flight; a head that already reached a
+    delivery verdict, or has moved to a newer operation, is left alone. Never
+    contacts a device. Returns whether a head was changed.
+    """
+    head = db.scalar(
+        select(OntServiceConfigurationHead)
+        .where(OntServiceConfigurationHead.latest_operation_id == operation.id)
+        .with_for_update()
+    )
+    if head is None or head.phase not in _IN_FLIGHT_PHASES:
+        return False
+    message = str(
+        operation.error
+        or (operation.output_payload or {}).get("message")
+        or "Configuration worker stopped before recording a lifecycle result."
+    )[:2000]
+    head.phase = OntServiceConfigurationPhase.failed
+    head.waiting_reason = None
+    head.failure_code = "operation_interrupted"
+    head.failure_message = message
+    revision = db.scalar(
+        select(OntServiceConfigurationRevision)
+        .where(
+            OntServiceConfigurationRevision.head_id == head.id,
+            OntServiceConfigurationRevision.revision == head.current_revision,
+            OntServiceConfigurationRevision.operation_id == operation.id,
+        )
+        .with_for_update()
+    )
+    if revision is not None and revision.phase in _IN_FLIGHT_PHASES:
+        revision.phase = OntServiceConfigurationPhase.failed
+        revision.failure_code = "operation_interrupted"
+        revision.failure_message = message
+    db.flush()
+    return True
 
 
 def _event_view(event: OntProvisioningEvent) -> ConfigurationEventView:

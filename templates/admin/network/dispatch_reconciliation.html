@@ -1,0 +1,42 @@
+{% extends "layouts/admin.html" %}
+
+{% block title %}Dispatch Reconciliation - Admin{% endblock %}
+
+{% block page_header %}
+<div class="mb-6">
+    <h1 class="text-2xl font-bold text-slate-900 dark:text-white font-display tracking-tight">Dispatch reconciliation</h1>
+    <p class="text-sm text-slate-500 dark:text-slate-400">Commands whose delivery was never confirmed. Check the device state, then record the outcome. Closing a row never contacts the device.</p>
+</div>
+{% endblock %}
+
+{% block content %}
+<div class="space-y-3">
+    {% for d in dispatches %}
+    <div class="rounded-lg border border-slate-200 bg-white px-4 py-3 dark:border-slate-700 dark:bg-slate-800/60">
+        <div class="flex flex-wrap items-center justify-between gap-2">
+            <p class="text-sm font-medium text-slate-900 dark:text-white"><span class="font-mono">{{ d.id[:8] }}</span> &middot; {{ d.command_name }}</p>
+            <span class="text-xs text-slate-400">{{ d.created_at | app_datetime('%b %d, %Y at %H:%M') }}</span>
+        </div>
+        <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">
+            Operation <span class="font-mono">{{ d.operation_id[:8] }}</span> ({{ d.operation_status }})
+            {% if d.target_type == 'ont' and d.target_id %}&middot; <a class="text-blue-600 hover:underline" href="/admin/network/onts/{{ d.target_id }}?tab=operations">Open ONT</a>{% endif %}
+        </p>
+        {% if d.last_error %}<p class="mt-1 text-xs text-rose-600 dark:text-rose-400">{{ d.last_error }}</p>{% endif %}
+        {% if can_resolve_network_dispatch %}
+        <form method="post" action="/admin/network/dispatches/{{ d.id }}/resolve" class="mt-2 flex max-w-2xl flex-wrap items-center gap-2" data-confirm="Close this dispatch as reviewed? This records your verdict and evidence only. It does not contact the device and does not change the operation outcome." data-confirm-variant="warning" data-confirm-label="Close dispatch">
+            {% include "components/forms/csrf_input.html" %}
+            <input type="hidden" name="expected_status" value="reconciliation_needed">
+            <input type="hidden" name="return_ont_id" value="">
+            <select name="resolution" required aria-label="Resolution" class="border border-slate-300 bg-white px-2.5 py-1.5 text-xs text-slate-900 dark:border-slate-600 dark:bg-slate-900 dark:text-white">
+                {% for r in resolutions %}<option value="{{ r }}">{{ r | replace('_', ' ') | capitalize }}</option>{% endfor %}
+            </select>
+            <input type="text" name="evidence" required minlength="8" maxlength="2000" aria-label="Evidence for resolution" placeholder="Evidence (what you checked; no secrets)" class="min-w-0 flex-1 border border-slate-300 bg-white px-2.5 py-1.5 text-xs text-slate-900 dark:border-slate-600 dark:bg-slate-900 dark:text-white">
+            <button type="submit" class="bg-slate-900 px-3 py-1.5 text-xs font-semibold text-white hover:bg-slate-700 dark:bg-white dark:text-slate-900">Close dispatch</button>
+        </form>
+        {% endif %}
+    </div>
+    {% else %}
+    <p class="py-6 text-center text-sm text-slate-500 dark:text-slate-400">No dispatches need reconciliation.</p>
+    {% endfor %}
+</div>
+{% endblock %}

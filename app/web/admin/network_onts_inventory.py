@@ -56,6 +56,8 @@ def _base_context(request: Request, db: Session, active_page: str) -> dict:
         "sidebar_stats": web_admin_service.get_sidebar_stats(db),
         "can_redrive_network_operations": bool(auth)
         and has_permission(auth, db, "network:operation:redrive"),
+        "can_resolve_network_dispatch": bool(auth)
+        and has_permission(auth, db, "network:ont:write"),
         "can_commission_ont": bool(auth)
         and has_permission(auth, db, "network:ont:commission"),
     }

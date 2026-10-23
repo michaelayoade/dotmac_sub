@@ -38,11 +38,13 @@ from app.services.network.ont_service_configuration import (
     OntConfigurationChange,
     OntConfigurationSection,
     RetryOntServiceConfigurationCommand,
+    VerifyOntServiceConfigurationReadbackCommand,
     WanConfigurationChange,
     WifiConfigurationChange,
     configure_ont_service,
     get_ont_service_configuration_projection,
     retry_ont_service_configuration,
+    verify_ont_service_configuration_readback,
 )
 from app.services.owner_commands import CommandContext
 from app.web.request_parsing import parse_form_data_sync
@@ -65,6 +67,8 @@ def _base_context(
         "sidebar_stats": get_sidebar_stats(db),
         "can_redrive_network_operations": bool(auth)
         and has_permission(auth, db, "network:operation:redrive"),
+        "can_resolve_network_dispatch": bool(auth)
+        and has_permission(auth, db, "network:ont:write"),
     }
 
 
@@ -927,6 +931,79 @@ def ont_configure_retry(
                 ont_unit_id=uuid.UUID(ont_id),
                 expected_head_id=uuid.UUID(configuration_head_id),
                 expected_revision=configuration_revision,
+            ),
+        )
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=400, detail="Invalid lifecycle identifier."
+        ) from exc
+    except DomainError as exc:
+        error = exc
+
+    if result is not None:
+        result_message = result.message
+    else:
+        assert error is not None
+        result_message = error.message
+
+    context = _base_context(request, db, active_page="onts")
+    context.update(_ont_configuration_form_context(db, ont_id))
+    if result is not None:
+        context["config_result"] = result
+    if error is not None:
+        context["config_error"] = error
+    response = templates.TemplateResponse(
+        "admin/network/onts/_configure_form.html", context
+    )
+    response.headers.update(
+        _toast_headers(
+            result_message,
+            "success" if result is not None else "error",
+        )
+    )
+    return response
+
+
+@router.post(
+    "/onts/{ont_id}/configure/verify",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("network:ont:write"))],
+)
+def ont_configure_verify(
+    request: Request,
+    ont_id: str,
+    configuration_head_id: str = Form(...),
+    configuration_revision: int = Form(..., ge=1),
+    failed_operation_id: str = Form(...),
+    idempotency_key: str = Form(...),
+    db: Session = Depends(get_db),
+) -> HTMLResponse:
+    """Queue a readback-only verification of the exact failed or interrupted revision.
+
+    Transport adapter only: it never writes to the device. The owner decides
+    eligibility and refuses in-flight heads.
+    """
+
+    auth = getattr(request.state, "auth", {}) or {}
+    permission_granted = bool(auth) and has_permission(auth, db, "network:ont:write")
+    finish_read_transaction(db)
+    result = None
+    error: DomainError | None = None
+    try:
+        if not permission_granted:
+            raise HTTPException(status_code=403, detail="Forbidden")
+        result = verify_ont_service_configuration_readback(
+            db,
+            VerifyOntServiceConfigurationReadbackCommand(
+                context=_ont_configuration_command_context(
+                    request,
+                    reason="Verify ONT service configuration by device readback",
+                    idempotency_key=idempotency_key,
+                ),
+                ont_unit_id=uuid.UUID(ont_id),
+                expected_head_id=uuid.UUID(configuration_head_id),
+                expected_revision=configuration_revision,
+                failed_operation_id=uuid.UUID(failed_operation_id),
             ),
         )
     except ValueError as exc:

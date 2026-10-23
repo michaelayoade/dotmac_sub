@@ -3128,3 +3128,94 @@ def test_verify_write_only_password_reports_delivered_unverified(
     assert execute_outcome.phase is OntServiceConfigurationPhase.delivered_unverified
     refreshed_head = db_session.get(OntServiceConfigurationHead, head_id)
     assert refreshed_head.failure_code == "wifi_password_write_only_unverifiable"
+
+
+# ── Readback verify on interrupted heads ────────────────────────────────────
+
+
+@pytest.mark.parametrize(
+    "phase",
+    [
+        OntServiceConfigurationPhase.queued,
+        OntServiceConfigurationPhase.applying,
+        OntServiceConfigurationPhase.readback_pending,
+    ],
+)
+def test_verify_allowed_on_interrupted_head(db_session, phase):
+    """An op that failed while the head was still in flight is interrupted."""
+    ont, assignment, head, revision, operation = _verify_setup(
+        db_session, suffix=f"interrupted-{phase.value}"
+    )
+    head.phase = phase
+    revision.phase = phase
+    ont_id, head_id, revision_number, operation_id = (
+        ont.id,
+        head.id,
+        revision.revision,
+        operation.id,
+    )
+    db_session.commit()
+
+    outcome = verify_ont_service_configuration_readback(
+        db_session,
+        _verify_command(
+            ont_id=ont_id,
+            head_id=head_id,
+            revision_number=revision_number,
+            failed_operation_id=operation_id,
+            idempotency_key=f"verify-interrupted-{phase.value}",
+        ),
+    )
+
+    assert outcome.replayed is False
+    assert outcome.operation_id != operation_id
+    assert outcome.message == "Readback verification queued."
+    assert (
+        db_session.get(NetworkOperation, outcome.operation_id).redrive_of_id
+        == operation_id
+    )
+
+
+@pytest.mark.parametrize(
+    "operation_status",
+    [
+        NetworkOperationStatus.running,
+        NetworkOperationStatus.pending,
+        NetworkOperationStatus.succeeded,
+    ],
+)
+def test_verify_still_refused_on_in_flight_head(db_session, operation_status):
+    ont, assignment, head, revision, operation = _verify_setup(
+        db_session, suffix=f"inflight-{operation_status.value}"
+    )
+    head.phase = OntServiceConfigurationPhase.queued
+    revision.phase = OntServiceConfigurationPhase.queued
+    operation.status = operation_status
+    ont_id, head_id, revision_number, operation_id = (
+        ont.id,
+        head.id,
+        revision.revision,
+        operation.id,
+    )
+    db_session.commit()
+
+    with pytest.raises(DomainError) as excinfo:
+        verify_ont_service_configuration_readback(
+            db_session,
+            _verify_command(
+                ont_id=ont_id,
+                head_id=head_id,
+                revision_number=revision_number,
+                failed_operation_id=operation_id,
+                idempotency_key=f"verify-inflight-{operation_status.value}",
+            ),
+        )
+    assert "verification_not_eligible" in str(excinfo.value.code)
+    assert (
+        db_session.scalar(
+            select(func.count())
+            .select_from(NetworkOperation)
+            .where(NetworkOperation.target_id == ont_id)
+        )
+        == 1
+    )
