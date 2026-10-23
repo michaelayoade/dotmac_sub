@@ -1,4 +1,6 @@
+import os
 from logging.config import fileConfig
+from pathlib import Path
 
 from dotmac_kernel.planes import install_module_plane_selections
 from dotmac_kernel.prerequisites import install_prerequisite_bindings
@@ -14,6 +16,14 @@ from app.db import (
 from app.migration_bindings import (
     ASSEMBLY_MODULE_PLANES,
     ASSEMBLY_PREREQUISITE_BINDINGS,
+)
+from app.migration_ownership import (
+    OWNER_ENV_VAR,
+    assert_migrator_identity,
+    assert_owner_variable_set_for_bypass,
+    hand_back_new_objects,
+    load_definer_allowlist,
+    snapshot_owned_objects,
 )
 from app.migration_schema_ops import install_idempotent_schema_ops
 from app.models import (  # noqa: F401
@@ -102,6 +112,12 @@ RETIRED_ARCHIVE_TABLES = frozenset(
 )
 
 
+DEFINER_ALLOWLIST_PATH = Path(__file__).with_name("definer_owner_allowlist.txt")
+
+#: `varchar(255)` is stored as atttypmod 255 + VARHDRSZ (4).
+_VERSION_NUM_TYPMOD = 259
+
+
 def ensure_alembic_version_table(connection) -> None:
     """Use a wider revision column for this repo's descriptive revision IDs."""
     version_table = Table(
@@ -112,11 +128,22 @@ def ensure_alembic_version_table(connection) -> None:
     version_table.create(connection, checkfirst=True)
 
     if connection.dialect.name == "postgresql":
-        connection.execute(
+        # Conditional: an unconditional ALTER needs table ownership on every
+        # run and takes a lock even when there is nothing to widen.
+        typmod = connection.execute(
             text(
-                "ALTER TABLE alembic_version ALTER COLUMN version_num TYPE VARCHAR(255)"
+                "SELECT atttypmod FROM pg_attribute "
+                "WHERE attrelid = to_regclass('alembic_version') "
+                "AND attname = 'version_num' AND NOT attisdropped"
             )
-        )
+        ).scalar()
+        if typmod != _VERSION_NUM_TYPMOD:
+            connection.execute(
+                text(
+                    "ALTER TABLE alembic_version "
+                    "ALTER COLUMN version_num TYPE VARCHAR(255)"
+                )
+            )
 
 
 def include_object(object, name, type_, reflected, compare_to):
@@ -178,6 +205,19 @@ def _set_migration_idle_transaction_timeout(connection) -> None:
     apply_migration_idle_transaction_timeout(connection)
 
 
+def _migration_object_owner(connection) -> str | None:
+    """The role every migration-created object is handed to, or ``None``.
+
+    Set by the deploy (``MIGRATION_OBJECT_OWNER=dotmac_app``) when migrations
+    run as the BYPASSRLS migrator. Unset keeps the historical behaviour, so
+    local and CI runs as a single owner or superuser are unchanged.
+    """
+    owner = os.environ.get(OWNER_ENV_VAR, "").strip()
+    if not owner or connection.dialect.name != "postgresql":
+        return None
+    return owner
+
+
 def run_migrations_online() -> None:
     connectable = engine_from_config(
         config.get_section(config.config_ini_section, {}),
@@ -186,9 +226,29 @@ def run_migrations_online() -> None:
     )
 
     with connectable.connect() as connection:
-        ensure_alembic_version_table(connection)
+        # Timeouts first: nothing below may wait on a lock unbounded.
         _set_migration_lock_timeout(connection)
         _set_migration_idle_transaction_timeout(connection)
+
+        owner = _migration_object_owner(connection)
+        if owner is None and connection.dialect.name == "postgresql":
+            assert_owner_variable_set_for_bypass(connection)
+        allowlist = frozenset()
+        if owner is not None:
+            assert_migrator_identity(connection, owner=owner)
+            allowlist = load_definer_allowlist(DEFINER_ALLOWLIST_PATH)
+            before_bootstrap = snapshot_owned_objects(connection)
+
+        ensure_alembic_version_table(connection)
+        if owner is not None:
+            # A fresh database creates alembic_version here, committed below,
+            # so it must be handed back before that commit.
+            hand_back_new_objects(
+                connection,
+                owner=owner,
+                before=before_bootstrap,
+                definer_allowlist=allowlist,
+            )
         connection.commit()
 
         context.configure(
@@ -200,7 +260,15 @@ def run_migrations_online() -> None:
         install_idempotent_schema_ops()
 
         with context.begin_transaction():
+            before = snapshot_owned_objects(connection) if owner else ()
             context.run_migrations()
+            if owner is not None:
+                hand_back_new_objects(
+                    connection,
+                    owner=owner,
+                    before=before,
+                    definer_allowlist=allowlist,
+                )
 
 
 if context.is_offline_mode():

@@ -469,9 +469,50 @@ jobs:
           fi
           python3 scripts/architecture/workflow_guidance_gate.py --base "$BASE"
 
+  # Every other migration in CI runs as a superuser, which cannot fail the way a
+  # production deploy can (2026-10-23: the deploy migrated as the BYPASSRLS
+  # migrator against objects owned by the runtime owner and had no ownership to
+  # act on). This lane reproduces the production role shape -- owner
+  # `dotmac_app`, migrator `app_admin` as a member of the owner, neither a
+  # superuser -- migrates a fresh database, and audits who owns the result. It
+  # also proves its own sensitivity: the same setup without the membership, or
+  # with the old direction, must fail. Gated by `docs-only`, NOT
+  # `postgresql-required`, and folded into the required `Tests` context.
+  migrations-production-roles:
+    name: Migrations (production roles)
+    needs: [changes, python-environment]
+    if: needs.changes.outputs.docs-only != 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    services:
+      postgres:
+        image: postgis/postgis:16-3.4
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -h 127.0.0.1 -U postgres -d postgres"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: ./.github/actions/setup-ci-python
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Migrate as app_admin with owner dotmac_app and audit ownership
+        env:
+          PRODROLES_ADMIN_URL: "postgresql://postgres:postgres@localhost:5432/postgres"
+        run: poetry run python -m scripts.ci.migrations_production_roles
+
   test:
     name: Tests
-    needs: [changes, python-environment, unit-shards, architecture, workflow-guidance]
+    needs: [changes, python-environment, unit-shards, architecture, workflow-guidance, migrations-production-roles]
     if: always() && needs.changes.result == 'success'
     runs-on: ubuntu-latest
     steps:
@@ -486,11 +527,13 @@ jobs:
           UNIT_RESULT: ${{ needs.unit-shards.result }}
           ARCHITECTURE_RESULT: ${{ needs.architecture.result }}
           WORKFLOW_GUIDANCE_RESULT: ${{ needs.workflow-guidance.result }}
+          PRODUCTION_ROLES_RESULT: ${{ needs.migrations-production-roles.result }}
         run: |
           test "$PYTHON_ENVIRONMENT_RESULT" = "success"
           test "$UNIT_RESULT" = "success"
           test "$ARCHITECTURE_RESULT" = "success"
           test "$WORKFLOW_GUIDANCE_RESULT" = "success"
+          test "$PRODUCTION_ROLES_RESULT" = "success"
 
   coverage:
     name: Combine Coverage
