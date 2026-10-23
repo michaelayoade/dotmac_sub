@@ -66,14 +66,20 @@ import sys
 import time
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
+from datetime import UTC, datetime
 from pathlib import Path
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.config import settings
+from app.models.catalog import Subscription
 from app.models.domain_settings import SettingDomain, SettingValueType
+from app.models.subscription_change import (
+    SubscriptionChangeRequest,
+    SubscriptionChangeStatus,
+)
 from app.schemas.settings import DomainSettingUpdate
 from app.services import access_rate_profile, radius_population
 from app.services.audit_adapter import AuditActor, stage_audit_event
@@ -173,6 +179,7 @@ class SwitchOutcome:
     record_schema: str | None = None
     apply_derived: int = 0
     moved_offer: int = 0
+    unverified_moves: int = 0
 
     def as_dict(self) -> dict[str, object]:
         return {
@@ -190,6 +197,7 @@ class SwitchOutcome:
             "record_schema": self.record_schema,
             "apply_derived": self.apply_derived,
             "moved_offer": self.moved_offer,
+            "unverified_moves": self.unverified_moves,
             "baseline": None if self.baseline is None else self.baseline.as_dict(),
             "read_back": _read_back_dict(self.read_back),
         }
@@ -224,6 +232,15 @@ ApprovedKey = tuple[str, str, str | None, str | None]
 
 
 @dataclass(frozen=True)
+class MovedClaim:
+    """A ``moved_offer`` decision: the service left its pre-move package."""
+
+    subscription_id: str
+    pre_move_offer_id: str
+    decided_at: datetime
+
+
+@dataclass(frozen=True)
 class ApprovedDivergences:
     """The reviewed exception record, bound to the sha256 of its file bytes.
 
@@ -237,6 +254,7 @@ class ApprovedDivergences:
     entries: frozenset[ApprovedKey]
     sha256: str
     audit_only: int = 0
+    moved: tuple[MovedClaim, ...] = ()
 
     @property
     def digest(self) -> str:
@@ -277,6 +295,7 @@ def load_approved(path: str | Path, expected_sha256: str) -> ApprovedDivergences
         raise _invalid("The record entries are not a list.")
 
     keys: set[ApprovedKey] = set()
+    moved: list[MovedClaim] = []
     audit_only = 0
     seen: set[str] = set()
     undecided = 0
@@ -306,6 +325,15 @@ def load_approved(path: str | Path, expected_sha256: str) -> ApprovedDivergences
                 raise _invalid("A decided entry needs who and when.", field=required)
         if decision == DECISION_MOVED_OFFER:
             audit_only += 1
+            try:
+                decided_at = datetime.fromisoformat(
+                    str(item["decided_at"]).replace("Z", "+00:00")
+                )
+            except ValueError as exc:
+                raise _invalid("decided_at is not a timestamp.") from exc
+            if decided_at.tzinfo is None:
+                decided_at = decided_at.replace(tzinfo=UTC)
+            moved.append(MovedClaim(sid, str(item.get("offer_id") or ""), decided_at))
         else:
             keys.add((sid, klass, current, derived))
     if undecided:
@@ -313,7 +341,10 @@ def load_approved(path: str | Path, expected_sha256: str) -> ApprovedDivergences
             "Every entry needs a decision before the switch.", undecided=undecided
         )
     return ApprovedDivergences(
-        entries=frozenset(keys), sha256=actual, audit_only=audit_only
+        entries=frozenset(keys),
+        sha256=actual,
+        audit_only=audit_only,
+        moved=tuple(moved),
     )
 
 
@@ -344,6 +375,47 @@ def emit_approval_list(
     ).encode()
     Path(path).write_bytes(raw)
     return hashlib.sha256(raw).hexdigest()
+
+
+def unverified_moves(db: Session, approved: ApprovedDivergences | None) -> list[str]:
+    """Subscription ids whose ``moved_offer`` claim is not backed by evidence.
+
+    A claim holds only when the subscription's current offer differs from the
+    recorded pre-move offer AND an applied subscription change request exists
+    for it, applied before the decision was made.
+    """
+    if approved is None:
+        return []
+    bad: list[str] = []
+    for claim in approved.moved:
+        try:
+            subscription = db.get(Subscription, UUID(claim.subscription_id))
+        except ValueError:
+            subscription = None
+        applied = (
+            db.scalars(
+                select(SubscriptionChangeRequest.applied_at).where(
+                    SubscriptionChangeRequest.subscription_id == subscription.id,
+                    SubscriptionChangeRequest.status
+                    == SubscriptionChangeStatus.applied,
+                    SubscriptionChangeRequest.applied_at.isnot(None),
+                )
+            ).all()
+            if subscription is not None
+            else []
+        )
+
+        def before(stamp: datetime, claim: MovedClaim = claim) -> bool:
+            aware = stamp if stamp.tzinfo else stamp.replace(tzinfo=UTC)
+            return aware < claim.decided_at
+
+        if (
+            subscription is None
+            or str(subscription.offer_id) == claim.pre_move_offer_id
+            or not any(before(stamp) for stamp in applied)
+        ):
+            bad.append(claim.subscription_id)
+    return bad
 
 
 def _live_keys(rows: Sequence[access_rate_profile.Divergence]) -> set[ApprovedKey]:
@@ -452,12 +524,12 @@ def _invalidate_switch_cache() -> bool:
     return True
 
 
-def _await_flag(db: Session) -> bool:
-    """Poll until the flag reads true, bounded by the cache TTL plus 5 seconds."""
+def _await_flag(db: Session, expected: bool = True) -> bool:
+    """Poll until the flag reads ``expected``, bounded by the cache TTL plus 5s."""
     deadline = _monotonic() + float(settings.settings_cache_ttl_seconds) + 5.0
     while True:
         _release_reads(db)
-        if access_rate_profile.rate_owner_enabled(db) is True:
+        if access_rate_profile.rate_owner_enabled(db) is expected:
             return True
         if _monotonic() >= deadline:
             return False
@@ -624,6 +696,7 @@ def switch_on(
             missing=len(wanted - live),
             approved_list_sha256=approved.sha256 if approved else None,
             emitted_list_sha256=emitted,
+            unverified_moves=len(unverified_moves(db, approved)),
         )
 
     base = baseline_read_back(db, run_populate)
@@ -642,6 +715,14 @@ def switch_on(
         _take_lock(db)
         if access_rate_profile.rate_owner_enabled(db):
             raise _error("already_enabled", "The rate owner is already switched on.")
+        bad_moves = unverified_moves(db, approved)
+        if bad_moves:
+            raise _error(
+                "moved_offer_unverified",
+                "A moved_offer entry is not backed by an applied plan change.",
+                count=len(bad_moves),
+                subscription_ids=bad_moves[:_MISMATCH_SAMPLE],
+            )
         rows = access_rate_profile.preflight(db)
         _check_divergence(rows, approved)
         _write_switch(
@@ -740,7 +821,7 @@ def switch_on(
         off = switch_off(db, context=off_context, apply=True, populate=run_populate)
         reprojected = off.applied
     except Exception as exc:  # noqa: BLE001 - the final state below says it all
-        off_error = type(exc).__name__
+        off_error = exc.code if isinstance(exc, DomainError) else type(exc).__name__
         logger.error("rate owner automatic switch-off failed: %s", off_error)
     final_flag = flag_from_row(db)
     trace["flag"] = final_flag
@@ -781,9 +862,20 @@ def switch_off(
     outcome = execute_owner_command(
         db, definition=_SWITCH_OFF, context=context, operation=flip
     )
-    _invalidate_switch_cache()
-    _project_checked(run_populate)
-    return outcome
+    # Symmetric with switch-on: do not trust the cache. Wait until the flag
+    # reads false and require the projection to say the owner was NOT in force.
+    for attempt in (1, 2):
+        _invalidate_switch_cache()
+        visible = _await_flag(db, expected=False)
+        result = _project_checked(run_populate)
+        if visible and result.get("rate_owner_enabled") is False:
+            return outcome
+    raise _error(
+        "owner_still_active",
+        "The rate owner is off in the database, but the rollback projection "
+        "still ran in owner mode; re-run the switch-off.",
+        flag=flag_from_row(db),
+    )
 
 
 def main(argv: Sequence[str] | None = None) -> int:

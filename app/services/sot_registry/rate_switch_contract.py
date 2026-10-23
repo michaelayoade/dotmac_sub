@@ -104,6 +104,8 @@ SERVICE = SOTService(
                 f"{SWITCH}.projection_failed",
                 f"{SWITCH}.no_target",
                 f"{SWITCH}.baseline_not_clean",
+                f"{SWITCH}.owner_still_active",
+                f"{SWITCH}.moved_offer_unverified",
                 f"{SWITCH}.owner_not_active",
                 f"{SWITCH}.approved_list_digest_mismatch",
                 f"{SWITCH}.approved_list_invalid",

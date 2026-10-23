@@ -628,31 +628,165 @@ def test_schema_and_classes_are_validated(tmp_path):
     )
 
 
-def test_a_moved_offer_entry_is_audit_only_and_must_not_diverge(
-    db_session, world, tmp_path
+def _moved_service(
+    db, *, slot=None, applied_at="2026-10-22T09:00:00+00:00", applied=True
 ):
-    sid, klass, current, derived = _divergent(db_session)
-    moved = _entry(str(uuid4()), decision="moved_offer")
-    path, digest = _record(tmp_path, [_entry(sid), moved])
+    """A service moved from package A to package B by a plan change."""
+    from datetime import date, datetime
+
+    from app.models.subscription_change import (
+        SubscriptionChangeRequest,
+        SubscriptionChangeStatus,
+    )
+
+    old_profile = _profile(db, "Old", rate="8M/8M", code="old")
+    new_profile = _profile(db, "New", rate="10M/10M", code="new")
+    old_offer = _offer(db, "Old", profile=old_profile)
+    new_offer = _offer(db, "New", profile=new_profile)
+    sub, _ = _service(db, new_offer, sub_profile=new_profile, slot=slot)
+    if applied:
+        db.add(
+            SubscriptionChangeRequest(
+                subscription_id=sub.id,
+                current_offer_id=old_offer.id,
+                requested_offer_id=new_offer.id,
+                effective_date=date(2026, 10, 1),
+                status=SubscriptionChangeStatus.applied,
+                applied_at=datetime.fromisoformat(applied_at),
+            )
+        )
+    db.commit()
+    return sub, old_offer, new_offer
+
+
+def _moved_entry(sub, pre_move_offer, **kw):
+    return _entry(
+        str(sub.id),
+        decision="moved_offer",
+        offer_id=str(pre_move_offer.id),
+        decided_at="2026-10-23T12:00:00Z",
+        **kw,
+    )
+
+
+def test_a_verified_moved_offer_entry_is_audit_only(db_session, world, tmp_path):
+    sid, *_ = _divergent(db_session)
+    sub, old_offer, _new = _moved_service(db_session)
+    path, digest = _record(tmp_path, [_entry(sid), _moved_entry(sub, old_offer)])
     approved = switch.load_approved(path, digest)
     assert len(approved.entries) == 1 and approved.audit_only == 1
+    assert switch.unverified_moves(db_session, approved) == []
 
     outcome = _on(db_session, world, approved=approved)
+
     assert outcome.enabled and outcome.moved_offer == 1 and outcome.apply_derived == 1
 
-    # Recorded as moved, yet it still diverges live: refused.
-    other = tmp_path / "other"
-    other.mkdir()
-    path, digest = _record(
-        other, [_entry(sid, decision="moved_offer", current=current)], name="r.json"
+
+def test_s2_a_move_must_have_changed_the_offer(db_session, world, tmp_path):
+    sub, _old, new_offer = _moved_service(db_session)
+    path, digest = _record(tmp_path, [_moved_entry(sub, new_offer)])  # not pre-move
+    approved = switch.load_approved(path, digest)
+
+    assert switch.unverified_moves(db_session, approved) == [str(sub.id)]
+    with pytest.raises(DomainError) as refused:
+        _on(db_session, world, approved=approved)
+    assert refused.value.code == "access.rate_profile_switch.moved_offer_unverified"
+    assert owner.rate_owner_enabled(db_session) is False
+
+
+def test_s2_a_move_needs_an_applied_change_request(db_session, world, tmp_path):
+    sub, old_offer, _new = _moved_service(db_session, applied=False)
+    path, digest = _record(tmp_path, [_moved_entry(sub, old_offer)])
+    approved = switch.load_approved(path, digest)
+
+    with pytest.raises(DomainError) as refused:
+        _on(db_session, world, approved=approved)
+    assert refused.value.code == "access.rate_profile_switch.moved_offer_unverified"
+
+
+def test_s2_the_change_must_predate_the_decision(db_session, world, tmp_path):
+    sub, old_offer, _new = _moved_service(
+        db_session, applied_at="2026-10-24T09:00:00+00:00"
     )
-    again = switch.load_approved(path, digest)
-    switch.switch_off(
+    path, digest = _record(tmp_path, [_moved_entry(sub, old_offer)])
+    approved = switch.load_approved(path, digest)
+
+    with pytest.raises(DomainError) as refused:
+        _on(db_session, world, approved=approved)
+    assert refused.value.code == "access.rate_profile_switch.moved_offer_unverified"
+    dry = switch.switch_on(
+        db_session, context=_context(), populate=world.populate, approved=approved
+    )
+    assert dry.unverified_moves == 1
+
+
+def test_a_moved_service_that_still_diverges_is_refused(db_session, world, tmp_path):
+    fifteen = _profile(db_session, "Fifteen", rate="15M/15M", code="fifteen")
+    sub, old_offer, _new = _moved_service(db_session, slot=fifteen)
+    path, digest = _record(tmp_path, [_moved_entry(sub, old_offer)])
+    approved = switch.load_approved(path, digest)
+
+    with pytest.raises(DomainError) as refused:
+        _on(db_session, world, approved=approved)
+    assert refused.value.code == "access.rate_profile_switch.preflight_divergence"
+    assert refused.value.details["unexpected"] == 1
+
+
+# ------------------------------------------- S1: rollback proves owner off
+
+
+def test_s1_switch_off_waits_for_the_flag_and_checks_the_projection(db_session, world):
+    _clean_service(db_session)
+    _on(db_session, world)
+    world.full = 0
+    world.owner_flag = [True, False]  # first rollback projection saw a stale true
+
+    outcome = switch.switch_off(
         db_session, context=_context(), apply=True, populate=world.populate
     )
-    with pytest.raises(DomainError) as refused:
-        _on(db_session, world, approved=again)
-    assert refused.value.details["unexpected"] == 1
+
+    assert outcome.applied and outcome.enabled is False
+    assert world.full == 2  # one retry
+    assert world.invalidations >= 3  # on, off, retry
+
+
+def test_s1_a_rollback_that_keeps_running_the_owner_is_reported(db_session, world):
+    _clean_service(db_session)
+    _on(db_session, world)
+    world.owner_flag = [True, True]
+
+    with pytest.raises(DomainError) as failed:
+        switch.switch_off(
+            db_session, context=_context(), apply=True, populate=world.populate
+        )
+
+    assert failed.value.code == "access.rate_profile_switch.owner_still_active"
+    assert failed.value.details["flag"] is False
+
+
+def test_s1_the_flag_poll_is_bounded(db_session, world, monkeypatch):
+    _clean_service(db_session)
+    _on(db_session, world)
+    monkeypatch.setattr(owner, "rate_owner_enabled", lambda _db: True)  # stale
+
+    assert switch._await_flag(db_session, expected=False) is False
+
+
+def test_s1_the_automatic_switch_off_gets_the_same_check(db_session, world):
+    _clean_service(db_session)
+    # baseline dry run, then the owner never runs -> automatic switch-off whose
+    # projections keep reporting the owner in force.
+    world.owner_flag = [False, False, False, True, True]
+
+    with pytest.raises(DomainError) as failed:
+        _on(db_session, world)
+
+    assert failed.value.code == "access.rate_profile_switch.owner_not_active"
+    assert (
+        failed.value.details["switch_off_error"]
+        == "access.rate_profile_switch.owner_still_active"
+    )
+    assert failed.value.details["flag"] is False
 
 
 def test_a_live_divergence_missing_from_the_record_refuses(db_session, world, tmp_path):
