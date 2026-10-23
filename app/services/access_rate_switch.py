@@ -412,7 +412,7 @@ def unverified_moves(db: Session, approved: ApprovedDivergences | None) -> list[
         if (
             subscription is None
             or str(subscription.offer_id) == claim.pre_move_offer_id
-            or not any(before(stamp) for stamp in applied)
+            or not any(before(stamp) for stamp in applied if stamp is not None)
         ):
             bad.append(claim.subscription_id)
     return bad
