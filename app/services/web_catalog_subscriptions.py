@@ -69,13 +69,13 @@ from app.schemas.catalog import (
 )
 from app.schemas.network import IPAssignmentCreate, IPAssignmentUpdate
 from app.schemas.subscriber import SubscriberAccountCreate
+from app.services import access_rate_profile, settings_spec
 from app.services import auth_flow as auth_flow_service
 from app.services import catalog as catalog_service
 from app.services import email as email_service
 from app.services import network as network_service
 from app.services import radius as radius_service
 from app.services import radius_reject as radius_reject_service
-from app.services import settings_spec
 from app.services import sms as sms_service
 from app.services import subscriber as subscriber_service
 from app.services.audit_adapter import record_audit_event
@@ -1298,6 +1298,17 @@ def _upsert_access_credential(
             radius_profile_uuid = UUID(str(radius_profile_id))
         except ValueError:
             radius_profile_uuid = None
+    if radius_profile_uuid:
+        # D1: refuse an unrecorded per-service speed override once the single
+        # rate owner is enabled. The admin form shows the profile read-only.
+        owning_subscription = (
+            db.get(Subscription, subscription_id) if subscription_id else None
+        )
+        access_rate_profile.refuse_unrecorded_override(
+            db,
+            offer_id=owning_subscription.offer_id if owning_subscription else None,
+            profile_id=radius_profile_uuid,
+        )
     if credential:
         credential.username = normalized_username
         if secret_hash:
@@ -4495,6 +4506,7 @@ def subscription_form_context(
         "ip_addon_options": ip_addon_options,
         "ip_addon_options_json": ip_addon_options_json,
         "radius_profiles": radius_profiles,
+        "rate_profile_read_only": access_rate_profile.rate_owner_enabled(db),
         "subscription_statuses": [item.value for item in SubscriptionStatus],
         "billing_modes": [item.value for item in BillingMode],
         "contract_terms": [item.value for item in ContractTerm],

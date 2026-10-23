@@ -52,6 +52,19 @@ def _sync_credential_to_radius(db: Session, credential: AccessCredential) -> Non
         )
 
 
+def _refuse_unrecorded_profile(db: Session, subscription_id, profile_id) -> None:
+    """D1: a credential may carry only its service package's own profile."""
+    from app.models.catalog import Subscription
+    from app.services import access_rate_profile
+
+    subscription = db.get(Subscription, subscription_id) if subscription_id else None
+    access_rate_profile.refuse_unrecorded_override(
+        db,
+        offer_id=subscription.offer_id if subscription is not None else None,
+        profile_id=profile_id,
+    )
+
+
 class AccessCredentials(CRUDManager[AccessCredential]):
     model = AccessCredential
     not_found_detail = "Access credential not found"
@@ -78,6 +91,9 @@ class AccessCredentials(CRUDManager[AccessCredential]):
             profile = db.get(RadiusProfile, payload.radius_profile_id)
             if not profile:
                 raise HTTPException(status_code=404, detail="RADIUS profile not found")
+            _refuse_unrecorded_profile(
+                db, payload.subscription_id, payload.radius_profile_id
+            )
         _refuse_reserved_secret(payload.secret_hash)
         credential = AccessCredential(**payload.model_dump())
         db.add(credential)
@@ -146,6 +162,11 @@ class AccessCredentials(CRUDManager[AccessCredential]):
             profile = db.get(RadiusProfile, data["radius_profile_id"])
             if not profile:
                 raise HTTPException(status_code=404, detail="RADIUS profile not found")
+            _refuse_unrecorded_profile(
+                db,
+                data.get("subscription_id", credential.subscription_id),
+                data["radius_profile_id"],
+            )
         for key, value in data.items():
             setattr(credential, key, value)
         if "is_active" in data:

@@ -11,7 +11,7 @@ from app.services import fup_enforcement
 from app.services import radius as radius_service
 from app.services import radius_reject as radius_reject_service
 from app.services.enforcement import (
-    _resolve_effective_profile,
+    _resolve_plan_profile,
     apply_radius_profile_to_subscription,
     disconnect_account_sessions,
     disconnect_subscription_sessions,
@@ -606,7 +606,7 @@ class EnforcementHandler:
                 code="access.event_policy.subscription_required",
                 message="FUP throttle requires a resolvable subscription.",
             )
-        _orig = _resolve_effective_profile(db, _sub_for_profile)
+        _orig = _resolve_plan_profile(db, _sub_for_profile)
         original_profile_id = str(_orig.id) if _orig else None
         # The throttle is a percentage of THIS subscriber's rate, not a
         # single global speed for the whole fleet — see
