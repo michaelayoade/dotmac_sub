@@ -68,7 +68,7 @@ RELAY_DEFINERS = frozenset(
 ALEMBIC_TAIL_LINES = 40
 
 #: Objects in the application schemas that are not extension members.
-_APP_SCHEMAS = "(n.nspname = 'public' OR n.nspname LIKE 'mod\\_%')"
+_APP_SCHEMAS = "(n.nspname = 'public' OR n.nspname LIKE 'mod\\_%%')"
 _NOT_EXTENSION = (
     "NOT EXISTS (SELECT 1 FROM pg_depend e WHERE e.deptype = 'e' "
     "AND e.classid = '{catalog}'::regclass AND e.objid = {alias}.oid)"
