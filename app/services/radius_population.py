@@ -696,6 +696,10 @@ def populate(
     db = source_db or SessionLocal()
     owns_db = source_db is None
     try:
+        if not dry_run:
+            # The one writer refuses to project rates the governed switch has not
+            # verified, whichever process (web, worker, script) calls it.
+            access_rate_profile.enforce_switch_guard(db)
         projection_targets = active_external_radius_targets(db, capability="users")
         if not projection_targets:
             raise RuntimeError("No DB-configured external RADIUS user target")

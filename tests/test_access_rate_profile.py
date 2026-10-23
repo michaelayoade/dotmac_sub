@@ -826,17 +826,15 @@ def test_r3_the_switch_cannot_be_written_outside_its_command(db_session, monkeyp
         )
     assert generic.value.status_code == 403
 
-    # The audited admin path validates through the same check: true is
-    # refused unless the governed switch command is the caller.
+    # The audited admin path validates through the same check. In this release
+    # EVERY value is refused unless the governed switch-on command is the
+    # caller: a `false` would only stop the next restart.
     service = DomainSettings(SettingDomain.radius)
-    for value in (True, "true", "1"):
+    for value in (True, "true", "1", False, "false", "0"):
         with pytest.raises(HTTPException):
             service._validate_relationship_change(
                 db_session, SettingDomain.radius, "rate_owner_enabled", value
             )
-    service._validate_relationship_change(
-        db_session, SettingDomain.radius, "rate_owner_enabled", False
-    )
     monkeypatch.setattr(
         "app.services.owner_commands.owner_command_active",
         lambda _db, owner=None: owner == SWITCH_OWNER,
@@ -844,6 +842,11 @@ def test_r3_the_switch_cannot_be_written_outside_its_command(db_session, monkeyp
     service._validate_relationship_change(
         db_session, SettingDomain.radius, "rate_owner_enabled", True
     )
+    # ...and even inside the command, turning it off is still refused.
+    with pytest.raises(HTTPException):
+        service._validate_relationship_change(
+            db_session, SettingDomain.radius, "rate_owner_enabled", False
+        )
 
 
 def test_r4_a_literal_only_collections_profile_beats_a_faster_fup(db_session, owner_on):

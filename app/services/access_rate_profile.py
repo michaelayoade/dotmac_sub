@@ -766,16 +766,42 @@ def refuse_unrecorded_override(
 
 
 class RateOwnerNotSwitchedOn(RuntimeError):
-    """The process must not serve before the governed switch has run."""
+    """The process must not serve or project before the governed switch has run."""
+
+
+#: Environments that are exempt from the deploy-order guard. Everything else --
+#: production, staging, shadow, a typo, an UNSET value -- needs the switch, so
+#: staging doubles as the rehearsal. A pytest run is also exempt.
+DEV_ENVIRONMENTS = frozenset({"development", "dev", "test", "testing", "ci", "local"})
+
+
+def _under_test() -> bool:
+    """Whether this process is a pytest run (the guard is exempt there)."""
+    import sys
+
+    return "pytest" in sys.modules
+
+
+def switch_guard_applies() -> bool:
+    """Whether this process must refuse to serve/project while the flag is off.
+
+    Fail-closed: only an explicit development/test value (or a pytest run)
+    exempts. The environment is read as DECLARED -- the ``app_env`` default would
+    turn an unset ``APP_ENV`` into ``development`` and hide the omission.
+    """
+    from app.config import settings
+
+    if _under_test():
+        return False
+    return settings.app_env_declared not in DEV_ENVIRONMENTS
 
 
 def assert_switched_on(db: Session) -> None:
-    """Refuse to serve (production) while the governed switch has not run.
+    """Refuse (RateOwnerNotSwitchedOn) while the governed switch has not run.
 
     This release resolves every rate through the owner and writes no plan rate
     into credentials, so it is only safe once the switch preflight, projection
-    and read-back have passed. Other environments (development, tests, fresh
-    databases) are not blocked; the flag is only evidence of the switch.
+    and read-back have passed.
     """
     if rate_owner_enabled(db) is True:
         return
@@ -786,13 +812,23 @@ def assert_switched_on(db: Session) -> None:
     )
 
 
+def enforce_switch_guard(db: Session) -> None:
+    """The guard every process shape calls: web start-up, workers, the writer."""
+    if switch_guard_applies():
+        assert_switched_on(db)
+
+
 def refuse_ungoverned_switch_on(
     db: Session, domain: object, key: str, pending_value: object
 ) -> None:
-    """Refuse turning the owner on except through its governed switch command.
+    """Refuse EVERY write of the switch except the governed switch-on command.
 
-    The switch is flipped only by ``access.rate_profile`` after it has re-run
-    the preflight in the same transaction. Turning it off is always allowed.
+    The flag records that the governed switch ran and a process will not start
+    while it is off, and this release has no switch-off (rolling back is
+    redeploying the previous release). So a settings API call, the admin form or
+    any generic write -- ``true`` or ``false`` -- is refused; only
+    ``access.rate_profile_switch`` turning it on, inside its own owner command,
+    may write it.
     """
     from app.services import settings_spec
     from app.services.owner_commands import owner_command_active
@@ -805,13 +841,11 @@ def refuse_ungoverned_switch_on(
         if spec is not None
         else (None, "unknown")
     )
-    if error is None and value is False:
-        return
-    if error is None and owner_command_active(db, owner=SWITCH_OWNER):
+    if error is None and value is True and owner_command_active(db, owner=SWITCH_OWNER):
         return
     raise ThrottleProfileChangeRefused(
-        "The single rate owner can only be switched on by its governed switch "
-        "command, which re-checks every service first."
+        "radius.rate_owner_enabled can only be written by the governed switch-on "
+        "command in this release."
     )
 
 

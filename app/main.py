@@ -431,22 +431,19 @@ def _assert_oidc_federation_configured() -> None:
 
 
 def _assert_rate_owner_switched_on() -> None:
-    """Fail closed in production until the governed rate switch has run.
+    """Fail closed until the governed rate switch has run.
 
     Every rate is derived by the single rate owner and no plan rate is written
-    into credentials any more, so a production process that starts while the
-    switch is off would serve rates nobody verified. Rolling back is
-    redeploying the previous release.
+    into credentials any more, so a process that starts while the switch is off
+    would serve rates nobody verified. Only an explicit development/test
+    environment is exempt; production, staging and an unset ``APP_ENV`` are
+    not. Rolling back is redeploying the previous release.
     """
-    from app.config import settings
-
-    if settings.app_env not in {"prod", "production"}:
-        return
-    from app.services.access_rate_profile import assert_switched_on
+    from app.services.access_rate_profile import enforce_switch_guard
 
     db = SessionLocal()
     try:
-        assert_switched_on(db)
+        enforce_switch_guard(db)
     finally:
         db.rollback()
         db.close()

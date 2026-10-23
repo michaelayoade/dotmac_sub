@@ -7,6 +7,7 @@ from uuid import UUID
 from sqlalchemy.orm import Session
 
 from app.models.catalog import Subscription, SubscriptionStatus
+from app.models.fup_state import FupActionStatus
 from app.services import fup_enforcement
 from app.services import radius as radius_service
 from app.services import radius_reject as radius_reject_service
@@ -31,6 +32,7 @@ from app.services.events.types import Event, EventType
 from app.services.fup_state import (
     ApplyFupRuntimeState,
     FupRuntimeStateError,
+    fup_state,
 )
 from app.services.fup_throttle_profile import resolve_fup_throttle_profile
 
@@ -632,6 +634,16 @@ class EnforcementHandler:
             # throttle profile, so one capped service degraded the customer's
             # unrelated services too.
             application = subscription_credential_scope(db, str(subscription_id))
+            # What the throttle was BEFORE this assertion. A re-assertion with the
+            # same throttle (after a cooldown, a re-evaluation) changes nothing on
+            # the wire, so it must not project again or drop the customer's
+            # sessions; only a throttle that is new or different does.
+            prior_state = fup_state.get(db, str(subscription_id))
+            throttle_changed = not (
+                prior_state is not None
+                and prior_state.action_status == FupActionStatus.throttled
+                and prior_state.throttle_profile_id == throttle_profile_id
+            )
             if application.matched:
                 # Gate on MATCHED, not updated. A re-assertion after a cooldown
                 # legitimately changes nothing on the wire, but the decision
@@ -665,11 +677,12 @@ class EnforcementHandler:
                 # dispatcher's outer commit — true post-commit delivery
                 # needs a durable consequence intent and a post-commit
                 # consumer, which this handler cannot express.
-                project_credentials_to_radius(db, application.usernames)
-                if policy.refresh_sessions:
-                    disconnect_subscription_sessions(
-                        db, str(subscription_id), reason="fup_throttle"
-                    )
+                if throttle_changed:
+                    project_credentials_to_radius(db, application.usernames)
+                    if policy.refresh_sessions:
+                        disconnect_subscription_sessions(
+                            db, str(subscription_id), reason="fup_throttle"
+                        )
         except FupRuntimeStateError:
             raise
         except Exception as exc:
