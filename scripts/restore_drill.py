@@ -603,6 +603,37 @@ def assert_isolation_model(
         f"distinct owners: {distinct_owners}, postgres-owned: {postgres_owned}/{total_tables}",
         checks,
     )
+
+    # 7. Role-graph direction (module_database_roles.v1): the migrator
+    #    app_admin is a member of the runtime owner dotmac_app with INHERIT and
+    #    SET and no ADMIN, and the owner does NOT reach the migrator. A backup
+    #    taken before the role-graph change legitimately fails this check.
+    if "app_admin" in observed and "dotmac_app" in observed:
+        edge = pg.scalar(
+            "SELECT pg_has_role('app_admin', 'dotmac_app', 'USAGE') || '|' || "
+            "pg_has_role('app_admin', 'dotmac_app', 'SET') || '|' || "
+            "pg_has_role('dotmac_app', 'app_admin', 'MEMBER') || '|' || "
+            "EXISTS (SELECT 1 FROM pg_auth_members m "
+            "WHERE m.roleid = 'dotmac_app'::regrole "
+            "AND m.member = 'app_admin'::regrole AND m.admin_option)"
+        )
+        inherits, can_set, old_direction, admin = (
+            part == "true" for part in edge.split("|")
+        )
+        _check(
+            "migrator_owner_direction",
+            inherits and can_set and not old_direction and not admin,
+            f"app_admin inherits dotmac_app: {inherits}; SET: {can_set}; "
+            f"ADMIN: {admin}; dotmac_app reaches app_admin: {old_direction}",
+            checks,
+        )
+    else:
+        _check(
+            "migrator_owner_direction",
+            True,
+            "app_admin or dotmac_app absent; direction not applicable",
+            checks,
+        )
     return checks
 
 
@@ -704,7 +735,7 @@ CREATE ROLE dotmac_public_probe NOLOGIN NOBYPASSRLS NOSUPERUSER;
 CREATE ROLE dotmac_schema_bootstrap LOGIN NOBYPASSRLS NOSUPERUSER;
 CREATE ROLE outbox_dispatcher LOGIN NOBYPASSRLS NOSUPERUSER;
 CREATE ROLE platform_outbox_dispatcher LOGIN NOBYPASSRLS NOSUPERUSER;
-GRANT app_admin TO dotmac_app;
+GRANT dotmac_app TO app_admin WITH INHERIT TRUE, SET TRUE;
 CREATE TABLE public.outbox_events (id int PRIMARY KEY, tenant_id text NOT NULL);
 ALTER TABLE public.outbox_events OWNER TO app_admin;
 ALTER TABLE public.outbox_events ENABLE ROW LEVEL SECURITY;

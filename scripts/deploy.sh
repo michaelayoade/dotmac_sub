@@ -571,6 +571,24 @@ migration_admin_credential_available() {
   return "${ok}"
 }
 
+# Every object a migration creates is handed back to this runtime owner inside
+# the migration transaction (alembic/env.py). Fixed, not env-configurable.
+MIGRATION_OBJECT_OWNER_ROLE="dotmac_app"
+
+# Read-only, pre-pin: the migration credential must be the contract migrator
+# (member of the object owner with INHERIT and SET, BYPASSRLS, not superuser,
+# owner not a member of it). The candidate image is named explicitly because
+# nothing is pinned yet and the pinned image may predate this check.
+verify_migration_identity() {
+  APP_IMAGE="${IMAGE}" GIT_SHA="${FULL_SHA}" \
+    "${COMPOSE[@]}" run --rm --no-deps --user 0:0 \
+    -v "${MIGRATION_ADMIN_PGPASS}:${MIGRATION_ADMIN_PGPASS_MOUNT}:ro" \
+    -e PGPASSFILE="${MIGRATION_ADMIN_PGPASS_MOUNT}" \
+    -e MIGRATION_DATABASE_URL="${MIGRATION_ADMIN_URL}" \
+    -e MIGRATION_OBJECT_OWNER="${MIGRATION_OBJECT_OWNER_ROLE}" \
+    app python scripts/verify_migrator_identity.py
+}
+
 MIGRATION_RUN_PREFIX=""
 run_migrations() {
   local attempt=1
@@ -582,6 +600,7 @@ run_migrations() {
       -v "${MIGRATION_ADMIN_PGPASS}:${MIGRATION_ADMIN_PGPASS_MOUNT}:ro" \
       -e PGPASSFILE="${MIGRATION_ADMIN_PGPASS_MOUNT}" \
       -e MIGRATION_DATABASE_URL="${MIGRATION_ADMIN_URL}" \
+      -e MIGRATION_OBJECT_OWNER="${MIGRATION_OBJECT_OWNER_ROLE}" \
       --name "${MIGRATION_RUN_PREFIX}${attempt}" app alembic upgrade heads 2>&1)"; then
       printf '%s\n' "${output}"
       return 0
@@ -1876,6 +1895,15 @@ pin_and_migrate() {
     echo "DEPLOY REFUSED before pinning: migrations have no app_admin credential (see MIGRATION ROLE PREFLIGHT above). Nothing was pinned, migrated or recreated." >&2
     install_deploy_interrupt_trap
     return 1
+  fi
+
+  if [[ "${BACKUP_MODE}" != "skip_production_post_migration_resume" ]]; then
+    log "Verifying the migration identity (read-only) before pinning"
+    if ! verify_migration_identity; then
+      echo "DEPLOY REFUSED before pinning: the migration credential is not the module_database_roles.v1 migrator for the object owner. Nothing was pinned, migrated or recreated." >&2
+      install_deploy_interrupt_trap
+      return 1
+    fi
   fi
 
   log "Pinning APP_IMAGE=${IMAGE} and GIT_SHA=${FULL_SHA}"

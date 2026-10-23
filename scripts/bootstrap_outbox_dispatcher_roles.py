@@ -5,6 +5,11 @@ This is an explicitly privileged cluster bootstrap, separate from ordinary
 Alembic execution. It never sets or prints a password. It owns the role and
 schema prerequisites migration 557 needs before it can harden relay functions.
 
+Role-graph direction (``module_database_roles.v1``): the migrator ``app_admin``
+is a member of the runtime owner ``dotmac_app`` (INHERIT and SET, no ADMIN) so
+migrations can alter what the owner owns. The owner is never a member of the
+migrator: ``--repair`` converges to that edge and never re-grants the old one.
+
 Usage::
 
     BOOTSTRAP_DATABASE_URL=postgresql://postgres@host/db \\
@@ -34,6 +39,7 @@ from psycopg import sql
 from app.outbox_dispatcher_roles import (
     OUTBOX_RELAY_OWNERSHIP_CONTRACT,
     RELAY_DISPATCHER_CONTRACT,
+    RoleGraphObservation,
     RolePosture,
     relay_dispatcher_violations,
     relay_ownership_violations,
@@ -63,26 +69,70 @@ def observe(conn: psycopg.Connection) -> dict[str, RolePosture]:
     return {str(row[0]): (bool(row[1]), bool(row[2]), bool(row[3])) for row in rows}
 
 
-def observe_ownership(conn: psycopg.Connection) -> tuple[bool, dict[str, bool]]:
-    """Read the ownership prerequisites migration 557 requires."""
+_BYPASS_REACHERS_SQL = """
+SELECT a.rolname, t.rolname
+  FROM pg_roles a
+  JOIN pg_roles t ON t.rolbypassrls AND t.oid <> a.oid
+ WHERE a.rolcanlogin AND NOT a.rolsuper AND a.rolname <> %s
+   AND pg_has_role(a.oid, t.oid, 'MEMBER')
+ ORDER BY 1, 2
+"""
+
+
+def observe_ownership(
+    conn: psycopg.Connection,
+) -> tuple[RoleGraphObservation, dict[str, bool]]:
+    """Read the role graph and the schema privileges migration 557 requires."""
 
     contract = OUTBOX_RELAY_OWNERSHIP_CONTRACT
+    migrator, owner = contract.migration_role, contract.owner_role
     rows = conn.execute(
         "SELECT rolname FROM pg_roles WHERE rolname = ANY(%s)",
-        ([contract.migration_role, contract.definer_role],),
+        ([migrator, owner, contract.definer_role],),
     ).fetchall()
     roles = {str(row[0]) for row in rows}
-    if contract.definer_role not in roles:
-        return False, dict.fromkeys(contract.schema_privileges, False)
-    if contract.migration_role not in roles:
-        member = False
-    else:
-        member = bool(
+    migrator_exists = migrator in roles
+    owner_exists = owner in roles
+    inherits = can_set = admin = old_direction = False
+    if migrator_exists and owner_exists:
+        inherits = bool(
             conn.execute(
-                "SELECT pg_has_role(%s, %s, 'MEMBER')",
-                (contract.migration_role, contract.definer_role),
+                "SELECT pg_has_role(%s, %s, 'USAGE')", (migrator, owner)
             ).fetchone()[0]
         )
+        can_set = bool(
+            conn.execute(
+                "SELECT pg_has_role(%s, %s, 'SET')", (migrator, owner)
+            ).fetchone()[0]
+        )
+        admin = bool(
+            conn.execute(
+                "SELECT EXISTS (SELECT 1 FROM pg_auth_members m "
+                "WHERE m.roleid = %s::regrole AND m.member = %s::regrole "
+                "AND m.admin_option)",
+                (owner, migrator),
+            ).fetchone()[0]
+        )
+        old_direction = bool(
+            conn.execute(
+                "SELECT pg_has_role(%s, %s, 'MEMBER')", (owner, migrator)
+            ).fetchone()[0]
+        )
+    reachers = tuple(
+        f"{row[0]}->{row[1]}"
+        for row in conn.execute(_BYPASS_REACHERS_SQL, (migrator,)).fetchall()
+    )
+    graph = RoleGraphObservation(
+        migrator_exists=migrator_exists,
+        owner_exists=owner_exists,
+        migrator_inherits_owner=inherits,
+        migrator_can_set_owner=can_set,
+        migrator_admin_option=admin,
+        owner_reaches_migrator=old_direction,
+        bypass_reachers=reachers,
+    )
+    if contract.definer_role not in roles:
+        return graph, dict.fromkeys(contract.schema_privileges, False)
     privileges = {
         privilege: bool(
             conn.execute(
@@ -92,7 +142,22 @@ def observe_ownership(conn: psycopg.Connection) -> tuple[bool, dict[str, bool]]:
         )
         for privilege in contract.schema_privileges
     }
-    return member, privileges
+    return graph, privileges
+
+
+def _apply(
+    conn: psycopg.Connection,
+    statement: sql.Composable,
+    *,
+    dry_run: bool,
+    would: str,
+    done: str,
+) -> None:
+    if dry_run:
+        print(f"would {would}")
+    else:
+        conn.execute(statement)
+        print(done)
 
 
 def bootstrap(conn: psycopg.Connection, *, dry_run: bool, repair: bool) -> int:
@@ -103,7 +168,7 @@ def bootstrap(conn: psycopg.Connection, *, dry_run: bool, repair: bool) -> int:
         for violation in (
             *relay_dispatcher_violations(observed),
             *relay_ownership_violations(
-                migration_role_is_definer_member=ownership[0],
+                role_graph=ownership[0],
                 definer_schema_privileges=ownership[1],
             ),
         )
@@ -144,23 +209,57 @@ def bootstrap(conn: psycopg.Connection, *, dry_run: bool, repair: bool) -> int:
             print(f"repaired: {role} {have} -> {wanted}")
 
     contract = OUTBOX_RELAY_OWNERSHIP_CONTRACT
-    member, privileges = observe_ownership(conn)
-    if not member:
-        statement = sql.SQL("GRANT {} TO {}").format(
-            sql.Identifier(contract.definer_role),
-            sql.Identifier(contract.migration_role),
+    graph, privileges = observe_ownership(conn)
+    migrator = sql.Identifier(contract.migration_role)
+    owner = sql.Identifier(contract.owner_role)
+    pair = f"{contract.migration_role} / {contract.owner_role}"
+    if graph.migrator_exists and graph.owner_exists:
+        # Converge to the one permitted direction. The old edge is revoked
+        # FIRST and is never granted again by this script.
+        if graph.owner_reaches_migrator:
+            _apply(
+                conn,
+                sql.SQL("REVOKE {} FROM {}").format(migrator, owner),
+                dry_run=dry_run,
+                would=f"revoke old-direction membership of {pair}",
+                done=f"revoked old-direction membership of {pair}",
+            )
+        if not (graph.migrator_inherits_owner and graph.migrator_can_set_owner):
+            _apply(
+                conn,
+                sql.SQL("GRANT {} TO {} WITH INHERIT TRUE, SET TRUE").format(
+                    owner, migrator
+                ),
+                dry_run=dry_run,
+                would=f"grant {contract.owner_role} to {contract.migration_role} "
+                "(INHERIT, SET)",
+                done=f"granted {contract.owner_role} to {contract.migration_role} "
+                "(INHERIT, SET)",
+            )
+        if graph.migrator_admin_option:
+            _apply(
+                conn,
+                sql.SQL("REVOKE ADMIN OPTION FOR {} FROM {}").format(owner, migrator),
+                dry_run=dry_run,
+                would=f"revoke ADMIN OPTION on {pair}",
+                done=f"revoked ADMIN OPTION on {pair}",
+            )
+    else:
+        print(
+            f"skipped role-graph repair: {contract.migration_role} or "
+            f"{contract.owner_role} does not exist",
+            file=sys.stderr,
         )
-        if dry_run:
+    if graph.bypass_reachers:
+        # Never auto-revoked: removing an arbitrary membership could cut a
+        # live login. Report and leave it to a governed change.
+        for reacher in graph.bypass_reachers:
             print(
-                f"would grant role membership: {contract.definer_role} "
-                f"to {contract.migration_role}"
+                f"DRIFT: login role path {reacher} reaches a BYPASSRLS role; "
+                "repair does not remove it.",
+                file=sys.stderr,
             )
-        else:
-            conn.execute(statement)
-            print(
-                f"granted role membership: {contract.definer_role} "
-                f"to {contract.migration_role}"
-            )
+        return 1
     missing_privileges = tuple(
         privilege
         for privilege in contract.schema_privileges
@@ -189,11 +288,11 @@ def bootstrap(conn: psycopg.Connection, *, dry_run: bool, repair: bool) -> int:
 
 
 def verify(conn: psycopg.Connection) -> int:
-    member, privileges = observe_ownership(conn)
+    graph, privileges = observe_ownership(conn)
     violations = (
         *relay_dispatcher_violations(observe(conn)),
         *relay_ownership_violations(
-            migration_role_is_definer_member=member,
+            role_graph=graph,
             definer_schema_privileges=privileges,
         ),
     )

@@ -89,6 +89,8 @@ def test_valid_credential_runs_migrations_as_app_admin(tmp_path: Path) -> None:
     assert "alembic upgrade heads" in call
     assert "PGPASSFILE=/run/secrets/migration-admin.pgpass" in call
     assert f"MIGRATION_DATABASE_URL={GOOD_URL}" in call
+    # Every object the migration creates is handed back to the runtime owner.
+    assert "MIGRATION_OBJECT_OWNER=dotmac_app" in call
     assert "s3cret-not-real" not in out + err + call
 
 
@@ -132,3 +134,85 @@ def test_group_readable_pgpass_is_refused_by_name(tmp_path: Path) -> None:
     assert "PREFLIGHT=refused" in out
     assert "has mode 440; expected 400" in err
     assert calls == []
+
+
+# --- Identity check and hand-back wiring ------------------------------------
+
+IDENTITY_HARNESS = """
+set -uo pipefail
+log() { printf '\\n==> %s\\n' "$*"; }
+compose_stub() { printf '%s\\n' "$*" >>"$COMPOSE_CALLS"; return "${COMPOSE_RC:-0}"; }
+COMPOSE=(compose_stub)
+IMAGE=registry.invalid/app:candidate
+FULL_SHA=0123456789abcdef
+MIGRATION_ADMIN_PGPASS=/etc/dotmac/sub/migration-admin.pgpass
+MIGRATION_ADMIN_PGPASS_MOUNT=/run/secrets/migration-admin.pgpass
+MIGRATION_ADMIN_URL=postgresql://app_admin@db:5432/dotmac_sub
+MIGRATION_MAX_ATTEMPTS=1
+MIGRATION_RETRY_SECONDS=0
+@@LEG@@
+verify_migration_identity
+echo "VERIFY_RC=$?"
+"""
+
+
+def _run_identity(tmp_path: Path, *, compose_rc: int = 0) -> tuple[str, list[str]]:
+    calls = tmp_path / "compose-calls"
+    calls.write_text("", encoding="utf-8")
+    result = subprocess.run(
+        ["bash", "-c", IDENTITY_HARNESS.replace("@@LEG@@", _leg())],
+        capture_output=True,
+        text=True,
+        cwd=tmp_path,
+        env={
+            **os.environ,
+            "COMPOSE_CALLS": str(calls),
+            "COMPOSE_RC": str(compose_rc),
+        },
+    )
+    return result.stdout, calls.read_text(encoding="utf-8").splitlines()
+
+
+def test_identity_check_runs_the_read_only_script_with_the_migration_credential(
+    tmp_path: Path,
+) -> None:
+    out, calls = _run_identity(tmp_path)
+    assert "VERIFY_RC=0" in out
+    (call,) = calls
+    assert call.endswith("app python scripts/verify_migrator_identity.py")
+    assert "PGPASSFILE=/run/secrets/migration-admin.pgpass" in call
+    assert "MIGRATION_DATABASE_URL=postgresql://app_admin@db:5432/dotmac_sub" in call
+    assert "MIGRATION_OBJECT_OWNER=dotmac_app" in call
+    assert "alembic" not in call
+
+
+def test_identity_check_failure_propagates(tmp_path: Path) -> None:
+    out, _calls = _run_identity(tmp_path, compose_rc=1)
+    assert "VERIFY_RC=1" in out
+
+
+def test_identity_check_precedes_the_pin_and_is_skipped_only_for_resume() -> None:
+    source = DEPLOY_SH.read_text(encoding="utf-8")
+    body = source[source.index("pin_and_migrate() {") :]
+    assert body.index("verify_migration_identity") < body.index(
+        'log "Pinning APP_IMAGE'
+    )
+    assert body.index("migration_admin_credential_available") < body.index(
+        "verify_migration_identity"
+    )
+    refusal = body[body.index("verify_migration_identity") :]
+    assert "DEPLOY REFUSED before pinning" in refusal[: refusal.index("Pinning")]
+
+
+def test_owner_role_is_fixed_not_environment_configurable() -> None:
+    source = DEPLOY_SH.read_text(encoding="utf-8")
+    assert '\nMIGRATION_OBJECT_OWNER_ROLE="dotmac_app"\n' in source
+    assert "MIGRATION_OBJECT_OWNER_ROLE:-" not in source
+
+
+def test_candidate_image_is_named_for_the_pre_pin_check() -> None:
+    """Nothing is pinned yet, and the pinned image may predate the script."""
+    source = DEPLOY_SH.read_text(encoding="utf-8")
+    fn = source[source.index("verify_migration_identity() {") :]
+    fn = fn[: fn.index("\n}\n")]
+    assert 'APP_IMAGE="${IMAGE}" GIT_SHA="${FULL_SHA}"' in fn
