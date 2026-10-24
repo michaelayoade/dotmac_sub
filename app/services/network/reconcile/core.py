@@ -579,6 +579,38 @@ def reconcile_ont(
                     ),
                 )
 
+            # A readback whose freshness refresh was not delivered is pending,
+            # never a pass or a terminal failure: the lifecycle waits and retries.
+            if readback_only and acs_result.refresh_pending:
+                return finalise(
+                    db,
+                    ont,
+                    success=False,
+                    failure=ReconcileFailure(
+                        reason=ReconcileFailureReason.VERIFICATION_MISMATCH,
+                        message=READBACK_PENDING_MESSAGE,
+                        evidence={
+                            "readback_pending": True,
+                            "refresh_not_delivered": True,
+                            "drift_fields": [],
+                        },
+                    ),
+                    started_monotonic=started_monotonic,
+                    observed_after=observed_before,
+                    actions_applied=(),
+                    drift_before=(),
+                    drift_after=(),
+                    observed_surfaces=_surfaces_observed(
+                        olt_result,
+                        acs_result,
+                        olt_read_attempted=olt_read_attempted,
+                        acs_read_attempted=acs_read_attempted,
+                    ),
+                    olt_read_status=_observed_olt_read_status(
+                        olt_result, read_attempted=olt_read_attempted
+                    ),
+                )
+
             # ── Compute plan ────────────────────────────────────────────────
             plan = compute_plan(
                 target,

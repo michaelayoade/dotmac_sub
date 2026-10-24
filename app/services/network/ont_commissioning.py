@@ -771,11 +771,20 @@ def _allocate_management_service_port_index(
 
 
 def _record_management_service_port(
-    db: Session, *, ont_unit_id: uuid.UUID, management: _CommissioningManagementPlan
+    db: Session,
+    *,
+    ont_unit_id: uuid.UUID,
+    management: _CommissioningManagementPlan,
+    completed_steps: tuple[str, ...],
 ) -> None:
     """Persist the created management service-port index on the ONT."""
     index = management.mgmt_service_port_index
     if index is None:
+        return
+    # Record only when this pass really created the port. "(exists)" means the
+    # OLT already had a port for this ONT/VLAN/GEM, possibly at another index,
+    # so our allocated index may not exist on the device.
+    if "create_mgmt_service_port" not in completed_steps:
         return
     from app.services.network.ont_desired_config import set_desired_config_values
     from app.services.network.service_port_allocator import (
@@ -1343,7 +1352,10 @@ def execute_ont_commissioning(
         )
 
     _record_management_service_port(
-        db, ont_unit_id=plan.ont_unit_id, management=plan.management
+        db,
+        ont_unit_id=plan.ont_unit_id,
+        management=plan.management,
+        completed_steps=completed_steps,
     )
     intent = db.scalars(
         select(OntCommissioningIntent)

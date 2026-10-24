@@ -806,12 +806,19 @@ def _execute(action: Action, ctx: ApplyContext) -> AppliedAction:
                 wifi_params[action.paths.channel] = action.channel
                 changed.append("wifi_channel")
             if action.security_mode is not None:
-                if action.security_mode.strip().lower() in {"none", "open", "default"}:
-                    # Never write an open network, whatever the planner asked.
+                if action.security_mode.strip().lower() in {
+                    "none",
+                    "open",
+                    "default",
+                    "basic",
+                    "wep",
+                }:
+                    # Never write an open or WEP network, whatever the planner
+                    # asked.
                     raise ApplyError(
                         action,
                         ReconcileFailureReason.INVALID_CHANGE,
-                        "refusing to write an open Wi-Fi security mode",
+                        "refusing to write an open or WEP Wi-Fi security mode",
                     )
                 wifi_params[action.paths.security_mode] = action.security_mode
                 changed.append("wifi_security_mode")

@@ -6570,6 +6570,13 @@ SETTINGS_SPECS.extend(
         ),
         SettingSpec(
             domain=SettingDomain.network_monitoring,
+            key="ont_wifi_security_floor_enforced",
+            env_var=None,
+            value_type=SettingValueType.boolean,
+            default=False,
+        ),
+        SettingSpec(
+            domain=SettingDomain.network_monitoring,
             key="ont_olt_observation_max_age_hours",
             env_var=None,
             value_type=SettingValueType.integer,

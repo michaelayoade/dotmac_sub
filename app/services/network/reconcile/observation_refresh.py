@@ -196,6 +196,25 @@ def _load_cached_state(db: Session, ont_id: uuid.UUID) -> OntObservedState | Non
     return observed_from_ont_observation(row)
 
 
+def _is_partial_read(observed: Any) -> bool:
+    """A present ONT whose status or detail half came back empty.
+
+    ``read_olt_state`` degrades to status-only / unknown-state observations
+    when a follow-up query fails. Storing those would overwrite good cached
+    fields with empty ones and reset the observation age, so they are skipped.
+    """
+    if not getattr(observed, "olt_present", False):
+        return False
+    return (
+        observed.olt_run_state is None
+        or observed.olt_match_state is None
+        or (
+            observed.olt_line_profile_id is None
+            and observed.olt_service_profile_id is None
+        )
+    )
+
+
 def refresh_one_ont_observation(
     db: Session,
     ont_id: uuid.UUID,
@@ -225,6 +244,8 @@ def refresh_one_ont_observation(
     if read.status == "unavailable" or read.observed is None:
         if read_reports_olt_busy(getattr(read, "error", None)):
             return ObservationRefreshResult.olt_busy
+        return ObservationRefreshResult.read_failed
+    if _is_partial_read(read.observed):
         return ObservationRefreshResult.read_failed
     from app.services.network.ont_reconcile_eligibility import (
         eligibility_under_lock,

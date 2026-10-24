@@ -206,6 +206,8 @@ class _WifiChanges:
     channel: int | None
     security_mode: str | None
     drifts: tuple[tuple[str, object, object], ...]
+    #: Drift recorded but deliberately not written (e.g. no PSK to pair with).
+    unrepairable_fields: frozenset[str] = frozenset()
 
     @property
     def has_values(self) -> bool:
@@ -1401,6 +1403,7 @@ def _plan_acs_side(
             observed,
             proposed_fields=proposed_fields,
             force_proposed_writes=force_proposed_writes,
+            psk_in_same_change=push_password and bool(desired.wifi_password_ref),
         )
     wifi_paths = desired.wifi_paths or _standard_wifi_paths(
         observed.acs.acs_data_model_root or desired.tr069_data_model_root
@@ -1418,7 +1421,8 @@ def _plan_acs_side(
                 surface="acs",
                 desired=desired_value,
                 observed=observed_value,
-                repairable=wifi_paths is not None,
+                repairable=wifi_paths is not None
+                and field not in wifi_changes.unrepairable_fields,
             )
         )
 
@@ -1763,6 +1767,7 @@ def _wifi_changes(
     *,
     proposed_fields: frozenset[str],
     force_proposed_writes: bool,
+    psk_in_same_change: bool = False,
 ) -> _WifiChanges:
     """Return observable WiFi drift and values for one batched write."""
     acs = observed.acs
@@ -1794,6 +1799,7 @@ def _wifi_changes(
     )
     values: dict[str, object] = {}
     drifts: list[tuple[str, object, object]] = []
+    skipped: set[str] = set()
     for field, action_key, desired_value, observed_value in candidates:
         if desired_value is None:
             continue
@@ -1806,14 +1812,21 @@ def _wifi_changes(
             continue
         forced = force_proposed_writes and field in proposed_fields
         if field == "wifi_security_mode" and security_is_floor:
-            # Floor-derived target: any security at or above WPA2-PSK (AES)
-            # satisfies it; only a weaker or open observed mode is drift.
-            differs = (
-                observed_value is not None
-                and observed_value not in _WIFI_SECURITY_FLOOR_OK
-            )
-        else:
-            differs = _observed_differs(observed_value, desired_value)
+            # Floor-derived target (gated; see ``_wifi_security_with_floor``).
+            # Only a KNOWN weaker or open observed mode is drift. Forced and
+            # bring-up pushes never apply: an unread mode is not evidence.
+            if observed_value is None or observed_value in _WIFI_SECURITY_FLOOR_OK:
+                continue
+            if observed_value in _WIFI_NEEDS_PSK_MODES and not psk_in_same_change:
+                # Moving an open/WEP network to WPA2 with no PSK in the same
+                # change would lock the customer out: record, never write.
+                drifts.append((field, desired_value, observed_value))
+                skipped.add(field)
+                continue
+            values[action_key] = desired_value
+            drifts.append((field, desired_value, observed_value))
+            continue
+        differs = _observed_differs(observed_value, desired_value)
         # Bring-up push. The freshness signal is the OLT authorization, not
         # "the ACS has never seen this device": the latter guaranteed a 404
         # (nothing can be written to a device the ACS holds no document for)
@@ -1834,14 +1847,29 @@ def _wifi_changes(
         channel=channel if isinstance(channel, int) else None,
         security_mode=security_mode if isinstance(security_mode, str) else None,
         drifts=tuple(drifts),
+        unrepairable_fields=frozenset(skipped),
     )
 
 
-#: Security modes that meet the WPA2-PSK (AES) floor on either data model.
+#: Security modes that meet the WPA2-PSK (AES) floor on either data model,
+#: including WPA/WPA2 mixed and WPA3. These are never rewritten.
 _WIFI_SECURITY_FLOOR_OK = frozenset(
-    {"11i", "WPA2-Personal", "WPA3-Personal", "WPA3-Personal-Transition"}
+    {
+        "11i",
+        "WPAand11i",
+        "WPA2-Personal",
+        "WPA-WPA2-Personal",
+        "WPA3-Personal",
+        "WPA3-Personal-Transition",
+    }
 )
-_WIFI_OPEN_MODES = frozenset({"none", "open", "default"})
+#: Observed modes with no usable WPA key: moving them needs a PSK written in
+#: the same change.
+_WIFI_NEEDS_PSK_MODES = frozenset({"None", "Basic"})
+#: Desired values that mean "no real choice" or a mode that must never be
+#: written (open, WEP). They resolve to the floor, or to nothing when the floor
+#: is not enforced.
+_WIFI_OPEN_MODES = frozenset({"none", "open", "default", "wep", "basic"})
 
 
 def _wifi_security_with_floor(
@@ -1849,16 +1877,16 @@ def _wifi_security_with_floor(
 ) -> tuple[str | None, bool]:
     """Return the desired Wi-Fi security mode and whether it is the floor.
 
-    An unset or ``default`` mode, and any open mode, resolve to the WPA2-PSK
-    (AES) floor: ``11i`` on TR-098 and ``WPA2-Personal`` on TR-181. An open
-    network is never a deliverable target. ONTs with no Wi-Fi SSID desired are
-    left alone (no managed Wi-Fi, nothing to enforce).
+    An unset or ``default`` mode, and any open/WEP mode, resolve to the
+    WPA2-PSK (AES) floor (``11i`` on TR-098, ``WPA2-Personal`` on TR-181) ONLY
+    when ``wifi_security_floor_enforced`` is on (default off = report-only,
+    nothing is planned). ONTs with no Wi-Fi SSID desired are left alone.
     """
     configured = desired.wifi_security_mode
     raw = configured.strip() if configured else ""
     if raw and raw.lower() not in _WIFI_OPEN_MODES:
         return _normalise_wifi_security_mode(raw, root), False
-    if desired.wifi_ssid is None:
+    if not desired.wifi_security_floor_enforced or desired.wifi_ssid is None:
         return None, False
     return ("WPA2-Personal" if root == "Device" else "11i"), True
 
@@ -2038,11 +2066,10 @@ def _iphost_differs(desired: OntDesiredState, observed: OntObservedState) -> boo
     # reader hasn't populated mgmt_ip yet (None).
     if not olt.olt_present:
         return True
-    # A present ONT whose OLT read found no management IPHOST at all is
-    # missing it; only reached when desired management config exists (the
-    # caller gates on desired.mgmt_vlan and desired.mgmt_ip).
-    if olt.olt_mgmt_ip is None:
-        return True
+    # A ``None`` management IP is NOT proof the IPHOST is missing: it is also
+    # what a failed detail read, unknown status or a ``-`` row produce, and
+    # acting on it would clear and rewrite the IPHOST on live ONTs. A row that
+    # positively shows an unset address (``0.0.0.0``) already differs above.
     return False
 
 

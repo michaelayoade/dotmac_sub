@@ -3225,10 +3225,26 @@ def _cr_chain_setup(db_session, monkeypatch, ont, stub_desired, *, queued_tasks)
     )
 
     class _RefreshableAcs(_StubAcsClient):
-        """Readback verify refreshes the section subtree before reading."""
+        """Delivers the verify refresh: the refreshed subtree gets a new stamp."""
 
-        def refresh_object(self, device_id, object_path, *, allow_when_pending=False):
+        refreshed = False
+
+        def create_task_and_wait(self, device_id, task, **kwargs):
+            self.refreshed = True
             return {"_id": "task-refresh"}
+
+        def list_devices(self, query=None, projection=None):
+            devices = super().list_devices(query, projection)
+            if self.refreshed and devices:
+                import copy
+                from datetime import UTC, datetime
+
+                devices = [copy.deepcopy(d) for d in devices]
+                stamp = datetime.now(UTC).isoformat()
+                wan = devices[0].setdefault("InternetGatewayDevice", {})
+                wan = wan.setdefault("WANDevice", {}).setdefault("1", {})
+                wan["_timestamp"] = stamp
+            return devices
 
     acs = _RefreshableAcs(
         device=_acs_device_missing_pppoe(ont),

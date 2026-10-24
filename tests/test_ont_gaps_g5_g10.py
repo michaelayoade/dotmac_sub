@@ -23,7 +23,7 @@ from app.models.network_operation import (
 )
 from app.models.ont_observation import OntObservation
 from app.models.ont_service_configuration import OntServiceConfigurationRevision
-from app.services.genieacs_client import GenieACSError
+from app.services.genieacs_client import GenieACSError, GenieACSTaskRejectedError
 from app.services.network import ont_service_configuration as lifecycle
 from app.services.network.olt_batched_mgmt import (
     BatchedMgmtSpec,
@@ -58,87 +58,123 @@ DEVICE_ID = "00259E-HG8546M-HWTC8535819A"
 # ── G5: verify freshness ────────────────────────────────────────────────────
 
 
+WAN = "InternetGatewayDevice.WANDevice.1."
+
+
+def _stamped_doc(stamp: datetime | None):
+    doc = _device_doc()
+    if stamp is not None:
+        node = doc.setdefault("InternetGatewayDevice", {})
+        node = node.setdefault("WANDevice", {}).setdefault("1", {})
+        node["_timestamp"] = stamp.isoformat()
+    return doc
+
+
 class _RefreshClient(_StubGenieAcsClient):
-    def __init__(self, *, devices, refresh_result=None, refresh_raises=None):
-        super().__init__(devices=devices)
+    """Delivers (or not) a refreshObject through create_task_and_wait."""
+
+    def __init__(self, *, stamp, task_raises=None):
+        super().__init__(devices=[])
         self.events: list[tuple] = []
-        self._refresh_result = refresh_result if refresh_result is not None else {}
-        self._refresh_raises = refresh_raises
+        self._stamp = stamp
+        self._task_raises = task_raises
 
     def list_devices(self, query=None, projection=None):
         self.events.append(("list", None))
-        return super().list_devices(query, projection)
+        return [_stamped_doc(self._stamp)]
 
-    def refresh_object(self, device_id, object_path, *, allow_when_pending=False):
-        self.events.append(("refresh", object_path))
-        if self._refresh_raises is not None:
-            raise self._refresh_raises
-        return self._refresh_result
+    def create_task_and_wait(self, device_id, task, **kwargs):
+        self.events.append(("refresh", task["objectName"], kwargs))
+        if self._task_raises is not None:
+            raise self._task_raises
+        return {"_id": "t1"}
 
 
-def test_g5_refresh_runs_and_the_device_is_re_read_afterwards():
-    client = _RefreshClient(devices=[_device_doc()])
+NOW = datetime.now(UTC)
+
+
+def test_g5_refresh_uses_a_connection_request_and_accepts_a_newer_subtree():
+    client = _RefreshClient(stamp=NOW + timedelta(seconds=30))
     result = read_acs_state(
-        client,
-        _desired(acs_device_id=DEVICE_ID),
-        refresh_paths=("InternetGatewayDevice.WANDevice.1.",),
+        client, _desired(acs_device_id=DEVICE_ID), refresh_paths=(WAN,)
     )
     assert result.success is True
-    assert client.events == [
-        ("list", None),
-        ("refresh", "InternetGatewayDevice.WANDevice.1."),
-        ("list", None),
-    ]
+    refresh = next(e for e in client.events if e[0] == "refresh")
+    assert refresh[1] == "InternetGatewayDevice.WANDevice.1"
+    assert refresh[2]["connection_request"] is True
+    assert refresh[2]["timeout_sec"] <= 30  # short and bounded
+    assert [e[0] for e in client.events] == ["list", "refresh", "list"]
 
 
-def test_g5_no_refresh_without_paths():
-    client = _RefreshClient(devices=[_device_doc()])
-    read_acs_state(client, _desired(acs_device_id=DEVICE_ID))
-    assert all(kind != "refresh" for kind, _ in client.events)
-
-
-def test_g5_refresh_uses_the_matched_document_id_when_none_is_recorded():
-    client = _RefreshClient(devices=[_device_doc()])
+def test_g5_stale_cache_after_refresh_is_pending_not_fresh():
+    client = _RefreshClient(stamp=NOW - timedelta(hours=2))
     result = read_acs_state(
-        client,
-        _desired(acs_device_id=None),
-        refresh_paths=("InternetGatewayDevice.WANDevice.1.",),
+        client, _desired(acs_device_id=DEVICE_ID), refresh_paths=(WAN,)
     )
-    assert result.success is True
-    assert ("refresh", "InternetGatewayDevice.WANDevice.1.") in client.events
+    assert result.success is False
+    assert result.refresh_pending is True
+    assert result.observed is None
+
+
+def test_g5_missing_subtree_timestamp_is_pending():
+    client = _RefreshClient(stamp=None)
+    result = read_acs_state(
+        client, _desired(acs_device_id=DEVICE_ID), refresh_paths=(WAN,)
+    )
+    assert result.refresh_pending is True
 
 
 @pytest.mark.parametrize(
-    "client",
+    "error",
     [
-        _RefreshClient(devices=[_device_doc()], refresh_raises=GenieACSError("boom")),
-        _RefreshClient(
-            devices=[_device_doc()],
-            refresh_result={"connectionRequestError": "401 Unauthorized"},
-        ),
+        GenieACSTaskRejectedError("Device already has 20 pending GenieACS task(s)"),
+        GenieACSError("refreshObject connection request failed: 401"),
+        GenieACSError("refreshObject did not complete synchronously: timeout"),
     ],
 )
-def test_g5_undelivered_refresh_fails_closed_without_using_stale_copy(client):
+def test_g5_backlog_or_undelivered_refresh_is_pending_not_unreachable(error):
+    client = _RefreshClient(stamp=NOW, task_raises=error)
     result = read_acs_state(
-        client,
-        _desired(acs_device_id=DEVICE_ID),
-        refresh_paths=("InternetGatewayDevice.LANDevice.1.WLANConfiguration.1.",),
+        client, _desired(acs_device_id=DEVICE_ID), refresh_paths=(WAN,)
     )
     assert result.success is False
-    assert result.unreachable is True
-    assert result.observed is None
-    assert [kind for kind, _ in client.events] == ["list", "refresh"]
+    assert result.refresh_pending is True
+    assert result.unreachable is False
+    assert [e[0] for e in client.events] == ["list", "refresh"]
+
+
+def test_g5_no_refresh_without_paths():
+    client = _RefreshClient(stamp=NOW)
+    read_acs_state(client, _desired(acs_device_id=DEVICE_ID))
+    assert all(kind != "refresh" for kind, *_ in client.events)
+
+
+def test_g5_a_client_that_cannot_refresh_with_a_cr_is_pending():
+    client = _StubGenieAcsClient(devices=[_device_doc()])
+    result = read_acs_state(
+        client, _desired(acs_device_id=DEVICE_ID), refresh_paths=(WAN,)
+    )
+    assert result.refresh_pending is True
 
 
 def test_g5_absent_device_is_not_refreshed():
-    client = _RefreshClient(devices=[])
+    client = _RefreshClient(stamp=NOW)
+    client.list_devices = lambda query=None, projection=None: []  # type: ignore[method-assign]
     result = read_acs_state(
-        client,
-        _desired(acs_device_id=DEVICE_ID),
-        refresh_paths=("InternetGatewayDevice.WANDevice.1.",),
+        client, _desired(acs_device_id=DEVICE_ID), refresh_paths=(WAN,)
     )
     assert result.success is True
-    assert all(kind != "refresh" for kind, _ in client.events)
+    assert all(kind != "refresh" for kind, *_ in client.events)
+
+
+def test_g5_pending_refresh_makes_the_readback_pending_in_the_reconciler():
+    import inspect
+
+    from app.services.network.reconcile import core
+
+    source = inspect.getsource(core.reconcile_ont)
+    assert "acs_result.refresh_pending" in source
+    assert '"readback_pending": True' in source
 
 
 def _revision(section: str) -> SimpleNamespace:
@@ -183,23 +219,39 @@ def test_g5_configure_template_shows_drift_fields():
 # ── G6: management IPHOST ───────────────────────────────────────────────────
 
 
-def test_g6_missing_management_iphost_on_present_ont_is_drift():
+def _iphost_plan(**olt_overrides):
     desired = _desired()
     observed = _synced_observed(desired)
     observed = dataclasses.replace(
-        observed,
-        olt=dataclasses.replace(observed.olt, olt_mgmt_ip=None, olt_mgmt_vlan=None),
+        observed, olt=dataclasses.replace(observed.olt, **olt_overrides)
     )
-    plan = compute_plan(desired, observed, "sweep")
-    assert OltIpconfig in _types(plan)
-    assert any(d.field == "olt_mgmt_ip" for d in plan.drifts)
+    return compute_plan(desired, observed, "sweep")
+
+
+def test_g6_unknown_management_ip_is_not_drift():
+    """None is what a failed detail read, unknown status or a '-' row give."""
+    plan = _iphost_plan(olt_mgmt_ip=None, olt_mgmt_vlan=None)
+    assert OltIpconfig not in _types(plan)
+    assert not any(d.field == "olt_mgmt_ip" for d in plan.drifts)
+
+
+def test_g6_dash_row_parses_to_unknown_not_absent():
+    from app.services.network.olt_ssh_ont.status import parse_ont_info_detail
+
+    detail = parse_ont_info_detail("ONT IP 0 address/mask : -/-\n")
+    assert detail["mgmt_ip"] is None
+    assert OltIpconfig not in _types(_iphost_plan(olt_mgmt_ip=detail["mgmt_ip"]))
+
+
+def test_g6_positively_unset_address_is_still_drift():
+    assert OltIpconfig in _types(_iphost_plan(olt_mgmt_ip="0.0.0.0"))
 
 
 def test_g6_no_iphost_drift_without_desired_management_config():
     desired = _desired(mgmt_ip=None)
     observed = _synced_observed(desired)
     observed = dataclasses.replace(
-        observed, olt=dataclasses.replace(observed.olt, olt_mgmt_ip=None)
+        observed, olt=dataclasses.replace(observed.olt, olt_mgmt_ip="0.0.0.0")
     )
     assert OltIpconfig not in _types(compute_plan(desired, observed, "sweep"))
 
@@ -247,6 +299,35 @@ def test_g6_commissioning_plan_carries_the_index_to_the_adapter_spec():
     assert plan.to_adapter_spec().mgmt_service_port_index == 31
 
 
+def test_g6_index_is_recorded_only_when_the_port_was_created(monkeypatch):
+    from app.services.network import ont_commissioning as oc
+
+    recorded: dict = {}
+    monkeypatch.setattr(
+        "app.services.network.ont_desired_config.set_desired_config_values",
+        lambda ont, values: recorded.update(values),
+    )
+    db = MagicMock()
+    db.get.return_value = SimpleNamespace(id=uuid.uuid4())
+    plan = SimpleNamespace(
+        mgmt_service_port_index=31, mgmt_vlan_tag=201, mgmt_gem_index=2
+    )
+    oc._record_management_service_port(
+        db,
+        ont_unit_id=uuid.uuid4(),
+        management=plan,
+        completed_steps=("create_mgmt_service_port (exists)", "configure_iphost"),
+    )
+    assert recorded == {}
+    oc._record_management_service_port(
+        db,
+        ont_unit_id=uuid.uuid4(),
+        management=plan,
+        completed_steps=("create_mgmt_service_port", "configure_iphost"),
+    )
+    assert recorded == {"olt.mgmt_service_port_index": 31}
+
+
 # ── G7: Wi-Fi security floor ────────────────────────────────────────────────
 
 
@@ -262,40 +343,120 @@ def _wifi_observed(desired, *, security, root="InternetGatewayDevice"):
     )
 
 
-@pytest.mark.parametrize("configured", [None, "", "default", "Default", "none", "open"])
-def test_g7_default_unset_or_open_enforces_wpa2_floor_when_weaker(configured):
-    desired = _desired(
-        wifi_security_mode=configured, tr069_data_model_root="InternetGatewayDevice"
+IGD = "InternetGatewayDevice"
+
+
+def _floor_desired(configured, **kw):
+    return _desired(
+        wifi_security_mode=configured,
+        tr069_data_model_root=kw.pop("root", IGD),
+        wifi_security_floor_enforced=kw.pop("enforced", True),
+        **kw,
     )
+
+
+def _wifi_actions(plan):
+    return [a for a in plan.actions if isinstance(a, AcsSetWifiConfig)]
+
+
+@pytest.mark.parametrize(
+    "configured", [None, "", "default", "Default", "none", "open", "wep"]
+)
+def test_g7_enforced_floor_raises_a_known_weak_wpa_network(configured):
+    desired = _floor_desired(configured)
+    plan = compute_plan(desired, _wifi_observed(desired, security="WPA"), "sweep")
+    actions = _wifi_actions(plan)
+    assert len(actions) == 1 and actions[0].security_mode == "11i"
+
+
+@pytest.mark.parametrize("configured", [None, "default", "none", "wep"])
+def test_g7_gate_off_is_report_only_and_never_writes_or_drifts(configured):
+    desired = _floor_desired(configured, enforced=False)
+    for observed_mode in ("None", "Basic", "WPA", "11i"):
+        plan = compute_plan(
+            desired, _wifi_observed(desired, security=observed_mode), "sweep"
+        )
+        assert _wifi_actions(plan) == []
+        assert not any(d.field == "wifi_security_mode" for d in plan.drifts)
+
+
+@pytest.mark.parametrize(
+    ("observed_mode", "root"),
+    [
+        ("11i", IGD),
+        ("WPAand11i", IGD),
+        ("WPA2-Personal", "Device"),
+        ("WPA-WPA2-Personal", "Device"),
+        ("WPA3-Personal", "Device"),
+        ("WPA3-Personal-Transition", "Device"),
+    ],
+)
+def test_g7_mixed_and_wpa3_meet_the_floor_and_are_never_rewritten(observed_mode, root):
+    desired = _floor_desired("default", root=root)
+    plan = compute_plan(
+        desired, _wifi_observed(desired, security=observed_mode, root=root), "sweep"
+    )
+    assert _wifi_actions(plan) == []
+    assert not any(d.field == "wifi_security_mode" for d in plan.drifts)
+
+
+def test_g7_open_network_without_a_psk_in_the_same_change_is_skipped_and_recorded():
+    desired = _floor_desired("default")
     plan = compute_plan(desired, _wifi_observed(desired, security="None"), "sweep")
-    actions = [a for a in plan.actions if isinstance(a, AcsSetWifiConfig)]
-    assert len(actions) == 1
-    assert actions[0].security_mode == "11i"
+    assert all(a.security_mode is None for a in _wifi_actions(plan))
+    drift = next(d for d in plan.drifts if d.field == "wifi_security_mode")
+    assert drift.repairable is False
 
 
-def test_g7_floor_never_rewrites_a_network_already_at_or_above_it():
-    desired = _desired(
-        wifi_security_mode="default", tr069_data_model_root="InternetGatewayDevice"
+def test_g7_open_network_moves_to_wpa2_when_the_psk_is_written_with_it():
+    desired = _floor_desired("default", wifi_password_pushed_at=None)
+    observed = _wifi_observed(desired, security="None")
+    plan = compute_plan(
+        desired,
+        observed,
+        "sync",
+        proposed_fields=frozenset({"wifi_password_ref"}),
+        force_proposed_writes=True,
     )
-    plan = compute_plan(desired, _wifi_observed(desired, security="11i"), "sweep")
-    assert AcsSetWifiConfig not in _types(plan)
+    actions = _wifi_actions(plan)
+    assert actions and actions[0].security_mode == "11i"
+    assert actions[0].password_ref == desired.wifi_password_ref
 
 
 def test_g7_unread_security_is_not_guessed_as_drift():
-    desired = _desired(
-        wifi_security_mode=None, tr069_data_model_root="InternetGatewayDevice"
-    )
+    desired = _floor_desired(None)
     plan = compute_plan(desired, _wifi_observed(desired, security=None), "sweep")
-    assert AcsSetWifiConfig not in _types(plan)
+    assert _wifi_actions(plan) == []
 
 
 def test_g7_tr181_floor_is_wpa2_personal():
-    desired = _desired(wifi_security_mode="default", tr069_data_model_root="Device")
+    desired = _floor_desired("default", root="Device")
     plan = compute_plan(
-        desired, _wifi_observed(desired, security="None", root="Device"), "sweep"
+        desired,
+        _wifi_observed(desired, security="WPA", root="Device"),
+        "sweep",
     )
-    action = next(a for a in plan.actions if isinstance(a, AcsSetWifiConfig))
-    assert action.security_mode == "WPA2-Personal"
+    assert _wifi_actions(plan)[0].security_mode == "WPA2-Personal"
+
+
+def test_g7_gate_defaults_off_in_settings():
+    from app.models.domain_settings import SettingDomain
+    from app.services.settings_spec import SETTINGS_SPECS
+
+    spec = next(
+        s
+        for s in SETTINGS_SPECS
+        if s.domain == SettingDomain.network_monitoring
+        and s.key == "ont_wifi_security_floor_enforced"
+    )
+    assert spec.default is False
+
+
+def test_g7_floor_is_registered_in_sentinels():
+    from app.services.network.reconcile.sentinels import RULES, is_deliverable
+
+    assert any(r.field == "wifi_security_mode" for r in RULES)
+    assert is_deliverable("wifi_security_mode", "default") is False
 
 
 def test_g7_explicit_strong_mode_is_still_honoured():
@@ -308,7 +469,8 @@ def test_g7_explicit_strong_mode_is_still_honoured():
     assert action.security_mode == "11i"
 
 
-def test_g7_applier_refuses_an_open_security_write():
+@pytest.mark.parametrize("mode", ["None", "Basic", "open", "wep", "default"])
+def test_g7_applier_refuses_open_and_wep_security_writes(mode):
     from app.services.network.reconcile import AcsSetWifiConfig as Action
     from app.services.network.reconcile.applier import ApplyContext, _execute
     from app.services.network.reconcile.state import Tr069WifiParameterPaths
@@ -326,7 +488,7 @@ def test_g7_applier_refuses_an_open_security_write():
         acs_client=client,
         resolve_secret=lambda ref: ref,
     )
-    action = Action(device_id=DEVICE_ID, paths=paths, security_mode="None")
+    action = Action(device_id=DEVICE_ID, paths=paths, security_mode=mode)
     with pytest.raises(ApplyError):
         _execute(action, ctx)
     client.set_parameter_values.assert_not_called()
@@ -768,3 +930,42 @@ def test_g10_background_scope_sets_background_priority():
 
     with background_olt_scope():
         assert current_priority() is OltSshPriority.BACKGROUND
+
+
+def test_g10_partial_read_neither_overwrites_cached_fields_nor_resets_age(
+    db_session, olt
+):
+    ont = _make_ont(db_session, olt, 0, observed_age_hours=30)
+    before = db_session.scalars(
+        select(OntObservation).where(OntObservation.ont_unit_id == ont.id)
+    ).one()
+    old_age = before.olt_observed_at
+    old_rx = before.olt_rx_dbm
+    # Status-only observation: present, but run state and detail are empty.
+    partial = dataclasses.replace(_observed().olt, olt_present=True)
+    outcome = refresh_olt_observations(
+        _factory(db_session),
+        olt.id,
+        ObservationRefreshPolicy(max_age=timedelta(hours=6), per_olt_limit=5),
+        adapter_factory=lambda db, o: MagicMock(),
+        read_fn=lambda a, d: SimpleNamespace(
+            status="present", observed=partial, error=None
+        ),
+    )
+    assert outcome.refreshed == 0 and outcome.failed == 1
+    db_session.expire_all()
+    after = db_session.scalars(
+        select(OntObservation).where(OntObservation.ont_unit_id == ont.id)
+    ).one()
+    assert after.olt_observed_at == old_age
+    assert after.olt_rx_dbm == old_rx
+    assert after.olt_present == before.olt_present
+
+
+def test_g7_preview_is_read_only_and_empty_without_onts(db_session):
+    from app.services.network.reconcile.wifi_floor_preview import (
+        preview_wifi_security_floor,
+    )
+
+    preview = preview_wifi_security_floor(db_session)
+    assert preview.examined == 0 and preview.would_change == 0
