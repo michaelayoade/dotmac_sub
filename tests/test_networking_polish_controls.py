@@ -176,8 +176,11 @@ def test_async_network_actions_have_busy_state_and_visible_results():
     assert "/admin/network/routers/{{ router.id }}/sync" in router_detail
     assert 'data-loading-label="Testing..."' in router_detail
     assert 'data-loading-label="Syncing..."' in router_detail
-    assert 'data-loading-label="Creating..."' in service_ports
-    assert 'data-loading-label="Deleting..."' in service_ports
+    # Service ports are read-only; the lifecycle is the only writer.
+    assert "data-service-ports-read-only" in service_ports
+    assert "Repair via configuration" in service_ports
+    assert "service-ports/create" not in service_ports
+    assert "/delete" not in service_ports
 
 
 def test_freshness_labels_match_snapshot_data():

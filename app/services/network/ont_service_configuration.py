@@ -215,6 +215,21 @@ class WifiConfigurationChange:
 
 
 @dataclass(frozen=True, slots=True)
+class WifiPatchConfigurationChange:
+    """Sparse operator WiFi patch: ``None`` keeps the current value.
+
+    Applied under the admission's row locks, so unchanged siblings are never
+    snapshotted by the caller and a concurrent change is not overwritten.
+    """
+
+    ssid: str | None = None
+    password: str | None = None
+    enabled: bool | None = None
+    channel: str | None = None
+    security_mode: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
 class CustomerWifiConfigurationChange:
     ssid: str
     password: str | None = None
@@ -249,6 +264,7 @@ OntConfigurationChange: TypeAlias = (
     WanConfigurationChange
     | LanConfigurationChange
     | WifiConfigurationChange
+    | WifiPatchConfigurationChange
     | ManagementConfigurationChange
     | AdvancedConfigurationChange
 )
@@ -672,6 +688,10 @@ def _change_updates(
             _refuse_reserved_wifi_password(change.password)
             updates["wifi.password"] = encrypt_credential(change.password)
             evidence["wifi.password"] = "changed"
+    elif section is OntConfigurationSection.wifi and isinstance(
+        change, WifiPatchConfigurationChange
+    ):
+        updates, evidence = _wifi_patch_updates(change)
     elif section is OntConfigurationSection.management and isinstance(
         change, ManagementConfigurationChange
     ):
@@ -756,6 +776,49 @@ def _customer_wifi_change_updates(
     if password is not None:
         updates["wifi.password"] = encrypt_credential(password)
         evidence["wifi.password"] = "changed"
+    return updates, evidence
+
+
+def _printable_ascii(value: str) -> bool:
+    return all(32 <= ord(char) <= 126 for char in value)
+
+
+def _wifi_patch_updates(
+    change: WifiPatchConfigurationChange,
+) -> tuple[dict[str, object], dict[str, object]]:
+    updates: dict[str, object] = {}
+    evidence: dict[str, object] = {}
+    if change.ssid is not None:
+        ssid = change.ssid.strip()
+        if not 1 <= len(ssid) <= 32 or not _printable_ascii(ssid):
+            raise _error(
+                "invalid_change", "WiFi name must be 1-32 printable ASCII characters."
+            )
+        updates["wifi.ssid"] = ssid
+        evidence["wifi.ssid"] = ssid
+    if change.password is not None:
+        password = change.password.strip()
+        if not 8 <= len(password) <= 63 or not _printable_ascii(password):
+            raise _error(
+                "invalid_change",
+                "WiFi password must be 8-63 printable ASCII characters.",
+            )
+        _refuse_reserved_wifi_password(password)
+        updates["wifi.password"] = encrypt_credential(password)
+        evidence["wifi.password"] = "changed"
+    if change.enabled is not None:
+        updates["wifi.enabled"] = bool(change.enabled)
+        evidence["wifi.enabled"] = bool(change.enabled)
+    for field, key in (
+        ("channel", "wifi.channel"),
+        ("security_mode", "wifi.security_mode"),
+    ):
+        value = _text(getattr(change, field))
+        if value is not None:
+            updates[key] = value
+            evidence[key] = value
+    if not updates:
+        raise _error("invalid_change", "A WiFi change must set at least one field.")
     return updates, evidence
 
 
@@ -3719,6 +3782,7 @@ __all__ = (
     "WanConfigurationChange",
     "WanVlanSource",
     "WifiConfigurationChange",
+    "WifiPatchConfigurationChange",
     "configure_cpe_wifi",
     "configure_customer_wifi",
     "configure_ont_service",
