@@ -80,6 +80,22 @@ def _pack_int(effective: Any, key: str) -> int | None:
     return _int_or_none(raw)
 
 
+def _wifi_floor_enforced(db: Session) -> bool:
+    """Policy gate for the Wi-Fi security floor; any lookup problem means off."""
+    from app.models.domain_settings import SettingDomain
+    from app.services.settings_spec import resolve_value
+
+    try:
+        return (
+            resolve_value(
+                db, SettingDomain.network_monitoring, "ont_wifi_security_floor_enforced"
+            )
+            is True
+        )
+    except Exception:  # noqa: BLE001 - the safe answer is report-only
+        return False
+
+
 def desired_from_ont_unit(db: Session, ont: OntUnit) -> OntDesiredState:
     """Materialise the current ``OntDesiredState`` for one ONT.
 
@@ -237,6 +253,7 @@ def desired_from_ont_unit(db: Session, ont: OntUnit) -> OntDesiredState:
         wifi_enabled=_bool_or_none(values.get("wifi_enabled")),
         wifi_channel=_wifi_channel_or_none(values.get("wifi_channel")),
         wifi_security_mode=_str_or_none(values.get("wifi_security_mode")),
+        wifi_security_floor_enforced=_wifi_floor_enforced(db),
         wifi_paths=wifi_paths,
         wan_remote_access_enabled=remote_enabled,
         wan_remote_access_expires_at=remote_expires_at,

@@ -26,7 +26,8 @@ from __future__ import annotations
 
 import logging
 import re
-from typing import TYPE_CHECKING, Any, Protocol, TypeAlias, runtime_checkable
+from datetime import UTC, datetime, timedelta
+from typing import Any, Protocol, TypeAlias, runtime_checkable
 
 from app.services.genieacs_client import GenieACSError
 from app.services.network.serial_utils import search_candidates
@@ -34,9 +35,6 @@ from app.services.network.serial_utils import search_candidates
 from ..state import AcsObservedFields, OntDesiredState
 from ..wifi_paths import wifi_paths_for_instance
 from ._types import ReadResult
-
-if TYPE_CHECKING:
-    from datetime import datetime
 
 logger = logging.getLogger(__name__)
 
@@ -135,6 +133,7 @@ def read_acs_state(
     desired: OntDesiredState,
     *,
     deadline: datetime | None = None,
+    refresh_paths: tuple[str, ...] = (),
 ) -> ReadResult[AcsObservedFields]:
     """Read the ACS-observed fields for one ONT.
 
@@ -145,6 +144,11 @@ def read_acs_state(
             match.
         deadline: Optional cutoff. The underlying HTTP client has its own
             timeout; ``reconcile_ont`` enforces the outer budget.
+        refresh_paths: Parameter subtrees to refresh from the device (existing
+            ``refreshObject`` owner path) before the cached copy is read. Used
+            by readback verification only, so a verify never compares against a
+            stale cache. A refresh that cannot be delivered fails the read
+            closed rather than falling back to the stale copy.
 
     Returns:
         ``ReadResult[AcsObservedFields]``. When the device hasn't yet
@@ -212,6 +216,52 @@ def read_acs_state(
         )
 
     device = devices[0]
+    if refresh_paths and len(devices) == 1:
+        # Verification freshness: ask the device for the named subtrees (with a
+        # Connection Request and a short bounded wait), re-read, and accept the
+        # copy only if every subtree's ``_timestamp`` is newer than the request.
+        # Anything else is "readback pending", never a stale pass.
+        device_id = str(device.get("_id") or "")
+        requested_at = datetime.now(UTC)
+        pending = _refresh_subtrees(client, device_id, refresh_paths)
+        if pending is None:
+            try:
+                devices = client.list_devices(
+                    query={"_id": device_id},
+                    projection=",".join(
+                        (projection, *(path.rstrip(".") for path in refresh_paths))
+                    ),
+                )
+            except GenieACSError as exc:
+                return ReadResult(
+                    status="unavailable",
+                    observed=None,
+                    error=str(exc),
+                    transport_unreachable=True,
+                )
+            if not devices:
+                return ReadResult(
+                    status="absent", observed=_absent_fields(), error=None
+                )
+            device = devices[0]
+            stale = [
+                path
+                for path in refresh_paths
+                if not _subtree_fresher_than(device, path, requested_at)
+            ]
+            if stale:
+                pending = (
+                    "ACS copy of "
+                    + ", ".join(stale)
+                    + " is not newer than the refresh request"
+                )
+        if pending is not None:
+            return ReadResult(
+                status="unavailable",
+                observed=None,
+                error=pending,
+                refresh_pending=True,
+            )
     observed = _parse_device(device, desired, match_count=len(devices))
     if len(devices) > 1:
         # Ambiguous identity. The planner fails closed on this; log once with
@@ -244,6 +294,62 @@ def read_acs_state(
         observed=observed,
         error=None,
     )
+
+
+_REFRESH_WAIT_SEC = 20
+_REFRESH_SKEW = timedelta(seconds=5)
+
+
+def _refresh_subtrees(
+    client: AcsDeviceReader,
+    device_id: str,
+    paths: tuple[str, ...],
+) -> str | None:
+    """Refresh ``paths`` with a Connection Request; ``None`` when delivered.
+
+    Returns a reason string when the refresh was not delivered (readback
+    pending). Uses the inform-safe widening ``allow_when_pending=True`` so a
+    device backlog does not block the read-only refresh outright, but the
+    GenieACS per-device task limit still applies and is reported as pending.
+    """
+    if not device_id:
+        return "ACS refresh skipped: matched device has no id"
+    create = getattr(client, "create_task_and_wait", None)
+    if not callable(create):
+        return "ACS refresh unavailable on this client"
+    for path in paths:
+        try:
+            create(
+                device_id,
+                {"name": "refreshObject", "objectName": path.rstrip(".")},
+                timeout_sec=_REFRESH_WAIT_SEC,
+                connection_request=True,
+                delete_on_timeout=True,
+                allow_when_pending=True,
+            )
+        except GenieACSError as exc:
+            # Backlog (task limit), Connection Request failure or timeout: the
+            # device did not deliver. Not a terminal failure.
+            logger.info(
+                "acs_reader_verify_refresh_pending",
+                extra={"device_id": device_id, "refresh_path": path},
+            )
+            return f"ACS refresh of {path} not delivered: {exc}"
+    return None
+
+
+def _subtree_fresher_than(device: dict[str, Any], path: str, since: datetime) -> bool:
+    node: Any = device
+    for part in path.rstrip(".").split("."):
+        if not isinstance(node, dict) or part not in node:
+            return False
+        node = node[part]
+    stamp = _parse_timestamp(node.get("_timestamp")) if isinstance(node, dict) else None
+    if stamp is None:
+        return False
+    if stamp.tzinfo is None:
+        stamp = stamp.replace(tzinfo=UTC)
+    return stamp >= since - _REFRESH_SKEW
 
 
 def _looks_like_ghost_wan_instance(observed: AcsObservedFields) -> bool:

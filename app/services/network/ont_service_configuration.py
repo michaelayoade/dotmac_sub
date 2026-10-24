@@ -249,6 +249,9 @@ class ManagementConfigurationChange:
     ip_address: str | None
     remote_access: bool
     wcd_index: int | None = None
+    # Re-issue the OLT TR-069 server-profile bind for a silent ONT. Changes no
+    # desired configuration (the other fields are ignored when set).
+    rebind_tr069: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -410,6 +413,8 @@ class OntServiceConfigurationProjection:
     next_action: OntConfigurationNextAction
     current_events: tuple[ConfigurationEventView, ...]
     historical_events: tuple[ConfigurationEventView, ...]
+    # Names of fields still diverging at the last readback (never values).
+    drift_fields: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -695,6 +700,8 @@ def _change_updates(
     elif section is OntConfigurationSection.management and isinstance(
         change, ManagementConfigurationChange
     ):
+        if change.rebind_tr069:
+            return {}, {"management.rebind_tr069": True}
         mode = _text(change.ip_mode)
         if mode not in {None, "inactive", "dhcp", "static_ip"}:
             raise _error("invalid_change", "Management IP mode is invalid.")
@@ -1831,6 +1838,47 @@ def _readback_converged(result: ReconcileResult, scoped_readback: bool) -> bool:
     return scoped_readback and result.sync_status == "out_of_sync"
 
 
+#: Subtrees refreshed from the device before a readback verify, per section.
+#: Only the revision's own subtree is refreshed (never the whole device).
+_READBACK_REFRESH_PATHS: dict[str, tuple[str, ...]] = {
+    OntConfigurationSection.wan.value: ("InternetGatewayDevice.WANDevice.1.",),
+    OntConfigurationSection.wifi.value: (
+        "InternetGatewayDevice.LANDevice.1.WLANConfiguration.1.",
+    ),
+}
+
+
+def _readback_refresh_paths(
+    revision: OntServiceConfigurationRevision, *, readback_only: bool
+) -> tuple[str, ...]:
+    if not readback_only:
+        return ()
+    return _READBACK_REFRESH_PATHS.get(revision.section, ())
+
+
+def _tr069_rebind_requested(
+    revision: OntServiceConfigurationRevision, *, readback_only: bool
+) -> bool:
+    return (
+        not readback_only
+        and revision.section == OntConfigurationSection.management.value
+        and (revision.desired_change_evidence or {}).get("management.rebind_tr069")
+        is True
+    )
+
+
+def _result_drift_fields(result: ReconcileResult) -> list[str]:
+    """Drift field names (never values) from the pass's residual drift."""
+
+    names: list[str] = []
+    for drift in getattr(result, "drift_after", ()) or ():
+        surface = str(getattr(drift, "surface", "") or "")
+        field = str(getattr(drift, "field", "") or "")
+        if field:
+            names.append(f"{surface}:{field}" if surface else field)
+    return names
+
+
 def _readback_drift_fields(failure: object) -> list[str]:
     """Drift field names carried by a verification failure, names only."""
 
@@ -2316,6 +2364,12 @@ def _execution_locked(
             operation_id=operation.id,
         ),
         readback_only=readback_only,
+        force_tr069_rebind=_tr069_rebind_requested(
+            revision, readback_only=readback_only
+        ),
+        refresh_acs_paths=_readback_refresh_paths(
+            revision, readback_only=readback_only
+        ),
         timeout_sec=SERVICE_CONFIGURATION_RECONCILE_TIMEOUT_SECONDS,
         ssh_priority=(
             OltSshPriority.INTERACTIVE if readback_only else OltSshPriority.WRITE
@@ -2543,6 +2597,7 @@ def _execution_locked(
         head.phase = OntServiceConfigurationPhase.verified
         revision.phase = OntServiceConfigurationPhase.verified
         revision.verified_at = now
+        revision.drift_fields = None
         head.waiting_reason = None
         head.failure_code = None
         head.failure_message = None
@@ -2571,6 +2626,10 @@ def _execution_locked(
         message = "Configuration verified."
     else:
         failure = result.failure
+        # Field names only (never values), kept on the revision for the UI.
+        revision.drift_fields = (
+            _readback_drift_fields(failure) or _result_drift_fields(result) or None
+        )
         failure_code = failure.reason if failure is not None else "residual_drift"
         failure_message = (
             failure.message
@@ -3494,6 +3553,13 @@ def get_ont_service_configuration_projection(
         next_action=next_action,
         current_events=current_events,
         historical_events=historical_events,
+        drift_fields=tuple(
+            str(name)
+            for name in (
+                (revision.drift_fields if revision is not None else None) or ()
+            )
+            if isinstance(name, str)
+        ),
     )
 
 

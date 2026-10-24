@@ -52,8 +52,8 @@ def _linked_cpe(db: Session, ont_id: UUID) -> Any:
     ).first()
 
 
-def acs_queued_task_count(db: Session, ont: OntUnit) -> int | None:
-    """Number of GenieACS tasks still queued for the ONT; ``None`` if unknown.
+def _pending_acs_tasks(db: Session, ont: OntUnit) -> list[dict[str, Any]] | None:
+    """Tasks still queued in GenieACS for the ONT; ``None`` if unknown.
 
     Read-only. Unknown (no device link, ACS unreachable) must be treated by
     callers as "do not assume anything" (fail closed).
@@ -70,10 +70,24 @@ def acs_queued_task_count(db: Session, ont: OntUnit) -> int | None:
         if server is None or not server.base_url:
             return None
         tasks = create_genieacs_client(server.base_url).get_pending_tasks(device_id)
-        return len([t for t in tasks if isinstance(t, dict)])
+        return [t for t in tasks if isinstance(t, dict)]
     except Exception:  # noqa: BLE001
         logger.info("acs_queue_lookup_failed", extra={"ont_id": str(ont.id)})
         return None
+
+
+def acs_queued_task_count(db: Session, ont: OntUnit) -> int | None:
+    """Number of GenieACS tasks still queued for the ONT; ``None`` if unknown."""
+    tasks = _pending_acs_tasks(db, ont)
+    return None if tasks is None else len(tasks)
+
+
+def acs_pending_reboot_task(db: Session, ont: OntUnit) -> bool | None:
+    """Whether GenieACS already holds a queued ``reboot`` task; ``None`` if unknown."""
+    tasks = _pending_acs_tasks(db, ont)
+    if tasks is None:
+        return None
+    return any(str(task.get("name") or "") == "reboot" for task in tasks)
 
 
 PENDING_CREATE_TTL_SECONDS = 10 * 60
