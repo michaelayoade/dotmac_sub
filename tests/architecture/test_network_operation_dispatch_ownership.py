@@ -33,6 +33,10 @@ DISPATCH_FIELDS = {
     "completed_at",
     "task_id",
     "last_error",
+    "resolution",
+    "resolution_evidence",
+    "resolved_by",
+    "resolved_at",
 }
 MANAGED_TARGETS = {
     Path("app/tasks/ont_runtime_status.py"): {

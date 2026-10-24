@@ -74,6 +74,18 @@
     </form>
     {% endif %}
 
+    {% if lifecycle.next_action.value == 'retry_current_configuration' and not is_lan_acs_task_drain and lifecycle.configuration_head_id and lifecycle.revision and lifecycle.operation_id %}
+    <form class="mt-2" hx-post="/admin/network/onts/{{ ont_id }}/configure/verify" hx-target="#configure-content" hx-swap="innerHTML">
+        {% include "components/forms/csrf_input.html" %}
+        <input type="hidden" name="configuration_head_id" value="{{ lifecycle.configuration_head_id }}">
+        <input type="hidden" name="configuration_revision" value="{{ lifecycle.revision }}">
+        <input type="hidden" name="failed_operation_id" value="{{ lifecycle.operation_id }}">
+        <input type="hidden" name="idempotency_key" value="{{ verify_idempotency_key }}">
+        <button type="submit" hx-disabled-elt="this" class="rounded border border-slate-300 bg-white px-2.5 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-50 disabled:opacity-50 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-200">Verify readback</button>
+        <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">Reads the device back only; nothing is written. Needs a fresh ACS Inform after the failure.</p>
+    </form>
+    {% endif %}
+
     {% if lifecycle.current_events %}
     <details class="mt-3 text-xs">
         <summary class="cursor-pointer font-medium text-slate-700 dark:text-slate-200">Current lifecycle evidence ({{ lifecycle.current_events | length }})</summary>

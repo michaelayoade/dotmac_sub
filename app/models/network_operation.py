@@ -100,6 +100,9 @@ class NetworkOperationDispatchStatus(enum.Enum):
     failed = "failed"
     reconciliation_needed = "reconciliation_needed"
     canceled = "canceled"
+    # Terminal: an owner reviewed a reconciliation_needed row and recorded the
+    # resolution. The operation outcome and the device are never touched.
+    resolved = "resolved"
 
 
 class NetworkOperation(Base):
@@ -304,6 +307,12 @@ class NetworkOperationDispatch(Base):
     )
     task_id: Mapped[str | None] = mapped_column(String(120), nullable=True)
     last_error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    resolution: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    resolution_evidence: Mapped[str | None] = mapped_column(Text, nullable=True)
+    resolved_by: Mapped[str | None] = mapped_column(String(160), nullable=True)
+    resolved_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, default=lambda: datetime.now(UTC)
     )
