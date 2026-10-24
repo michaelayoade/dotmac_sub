@@ -679,6 +679,179 @@ class TestCollisionPrecision:
         assert result["session_ip_ipam_stale"] == ["203.0.113.41"]
 
 
+class TestServedIpResolution:
+    """Servable set mirrors the writer: captive, IPAM fallback, test grants."""
+
+    def _radius(self, tmp_path, radreply=()):
+        db_path = tmp_path / "radius.db"
+        _seed_radius_sqlite(db_path, radreply=radreply)
+        return db_path
+
+    @staticmethod
+    def _projections(*pairs):
+        return {
+            login: SimpleNamespace(
+                login=login,
+                subscription_id=str(sub.id),
+                subscription_status=sub.status,
+                plan=SimpleNamespace(write_radreply=True),
+            )
+            for login, sub in pairs
+        }
+
+    def test_captive_blocked_collision_is_critical(
+        self, db_session, tmp_path, catalog_offer
+    ):
+        a = _seed_sub(
+            db_session, login="cp-a", offer=catalog_offer, col_ip="203.0.113.60"
+        )
+        b = _seed_sub(
+            db_session,
+            login="cp-b",
+            offer=catalog_offer,
+            status=SubscriptionStatus.suspended,
+            col_ip="203.0.113.60",
+        )
+        with patch(
+            "app.services.radius_projection_planner.plan_login_radius_projections",
+            return_value=self._projections(("cp-a", a), ("cp-b", b)),
+        ):
+            result = _run(db_session, self._radius(tmp_path))
+        assert result["ip_on_multiple_subscriptions"] == ["203.0.113.60"]
+
+    def test_ipam_fallback_collision_is_critical(
+        self, db_session, tmp_path, catalog_offer
+    ):
+        # No column IP; the writer serves the single active IPAM address.
+        a = _seed_sub(
+            db_session, login="fb-a", offer=catalog_offer, assign_ip="203.0.113.70"
+        )
+        b = _seed_sub(
+            db_session, login="fb-b", offer=catalog_offer, col_ip="203.0.113.70"
+        )
+        with patch(
+            "app.services.radius_projection_planner.plan_login_radius_projections",
+            return_value=self._projections(("fb-a", a), ("fb-b", b)),
+        ):
+            result = _run(db_session, self._radius(tmp_path))
+        assert result["ip_on_multiple_subscriptions"] == ["203.0.113.70"]
+
+    def test_live_test_grant_on_disabled_sub_is_included(
+        self, db_session, tmp_path, catalog_offer
+    ):
+        from datetime import UTC, datetime, timedelta
+        from uuid import uuid4
+
+        from app.models.test_connection import TestConnectionGrant
+
+        a = _seed_sub(
+            db_session, login="tg-a", offer=catalog_offer, col_ip="203.0.113.80"
+        )
+        b = _seed_sub(
+            db_session,
+            login="tg-b",
+            offer=catalog_offer,
+            status=SubscriptionStatus.disabled,
+            col_ip="203.0.113.80",
+        )
+        from tests.mfa_removal_helpers import make_staff
+
+        actor_id = make_staff(db_session)
+        now = datetime.now(UTC)
+        db_session.add(
+            TestConnectionGrant(
+                subscription_id=b.id,
+                subscriber_id=b.subscriber_id,
+                actor_id=actor_id,
+                actor_label="test",
+                command_id=uuid4(),
+                activated_at=now - timedelta(minutes=1),
+                expires_at=now + timedelta(minutes=30),
+                duration_seconds=1860,
+            )
+        )
+        db_session.commit()
+        with patch(
+            "app.services.radius_projection_planner.plan_login_radius_projections",
+            return_value=self._projections(("tg-a", a), ("tg-b", b)),
+        ):
+            result = _run(db_session, self._radius(tmp_path))
+        assert result["ip_on_multiple_subscriptions"] == ["203.0.113.80"]
+
+    def test_radreply_framed_ip_shared_across_subscribers_is_critical(
+        self, db_session, tmp_path, catalog_offer
+    ):
+        _seed_sub(db_session, login="rr-a", offer=catalog_offer, col_ip="203.0.113.90")
+        _seed_sub(db_session, login="rr-b", offer=catalog_offer, col_ip="203.0.113.91")
+        radius = self._radius(
+            tmp_path,
+            radreply=[
+                ("rr-a", "Framed-IP-Address", "203.0.113.95"),
+                ("rr-b", "Framed-IP-Address", "203.0.113.95"),
+            ],
+        )
+        result = _run(db_session, radius)
+        assert result["ip_on_multiple_subscriptions"] == ["203.0.113.95"]
+
+    def test_session_on_other_subscribers_ip_without_own_assignment(
+        self, db_session, tmp_path, catalog_offer
+    ):
+        from datetime import UTC, datetime
+
+        from app.models.catalog import NasDevice
+        from app.models.radius_active_session import RadiusActiveSession
+
+        nas = NasDevice(name="noassign-nas", is_active=True)
+        db_session.add(nas)
+        db_session.flush()
+        own = _seed_sub(db_session, login="na-a", offer=catalog_offer)
+        _seed_sub(
+            db_session, login="na-b", offer=catalog_offer, assign_ip="203.0.113.99"
+        )
+        db_session.add(
+            RadiusActiveSession(
+                subscription_id=own.id,
+                subscriber_id=own.subscriber_id,
+                nas_device_id=nas.id,
+                username="na-a",
+                acct_session_id="1",
+                framed_ip_address="203.0.113.99",
+                session_start=datetime.now(UTC),
+            )
+        )
+        db_session.commit()
+        result = _run(db_session, self._radius(tmp_path))
+        assert result["session_ip_ipam_mismatch"] == ["203.0.113.99"]
+
+    def test_same_subscriber_sharing_is_warning_tier(self):
+        from app.services.ip_consistency_audit import (
+            INFORMATIONAL_KINDS,
+            WARNING_KINDS,
+        )
+
+        assert "ip_shared_within_subscriber" in WARNING_KINDS
+        assert "ip_shared_within_subscriber" not in INFORMATIONAL_KINDS
+
+    def test_warning_kind_flips_ok(self, db_session, tmp_path, catalog_offer):
+        owner = Subscriber(first_name="W", last_name="Own", email="wown@example.com")
+        db_session.add(owner)
+        db_session.flush()
+        for login in ("ws-a", "ws-b"):
+            db_session.add(
+                Subscription(
+                    subscriber_id=owner.id,
+                    offer_id=catalog_offer.id,
+                    status=SubscriptionStatus.active,
+                    login=login,
+                    ipv4_address="203.0.113.100",
+                )
+            )
+        db_session.commit()
+        result = _run(db_session, self._radius(tmp_path))
+        assert result["ip_shared_within_subscriber"] == ["203.0.113.100"]
+        assert result["ok"] is False
+
+
 def test_summary_formatter_prints_counts_tiers_and_subscriber_numbers():
     import importlib.util
     from pathlib import Path
