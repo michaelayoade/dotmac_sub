@@ -2,16 +2,22 @@
 #
 # radius_ip_consistency_drift{kind} comes from the periodic read-only
 # app.tasks.radius.audit_ip_consistency run (app/services/ip_consistency_audit.py).
-# Three collision kinds mean two live services can hold, or already hold, the
-# same address: page on any non-zero value. assignment_on_terminal_subscription
-# (a held assignment on a cancelled/expired service) is a retention/cleanup
-# signal, not a live collision, so it only warns. session_ip_pool_not_linked
-# depends on NAS radius_pool tagging being complete, so it only warns.
+# Severity follows the classification in app/services/ip_consistency_audit.py
+# (CRITICAL_KINDS / WARNING_KINDS / INFORMATIONAL_KINDS):
+#   critical - real cross-customer conflicts only: session_ip_duplicate, an IP on
+#     RADIUS-servable subscriptions of different subscribers
+#     (ip_on_multiple_subscriptions), and a live session on an IP held by another
+#     subscriber (session_ip_ipam_mismatch).
+#   warning  - hygiene: assignment_on_terminal_subscription,
+#     session_ip_ipam_stale (live IP differs from the sub's own stale IPAM row),
+#     session_ip_pool_not_linked (depends on NAS radius_pool tagging).
+#   not alerted - informational: ip_shared_within_subscriber (add-on service
+#     sharing one static IP) and ip_column_reuse_historic (old broad count that
+#     includes disabled/suspended/hidden/stopped/archived history).
 #
 # RUNBOOK - before loading these rules, run
-#   scripts/one_off/audit_ip_consistency.py
-# once and clear (or consciously accept) its findings: stale hidden/disabled
-# subscription columns will otherwise page critical on the first audit run.
+#   scripts/one_off/audit_ip_consistency.py --summary
+# once and clear (or consciously accept) its critical and warning findings.
 #
 # The audit runs every ip_consistency_audit_interval_seconds (default 21600 s);
 # IPv4ConsistencyAuditStale must stay at least 2x that interval. If the interval
@@ -31,11 +37,10 @@ groups:
           summary: "IPv4 collision class {{ $labels.kind }} is non-zero"
           description: >
             {{ $value }} finding(s) of class {{ $labels.kind }}. The address of
-            one service is also held, reserved or in use by another. Run
-            scripts/one_off/audit_ip_consistency.py for sample logins/IPs; do
-            not reissue the address until resolved. Before first load of these
-            rules, run that script once: stale hidden/disabled columns page
-            critical on the first audit run otherwise.
+            one service is also held, reserved or in use by a different
+            subscriber. Run scripts/one_off/audit_ip_consistency.py --summary
+            for sample IPs and subscriber numbers; do not reissue the address
+            until resolved.
           runbook: "docs/designs/IP_ASSIGNMENT_LIFECYCLE_SOT.md"
 
       - alert: IPv4AssignmentOnTerminalSubscription
@@ -51,9 +56,23 @@ groups:
             {{ $value }} finding(s) of class {{ $labels.kind }}. An active IPAM
             assignment belongs to a terminal subscription; the retention sweep
             or a manual release should free it. Run
-            scripts/one_off/audit_ip_consistency.py for samples. Before first
-            load of these rules, run that script once: stale hidden/disabled
-            columns page critical on the first audit run otherwise.
+            scripts/one_off/audit_ip_consistency.py --summary for samples.
+          runbook: "docs/designs/IP_ASSIGNMENT_LIFECYCLE_SOT.md"
+
+      - alert: IPv4SessionIpamStale
+        expr: radius_ip_consistency_drift{kind="session_ip_ipam_stale"} > 0
+        for: 1h
+        labels:
+          severity: warning
+          area: ipam
+          owner: network-operations
+        annotations:
+          summary: "Live session IP differs from the subscription's own IPAM assignment"
+          description: >
+            {{ $value }} live session(s) use an IP that is not the
+            subscription's active IPAM assignment, and no other subscriber
+            holds the address. IPAM hygiene: update or release the stale
+            assignment. Run scripts/one_off/audit_ip_consistency.py --summary.
           runbook: "docs/designs/IP_ASSIGNMENT_LIFECYCLE_SOT.md"
 
       - alert: IPv4SessionPoolNotLinkedToNas
