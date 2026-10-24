@@ -260,6 +260,17 @@ class DomainSettings(ListResponseMixin):
             validate_setting_change(db, domain, key, value)
         except ControlRelationshipError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
+        from app.services.access_rate_profile import (
+            ThrottleProfileChangeRefused,
+            refuse_throttle_profile_change,
+            refuse_ungoverned_switch_on,
+        )
+
+        try:
+            refuse_ungoverned_switch_on(db, domain, key, value)
+            refuse_throttle_profile_change(db, domain, key, value)
+        except ThrottleProfileChangeRefused as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
         from app.services.settings_spec import typed_setting_value_error
 
         typed_error = typed_setting_value_error(domain, key, value)

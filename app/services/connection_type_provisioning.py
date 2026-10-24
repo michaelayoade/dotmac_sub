@@ -374,6 +374,23 @@ def _append_vendor_attributes(
 # ---------------------------------------------------------------------------
 
 
+def _subscription_plan_profile(
+    db: Session, subscription: Subscription
+) -> RadiusProfile | None:
+    """The subscription's plan profile.
+
+    The stored subscription profile before ``radius.rate_owner_enabled``;
+    afterwards the single rate owner's plan layer (the package's profile).
+    """
+    from app.services import access_rate_profile
+
+    if access_rate_profile.rate_owner_enabled(db):
+        return access_rate_profile.resolve_plan_profile(db, subscription)
+    if subscription.radius_profile_id:
+        return db.get(RadiusProfile, subscription.radius_profile_id)
+    return None
+
+
 def resolve_connection_type(
     db: Session,
     subscription: Subscription,
@@ -388,10 +405,9 @@ def resolve_connection_type(
     4. Fallback to PPPoE
     """
     # 1. Check profile-level connection type
-    if subscription.radius_profile_id:
-        profile = db.get(RadiusProfile, subscription.radius_profile_id)
-        if profile and profile.connection_type:
-            return profile.connection_type
+    profile = _subscription_plan_profile(db, subscription)
+    if profile and profile.connection_type:
+        return profile.connection_type
 
     # 2. Resolve NAS device
     if not nas_device and subscription.provisioning_nas_device_id:
@@ -593,8 +609,12 @@ def _offer_rate_limit_fallback(db: Session, subscription: Subscription) -> str |
     if not offer_id:
         return None
     from app.models.catalog import CatalogOffer
+    from app.services import access_rate_profile
 
     offer = db.get(CatalogOffer, offer_id)
+    if access_rate_profile.rate_owner_enabled(db):
+        # Same grammar as the sweep, committed rate included.
+        return access_rate_profile.offer_rate_limit(offer)
     down = getattr(offer, "speed_download_mbps", None) if offer else None
     up = getattr(offer, "speed_upload_mbps", None) if offer else None
     if down and up:
@@ -681,8 +701,9 @@ def build_radius_reply_attributes(
     Returns:
         List of dicts with keys: attribute, op, value
     """
-    if not profile and subscription.radius_profile_id:
-        profile = db.get(RadiusProfile, subscription.radius_profile_id)
+    profile_given = profile is not None
+    if not profile:
+        profile = _subscription_plan_profile(db, subscription)
 
     connection_type = resolve_connection_type(db, subscription, nas_device)
 
@@ -725,6 +746,29 @@ def build_radius_reply_attributes(
 
     # Append vendor-specific attributes
     _append_vendor_attributes(attrs, profile, connection_type)
+
+    # The single rate owner decides the rate string (one grammar for radreply
+    # and CoA), replacing whatever the profile-only builder derived.
+    from app.services import access_rate_profile
+
+    if (
+        not profile_given
+        and access_rate_profile.rate_owner_enabled(db)
+        and connection_type
+        in (
+            ConnectionType.pppoe,
+            ConnectionType.hotspot,
+            ConnectionType.ipoe,
+        )
+    ):
+        owner_rate = access_rate_profile.resolve_effective_rate(
+            db, subscription, include_enforcement=False
+        ).rate_limit
+        attrs[:] = [a for a in attrs if a["attribute"] != "Mikrotik-Rate-Limit"]
+        if owner_rate:
+            attrs.append(
+                {"attribute": "Mikrotik-Rate-Limit", "op": ":=", "value": owner_rate}
+            )
 
     # Parity: when the profile defines no rate-limit, fall back to the offer's
     # speeds (the authoritative sweep does this) so a rate-limited connection type
@@ -799,8 +843,8 @@ def build_nas_provisioning_commands(
     """
     from app.models.catalog import NasVendor
 
-    if not profile and subscription.radius_profile_id:
-        profile = db.get(RadiusProfile, subscription.radius_profile_id)
+    if not profile:
+        profile = _subscription_plan_profile(db, subscription)
 
     connection_type = resolve_connection_type(db, subscription, nas_device)
     commands: list[str] = []

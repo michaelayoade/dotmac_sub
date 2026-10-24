@@ -40,7 +40,7 @@ from app.models.enforcement_application import (
 )
 from app.models.radius import RadiusClient
 from app.models.usage import AccountingStatus, RadiusAccountingSession
-from app.services import control_registry, settings_spec
+from app.services import access_rate_profile, control_registry, settings_spec
 from app.services.common import coerce_uuid
 from app.services.credential_crypto import decrypt_credential, non_reference_or_none
 from app.services.domain_errors import DomainError
@@ -308,7 +308,15 @@ def _resolve_effective_profile(
 
     Returns:
         RadiusProfile or None if no profile is configured
+
+    With ``radius.rate_owner_enabled`` the single rate owner answers instead
+    (throttle > staged plan change > package profile).
     """
+    if access_rate_profile.rate_owner_enabled(db):
+        return access_rate_profile.resolve_effective_rate(
+            db, subscription, credential
+        ).profile
+
     # 1. Check credential-level override first
     if credential and credential.radius_profile_id:
         profile = db.get(RadiusProfile, credential.radius_profile_id)
@@ -330,6 +338,20 @@ def _resolve_effective_profile(
     if offer_profile:
         return db.get(RadiusProfile, offer_profile.profile_id)
     return None
+
+
+def _resolve_plan_profile(
+    db: Session, subscription: Subscription
+) -> RadiusProfile | None:
+    """The profile for the subscription's PLAN (no throttle, no override).
+
+    FUP full speed, the FUP restore target and NAS provisioning want the plan,
+    not whatever throttle is currently applied. With the single rate owner off
+    this is the previous subscription-level resolution.
+    """
+    if access_rate_profile.rate_owner_enabled(db):
+        return access_rate_profile.resolve_plan_profile(db, subscription)
+    return _resolve_effective_profile(db, subscription)
 
 
 def _resolve_nas_device(
@@ -649,29 +671,11 @@ def _send_coa_disconnect(
 def _build_mikrotik_rate_limit(profile: RadiusProfile) -> str | None:
     """Build MikroTik-Rate-Limit attribute string from profile speeds.
 
-    Format: rx/tx burst-rx/burst-tx threshold-rx/threshold-tx time.
-
-    rx/tx are NAS-perspective: rx is NAS ingress — the subscriber's UPLOAD —
-    and tx is NAS egress, the subscriber's DOWNLOAD. That convention is
-    encoded canonically in ``app.services.bandwidth.to_subscriber_directions``,
-    which the live bandwidth charts read through. Every pair here is therefore
-    upload-first; emitting download-first silently swaps a subscriber's rates.
+    The grammar lives with the single rate owner
+    (``app.services.access_rate_profile.profile_rate_limit``): rx/tx are
+    NAS-perspective, so every pair is upload-first.
     """
-    if profile.mikrotik_rate_limit:
-        return profile.mikrotik_rate_limit
-    if not profile.download_speed and not profile.upload_speed:
-        return None
-    dl = f"{profile.download_speed}k" if profile.download_speed else "0"
-    ul = f"{profile.upload_speed}k" if profile.upload_speed else "0"
-    rate = f"{ul}/{dl}"
-    if profile.burst_download or profile.burst_upload:
-        bdl = f"{profile.burst_download}k" if profile.burst_download else dl
-        bul = f"{profile.burst_upload}k" if profile.burst_upload else ul
-        threshold = f"{profile.burst_threshold}k" if profile.burst_threshold else dl
-        threshold_ul = f"{profile.burst_threshold}k" if profile.burst_threshold else ul
-        btime = str(profile.burst_time or 10)
-        rate = f"{ul}/{dl} {bul}/{bdl} {threshold_ul}/{threshold} {btime}/{btime}"
-    return rate
+    return access_rate_profile.profile_rate_limit(profile)
 
 
 def _attempt_coa_update(
@@ -680,7 +684,8 @@ def _attempt_coa_update(
     username: str | None,
     framed_ip: str | None,
     session_id: str | None,
-    profile: RadiusProfile,
+    profile: RadiusProfile | None,
+    rate_limit: str | None = None,
 ) -> tuple[bool, str]:
     """Send a RADIUS CoA-Update to change session attributes in-place.
 
@@ -733,14 +738,16 @@ def _attempt_coa_update(
         req["Framed-IP-Address"] = framed_ip
     if session_id:
         req["Acct-Session-Id"] = session_id
-    # Apply profile bandwidth attributes
-    rate_limit = _build_mikrotik_rate_limit(profile)
+    # Apply profile bandwidth attributes. The single rate owner passes the rate
+    # it derived; otherwise the profile's own speeds decide.
+    if rate_limit is None and profile is not None:
+        rate_limit = _build_mikrotik_rate_limit(profile)
     if rate_limit:
         try:
             req["Mikrotik-Rate-Limit"] = rate_limit
         except KeyError:
             logger.debug("Mikrotik-Rate-Limit attribute not in dictionary, skipping.")
-    if profile.download_speed:
+    if profile is not None and profile.download_speed:
         try:
             req["Filter-Id"] = profile.name or profile.code or ""
         except KeyError:
@@ -752,7 +759,7 @@ def _attempt_coa_update(
             "CoA update sent for user=%s on NAS %s (profile=%s).",
             username,
             nas_device.id,
-            profile.name,
+            profile.name if profile is not None else None,
         )
         return True, "sent"
     except Timeout:
@@ -774,11 +781,12 @@ def _send_coa_update(
     username: str | None,
     framed_ip: str | None,
     session_id: str | None,
-    profile: RadiusProfile,
+    profile: RadiusProfile | None,
+    rate_limit: str | None = None,
 ) -> bool:
     """Send a RADIUS CoA-Update; the bool contract is unchanged."""
     sent, disposition = _attempt_coa_update(
-        db, nas_device, username, framed_ip, session_id, profile
+        db, nas_device, username, framed_ip, session_id, profile, rate_limit
     )
     _record_coa_evidence(nas_device.id, CoaKind.update, disposition)
     return sent
@@ -822,14 +830,29 @@ def update_subscription_sessions(
     count = 0
     for session in sessions:
         credential = db.get(AccessCredential, session.access_credential_id)
-        # Resolve profile with credential-level override support
-        profile = _resolve_effective_profile(db, subscription, credential)
-        if not profile:
-            logger.warning(
-                "No profile found for session %s, skipping CoA update.",
-                session.id,
+        owner_rate = None
+        if access_rate_profile.rate_owner_enabled(db):
+            # One deterministic derivation shared with the radreply sweep, so
+            # the live session and the next reauthentication carry the same rate.
+            owner_rate = access_rate_profile.resolve_effective_rate(
+                db, subscription, credential
             )
-            continue
+            profile = owner_rate.profile
+            if profile is None and not owner_rate.rate_limit:
+                logger.warning(
+                    "No rate found for session %s, skipping CoA update.",
+                    session.id,
+                )
+                continue
+        else:
+            # Resolve profile with credential-level override support
+            profile = _resolve_effective_profile(db, subscription, credential)
+            if not profile:
+                logger.warning(
+                    "No profile found for session %s, skipping CoA update.",
+                    session.id,
+                )
+                continue
 
         nas_device = _resolve_nas_device(db, session)
         username = credential.username if credential else None
@@ -837,7 +860,13 @@ def update_subscription_sessions(
         session_id = session.session_id
         if nas_device:
             if _send_coa_update(
-                db, nas_device, username, framed_ip, session_id, profile
+                db,
+                nas_device,
+                username,
+                framed_ip,
+                session_id,
+                profile,
+                owner_rate.rate_limit if owner_rate is not None else None,
             ):
                 count += 1
             else:
@@ -1665,6 +1694,21 @@ def disconnect_subscription_sessions_confirmed(
     )
 
 
+def _signature_profile_id(db: Session, subscription: Subscription) -> str:
+    """The profile id the BNG would be served for this subscription.
+
+    The stored subscription profile before the single rate owner is enabled;
+    afterwards the derived profile, so a plan change that no longer rewrites
+    the stored field is still seen as an effective change.
+    """
+    if access_rate_profile.rate_owner_enabled(db):
+        profile_id = access_rate_profile.resolve_effective_rate(
+            db, subscription
+        ).profile_id
+        return str(profile_id or "")
+    return str(subscription.radius_profile_id or "")
+
+
 def network_identity_signature(db: Session, subscription: Subscription) -> tuple:
     """The RADIUS-effective network identity of a subscription: login, served
     IPv4, served IPv6 prefix, RADIUS profile, and the sorted set of active routed
@@ -1691,7 +1735,7 @@ def network_identity_signature(db: Session, subscription: Subscription) -> tuple
         (subscription.login or "").strip(),
         (subscription.ipv4_address or "").strip(),
         (subscription.ipv6_address or "").strip(),
-        str(subscription.radius_profile_id or ""),
+        _signature_profile_id(db, subscription),
         routes,
     )
 
@@ -2086,7 +2130,7 @@ def lift_fup_enforcement(
     if prior == FupActionStatus.throttled:
         target = str(state.original_profile_id) if state.original_profile_id else None
         if not target and subscription is not None:
-            prof = _resolve_effective_profile(db, subscription)
+            prof = _resolve_plan_profile(db, subscription)
             target = str(prof.id) if prof else None
         if target and subscription is not None:
             try:
@@ -2253,7 +2297,7 @@ def cleanup_subscription_on_cancel(db: Session, subscription_id: str) -> dict[st
                     build_nas_provisioning_commands,
                 )
 
-                profile = _resolve_effective_profile(db, subscription)
+                profile = _resolve_plan_profile(db, subscription)
                 commands = build_nas_provisioning_commands(
                     db,
                     subscription,

@@ -40,7 +40,7 @@ from app.schemas.catalog import (
     SubscriptionCreate,
     SubscriptionUpdate,
 )
-from app.services import settings_spec
+from app.services import access_rate_profile, settings_spec
 from app.services.billing_settings import COLLECTIBLE_SERVICE_STATUSES
 from app.services.common import (
     apply_ordering,
@@ -994,6 +994,11 @@ class Subscriptions(ListResponseMixin):
             str(payload.service_address_id) if payload.service_address_id else None,
         )
         catalog_validators.validate_offer_active(db, str(payload.offer_id))
+        # Unrecorded per-service speed overrides are refused once the single
+        # rate owner is enabled (a different speed is a different package).
+        access_rate_profile.refuse_unrecorded_override(
+            db, offer_id=payload.offer_id, profile_id=payload.radius_profile_id
+        )
         reference_at = payload.start_at or datetime.now(UTC)
         if payload.offer_version_id:
             catalog_validators.validate_offer_version_active(
@@ -1418,6 +1423,9 @@ class Subscriptions(ListResponseMixin):
         previous_profile_id = subscription.radius_profile_id
         subscriber_id = str(data.get("subscriber_id", subscription.subscriber_id))
         offer_id = str(data.get("offer_id", subscription.offer_id))
+        access_rate_profile.refuse_unrecorded_override(
+            db, offer_id=offer_id, profile_id=data.get("radius_profile_id")
+        )
         offer_version_id = data.get("offer_version_id", subscription.offer_version_id)
         # A plan change to a different offer must not carry the previous offer's
         # pinned version: a stale offer_version_id makes price resolution read the

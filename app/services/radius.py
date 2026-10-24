@@ -43,7 +43,7 @@ from app.schemas.radius import (
     RadiusSyncJobCreate,
     RadiusSyncJobUpdate,
 )
-from app.services import radius_dsn, settings_spec
+from app.services import access_rate_profile, radius_dsn, settings_spec
 from app.services.access_credential_secret import (
     AccessCredentialSecretFormat,
     classify_access_credential_secret,
@@ -1007,11 +1007,20 @@ def ensure_radius_users_for_subscription(
     if not credentials:
         return changed
 
+    rate_ctx = (
+        access_rate_profile.RateContext.load(db, [subscription.id])
+        if access_rate_profile.rate_owner_enabled(db)
+        else None
+    )
     for credential in credentials:
         existing_user = db.scalars(
             select(RadiusUser).where(RadiusUser.access_credential_id == credential.id)
         ).first()
-        profile_id = credential.radius_profile_id or subscription.radius_profile_id
+        profile_id = (
+            access_rate_profile.derive(rate_ctx, subscription, credential).profile_id
+            if rate_ctx is not None
+            else credential.radius_profile_id or subscription.radius_profile_id
+        )
         if existing_user:
             updated = False
             if existing_user.subscription_id != subscription.id:
@@ -1677,12 +1686,27 @@ class RadiusSyncJobs(ListResponseMixin):
                         )
                     ).all()
                 )
+                rate_ctx = (
+                    access_rate_profile.RateContext.load(db)
+                    if access_rate_profile.rate_owner_enabled(db)
+                    else None
+                )
                 for credential in credentials:
                     subscription = _radius_sync_subscription_for_subscriber(
                         db, credential.subscriber_id
                     )
                     if not subscription:
                         continue
+                    synced_profile_id = credential.radius_profile_id
+                    if rate_ctx is not None:
+                        rate_subscription = (
+                            db.get(Subscription, credential.subscription_id)
+                            if credential.subscription_id
+                            else None
+                        ) or subscription
+                        synced_profile_id = access_rate_profile.derive(
+                            rate_ctx, rate_subscription, credential
+                        ).profile_id
                     existing_user = db.scalars(
                         select(RadiusUser).where(
                             RadiusUser.access_credential_id == credential.id
@@ -1693,7 +1717,7 @@ class RadiusSyncJobs(ListResponseMixin):
                         existing_user.subscriber_id = subscription.subscriber_id
                         existing_user.username = credential.username
                         existing_user.secret_hash = credential.secret_hash
-                        existing_user.radius_profile_id = credential.radius_profile_id
+                        existing_user.radius_profile_id = synced_profile_id
                         existing_user.is_active = True
                         existing_user.last_sync_at = datetime.now(UTC)
                         users_updated += 1
@@ -1704,7 +1728,7 @@ class RadiusSyncJobs(ListResponseMixin):
                             access_credential_id=credential.id,
                             username=credential.username,
                             secret_hash=credential.secret_hash,
-                            radius_profile_id=credential.radius_profile_id,
+                            radius_profile_id=synced_profile_id,
                             is_active=True,
                             last_sync_at=datetime.now(UTC),
                         )

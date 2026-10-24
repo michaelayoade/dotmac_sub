@@ -1873,6 +1873,15 @@ SETTINGS_SPECS: list[SettingSpec] = [
     ),
     SettingSpec(
         domain=SettingDomain.radius,
+        key="rate_owner_enabled",
+        env_var=None,
+        value_type=SettingValueType.boolean,
+        default=False,
+        label="Derive Service Rate Through The Single Rate Owner",
+        owner_command_only=True,
+    ),
+    SettingSpec(
+        domain=SettingDomain.radius,
         key="active_group_name",
         env_var="RADIUS_ACTIVE_GROUP_NAME",
         value_type=SettingValueType.string,
