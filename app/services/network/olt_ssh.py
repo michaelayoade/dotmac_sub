@@ -459,8 +459,218 @@ def _setup_prompt_timeout() -> float:
     return settings.olt_ssh_prompt_timeout_seconds
 
 
-def _open_shell(olt: OLTDevice) -> tuple[Transport, Channel, OltSshPolicy]:
-    """Open an SSH shell session to an OLT. Caller must close transport."""
+_ANSI_RE = re.compile(r"\x1b\[[0-9;?]*[A-Za-z]")
+# A bare CLI prompt at the end of the received text: ``boi-olt>``, ``boi-olt#``,
+# ``boi-olt(config)#``. Pager ("More"), ``{ <cr>|...}:`` and ``(y/n)`` prompts
+# all end in something else, so they never count as clean.
+_CLEAN_PROMPT_RE = re.compile(r"(?:^|\r?\n)\S*[>#]\s*$")
+_LOGOUT_CONFIRM_RE = re.compile(r"log ?out\?\s*\(y/n\)", re.IGNORECASE)
+_LOGOUT_MAX_SECONDS = 3.0
+_LOGOUT_READ_SECONDS = 1.5
+
+
+def _instrument_channel(channel: Channel) -> None:
+    """Track whether the last thing received was a bare prompt.
+
+    Wraps ``send``/``recv`` on this channel instance. A send marks the channel
+    dirty until a read ends at a prompt again, so a logout is only ever typed
+    into a session that is verifiably idle at a prompt.
+    """
+    state = {"clean": False, "tail": ""}
+    try:
+        raw_send = channel.send
+        raw_recv = channel.recv
+    except AttributeError:
+        return
+
+    def send(data: Any) -> Any:
+        state["clean"] = False
+        return raw_send(data)
+
+    def recv(nbytes: int) -> Any:
+        chunk = raw_recv(nbytes)
+        if chunk:
+            text = (
+                chunk.decode("utf-8", errors="replace")
+                if isinstance(chunk, bytes)
+                else str(chunk)
+            )
+            state["tail"] = _ANSI_RE.sub("", (state["tail"] + text))[-400:]
+            state["clean"] = bool(_CLEAN_PROMPT_RE.search(state["tail"]))
+        return chunk
+
+    try:
+        channel.send = send  # type: ignore[method-assign]
+        channel.recv = recv  # type: ignore[method-assign]
+        channel._olt_raw_send = raw_send  # type: ignore[attr-defined]
+        channel._olt_raw_recv = raw_recv  # type: ignore[attr-defined]
+        channel._olt_state = state  # type: ignore[attr-defined]
+    except AttributeError:
+        return
+
+
+def _channel_is_clean(channel: Channel | None) -> bool:
+    state = getattr(channel, "_olt_state", None)
+    return bool(state and state.get("clean"))
+
+
+def _logout_session(
+    channel: Channel, *, max_seconds: float = _LOGOUT_MAX_SECONDS
+) -> str:
+    """Log out of a session that is idle at a clean prompt. Never raises.
+
+    Sends ``quit`` up to 4 times. ``y`` is typed ONLY when the text matches the
+    exact logout confirmation; any other ``(y/n)`` prompt (for example a
+    destructive ``ont delete`` confirmation) ends the attempt without answering.
+    """
+    raw_send = getattr(channel, "_olt_raw_send", None) or channel.send
+    raw_recv = getattr(channel, "_olt_raw_recv", None) or channel.recv
+    end = time.monotonic() + max_seconds
+
+    def _read(window: float) -> tuple[str, bool]:
+        text = ""
+        limit = min(end, time.monotonic() + window)
+        try:
+            channel.settimeout(0.3)
+        except Exception:
+            pass
+        while time.monotonic() < limit:
+            try:
+                chunk = raw_recv(4096)
+            except TimeoutError:
+                if _CLEAN_PROMPT_RE.search(_ANSI_RE.sub("", text)):
+                    return text, False
+                continue
+            except Exception:
+                return text, True
+            if not chunk:
+                return text, True
+            text += (
+                chunk.decode("utf-8", errors="replace")
+                if isinstance(chunk, bytes)
+                else str(chunk)
+            )
+            if "(y/n)" in text.lower() or _CLEAN_PROMPT_RE.search(
+                _ANSI_RE.sub("", text)
+            ):
+                return text, False
+        return text, False
+
+    try:
+        for _ in range(4):
+            if getattr(channel, "closed", False) or time.monotonic() >= end:
+                return "forced"
+            raw_send("quit\n")
+            text, eof = _read(_LOGOUT_READ_SECONDS)
+            if eof:
+                return "clean"
+            if _LOGOUT_CONFIRM_RE.search(text):
+                raw_send("y\n")
+                _read(_LOGOUT_READ_SECONDS)
+                return "clean"
+            if "(y/n)" in text.lower():
+                return "forced"
+        return "forced"
+    except Exception:
+        return "forced"
+
+
+def _manage_transport(
+    transport: Transport,
+    *,
+    lease: Any | None,
+    logout_on_close: bool,
+    grace_seconds: float,
+    olt_label: str,
+    priority: str,
+    opened_at: float,
+) -> None:
+    """Rebind ``transport.close`` so every close path logs out cleanly and
+    releases the limiter slot exactly once.
+
+    All ~57 call sites already ``transport.close()`` in ``finally`` (and the
+    pool and ``olt_session`` close through it), so the limit, the logout and the
+    release apply without editing any of them. ``close_real`` is the plain
+    paramiko close with no logout and no slot release (used for dirty sessions).
+    """
+    from app.services.network import olt_ssh_limiter, olt_ssh_metrics
+
+    original_close = transport.close
+    holder: dict[str, Any] = {"channel": None, "closed": False}
+
+    def release_slot() -> None:
+        if lease is None:
+            return
+        if grace_seconds > 0:
+            time.sleep(grace_seconds)
+        olt_ssh_limiter.mark_released(lease)
+        logger.info(
+            "olt_ssh_session olt=%s priority=%s wait_ms=%d hold_ms=%d scope_reused=false",
+            olt_label,
+            priority,
+            int(lease.wait_seconds * 1000),
+            int((time.monotonic() - opened_at) * 1000),
+        )
+
+    def close_real() -> None:
+        try:
+            original_close()
+        finally:
+            release_slot()
+
+    def close() -> None:
+        if holder["closed"]:
+            return
+        holder["closed"] = True
+        outcome = "skipped_dirty"
+        channel = holder["channel"]
+        try:
+            if logout_on_close and channel is not None and _channel_is_clean(channel):
+                try:
+                    active = transport.is_active()
+                except Exception:
+                    active = False
+                if active and not getattr(channel, "closed", False):
+                    outcome = _logout_session(channel)
+        except Exception:
+            outcome = "forced"
+        olt_ssh_metrics.record_logout(outcome)
+        try:
+            original_close()
+        except Exception:
+            logger.debug("olt_ssh_transport_close_failed", exc_info=True)
+        finally:
+            release_slot()
+
+    transport.close = close  # type: ignore[method-assign]
+    transport.close_real = close_real  # type: ignore[attr-defined]
+    transport._olt_holder = holder  # type: ignore[attr-defined]
+    transport.session_clean = lambda: _channel_is_clean(holder["channel"])  # type: ignore[attr-defined]
+
+
+def _attach_channel(transport: Transport, channel: Channel) -> None:
+    holder = getattr(transport, "_olt_holder", None)
+    if holder is not None:
+        holder["channel"] = channel
+
+
+def _connect_unlimited(
+    olt: OLTDevice,
+    *,
+    lease: Any | None,
+    priority_name: str,
+) -> tuple[Transport, Channel, OltSshPolicy]:
+    """Open the SSH shell. The caller already holds any slot (``lease``).
+
+    Auth-phase EOF retry: at most ONE retry, only when ``start_client`` /
+    ``auth_password`` fail with an EOF/banner error before any channel exists,
+    never for BACKGROUND, never for a password reject, and only if the caller's
+    deadline allows. ``olt_ssh_auth_eof_retry_delay_seconds=0`` disables it.
+    """
+    import random
+
+    from app.services.network import olt_ssh_limiter, olt_ssh_metrics
+
     host = (olt.mgmt_ip or olt.hostname or "").strip()
     if not host:
         raise ValueError("Management IP or hostname is required")
@@ -476,24 +686,159 @@ def _open_shell(olt: OLTDevice) -> tuple[Transport, Channel, OltSshPolicy]:
     if not password:
         raise ValueError("SSH password could not be decrypted")
 
+    config = olt_ssh_limiter.get_config()
+    model_key = olt_ssh_limiter.model_key_for(getattr(olt, "model", None))
     port = int(olt.ssh_port or 22)
-    sock = socket.create_connection((host, port), timeout=20)
-    transport = Transport(sock)
-    _apply_preferred_algorithms(transport, policy)
-    transport.start_client(timeout=20)
-    transport.auth_password(username=olt.ssh_username, password=password)
-    if not transport.is_authenticated():
-        transport.close()
-        raise RuntimeError("SSH authentication failed")
-    channel = transport.open_session(timeout=20)
-    # Use wider PTY and set terminal type to avoid control sequence issues
-    channel.get_pty(term="dumb", width=400, height=50)
-    channel.invoke_shell()
-    initial_output = _prime_shell_prompt(channel, policy.prompt_regex)
+    retry_allowed = (
+        priority_name != "background" and config.auth_eof_retry_delay_seconds > 0
+    )
+    opened_at = time.monotonic()
+    retried = False
+    while True:
+        sock = socket.create_connection((host, port), timeout=20)
+        transport = Transport(sock)
+        try:
+            _apply_preferred_algorithms(transport, policy)
+            transport.start_client(timeout=20)
+            transport.auth_password(username=olt.ssh_username, password=password)
+            break
+        except (SSHException, EOFError) as exc:
+            _discard_failed_transport(transport, sock)
+            deadline = olt_ssh_limiter.current_deadline()
+            delay = config.auth_eof_retry_delay_seconds + random.uniform(-3, 3)  # noqa: S311 - jitter
+            delay = max(1.0, delay)
+            fits = deadline is None or deadline - time.monotonic() > delay + 25
+            if (
+                retry_allowed
+                and not retried
+                and fits
+                and (
+                    isinstance(exc, EOFError)
+                    or olt_ssh_limiter.is_auth_eof_message(exc)
+                )
+            ):
+                retried = True
+                logger.warning(
+                    "OLT %s SSH login hit EOF before a channel existed; "
+                    "retrying once in %.1fs",
+                    olt.name,
+                    delay,
+                )
+                time.sleep(delay)
+                continue
+            raise
+        except BaseException:
+            _discard_failed_transport(transport, sock)
+            raise
+    try:
+        if not transport.is_authenticated():
+            raise RuntimeError("SSH authentication failed")
+        channel = transport.open_session(timeout=20)
+        # Use wider PTY and set terminal type to avoid control sequence issues
+        channel.get_pty(term="dumb", width=400, height=50)
+        channel.invoke_shell()
+        _instrument_channel(channel)
+        initial_output = _prime_shell_prompt(channel, policy.prompt_regex)
+    except BaseException:
+        _discard_failed_transport(transport, sock)
+        raise
+    _manage_transport(
+        transport,
+        lease=lease,
+        logout_on_close=config.logout_on_close,
+        grace_seconds=config.grace_for(model_key),
+        olt_label=str(getattr(olt, "name", "") or getattr(olt, "id", "")),
+        priority=priority_name,
+        opened_at=opened_at,
+    )
+    _attach_channel(transport, channel)
+    olt_ssh_metrics.record_open(
+        str(getattr(olt, "name", "") or getattr(olt, "id", "")),
+        priority_name,
+        "auth_eof_retried_ok" if retried else "ok",
+    )
     prompt_regex = _derive_prompt_regex(initial_output, policy.prompt_regex)
     if prompt_regex != policy.prompt_regex:
         policy = _replace_policy_prompt_regex(policy, prompt_regex)
     return transport, channel, policy
+
+
+def _discard_failed_transport(transport: Any, sock: Any) -> None:
+    """Close a half-open transport/socket without logout or slot handling."""
+    for closer in (getattr(transport, "close", None), getattr(sock, "close", None)):
+        if closer is None:
+            continue
+        try:
+            closer()
+        except Exception:
+            logger.debug("olt_ssh_failed_open_cleanup", exc_info=True)
+
+
+def _scope_normaliser(
+    session: tuple[Transport, Channel, OltSshPolicy],
+) -> bool:
+    """Return a reused scope session to its post-login (user-mode) state.
+
+    Only a session idle at a clean privileged prompt is reused: ``quit`` there
+    drops to user mode, exactly where a fresh login starts. Anything else
+    (config mode, pager, unknown) is reported unusable and reopened.
+    """
+    transport, channel, policy = session
+    try:
+        if not transport.is_active() or getattr(channel, "closed", False):
+            return False
+    except Exception:
+        return False
+    if not _channel_is_clean(channel):
+        return False
+    state = getattr(channel, "_olt_state", {})
+    tail = str(state.get("tail", ""))
+    last_line = tail.strip().splitlines()[-1].strip() if tail.strip() else ""
+    if last_line.endswith(">"):
+        return True
+    if not last_line.endswith("#") or "(config" in last_line:
+        return False
+    try:
+        channel.send("quit\n")
+        out = _read_until_prompt(channel, r"(?:^|\r?\n)\S*>\s*$", timeout_sec=5)
+    except Exception:
+        return False
+    return bool(re.search(r">\s*$", out or "")) and _channel_is_clean(channel)
+
+
+def _open_shell(olt: OLTDevice) -> tuple[Transport, Channel, OltSshPolicy]:
+    """Open an SSH shell session to an OLT. Caller must close transport.
+
+    Takes a per-OLT session slot first (cross-process Postgres semaphore, see
+    ``olt_ssh_limiter``) and raises ``OltSessionBusy`` (an ``olt_busy:``
+    ``TimeoutError``) before any socket is opened when none is free. Inside an
+    ``olt_ssh_scope`` the scope's single session is reused instead.
+    """
+    from app.services.network import olt_ssh_limiter, olt_ssh_metrics
+
+    scope = olt_ssh_limiter.active_scope(olt)
+    priority_name = olt_ssh_limiter.current_priority().name.lower()
+    if scope is not None:
+        return cast(
+            "tuple[Transport, Channel, OltSshPolicy]",
+            scope.checkout(
+                lambda: _connect_unlimited(
+                    olt, lease=None, priority_name=priority_name
+                ),
+                _scope_normaliser,
+            ),
+        )
+    lease = olt_ssh_limiter.acquire_for_olt(olt)
+    try:
+        return _connect_unlimited(olt, lease=lease, priority_name=priority_name)
+    except BaseException as exc:
+        olt_ssh_limiter.mark_released(lease)
+        olt_ssh_metrics.record_open(
+            str(getattr(olt, "name", "") or getattr(olt, "id", "")),
+            priority_name,
+            olt_ssh_metrics.classify_open_failure(exc),
+        )
+        raise
 
 
 def _cached_service_ports(olt: OLTDevice, fsp: str) -> list[ServicePortEntry] | None:

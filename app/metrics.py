@@ -610,6 +610,121 @@ class _IpConsistencyAuditCollector(Collector):
 REGISTRY.register(_IpConsistencyAuditCollector())
 
 
+class _OltSshLimiterCollector(Collector):
+    """Per-OLT SSH session metrics (G4).
+
+    ``olt_ssh_sessions_held`` is the truth: held advisory-lock slots counted in
+    ``pg_locks`` at scrape time (workers cannot export gauges to this
+    process). Counters (opens by outcome, slot wait, logouts) are Redis-backed
+    by the workers and read back here, fail-soft. Never raises.
+    """
+
+    def describe(self):  # noqa: ANN201 - prometheus collector protocol
+        yield _gauge_description(
+            "olt_ssh_sessions_held",
+            "OLT SSH session slots currently held (advisory locks)",
+            labels=["olt", "model"],
+        )
+        yield _gauge_description(
+            "olt_ssh_oldest_hold_seconds",
+            "Age of the oldest held OLT SSH session slot",
+            labels=["olt"],
+        )
+
+    def collect(self):  # noqa: ANN201 - prometheus collector protocol
+        from prometheus_client.core import (
+            CounterMetricFamily,
+            GaugeMetricFamily,
+            HistogramMetricFamily,
+        )
+
+        try:
+            from app.services.network import olt_ssh_metrics
+            from app.services.network.olt_ssh_limiter import get_config
+
+            counters = olt_ssh_metrics.load_counters()
+        except Exception:
+            return
+
+        opens = CounterMetricFamily(
+            "olt_ssh_open",
+            "OLT SSH session opens by outcome",
+            labels=["olt", "priority", "outcome"],
+        )
+        logouts = CounterMetricFamily(
+            "olt_ssh_logout",
+            "OLT SSH logouts before close by outcome",
+            labels=["outcome"],
+        )
+        waits: dict[tuple[str, str], dict[str, float]] = {}
+        for name, value in counters.items():
+            parts = name.split("|")
+            if parts[0] == "open" and len(parts) == 4:
+                opens.add_metric(parts[1:], value)
+            elif parts[0] == "logout" and len(parts) == 2:
+                logouts.add_metric([parts[1]], value)
+            elif parts[0] == "wait_bucket" and len(parts) == 4:
+                waits.setdefault((parts[1], parts[2]), {})[parts[3]] = value
+            elif parts[0] == "wait_sum" and len(parts) == 3:
+                waits.setdefault((parts[1], parts[2]), {})["sum"] = value
+        yield opens
+        yield logouts
+        wait_metric = HistogramMetricFamily(
+            "olt_ssh_slot_wait_seconds",
+            "Time waiting for an OLT SSH session slot",
+            labels=["olt", "priority"],
+        )
+        for (olt, priority), data in waits.items():
+            buckets = [
+                (str(bound), data.get(str(bound), 0.0))
+                for bound in olt_ssh_metrics.WAIT_BUCKETS
+            ]
+            buckets.append(("+Inf", data.get("+Inf", 0.0)))
+            wait_metric.add_metric([olt, priority], buckets, data.get("sum", 0.0))
+        yield wait_metric
+
+        try:
+            from sqlalchemy import select
+
+            from app.models.network import OLTDevice
+            from app.services.db_session_adapter import db_session_adapter
+
+            with db_session_adapter.read_session() as db:
+                olts = [
+                    (str(row.id), row.name, row.model)
+                    for row in db.execute(
+                        select(OLTDevice.id, OLTDevice.name, OLTDevice.model).where(
+                            OLTDevice.is_active.is_(True)
+                        )
+                    ).all()
+                ]
+            held = olt_ssh_metrics.held_slots_by_olt(olts, get_config())
+            models = {name: model for _id, name, model in olts}
+        except Exception:
+            return
+        held_metric = GaugeMetricFamily(
+            "olt_ssh_sessions_held",
+            "OLT SSH session slots currently held (advisory locks)",
+            labels=["olt", "model"],
+        )
+        oldest_metric = GaugeMetricFamily(
+            "olt_ssh_oldest_hold_seconds",
+            "Age of the oldest held OLT SSH session slot",
+            labels=["olt"],
+        )
+        for name, model in models.items():
+            count, oldest = held.get(name, (0, 0.0))
+            held_metric.add_metric(
+                [name, olt_ssh_metrics.model_key_for(model)], float(count)
+            )
+            oldest_metric.add_metric([name], float(oldest))
+        yield held_metric
+        yield oldest_metric
+
+
+REGISTRY.register(_OltSshLimiterCollector())
+
+
 class _Ipv4RetentionCollector(Collector):
     """Latest daily IPv4 retention sweep counts by class (shadow or apply)."""
 

@@ -36,10 +36,12 @@ invoke it directly. Long operations take up to ``timeout_sec``.
 
 from __future__ import annotations
 
+import contextvars
 import logging
 import time
 import uuid
 from concurrent.futures import ThreadPoolExecutor
+from contextlib import ExitStack
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime, timedelta
 from functools import partial
@@ -49,6 +51,12 @@ from sqlalchemy import select, text
 from sqlalchemy.orm import Session
 
 from app.models.network import OLTDevice, OntSyncStatus, OntUnit
+from app.services.network.olt_ssh_limiter import (
+    OltSessionBusy,
+    OltSshPriority,
+    is_busy_message,
+    olt_ssh_scope,
+)
 from app.services.network.ppp_delivery_authorization import (
     authorize_ppp_delivery,
     derive_delivery_scope,
@@ -213,6 +221,7 @@ def reconcile_ont(
     ping_function: PingFunction | None = None,
     lifecycle_binding: ReconcileLifecycleBinding | None = None,
     readback_only: bool = False,
+    ssh_priority: OltSshPriority | None = None,
 ) -> ReconcileResult:
     """Reconcile one ONT — bring live state into agreement with desired state.
 
@@ -242,6 +251,9 @@ def reconcile_ont(
         lifecycle_binding: Exact assignment, configuration head, revision and
             operation allowed to own this pass's current status projection.
         readback_only: Observe and verify without applying a device write.
+        ssh_priority: OLT SSH limiter priority for this pass. Defaults to
+            INTERACTIVE for readback-only, BACKGROUND for ``mode="sweep"`` and
+            WRITE otherwise.
         olt_adapter: Pre-built OLT SSH adapter. Tests pass a stub; in
             production it's built from the ``OLTDevice`` row.
         acs_client: Pre-built GenieACS NBI client. Same pattern.
@@ -267,6 +279,9 @@ def reconcile_ont(
         else proposed_change
     )
     persist_proposed_values = not isinstance(proposed_change, OntWanProposedChange)
+    # Holds the per-pass OLT SSH scope (one slot, one login) until the function
+    # returns by any path.
+    scope_stack = ExitStack()
 
     try:
         with acquire_reconcile_lock(db, ont_unit_id) as ont:
@@ -427,6 +442,43 @@ def reconcile_ont(
             # is never reassigned after this point, so the same flag applies
             # to both the pre-apply read below and the post-apply verify read.
             olt_read_attempted = olt_adapter is not None
+
+            # ── One OLT session for the whole pass ──────────────────────────
+            # Take the OLT's SSH slot BEFORE any OLT I/O. When it is busy the
+            # pass stops here: nothing was read or written, the prior sync
+            # status is restored, and the lifecycle defers instead of failing.
+            scope_olt = getattr(olt_adapter, "olt", None) if olt_adapter else None
+            if getattr(scope_olt, "id", None) is not None:
+                try:
+                    scope_stack.enter_context(
+                        olt_ssh_scope(
+                            scope_olt,
+                            ssh_priority or _default_ssh_priority(mode, readback_only),
+                            deadline_monotonic=started_monotonic + timeout_sec,
+                        )
+                    )
+                except OltSessionBusy as exc:
+                    return _finalise(
+                        db,
+                        ont,
+                        success=False,
+                        failure=ReconcileFailure(
+                            reason=ReconcileFailureReason.OLT_BUSY,
+                            message=str(exc),
+                            evidence={"readback_pending": bool(readback_only)},
+                        ),
+                        started_monotonic=started_monotonic,
+                        observed_after=None,
+                        actions_applied=(),
+                        drift_before=(),
+                        drift_after=(),
+                        observed_surfaces=frozenset(),
+                        olt_read_status=None,
+                        preserve=_ForeignStatePreserve(
+                            sync_status=prior_sync_status,
+                            last_error=prior_last_error,
+                        ),
+                    )
             # Symmetric case: ``acs_client is None`` at this point means the
             # OLT-only profile-change pass (``olt_only_profile_change``)
             # deliberately skipped ACS I/O and substitutes
@@ -838,6 +890,13 @@ def reconcile_ont(
             # if the plan happened to be a delete-only pass.
             if verify_olt_result.status == "unavailable":
                 verify_olt_reason = _olt_unavailable_reason(verify_olt_result)
+                # A transport failure (unreachable / busy / EOF) AFTER a
+                # successful apply proves nothing about the apply itself: hand
+                # it to the existing delayed-readback rail instead of failing.
+                verify_transport_failure = verify_olt_reason in {
+                    ReconcileFailureReason.OLT_UNREACHABLE,
+                    ReconcileFailureReason.OLT_BUSY,
+                }
                 return finalise(
                     db,
                     ont,
@@ -847,6 +906,11 @@ def reconcile_ont(
                         message=(
                             "Post-apply verification could not confirm OLT state: "
                             f"{verify_olt_result.error or 'no detail'}"
+                        ),
+                        evidence=(
+                            {"readback_pending": True}
+                            if verify_transport_failure
+                            else None
                         ),
                     ),
                     started_monotonic=started_monotonic,
@@ -1084,6 +1148,18 @@ def reconcile_ont(
             ),
         )
 
+    finally:
+        scope_stack.close()
+
+
+def _default_ssh_priority(mode: str, readback_only: bool) -> OltSshPriority:
+    """Limiter priority when the caller did not choose one."""
+    if readback_only:
+        return OltSshPriority.INTERACTIVE
+    if mode == "sweep":
+        return OltSshPriority.BACKGROUND
+    return OltSshPriority.WRITE
+
 
 # ── Internal helpers ────────────────────────────────────────────────────────
 
@@ -1235,8 +1311,13 @@ def _read_observed_parallel(
         )
 
     with ThreadPoolExecutor(max_workers=2, thread_name_prefix="reconcile-read") as pool:
+        # The OLT read runs in a worker thread: carry the SSH scope/priority
+        # contextvars across so it joins the pass's session instead of opening
+        # a second one.
+        olt_context = contextvars.copy_context()
         olt_future = pool.submit(
-            read_olt_state, olt_adapter, desired, deadline=deadline
+            olt_context.run,
+            partial(read_olt_state, olt_adapter, desired, deadline=deadline),
         )
         acs_future = pool.submit(read_acs_state, acs_client, desired, deadline=deadline)
         olt_result = olt_future.result()
@@ -1320,6 +1401,8 @@ def _olt_unavailable_reason(result: ReadResult) -> str:
     compare against at all) — and each gets its own operator-facing reason
     rather than collapsing into the generic ``OLT_OBSERVATION_UNAVAILABLE``.
     """
+    if is_busy_message(result.error):
+        return ReconcileFailureReason.OLT_BUSY
     if result.unreachable:
         return ReconcileFailureReason.OLT_UNREACHABLE
     if result.identity_status == "mismatch":
