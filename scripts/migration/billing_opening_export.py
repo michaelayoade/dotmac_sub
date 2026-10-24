@@ -17,6 +17,7 @@ from uuid import UUID
 from sqlalchemy.exc import SQLAlchemyError
 
 from app.db import read_only_snapshot_session
+from app.services.billing.opening_census_wire import render_opening_census_wire
 from app.services.billing.opening_export import (
     BillingOpeningExportError,
     preview_billing_opening_export,
@@ -96,7 +97,17 @@ def main(argv: Sequence[str] | None = None) -> int:
         ),
         required=True,
     )
+    parser.add_argument(
+        "--output",
+        choices=("json", "wire"),
+        default="json",
+        help="json (default) or the rehearsal census wire document (v3 only)",
+    )
     args = parser.parse_args(argv)
+    if args.output == "wire" and args.population_version != (
+        "sub-billing-opening-census-v3"
+    ):
+        parser.error("--output wire requires sub-billing-opening-census-v3")
     precisions = tuple(args.currency_precision)
     if len(dict(precisions)) != len(precisions):
         parser.error("declare each currency precision exactly once")
@@ -110,7 +121,12 @@ def main(argv: Sequence[str] | None = None) -> int:
     try:
         with read_only_snapshot_session() as db:
             report = preview_billing_opening_export(db, query=query)
-        output = _json_value(asdict(report))
+        if args.output == "wire":
+            if not isinstance(report, BillingOpeningExportPreviewV3):
+                raise TypeError("wire output renders census v3 only")
+            wire = render_opening_census_wire(report)
+        else:
+            output = _json_value(asdict(report))
     except BillingOpeningExportError as exc:
         print(json.dumps({"complete": False, "error": exc.code}, sort_keys=True))
         return 2
@@ -129,7 +145,10 @@ def main(argv: Sequence[str] | None = None) -> int:
             )
         )
         return 2
-    print(json.dumps(output, sort_keys=True, allow_nan=False))
+    if args.output == "wire":
+        print(wire, end="")
+    else:
+        print(json.dumps(output, sort_keys=True, allow_nan=False))
     return (
         1
         if report.blocking_exceptions
