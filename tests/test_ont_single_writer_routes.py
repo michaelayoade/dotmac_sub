@@ -92,10 +92,10 @@ def test_configure_mgmt_ip_action_is_retired(monkeypatch):
 )
 def test_api_direct_writers_return_410(call, monkeypatch):
     from app.api import network_ont_ops
-    from app.services.network import ont_write as ont_write_module
+    from app.services.network.ont_write import ont_write
 
     for name in ("update_management_ip", "update_service_port", "move_ont"):
-        monkeypatch.setattr(ont_write_module.ont_write, name, _boom)
+        monkeypatch.setattr(ont_write, name, _boom)
     with pytest.raises(HTTPException) as excinfo:
         call(network_ont_ops)
     assert excinfo.value.status_code == 410
