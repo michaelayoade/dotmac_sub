@@ -110,6 +110,7 @@ class RouterConnectionService:
     def _get_or_create_tunnel(
         cls, router: Router | LldpRouter, jump_host: JumpHost | LldpJumpHost
     ) -> SSHTunnelForwarder:
+        require(Effect.device_ssh)
         with cls._lock:
             tunnel_key = f"{jump_host.id}:{router.management_ip}:{router.rest_api_port}"
 

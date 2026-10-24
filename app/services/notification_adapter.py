@@ -46,6 +46,7 @@ from typing import TYPE_CHECKING, Any, Protocol, runtime_checkable
 from app.models.domain_settings import SettingDomain
 from app.services import settings_spec
 from app.services.adapters import adapter_registry
+from app.services.outbound_effects import Effect, require
 
 if TYPE_CHECKING:
     pass
@@ -433,6 +434,7 @@ class WebhookProvider:
         return True  # Always available if there's a URL
 
     def send(self, request: NotificationRequest) -> NotificationResult:
+        require(Effect.webhook_out)
         import httpx
 
         webhook_url = request.recipient

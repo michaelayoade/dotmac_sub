@@ -20,7 +20,10 @@ from app.config import settings
 
 logger = logging.getLogger(__name__)
 
-_PRODUCTION_ENVS = frozenset({"production", "prod"})
+# Exactly "production", which is what the deploy workflow requires.
+# app.config.Settings also treats "prod" as production for its own purposes;
+# this gate deliberately does not, so a mistyped value blocks rather than opens.
+_PRODUCTION_ENVS = frozenset({"production"})
 
 
 class Effect(StrEnum):
@@ -34,6 +37,8 @@ class Effect(StrEnum):
     payment_gateway = "payment_gateway"
     webhook_out = "webhook_out"
     social_messaging = "social_messaging"
+    erp_sync = "erp_sync"
+    push = "push"
 
 
 class OutboundEffectBlocked(RuntimeError):

@@ -22,7 +22,7 @@ def _use(monkeypatch: pytest.MonkeyPatch, app_env: str, allow: str = "") -> None
     )
 
 
-@pytest.mark.parametrize("env", ["production", "prod", "Production"])
+@pytest.mark.parametrize("env", ["production", "Production"])
 def test_production_permits_everything(
     monkeypatch: pytest.MonkeyPatch, env: str
 ) -> None:
@@ -31,7 +31,9 @@ def test_production_permits_everything(
         oe.require(effect)
 
 
-@pytest.mark.parametrize("env", ["staging", "development", "test", "", "unknown"])
+@pytest.mark.parametrize(
+    "env", ["staging", "development", "test", "prod", "", "unknown"]
+)
 def test_non_production_blocks_by_default(
     monkeypatch: pytest.MonkeyPatch, env: str
 ) -> None:

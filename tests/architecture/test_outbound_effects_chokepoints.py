@@ -33,6 +33,22 @@ TRANSPORT_ROOTS = {
     "paramiko",
     "routeros_api",
     "pyrad",
+    "sshtunnel",
+}
+# Calls that open or drive a connection. Key loading, host-key policies and
+# exception classes are not call sites.
+OPENER_NAMES = {
+    "SSHClient",
+    "Transport",
+    "SSHTunnelForwarder",
+    "SMTP",
+    "SMTP_SSL",
+    "LMTP",
+    "RouterOsApiPool",
+    "RouterOsApi",
+    "connect",
+    "Client",
+    "SendPacket",
 }
 NON_TRANSPORT_SUBMODULES = {
     "paramiko.ssh_exception",
@@ -110,6 +126,16 @@ def _imported_modules(tree: ast.AST) -> set[str]:
     return modules
 
 
+def _requires_imported(tree: ast.AST) -> bool:
+    """``require`` must be the one from app.services.outbound_effects."""
+    return any(
+        isinstance(n, ast.ImportFrom)
+        and n.module == "app.services.outbound_effects"
+        and any(a.name == "require" and a.asname is None for a in n.names)
+        for n in ast.walk(tree)
+    )
+
+
 def _calls_require(node: ast.AST) -> bool:
     return any(
         isinstance(child, ast.Call)
@@ -117,6 +143,50 @@ def _calls_require(node: ast.AST) -> bool:
         and child.func.id == "require"
         for child in ast.walk(node)
     )
+
+
+def _transport_names(tree: ast.AST) -> tuple[set[str], set[str]]:
+    """(module aliases, imported names) that come from a transport module."""
+    modules: set[str] = set()
+    names: set[str] = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            for alias in node.names:
+                if _is_transport(alias.name):
+                    modules.add((alias.asname or alias.name).split(".")[0])
+        elif isinstance(node, ast.ImportFrom) and node.module and node.level == 0:
+            for alias in node.names:
+                if _is_transport(node.module) or _is_transport(
+                    f"{node.module}.{alias.name}"
+                ):
+                    names.add(alias.asname or alias.name)
+    return modules, names
+
+
+def _call_sites(tree: ast.Module) -> list[tuple[ast.Call, list[ast.AST]]]:
+    """Transport-opening calls, each with its chain of enclosing functions."""
+    modules, names = _transport_names(tree)
+    found: list[tuple[ast.Call, list[ast.AST]]] = []
+
+    def visit(node: ast.AST, scopes: list[ast.AST]) -> None:
+        if isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef):
+            scopes = [*scopes, node]
+        if isinstance(node, ast.Call):
+            func = node.func
+            if isinstance(func, ast.Name) and func.id in names | modules:
+                if func.id in OPENER_NAMES or func.id in modules:
+                    found.append((node, scopes))
+            elif isinstance(func, ast.Attribute) and func.attr in OPENER_NAMES:
+                root = func
+                while isinstance(root, ast.Attribute):
+                    root = root.value  # type: ignore[assignment]
+                if isinstance(root, ast.Name) and root.id in modules | names:
+                    found.append((node, scopes))
+        for child in ast.iter_child_nodes(node):
+            visit(child, scopes)
+
+    visit(tree, [])
+    return found
 
 
 def _find(tree: ast.Module, qualified: str) -> ast.AST | None:
@@ -138,7 +208,7 @@ def _find(tree: ast.Module, qualified: str) -> ast.AST | None:
     return node
 
 
-def test_transport_importers_call_require() -> None:
+def test_transport_importers_import_gate() -> None:
     offenders = []
     for path in source_index.python_files(APP):
         if path == GATE_MODULE:
@@ -154,9 +224,35 @@ def test_transport_importers_call_require() -> None:
     )
 
 
+def test_every_transport_call_site_is_gated() -> None:
+    """Per call site, not per module: the enclosing function must call require."""
+    offenders = []
+    for path in source_index.python_files(APP):
+        if path == GATE_MODULE:
+            continue
+        tree = source_index.python_ast(path)
+        sites = _call_sites(tree)
+        if not sites:
+            continue
+        rel = path.relative_to(ROOT).as_posix()
+        if not _requires_imported(tree):
+            offenders.append(f"{rel}: require not imported from outbound_effects")
+            continue
+        for call, scopes in sites:
+            if not any(_calls_require(scope) for scope in scopes):
+                where = (
+                    getattr(scopes[-1], "name", "<module>") if scopes else "<module>"
+                )
+                offenders.append(f"{rel}:{call.lineno} in {where}")
+    assert not offenders, "transport call sites without require(): " + "; ".join(
+        offenders
+    )
+
+
 @pytest.mark.parametrize(("rel", "qualified"), CHOKEPOINTS)
 def test_chokepoint_calls_require(rel: str, qualified: str) -> None:
     tree = source_index.python_ast(APP / rel)
+    assert _requires_imported(tree), f"{rel} must import require from outbound_effects"
     node = _find(tree, qualified)
     assert node is not None, f"{rel}:{qualified} not found; update CHOKEPOINTS"
     assert _calls_require(node), f"{rel}:{qualified} must call require(Effect.*)"
@@ -174,6 +270,7 @@ def test_every_effect_is_gated_somewhere() -> None:
                 isinstance(node, ast.Call)
                 and isinstance(node.func, ast.Name)
                 and node.func.id == "require"
+                and _requires_imported(source_index.python_ast(path))
                 and node.args
                 and isinstance(node.args[0], ast.Attribute)
             ):
