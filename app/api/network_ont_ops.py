@@ -393,18 +393,29 @@ def update_ont_external_id(
     dependencies=[Depends(require_permission("network:ont:write"))],
 )
 def set_ont_wifi_config(
-    ont_id: str, payload: OntWifiConfigRequest, db: Session = Depends(get_db)
+    ont_id: str,
+    payload: OntWifiConfigRequest,
+    request: Request,
+    db: Session = Depends(get_db),
 ) -> OntActionResponse:
-    from app.services.network.ont_features import ont_features
+    """Queue a sparse WiFi change through the ONT configuration lifecycle."""
+    from app.services.web_network_ont_actions.lifecycle_admission import (
+        submit_wifi_change,
+    )
 
-    result = ont_features.set_wifi_config(
+    if payload.band:
+        raise HTTPException(
+            status_code=422,
+            detail="Per-band WiFi changes are not supported by the lifecycle.",
+        )
+    result = submit_wifi_change(
         db,
+        request,
         ont_id,
         ssid=payload.ssid,
         password=payload.password,
         enabled=payload.enabled,
-        band=payload.band,
-        channel=payload.channel,
+        channel=None if payload.channel is None else str(payload.channel),
         security_mode=payload.security_mode,
     )
     return _action_response(result)
@@ -550,6 +561,7 @@ ALLOWED_BULK_ACTIONS = {
 )
 def submit_bulk_action(
     payload: OntBulkActionRequest,
+    request: Request,
     db: Session = Depends(get_db),
 ) -> OntBulkActionResponse:
     if payload.action not in ALLOWED_BULK_ACTIONS:
@@ -587,11 +599,20 @@ def submit_bulk_action(
                 f"{result.skipped} skipped"
             ),
         )
+    from app.services import web_admin as web_admin_service
     from app.services.queue_adapter import enqueue_task
 
+    bulk_params = dict(payload.params or {})
+    if payload.action == "wifi_update":
+        # The lifecycle records who asked; the permission was checked above.
+        auth = getattr(request.state, "auth", {}) or {}
+        bulk_params["_actor"] = (
+            f"{auth.get('principal_type') or 'user'}:"
+            f"{web_admin_service.get_actor_id(request) or auth.get('principal_id') or 'unknown'}"
+        )
     task = enqueue_task(
         "app.tasks.ont_bulk.execute_bulk_action",
-        args=[payload.ont_ids, payload.action, payload.params],
+        args=[payload.ont_ids, payload.action, bulk_params],
         correlation_id=f"ont_bulk:{payload.action}:{len(payload.ont_ids)}",
         source="api_network_ont_bulk",
     )

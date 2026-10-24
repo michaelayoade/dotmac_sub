@@ -10,6 +10,7 @@ OLT or ACS.
 from __future__ import annotations
 
 import uuid
+from dataclasses import astuple
 
 from sqlalchemy.orm import Session
 from starlette.requests import Request
@@ -18,14 +19,13 @@ from app.db import finish_read_transaction
 from app.services import web_admin as web_admin_service
 from app.services.auth_dependencies import has_permission
 from app.services.domain_errors import DomainError
-from app.services.network.effective_ont_config import resolve_effective_ont_config
 from app.services.network.ont_action_common import ActionResult
 from app.services.network.ont_service_configuration import (
     ConfigureOntServiceCommand,
     ManagementConfigurationChange,
     OntConfigurationChange,
     OntConfigurationSection,
-    WifiConfigurationChange,
+    WifiPatchConfigurationChange,
     configure_ont_service,
 )
 from app.services.owner_commands import CommandContext
@@ -53,32 +53,26 @@ def lifecycle_command_context(
     )
 
 
-def submit_section_change(
+def admit_section_change(
     db: Session,
-    request: Request,
     ont_id: str,
     *,
+    context: CommandContext,
+    permission_granted: bool,
     section: OntConfigurationSection,
     change: OntConfigurationChange,
-    reason: str,
 ) -> ActionResult:
-    """Admit one section change; the lifecycle plans and applies it."""
+    """Admit one section change with an explicit command context."""
     try:
         ont_uuid = uuid.UUID(str(ont_id))
     except ValueError:
         return ActionResult(success=False, message="Invalid ONT identifier.")
-    auth = getattr(request.state, "auth", {}) or {}
-    permission_granted = bool(auth) and has_permission(auth, db, "network:ont:write")
     finish_read_transaction(db)
     try:
         outcome = configure_ont_service(
             db,
             ConfigureOntServiceCommand(
-                context=lifecycle_command_context(
-                    request,
-                    reason=reason,
-                    idempotency_key=f"ont-config:{ont_id}:{section.value}:{uuid.uuid4()}",
-                ),
+                context=context,
                 ont_unit_id=ont_uuid,
                 permission_granted=permission_granted,
                 section=section,
@@ -98,6 +92,53 @@ def submit_section_change(
     )
 
 
+def submit_section_change(
+    db: Session,
+    request: Request,
+    ont_id: str,
+    *,
+    section: OntConfigurationSection,
+    change: OntConfigurationChange,
+    reason: str,
+) -> ActionResult:
+    """Admit one section change; the lifecycle plans and applies it."""
+    auth = getattr(request.state, "auth", {}) or {}
+    permission_granted = bool(auth) and has_permission(auth, db, "network:ont:write")
+    return admit_section_change(
+        db,
+        ont_id,
+        context=lifecycle_command_context(
+            request,
+            reason=reason,
+            idempotency_key=f"ont-config:{ont_id}:{section.value}:{uuid.uuid4()}",
+        ),
+        permission_granted=permission_granted,
+        section=section,
+        change=change,
+    )
+
+
+def wifi_patch(
+    *,
+    ssid: str | None = None,
+    password: str | None = None,
+    enabled: bool | None = None,
+    channel: str | None = None,
+    security_mode: str | None = None,
+) -> WifiPatchConfigurationChange | None:
+    """Build a sparse patch; blank strings mean unchanged. None if empty."""
+    patch = WifiPatchConfigurationChange(
+        ssid=(ssid or "").strip() or None,
+        password=(password or "").strip() or None,
+        enabled=enabled,
+        channel=_text(channel),
+        security_mode=_text(security_mode),
+    )
+    if all(value is None for value in astuple(patch)):
+        return None
+    return patch
+
+
 def submit_wifi_change(
     db: Session,
     request: Request,
@@ -105,36 +146,69 @@ def submit_wifi_change(
     *,
     ssid: str | None = None,
     password: str | None = None,
+    enabled: bool | None = None,
+    channel: str | None = None,
+    security_mode: str | None = None,
 ) -> ActionResult:
-    """Change SSID and/or password; unchanged WiFi fields carry forward."""
-    ssid_text = (ssid or "").strip() or None
-    password_text = (password or "").strip() or None
-    if ssid_text is None and password_text is None:
-        return ActionResult(
-            success=False, message="A WiFi name or password is required."
-        )
-    try:
-        ont = _load_ont(db, ont_id)
-    except ValueError:
-        return ActionResult(success=False, message="ONT not found.")
-    values = resolve_effective_ont_config(db, ont)["values"]
-    enabled = values.get("wifi_enabled")
-    change = WifiConfigurationChange(
-        enabled=True if enabled is None else bool(enabled),
-        ssid=ssid_text or _text(values.get("wifi_ssid")),
-        channel=_text(values.get("wifi_channel")),
-        security_mode=_text(values.get("wifi_security_mode")),
-        password=password_text,
+    """Change WiFi fields; unset fields stay as the owner holds them."""
+    patch = wifi_patch(
+        ssid=ssid,
+        password=password,
+        enabled=enabled,
+        channel=channel,
+        security_mode=security_mode,
     )
-    what = "WiFi name" if password_text is None else "WiFi password"
+    if patch is None:
+        return ActionResult(success=False, message="A WiFi setting is required.")
     return submit_section_change(
         db,
         request,
         ont_id,
         section=OntConfigurationSection.wifi,
-        change=change,
-        reason=f"Change ONT {what}",
+        change=patch,
+        reason="Change ONT WiFi settings",
     )
+
+
+def submit_wifi_change_for_bulk(
+    db: Session,
+    ont_id: str,
+    *,
+    actor: str,
+    params: dict[str, object],
+) -> ActionResult:
+    """One lifecycle admission per ONT for a bulk wifi_update.
+
+    The bulk route already checked ``network:ont:write`` for the initiator.
+    """
+    patch = wifi_patch(
+        ssid=cast_text(params.get("ssid")),
+        password=cast_text(params.get("password")),
+        enabled=params.get("enabled")
+        if isinstance(params.get("enabled"), bool)
+        else None,
+        channel=cast_text(params.get("channel")),
+        security_mode=cast_text(params.get("security_mode")),
+    )
+    if patch is None:
+        return ActionResult(success=False, message="A WiFi setting is required.")
+    return admit_section_change(
+        db,
+        ont_id,
+        context=CommandContext.system(
+            actor=actor or "bulk:unknown",
+            scope="network:ont:write",
+            reason="Bulk ONT WiFi update",
+            idempotency_key=f"ont-config:{ont_id}:wifi:{uuid.uuid4()}",
+        ),
+        permission_granted=True,
+        section=OntConfigurationSection.wifi,
+        change=patch,
+    )
+
+
+def cast_text(value: object) -> str | None:
+    return value if isinstance(value, str) else None
 
 
 def submit_management_change(
@@ -165,12 +239,3 @@ def submit_management_change(
 def _text(value: object) -> str | None:
     text = str(value).strip() if value is not None else ""
     return text or None
-
-
-def _load_ont(db: Session, ont_id: str):
-    from app.models.network import OntUnit
-
-    ont = db.get(OntUnit, uuid.UUID(str(ont_id)))
-    if ont is None:
-        raise ValueError("ONT not found")
-    return ont

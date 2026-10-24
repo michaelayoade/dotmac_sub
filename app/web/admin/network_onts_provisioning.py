@@ -10,7 +10,7 @@ from __future__ import annotations
 import json
 from urllib.parse import quote_plus
 
-from fastapi import APIRouter, Depends, Form, Query, Request
+from fastapi import APIRouter, Depends, Query, Request
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Response
 from sqlalchemy.orm import Session
 
@@ -260,86 +260,12 @@ def ont_preflight_check(
     "/onts/{ont_id}/save-provision-settings",
     dependencies=[Depends(require_permission("network:ont:write"))],
 )
-def ont_save_provision_settings(
-    request: Request,
-    ont_id: str,
-    onu_mode: str | None = Form(default=None),
-    mgmt_ip_mode: str | None = Form(default=None),
-    mgmt_ip_address: str | None = Form(default=None),
-    mgmt_subnet: str | None = Form(default=None),
-    mgmt_gateway: str | None = Form(default=None),
-    wan_protocol: str | None = Form(default=None),
-    ip_pool_id: str | None = Form(default=None),
-    static_ip_pool_id: str | None = Form(default=None),
-    static_ip: str | None = Form(default=None),
-    static_subnet: str | None = Form(default=None),
-    static_gateway: str | None = Form(default=None),
-    static_dns: str | None = Form(default=None),
-    lan_ip: str | None = Form(default=None),
-    lan_subnet: str | None = Form(default=None),
-    dhcp_enabled: str | None = Form(default=None),
-    dhcp_start: str | None = Form(default=None),
-    dhcp_end: str | None = Form(default=None),
-    wifi_enabled: str | None = Form(default=None),
-    wifi_ssid: str | None = Form(default=None),
-    wifi_password: str | None = Form(default=None),
-    wifi_security_mode: str | None = Form(default=None),
-    wifi_channel: str | None = Form(default=None),
-    pppoe_username: str | None = Form(default=None),
-    pppoe_password: str | None = Form(default=None),
-    db: Session = Depends(get_db),
-) -> Response:
-    """Persist provision-page WAN settings without starting provisioning."""
-    result = web_onts_provisioning_service.save_provision_settings(
-        db,
-        ont_id=ont_id,
-        onu_mode=onu_mode,
-        mgmt_ip_mode=mgmt_ip_mode,
-        mgmt_ip_address=mgmt_ip_address,
-        mgmt_subnet=mgmt_subnet,
-        mgmt_gateway=mgmt_gateway,
-        wan_protocol=wan_protocol,
-        ip_pool_id=ip_pool_id,
-        static_ip_pool_id=static_ip_pool_id,
-        static_ip=static_ip,
-        static_subnet=static_subnet,
-        static_gateway=static_gateway,
-        static_dns=static_dns,
-        lan_ip=lan_ip,
-        lan_subnet=lan_subnet,
-        dhcp_enabled=dhcp_enabled,
-        dhcp_start=dhcp_start,
-        dhcp_end=dhcp_end,
-        wifi_enabled=wifi_enabled,
-        wifi_ssid=wifi_ssid,
-        wifi_password=wifi_password,
-        wifi_security_mode=wifi_security_mode,
-        wifi_channel=wifi_channel,
-        pppoe_username=pppoe_username,
-        pppoe_password=pppoe_password,
-    )
-    success = bool(result.content.get("success"))
-    message = str(result.content.get("message") or "Provision settings failed")
-    log_network_action_result(
-        request=request,
-        resource_type="ont",
-        resource_id=ont_id,
-        action="Save Provisioning Configuration",
-        success=success,
-        message=message,
-        metadata={"status_code": result.status_code},
-    )
-    if request.headers.get("HX-Request") != "true":
-        status = "success" if success else "error"
-        from urllib.parse import quote_plus
-
-        return RedirectResponse(
-            f"/admin/network/onts/{ont_id}/provision?status={status}&message={quote_plus(message)}",
-            status_code=303,
-        )
-    return JSONResponse(
-        status_code=result.status_code,
-        content=result.content,
+def ont_save_provision_settings(ont_id: str) -> JSONResponse:
+    """Retired: wrote desired config outside the configuration lifecycle."""
+    return retired_writer_response(
+        "Save provisioning configuration",
+        "Save settings from the Configure tab; each section is admitted by the "
+        "ONT configuration lifecycle.",
     )
 
 

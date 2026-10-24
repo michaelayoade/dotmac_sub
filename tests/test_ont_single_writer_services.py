@@ -9,11 +9,12 @@ from unittest.mock import MagicMock
 import pytest
 
 from app.services.domain_errors import DomainError
-from app.services.network import break_glass
+from app.services.network import break_glass, ont_service_configuration
 from app.services.network.ont_service_configuration import (
     ManagementConfigurationChange,
     OntConfigurationSection,
     WifiConfigurationChange,
+    WifiPatchConfigurationChange,
 )
 from app.services.web_network_ont_actions import lifecycle_admission
 
@@ -106,23 +107,10 @@ def admission(monkeypatch):
     monkeypatch.setattr(
         lifecycle_admission.web_admin_service, "get_actor_id", lambda request: "u-1"
     )
-    monkeypatch.setattr(lifecycle_admission, "_load_ont", lambda db, ont_id: object())
-    monkeypatch.setattr(
-        lifecycle_admission,
-        "resolve_effective_ont_config",
-        lambda db, ont: {
-            "values": {
-                "wifi_enabled": False,
-                "wifi_ssid": "OLD",
-                "wifi_channel": "6",
-                "wifi_security_mode": "WPA2",
-            }
-        },
-    )
     return captured
 
 
-def test_ssid_change_carries_other_wifi_fields_forward(admission):
+def test_ssid_change_is_a_sparse_patch_so_siblings_stay_with_the_owner(admission):
     result = lifecycle_admission.submit_wifi_change(
         MagicMock(), _request(), str(uuid.uuid4()), ssid="NEW"
     )
@@ -130,23 +118,84 @@ def test_ssid_change_carries_other_wifi_fields_forward(admission):
     command = admission["command"]
     assert command.section is OntConfigurationSection.wifi
     change = command.change
-    assert isinstance(change, WifiConfigurationChange)
-    assert (change.ssid, change.enabled, change.channel) == ("NEW", False, "6")
-    assert change.security_mode == "WPA2"
-    assert change.password is None
+    assert isinstance(change, WifiPatchConfigurationChange)
+    # Unset fields stay None: the owner keeps their current values under its
+    # row locks, so a concurrent change is not overwritten and an unset
+    # ``enabled`` is never forced to True.
+    assert change == WifiPatchConfigurationChange(ssid="NEW")
+    assert change.enabled is None
     assert command.permission_granted is True
     assert command.context.scope == "network:ont:write"
     assert command.context.idempotency_key.startswith("ont-config:")
 
 
-def test_password_change_keeps_current_ssid(admission):
+def test_password_change_does_not_snapshot_the_ssid(admission):
     result = lifecycle_admission.submit_wifi_change(
         MagicMock(), _request(), str(uuid.uuid4()), password="correct horse 1"
     )
     assert result.success
     change = admission["command"].change
-    assert change.ssid == "OLD"
+    assert change.ssid is None
     assert change.password == "correct horse 1"
+
+
+def test_explicit_enabled_false_is_preserved(admission):
+    lifecycle_admission.submit_wifi_change(
+        MagicMock(), _request(), str(uuid.uuid4()), enabled=False
+    )
+    assert admission["command"].change.enabled is False
+
+
+def test_bulk_wifi_update_admits_one_lifecycle_command_per_ont(admission):
+    first = lifecycle_admission.submit_wifi_change_for_bulk(
+        MagicMock(),
+        str(uuid.uuid4()),
+        actor="user:u-1",
+        params={"ssid": "BULK", "enabled": True, "_actor": "ignored"},
+    )
+    command = admission["command"]
+    assert first.success
+    assert command.change == WifiPatchConfigurationChange(ssid="BULK", enabled=True)
+    assert command.context.actor == "user:u-1"
+    assert command.context.scope == "network:ont:write"
+    empty = lifecycle_admission.submit_wifi_change_for_bulk(
+        MagicMock(), str(uuid.uuid4()), actor="user:u-1", params={}
+    )
+    assert not empty.success
+
+
+@pytest.mark.parametrize(
+    "change",
+    [
+        WifiPatchConfigurationChange(ssid=""),
+        WifiPatchConfigurationChange(ssid="x" * 33),
+        WifiPatchConfigurationChange(ssid="caf\u00e9"),
+        WifiPatchConfigurationChange(password="short"),
+        WifiPatchConfigurationChange(password="p" * 64),
+        WifiPatchConfigurationChange(password="pass\u00e9word1"),
+        WifiPatchConfigurationChange(password="tab\tpassword1"),
+        WifiPatchConfigurationChange(),
+    ],
+)
+def test_owner_enforces_ssid_and_psk_rules_server_side(change):
+    with pytest.raises(DomainError):
+        ont_service_configuration._wifi_patch_updates(change)
+
+
+def test_owner_patch_updates_contain_only_supplied_fields(monkeypatch):
+    monkeypatch.setattr(
+        ont_service_configuration, "encrypt_credential", lambda value: f"enc:{value}"
+    )
+    updates, evidence = ont_service_configuration._wifi_patch_updates(
+        WifiPatchConfigurationChange(ssid="Home 1", password="abcdefgh")
+    )
+    assert updates == {"wifi.ssid": "Home 1", "wifi.password": "enc:abcdefgh"}
+    assert "wifi.enabled" not in updates
+    assert evidence["wifi.password"] == "changed"
+    updates, _ = ont_service_configuration._wifi_patch_updates(
+        WifiPatchConfigurationChange(enabled=False)
+    )
+    assert updates == {"wifi.enabled": False}
 
 
 def test_empty_wifi_change_is_refused_without_calling_lifecycle(admission):

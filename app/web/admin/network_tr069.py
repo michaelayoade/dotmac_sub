@@ -83,6 +83,10 @@ def tr069_dashboard(
     )
     context = _base_context(request, db, active_page="tr069")
     context.update(page_data)
+    auth = getattr(request.state, "auth", None) or {}
+    context["can_break_glass"] = BREAK_GLASS_ROLE in {
+        str(role) for role in (auth.get("roles") or [])
+    }
     context["status"] = status
     context["message"] = message
     return templates.TemplateResponse("admin/network/tr069/index.html", context)

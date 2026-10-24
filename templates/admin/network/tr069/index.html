@@ -219,7 +219,9 @@
                             </form>
                         {% endif %}
                         {% if device.is_registered_in_acs %}
+                        {% if can_break_glass %}
                         <button type="button" onclick="openConfigModal('{{ device.id }}')" class="rounded-lg border border-sky-300 bg-sky-50 px-3 py-2 text-xs font-medium text-sky-700 transition-colors hover:bg-sky-100 dark:border-sky-700 dark:bg-sky-900/20 dark:text-sky-300 min-h-[36px]">Configure</button>
+                        {% endif %}
                         <button type="button" onclick="openNatModal('{{ device.id }}')" class="rounded-lg border border-indigo-300 bg-indigo-50 px-3 py-2 text-xs font-medium text-indigo-700 transition-colors hover:bg-indigo-100 dark:border-indigo-700 dark:bg-indigo-900/20 dark:text-indigo-300 min-h-[36px]">NAT</button>
                         <button type="button" onclick="openFirmwareModal('{{ device.id }}')" class="rounded-lg border border-amber-300 bg-amber-50 px-3 py-2 text-xs font-medium text-amber-700 transition-colors hover:bg-amber-100 dark:border-amber-700 dark:bg-amber-900/20 dark:text-amber-300 min-h-[36px]">Firmware</button>
                         {% else %}
@@ -309,6 +311,7 @@
                                         </form>
                                     {% endif %}
                                     {% if device.is_registered_in_acs %}
+                                        {% if can_break_glass %}
                                         {% for key, action in job_actions.items() %}
                                         <form method="POST" action="/admin/network/tr069/devices/{{ device.id }}/action" data-confirm="Queue {{ action.label }} for {{ device.display_name or device.serial_number }}?" data-confirm-variant="{{ 'danger' if key == 'factory_reset' else 'warning' }}" data-confirm-label="{{ action.label }}">
                                             {% include "components/forms/csrf_input.html" %}
@@ -318,7 +321,10 @@
                                             <button type="submit" class="rounded-lg border border-slate-300 px-2 py-1 text-xs font-medium text-slate-700 transition-colors hover:bg-slate-100 hover:border-slate-400 dark:border-slate-600 dark:text-slate-300 dark:hover:bg-slate-700 focus-visible:ring-2 focus-visible:ring-sky-500 focus-visible:ring-offset-1">{{ action.label }}</button>
                                         </form>
                                         {% endfor %}
+                                        {% endif %}
+                                        {% if can_break_glass %}
                                         <button type="button" onclick="openConfigModal('{{ device.id }}')" class="rounded-lg border border-sky-300 bg-sky-50 px-2 py-1 text-xs font-medium text-sky-700 transition-colors hover:bg-sky-100 hover:border-sky-400 dark:border-sky-700 dark:bg-sky-900/20 dark:text-sky-300 dark:hover:bg-sky-900/30 focus-visible:ring-2 focus-visible:ring-sky-500 focus-visible:ring-offset-1">Configure</button>
+                                        {% endif %}
                                         <button type="button" onclick="openNatModal('{{ device.id }}')" class="rounded-lg border border-indigo-300 bg-indigo-50 px-2 py-1 text-xs font-medium text-indigo-700 transition-colors hover:bg-indigo-100 hover:border-indigo-400 dark:border-indigo-700 dark:bg-indigo-900/20 dark:text-indigo-300 dark:hover:bg-indigo-900/30 focus-visible:ring-2 focus-visible:ring-indigo-500 focus-visible:ring-offset-1">NAT</button>
                                         <button type="button" onclick="openFirmwareModal('{{ device.id }}')" class="rounded-lg border border-amber-300 bg-amber-50 px-2 py-1 text-xs font-medium text-amber-700 transition-colors hover:bg-amber-100 hover:border-amber-400 dark:border-amber-700 dark:bg-amber-900/20 dark:text-amber-300 dark:hover:bg-amber-900/30 focus-visible:ring-2 focus-visible:ring-amber-500 focus-visible:ring-offset-1">Firmware</button>
                                     {% else %}
@@ -377,7 +383,9 @@
                     {% endif %}
                     <div class="flex flex-wrap gap-2">
                         {% if device.is_registered_in_acs %}
+                        {% if can_break_glass %}
                         <button type="button" onclick="openConfigModal('{{ device.id }}')" class="rounded-lg border border-sky-300 bg-sky-50 px-3 py-2 text-xs font-medium text-sky-700 transition-colors hover:bg-sky-100 dark:border-sky-700 dark:bg-sky-900/20 dark:text-sky-300 min-h-[36px]">Configure</button>
+                        {% endif %}
                         <button type="button" onclick="openNatModal('{{ device.id }}')" class="rounded-lg border border-indigo-300 bg-indigo-50 px-3 py-2 text-xs font-medium text-indigo-700 transition-colors hover:bg-indigo-100 dark:border-indigo-700 dark:bg-indigo-900/20 dark:text-indigo-300 min-h-[36px]">NAT</button>
                         <button type="button" onclick="openFirmwareModal('{{ device.id }}')" class="rounded-lg border border-amber-300 bg-amber-50 px-3 py-2 text-xs font-medium text-amber-700 transition-colors hover:bg-amber-100 dark:border-amber-700 dark:bg-amber-900/20 dark:text-amber-300 min-h-[36px]">Firmware</button>
                         {% else %}
@@ -469,6 +477,7 @@
                             <td class="px-4 py-3 text-sm">
                                 <div class="flex flex-wrap gap-2">
                                     {% if device.is_registered_in_acs %}
+                                        {% if can_break_glass %}
                                         {% for key, action in job_actions.items() %}
                                         <form method="POST" action="/admin/network/tr069/devices/{{ device.id }}/action" data-confirm="Queue {{ action.label }} for {{ device.display_name or device.serial_number }}?" data-confirm-variant="{{ 'danger' if key == 'factory_reset' else 'warning' }}" data-confirm-label="{{ action.label }}">
                                             {% include "components/forms/csrf_input.html" %}
@@ -478,7 +487,10 @@
                                             <button type="submit" class="rounded-lg border border-slate-300 px-2 py-1 text-xs font-medium text-slate-700 transition-colors hover:bg-slate-100 hover:border-slate-400 dark:border-slate-600 dark:text-slate-300 dark:hover:bg-slate-700 focus-visible:ring-2 focus-visible:ring-sky-500 focus-visible:ring-offset-1">{{ action.label }}</button>
                                         </form>
                                         {% endfor %}
+                                        {% endif %}
+                                        {% if can_break_glass %}
                                         <button type="button" onclick="openConfigModal('{{ device.id }}')" class="rounded-lg border border-sky-300 bg-sky-50 px-2 py-1 text-xs font-medium text-sky-700 transition-colors hover:bg-sky-100 hover:border-sky-400 dark:border-sky-700 dark:bg-sky-900/20 dark:text-sky-300 dark:hover:bg-sky-900/30 focus-visible:ring-2 focus-visible:ring-sky-500 focus-visible:ring-offset-1">Configure</button>
+                                        {% endif %}
                                         <button type="button" onclick="openNatModal('{{ device.id }}')" class="rounded-lg border border-indigo-300 bg-indigo-50 px-2 py-1 text-xs font-medium text-indigo-700 transition-colors hover:bg-indigo-100 hover:border-indigo-400 dark:border-indigo-700 dark:bg-indigo-900/20 dark:text-indigo-300 dark:hover:bg-indigo-900/30 focus-visible:ring-2 focus-visible:ring-indigo-500 focus-visible:ring-offset-1">NAT</button>
                                         <button type="button" onclick="openFirmwareModal('{{ device.id }}')" class="rounded-lg border border-amber-300 bg-amber-50 px-2 py-1 text-xs font-medium text-amber-700 transition-colors hover:bg-amber-100 hover:border-amber-400 dark:border-amber-700 dark:bg-amber-900/20 dark:text-amber-300 dark:hover:bg-amber-900/30 focus-visible:ring-2 focus-visible:ring-amber-500 focus-visible:ring-offset-1">Firmware</button>
                                     {% else %}

@@ -182,21 +182,76 @@ def test_web_and_api_modules_gain_no_direct_ont_olt_acs_writers():
 
 
 def test_retired_direct_writers_stay_retired():
-    retired = {
-        "app/web/admin/network_onts.py": ("service_port_service_write",),
-        "app/web/admin/network_onts_actions.py": ("reconcile_ont",),
-        "app/web/admin/network_onts_inventory.py": ("ont_write",),
-        "app/api/network_ont_ops.py": ("reconcile_ont",),
-    }
     current = ont_direct_writer_scan.scan()
-    for path, names in retired.items():
-        for name in names:
-            assert (path, name) not in current, (path, name)
+    categories = {}
+    for (path, name), count in current.items():
+        categories.setdefault(path, {})[name] = count
+    assert "reconcile_ont" not in categories.get(
+        "app/web/admin/network_onts_actions.py", {}
+    )
+    assert "reconcile_ont" not in categories.get("app/api/network_ont_ops.py", {})
+    for path in (
+        "app/web/admin/network_onts.py",
+        "app/web/admin/network_onts_inventory.py",
+        "app/web/admin/network_tr069.py",
+    ):
+        assert path not in categories, path
+    # The API keeps only the feature toggles that have no lifecycle section.
+    assert set(categories["app/api/network_ont_ops.py"]) <= {
+        "ont_features",
+        "ont_write",
+    }
     api = _source("app/api/network_ont_ops.py")
     assert not re.search(
         r"ont_write\.(update_management_ip|update_service_port|move_ont)", api
     )
+    assert "ont_features.set_wifi_config" not in api
+    bulk = _source("app/tasks/ont_bulk.py")
+    assert "set_wifi_config" not in bulk
+    assert "submit_wifi_change_for_bulk(" in bulk
     assert not (ROOT / "app/web/admin/network_ont_service_ports.py").exists()
+
+
+def test_scanner_resolves_aliases_and_ignores_strings():
+    scan_source = ont_direct_writer_scan.scan_source
+    hits = scan_source(
+        "app/web/admin/x.py",
+        "from app.services.network import ont_provision_steps as steps\n"
+        "from app.services.network.ont_features import ont_features as feats\n"
+        "from app.services.network.reconcile import reconcile_ont as r\n"
+        "import app.services.network.ont_write as ow\n"
+        "def f(db):\n"
+        '    """steps.deprovision(reconcile_ont) in a docstring"""\n'
+        '    s = "ont_features.set_wifi_config("\n'
+        "    steps.deprovision(db)\n"
+        "    feats.toggle_voip(db)\n"
+        "    r(db)\n"
+        "    ow.ont_write.update_management_ip(db)\n"
+        "    adapter.create_service_port()\n",
+    )
+    assert dict(hits) == {
+        ("app/web/admin/x.py", "provision_steps"): 1,
+        ("app/web/admin/x.py", "ont_features"): 1,
+        ("app/web/admin/x.py", "reconcile_ont"): 1,
+        ("app/web/admin/x.py", "ont_write"): 1,
+        ("app/web/admin/x.py", "olt_write"): 1,
+    }
+
+
+def test_owner_allowlist_is_explicit_and_small():
+    assert "app/services/network/ont_service_configuration.py" in (
+        ont_direct_writer_scan.OWNER_ALLOWLIST
+    )
+    # Bulk provisioning, the provisioning task and the ACS direct writer in the
+    # TR-069 task are named debt in the baseline, never silently exempt.
+    baseline = _load_direct_writer_baseline()
+    for path in (
+        "app/services/network/bulk_provisioning.py",
+        "app/tasks/ont_provisioning.py",
+        "app/tasks/tr069.py",
+    ):
+        assert any(key[0] == path for key in baseline), path
+        assert not ont_direct_writer_scan._is_owner(path), path
 
 
 def test_break_glass_routes_are_admin_only_reasoned_and_audited():
@@ -238,3 +293,18 @@ def test_wifi_and_management_controls_use_the_lifecycle_admission():
     admission = _source("app/services/web_network_ont_actions/lifecycle_admission.py")
     assert "configure_ont_service(" in admission
     assert "reconcile_ont(" not in admission
+
+
+def test_tr069_break_glass_controls_are_hidden_from_non_admins():
+    template = _source("templates/admin/network/tr069/index.html")
+    lines = template.splitlines()
+    guarded = 0
+    for number, line in enumerate(lines):
+        if "openConfigModal('" in line and "onclick=" in line:
+            assert "{% if can_break_glass %}" in lines[number - 1], number
+            guarded += 1
+        if "job_actions.items()" in line:
+            assert "{% if can_break_glass %}" in lines[number - 1], number
+            guarded += 1
+    assert guarded >= 4
+    assert "can_break_glass" in _source("app/web/admin/network_tr069.py")
