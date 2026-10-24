@@ -319,7 +319,7 @@ def get_registered_ont_serials(
     started = time.monotonic()
     try:
         transport, channel, policy = core._open_shell(olt)
-    except (SSHException, OSError, TimeoutError, ValueError) as exc:
+    except (SSHException, EOFError, OSError, TimeoutError, ValueError) as exc:
         return False, f"Connection failed: {exc}", []
 
     try:
