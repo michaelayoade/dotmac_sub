@@ -90,14 +90,16 @@ def _dispatch_action(db, ont_id: str, action: str, params: dict):  # type: ignor
         )
 
     if action == "wifi_update":
-        from app.services.network.ont_features import ont_features
+        from app.services.web_network_ont_actions.lifecycle_admission import (
+            submit_wifi_change_for_bulk,
+        )
 
-        return ont_features.set_wifi_config(
+        # One lifecycle admission per ONT; never a direct device write.
+        return submit_wifi_change_for_bulk(
             db,
             ont_id,
-            ssid=params.get("ssid"),
-            password=params.get("password"),
-            enabled=params.get("enabled"),
+            actor=str(params.get("_actor") or ""),
+            params=params,
         )
 
     if action == "voip_toggle":

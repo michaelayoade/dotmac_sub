@@ -71,6 +71,14 @@ def _needs_review(db_session):
     return ont, operation, dispatch
 
 
+def _resolve(db_session, command, **kwargs):
+    """Owner commands need a transaction-free session at entry."""
+    db_session.commit()
+    return dispatch_owner.resolve_reconciliation_needed_dispatch(
+        db_session, command, **kwargs
+    )
+
+
 def _command(dispatch, **overrides):
     values = {
         "dispatch_id": str(dispatch.id),
@@ -88,9 +96,7 @@ def test_resolve_happy_path_records_verdict_and_leaves_operation_alone(db_sessio
     db_session.refresh(operation)
     before = (operation.status, operation.error, operation.output_payload)
 
-    result = dispatch_owner.resolve_reconciliation_needed_dispatch(
-        db_session, _command(dispatch)
-    )
+    result = _resolve(db_session, _command(dispatch))
 
     db_session.refresh(dispatch)
     db_session.refresh(operation)
@@ -112,9 +118,7 @@ def test_resolve_happy_path_records_verdict_and_leaves_operation_alone(db_sessio
 @pytest.mark.parametrize("resolution", list(DispatchResolution))
 def test_resolve_accepts_each_resolution(db_session, resolution):
     _, _, dispatch = _needs_review(db_session)
-    dispatch_owner.resolve_reconciliation_needed_dispatch(
-        db_session, _command(dispatch, resolution=resolution)
-    )
+    _resolve(db_session, _command(dispatch, resolution=resolution))
     db_session.refresh(dispatch)
     assert dispatch.resolution == resolution.value
 
@@ -135,9 +139,7 @@ def test_resolve_refused_on_wrong_status(db_session, status):
     db_session.commit()
 
     with pytest.raises(NetworkOperationDispatchError) as excinfo:
-        dispatch_owner.resolve_reconciliation_needed_dispatch(
-            db_session, _command(dispatch)
-        )
+        _resolve(db_session, _command(dispatch))
 
     assert excinfo.value.code == "dispatch_status_conflict"
     db_session.refresh(dispatch)
@@ -147,11 +149,9 @@ def test_resolve_refused_on_wrong_status(db_session, status):
 
 def test_resolve_refuses_a_second_resolution(db_session):
     _, _, dispatch = _needs_review(db_session)
-    dispatch_owner.resolve_reconciliation_needed_dispatch(
-        db_session, _command(dispatch)
-    )
+    _resolve(db_session, _command(dispatch))
     with pytest.raises(NetworkOperationDispatchError) as excinfo:
-        dispatch_owner.resolve_reconciliation_needed_dispatch(
+        _resolve(
             db_session, _command(dispatch, resolution=DispatchResolution.superseded)
         )
     assert excinfo.value.code == "dispatch_status_conflict"
@@ -173,9 +173,7 @@ def test_resolve_refuses_a_second_resolution(db_session):
 def test_resolve_validates_inputs_without_changing_the_row(db_session, overrides, code):
     _, _, dispatch = _needs_review(db_session)
     with pytest.raises(NetworkOperationDispatchError) as excinfo:
-        dispatch_owner.resolve_reconciliation_needed_dispatch(
-            db_session, _command(dispatch, **overrides)
-        )
+        _resolve(db_session, _command(dispatch, **overrides))
     assert excinfo.value.code == code
     db_session.refresh(dispatch)
     assert dispatch.status == NetworkOperationDispatchStatus.reconciliation_needed
@@ -186,17 +184,13 @@ def test_resolve_refused_while_operation_is_active(db_session):
     operation.status = NetworkOperationStatus.running
     db_session.commit()
     with pytest.raises(NetworkOperationDispatchError) as excinfo:
-        dispatch_owner.resolve_reconciliation_needed_dispatch(
-            db_session, _command(dispatch)
-        )
+        _resolve(db_session, _command(dispatch))
     assert excinfo.value.code == "operation_still_active"
 
 
 def test_resolve_is_recorded_in_audit(db_session):
     _, _, dispatch = _needs_review(db_session)
-    dispatch_owner.resolve_reconciliation_needed_dispatch(
-        db_session, _command(dispatch, resolution=DispatchResolution.superseded)
-    )
+    _resolve(db_session, _command(dispatch, resolution=DispatchResolution.superseded))
 
     events = db_session.scalars(
         select(AuditEvent).where(
@@ -216,9 +210,7 @@ def test_resolve_is_recorded_in_audit(db_session):
 def test_refused_resolution_writes_no_audit(db_session):
     _, _, dispatch = _needs_review(db_session)
     with pytest.raises(NetworkOperationDispatchError):
-        dispatch_owner.resolve_reconciliation_needed_dispatch(
-            db_session, _command(dispatch, evidence="short")
-        )
+        _resolve(db_session, _command(dispatch, evidence="short"))
     assert (
         db_session.scalars(
             select(AuditEvent).where(
@@ -234,9 +226,7 @@ def test_list_returns_only_reconciliation_needed(db_session):
     assert [
         d.id for d in dispatch_owner.list_reconciliation_needed_dispatches(db_session)
     ] == [dispatch.id]
-    dispatch_owner.resolve_reconciliation_needed_dispatch(
-        db_session, _command(dispatch)
-    )
+    _resolve(db_session, _command(dispatch))
     assert dispatch_owner.list_reconciliation_needed_dispatches(db_session) == []
 
 
@@ -386,6 +376,49 @@ def test_sync_ignores_head_that_moved_to_a_newer_operation(db_session):
     db_session.commit()
     db_session.refresh(head)
     assert head.phase is OntServiceConfigurationPhase.queued
+
+
+def test_sync_leaves_head_untouched_when_current_revision_is_missing(db_session):
+    """Head and revision move together or not at all."""
+    head, revision, operation, dispatch = _config_dispatch(db_session)
+    db_session.delete(revision)
+    db_session.commit()
+    dispatch_owner._mark_publish_exhausted(
+        db_session, dispatch, now=datetime.now(UTC), unknown_delivery=True
+    )
+    db_session.commit()
+    db_session.refresh(head)
+    db_session.refresh(operation)
+    assert operation.status == NetworkOperationStatus.failed
+    assert head.phase is OntServiceConfigurationPhase.queued
+    assert head.failure_code is None
+
+
+def test_sync_leaves_head_untouched_when_revision_belongs_to_another_operation(
+    db_session,
+):
+    head, revision, operation, dispatch = _config_dispatch(db_session)
+    other = NetworkOperation(
+        operation_type=NetworkOperationType.ont_service_config,
+        target_type=NetworkOperationTargetType.ont,
+        target_id=operation.target_id,
+        status=NetworkOperationStatus.succeeded,
+        correlation_key="sync-other-revision",
+        input_payload={},
+        initiated_by="test",
+    )
+    db_session.add(other)
+    db_session.flush()
+    revision.operation_id = other.id
+    db_session.commit()
+    dispatch_owner._mark_publish_exhausted(
+        db_session, dispatch, now=datetime.now(UTC), unknown_delivery=True
+    )
+    db_session.commit()
+    db_session.refresh(head)
+    db_session.refresh(revision)
+    assert head.phase is OntServiceConfigurationPhase.queued
+    assert revision.phase is OntServiceConfigurationPhase.queued
 
 
 def test_non_configuration_operation_does_not_touch_any_head(db_session):

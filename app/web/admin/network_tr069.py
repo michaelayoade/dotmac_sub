@@ -11,7 +11,8 @@ from sqlalchemy.orm import Session
 
 from app.db import get_db
 from app.services import web_network_tr069 as web_network_tr069_service
-from app.services.auth_dependencies import require_method_permission
+from app.services.auth_dependencies import require_method_permission, require_role
+from app.services.network.break_glass import BREAK_GLASS_ROLE, authorize_break_glass
 from app.web.request_parsing import parse_form_data_sync
 
 templates = Jinja2Templates(directory="templates")
@@ -38,6 +39,32 @@ def _base_context(
     }
 
 
+def _break_glass_refusal(
+    db: Session,
+    request: Request,
+    *,
+    device_id: str,
+    action: str,
+    reason: str,
+    acs_server_id: str,
+) -> RedirectResponse | None:
+    decision = authorize_break_glass(
+        db,
+        request,
+        action=action,
+        resource_type="tr069_device",
+        resource_id=device_id,
+        reason=reason,
+    )
+    if decision.allowed:
+        return None
+    message = quote_plus(decision.message)
+    return RedirectResponse(
+        f"/admin/network/tr069?acs_server_id={acs_server_id}&status=error&message={message}",
+        status_code=303,
+    )
+
+
 @router.get("/tr069", response_class=HTMLResponse)
 def tr069_dashboard(
     request: Request,
@@ -56,6 +83,10 @@ def tr069_dashboard(
     )
     context = _base_context(request, db, active_page="tr069")
     context.update(page_data)
+    auth = getattr(request.state, "auth", None) or {}
+    context["can_break_glass"] = BREAK_GLASS_ROLE in {
+        str(role) for role in (auth.get("roles") or [])
+    }
     context["status"] = status
     context["message"] = message
     return templates.TemplateResponse("admin/network/tr069/index.html", context)
@@ -414,13 +445,27 @@ def tr069_create_ont(
         )
 
 
-@router.post("/tr069/devices/{device_id}/action")
+@router.post(
+    "/tr069/devices/{device_id}/action",
+    dependencies=[Depends(require_role(BREAK_GLASS_ROLE))],
+)
 def tr069_device_action(
     device_id: str, request: Request, db: Session = Depends(get_db)
 ) -> RedirectResponse:
+    """Break-glass: queue a direct ACS device job (admin only, reason audited)."""
     form = parse_form_data_sync(request)
     action = str(form.get("action") or "").strip()
     acs_server_id = str(form.get("acs_server_id") or "").strip() or ""
+    denied = _break_glass_refusal(
+        db,
+        request,
+        device_id=device_id,
+        action=f"tr069_device_job.{action or 'unknown'}",
+        reason=str(form.get("break_glass_reason") or ""),
+        acs_server_id=acs_server_id,
+    )
+    if denied is not None:
+        return denied
     try:
         job = web_network_tr069_service.queue_device_job(
             db,
@@ -441,16 +486,29 @@ def tr069_device_action(
         )
 
 
-@router.post("/tr069/devices/{device_id}/config")
+@router.post(
+    "/tr069/devices/{device_id}/config",
+    dependencies=[Depends(require_role(BREAK_GLASS_ROLE))],
+)
 def tr069_config_push(
     device_id: str, request: Request, db: Session = Depends(get_db)
 ) -> RedirectResponse:
-    """Push configuration to a TR-069 device via setParameterValues."""
+    """Break-glass: push config via setParameterValues (admin only, audited)."""
     form = parse_form_data_sync(request)
     action_key = str(form.get("config_action") or "").strip()
     value = str(form.get("config_value") or "").strip()
     acs_server_id = str(form.get("acs_server_id") or "").strip() or ""
 
+    denied = _break_glass_refusal(
+        db,
+        request,
+        device_id=device_id,
+        action=f"tr069_config_push.{action_key or 'unknown'}",
+        reason=str(form.get("break_glass_reason") or ""),
+        acs_server_id=acs_server_id,
+    )
+    if denied is not None:
+        return denied
     try:
         job = web_network_tr069_service.create_config_push_job(
             db,

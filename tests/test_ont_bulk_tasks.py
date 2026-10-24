@@ -64,11 +64,15 @@ class TestDispatchAction:
 
         db = MagicMock()
         with patch(
-            "app.services.network.ont_features.OntFeatureService.set_wifi_config",
-            return_value=ActionResult(success=True, message="Updated"),
-        ):
-            result = _dispatch_action(db, "ont-1", "wifi_update", {"ssid": "NewSSID"})
+            "app.services.web_network_ont_actions.lifecycle_admission."
+            "submit_wifi_change_for_bulk",
+            return_value=ActionResult(success=True, message="Queued"),
+        ) as admit:
+            result = _dispatch_action(
+                db, "ont-1", "wifi_update", {"ssid": "NewSSID", "_actor": "user:u1"}
+            )
             assert result.success is True
+            assert admit.call_args.kwargs["actor"] == "user:u1"
 
     def test_voip_toggle_action(self):
         from app.tasks.ont_bulk import _dispatch_action

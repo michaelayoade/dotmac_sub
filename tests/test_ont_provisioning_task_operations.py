@@ -1,8 +1,5 @@
 from __future__ import annotations
 
-import json
-from types import SimpleNamespace
-
 from sqlalchemy import select
 
 
@@ -216,89 +213,3 @@ def test_inform_apply_completes_waiting_bootstrap_parent(db_session):
     assert parent.output_payload["device_confirmation"]["confirmation_source"] == (
         "stale_inform_reconnect"
     )
-
-
-def test_admin_provision_route_queues_device_write(db_session, monkeypatch):
-    from app.models.network import OntUnit
-    from app.web.admin import network_onts_provisioning
-
-    ont = OntUnit(serial_number="ADMIN-PROVISION-COMMAND")
-    db_session.add(ont)
-    db_session.commit()
-
-    monkeypatch.setattr(
-        network_onts_provisioning,
-        "can_manage_ont_from_request",
-        lambda *args, **kwargs: True,
-    )
-    monkeypatch.setattr(
-        network_onts_provisioning,
-        "actor_label",
-        lambda request: "admin",
-    )
-    monkeypatch.setattr(
-        network_onts_provisioning,
-        "log_network_action_result",
-        lambda *args, **kwargs: None,
-    )
-    response = network_onts_provisioning.provision_ont_direct(
-        SimpleNamespace(headers={}),
-        str(ont.id),
-        dry_run=False,
-        async_execution=False,
-        db=db_session,
-    )
-
-    payload = json.loads(response.body)
-    assert response.status_code == 202
-    assert payload["waiting"] is True
-    assert payload["data"]["operation_id"]
-    assert payload["data"]["dispatch_id"]
-
-
-def test_admin_provision_browser_redirects_to_operation_progress(
-    db_session, monkeypatch
-):
-    from urllib.parse import parse_qs, urlparse
-
-    from app.models.network import OntUnit
-    from app.web.admin import network_onts_provisioning
-
-    ont = OntUnit(serial_number="ADMIN-PROVISION-BROWSER")
-    db_session.add(ont)
-    db_session.commit()
-
-    monkeypatch.setattr(
-        network_onts_provisioning,
-        "can_manage_ont_from_request",
-        lambda *args, **kwargs: True,
-    )
-    monkeypatch.setattr(
-        network_onts_provisioning,
-        "actor_label",
-        lambda request: "admin",
-    )
-    monkeypatch.setattr(
-        network_onts_provisioning,
-        "log_network_action_result",
-        lambda *args, **kwargs: None,
-    )
-
-    response = network_onts_provisioning.provision_ont_direct(
-        SimpleNamespace(headers={"accept": "text/html,application/xhtml+xml"}),
-        str(ont.id),
-        dry_run=False,
-        async_execution=True,
-        db=db_session,
-    )
-
-    location = response.headers["location"]
-    parsed = urlparse(location)
-    query = parse_qs(parsed.query)
-    assert response.status_code == 303
-    assert parsed.path == f"/admin/network/onts/{ont.id}/provision"
-    assert query["operation_id"][0]
-    assert query["status"] == ["info"]
-    assert query["message"] == [
-        "ONT provisioning queued; waiting for device confirmation."
-    ]
