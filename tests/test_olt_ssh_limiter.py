@@ -1170,3 +1170,66 @@ def test_snapshot_publishes_held_slots_and_counters_within_the_registered_bound(
     assert by_key[("logout_clean", "all")] == 9.0
     spec = observability._STATE_SNAPSHOT_SPECS["olt_ssh"]
     assert len(observations) <= spec["max_observations"]
+
+
+def test_a_hash_reused_session_matches_the_policy_prompt_immediately(
+    server, monkeypatch
+):
+    """Callers wait for ``policy.prompt_regex`` (derived from the `>` login
+    prompt). A reused `#` session must still match it at once."""
+    opens: list[FakeSessionTransport] = []
+
+    def opener(olt, **kw):
+        transport, channel, _ = _clean_session(opens)
+        return (
+            transport,
+            channel,
+            SimpleNamespace(prompt_regex=r"(?:^|\r?\n)boi\-olt>\s*$"),
+        )
+
+    monkeypatch.setattr(olt_ssh, "_connect_unlimited", opener)
+    set_config_override(LimiterConfig(max_ma5608t=1, release_grace_seconds_ma5608t=0))
+    olt = _olt()
+    with olt_ssh_scope(olt, OltSshPriority.WRITE):
+        transport, channel, _ = olt_ssh._open_shell(olt)
+        channel.send("enable\n")
+        channel.pending.append(b"\r\nboi-olt#")
+        channel.recv(4096)
+        transport.close()
+        transport, channel, policy = olt_ssh._open_shell(olt)
+        channel.pending.append(b"\r\nboi-olt#")
+        started = time.monotonic()
+        out = olt_ssh._read_until_prompt(channel, policy.prompt_regex, timeout_sec=5)
+        assert time.monotonic() - started < 1.0
+        assert out.strip().endswith("boi-olt#")
+        # and a user-mode prompt still matches
+        channel.pending.append(b"\r\nboi-olt>")
+        assert (
+            olt_ssh._read_until_prompt(channel, policy.prompt_regex, timeout_sec=5)
+            .strip()
+            .endswith("boi-olt>")
+        )
+        transport.close()
+    assert len(opens) == 1
+
+
+def test_scope_reopens_are_capped_and_wait_the_release_grace(server, monkeypatch):
+    sleeps: list[float] = []
+    monkeypatch.setattr(olt_ssh_limiter, "time", _TimeShim(sleeps.append))
+    opens: list[FakeSessionTransport] = []
+    monkeypatch.setattr(
+        olt_ssh, "_connect_unlimited", lambda olt, **kw: _clean_session(opens)
+    )
+    set_config_override(LimiterConfig(max_ma5608t=1, release_grace_seconds_ma5608t=2))
+    olt = _olt()
+    with olt_ssh_scope(olt, OltSshPriority.WRITE):
+        for _ in range(4):  # first open + three reopens, each left dirty
+            transport, channel, _ = olt_ssh._open_shell(olt)
+            channel.send("display x\n")  # unread: dirty, discarded at check-in
+            transport.close()
+        assert len(opens) == 4
+        assert sleeps == [2.0, 2.0, 2.0]  # grace before every reopen
+        with pytest.raises(OltSessionBusy, match="olt_busy:.*3 reopens"):
+            olt_ssh._open_shell(olt)
+        assert len(opens) == 4  # did not loop or log in again
+    assert server.held_exclusive() == 0

@@ -555,7 +555,18 @@ def mark_released(lease: SlotLease) -> None:
 class OltSshScope:
     """A held slot and one lazily opened session reused across a pass."""
 
-    def __init__(self, *, olt_key: str, lease: SlotLease, label: str) -> None:
+    MAX_REOPENS = 3
+
+    def __init__(
+        self,
+        *,
+        olt_key: str,
+        lease: SlotLease,
+        label: str,
+        grace_seconds: float = 0.0,
+    ) -> None:
+        self.grace_seconds = grace_seconds
+        self.reopens = 0
         self.olt_key = olt_key
         self.lease = lease
         self.label = label
@@ -594,6 +605,18 @@ class OltSshScope:
                     self._discard()
                     session = None
             if session is None:
+                if self.opens > 0:
+                    # A reopen inside the held slot: let the OLT reclaim the
+                    # previous VTY first, and never loop forever.
+                    if self.reopens >= self.MAX_REOPENS:
+                        raise OltSessionBusy(
+                            busy_message(
+                                f"scope session unusable after {self.MAX_REOPENS} reopens"
+                            )
+                        )
+                    self.reopens += 1
+                    if self.grace_seconds > 0:
+                        time.sleep(self.grace_seconds)
                 session = opener()
                 self._session = session
                 self.opens += 1
@@ -696,6 +719,7 @@ def olt_ssh_scope(
             olt_key=olt_key,
             lease=lease,
             label=str(getattr(olt, "name", None) or olt_key),
+            grace_seconds=config.grace_for(model_key_for(getattr(olt, "model", None))),
         )
         token = _scopes_var.set((*_scopes_var.get(), (olt_key, scope)))
         started = time.monotonic()

@@ -777,6 +777,15 @@ def _discard_failed_transport(transport: Any, sock: Any) -> None:
             logger.debug("olt_ssh_failed_open_cleanup", exc_info=True)
 
 
+def _any_mode_policy(policy: OltSshPolicy) -> OltSshPolicy:
+    """Policy whose prompt regex matches the same host at `>` or `#`."""
+    regex = policy.prompt_regex
+    widened = re.sub(r">(\\s\*\$)$", r"[>#]\1", regex)
+    if widened == regex:
+        return policy
+    return _replace_policy_prompt_regex(policy, widened)
+
+
 def _scope_normaliser(
     session: tuple[Transport, Channel, OltSshPolicy],
 ) -> bool:
@@ -818,14 +827,15 @@ def _open_shell(olt: OLTDevice) -> tuple[Transport, Channel, OltSshPolicy]:
     scope = olt_ssh_limiter.active_scope(olt)
     priority_name = olt_ssh_limiter.current_priority().name.lower()
     if scope is not None:
+        transport, channel, policy = scope.checkout(
+            lambda: _connect_unlimited(olt, lease=None, priority_name=priority_name),
+            _scope_normaliser,
+        )
+        # A reused session may sit at `#` (privileged) while the login prompt
+        # regex ends in `>`: accept either so callers never wait out a timeout.
         return cast(
             "tuple[Transport, Channel, OltSshPolicy]",
-            scope.checkout(
-                lambda: _connect_unlimited(
-                    olt, lease=None, priority_name=priority_name
-                ),
-                _scope_normaliser,
-            ),
+            (transport, channel, _any_mode_policy(policy)),
         )
     lease = olt_ssh_limiter.acquire_for_olt(olt)
     try:
