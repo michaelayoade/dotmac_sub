@@ -94,7 +94,7 @@ NOW = datetime.now(UTC)
 
 
 def test_g5_refresh_uses_a_connection_request_and_accepts_a_newer_subtree():
-    client = _RefreshClient(stamp=NOW + timedelta(seconds=30))
+    client = _RefreshClient(stamp=datetime.now(UTC) + timedelta(hours=1))
     result = read_acs_state(
         client, _desired(acs_device_id=DEVICE_ID), refresh_paths=(WAN,)
     )
@@ -107,7 +107,7 @@ def test_g5_refresh_uses_a_connection_request_and_accepts_a_newer_subtree():
 
 
 def test_g5_stale_cache_after_refresh_is_pending_not_fresh():
-    client = _RefreshClient(stamp=NOW - timedelta(hours=2))
+    client = _RefreshClient(stamp=datetime.now(UTC) - timedelta(hours=2))
     result = read_acs_state(
         client, _desired(acs_device_id=DEVICE_ID), refresh_paths=(WAN,)
     )
@@ -144,7 +144,7 @@ def test_g5_backlog_or_undelivered_refresh_is_pending_not_unreachable(error):
 
 
 def test_g5_silent_ont_verifies_after_an_inform_refreshes_the_cache_without_a_cr():
-    write_time = NOW
+    write_time = datetime.now(UTC)
     client = _RefreshClient(
         stamp=write_time - timedelta(hours=1),
         task_raises=GenieACSError("refreshObject connection request failed: 401"),
