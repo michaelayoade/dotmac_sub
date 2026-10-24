@@ -11,6 +11,8 @@ FSP_PREFIX_RE = re.compile(r"^(?:x?g?pon|epon|port|gei|ge|eth)[-_]?", re.IGNOREC
 
 HUAWEI_OPTIONAL_ARG_PROMPT = r"\{[^\r\n{}]*\}\s*:?\s*$"
 
+_CONTROL_CHARS_RE = re.compile(r"[\x00-\x1f\x7f]")
+
 READONLY_COMMAND_PREFIXES = (
     "display",
     "show",
@@ -119,6 +121,15 @@ def validate_readonly_command(command: str) -> tuple[bool, str]:
     """Validate that a CLI command is read-only."""
     normalized = command.strip().lower()
 
+    # One physical line only: a newline or any control character would let a
+    # second command ride along and be confirmed by an auto-answered prompt.
+    if _CONTROL_CHARS_RE.search(command) or ";" in command:
+        return (
+            False,
+            "Command contains control characters or command separators "
+            "\u2014 only a single read-only command is permitted",
+        )
+
     for prefix in DANGEROUS_COMMAND_PREFIXES:
         if normalized.startswith(prefix):
             return (
@@ -127,7 +138,7 @@ def validate_readonly_command(command: str) -> tuple[bool, str]:
             )
 
     for prefix in READONLY_COMMAND_PREFIXES:
-        if normalized.startswith(prefix):
+        if re.match(rf"{re.escape(prefix)}(\s|$)", normalized):
             return True, ""
 
     return (

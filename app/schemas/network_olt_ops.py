@@ -71,7 +71,11 @@ class OltTr069ProfileCreateRequest(BaseModel):
 
 
 class OltCliCommandRequest(BaseModel):
-    command: str = Field(min_length=1, max_length=500)
+    command: str = Field(
+        min_length=1,
+        max_length=200,
+        pattern=r"^[^\x00-\x1f\x7f;]+$",
+    )
 
 
 class OltOntStatusBySerialRequest(BaseModel):
