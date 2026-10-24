@@ -11,6 +11,11 @@ Usage (inside the app container so the DB + external RADIUS resolve):
 
     docker compose exec app python scripts/one_off/audit_ip_consistency.py
     docker compose exec app python scripts/one_off/audit_ip_consistency.py --store
+    docker compose exec app python scripts/one_off/audit_ip_consistency.py --summary
+
+--summary prints a compact, read-only table: count per kind, its alert tier
+(critical/warning/info/drift) and sample IPs / logins with subscriber numbers.
+No secrets are printed. Run it before loading ip_consistency.rules.yml.
 
 --store also writes the result to Redis so the /metrics gauge
 (radius_ip_consistency_drift) reflects this run immediately.
@@ -22,9 +27,38 @@ import sys
 
 from app.db import SessionLocal
 from app.services.ip_consistency_audit import (
+    _ALL_KINDS,
+    CRITICAL_KINDS,
+    INFORMATIONAL_KINDS,
+    WARNING_KINDS,
     audit_ip_consistency,
     store_latest_ip_audit,
 )
+
+
+def format_summary(result: dict) -> str:
+    """Counts per kind with samples (IPs, logins, subscriber numbers only)."""
+    counts = result.get("counts", {})
+    numbers = result.get("sample_subscribers", {})
+    lines = [
+        f"population={result.get('population')} errors={result.get('errors')} "
+        f"ok={result.get('ok')}"
+    ]
+    for kind in _ALL_KINDS:
+        if kind in CRITICAL_KINDS:
+            tier = "CRITICAL"
+        elif kind in WARNING_KINDS:
+            tier = "warning"
+        elif kind in INFORMATIONAL_KINDS:
+            tier = "info"
+        else:
+            tier = "drift"
+        lines.append(f"{kind:40s} {counts.get(kind, 0):6d}  [{tier}]")
+        for sample in result.get(kind, [])[:5]:
+            owners = numbers.get(kind, {}).get(sample)
+            suffix = f"  subscribers={','.join(owners)}" if owners else ""
+            lines.append(f"    {sample}{suffix}")
+    return "\n".join(lines)
 
 
 def main() -> int:
@@ -33,6 +67,11 @@ def main() -> int:
         "--store",
         action="store_true",
         help="Also persist the result to Redis for the /metrics collector.",
+    )
+    parser.add_argument(
+        "--summary",
+        action="store_true",
+        help="Print counts per kind with samples instead of the full JSON.",
     )
     args = parser.parse_args()
 
@@ -45,7 +84,10 @@ def main() -> int:
     if args.store:
         result["stored"] = store_latest_ip_audit(result)
 
-    print(json.dumps(result, indent=2, sort_keys=True))
+    if args.summary:
+        print(format_summary(result))
+    else:
+        print(json.dumps(result, indent=2, sort_keys=True))
     # Non-zero exit when drift or errors found, so it's usable as a check.
     return 0 if result.get("ok") else 1
 

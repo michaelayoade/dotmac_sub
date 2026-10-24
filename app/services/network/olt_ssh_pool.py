@@ -489,5 +489,10 @@ def pooled_ssh_connection(olt: OLTDevice):
         ssh_pool._stats["errors"] += 1
         logger.warning("SSH connection error for %s: %s", olt.name, e)
         raise
+    except BaseException:
+        # Any other failure (RuntimeError, ValueError, SoftTimeLimitExceeded,
+        # KeyboardInterrupt) leaves the channel in an unknown state.
+        close_on_exit = True
+        raise
     finally:
         ssh_pool.release(conn, close=close_on_exit)
