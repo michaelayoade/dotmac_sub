@@ -774,3 +774,14 @@ collect_ignore_glob = [
     "test_transactional_audit_events.py",
     "test_web_system_audit_service.py",
 ]
+
+
+@pytest.fixture(autouse=True)
+def _olt_ssh_limiter_off_by_default():
+    """The unit lane has no lock database: keep the G4 OLT SSH limiter off
+    unless a test pins its own configuration (``set_config_override``)."""
+    from app.services.network import olt_ssh_limiter
+
+    olt_ssh_limiter.set_config_override(olt_ssh_limiter.LimiterConfig(enabled=False))
+    yield
+    olt_ssh_limiter.set_config_override(None)

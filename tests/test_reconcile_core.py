@@ -1684,6 +1684,9 @@ def test_verification_re_read_marks_out_of_sync_when_olt_unreachable_post_apply(
     assert result.failure.reason == ReconcileFailureReason.OLT_UNREACHABLE
     assert "verification" in result.failure.message.lower()
     assert call_count["n"] == 2
+    # G4: a transport failure AFTER a successful apply is handed to the
+    # existing delayed-readback rail rather than failing the job.
+    assert result.failure.evidence == {"readback_pending": True}
 
 
 def test_verification_re_read_marks_out_of_sync_when_acs_unreachable_post_apply(
@@ -3413,3 +3416,78 @@ def test_inform_resume_chain_gets_fresh_verify_dispatch_keys(
     }
     assert keys["verify:1@r1"] is NetworkOperationDispatchStatus.pending
     assert keys["verify:1"] is NetworkOperationDispatchStatus.completed
+
+
+# ── G4: OLT SSH session limiter ─────────────────────────────────────────────
+
+
+def test_busy_olt_stops_before_any_read_and_changes_nothing(
+    db_session, ont, stub_desired, monkeypatch
+):
+    """Every SSH slot busy: refuse before reading or writing anything, restore
+    the prior sync status, and report ``olt_busy`` (the lifecycle defers it)."""
+    from contextlib import contextmanager
+
+    from app.services.network.olt_ssh_limiter import OltSessionBusy
+
+    @contextmanager
+    def busy_scope(olt, priority, **_kw):
+        raise OltSessionBusy(
+            "olt_busy: all 2 SSH session slot(s) for this OLT are in use"
+        )
+        yield None  # pragma: no cover
+
+    monkeypatch.setattr(reconcile_core, "olt_ssh_scope", busy_scope)
+    olt = _StubOltAdapter(olt=SimpleNamespace(id=uuid.uuid4(), name="OLT-BUSY"))
+    acs = _StubAcsClient(device=_synced_acs_device(ont))
+    prior_status = ont.sync_status
+    prior_error = ont.last_error
+
+    result = reconcile_ont(
+        db_session,
+        ont.id,
+        proposed_change={"description": "NEW_DESC"},
+        mode="sync",
+        olt_adapter=olt,
+        acs_client=acs,
+    )
+
+    assert result.success is False
+    assert result.failure.reason == ReconcileFailureReason.OLT_BUSY
+    assert result.failure.message.startswith("olt_busy:")
+    assert result.actions_applied == ()
+    assert olt.calls == []  # not even the presence read happened
+    assert acs.spv_calls == []
+    db_session.refresh(ont)
+    assert ont.sync_status == prior_status
+    assert ont.last_error == prior_error
+
+
+def test_reconcile_priority_defaults():
+    from app.services.network.olt_ssh_limiter import OltSshPriority
+
+    assert (
+        reconcile_core._default_ssh_priority("sweep", False)
+        is OltSshPriority.BACKGROUND
+    )
+    assert reconcile_core._default_ssh_priority("sync", False) is OltSshPriority.WRITE
+    assert (
+        reconcile_core._default_ssh_priority("bootstrap", False) is OltSshPriority.WRITE
+    )
+    assert (
+        reconcile_core._default_ssh_priority("sweep", True)
+        is OltSshPriority.INTERACTIVE
+    )
+
+
+def test_busy_olt_read_message_maps_to_olt_busy_reason():
+    result = ReadResult(
+        status="unavailable",
+        observed=None,
+        error="Connection failed: olt_busy: all 2 SSH session slot(s) in use",
+        transport_unreachable=True,
+    )
+    assert (
+        reconcile_core._olt_unavailable_reason(result)
+        == ReconcileFailureReason.OLT_BUSY
+    )

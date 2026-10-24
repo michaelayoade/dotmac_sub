@@ -482,3 +482,61 @@ def test_no_transaction_held_during_ssh_walk(db_session, monkeypatch):
     mod.harvest_olt_mac_tables(db_session)
     assert tx_states, "SSH walk never ran"
     assert not any(tx_states), "a DB transaction was open during the SSH walk"
+
+
+# --------------------------------------------------------------------------- #
+# G4: background priority, one login per OLT, busy skips the cycle
+# --------------------------------------------------------------------------- #
+def test_harvest_walks_ports_inside_one_background_scope(db_session, monkeypatch):
+    from app.services.network import olt_ssh_limiter
+
+    olt = _huawei_olt(db_session)
+    _online_ont(db_session, olt, board="0/1", port="7", ont_id=5, serial="HWTC00000007")
+    _online_ont(
+        db_session, olt, board="0/1", port="14", ont_id=1, serial="HWTC00000014"
+    )
+    db_session.commit()
+    scopes: list[olt_ssh_limiter.OltSshPriority] = []
+
+    @contextmanager
+    def fake_scope(snapshot, priority, **_kw):
+        scopes.append(priority)
+        yield None
+
+    monkeypatch.setattr(olt_mac_harvest, "olt_ssh_scope", fake_scope)
+    monkeypatch.setattr(
+        olt_mac_harvest,
+        "_run_readonly_command",
+        _fake_runner({"0/1/7": _PORT_7, "0/1/14": _PORT_14}),
+    )
+
+    counters = harvest_olt_mac_tables(db_session)
+
+    assert counters["ports_walked"] == 2
+    assert scopes == [olt_ssh_limiter.OltSshPriority.BACKGROUND]  # not one per port
+
+
+def test_harvest_skips_a_busy_olt_without_counting_an_error(db_session, monkeypatch):
+    from app.services.network.olt_ssh_limiter import OltSessionBusy
+
+    olt = _huawei_olt(db_session)
+    _online_ont(db_session, olt, board="0/1", port="7", ont_id=5, serial="HWTC00000007")
+    db_session.commit()
+
+    @contextmanager
+    def busy_scope(snapshot, priority, **_kw):
+        raise OltSessionBusy(
+            "olt_busy: all 2 SSH session slot(s) for this OLT are in use"
+        )
+        yield None  # pragma: no cover
+
+    def _never(olt, command):
+        raise AssertionError("no SSH may be attempted while the OLT is busy")
+
+    monkeypatch.setattr(olt_mac_harvest, "olt_ssh_scope", busy_scope)
+    monkeypatch.setattr(olt_mac_harvest, "_run_readonly_command", _never)
+
+    counters = harvest_olt_mac_tables(db_session)
+
+    assert counters["olt_errors"] == 0
+    assert counters["observations"] == 0

@@ -44,6 +44,11 @@ from app.models.network import (
 )
 from app.services.network._common import normalize_mac_address
 from app.services.network.olt_ssh_diagnostics import _run_readonly_command
+from app.services.network.olt_ssh_limiter import (
+    OltSessionBusy,
+    OltSshPriority,
+    olt_ssh_scope,
+)
 from app.services.network.serial_utils import parse_ont_id_on_olt
 from app.services.radio_registration import _compact_mac_sql, compact_mac
 
@@ -418,24 +423,32 @@ def _harvest_olt_mac_tables(
     for olt_id, snapshot in ssh_snapshots.items():
         walked: list[tuple[str, str]] = []
         try:
-            for fsp in contexts[olt_id]:
-                # The snapshot mirrors every attribute the SSH path reads
-                # (mgmt_ip/hostname/ssh_*/vendor/model/name/id) as plain data;
-                # a live OLTDevice here would reopen a transaction post-commit.
-                ok, status, output = _run_readonly_command(
-                    cast("OLTDevice", snapshot), f"display mac-address port {fsp}"
-                )
-                counters["ports_walked"] += 1
-                if not ok:
-                    logger.warning(
-                        "olt_mac_harvest_port_read_failed "
-                        "olt_device_id=%s fsp=%s status=%s",
-                        olt_id,
-                        fsp,
-                        status,
+            # Background work: one SSH login for the whole port walk, using
+            # only the unreserved session slots. A busy OLT skips this cycle.
+            with olt_ssh_scope(snapshot, OltSshPriority.BACKGROUND):
+                for fsp in contexts[olt_id]:
+                    # The snapshot mirrors every attribute the SSH path reads
+                    # (mgmt_ip/hostname/ssh_*/vendor/model/name/id) as plain
+                    # data; a live OLTDevice here would reopen a transaction
+                    # post-commit.
+                    ok, status, output = _run_readonly_command(
+                        cast("OLTDevice", snapshot),
+                        f"display mac-address port {fsp}",
                     )
-                    continue
-                walked.append((fsp, output))
+                    counters["ports_walked"] += 1
+                    if not ok:
+                        logger.warning(
+                            "olt_mac_harvest_port_read_failed "
+                            "olt_device_id=%s fsp=%s status=%s",
+                            olt_id,
+                            fsp,
+                            status,
+                        )
+                        continue
+                    walked.append((fsp, output))
+        except OltSessionBusy:
+            logger.info("olt_mac_harvest_skipped_busy olt_device_id=%s", olt_id)
+            continue
         except Exception:  # noqa: BLE001 - isolate per-OLT failure, keep going
             counters["olt_errors"] += 1
             logger.exception("olt_mac_harvest_olt_failed olt_device_id=%s", olt_id)
