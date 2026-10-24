@@ -981,3 +981,67 @@ def test_metrics_never_raise_into_the_ssh_path(monkeypatch):
     monkeypatch.setattr(olt_ssh_metrics, "_redis", lambda: Boom())
     monkeypatch.setattr(olt_ssh_metrics, "_redis_down_until", 0.0)
     olt_ssh_metrics.record_open("OLT-A", "write", "ok")  # must not raise
+
+
+def test_snapshot_publishes_held_slots_and_counters_within_the_registered_bound(
+    monkeypatch,
+):
+    from app.services import observability
+    from app.services.network import olt_ssh_metrics
+
+    olts = [
+        SimpleNamespace(id=uuid.uuid4(), name=f"OLT {i}/ Gudu", model="MA5608T")
+        for i in range(20)  # more than the 14 the producer is bounded to
+    ]
+    held_names = {olts[0].name: (2, 41.0)}
+
+    class FakeResult:
+        def __init__(self, rows):
+            self._rows = rows
+
+        def all(self):
+            return self._rows
+
+    class FakeDb:
+        def execute(self, *_a, **_k):
+            return FakeResult(olts[:14])  # the producer's LIMIT 14
+
+    monkeypatch.setattr(
+        olt_ssh_metrics, "held_slots_by_olt", lambda db, o, c: dict(held_names)
+    )
+    monkeypatch.setattr(
+        olt_ssh_metrics,
+        "load_counters",
+        lambda: {
+            f"open|{olts[0].name}|write|ok": 7.0,
+            f"open|{olts[0].name}|background|auth_eof": 3.0,
+            f"wait_sum|{olts[0].name}|write": 12.5,
+            f"wait_bucket|{olts[0].name}|write|+Inf": 4.0,
+            "logout|clean": 9.0,
+        },
+    )
+    published: dict[str, object] = {}
+
+    def fake_publish(domain, observations, **_kw):
+        published["domain"] = domain
+        published["observations"] = list(observations)
+        return True
+
+    monkeypatch.setattr(observability, "publish_state_snapshot", fake_publish)
+
+    assert olt_ssh_metrics.publish_olt_ssh_snapshot(FakeDb()) is True
+
+    observations = published["observations"]
+    by_key = {(o.signal, o.scope): o.value for o in observations}
+    scope = olt_ssh_metrics._scope(olts[0].name)
+    assert re.fullmatch(r"[A-Za-z0-9_.:-]+", scope)
+    assert published["domain"] == "olt_ssh"
+    assert by_key[("sessions_held", scope)] == 2.0
+    assert by_key[("oldest_hold_seconds", scope)] == 41.0
+    assert by_key[("open_ok", scope)] == 7.0
+    assert by_key[("open_auth_eof", scope)] == 3.0
+    assert by_key[("slot_wait_seconds_sum", scope)] == 12.5
+    assert by_key[("slot_wait_count", scope)] == 4.0
+    assert by_key[("logout_clean", "all")] == 9.0
+    spec = observability._STATE_SNAPSHOT_SPECS["olt_ssh"]
+    assert len(observations) <= spec["max_observations"]

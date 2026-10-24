@@ -1,10 +1,15 @@
 """Metrics for the per-OLT SSH session limiter.
 
-Celery workers cannot export Prometheus gauges to the web ``/metrics`` (see
-``app/metrics.py``), so counters live in a Redis hash that a scrape-time
-collector reads back, fail-soft (the same pattern as the suspension-audit
-collector). The truth for *sessions held* is not a counter at all: the web
-process counts held advisory locks in ``pg_locks`` at scrape time.
+Workers cannot export Prometheus gauges to the web ``/metrics`` and a scrape
+must never touch the database (``docs/METRICS_SCRAPE_SAFETY.md``). So:
+
+* hot-path counters (opens by outcome, slot wait, logouts) are incremented
+  fail-soft in a Redis hash by whichever process opens the session;
+* a scheduled producer (``publish_olt_ssh_snapshot``, run from the existing
+  infrastructure check) counts held slots from ``pg_locks`` (the truth for
+  *sessions per OLT*), adds the counters, and publishes one bounded
+  ``olt_ssh`` state snapshot that the existing observability collector exports
+  as ``observability_state{domain="olt_ssh",signal,scope}``.
 
 Nothing here may raise into the SSH path, and nothing here carries secrets.
 """
@@ -12,7 +17,7 @@ Nothing here may raise into the SSH path, and nothing here carries secrets.
 from __future__ import annotations
 
 import logging
-import os
+import re
 import time
 from typing import Any
 
@@ -42,21 +47,11 @@ OPEN_OUTCOMES = (
     "other",
 )
 
-_redis_client: Any = None
-
 
 def _redis() -> Any:
-    global _redis_client
-    if _redis_client is None:
-        url = os.getenv("REDIS_URL")
-        if not url:
-            return None
-        import redis
+    from app.services.redis_client import get_redis
 
-        _redis_client = redis.Redis.from_url(
-            url, socket_timeout=1, socket_connect_timeout=1
-        )
-    return _redis_client
+    return get_redis()
 
 
 _redis_down_until = 0.0
@@ -145,15 +140,13 @@ def _lock_halves(key: int) -> tuple[int, int]:
 
 
 def held_slots_by_olt(
-    olts: list[tuple[str, str, str | None]], config: LimiterConfig
+    db: Any, olts: list[tuple[str, str, str | None]], config: LimiterConfig
 ) -> dict[str, tuple[int, float]]:
     """Count held slot locks per OLT from ``pg_locks`` (truth, not a counter).
 
     ``olts`` is ``(olt_id, name, model)``. Returns ``name -> (held, oldest_age_s)``.
     """
     from sqlalchemy import text
-
-    from app.services.db_session_adapter import db_session_adapter
 
     wanted: dict[tuple[int, int], str] = {}
     for olt_id, name, model in olts:
@@ -162,19 +155,18 @@ def held_slots_by_olt(
             wanted[_lock_halves(slot_key(olt_id, index))] = name
     if not wanted:
         return {}
-    with db_session_adapter.read_session() as db:
-        if not db.get_bind().dialect.name.startswith("postgres"):
-            return {}
-        rows = db.execute(
-            text(
-                "SELECT l.classid::bigint, l.objid::bigint, "
-                "EXTRACT(EPOCH FROM (now() - a.backend_start)) "
-                "FROM pg_locks l JOIN pg_stat_activity a ON a.pid = l.pid "
-                "WHERE l.locktype = 'advisory' AND l.granted AND l.objsubid = 1 "
-                "AND a.application_name = :app"
-            ),
-            {"app": LIMITER_APPLICATION_NAME},
-        ).all()
+    if not db.get_bind().dialect.name.startswith("postgres"):
+        return {}
+    rows = db.execute(
+        text(
+            "SELECT l.classid::bigint, l.objid::bigint, "
+            "EXTRACT(EPOCH FROM (now() - a.backend_start)) "
+            "FROM pg_locks l JOIN pg_stat_activity a ON a.pid = l.pid "
+            "WHERE l.locktype = 'advisory' AND l.granted AND l.objsubid = 1 "
+            "AND a.application_name = :app"
+        ),
+        {"app": LIMITER_APPLICATION_NAME},
+    ).all()
     held: dict[str, tuple[int, float]] = {}
     for classid, objid, age in rows:
         olt_name = wanted.get((int(classid), int(objid)))
@@ -185,6 +177,84 @@ def held_slots_by_olt(
     return held
 
 
+_SCOPE_UNSAFE = re.compile(r"[^A-Za-z0-9_.:-]+")
+_MAX_OLTS = 14
+_PER_OLT_SIGNALS = 12  # sessions_held, oldest_hold, 8 open outcomes, 2 wait totals
+
+
+def _scope(name: str) -> str:
+    return _SCOPE_UNSAFE.sub("_", str(name)).strip("_")[:100] or "olt"
+
+
+def publish_olt_ssh_snapshot(db: Any, *, now: Any = None) -> bool:
+    """Publish held-slot truth plus counters as the ``olt_ssh`` state snapshot.
+
+    Runs in a worker (never in a scrape). Bounded: at most ``_MAX_OLTS`` OLTs.
+    """
+    from sqlalchemy import select
+
+    from app.models.network import OLTDevice
+    from app.services.network.olt_ssh_limiter import get_config
+    from app.services.observability import StateObservation, publish_state_snapshot
+
+    rows = db.execute(
+        select(OLTDevice.id, OLTDevice.name, OLTDevice.model)
+        .where(OLTDevice.is_active.is_(True))
+        .order_by(OLTDevice.name)
+        .limit(_MAX_OLTS)
+    ).all()
+    olts = [(str(row.id), row.name, row.model) for row in rows]
+    held = held_slots_by_olt(db, olts, get_config())
+    counters = load_counters()
+
+    observations: list[Any] = []
+    for _olt_id, name, _model in olts:
+        scope = _scope(name)
+        count, oldest = held.get(name, (0, 0.0))
+        observations.append(StateObservation("sessions_held", scope, float(count)))
+        observations.append(StateObservation("oldest_hold_seconds", scope, oldest))
+        for outcome in OPEN_OUTCOMES:
+            total = sum(
+                value
+                for key, value in counters.items()
+                if key.startswith("open|")
+                and key.split("|")[1] == name
+                and key.split("|")[-1] == outcome
+            )
+            observations.append(StateObservation(f"open_{outcome}", scope, total))
+        observations.append(
+            StateObservation(
+                "slot_wait_seconds_sum",
+                scope,
+                sum(
+                    value
+                    for key, value in counters.items()
+                    if key.startswith("wait_sum|") and key.split("|")[1] == name
+                ),
+            )
+        )
+        observations.append(
+            StateObservation(
+                "slot_wait_count",
+                scope,
+                sum(
+                    value
+                    for key, value in counters.items()
+                    if key.startswith("wait_bucket|")
+                    and key.split("|")[1] == name
+                    and key.split("|")[-1] == "+Inf"
+                ),
+            )
+        )
+    for outcome in ("clean", "forced", "skipped_dirty"):
+        observations.append(
+            StateObservation(
+                f"logout_{outcome}", "all", counters.get(f"logout|{outcome}", 0.0)
+            )
+        )
+    return publish_state_snapshot("olt_ssh", observations, now=now)
+
+
 __all__ = [
     "COUNTER_HASH_KEY",
     "WAIT_BUCKETS",
@@ -193,6 +263,7 @@ __all__ = [
     "intent_key",
     "load_counters",
     "model_key_for",
+    "publish_olt_ssh_snapshot",
     "record_logout",
     "record_open",
     "record_wait",
