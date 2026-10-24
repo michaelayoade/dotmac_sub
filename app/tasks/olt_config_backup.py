@@ -116,8 +116,10 @@ def _fetch_running_config_via_ssh(target: _BackupTarget) -> str:
         from app.services.network.olt_protocol_adapters import (
             get_protocol_adapter_from_config,
         )
+        from app.services.network.olt_ssh import backup_config_read_cap
 
-        result = get_protocol_adapter_from_config(connection).fetch_running_config()
+        with backup_config_read_cap():
+            result = get_protocol_adapter_from_config(connection).fetch_running_config()
         raw_config_text = result.data.get("config_text") if result.success else ""
         config_text = raw_config_text if isinstance(raw_config_text, str) else ""
         if result.success and config_text.strip():
