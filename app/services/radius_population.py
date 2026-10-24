@@ -565,6 +565,42 @@ def _projection_tables(config: dict):
     return radcheck, radreply, radusergroup
 
 
+def _reply_rate(attrs: Iterable[RadiusAttribute]) -> str | None:
+    return next((a[2] for a in attrs if a[0] == "Mikrotik-Rate-Limit"), None)
+
+
+def observed_rate_limits(
+    target: Mapping[str, object], usernames: Iterable[str]
+) -> tuple[dict[str, list[str]], dict[str, list[str]]]:
+    """Read back the rate rows actually written for each login.
+
+    Returns ``(rates, test_rates)``: the ``Mikrotik-Rate-Limit`` values per
+    login, and the test-access ``Mikrotik-Rate-Limit`` values per login. Read
+    only: SELECTs on one target, never a write.
+    """
+    _radcheck, radreply, _radusergroup = _projection_tables(dict(target))
+    engine = get_external_engine(str(target["db_url"]))
+    names = sorted({str(name) for name in usernames if name})
+    rates: dict[str, list[str]] = {}
+    test_rates: dict[str, list[str]] = {}
+    test_attribute = TEST_RADIUS_PREFIX + "Mikrotik-Rate-Limit"
+    with engine.connect() as conn:
+        for start in range(0, len(names), 2000):
+            chunk = names[start : start + 2000]
+            for row in conn.execute(
+                select(radreply.c.username, radreply.c.attribute, radreply.c.value)
+                .where(
+                    radreply.c.username.in_(chunk),
+                    radreply.c.attribute.in_(("Mikrotik-Rate-Limit", test_attribute)),
+                )
+                .order_by(radreply.c.username, radreply.c.value)
+            ):
+                bucket = test_rates if row.attribute == test_attribute else rates
+                bucket.setdefault(str(row.username), []).append(str(row.value))
+        conn.rollback()
+    return rates, test_rates
+
+
 def _write_radius_projection(
     conn,
     config: dict,
@@ -659,8 +695,14 @@ def populate(
     *,
     source_db=None,
     include_expected_fingerprints: bool = False,
+    include_projection_plan: bool = False,
 ) -> dict[str, object]:
-    """Project the authoritative subscriber state to every configured target."""
+    """Project the authoritative subscriber state to every configured target.
+
+    ``include_projection_plan`` adds the per-login plan (mode, the rate rows it
+    writes, whether a test grant is active) and whether the single rate owner
+    was in force, so a caller can verify exactly what was projected.
+    """
     stats: dict[str, object] = {
         "subscriptions_considered": 0,
         "skipped_no_credential": 0,
@@ -1239,6 +1281,17 @@ def populate(
         work = [item for item in work if item.username in only_usernames]
         stats["scoped_targets"] = len(only_usernames)
         unbuildable_usernames.intersection_update(only_usernames)
+    if include_projection_plan:
+        stats["rate_owner_enabled"] = rate_owner_ctx is not None
+        stats["projection_plan"] = {
+            item.username: {
+                "mode": item.mode,
+                "rate": _reply_rate(item.reply_attrs),
+                "test_access": item.test_access is not None,
+                "test_rate": _reply_rate(item.test_reply_attrs),
+            }
+            for item in work
+        }
     stats["projected_logins"] = len(work)
     stats["unbuildable_logins"] = len(unbuildable_usernames)
     stats["projection_complete"] = not unbuildable_usernames

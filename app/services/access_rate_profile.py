@@ -67,7 +67,7 @@ from app.models.subscription_change import (
 logger = logging.getLogger(__name__)
 
 SETTING_KEY = "rate_owner_enabled"
-SWITCH_OWNER = "access.rate_profile"
+SWITCH_OWNER = "access.rate_profile_switch"
 _FUP_PROFILE_CODE_PREFIX = "fup-throttle-"
 
 
@@ -757,6 +757,7 @@ DIVERGENCE_CLASSES = (
 class Divergence:
     subscription_id: str
     login: str
+    offer_id: str | None
     klass: str
     derived_layer: str
     derived_profile_id: str | None
@@ -770,6 +771,7 @@ class Divergence:
         return {
             "subscription_id": self.subscription_id,
             "login": self.login,
+            "offer_id": self.offer_id,
             "class": self.klass,
             "derived_layer": self.derived_layer,
             "derived_profile_id": self.derived_profile_id,
@@ -785,15 +787,10 @@ def _s(value: object) -> str | None:
     return None if value is None else str(value)
 
 
-def preflight(db: Session) -> list[Divergence]:
-    """List every provisioned login whose derived rate differs from the projection.
-
-    "Projection" is the previous precedence the radius sweep applies today:
-    the credential slot, else the subscription profile, rate per the legacy
-    grammar. Recognised throttles are compared in the reverse direction: the
-    derived throttle profile must be the profile actually projected.
-    Read-only.
-    """
+def _provisioned_state(
+    db: Session,
+) -> tuple[list[Subscription], dict[str, AccessCredential], RateContext]:
+    """Every provisioned login's subscription and credential, plus the context."""
     from app.services.radius_access_state import ACTIVE_STATUSES, BLOCKED_STATUSES
 
     subscriptions = list(
@@ -818,8 +815,30 @@ def preflight(db: Session) -> list[Divergence]:
             .order_by(AccessCredential.id.desc())
         ).all():
             credentials_by_login[found.username] = found
-
     ctx = RateContext.load(db, [s.id for s in subscriptions])
+    return subscriptions, credentials_by_login, ctx
+
+
+def derived_rates(db: Session) -> dict[str, str | None]:
+    """The derived rate string for every provisioned login (read-only)."""
+    subscriptions, credentials_by_login, ctx = _provisioned_state(db)
+    return {
+        s.login: derive(ctx, s, credentials_by_login.get(s.login or "")).rate_limit
+        for s in subscriptions
+        if s.login
+    }
+
+
+def preflight(db: Session) -> list[Divergence]:
+    """List every provisioned login whose derived rate differs from the projection.
+
+    "Projection" is the previous precedence the radius sweep applies today:
+    the credential slot, else the subscription profile, rate per the legacy
+    grammar. Recognised throttles are compared in the reverse direction: the
+    derived throttle profile must be the profile actually projected.
+    Read-only.
+    """
+    subscriptions, credentials_by_login, ctx = _provisioned_state(db)
     rows: list[Divergence] = []
     for subscription in sorted(subscriptions, key=lambda s: str(s.id)):
         credential = credentials_by_login.get(subscription.login or "")
@@ -863,6 +882,7 @@ def preflight(db: Session) -> list[Divergence]:
             Divergence(
                 subscription_id=str(subscription.id),
                 login=subscription.login or "",
+                offer_id=_s(subscription.offer_id),
                 klass=klass,
                 derived_layer=derived.layer.value,
                 derived_profile_id=_s(derived.profile_id),
