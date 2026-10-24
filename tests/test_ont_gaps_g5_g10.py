@@ -732,3 +732,47 @@ def test_g10_settings_defaults_and_schedule_registered():
 def test_g10_overview_shows_the_olt_observation_age():
     html = Path("templates/admin/network/onts/_tab_overview.html").read_text()
     assert "olt_observation_age_hours" in html
+
+
+def test_g10_refresh_skips_the_olt_when_the_limiter_reports_busy(
+    db_session, olt, monkeypatch
+):
+    from app.services.network.reconcile import observation_refresh as mod
+
+    _make_ont(db_session, olt, 0, observed_age_hours=30)
+    _make_ont(db_session, olt, 1, observed_age_hours=31)
+    monkeypatch.setattr(mod, "read_reports_olt_busy", lambda error: True)
+    calls = []
+
+    def busy_read(adapter, desired):
+        calls.append(desired.serial_number)
+        return SimpleNamespace(status="unavailable", observed=None, error="busy")
+
+    outcome = refresh_olt_observations(
+        _factory(db_session),
+        olt.id,
+        ObservationRefreshPolicy(max_age=timedelta(hours=6), per_olt_limit=5),
+        adapter_factory=lambda db, o: MagicMock(),
+        read_fn=busy_read,
+    )
+    assert outcome.skipped_olt_busy is True
+    assert outcome.refreshed == 0
+    assert len(calls) == 1  # stopped after the first busy answer
+
+
+def test_g10_background_scope_is_a_noop_without_the_limiter(monkeypatch):
+    import builtins
+
+    from app.services.network.reconcile import observation_refresh as mod
+
+    real_import = builtins.__import__
+
+    def fake_import(name, *a, **k):
+        if name == "app.services.network.olt_ssh_limiter":
+            raise ImportError(name)
+        return real_import(name, *a, **k)
+
+    monkeypatch.setattr(builtins, "__import__", fake_import)
+    with mod.background_olt_scope():
+        pass
+    assert mod.read_reports_olt_busy("anything") is False

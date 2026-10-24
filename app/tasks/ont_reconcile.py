@@ -393,6 +393,7 @@ def refresh_olt_observations(
     from app.models.network import OLTDevice
     from app.services.network.reconcile.observation_refresh import (
         ObservationRefreshResult,
+        background_olt_scope,
         olt_has_active_operation,
         refresh_one_ont_observation,
         stale_observation_ont_ids,
@@ -433,7 +434,11 @@ def refresh_olt_observations(
                 if index and olt_has_active_operation(db, olt_id):
                     busy = True
                     break
-                result = refresh_one_ont_observation(db, ont_id, adapter, **kwargs)
+                with background_olt_scope():
+                    result = refresh_one_ont_observation(db, ont_id, adapter, **kwargs)
+                if result is ObservationRefreshResult.olt_busy:
+                    busy = True
+                    break
                 if result in (
                     ObservationRefreshResult.busy,
                     ObservationRefreshResult.not_eligible,

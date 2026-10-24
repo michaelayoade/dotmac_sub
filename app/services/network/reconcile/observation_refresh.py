@@ -23,6 +23,7 @@ from __future__ import annotations
 import logging
 import uuid
 from collections.abc import Callable
+from contextlib import nullcontext
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime, timedelta
 from enum import StrEnum
@@ -61,6 +62,7 @@ class ObservationRefreshResult(StrEnum):
     read_failed = "read_failed"
     busy = "busy"
     not_eligible = "not_eligible"
+    olt_busy = "olt_busy"
 
 
 @dataclass(frozen=True, slots=True)
@@ -115,6 +117,31 @@ def olt_observation_age(
         observed_at = observed_at.replace(tzinfo=UTC)
     seconds = max(((now or datetime.now(UTC)) - observed_at).total_seconds(), 0)
     return observed_at, round(seconds / 3600, 1)
+
+
+def background_olt_scope() -> Any:
+    """BACKGROUND OLT-session priority once the per-OLT limiter exists.
+
+    Until the limiter (G4 PR-A) is on main this is a no-op context, keeping the
+    current behaviour.
+    """
+    try:
+        from app.services.network.olt_ssh_limiter import (
+            OltSshPriority,
+            olt_ssh_priority,
+        )
+    except ImportError:
+        return nullcontext()
+    return olt_ssh_priority(OltSshPriority.BACKGROUND)
+
+
+def read_reports_olt_busy(error: object) -> bool:
+    """Whether a failed read says the limiter had no free session."""
+    try:
+        from app.services.network.olt_ssh_limiter import is_busy_message
+    except ImportError:
+        return False
+    return bool(is_busy_message(error))
 
 
 def olt_has_active_operation(db: Session, olt_id: uuid.UUID) -> bool:
@@ -207,6 +234,8 @@ def refresh_one_ont_observation(
         )
         return ObservationRefreshResult.read_failed
     if read.status == "unavailable" or read.observed is None:
+        if read_reports_olt_busy(getattr(read, "error", None)):
+            return ObservationRefreshResult.olt_busy
         return ObservationRefreshResult.read_failed
     from app.services.network.ont_reconcile_eligibility import (
         eligibility_under_lock,
@@ -237,7 +266,9 @@ def refresh_one_ont_observation(
 __all__ = [
     "ObservationRefreshPolicy",
     "ObservationRefreshResult",
+    "background_olt_scope",
     "load_refresh_policy",
+    "read_reports_olt_busy",
     "olt_has_active_operation",
     "olt_observation_age",
     "refresh_one_ont_observation",
