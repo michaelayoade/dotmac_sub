@@ -56,7 +56,10 @@ _DISPATCH_STATUS_LABELS = {
     NetworkOperationDispatchStatus.failed: "Command publication failed",
     NetworkOperationDispatchStatus.reconciliation_needed: "Review current device state",
     NetworkOperationDispatchStatus.canceled: "Command canceled",
+    NetworkOperationDispatchStatus.resolved: "Reviewed and closed by an owner",
 }
+_RESOLUTION_EVIDENCE_MIN = 8
+_RESOLUTION_EVIDENCE_MAX = 2000
 
 
 class NetworkOperationCommand(StrEnum):
@@ -75,6 +78,29 @@ class NetworkOperationCommand(StrEnum):
     ont_service_config_apply_v1 = "ont_service_config_apply.v1"
     ont_service_config_verify_v1 = "ont_service_config_verify.v1"
     cpe_tr069_command_v1 = "cpe_tr069_command.v1"
+
+
+class DispatchResolution(StrEnum):
+    """Owner verdict on a dispatch whose delivery outcome was never confirmed."""
+
+    confirmed_landed = "confirmed_landed"
+    superseded = "superseded"
+    no_longer_wanted = "no_longer_wanted"
+
+
+@dataclass(frozen=True)
+class ResolveDispatchCommand:
+    """Close one ``reconciliation_needed`` dispatch with recorded evidence.
+
+    ``expected_status`` is an optimistic guard and must be
+    ``reconciliation_needed``; the locked row must still be in that status.
+    """
+
+    dispatch_id: str
+    resolution: DispatchResolution
+    evidence: str
+    actor: str
+    expected_status: str = NetworkOperationDispatchStatus.reconciliation_needed.value
 
 
 class NetworkOperationDispatchError(ValueError):
@@ -736,25 +762,45 @@ def _terminalize_operation(
     message: str,
 ) -> None:
     operation = dispatch.operation
-    if operation.status not in _ACTIVE_OPERATION_STATUSES:
-        return
-    from app.services.network_operations import network_operations
+    if operation.status in _ACTIVE_OPERATION_STATUSES:
+        from app.services.network_operations import network_operations
 
-    # Merge, never replace: the operation may already carry committed device
-    # evidence (for example a landed ONT authorization) that must survive a
-    # worker crash, otherwise the ledger claims the device was never touched.
-    existing_payload = operation.output_payload or {}
-    network_operations.mark_failed(
-        db,
-        str(operation.id),
-        message,
-        output_payload={
-            **(existing_payload if isinstance(existing_payload, dict) else {}),
-            "dispatch_id": str(dispatch.id),
-            "dispatch_status": dispatch.status.value,
-            "message": message,
-        },
+        # Merge, never replace: the operation may already carry committed device
+        # evidence (for example a landed ONT authorization) that must survive a
+        # worker crash, otherwise the ledger claims the device was never touched.
+        existing_payload = operation.output_payload or {}
+        network_operations.mark_failed(
+            db,
+            str(operation.id),
+            message,
+            output_payload={
+                **(existing_payload if isinstance(existing_payload, dict) else {}),
+                "dispatch_id": str(dispatch.id),
+                "dispatch_status": dispatch.status.value,
+                "message": message,
+            },
+        )
+    _sync_configuration_lifecycle(db, operation)
+
+
+def _sync_configuration_lifecycle(db: Session, operation: NetworkOperation) -> None:
+    """Tell the ONT service-configuration owner its operation ended unfinished.
+
+    The dispatch layer fails the operation without the worker having recorded a
+    lifecycle result, which would leave the configuration head in ``queued``.
+    The owner moves its own head; this module never writes it.
+    """
+    if (
+        operation.operation_type != NetworkOperationType.ont_service_config
+        or operation.status
+        not in {NetworkOperationStatus.failed, NetworkOperationStatus.canceled}
+    ):
+        return
+    from app.services.network.ont_service_configuration import (
+        mark_configuration_operation_interrupted,
     )
+
+    mark_configuration_operation_interrupted(db, operation)
 
 
 def _mark_publish_exhausted(
@@ -1108,6 +1154,136 @@ def fail_dispatch_execution(
             "Command worker exited unexpectedly. Review current device state before retrying.",
         )
         db.flush()
+
+
+def resolve_reconciliation_needed_dispatch(
+    db: Session,
+    command: ResolveDispatchCommand,
+    *,
+    now: datetime | None = None,
+) -> NetworkOperationDispatch:
+    """Record an owner's verdict on a ``reconciliation_needed`` dispatch.
+
+    Moves the row to the terminal ``resolved`` status and stages one audit
+    event in the same transaction, then commits. Never touches the operation,
+    its outcome, a configuration head or any device. Refuses (and rolls back)
+    unless the locked row is still ``reconciliation_needed`` and its operation
+    is already terminal.
+    """
+    from app.services.audit_adapter import AuditActor, AuditRecord, audit_adapter
+
+    try:
+        if command.expected_status != (
+            NetworkOperationDispatchStatus.reconciliation_needed.value
+        ):
+            raise NetworkOperationDispatchError(
+                "invalid_expected_status",
+                "Only reconciliation_needed dispatches can be resolved.",
+            )
+        try:
+            resolution = DispatchResolution(str(command.resolution))
+        except ValueError as exc:
+            raise NetworkOperationDispatchError(
+                "invalid_resolution", "Resolution is not recognised."
+            ) from exc
+        actor = str(command.actor or "").strip()
+        if not actor:
+            raise NetworkOperationDispatchError(
+                "actor_required", "A resolving actor is required."
+            )
+        evidence = str(command.evidence or "").strip()
+        if not (_RESOLUTION_EVIDENCE_MIN <= len(evidence) <= _RESOLUTION_EVIDENCE_MAX):
+            raise NetworkOperationDispatchError(
+                "invalid_evidence",
+                "Evidence must be between "
+                f"{_RESOLUTION_EVIDENCE_MIN} and {_RESOLUTION_EVIDENCE_MAX} "
+                "characters.",
+            )
+        try:
+            dispatch_uuid = UUID(str(command.dispatch_id))
+        except ValueError as exc:
+            raise NetworkOperationDispatchError(
+                "dispatch_not_found", "Network operation dispatch not found."
+            ) from exc
+        dispatch = db.scalar(
+            select(NetworkOperationDispatch)
+            .where(NetworkOperationDispatch.id == dispatch_uuid)
+            .with_for_update()
+            .execution_options(populate_existing=True)
+        )
+        if dispatch is None:
+            raise NetworkOperationDispatchError(
+                "dispatch_not_found", "Network operation dispatch not found."
+            )
+        if dispatch.status != NetworkOperationDispatchStatus.reconciliation_needed:
+            raise NetworkOperationDispatchError(
+                "dispatch_status_conflict",
+                "Dispatch is no longer reconciliation_needed; refresh the list.",
+            )
+        operation = dispatch.operation
+        if operation.status in _ACTIVE_OPERATION_STATUSES:
+            raise NetworkOperationDispatchError(
+                "operation_still_active",
+                "The dispatch's operation is still active; it cannot be closed.",
+            )
+        current = now or datetime.now(UTC)
+        previous_error = dispatch.last_error
+        dispatch.status = NetworkOperationDispatchStatus.resolved
+        dispatch.resolution = resolution.value
+        dispatch.resolution_evidence = evidence
+        dispatch.resolved_by = actor[:160]
+        dispatch.resolved_at = current
+        audit_adapter.stage(
+            db,
+            AuditRecord(
+                action="network_operation_dispatch.resolve",
+                entity_type="network_operation_dispatch",
+                entity_id=str(dispatch.id),
+                actor=AuditActor.user(actor[:160]),
+                metadata={
+                    "resolution": resolution.value,
+                    "evidence": evidence,
+                    "operation_id": str(dispatch.operation_id),
+                    "command_name": dispatch.command_name,
+                    "previous_status": (
+                        NetworkOperationDispatchStatus.reconciliation_needed.value
+                    ),
+                    "previous_error": previous_error,
+                },
+            ),
+        )
+        db.flush()
+        db.commit()
+    except Exception:
+        db.rollback()
+        raise
+    logger.info(
+        "Network operation dispatch resolved",
+        extra={
+            "event": "network_operation_dispatch",
+            "dispatch_id": str(dispatch.id),
+            "dispatch_status": "resolved",
+            "resolution": resolution.value,
+        },
+    )
+    return dispatch
+
+
+def list_reconciliation_needed_dispatches(
+    db: Session, *, limit: int = 200
+) -> list[NetworkOperationDispatch]:
+    """Oldest-first dispatches awaiting an owner resolution (read-only)."""
+    return list(
+        db.scalars(
+            select(NetworkOperationDispatch)
+            .where(
+                NetworkOperationDispatch.status
+                == NetworkOperationDispatchStatus.reconciliation_needed
+            )
+            .order_by(NetworkOperationDispatch.created_at.asc())
+            .limit(max(1, min(int(limit), 500)))
+        ).all()
+    )
 
 
 def reconcile_dispatches(
