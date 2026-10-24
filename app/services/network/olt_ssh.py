@@ -404,10 +404,14 @@ def _prepare_huawei_read_shell(channel: Channel, prompt_regex: str) -> str:
     if "#" not in fallback_prompt:
         fallback_prompt = r"#\s*$"
     privileged_prompt = _derive_prompt_regex(output, fallback_prompt)
-    # The OLT's line editor can coalesce spaces ("screen-length0temporary" ->
-    # "Unknown command"); the rejection used to be ignored, leaving paging on
-    # and reads cut off at "---- More ----". Verify, retry once, fail closed.
-    for attempt in range(2):
+    # Prod (MA5800-X2): the line editor echoed "screen-length0temporary" and
+    # answered "% Unknown command", leaving paging ON. The editor drops spaces
+    # when the line arrives while it is still redrawing the prompt, so let it
+    # go quiet and drain unread bytes first, send the line atomically, verify
+    # the reply, and retry (settling again) before giving up. If paging still
+    # cannot be disabled we continue: every read path answers "---- More ----".
+    for attempt in range(_PAGING_OFF_ATTEMPTS):
+        _settle_channel(channel)
         paging_output = _run_huawei_cmd(
             channel,
             "screen-length 0 temporary",
@@ -420,10 +424,27 @@ def _prepare_huawei_read_shell(channel: Channel, prompt_regex: str) -> str:
             attempt + 1,
             paging_output.strip()[-120:],
         )
-        time.sleep(0.5)
-    raise OltCliPromptError(
-        "OLT rejected 'screen-length 0 temporary'; paging could not be disabled"
-    )
+    logger.error("OLT paging could not be disabled; continuing with pager handling")
+    return privileged_prompt
+
+
+_PAGING_OFF_ATTEMPTS = 3
+_SETTLE_SECONDS = 0.4
+
+
+def _settle_channel(channel: Channel) -> None:
+    """Let the OLT finish redrawing its prompt, then discard unread bytes."""
+    time.sleep(_SETTLE_SECONDS)
+    ready = getattr(channel, "recv_ready", None)
+    if not callable(ready):
+        return
+    for _ in range(20):
+        try:
+            if not ready():
+                return
+            channel.recv(4096)
+        except Exception:
+            return
 
 
 def _replace_policy_prompt_regex(

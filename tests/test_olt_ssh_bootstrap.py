@@ -212,35 +212,74 @@ def test_firmware_probe_uses_privileged_prompt_for_readback(monkeypatch) -> None
     assert calls == [("display version", privileged_prompt)]
 
 
-def test_paging_rejection_is_retried_then_fails_closed(monkeypatch) -> None:
-    import pytest
+def test_paging_off_waits_for_quiet_prompt_before_sending_the_line(monkeypatch) -> None:
+    """Scripted editor: a line arriving while bytes are still pending (prompt
+    redraw) loses its spaces; after the settle+drain it is accepted."""
+    from app.services.network import olt_ssh
 
+    class EditorChannel:
+        def __init__(self) -> None:
+            self.pending = [b"\r\nboi-olt#", b"\x1b[2K\rboi-olt#"]  # redraw tail
+            self.sent: list[str] = []
+            self.reply: list[str] = []
+
+        def settimeout(self, _t):
+            pass
+
+        def recv_ready(self):
+            return bool(self.pending)
+
+        def recv(self, _n):
+            if self.pending:
+                return self.pending.pop(0)
+            if self.reply:
+                return self.reply.pop(0).encode()
+            raise TimeoutError
+
+        def send(self, data):
+            self.sent.append(data)
+            if data.startswith("enable"):
+                self.reply.append("enable\r\nboi-olt#")
+                return
+            line = data.strip()
+            if self.pending:  # arrived mid-redraw: spaces coalesced
+                line = line.replace(" ", "")
+            if line == "screen-length 0 temporary":
+                self.reply.append(f"{line}\r\nboi-olt#")
+            else:
+                self.reply.append(
+                    f"{line}\r\n% Unknown command, the error locates at '^'\r\nboi-olt#"
+                )
+
+    channel = EditorChannel()
+    channel.pending = []  # enable prompt first
+    monkeypatch.setattr(olt_ssh.time, "sleep", lambda _: None)
+    # redraw bytes land right after the enable prompt is matched
+    orig_send = channel.send
+
+    def send(data):
+        orig_send(data)
+        if data.startswith("enable"):
+            channel.pending = [b"\x1b[2K\rboi-olt#"]
+
+    channel.send = send  # type: ignore[method-assign]
+    olt_ssh._prepare_huawei_read_shell(channel, r"(?:^|\r?\n)boi\-olt>\s*$")
+    assert channel.sent[-1] == "screen-length 0 temporary\n"
+    assert len([x for x in channel.sent if x.startswith("screen")]) == 1
+
+
+def test_paging_rejection_retries_then_continues_with_pager_handling(
+    monkeypatch,
+) -> None:
     from app.services.network import olt_ssh
 
     channel = _FakeChannel()
-    responses = iter(
-        [
-            "\r\nboi-olt#",
-            "screen-length0temporary\r\n  % Unknown command, the error locates at '^'\r\nboi-olt#",
-            "screen-length 0 temporary\r\nboi-olt#",
-        ]
-    )
+    bad = "% Unknown command, the error locates at '^'\r\nboi-olt#"
+    responses = iter(["\r\nboi-olt#", bad, bad, bad])
     monkeypatch.setattr(
         olt_ssh, "_read_until_prompt", lambda *_a, **_k: next(responses)
     )
     monkeypatch.setattr(olt_ssh.time, "sleep", lambda _: None)
     prompt = olt_ssh._prepare_huawei_read_shell(channel, r"(?:^|\r?\n)boi\-olt>\s*$")
     assert prompt.endswith(r"\s*$")
-    # the command is always written as one atomic line, spaces intact
-    assert "".join(channel.sent).count("screen-length 0 temporary\n") == 2
-
-    channel = _FakeChannel()
-    always_bad = iter(
-        ["\r\nboi-olt#"]
-        + ["% Unknown command, the error locates at '^'\r\nboi-olt#"] * 2
-    )
-    monkeypatch.setattr(
-        olt_ssh, "_read_until_prompt", lambda *_a, **_k: next(always_bad)
-    )
-    with pytest.raises(olt_ssh.OltCliPromptError):
-        olt_ssh._prepare_huawei_read_shell(channel, r"(?:^|\r?\n)boi\-olt>\s*$")
+    assert "".join(channel.sent).count("screen-length 0 temporary\n") == 3
