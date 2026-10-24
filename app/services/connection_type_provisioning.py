@@ -377,18 +377,10 @@ def _append_vendor_attributes(
 def _subscription_plan_profile(
     db: Session, subscription: Subscription
 ) -> RadiusProfile | None:
-    """The subscription's plan profile.
-
-    The stored subscription profile before ``radius.rate_owner_enabled``;
-    afterwards the single rate owner's plan layer (the package's profile).
-    """
+    """The subscription's plan profile, as the single rate owner derives it."""
     from app.services import access_rate_profile
 
-    if access_rate_profile.rate_owner_enabled(db):
-        return access_rate_profile.resolve_plan_profile(db, subscription)
-    if subscription.radius_profile_id:
-        return db.get(RadiusProfile, subscription.radius_profile_id)
-    return None
+    return access_rate_profile.resolve_plan_profile(db, subscription)
 
 
 def resolve_connection_type(
@@ -612,14 +604,8 @@ def _offer_rate_limit_fallback(db: Session, subscription: Subscription) -> str |
     from app.services import access_rate_profile
 
     offer = db.get(CatalogOffer, offer_id)
-    if access_rate_profile.rate_owner_enabled(db):
-        # Same grammar as the sweep, committed rate included.
-        return access_rate_profile.offer_rate_limit(offer)
-    down = getattr(offer, "speed_download_mbps", None) if offer else None
-    up = getattr(offer, "speed_upload_mbps", None) if offer else None
-    if down and up:
-        return f"{down}M/{up}M"
-    return None
+    # Same grammar as the sweep, committed rate included.
+    return access_rate_profile.offer_rate_limit(offer)
 
 
 def _active_ipassignment_ipv4(db: Session, subscription: Subscription) -> str | None:
@@ -751,15 +737,10 @@ def build_radius_reply_attributes(
     # and CoA), replacing whatever the profile-only builder derived.
     from app.services import access_rate_profile
 
-    if (
-        not profile_given
-        and access_rate_profile.rate_owner_enabled(db)
-        and connection_type
-        in (
-            ConnectionType.pppoe,
-            ConnectionType.hotspot,
-            ConnectionType.ipoe,
-        )
+    if not profile_given and connection_type in (
+        ConnectionType.pppoe,
+        ConnectionType.hotspot,
+        ConnectionType.ipoe,
     ):
         owner_rate = access_rate_profile.resolve_effective_rate(
             db, subscription, include_enforcement=False
