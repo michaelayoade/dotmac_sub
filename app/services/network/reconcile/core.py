@@ -223,6 +223,7 @@ def reconcile_ont(
     lifecycle_binding: ReconcileLifecycleBinding | None = None,
     readback_only: bool = False,
     refresh_acs_paths: tuple[str, ...] = (),
+    refresh_fresh_since: datetime | None = None,
     force_tr069_rebind: bool = False,
     ssh_priority: OltSshPriority | None = None,
 ) -> ReconcileResult:
@@ -257,6 +258,8 @@ def reconcile_ont(
         force_tr069_rebind: Re-issue the OLT TR-069 server-profile bind even
             when the OLT already reports the desired profile (``sync`` mode,
             lifecycle management section only).
+        refresh_fresh_since: Cached refresh subtrees stamped at/after this are
+            accepted without a Connection Request.
         refresh_acs_paths: ACS parameter subtrees refreshed from the device
             before the first observation (readback verification freshness).
         ssh_priority: OLT SSH limiter priority for this pass. Defaults to
@@ -512,6 +515,7 @@ def reconcile_ont(
                 olt_observed_fallback=olt_observed_fallback,
                 acs_observed_fallback=acs_observed_fallback,
                 acs_refresh_paths=refresh_acs_paths if readback_only else (),
+                acs_fresh_since=refresh_fresh_since,
             )
 
             # ICMP reachability check on the mgmt IP. Runs from the reconciler
@@ -1328,6 +1332,7 @@ def _read_observed_parallel(
     olt_observed_fallback: OltObservedFields | None = None,
     acs_observed_fallback: AcsObservedFields | None = None,
     acs_refresh_paths: tuple[str, ...] = (),
+    acs_fresh_since: datetime | None = None,
 ):
     """Run OLT + ACS reads in parallel.
 
@@ -1335,7 +1340,9 @@ def _read_observed_parallel(
     The readers themselves don't share state, so no synchronisation needed.
     """
     refresh_kwargs: dict[str, Any] = (
-        {"refresh_paths": acs_refresh_paths} if acs_refresh_paths else {}
+        {"refresh_paths": acs_refresh_paths, "fresh_since": acs_fresh_since}
+        if acs_refresh_paths
+        else {}
     )
     if olt_adapter is None:
         # No adapter means the caller deliberately skipped OLT I/O (the

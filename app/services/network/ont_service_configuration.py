@@ -2370,6 +2370,10 @@ def _execution_locked(
         refresh_acs_paths=_readback_refresh_paths(
             revision, readback_only=readback_only
         ),
+        refresh_fresh_since=(
+            _parse_ts((operation.input_payload or {}).get("ppp_write_issued_at"))
+            or revision.created_at
+        ),
         timeout_sec=SERVICE_CONFIGURATION_RECONCILE_TIMEOUT_SECONDS,
         ssh_priority=(
             OltSshPriority.INTERACTIVE if readback_only else OltSshPriority.WRITE

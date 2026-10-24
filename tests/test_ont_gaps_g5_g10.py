@@ -143,6 +143,30 @@ def test_g5_backlog_or_undelivered_refresh_is_pending_not_unreachable(error):
     assert [e[0] for e in client.events] == ["list", "refresh"]
 
 
+def test_g5_silent_ont_verifies_after_an_inform_refreshes_the_cache_without_a_cr():
+    write_time = NOW
+    client = _RefreshClient(
+        stamp=write_time - timedelta(hours=1),
+        task_raises=GenieACSError("refreshObject connection request failed: 401"),
+    )
+    desired = _desired(acs_device_id=DEVICE_ID)
+    first = read_acs_state(
+        client, desired, refresh_paths=(WAN,), fresh_since=write_time
+    )
+    assert first.refresh_pending is True
+    refresh = next(e for e in client.events if e[0] == "refresh")
+    assert refresh[2]["delete_on_timeout"] is False  # still runs on next Inform
+
+    # An Inform later refreshes the subtree: the next verify needs no new CR.
+    client.events.clear()
+    client._stamp = write_time + timedelta(minutes=5)
+    second = read_acs_state(
+        client, desired, refresh_paths=(WAN,), fresh_since=write_time
+    )
+    assert second.success is True
+    assert all(kind != "refresh" for kind, *_ in client.events)
+
+
 def test_g5_no_refresh_without_paths():
     client = _RefreshClient(stamp=NOW)
     read_acs_state(client, _desired(acs_device_id=DEVICE_ID))

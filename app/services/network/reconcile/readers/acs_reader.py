@@ -134,6 +134,7 @@ def read_acs_state(
     *,
     deadline: datetime | None = None,
     refresh_paths: tuple[str, ...] = (),
+    fresh_since: datetime | None = None,
 ) -> ReadResult[AcsObservedFields]:
     """Read the ACS-observed fields for one ONT.
 
@@ -144,6 +145,10 @@ def read_acs_state(
             match.
         deadline: Optional cutoff. The underlying HTTP client has its own
             timeout; ``reconcile_ont`` enforces the outer budget.
+        fresh_since: When every refresh subtree's cached ``_timestamp`` is
+            already at or after this instant the cache is accepted without
+            sending a Connection Request (a silent ONT can still verify once an
+            Inform has refreshed it).
         refresh_paths: Parameter subtrees to refresh from the device (existing
             ``refreshObject`` owner path) before the cached copy is read. Used
             by readback verification only, so a verify never compares against a
@@ -174,6 +179,8 @@ def read_acs_state(
         )
     if desired.remote_access_paths is not None:
         projection_paths.extend(vars(desired.remote_access_paths).values())
+    if refresh_paths:
+        projection_paths.extend(path.rstrip(".") for path in refresh_paths)
     projection = ",".join(dict.fromkeys(projection_paths))
 
     try:
@@ -216,6 +223,19 @@ def read_acs_state(
         )
 
     device = devices[0]
+    if fresh_since is not None and fresh_since.tzinfo is None:
+        fresh_since = fresh_since.replace(tzinfo=UTC)
+    if (
+        refresh_paths
+        and len(devices) == 1
+        and fresh_since is not None
+        and all(
+            _subtree_fresher_than(devices[0], p, fresh_since) for p in refresh_paths
+        )
+    ):
+        # An Inform already refreshed these subtrees after the write: the cache
+        # is fresh evidence, no Connection Request needed.
+        refresh_paths = ()
     if refresh_paths and len(devices) == 1:
         # Verification freshness: ask the device for the named subtrees (with a
         # Connection Request and a short bounded wait), re-read, and accept the
@@ -324,7 +344,9 @@ def _refresh_subtrees(
                 {"name": "refreshObject", "objectName": path.rstrip(".")},
                 timeout_sec=_REFRESH_WAIT_SEC,
                 connection_request=True,
-                delete_on_timeout=True,
+                # Keep the queued refresh: if the Connection Request fails it
+                # still runs on the device's next Inform.
+                delete_on_timeout=False,
                 allow_when_pending=True,
             )
         except GenieACSError as exc:
