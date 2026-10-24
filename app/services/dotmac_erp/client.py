@@ -28,6 +28,7 @@ from app.services.dotmac_erp.operational_contracts import (
     ErpOperationalSyncOutcome,
 )
 from app.services.integrations.diagnostics import OperationDiagnostic, safe_diagnostic
+from app.services.outbound_effects import Effect, require
 
 logger = logging.getLogger(__name__)
 
@@ -124,6 +125,7 @@ class DotMacERPClient:
 
     def _get_client(self) -> httpx.Client:
         """Get or create the pooled HTTP client."""
+        require(Effect.erp_sync)
         if self._client is None:
             self._client = httpx.Client(
                 base_url=self.base_url,
@@ -263,6 +265,7 @@ class DotMacERPClient:
         headers: dict[str, str] | None = None,
     ) -> dict | list | None:
         """Make an HTTP request with retry logic (delegated to the shared engine)."""
+        require(Effect.erp_sync)
         request_id = uuid4()
         self._last_request_id = request_id
         self._last_status = None

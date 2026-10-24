@@ -21,6 +21,7 @@ from app.services.integrations.runtime import (
     OperationStatus,
     ValidationResult,
 )
+from app.services.outbound_effects import Effect, require
 
 WHATSAPP_SEND_CAPABILITY = "messaging.send.v1"
 WHATSAPP_RECEIVE_CAPABILITY = "messaging.receive.v1"
@@ -253,6 +254,7 @@ class WhatsAppRuntimeRunner:
         config: Mapping[str, Any],
         secret_material: Mapping[str, str],
     ) -> OperationResult:
+        require(Effect.social_messaging)
         if envelope.capability_id == WHATSAPP_TEMPLATE_READ_CAPABILITY:
             return self._read_template(
                 envelope,

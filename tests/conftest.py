@@ -777,6 +777,28 @@ collect_ignore_glob = [
 
 
 @pytest.fixture(autouse=True)
+def _outbound_effects_allow_all_in_unit_tests(monkeypatch: pytest.MonkeyPatch):
+    """Unit tests drive transports through fakes; the gate has its own tests.
+
+    The gate is environment-only, so tests that exercise it patch
+    ``app.services.outbound_effects.settings`` themselves, which overrides this.
+    """
+    import dataclasses
+
+    from app.services import outbound_effects
+
+    monkeypatch.setattr(
+        outbound_effects,
+        "settings",
+        dataclasses.replace(
+            outbound_effects.settings,
+            outbound_effects_allow=",".join(e.value for e in outbound_effects.Effect),
+        ),
+    )
+    yield
+
+
+@pytest.fixture(autouse=True)
 def _olt_ssh_limiter_off_by_default():
     """The unit lane has no lock database: keep the G4 OLT SSH limiter off
     unless a test pins its own configuration (``set_config_override``)."""

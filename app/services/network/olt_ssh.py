@@ -24,6 +24,7 @@ from paramiko.ssh_exception import SSHException
 from paramiko.transport import Transport
 
 from app.services.network.huawei_cli_response import describe_huawei_rejection
+from app.services.outbound_effects import Effect, require
 
 logger = logging.getLogger(__name__)
 
@@ -672,6 +673,7 @@ def _connect_unlimited(
     never for BACKGROUND, never for a password reject, and only if the caller's
     deadline allows. ``olt_ssh_auth_eof_retry_delay_seconds=0`` disables it.
     """
+    require(Effect.device_ssh)
     from app.services.network import olt_ssh_limiter, olt_ssh_metrics
 
     host = (olt.mgmt_ip or olt.hostname or "").strip()
@@ -822,6 +824,7 @@ def _open_shell(olt: OLTDevice) -> tuple[Transport, Channel, OltSshPolicy]:
     ``TimeoutError``) before any socket is opened when none is free. Inside an
     ``olt_ssh_scope`` the scope's single session is reused instead.
     """
+    require(Effect.device_ssh)
     from app.services.network import olt_ssh_limiter, olt_ssh_metrics
 
     scope = olt_ssh_limiter.active_scope(olt)
