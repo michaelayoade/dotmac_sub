@@ -604,9 +604,11 @@ def _manage_transport(
     def release_slot() -> None:
         if lease is None:
             return
-        if grace_seconds > 0:
-            time.sleep(grace_seconds)
-        olt_ssh_limiter.mark_released(lease)
+        try:
+            if grace_seconds > 0:
+                time.sleep(grace_seconds)
+        finally:
+            olt_ssh_limiter.mark_released(lease)
         logger.info(
             "olt_ssh_session olt=%s priority=%s wait_ms=%d hold_ms=%d scope_reused=false",
             olt_label,
@@ -778,13 +780,16 @@ def _discard_failed_transport(transport: Any, sock: Any) -> None:
 def _scope_normaliser(
     session: tuple[Transport, Channel, OltSshPolicy],
 ) -> bool:
-    """Return a reused scope session to its post-login (user-mode) state.
+    """Decide whether a scope session can be handed to the next caller.
 
-    Only a session idle at a clean privileged prompt is reused: ``quit`` there
-    drops to user mode, exactly where a fresh login starts. Anything else
-    (config mode, pager, unknown) is reported unusable and reopened.
+    Sends NOTHING. ``quit`` is reserved for the explicit logout path: on
+    Huawei it may ask a logout confirmation instead of leaving privileged
+    mode, so using it to "reset" would stall and force a re-login. A session
+    idle at a clean user (``>``) or privileged (``#``) prompt is reused as is;
+    callers already run ``enable`` themselves. Config mode, pager, unknown or
+    dirty state is reported unusable and the scope reopens inside its slot.
     """
-    transport, channel, policy = session
+    transport, channel, _policy = session
     try:
         if not transport.is_active() or getattr(channel, "closed", False):
             return False
@@ -795,16 +800,9 @@ def _scope_normaliser(
     state = getattr(channel, "_olt_state", {})
     tail = str(state.get("tail", ""))
     last_line = tail.strip().splitlines()[-1].strip() if tail.strip() else ""
-    if last_line.endswith(">"):
-        return True
-    if not last_line.endswith("#") or "(config" in last_line:
+    if "(config" in last_line:
         return False
-    try:
-        channel.send("quit\n")
-        out = _read_until_prompt(channel, r"(?:^|\r?\n)\S*>\s*$", timeout_sec=5)
-    except Exception:
-        return False
-    return bool(re.search(r">\s*$", out or "")) and _channel_is_clean(channel)
+    return last_line.endswith((">", "#"))
 
 
 def _open_shell(olt: OLTDevice) -> tuple[Transport, Channel, OltSshPolicy]:

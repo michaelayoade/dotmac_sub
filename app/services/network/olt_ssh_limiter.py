@@ -216,8 +216,8 @@ def model_key_for(model: object) -> str:
 
 # ── Priority / deadline / holdings contexts ─────────────────────────────────
 
-_priority_var: contextvars.ContextVar[OltSshPriority] = contextvars.ContextVar(
-    "olt_ssh_priority", default=OltSshPriority.INTERACTIVE
+_priority_var: contextvars.ContextVar[OltSshPriority | None] = contextvars.ContextVar(
+    "olt_ssh_priority", default=None
 )
 _deadline_var: contextvars.ContextVar[float | None] = contextvars.ContextVar(
     "olt_ssh_deadline", default=None
@@ -231,6 +231,12 @@ _scopes_var: contextvars.ContextVar[tuple[tuple[str, Any], ...]] = (
 
 
 def current_priority() -> OltSshPriority:
+    value = _priority_var.get()  # WRITE == 0 is falsy: compare to None
+    return OltSshPriority.INTERACTIVE if value is None else value
+
+
+def explicit_priority() -> OltSshPriority | None:
+    """The priority an enclosing caller set, or None if nobody did."""
     return _priority_var.get()
 
 
@@ -309,7 +315,11 @@ def _limiter_engine(url: str) -> Any:
                     "keepalives_interval": 10,
                     "keepalives_count": 3,
                     "connect_timeout": 5,
-                    "options": "-c statement_timeout=2000",
+                    "options": (
+                        "-c statement_timeout=2000 -c tcp_keepalives_idle=30 "
+                        "-c tcp_keepalives_interval=10 -c tcp_keepalives_count=3 "
+                        "-c idle_session_timeout=0"
+                    ),
                 },
             )
             _engines[url] = engine
@@ -608,11 +618,13 @@ class OltSshScope:
     def _discard(self) -> None:
         session, self._session = self._session, None
         if session is not None:
+            # close() logs out from a verified clean prompt and merely closes
+            # a dirty session (never typing into it); close_real is the fallback.
             try:
-                session[0].close_real()
+                session[0].close()
             except Exception:
                 try:
-                    session[0].close()
+                    session[0].close_real()
                 except Exception:
                     logger.debug("olt_ssh_scope_discard_failed", exc_info=True)
 
@@ -698,9 +710,11 @@ def olt_ssh_scope(
                 except ValueError:
                     pass
                 grace = config.grace_for(model_key_for(getattr(olt, "model", None)))
-                if grace > 0:
-                    time.sleep(grace)
-                mark_released(lease)
+                try:
+                    if grace > 0:
+                        time.sleep(grace)
+                finally:
+                    mark_released(lease)
                 logger.info(
                     "olt_ssh_scope olt=%s priority=%s hold_ms=%d opens=%d reuses=%d",
                     scope.label,

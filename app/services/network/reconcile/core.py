@@ -54,6 +54,7 @@ from app.models.network import OLTDevice, OntSyncStatus, OntUnit
 from app.services.network.olt_ssh_limiter import (
     OltSessionBusy,
     OltSshPriority,
+    explicit_priority,
     is_busy_message,
     olt_ssh_scope,
 )
@@ -453,7 +454,7 @@ def reconcile_ont(
                     scope_stack.enter_context(
                         olt_ssh_scope(
                             scope_olt,
-                            ssh_priority or _default_ssh_priority(mode, readback_only),
+                            _resolve_ssh_priority(ssh_priority, mode, readback_only),
                             deadline_monotonic=started_monotonic + timeout_sec,
                         )
                     )
@@ -1150,6 +1151,21 @@ def reconcile_ont(
 
     finally:
         scope_stack.close()
+
+
+def _resolve_ssh_priority(
+    explicit: OltSshPriority | None, mode: str, readback_only: bool
+) -> OltSshPriority:
+    """Caller's argument, else an enclosing caller's priority, else by mode.
+
+    Compared with ``is None`` because ``OltSshPriority.WRITE`` is 0 (falsy).
+    """
+    if explicit is not None:
+        return explicit
+    outer = explicit_priority()
+    if outer is not None:
+        return outer
+    return _default_ssh_priority(mode, readback_only)
 
 
 def _default_ssh_priority(mode: str, readback_only: bool) -> OltSshPriority:

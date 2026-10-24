@@ -213,6 +213,10 @@ def publish_olt_ssh_snapshot(db: Any, *, now: Any = None) -> bool:
         count, oldest = held.get(name, (0, 0.0))
         observations.append(StateObservation("sessions_held", scope, float(count)))
         observations.append(StateObservation("oldest_hold_seconds", scope, oldest))
+        # Alert hook (design 5d): 1 when a slot has been held over 900 s.
+        observations.append(
+            StateObservation("slot_hold_over_900s", scope, 1.0 if oldest > 900 else 0.0)
+        )
         for outcome in OPEN_OUTCOMES:
             total = sum(
                 value

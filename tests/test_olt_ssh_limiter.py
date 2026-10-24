@@ -553,7 +553,7 @@ def test_scope_reuses_one_session_for_a_whole_pass(server, monkeypatch):
             assert server.held_exclusive() == 1  # the scope's one slot
             transport.close()  # checks back in; does not close the session
     assert len(opens) == 1, "a reconcile pass must log in exactly once"
-    assert opens[0].closed_real is True  # closed when the scope ended
+    assert opens[0].closed is True  # closed when the scope ended
     assert server.held_exclusive() == 0
 
 
@@ -588,22 +588,19 @@ def test_scope_discards_a_dirty_session_and_reopens_in_the_same_slot(
         transport, channel, _ = olt_ssh._open_shell(olt)
         channel.send("display service-port all\n")  # sent, never read: dirty
         transport.close()
-        assert opens[0].closed_real is True  # discarded at check-in
+        assert opens[0].closed is True  # discarded at check-in
         olt_ssh._open_shell(olt)[0].close()
     assert len(opens) == 2
     assert server.held_exclusive() == 0
 
 
-def test_scope_returns_a_privileged_session_to_user_mode_before_reuse(
-    server, monkeypatch
-):
+def test_scope_reuses_privileged_and_user_sessions_without_typing(server, monkeypatch):
+    """A reused session is never sent ``quit`` (it may ask a logout confirmation
+    on Huawei): `>` and `#` prompts are both reused as-is, one login total."""
     opens: list[FakeSessionTransport] = []
-
-    def opener(olt, **kw):
-        transport, channel, policy = _clean_session(opens)
-        return transport, channel, policy
-
-    monkeypatch.setattr(olt_ssh, "_connect_unlimited", opener)
+    monkeypatch.setattr(
+        olt_ssh, "_connect_unlimited", lambda olt, **kw: _clean_session(opens)
+    )
     set_config_override(LimiterConfig(max_ma5608t=1, release_grace_seconds_ma5608t=0))
     olt = _olt()
     with olt_ssh_scope(olt, OltSshPriority.WRITE):
@@ -611,11 +608,138 @@ def test_scope_returns_a_privileged_session_to_user_mode_before_reuse(
         channel.send("enable\n")
         channel.pending.append(b"\r\nboi-olt#")
         channel.recv(4096)  # privileged prompt, clean
-        channel.replies = ["\r\nboi-olt>"]  # reply to the normalising `quit`
+        sent_before = list(channel.sent)
+        transport.close()
+        transport, channel, _ = olt_ssh._open_shell(olt)  # reused at `#`
+        assert channel.sent == sent_before  # nothing typed to normalise
+        channel.send("display version\n")
+        channel.pending.append(b"\r\nboi-olt>")
+        channel.recv(4096)  # back at a user prompt, clean
+        transport.close()
+        olt_ssh._open_shell(olt)[0].close()  # reused at `>`
+        assert "quit\n" not in channel.sent
+    assert len(opens) == 1, "one login for the whole scope"
+
+
+def test_scope_reopens_a_session_left_in_config_mode(server, monkeypatch):
+    opens: list[FakeSessionTransport] = []
+    monkeypatch.setattr(
+        olt_ssh, "_connect_unlimited", lambda olt, **kw: _clean_session(opens)
+    )
+    set_config_override(LimiterConfig(max_ma5608t=1, release_grace_seconds_ma5608t=0))
+    olt = _olt()
+    with olt_ssh_scope(olt, OltSshPriority.WRITE):
+        transport, channel, _ = olt_ssh._open_shell(olt)
+        channel.send("config\n")
+        channel.pending.append(b"\r\nboi-olt(config)#")
+        channel.recv(4096)
         transport.close()
         olt_ssh._open_shell(olt)[0].close()
-        assert channel.sent[-1] == "quit\n"
-    assert len(opens) == 1
+    assert len(opens) == 2
+    assert server.held_exclusive() == 0
+
+
+def test_scope_end_logs_out_a_clean_session_and_not_a_dirty_one(server, monkeypatch):
+    sessions = []
+
+    def opener(olt, **kw):
+        channel = FakeChannel(
+            replies=["\r\nboi-olt>", "Are you sure to log out? (y/n)[n]:", ""]
+        )
+        transport, _ch, policy = _managed_session(channel)
+        sessions.append((transport, channel))
+        return transport, channel, policy
+
+    monkeypatch.setattr(olt_ssh, "_connect_unlimited", opener)
+    set_config_override(LimiterConfig(max_ma5608t=1, release_grace_seconds_ma5608t=0))
+    olt = _olt()
+    with olt_ssh_scope(olt, OltSshPriority.WRITE):
+        olt_ssh._open_shell(olt)[0].close()
+    (_t, clean_channel) = sessions[0]
+    assert clean_channel.sent[-3:] == ["quit\n", "quit\n", "y\n"]
+
+    with olt_ssh_scope(olt, OltSshPriority.WRITE):
+        transport, channel, _ = olt_ssh._open_shell(olt)
+        channel.send("display x\n")  # unread output: dirty
+        before = list(channel.sent)
+        # leave the scope with the session still checked out
+    assert sessions[1][1].sent == before  # no logout typed into a dirty channel
+
+
+def _managed_session(channel):
+    olt_ssh._instrument_channel(channel)
+    transport, _lease, _closes = None, None, None
+    closes: list[str] = []
+    transport = SimpleNamespace(
+        close=lambda: closes.append("c"), is_active=lambda: True
+    )
+    olt_ssh._manage_transport(
+        transport,
+        lease=None,
+        logout_on_close=True,
+        grace_seconds=0,
+        olt_label="OLT-A",
+        priority="write",
+        opened_at=time.monotonic(),
+    )
+    olt_ssh._attach_channel(transport, channel)
+    channel.pending.append(b"boi-olt>")
+    channel.recv(4096)
+    return transport, channel, SimpleNamespace(prompt_regex=r"\S*>\s*$")
+
+
+def test_slot_is_released_even_if_the_grace_sleep_raises(server, monkeypatch):
+    set_config_override(LimiterConfig(max_ma5608t=1, release_grace_seconds_ma5608t=2))
+    monkeypatch.setattr(
+        olt_ssh_limiter,
+        "time",
+        _TimeShim(lambda s: (_ for _ in ()).throw(KeyboardInterrupt())),
+    )
+    olt = _olt()
+    with pytest.raises(KeyboardInterrupt):
+        with olt_ssh_scope(olt, OltSshPriority.WRITE):
+            pass
+    assert server.held_exclusive() == 0
+
+
+def test_outer_priority_is_honoured_by_an_enclosing_caller():
+    assert olt_ssh_limiter.explicit_priority() is None
+    with olt_ssh_priority(OltSshPriority.BACKGROUND):
+        assert olt_ssh_limiter.explicit_priority() is OltSshPriority.BACKGROUND
+    assert olt_ssh_limiter.explicit_priority() is None
+    src = (
+        Path(__file__).resolve().parents[1] / "app/services/network/reconcile/core.py"
+    ).read_text()
+    assert "explicit_priority()" in src
+
+
+def test_reconcile_priority_resolution_treats_write_as_a_real_value():
+    from app.services.network.reconcile import core
+
+    assert (
+        core._resolve_ssh_priority(OltSshPriority.WRITE, "sweep", False)
+        is OltSshPriority.WRITE
+    )
+    with olt_ssh_priority(OltSshPriority.WRITE):
+        assert core._resolve_ssh_priority(None, "sweep", False) is OltSshPriority.WRITE
+    with olt_ssh_priority(OltSshPriority.BACKGROUND):
+        assert (
+            core._resolve_ssh_priority(None, "sync", False) is OltSshPriority.BACKGROUND
+        )
+    assert core._resolve_ssh_priority(None, "sweep", False) is OltSshPriority.BACKGROUND
+
+
+def test_limiter_connection_carries_server_side_keepalives():
+    src = (
+        Path(__file__).resolve().parents[1] / "app/services/network/olt_ssh_limiter.py"
+    ).read_text()
+    for option in (
+        "tcp_keepalives_idle=30",
+        "tcp_keepalives_interval=10",
+        "tcp_keepalives_count=3",
+        "idle_session_timeout=0",
+    ):
+        assert option in src
 
 
 def test_failed_open_releases_the_slot(server, monkeypatch):
@@ -1038,6 +1162,7 @@ def test_snapshot_publishes_held_slots_and_counters_within_the_registered_bound(
     assert published["domain"] == "olt_ssh"
     assert by_key[("sessions_held", scope)] == 2.0
     assert by_key[("oldest_hold_seconds", scope)] == 41.0
+    assert by_key[("slot_hold_over_900s", scope)] == 0.0
     assert by_key[("open_ok", scope)] == 7.0
     assert by_key[("open_auth_eof", scope)] == 3.0
     assert by_key[("slot_wait_seconds_sum", scope)] == 12.5
