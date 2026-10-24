@@ -774,3 +774,25 @@ collect_ignore_glob = [
     "test_transactional_audit_events.py",
     "test_web_system_audit_service.py",
 ]
+
+
+@pytest.fixture(autouse=True)
+def _outbound_effects_allow_all_in_unit_tests(monkeypatch: pytest.MonkeyPatch):
+    """Unit tests drive transports through fakes; the gate has its own tests.
+
+    The gate is environment-only, so tests that exercise it patch
+    ``app.services.outbound_effects.settings`` themselves, which overrides this.
+    """
+    import dataclasses
+
+    from app.services import outbound_effects
+
+    monkeypatch.setattr(
+        outbound_effects,
+        "settings",
+        dataclasses.replace(
+            outbound_effects.settings,
+            outbound_effects_allow=",".join(e.value for e in outbound_effects.Effect),
+        ),
+    )
+    yield

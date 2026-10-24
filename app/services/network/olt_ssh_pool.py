@@ -35,6 +35,8 @@ from paramiko.channel import Channel
 from paramiko.ssh_exception import SSHException
 from paramiko.transport import Transport
 
+from app.services.outbound_effects import Effect, require
+
 if TYPE_CHECKING:
     from app.models.network import OLTDevice
     from app.services.network.olt_vendor_adapters import OltSshPolicy
@@ -479,6 +481,7 @@ def pooled_ssh_connection(olt: OLTDevice):
     Yields:
         Tuple of (Channel, OltSshPolicy) for the connection.
     """
+    require(Effect.device_ssh)
     conn = ssh_pool.acquire(olt)
     close_on_exit = False
     try:

@@ -18,6 +18,7 @@ from app.services.integrations.runtime import (
     OperationStatus,
     ValidationResult,
 )
+from app.services.outbound_effects import Effect, require
 
 PAYMENT_INTENT_CAPABILITY = "payments.intent.v1"
 PAYMENT_WEBHOOK_CAPABILITY = "payments.webhook.v1"
@@ -72,6 +73,7 @@ class PaymentGatewayRunner:
         json_data: dict[str, Any] | None = None,
         params: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
+        require(Effect.payment_gateway)
         client = self._client_override or httpx.Client()
         owned = self._client_override is None
         try:

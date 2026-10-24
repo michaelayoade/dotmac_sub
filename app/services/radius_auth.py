@@ -16,6 +16,7 @@ from sqlalchemy.orm import Session
 
 from app.models.domain_settings import DomainSetting, SettingDomain
 from app.models.radius import RadiusServer
+from app.services.outbound_effects import Effect, require
 
 logger = logging.getLogger(__name__)
 
@@ -85,6 +86,7 @@ def _pick_radius_server(db: Session, server_id: str | None) -> RadiusServer:
 def authenticate(
     db: Session, username: str, password: str, server_id: str | None = None
 ) -> None:
+    require(Effect.radius_auth)
     server = _pick_radius_server(db, server_id)
     # What was held at boot — not the `radius/auth_shared_secret` row, and not
     # the environment.

@@ -23,6 +23,7 @@ from paramiko.ssh_exception import SSHException
 from paramiko.transport import Transport
 
 from app.services.network.huawei_cli_response import describe_huawei_rejection
+from app.services.outbound_effects import Effect, require
 
 logger = logging.getLogger(__name__)
 
@@ -461,6 +462,7 @@ def _setup_prompt_timeout() -> float:
 
 def _open_shell(olt: OLTDevice) -> tuple[Transport, Channel, OltSshPolicy]:
     """Open an SSH shell session to an OLT. Caller must close transport."""
+    require(Effect.device_ssh)
     host = (olt.mgmt_ip or olt.hostname or "").strip()
     if not host:
         raise ValueError("Management IP or hostname is required")

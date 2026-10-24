@@ -583,6 +583,9 @@ def _startup_preflight() -> None:
     idempotent default-settings seeding is deferred off the serving path — see
     [_run_deferred_startup]."""
     _check_test_environment_leakage()
+    from app.services.outbound_effects import log_startup_status
+
+    log_startup_status()
     from app.services.avatar import require_compatible_avatar_policy
 
     require_compatible_avatar_policy()

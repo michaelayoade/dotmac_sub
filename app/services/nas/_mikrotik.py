@@ -28,6 +28,7 @@ from app.services.nas._helpers import (
     merge_single_tag,
     prefixed_value_from_tags,
 )
+from app.services.outbound_effects import Effect, require
 
 logger = logging.getLogger(__name__)
 
@@ -170,6 +171,7 @@ def _mikrotik_rest_auth(
 
 
 def _mikrotik_routeros_auth(device: NasDevice) -> tuple[str, int, str, str]:
+    require(Effect.router_api)
     if device.vendor != NasVendor.mikrotik:
         raise HTTPException(
             status_code=400,
@@ -198,6 +200,7 @@ def _mikrotik_rest_get(
     timeout: int = 10,
 ) -> object:
     """Issue a GET request to MikroTik REST endpoint."""
+    require(Effect.router_api)
     import requests
 
     resp = requests.get(
@@ -362,6 +365,7 @@ def _mikrotik_status_from_rest(device: NasDevice) -> dict[str, object]:
 def _mikrotik_routeros_query(
     device: NasDevice,
 ) -> tuple[dict[str, object], list[dict[str, object]], list[dict[str, object]]]:
+    require(Effect.router_api)
     from routeros_api import RouterOsApiPool
 
     host, port, username, password = _mikrotik_routeros_auth(device)
@@ -406,6 +410,7 @@ def disconnect_mikrotik_pppoe_bulk(device: NasDevice, logins: set[str]) -> set[s
     present after the remove is unambiguously NOT dropped. Raises if the API is
     unreachable or has no usable credentials, so the caller can fall back.
     """
+    require(Effect.router_api)
     from routeros_api import RouterOsApiPool
 
     wanted = {str(lg or "").strip() for lg in logins if str(lg or "").strip()}
@@ -463,6 +468,7 @@ def apply_mikrotik_address_list_via_api(
     present afterwards. Raises if the API is unreachable or uncredentialed so
     the caller can fall back to SSH.
     """
+    require(Effect.router_api)
     from routeros_api import RouterOsApiPool
 
     list_name = str(list_name or "").strip()
@@ -507,6 +513,7 @@ def remove_mikrotik_address_list_via_api(
     absent — idempotent). Raises if the API is unreachable/uncredentialed so
     the caller can fall back to SSH.
     """
+    require(Effect.router_api)
     from routeros_api import RouterOsApiPool
 
     list_name = str(list_name or "").strip()
@@ -587,6 +594,7 @@ def get_mikrotik_pppoe_live_bandwidth(
     This is intentionally separate from the sampled history pipeline. It is for
     operator "what is this customer doing right now?" UI reads.
     """
+    require(Effect.router_api)
     if isinstance(device, MikrotikLiveBandwidthTarget):
         target = device
     else:
@@ -716,6 +724,7 @@ def get_mikrotik_pppoe_live_bandwidth(
 
 
 def _mikrotik_status_from_routeros_api(device: NasDevice) -> dict[str, object]:
+    require(Effect.router_api)
     resource_data, interfaces, _ppp_active = _mikrotik_routeros_query(device)
     uptime_raw = resource_data.get("uptime")
     uptime_seconds = _parse_routeros_uptime_to_seconds(uptime_raw)
