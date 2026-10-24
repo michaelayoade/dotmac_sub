@@ -104,6 +104,20 @@ CHOKEPOINTS = [
         "services/integrations/connectors/meta_social_runtime.py",
         "MetaCapiRunner.execute",
     ),
+    ("services/meta_pages.py", "_request_with_retry"),
+    ("services/meta_pages.py", "_request_with_retry_sync"),
+    ("services/dotmac_erp/client.py", "DotMacERPClient._request"),
+    ("services/dotmac_erp/client.py", "DotMacERPClient._get_client"),
+    ("services/push.py", "send_push"),
+    ("services/push.py", "send_push_to_system_user"),
+    ("services/notification_adapter.py", "WebhookProvider.send"),
+    ("services/nextcloud_talk.py", "NextcloudTalkClient._request"),
+    ("services/router_management/inventory.py", "JumpHostInventory.test_connection"),
+    (
+        "services/router_management/connection.py",
+        "RouterConnectionService._get_or_create_tunnel",
+    ),
+    ("services/network/olt_ssh.py", "_connect_unlimited"),
 ]
 
 
