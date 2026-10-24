@@ -796,3 +796,14 @@ def _outbound_effects_allow_all_in_unit_tests(monkeypatch: pytest.MonkeyPatch):
         ),
     )
     yield
+
+
+@pytest.fixture(autouse=True)
+def _olt_ssh_limiter_off_by_default():
+    """The unit lane has no lock database: keep the G4 OLT SSH limiter off
+    unless a test pins its own configuration (``set_config_override``)."""
+    from app.services.network import olt_ssh_limiter
+
+    olt_ssh_limiter.set_config_override(olt_ssh_limiter.LimiterConfig(enabled=False))
+    yield
+    olt_ssh_limiter.set_config_override(None)

@@ -537,6 +537,10 @@ class ReconcileFailureReason:
 
     # Preflight / reachability — no writes attempted
     OLT_UNREACHABLE = "olt_unreachable"
+    # Every SSH session slot for the OLT is in use (G4 limiter). Raised before
+    # any OLT read, so nothing was written and the DB is unchanged; the
+    # configuration lifecycle defers and retries instead of failing the job.
+    OLT_BUSY = "olt_busy"
     ACS_UNREACHABLE = "acs_unreachable"
     # The OLT replied, but the reply could not be trusted as an observation
     # (rejected command, parameter error, unparseable body). Distinct from

@@ -38,6 +38,16 @@ def check_stale_infrastructure() -> dict[str, object]:
     if postgres is not None:
         publish_database_pressure_snapshot(postgres)
 
+    # Per-OLT SSH session state (G4 limiter). Fail-soft: never fail the
+    # infrastructure check because the limiter snapshot could not be built.
+    try:
+        from app.services.network.olt_ssh_metrics import publish_olt_ssh_snapshot
+
+        with db_session_adapter.read_session() as olt_ssh_db:
+            publish_olt_ssh_snapshot(olt_ssh_db)
+    except Exception:
+        logger.warning("olt_ssh_snapshot_publish_failed", exc_info=True)
+
     degraded = [
         {
             "name": service.name,
