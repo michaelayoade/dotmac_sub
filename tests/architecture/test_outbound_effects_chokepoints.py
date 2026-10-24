@@ -14,6 +14,7 @@ database, models, the control registry or settings resolution.
 from __future__ import annotations
 
 import ast
+import functools
 from pathlib import Path
 
 import pytest
@@ -208,29 +209,59 @@ def _find(tree: ast.Module, qualified: str) -> ast.AST | None:
     return node
 
 
-def test_transport_importers_import_gate() -> None:
-    offenders = []
+_TEXT_NEEDLES = (
+    "smtplib",
+    "ncclient",
+    "librouteros",
+    "paramiko",
+    "routeros_api",
+    "pyrad",
+    "sshtunnel",
+    "require(",
+)
+
+
+@functools.cache
+def _relevant() -> tuple[tuple[Path, ast.Module], ...]:
+    """(path, tree) for the few files that mention a transport or call require().
+
+    Computed once per worker and shared by every test below.
+    """
+    out = []
     for path in source_index.python_files(APP):
         if path == GATE_MODULE:
             continue
-        tree = source_index.python_ast(path)
-        if any(
-            _is_transport(m) for m in _imported_modules(tree)
-        ) and not _calls_require(tree):
-            offenders.append(path.relative_to(ROOT).as_posix())
+        text = source_index.source_text(path)
+        if any(n in text for n in _TEXT_NEEDLES):
+            out.append((path, source_index.python_ast(path)))
+    return tuple(out)
+
+
+@functools.cache
+def _transport_files() -> tuple[tuple[Path, ast.Module], ...]:
+    return tuple(
+        (p, t)
+        for p, t in _relevant()
+        if any(_is_transport(m) for m in _imported_modules(t))
+    )
+
+
+def test_transport_importers_import_gate() -> None:
+    offenders = [
+        path.relative_to(ROOT).as_posix()
+        for path, tree in _transport_files()
+        if not _requires_imported(tree)
+    ]
     assert not offenders, (
-        "modules import an outbound transport without calling "
-        f"outbound_effects.require: {offenders}"
+        "modules import an outbound transport without importing "
+        f"require from outbound_effects: {offenders}"
     )
 
 
 def test_every_transport_call_site_is_gated() -> None:
     """Per call site, not per module: the enclosing function must call require."""
     offenders = []
-    for path in source_index.python_files(APP):
-        if path == GATE_MODULE:
-            continue
-        tree = source_index.python_ast(path)
+    for path, tree in _transport_files():
         sites = _call_sites(tree)
         if not sites:
             continue
@@ -262,15 +293,14 @@ def test_every_effect_is_gated_somewhere() -> None:
     from app.services.outbound_effects import Effect
 
     used: set[str] = set()
-    for path in source_index.python_files(APP):
-        if path == GATE_MODULE:
+    for _path, tree in _relevant():
+        if not _requires_imported(tree):
             continue
-        for node in ast.walk(source_index.python_ast(path)):
+        for node in ast.walk(tree):
             if (
                 isinstance(node, ast.Call)
                 and isinstance(node.func, ast.Name)
                 and node.func.id == "require"
-                and _requires_imported(source_index.python_ast(path))
                 and node.args
                 and isinstance(node.args[0], ast.Attribute)
             ):
