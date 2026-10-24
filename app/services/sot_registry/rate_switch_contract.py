@@ -35,7 +35,10 @@ SERVICE = SOTService(
         "and reads every target's radreply rate back against the derived rate. "
         "Any projection failure or mismatch switches the owner off again and "
         "re-projects. The matching switch-off command is the rollback. Both "
-        "are dry-run unless applied explicitly."
+        "are dry-run unless applied explicitly. An environment with no active user "
+        "target at all (never production) may use a no-target mode that skips "
+        "the projection and read-back and replaces the per-entry match with a "
+        "digest acknowledgement of the live divergence set."
     ),
     contract=ServiceContract(
         concerns=(
@@ -104,6 +107,8 @@ SERVICE = SOTService(
                 f"{SWITCH}.projection_failed",
                 f"{SWITCH}.no_target",
                 f"{SWITCH}.baseline_not_clean",
+                f"{SWITCH}.no_target_mode_refused",
+                f"{SWITCH}.divergence_ack_mismatch",
                 f"{SWITCH}.owner_still_active",
                 f"{SWITCH}.moved_offer_unverified",
                 f"{SWITCH}.owner_not_active",
