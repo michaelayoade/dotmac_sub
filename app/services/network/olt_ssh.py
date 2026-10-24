@@ -404,12 +404,26 @@ def _prepare_huawei_read_shell(channel: Channel, prompt_regex: str) -> str:
     if "#" not in fallback_prompt:
         fallback_prompt = r"#\s*$"
     privileged_prompt = _derive_prompt_regex(output, fallback_prompt)
-    _run_huawei_cmd(
-        channel,
-        "screen-length 0 temporary",
-        prompt=privileged_prompt,
+    # The OLT's line editor can coalesce spaces ("screen-length0temporary" ->
+    # "Unknown command"); the rejection used to be ignored, leaving paging on
+    # and reads cut off at "---- More ----". Verify, retry once, fail closed.
+    for attempt in range(2):
+        paging_output = _run_huawei_cmd(
+            channel,
+            "screen-length 0 temporary",
+            prompt=privileged_prompt,
+        )
+        if not is_error_output(paging_output):
+            return privileged_prompt
+        logger.warning(
+            "OLT rejected paging disable (attempt %d): %s",
+            attempt + 1,
+            paging_output.strip()[-120:],
+        )
+        time.sleep(0.5)
+    raise OltCliPromptError(
+        "OLT rejected 'screen-length 0 temporary'; paging could not be disabled"
     )
-    return privileged_prompt
 
 
 def _replace_policy_prompt_regex(

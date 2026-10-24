@@ -43,6 +43,21 @@ _ONT_INVENTORY_RECOGNITION_RE = re.compile(
 )
 
 
+_ONT_INVENTORY_EMPTY_RE = re.compile(
+    r"No\s+ONT|the total of ONTs are:\s*0\b",
+    re.IGNORECASE,
+)
+
+
+def _ont_inventory_response_explicitly_empty(clean_output: str) -> bool:
+    """Whether the device affirmatively said the port holds no ONTs.
+
+    A table header with no rows is NOT an empty port: it is what a cut-off read
+    looks like (output ended after the header), and must fail closed.
+    """
+    return bool(_ONT_INVENTORY_EMPTY_RE.search(clean_output))
+
+
 def _ont_inventory_response_recognized(clean_output: str) -> bool:
     """Whether the device returned a known inventory response (possibly empty)."""
     return bool(_ONT_INVENTORY_RECOGNITION_RE.search(clean_output))
@@ -353,8 +368,17 @@ def get_registered_ont_serials(
             # description containing words like "error" or "invalid" in a data
             # row cannot be misread as a device rejection.
             clean_output = _ANSI_ESCAPE_RE.sub("", output)
-            if _ont_inventory_response_recognized(clean_output):
+            if _ont_inventory_response_explicitly_empty(clean_output):
                 continue
+            if _ont_inventory_response_recognized(clean_output):
+                # Header but no parsable rows and no explicit empty marker:
+                # a truncated/cut-off read, not evidence of an empty port.
+                return (
+                    False,
+                    f"Huawei inventory response for {fsp} had a table header "
+                    "but no ONT rows (truncated read)",
+                    [],
+                )
             if core.is_error_output(output):
                 return (
                     False,

@@ -246,3 +246,21 @@ def test_paged_reader_accepts_prompt_after_inline_continuation_marker(
 
     assert output.endswith("MA5800-X2#")
     assert sent == []
+
+
+def test_header_only_inventory_is_a_truncated_read_not_an_empty_port(
+    monkeypatch,
+) -> None:
+    """A table header with no rows (cut-off read) must fail closed, never
+    report an authoritative empty port."""
+    _huawei_reader(
+        monkeypatch,
+        "  F/S/P   ONT         SN         Type\n  -----------------\nMA5800-X2#",
+    )
+    ok, message, entries = get_registered_ont_serials(
+        OLTDevice(name="Garki", vendor="Huawei", model="MA5800-X2"),
+        ["0/2/1"],
+    )
+    assert ok is False
+    assert "truncated" in message
+    assert entries == []

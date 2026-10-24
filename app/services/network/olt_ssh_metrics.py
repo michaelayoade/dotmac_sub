@@ -43,6 +43,7 @@ OPEN_OUTCOMES = (
     "auth_eof",
     "auth_eof_retried_ok",
     "auth_rejected",
+    "login_skipped",
     "connect_timeout",
     "other",
 )
@@ -100,13 +101,18 @@ def classify_open_failure(exc: BaseException) -> str:
     from app.services.network.olt_ssh_limiter import (
         OltSessionBusy,
         is_auth_eof_message,
+        is_login_refusal_message,
     )
 
     if isinstance(exc, OltSessionBusy):
         return "busy_timeout"
     if isinstance(exc, AuthenticationException):
         return "auth_rejected"
-    if is_auth_eof_message(exc) or isinstance(exc, EOFError):
+    if (
+        is_auth_eof_message(exc)
+        or is_login_refusal_message(exc)
+        or isinstance(exc, EOFError)
+    ):
         return "auth_eof"
     if isinstance(exc, RuntimeError) and "authentication failed" in str(exc).lower():
         return "auth_rejected"

@@ -31,7 +31,7 @@ from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 from typing import cast
 
-from paramiko.ssh_exception import SSHException
+from paramiko.ssh_exception import AuthenticationException, SSHException
 from sqlalchemy import delete, select
 from sqlalchemy.orm import Session
 
@@ -49,6 +49,8 @@ from app.services.network.olt_ssh_limiter import (
     OltLoginFailed,
     OltSessionBusy,
     OltSshPriority,
+    is_auth_rejected_message,
+    is_login_failed_message,
     is_login_refusal_message,
     olt_ssh_scope,
 )
@@ -358,6 +360,7 @@ def _new_counters() -> dict[str, int]:
         "macs_seen": 0,
         "olt_errors": 0,
         "olt_login_refused": 0,
+        "olt_auth_failed": 0,
         "pruned": 0,
         "drift_detected": 0,
         "linkable_no_assignment": 0,
@@ -440,7 +443,12 @@ def _harvest_olt_mac_tables(
                         f"display mac-address port {fsp}",
                     )
                     counters["ports_walked"] += 1
-                    if not ok and is_login_refusal_message(status):
+                    if not ok and is_auth_rejected_message(status):
+                        raise AuthenticationException(status)
+                    if not ok and (
+                        is_login_refusal_message(status)
+                        or is_login_failed_message(status)
+                    ):
                         # Login refused: stop the walk; no further logins.
                         raise OltLoginFailed(status)
                     if not ok:
@@ -455,6 +463,12 @@ def _harvest_olt_mac_tables(
                     walked.append((fsp, output))
         except OltSessionBusy:
             logger.info("olt_mac_harvest_skipped_busy olt_device_id=%s", olt_id)
+            continue
+        except AuthenticationException:
+            # Wrong credentials are a real fault, not a transient refusal:
+            # surface loudly and do not retry (lockout risk).
+            counters["olt_auth_failed"] += 1
+            logger.error("olt_mac_harvest_auth_rejected olt_device_id=%s", olt_id)
             continue
         except (OltLoginFailed, EOFError, SSHException, OSError) as exc:
             # Login refusal is not a harvest error: retrying would add logins

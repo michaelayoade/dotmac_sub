@@ -210,3 +210,37 @@ def test_firmware_probe_uses_privileged_prompt_for_readback(monkeypatch) -> None
     assert message == "Running: MA5600V800R013C00"
     assert info.current_version == "MA5600V800R013C00"
     assert calls == [("display version", privileged_prompt)]
+
+
+def test_paging_rejection_is_retried_then_fails_closed(monkeypatch) -> None:
+    import pytest
+
+    from app.services.network import olt_ssh
+
+    channel = _FakeChannel()
+    responses = iter(
+        [
+            "\r\nboi-olt#",
+            "screen-length0temporary\r\n  % Unknown command, the error locates at '^'\r\nboi-olt#",
+            "screen-length 0 temporary\r\nboi-olt#",
+        ]
+    )
+    monkeypatch.setattr(
+        olt_ssh, "_read_until_prompt", lambda *_a, **_k: next(responses)
+    )
+    monkeypatch.setattr(olt_ssh.time, "sleep", lambda _: None)
+    prompt = olt_ssh._prepare_huawei_read_shell(channel, r"(?:^|\r?\n)boi\-olt>\s*$")
+    assert prompt.endswith(r"\s*$")
+    # the command is always written as one atomic line, spaces intact
+    assert "".join(channel.sent).count("screen-length 0 temporary\n") == 2
+
+    channel = _FakeChannel()
+    always_bad = iter(
+        ["\r\nboi-olt#"]
+        + ["% Unknown command, the error locates at '^'\r\nboi-olt#"] * 2
+    )
+    monkeypatch.setattr(
+        olt_ssh, "_read_until_prompt", lambda *_a, **_k: next(always_bad)
+    )
+    with pytest.raises(olt_ssh.OltCliPromptError):
+        olt_ssh._prepare_huawei_read_shell(channel, r"(?:^|\r?\n)boi\-olt>\s*$")
