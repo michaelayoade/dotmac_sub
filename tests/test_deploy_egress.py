@@ -248,6 +248,8 @@ def test_cf_nft_syntax_check() -> None:  # pragma: no cover - needs nft
             capture_output=True,
             check=False,
         )
+        if "Operation not permitted" in result.stderr:
+            pytest.skip("nft needs netlink privileges to check")
         assert result.returncode == 0, result.stderr
 
 
