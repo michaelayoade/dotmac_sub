@@ -58,6 +58,7 @@ def _base_context(request: Request, db: Session, active_page: str) -> dict:
         and has_permission(auth, db, "network:operation:redrive"),
         "can_resolve_network_dispatch": bool(auth)
         and has_permission(auth, db, "network:ont:write"),
+        "can_break_glass": "admin" in {str(role) for role in (auth.get("roles") or [])},
         "can_commission_ont": bool(auth)
         and has_permission(auth, db, "network:ont:commission"),
     }

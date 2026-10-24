@@ -126,6 +126,7 @@
             <div class="mt-1">{{ recovery.bind_action_reason }}</div>
             {% endif %}
         </div>
+        {% if can_break_glass %}
         <form hx-post="/admin/network/onts/{{ ont_id }}/bind-internet-wan"
               hx-swap="none"
               hx-indicator="find button"
@@ -158,6 +159,7 @@
                 Bind Internet WAN
             </button>
         </form>
+        {% endif %}
     </div>
 </div>
 {% endif %}

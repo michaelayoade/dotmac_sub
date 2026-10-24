@@ -39,7 +39,9 @@ def _form_str(form: FormData, key: str, default: str = "") -> str:
 
 
 def _base_context(request: Request, db: Session, active_page: str) -> dict:
+    auth = getattr(request.state, "auth", None) or {}
     return {
+        "can_break_glass": "admin" in {str(r) for r in (auth.get("roles") or [])},
         "request": request,
         "active_page": active_page,
         "active_menu": "network",

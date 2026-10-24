@@ -33,10 +33,9 @@ OWNER_ALLOWLIST: tuple[str, ...] = (
     "app/services/network/ont_provision_steps.py",
     "app/services/network/ont_authorization.py",
     "app/services/network/ont_commissioning.py",
-    # transport drivers that define the device methods
-    "app/services/network/olt_",
-    "app/services/genieacs_",
-    "app/services/network/genieacs",
+    # transport drivers that define the device methods (exact files only)
+    "app/services/network/olt_protocol_adapters.py",
+    "app/services/genieacs_client.py",
 )
 
 OLT_WRITE_METHODS = frozenset(
@@ -87,7 +86,10 @@ _ACS_SERVICE_WRITE = re.compile(
 
 
 def _is_owner(rel: str) -> bool:
-    return any(rel == prefix or rel.startswith(prefix) for prefix in OWNER_ALLOWLIST)
+    return any(
+        rel == entry or (entry.endswith("/") and rel.startswith(entry))
+        for entry in OWNER_ALLOWLIST
+    )
 
 
 def _module_name(rel: str) -> str:

@@ -308,3 +308,26 @@ def test_tr069_break_glass_controls_are_hidden_from_non_admins():
             guarded += 1
     assert guarded >= 4
     assert "can_break_glass" in _source("app/web/admin/network_tr069.py")
+
+
+def test_allowlist_is_exact_files_so_new_olt_modules_are_not_exempt():
+    for entry in ont_direct_writer_scan.OWNER_ALLOWLIST:
+        assert entry.endswith("/") or entry.endswith(".py"), entry
+        assert not entry.endswith("_"), entry
+    assert not ont_direct_writer_scan._is_owner("app/services/network/olt_foo.py")
+    assert not ont_direct_writer_scan._is_owner("app/services/genieacs_foo.py")
+    assert not ont_direct_writer_scan._is_owner(
+        "app/services/network/olt_api_operations.py"
+    )
+    assert ont_direct_writer_scan._is_owner(
+        "app/services/network/olt_protocol_adapters.py"
+    )
+    hits = ont_direct_writer_scan.scan_source(
+        "app/services/network/olt_foo.py",
+        "def f(adapter):\n    adapter.create_service_port()\n",
+    )
+    assert dict(hits) == {("app/services/network/olt_foo.py", "olt_write"): 1}
+    # Scanning the tree applies the allowlist: olt_api_operations is counted.
+    assert ("app/services/network/olt_api_operations.py", "olt_write") in (
+        ont_direct_writer_scan.scan()
+    )

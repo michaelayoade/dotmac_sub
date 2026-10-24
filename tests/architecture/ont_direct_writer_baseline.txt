@@ -2,12 +2,15 @@ app/api/network_olt_ops.py olt_write 3
 app/api/network_ont_ops.py ont_features 8
 app/api/network_ont_ops.py ont_write 2
 app/api/reconcile_webhooks.py reconcile_ont 1
+app/services/genieacs_service.py ont_features 3
 app/services/network/_resolve.py acs_write 8
 app/services/network/bulk_provisioning.py provisioning_command 1
 app/services/network/compensation_retry.py provision_steps 1
 app/services/network/cpe_action_device.py acs_write 3
 app/services/network/cpe_action_network.py acs_write 1
 app/services/network/link_speed_test.py acs_write 1
+app/services/network/olt_api_operations.py olt_write 3
+app/services/network/olt_api_operations.py provisioning_command 1
 app/services/network/ont_action_common.py acs_write 1
 app/services/network/ont_action_device.py acs_write 3
 app/services/network/ont_action_network.py acs_write 2
