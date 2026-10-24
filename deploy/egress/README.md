@@ -35,3 +35,42 @@ populates it. Never flush the host ruleset or replace another owner's table.
 
 Rollback is scoped to this table and resolver configuration after capturing the
 current host plan. No rollback command is executed by the renderer.
+
+## container_forward mode
+
+`render.py` also renders a default-deny table for traffic forwarded from
+container bridges, for hosts where the container runtime owns the forwarding
+rules. Input has `"mode": "container_forward"` and exactly
+`scope_ifnames`, `internal_cidrs`, `exempt_src_cidrs`, `allow`,
+`hostnet_uids` and `enforce` (see `container-forward.profile-input.example.json`
+for the profile form). With `--profile seabone` the interface scope and
+host-network uids are fixed by the profile and the remaining keys are input;
+`--allowlist FILE` supplies `allow` from a separate measured list.
+
+- Table `inet dotmac_staging_egress`, one atomic `nft -f` transaction, no
+  `flush ruleset`. Base chains use `policy accept` and only add drops, so the
+  runtime's own chains are unaffected and a runtime restart does not touch it.
+- New traffic from the listed bridges is denied unless the destination is an
+  explicit internal network or an exact `{ip, proto, port}` allowlist entry.
+  There is no private-range acceptance in this mode. Network lists reject
+  anything broader than a /16 and the three private blocks. Allowlist entries
+  are single addresses; ranges are refused.
+- A second chain scopes host-network processes by uid (`hostnet_uids`) on host
+  output. Other host users are untouched.
+- Dropped tuples are recorded in a timed set and rate-limit logged.
+- `enforce=false` records and logs only. `enforce=true` refuses
+  documentation-range placeholder allow entries.
+- Persistence files are rendered too: a oneshot unit with no `ExecStop` (stopping
+  it never opens egress) and a runtime drop-in that refuses to start the runtime
+  without the table. The runtime is deliberately not given `Requires=`.
+- Disable any packaged ruleset service whose configuration begins with
+  `flush ruleset`; it would remove this table and the runtime's rules.
+
+## host_output fixes
+
+The blanket private-range accept and the unrestricted `udp dport 123` accept are
+gone. Use optional `local_cidrs` (explicit networks) and `ntp_servers` (named
+addresses). Empty means no exception.
+
+Not covered by the unit tests: kernel behaviour. `nft -c` syntax checks run only
+where `nft` is installed.

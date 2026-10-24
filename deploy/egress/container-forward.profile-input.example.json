@@ -1,0 +1,9 @@
+{
+  "internal_cidrs": ["192.0.2.0/24", "198.51.100.0/24"],
+  "exempt_src_cidrs": [],
+  "allow": [
+    {"ip": "203.0.113.10", "proto": "udp", "port": 53},
+    {"ip": "203.0.113.10", "proto": "tcp", "port": 53}
+  ],
+  "enforce": false
+}
