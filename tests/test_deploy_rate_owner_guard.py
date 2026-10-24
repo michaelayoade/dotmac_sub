@@ -8,6 +8,7 @@ image that cannot start.
 
 from __future__ import annotations
 
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -54,7 +55,7 @@ def test_flag_off_refuses_with_the_clear_message(tmp_path):
         "PR-2 requires the rate owner switched on first (run the PR-1c switch)" in out
     )
     assert len(calls) == 1
-    assert "check_rate_owner_flag.py" in calls[0]
+    assert "scripts.check_rate_owner_flag" in calls[0]
 
 
 def test_flag_on_passes_silently(tmp_path):
@@ -63,53 +64,98 @@ def test_flag_on_passes_silently(tmp_path):
     assert "DEPLOY REFUSED" not in out
 
 
-def test_the_check_runs_before_the_backup_and_the_env_pin():
+def test_the_check_runs_before_any_write_capable_step():
     source = DEPLOY_SH.read_text(encoding="utf-8")
     call = source.index("\nverify_rate_owner_enabled || exit 1\n")
-    assert call > source.index("\nverify_database_prerequisites\n")
+    assert call < source.index("\nrun_database_prerequisite_bootstrap\n")
+    assert call < source.index("\nverify_database_prerequisites\n")
     assert call < source.index("# If this script is killed mid-backup")
     assert call < source.index('set_env_value APP_IMAGE "${IMAGE}"', call)
 
 
+def test_the_deploy_invokes_the_check_as_a_module():
+    """``python scripts/x.py`` would not put the repo root on sys.path."""
+    source = DEPLOY_SH.read_text(encoding="utf-8")
+    assert "python -m scripts.check_rate_owner_flag" in source
+    assert "scripts/check_rate_owner_flag.py" not in source
+
+
+def _container_like(*argv: str) -> subprocess.CompletedProcess[str]:
+    """Run from the image workdir with no PYTHONPATH and an unreachable database."""
+    env = {
+        k: v
+        for k, v in os.environ.items()
+        if k not in {"PYTHONPATH", "DATABASE_URL"} and not k.startswith("PYTEST")
+    }
+    env["DATABASE_URL"] = "postgresql+psycopg://u:p@127.0.0.1:9/none"
+    return subprocess.run(
+        [sys.executable, *argv],
+        capture_output=True,
+        text=True,
+        cwd=ROOT,
+        env=env,
+        timeout=120,
+    )
+
+
+def test_the_module_invocation_resolves_the_app_and_fails_closed_on_the_db():
+    result = _container_like("-m", "scripts.check_rate_owner_flag")
+    assert result.returncode == 4, result.stderr
+    # Imports resolved (the failure is the database, not a missing module).
+    assert "unreadable:" in result.stderr
+    assert "ModuleNotFoundError" not in result.stderr
+    assert "u:p@" not in result.stdout + result.stderr
+
+
+def test_a_plain_script_run_cannot_import_the_app_and_exits_4_with_the_class_only():
+    """The container's sys.path: this is why the deploy must use ``-m``."""
+    result = _container_like("scripts/check_rate_owner_flag.py")
+    assert result.returncode == 4
+    assert result.stderr.strip() == ("rate owner flag unreadable: ModuleNotFoundError")
+
+
+class _Row:
+    def __init__(self, value_json, value_text):
+        self.value_json, self.value_text = value_json, value_text
+
+
 class _Session:
+    def __init__(self, row):
+        self._row = row
+
     def __enter__(self):
         return self
 
     def __exit__(self, *exc):
         return False
 
+    def execute(self, _statement):
+        row = self._row
+        return type("R", (), {"first": lambda _s: row})()
+
     def rollback(self):
         pass
 
 
-@pytest.mark.parametrize(("flag", "code"), [(True, 0), (False, 3), (None, 3)])
-def test_the_check_script_exit_codes(monkeypatch, capsys, flag, code):
+@pytest.mark.parametrize(
+    ("row", "code"),
+    [
+        (_Row(True, None), 0),
+        (_Row(None, "true"), 0),
+        (_Row(False, None), 3),
+        (_Row(None, "false"), 3),
+        (None, 3),
+    ],
+)
+def test_the_check_script_exit_codes(monkeypatch, row, code):
     from app import db as app_db
-    from app.services import access_rate_switch
 
-    monkeypatch.setattr(app_db, "SessionLocal", lambda: _Session())
-    monkeypatch.setattr(access_rate_switch, "flag_from_row", lambda _db: flag)
-    sys.path.insert(0, str(ROOT / "scripts"))
-    try:
-        import check_rate_owner_flag
-    finally:
-        sys.path.pop(0)
+    monkeypatch.setattr(app_db, "SessionLocal", lambda: _Session(row))
+    from scripts import check_rate_owner_flag
+
     assert check_rate_owner_flag.main() == code
 
 
-def test_an_unreadable_flag_is_not_treated_as_on(monkeypatch, capsys):
-    from app import db as app_db
-    from app.services import access_rate_switch
-
-    def boom(_db):
-        raise RuntimeError("secret-looking detail")
-
-    monkeypatch.setattr(app_db, "SessionLocal", lambda: _Session())
-    monkeypatch.setattr(access_rate_switch, "flag_from_row", boom)
-    sys.path.insert(0, str(ROOT / "scripts"))
-    try:
-        import check_rate_owner_flag
-    finally:
-        sys.path.pop(0)
-    assert check_rate_owner_flag.main() == 4
-    assert "secret-looking detail" not in capsys.readouterr().err
+def test_the_check_selects_only_the_value_columns():
+    source = (ROOT / "scripts/check_rate_owner_flag.py").read_text(encoding="utf-8")
+    assert "select(DomainSetting.value_json, DomainSetting.value_text)" in source

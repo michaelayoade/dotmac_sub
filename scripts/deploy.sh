@@ -818,12 +818,16 @@ verify_database_prerequisites() {
 # PR-2 derives every rate through the rate owner and a production process
 # refuses to start while its flag is off. If that were discovered only after the
 # backup and the .env image pin, a refused restore would leave .env pinned to
-# this image and the next recreate would not start. Read the flag first, with
-# the app's own uncached read, through the candidate image. Read-only.
+# this image and the next recreate would not start. Read the flag first,
+# uncached, through the candidate image. Read-only.
+#
+# Fail-closed edges, both intended: a bootstrap onto an empty database cannot
+# pass (there is no flag row, exit 3), and running this deploy.sh with a pre-PR-2
+# image fails (the check module is absent, so python -m exits non-zero).
 verify_rate_owner_enabled() {
   log "Verifying the rate owner is switched on (read-only)"
   if ! APP_IMAGE="${IMAGE}" GIT_SHA="${FULL_SHA}" \
-    "${COMPOSE[@]}" run --rm --no-deps app python scripts/check_rate_owner_flag.py; then
+    "${COMPOSE[@]}" run --rm --no-deps app python -m scripts.check_rate_owner_flag; then
     echo "DEPLOY REFUSED: PR-2 requires the rate owner switched on first (run the PR-1c switch)." >&2
     return 1
   fi
@@ -1662,9 +1666,9 @@ if ! preflight_deployment_secrets; then
   exit 1
 fi
 
+verify_rate_owner_enabled || exit 1
 run_database_prerequisite_bootstrap
 verify_database_prerequisites
-verify_rate_owner_enabled || exit 1
 
 # If this script is killed mid-backup -- an SSH session dropping is enough --
 # the pg_dump it started does NOT die with it. It keeps running, and the next
