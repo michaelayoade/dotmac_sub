@@ -60,6 +60,9 @@ class BatchedMgmtSpec:
     # Management service-port configuration
     mgmt_vlan_tag: int | None = None
     mgmt_gem_index: int | None = None
+    # Explicit service-port index (DB-allocated) so the created port's index is
+    # known and can be recorded; None lets the OLT auto-assign (unrecorded).
+    mgmt_service_port_index: int | None = None
 
     # IPHOST configuration
     ip_mode: str = "dhcp"  # "dhcp" or "static"
@@ -179,8 +182,11 @@ def build_management_command_batch(
             validate_gem_index,
             _validate_non_negative_int(spec.mgmt_gem_index, "mgmt_gem_index"),
         )
+        sp_index_part = ""
+        if spec.mgmt_service_port_index is not None:
+            sp_index_part = f"{_validate_non_negative_int(spec.mgmt_service_port_index, 'mgmt_service_port_index')} "
         sp_cmd = (
-            f"service-port vlan {mgmt_vlan_tag} "
+            f"service-port {sp_index_part}vlan {mgmt_vlan_tag} "
             f"gpon {fsp} ont {ont_id} "
             f"gemport {mgmt_gem_index} "
             f"multi-service user-vlan {mgmt_vlan_tag} "

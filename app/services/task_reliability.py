@@ -606,6 +606,17 @@ TASK_RELIABILITY_CONTRACTS: dict[str, TaskReliabilityContract] = {
     "app.tasks.ont_reconcile.run_ont_reconcile_sweep": _c(
         "network", SWEEP, IDEMP, HEALTH
     ),
+    "app.tasks.ont_reconcile.refresh_stale_olt_observations": _c(
+        "network",
+        SWEEP,
+        IDEMP,
+        HEALTH,
+        "Read-only towards devices: refreshes only the OLT half of the stored "
+        "observation for admitted ONTs whose observation is older than a "
+        "configurable age. Bounded per OLT per cycle, skips an OLT while any "
+        "operation on it is pending or running, takes a per-OLT advisory lock, "
+        "and plans/applies nothing. Repeating it is inherently safe.",
+    ),
     "app.tasks.ont_reconcile.alert_overdue_reconcile_holds": _c(
         "network",
         SWEEP,

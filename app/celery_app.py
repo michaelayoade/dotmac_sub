@@ -160,6 +160,7 @@ celery_app.conf.task_routes = {
     "app.tasks.olt_mac_harvest.run_olt_mac_harvest": {"queue": "inventory"},
     "app.tasks.olt_mac_harvest.run_single_olt_mac_harvest": {"queue": "inventory"},
     "app.tasks.ont_signal_observations.record_ont_observations": {"queue": "ingestion"},
+    "app.tasks.ont_reconcile.refresh_stale_olt_observations": {"queue": "inventory"},
     "app.tasks.ont_runtime_status.dispatch_huawei_ont_status": {"queue": "inventory"},
     "app.tasks.ont_runtime_status.refresh_huawei_olt_status": {"queue": "inventory"},
     "app.tasks.ont_runtime_status.refresh_single_ont_status": {"queue": "inventory"},

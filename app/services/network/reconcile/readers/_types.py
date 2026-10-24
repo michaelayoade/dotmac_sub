@@ -68,6 +68,11 @@ class ReadResult(Generic[T]):
     #: ``OLT_IDENTITY_MISMATCH``/``OLT_IDENTITY_UNRESOLVED`` instead of the
     #: generic ``OLT_OBSERVATION_UNAVAILABLE``.
     identity_status: Literal["mismatch", "unresolved"] | None = None
+    #: An ``"unavailable"`` ACS read whose freshness refresh was not delivered
+    #: (device silent, task backlog, or the subtree timestamp did not advance).
+    #: This is a "try again later" state for readback verification, not a
+    #: failure of the device or the transport.
+    refresh_pending: bool = False
 
     def __post_init__(self) -> None:
         if self.status == "unavailable" and self.observed is not None:
@@ -81,6 +86,8 @@ class ReadResult(Generic[T]):
             raise ValueError(
                 "transport_unreachable only applies to an 'unavailable' status"
             )
+        if self.refresh_pending and self.status != "unavailable":
+            raise ValueError("refresh_pending only applies to an 'unavailable' status")
         if self.identity_status is not None and self.status != "unavailable":
             raise ValueError("identity_status only applies to an 'unavailable' status")
         if self.identity_status is not None and self.transport_unreachable:
