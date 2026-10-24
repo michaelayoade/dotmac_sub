@@ -159,6 +159,9 @@ class OntServiceConfigurationRevision(Base):
     failure_code: Mapped[str | None] = mapped_column(String(160))
     failure_message: Mapped[str | None] = mapped_column(Text)
     verified_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    # Names (surface:field) of the fields that still diverged at the last
+    # readback. Never values.
+    drift_fields: Mapped[list[str] | None] = mapped_column(JSON)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, default=lambda: datetime.now(UTC)
     )

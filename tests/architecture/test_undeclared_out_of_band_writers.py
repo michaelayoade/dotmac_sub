@@ -286,6 +286,7 @@ BASELINE: dict[str, str] = {
     "app/tasks/ont_reconcile.py::_close_expired_remote_access": "adapter-owned session lifecycle (task/runner)",
     "app/tasks/ont_reconcile.py::_reconcile_dialer_credentials": "adapter-owned session lifecycle (task/runner)",
     "app/tasks/ont_reconcile.py::alert_overdue_reconcile_holds": "adapter-owned session lifecycle (task/runner)",
+    "app/tasks/ont_reconcile.py::refresh_stale_olt_observations": "adapter-owned session lifecycle (task/runner)",
     "app/tasks/ont_reconcile.py::reconcile_huawei_ont": "adapter-owned session lifecycle (task/runner)",
     "app/tasks/ont_reconcile.py::run_ont_reconcile_sweep": "adapter-owned session lifecycle (task/runner)",
     "app/tasks/ont_runtime_status.py::dispatch_huawei_ont_status": "adapter-owned session lifecycle (task/runner)",

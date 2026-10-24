@@ -65,6 +65,11 @@
             {% if signal_info.signal_updated_at %}
             <div class="mt-1 text-xs text-slate-400 dark:text-slate-500">Updated {{ signal_info.signal_updated_at | app_datetime('%H:%M') }}</div>
             {% endif %}
+            {% if signal_info.olt_observation_age_hours is not none %}
+            <div class="mt-1 text-xs {% if signal_info.olt_observation_age_hours >= 6 %}text-amber-600 dark:text-amber-400{% else %}text-slate-400 dark:text-slate-500{% endif %}" data-testid="olt-observation-age">OLT reading {{ signal_info.olt_observation_age_hours }} h old{% if signal_info.olt_observation_age_hours >= 6 %} (stale){% endif %}</div>
+            {% else %}
+            <div class="mt-1 text-xs text-slate-400 dark:text-slate-500" data-testid="olt-observation-age">OLT reading never observed</div>
+            {% endif %}
             {% else %}
             <div class="mt-2 text-xl font-bold text-slate-400 dark:text-slate-500">No data</div>
             <button type="button" hx-post="/admin/network/onts/{{ ont.id }}/refresh" hx-swap="none" hx-disabled-elt="this" data-refresh-status-action class="mt-1 text-sm text-cyan-600 hover:text-cyan-700 dark:text-cyan-400">Refresh &rarr;</button>

@@ -76,6 +76,33 @@ def acs_queued_task_count(db: Session, ont: OntUnit) -> int | None:
         return None
 
 
+def acs_pending_reboot_task(db: Session, ont: OntUnit) -> bool | None:
+    """Whether GenieACS already holds a queued ``reboot`` task for the ONT.
+
+    Read-only. ``None`` means unknown (no device link, ACS unreachable); the
+    caller must not assume either answer.
+    """
+    try:
+        from app.models.tr069 import Tr069AcsServer
+        from app.services.genieacs_client import create_genieacs_client
+
+        cpe = _linked_cpe(db, ont.id)
+        device_id = getattr(cpe, "genieacs_device_id", None)
+        if cpe is None or not device_id:
+            return None
+        server = db.get(Tr069AcsServer, cpe.acs_server_id)
+        if server is None or not server.base_url:
+            return None
+        tasks = create_genieacs_client(server.base_url).get_pending_tasks(device_id)
+        return any(
+            isinstance(task, dict) and str(task.get("name") or "") == "reboot"
+            for task in tasks
+        )
+    except Exception:  # noqa: BLE001
+        logger.info("acs_pending_reboot_lookup_failed", extra={"ont_id": str(ont.id)})
+        return None
+
+
 PENDING_CREATE_TTL_SECONDS = 10 * 60
 MAX_RESUMES_PER_REVISION = 3
 

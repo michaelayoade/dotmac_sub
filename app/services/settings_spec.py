@@ -6457,6 +6457,27 @@ SETTINGS_SPECS.extend(
         ),
         SettingSpec(
             domain=SettingDomain.network_monitoring,
+            key="ont_olt_observation_refresh_interval_seconds",
+            env_var=None,
+            value_type=SettingValueType.integer,
+            default=1800,
+        ),
+        SettingSpec(
+            domain=SettingDomain.network_monitoring,
+            key="ont_olt_observation_max_age_hours",
+            env_var=None,
+            value_type=SettingValueType.integer,
+            default=6,
+        ),
+        SettingSpec(
+            domain=SettingDomain.network_monitoring,
+            key="ont_olt_observation_refresh_per_olt",
+            env_var=None,
+            value_type=SettingValueType.integer,
+            default=5,
+        ),
+        SettingSpec(
+            domain=SettingDomain.network_monitoring,
             key="router_config_backup_interval_hours",
             env_var=None,
             value_type=SettingValueType.integer,

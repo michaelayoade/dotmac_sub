@@ -360,7 +360,17 @@ def compute_plan(
         olt_wait_reason = olt_identity_gate
         omci_wan_planned = False
     elif tr069_profile_only_change:
-        _plan_tr069_profile_only(desired, observed, actions, drifts)
+        _plan_tr069_profile_only(
+            desired,
+            observed,
+            actions,
+            drifts,
+            force_rebind=(
+                force_proposed_writes
+                and forced_fields is not None
+                and "tr069_profile_id" in forced_fields
+            ),
+        )
         omci_wan_planned = False
     elif wifi_only_change or remote_only_change:
         omci_wan_planned = False
@@ -482,8 +492,14 @@ def _plan_tr069_profile_only(
     observed: OntObservedState,
     actions: list[Action],
     drifts: list[Drift],
+    *,
+    force_rebind: bool = False,
 ) -> None:
-    """Plan only the requested OLT TR-069 profile binding."""
+    """Plan only the requested OLT TR-069 profile binding.
+
+    ``force_rebind`` re-issues the bind even when the OLT already reports the
+    desired profile (operator "Re-bind TR-069" for a silent ONT).
+    """
     if desired.olt_ont_id is None:
         # ``compute_plan`` never reaches this function while the identity
         # gate is open; this guard exists only to narrow the type for mypy
@@ -491,7 +507,9 @@ def _plan_tr069_profile_only(
         return
     if not is_deliverable("tr069_profile_id", desired.tr069_profile_id):
         return
-    if observed.olt.olt_tr069_profile_id == desired.tr069_profile_id:
+    if observed.olt.olt_tr069_profile_id == desired.tr069_profile_id and not (
+        force_rebind
+    ):
         return
     actions.append(
         OltTr069ServerConfig(
@@ -1749,7 +1767,7 @@ def _wifi_changes(
     """Return observable WiFi drift and values for one batched write."""
     acs = observed.acs
     root = acs.acs_data_model_root or desired.tr069_data_model_root
-    desired_security = _normalise_wifi_security_mode(desired.wifi_security_mode, root)
+    desired_security, security_is_floor = _wifi_security_with_floor(desired, root)
     observed_security = _normalise_wifi_security_mode(
         acs.acs_observed_wifi_security_mode, root
     )
@@ -1787,7 +1805,15 @@ def _wifi_changes(
             # where unmanaged fields become visible.
             continue
         forced = force_proposed_writes and field in proposed_fields
-        differs = _observed_differs(observed_value, desired_value)
+        if field == "wifi_security_mode" and security_is_floor:
+            # Floor-derived target: any security at or above WPA2-PSK (AES)
+            # satisfies it; only a weaker or open observed mode is drift.
+            differs = (
+                observed_value is not None
+                and observed_value not in _WIFI_SECURITY_FLOOR_OK
+            )
+        else:
+            differs = _observed_differs(observed_value, desired_value)
         # Bring-up push. The freshness signal is the OLT authorization, not
         # "the ACS has never seen this device": the latter guaranteed a 404
         # (nothing can be written to a device the ACS holds no document for)
@@ -1809,6 +1835,32 @@ def _wifi_changes(
         security_mode=security_mode if isinstance(security_mode, str) else None,
         drifts=tuple(drifts),
     )
+
+
+#: Security modes that meet the WPA2-PSK (AES) floor on either data model.
+_WIFI_SECURITY_FLOOR_OK = frozenset(
+    {"11i", "WPA2-Personal", "WPA3-Personal", "WPA3-Personal-Transition"}
+)
+_WIFI_OPEN_MODES = frozenset({"none", "open", "default"})
+
+
+def _wifi_security_with_floor(
+    desired: OntDesiredState, root: str | None
+) -> tuple[str | None, bool]:
+    """Return the desired Wi-Fi security mode and whether it is the floor.
+
+    An unset or ``default`` mode, and any open mode, resolve to the WPA2-PSK
+    (AES) floor: ``11i`` on TR-098 and ``WPA2-Personal`` on TR-181. An open
+    network is never a deliverable target. ONTs with no Wi-Fi SSID desired are
+    left alone (no managed Wi-Fi, nothing to enforce).
+    """
+    configured = desired.wifi_security_mode
+    raw = configured.strip() if configured else ""
+    if raw and raw.lower() not in _WIFI_OPEN_MODES:
+        return _normalise_wifi_security_mode(raw, root), False
+    if desired.wifi_ssid is None:
+        return None, False
+    return ("WPA2-Personal" if root == "Device" else "11i"), True
 
 
 def _normalise_wifi_security_mode(value: str | None, root: str | None) -> str | None:
@@ -1985,6 +2037,11 @@ def _iphost_differs(desired: OntDesiredState, observed: OntObservedState) -> boo
     # Fresh authorization always needs the iphost write — even when the OLT
     # reader hasn't populated mgmt_ip yet (None).
     if not olt.olt_present:
+        return True
+    # A present ONT whose OLT read found no management IPHOST at all is
+    # missing it; only reached when desired management config exists (the
+    # caller gates on desired.mgmt_vlan and desired.mgmt_ip).
+    if olt.olt_mgmt_ip is None:
         return True
     return False
 

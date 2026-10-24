@@ -135,6 +135,7 @@ def read_acs_state(
     desired: OntDesiredState,
     *,
     deadline: datetime | None = None,
+    refresh_paths: tuple[str, ...] = (),
 ) -> ReadResult[AcsObservedFields]:
     """Read the ACS-observed fields for one ONT.
 
@@ -145,6 +146,11 @@ def read_acs_state(
             match.
         deadline: Optional cutoff. The underlying HTTP client has its own
             timeout; ``reconcile_ont`` enforces the outer budget.
+        refresh_paths: Parameter subtrees to refresh from the device (existing
+            ``refreshObject`` owner path) before the cached copy is read. Used
+            by readback verification only, so a verify never compares against a
+            stale cache. A refresh that cannot be delivered fails the read
+            closed rather than falling back to the stale copy.
 
     Returns:
         ``ReadResult[AcsObservedFields]``. When the device hasn't yet
@@ -212,6 +218,31 @@ def read_acs_state(
         )
 
     device = devices[0]
+    if refresh_paths and len(devices) == 1:
+        # Verification freshness: refresh only the named subtrees on the device
+        # that matched, then re-read it. An undelivered refresh fails the read
+        # closed instead of falling back to the stale cached copy.
+        refresh_error = _refresh_subtrees(
+            client, str(device.get("_id") or ""), refresh_paths
+        )
+        if refresh_error is None:
+            try:
+                devices = client.list_devices(
+                    query={"_id": str(device.get("_id") or "")},
+                    projection=projection,
+                )
+            except Exception as exc:  # noqa: BLE001 - fail closed
+                refresh_error = f"ACS re-read after refresh failed: {exc}"
+        if refresh_error is not None:
+            return ReadResult(
+                status="unavailable",
+                observed=None,
+                error=refresh_error,
+                transport_unreachable=True,
+            )
+        if not devices:
+            return ReadResult(status="absent", observed=_absent_fields(), error=None)
+        device = devices[0]
     observed = _parse_device(device, desired, match_count=len(devices))
     if len(devices) > 1:
         # Ambiguous identity. The planner fails closed on this; log once with
@@ -244,6 +275,34 @@ def read_acs_state(
         observed=observed,
         error=None,
     )
+
+
+def _refresh_subtrees(
+    client: AcsDeviceReader,
+    device_id: str,
+    paths: tuple[str, ...],
+) -> str | None:
+    """Refresh ``paths`` on the device; return an error string if not fresh."""
+    if not device_id:
+        return "ACS refresh skipped: matched device has no id"
+    if not isinstance(client, AcsRefreshReader):
+        return "ACS refresh unavailable on this client"
+    for path in paths:
+        try:
+            result = client.refresh_object(device_id, path, allow_when_pending=True)
+        except Exception as exc:  # noqa: BLE001 - fail closed on any transport error
+            logger.info(
+                "acs_reader_verify_refresh_failed",
+                extra={"device_id": device_id, "refresh_path": path},
+            )
+            return f"ACS refresh of {path} failed: {exc}"
+        if isinstance(result, dict) and result.get("connectionRequestError"):
+            # Task queued but the device was not reached: the cache is stale.
+            return (
+                f"ACS refresh of {path} was queued but the device did not "
+                "answer the Connection Request"
+            )
+    return None
 
 
 def _looks_like_ghost_wan_instance(observed: AcsObservedFields) -> bool:

@@ -1535,6 +1535,18 @@ def build_beat_schedule() -> dict:
             enabled=control_registry.is_enabled(session, "network.ont_reconcile"),
             interval_seconds=max(ont_reconcile_seconds, 300),
         )
+        observation_refresh_seconds = resolve_integer(
+            session,
+            SettingDomain.network_monitoring,
+            "ont_olt_observation_refresh_interval_seconds",
+        )
+        _sync_scheduled_task(
+            session,
+            name="ont_olt_observation_refresh",
+            task_name="app.tasks.ont_reconcile.refresh_stale_olt_observations",
+            enabled=control_registry.is_enabled(session, "network.ont_reconcile"),
+            interval_seconds=max(observation_refresh_seconds, 300),
+        )
         # Independent of network.ont_reconcile ON PURPOSE: the fleet-wide
         # control is often disabled while holds are in force, and gating this
         # on it would silence the overdue alarm exactly when it matters.

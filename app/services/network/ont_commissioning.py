@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 import uuid
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
@@ -112,6 +113,8 @@ _RECONCILE_COMMISSIONING = OwnerCommandDefinition(
     concern="commissioning expiry and assignment reconciliation",
     name="reconcile_ont_commissioning",
 )
+
+logger = logging.getLogger(__name__)
 
 
 class OntCommissioningError(DomainError):
@@ -264,6 +267,7 @@ class _CommissioningManagementPlan:
     gateway: str | None
     ip_priority: int
     tr069_profile_id: int
+    mgmt_service_port_index: int | None = None
 
     def to_adapter_spec(self) -> BatchedMgmtSpec:
         return BatchedMgmtSpec(
@@ -271,6 +275,7 @@ class _CommissioningManagementPlan:
             ont_id_on_olt=self.ont_id_on_olt,
             mgmt_vlan_tag=self.mgmt_vlan_tag,
             mgmt_gem_index=self.mgmt_gem_index,
+            mgmt_service_port_index=self.mgmt_service_port_index,
             ip_mode=self.ip_mode,
             ip_address=self.ip_address,
             subnet_mask=self.subnet_mask,
@@ -723,6 +728,74 @@ def _autofind_entry_matches(entry: object, target: OntAuthorizationTarget) -> bo
     }
 
 
+def _allocate_management_service_port_index(
+    db: Session, *, ont: OntUnit, olt: OLTDevice, vlan: int, gem_index: int
+) -> int | None:
+    """DB-allocate the management service-port index so it can be recorded.
+
+    Reuses an index already recorded on the ONT. Allocation failure falls back
+    to the OLT auto-assigning (index then stays unrecorded) rather than
+    blocking commissioning.
+    """
+    from app.services.network.ont_desired_config import (
+        desired_config,
+        get_desired_config_value,
+    )
+    from app.services.network.service_port_allocator import (
+        AllocationError,
+        allocate_service_port,
+    )
+
+    recorded = get_desired_config_value(
+        desired_config(ont), "olt", "mgmt_service_port_index"
+    )
+    if recorded not in (None, ""):
+        return int(recorded)
+    try:
+        allocation = allocate_service_port(
+            db,
+            olt.id,
+            ont.id,
+            service_type="management",
+            vlan_id=vlan,
+            gem_index=gem_index,
+            correlation_key=f"ont-mgmt-service-port:{ont.id}:{vlan}:{gem_index}",
+        )
+    except AllocationError:
+        logger.warning(
+            "mgmt_service_port_allocation_failed", extra={"ont_id": str(ont.id)}
+        )
+        return None
+    return int(allocation.port_index)
+
+
+def _record_management_service_port(
+    db: Session, *, ont_unit_id: uuid.UUID, management: _CommissioningManagementPlan
+) -> None:
+    """Persist the created management service-port index on the ONT."""
+    index = management.mgmt_service_port_index
+    if index is None:
+        return
+    from app.services.network.ont_desired_config import set_desired_config_values
+    from app.services.network.service_port_allocator import (
+        find_allocation_by_correlation_key,
+        mark_provisioned,
+    )
+
+    ont = db.get(OntUnit, ont_unit_id)
+    if ont is None:
+        return
+    set_desired_config_values(ont, {"olt.mgmt_service_port_index": index})
+    allocation = find_allocation_by_correlation_key(
+        db,
+        f"ont-mgmt-service-port:{ont.id}:{management.mgmt_vlan_tag}:"
+        f"{management.mgmt_gem_index}",
+    )
+    if allocation is not None and allocation.provisioned_at is None:
+        mark_provisioned(db, allocation.id)
+    db.flush()
+
+
 def _management_only_plan(
     db: Session,
     *,
@@ -791,7 +864,11 @@ def _management_only_plan(
             "management_priority_missing",
             "Management IPHOST priority could not be resolved from imported OLT state.",
         )
+    mgmt_sp_index = _allocate_management_service_port_index(
+        db, ont=ont, olt=olt, vlan=int(mgmt_vlan), gem_index=int(mgmt_gem)
+    )
     plan = _CommissioningManagementPlan(
+        mgmt_service_port_index=mgmt_sp_index,
         fsp=OntFsp.parse(fsp),
         ont_id_on_olt=ont_id_on_olt,
         mgmt_vlan_tag=int(mgmt_vlan),
@@ -1264,6 +1341,9 @@ def execute_ont_commissioning(
             message=management_result.message,
         )
 
+    _record_management_service_port(
+        db, ont_unit_id=plan.ont_unit_id, management=plan.management
+    )
     intent = db.scalars(
         select(OntCommissioningIntent)
         .where(OntCommissioningIntent.id == plan.intent_id)

@@ -483,6 +483,10 @@ WORKFLOW_GUIDANCE: tuple[AdminWorkflowGuidance, ...] = (
         "If the device is on a known-slow OLT shelf, ask for the longer wait-time option so a slow OLT does not cut the change off partway through.",
         "When a configuration shows Failed or interrupted, use Verify readback on the Configuration tab to check whether the device already has the wanted settings; it only reads the device and needs the ONT to have informed ACS since the failure.",
         "A command whose delivery could not be confirmed shows Review current device state on the ONT's Operations tab and in Network > Dispatch reconciliation. Check the device first, then use Close dispatch to record whether it landed, was superseded, or is no longer wanted, with your evidence.",
+        "If the Configuration tab lists the fields that still differed at the last readback, those are names only (never values); Verify readback first refreshes just the WAN or Wi-Fi part of the device it checks, so it reflects the device now rather than ACS's older copy.",
+        "Use Re-bind TR-069 (OLT) on the Configuration tab for an ONT that has stopped contacting ACS. It re-issues the OLT's TR-069 server-profile bind through the management configuration lifecycle and changes no saved settings.",
+        "Reboot with the automatic option falls back to an OLT reboot only when ACS has no reboot already waiting; if one is queued you are told it will run on the ONT's next check-in and no second reboot is sent.",
+        "The ONT overview shows how old the OLT reading is. Readings older than the configured age (6 hours by default) are refreshed in the background, a few ONTs per OLT at a time, and never while another operation is running on that OLT.",
         notes=(
             "Close dispatch only records your verdict, evidence and name against the dispatch row. It never contacts the device, retries anything, or changes the operation's outcome; use Retry current configuration or Verify readback for device work. Do not paste passwords or keys into the evidence.",
             "When setting PPPoE, leave the WAN connection index blank unless you know it: Sub then selects an existing internet WAN container on the ONT or creates one, and never uses the management container. Creating one can take several minutes (until the ONT's next check-in); the change then resumes on its own.",
@@ -1641,6 +1645,15 @@ _ACTION_SPECS: dict[str, tuple[_ActionSpec, ...]] = {
             6,
             permission="network:ont:write",
         ),
+        _action("read-drift-fields", "Read which fields still differ", 7),
+        _action(
+            "rebind-tr069",
+            "Re-bind TR-069 for a silent ONT",
+            8,
+            9,
+            permission="network:ont:write",
+        ),
+        _action("check-olt-reading-age", "Check how old the OLT reading is", 10),
     ),
     "cpe-detail-wifi-actions": (
         _action(

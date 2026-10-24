@@ -965,6 +965,84 @@ def ont_configure_retry(
 
 
 @router.post(
+    "/onts/{ont_id}/configure/rebind-tr069",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("network:ont:write"))],
+)
+def ont_configure_rebind_tr069(
+    request: Request,
+    ont_id: str,
+    idempotency_key: str | None = Form(default=None),
+    db: Session = Depends(get_db),
+) -> HTMLResponse:
+    """Re-bind the OLT TR-069 server profile for a silent ONT.
+
+    Transport adapter only: the request is admitted as a management-section
+    lifecycle revision (no desired-config change). The reconcile planner and
+    applier issue the OLT bind; nothing here talks to the device.
+    """
+
+    auth = getattr(request.state, "auth", {}) or {}
+    permission_granted = bool(auth) and has_permission(auth, db, "network:ont:write")
+    resolved_key = (idempotency_key or "").strip() or (
+        f"ont-config:{ont_id}:management-rebind:{uuid.uuid4()}"
+    )
+    finish_read_transaction(db)
+    result = None
+    error: DomainError | None = None
+    try:
+        result = configure_ont_service(
+            db,
+            ConfigureOntServiceCommand(
+                context=_ont_configuration_command_context(
+                    request,
+                    reason="Re-bind TR-069 server profile on the OLT",
+                    idempotency_key=resolved_key,
+                ),
+                ont_unit_id=uuid.UUID(ont_id),
+                permission_granted=permission_granted,
+                section=OntConfigurationSection.management,
+                change=ManagementConfigurationChange(
+                    ip_mode=None,
+                    ip_address=None,
+                    remote_access=False,
+                    rebind_tr069=True,
+                ),
+            ),
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail="Invalid ONT identifier.") from exc
+    except DomainError as exc:
+        error = exc
+
+    result_message = result.message if result is not None else error.message  # type: ignore[union-attr]
+    _log_ont_action_result(
+        request=request,
+        ont_id=ont_id,
+        action="Re-bind TR-069 (OLT)",
+        ok=result is not None,
+        message=result_message,
+        metadata={
+            "operation_id": str(result.operation_id) if result is not None else None,
+            "error_code": error.code if error is not None else None,
+        },
+    )
+    context = _base_context(request, db, active_page="onts")
+    context.update(_ont_configuration_form_context(db, ont_id))
+    if result is not None:
+        context["config_result"] = result
+    if error is not None:
+        context["config_error"] = error
+    response = templates.TemplateResponse(
+        "admin/network/onts/_configure_form.html", context
+    )
+    response.headers.update(
+        _toast_headers(result_message, "success" if result is not None else "error")
+    )
+    return response
+
+
+@router.post(
     "/onts/{ont_id}/configure/verify",
     response_class=HTMLResponse,
     dependencies=[Depends(require_permission("network:ont:write"))],

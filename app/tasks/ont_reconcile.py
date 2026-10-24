@@ -358,3 +358,126 @@ def run_ont_reconcile_sweep(max_onts: int = 25) -> dict[str, Any]:
             "remote_access": remote_access,
             "dialer_credentials": dialer_credentials,
         }
+
+
+@dataclass(frozen=True, slots=True)
+class OltObservationRefreshOutcome:
+    olt_id: Any
+    candidates: int = 0
+    refreshed: int = 0
+    failed: int = 0
+    busy_ont: int = 0
+    not_eligible: int = 0
+    skipped_olt_busy: bool = False
+
+
+def refresh_olt_observations(
+    db: Session,
+    olt_id: Any,
+    policy: Any,
+    *,
+    adapter_factory: Any = None,
+    read_fn: Any = None,
+) -> OltObservationRefreshOutcome:
+    """Refresh up to ``policy.per_olt_limit`` stale OLT readings for one OLT.
+
+    Task adapter: owns the per-ONT transaction boundaries so one slow device
+    never holds a transaction open across the others. Skips the whole OLT
+    while any operation on it is pending or running, including one that
+    starts mid-cycle.
+    """
+    from app.models.network import OLTDevice
+    from app.services.network.reconcile.observation_refresh import (
+        ObservationRefreshResult,
+        olt_has_active_operation,
+        refresh_one_ont_observation,
+        stale_observation_ont_ids,
+    )
+
+    kwargs: dict[str, Any] = {"read_fn": read_fn} if read_fn is not None else {}
+    if olt_has_active_operation(db, olt_id):
+        db.commit()  # read-only: just end the transaction
+        return OltObservationRefreshOutcome(olt_id=olt_id, skipped_olt_busy=True)
+    ont_ids = stale_observation_ont_ids(
+        db,
+        olt_id,
+        older_than=datetime.now(UTC) - policy.max_age,
+        limit=policy.per_olt_limit,
+    )
+    olt = db.get(OLTDevice, olt_id)
+    if not ont_ids or olt is None:
+        db.commit()  # read-only: just end the transaction
+        return OltObservationRefreshOutcome(olt_id=olt_id)
+    if adapter_factory is None:
+        from app.services.network.olt_protocol_adapters import get_protocol_adapter
+
+        adapter = get_protocol_adapter(olt)
+    else:
+        adapter = adapter_factory(db, olt)
+
+    counts = {"refreshed": 0, "failed": 0, "busy_ont": 0, "not_eligible": 0}
+    busy = False
+    for index, ont_id in enumerate(ont_ids):
+        if index and olt_has_active_operation(db, olt_id):
+            busy = True
+            break
+        result = refresh_one_ont_observation(db, ont_id, adapter, **kwargs)
+        if result is ObservationRefreshResult.refreshed:
+            db.commit()
+            counts["refreshed"] += 1
+        elif result is ObservationRefreshResult.read_failed:
+            db.commit()  # nothing was written; keep the previous observation
+            counts["failed"] += 1
+        elif result is ObservationRefreshResult.busy:
+            db.rollback()
+            counts["busy_ont"] += 1
+        else:
+            db.rollback()
+            counts["not_eligible"] += 1
+    return OltObservationRefreshOutcome(
+        olt_id=olt_id,
+        candidates=len(ont_ids),
+        skipped_olt_busy=busy,
+        **counts,
+    )
+
+
+@celery_app.task(
+    name="app.tasks.ont_reconcile.refresh_stale_olt_observations",
+    soft_time_limit=840,
+    time_limit=900,
+)
+def refresh_stale_olt_observations() -> dict[str, Any]:
+    """Refresh stale OLT observations, a few ONTs per OLT per cycle.
+
+    Read-only towards devices. Skips an OLT while any operation on it is
+    running or while its status poll holds the per-OLT lock, so it never adds
+    an OLT session on top of other work. Gated on ``network.ont_reconcile``.
+    """
+    from app.services import control_registry
+    from app.services.network.reconcile.observation_refresh import (
+        load_refresh_policy,
+        refreshable_olt_ids,
+    )
+    from app.tasks.ont_runtime_status import _olt_lock_key
+
+    with db_session_adapter.session() as db:
+        if not control_registry.is_enabled(db, "network.ont_reconcile"):
+            return {"skipped": "ont_reconcile_disabled"}
+        policy = load_refresh_policy(db)
+        olt_ids = refreshable_olt_ids(db)
+
+    totals = {"olts": 0, "refreshed": 0, "failed": 0, "skipped_olt_busy": 0}
+    for olt_id in olt_ids:
+        with postgres_session_advisory_lock(_olt_lock_key(str(olt_id))) as acquired:
+            if not acquired:
+                totals["skipped_olt_busy"] += 1
+                continue
+            with db_session_adapter.session() as db:
+                outcome = refresh_olt_observations(db, olt_id, policy)
+        totals["olts"] += 1
+        totals["refreshed"] += outcome.refreshed
+        totals["failed"] += outcome.failed
+        if outcome.skipped_olt_busy:
+            totals["skipped_olt_busy"] += 1
+    return totals

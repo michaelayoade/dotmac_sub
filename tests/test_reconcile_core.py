@@ -3220,7 +3220,14 @@ def _cr_chain_setup(db_session, monkeypatch, ont, stub_desired, *, queued_tasks)
         "app.services.network.reconcile.core.desired_from_ont_unit",
         lambda *_a, **_k: desired,
     )
-    acs = _StubAcsClient(
+
+    class _RefreshableAcs(_StubAcsClient):
+        """Readback verify refreshes the section subtree before reading."""
+
+        def refresh_object(self, device_id, object_path, *, allow_when_pending=False):
+            return {"_id": "task-refresh"}
+
+    acs = _RefreshableAcs(
         device=_acs_device_missing_pppoe(ont),
         spv_cr_error="Connection Request failed: device unreachable",
     )
