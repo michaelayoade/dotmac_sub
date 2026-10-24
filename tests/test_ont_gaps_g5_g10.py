@@ -760,19 +760,11 @@ def test_g10_refresh_skips_the_olt_when_the_limiter_reports_busy(
     assert len(calls) == 1  # stopped after the first busy answer
 
 
-def test_g10_background_scope_is_a_noop_without_the_limiter(monkeypatch):
-    import builtins
+def test_g10_background_scope_sets_background_priority():
+    from app.services.network.olt_ssh_limiter import OltSshPriority, current_priority
+    from app.services.network.reconcile.observation_refresh import (
+        background_olt_scope,
+    )
 
-    from app.services.network.reconcile import observation_refresh as mod
-
-    real_import = builtins.__import__
-
-    def fake_import(name, *a, **k):
-        if name == "app.services.network.olt_ssh_limiter":
-            raise ImportError(name)
-        return real_import(name, *a, **k)
-
-    monkeypatch.setattr(builtins, "__import__", fake_import)
-    with mod.background_olt_scope():
-        pass
-    assert mod.read_reports_olt_busy("anything") is False
+    with background_olt_scope():
+        assert current_priority() is OltSshPriority.BACKGROUND

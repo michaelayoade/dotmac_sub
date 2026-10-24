@@ -60,6 +60,7 @@ from app.services.network.serial_utils import (
     normalized_serial_sql,
 )
 from app.services.network_operation_dispatch import (
+    DispatchResolution,
     NetworkOperationCommand,
     stage_dispatch,
 )
@@ -1805,8 +1806,16 @@ def _reconcile(
             from app.services.network.parsers import normalize_fsp
             from app.services.network.serial_utils import parse_ont_id_on_olt
 
+            # An operator closing the dispatch as ``confirmed_landed`` keeps the
+            # delivery ambiguity on record: the same durable evidence gates
+            # below still decide recovery. ``superseded`` and
+            # ``no_longer_wanted`` verdicts deliberately stay in manual review.
             unknown_delivery = any(
                 dispatch.status is NetworkOperationDispatchStatus.reconciliation_needed
+                or (
+                    dispatch.status is NetworkOperationDispatchStatus.resolved
+                    and dispatch.resolution == DispatchResolution.confirmed_landed.value
+                )
                 for dispatch in prior.dispatches
             )
             explicitly_recorded = (

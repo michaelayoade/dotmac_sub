@@ -724,57 +724,49 @@ def build_mgmt_ip_payload(form: FormData) -> OntUnitUpdate:
 def update_mgmt_ip_from_form(
     db: Session, ont_id: str, form: FormData, *, request: Request | None = None
 ) -> OntFormResult:
+    """Submit the management-IP modal through the service-configuration lifecycle.
+
+    The lifecycle's management section owns IPAM allocation, the desired-config
+    write and the OLT/ACS delivery; this adapter only parses the form.
+    """
+    from app.services.network.ont_desired_config import (
+        desired_config,
+        get_desired_config_value,
+    )
+    from app.services.web_network_ont_actions.lifecycle_admission import (
+        submit_management_change,
+    )
+
     try:
         ont = network_service.ont_units.get_including_inactive(db=db, entity_id=ont_id)
     except HTTPException:
         return OntFormResult(not_found=True)
+    if request is None:
+        return OntFormResult(
+            ont=ont,
+            form_model=ont,
+            error="Management IP changes need an authenticated request.",
+        )
 
-    before_snapshot = model_to_dict(ont)
-    mgmt_ip_mode = form_str(form, "mgmt_ip_mode").strip() or None
-    mgmt_ip_address = form_str(form, "mgmt_ip_address").strip() or None
-    if mgmt_ip_mode == "static_ip":
-        from app.services.network.ont_management_ipam import allocate_ont_management_ip
-
-        try:
-            allocation = allocate_ont_management_ip(
-                db,
-                ont=ont,
-                requested_ip=mgmt_ip_address,
-            )
-        except ValueError as exc:
-            return OntFormResult(ont=ont, form_model=ont, error=str(exc))
-        mgmt_ip_address = allocation.address
-    elif mgmt_ip_mode in {"inactive", "dhcp"}:
-        from app.services.network.ont_management_ipam import release_ont_management_ip
-
-        release_ont_management_ip(db, ont=ont, mode=mgmt_ip_mode)
-    set_desired_config_values(
-        ont,
-        {
-            "management.ip_mode": mgmt_ip_mode,
-            "management.ip_address": mgmt_ip_address
-            if mgmt_ip_mode == "static_ip"
-            else None,
-        },
-    )
-    set_desired_config_values(
-        ont,
-        {"access.mgmt_remote": form_str(form, "mgmt_remote_access") == "true"},
-    )
-    ont.voip_enabled = form_str(form, "voip_enabled") == "true"
-    db.add(ont)
-    db.flush()
-    after = network_service.ont_units.get_including_inactive(db=db, entity_id=ont_id)
-    changes = diff_dicts(before_snapshot, model_to_dict(after))
-    metadata: dict[str, object] | None = {"changes": changes} if changes else None
-    _log_ont_audit_event(
+    raw_wcd = get_desired_config_value(desired_config(ont), "management", "wcd_index")
+    try:
+        wcd_index = int(raw_wcd) if raw_wcd else None
+    except (TypeError, ValueError):
+        wcd_index = None
+    result = submit_management_change(
         db,
-        request=request,
-        action="update_mgmt_ip",
-        ont_id=ont_id,
-        metadata=metadata,
+        request,
+        ont_id,
+        ip_mode=form_str(form, "mgmt_ip_mode").strip() or None,
+        ip_address=form_str(form, "mgmt_ip_address").strip() or None,
+        remote_access=form_str(form, "mgmt_remote_access") == "true",
+        wcd_index=wcd_index,
     )
-    return OntFormResult(ont=after, form_model=after, changes=metadata)
+    if not result.success:
+        return OntFormResult(ont=ont, form_model=ont, error=result.message)
+    return OntFormResult(
+        ont=ont, form_model=ont, changes={"operation": result.data or {}}
+    )
 
 
 def mgmt_ip_modal_context(db: Session, ont_id: str) -> dict[str, object]:

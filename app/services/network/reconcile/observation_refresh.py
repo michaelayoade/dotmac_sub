@@ -23,7 +23,6 @@ from __future__ import annotations
 import logging
 import uuid
 from collections.abc import Callable
-from contextlib import nullcontext
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime, timedelta
 from enum import StrEnum
@@ -39,6 +38,11 @@ from app.models.network_operation import (
     NetworkOperationTargetType,
 )
 from app.models.ont_observation import OntObservation
+from app.services.network.olt_ssh_limiter import (
+    OltSshPriority,
+    is_busy_message,
+    olt_ssh_priority,
+)
 
 from .adapters import desired_from_ont_unit, upsert_ont_observation
 from .candidates import restrict_to_reconcile_candidates
@@ -120,28 +124,13 @@ def olt_observation_age(
 
 
 def background_olt_scope() -> Any:
-    """BACKGROUND OLT-session priority once the per-OLT limiter exists.
-
-    Until the limiter (G4 PR-A) is on main this is a no-op context, keeping the
-    current behaviour.
-    """
-    try:
-        from app.services.network.olt_ssh_limiter import (
-            OltSshPriority,
-            olt_ssh_priority,
-        )
-    except ImportError:
-        return nullcontext()
+    """Run OLT reads at BACKGROUND priority so they never take the reserved slot."""
     return olt_ssh_priority(OltSshPriority.BACKGROUND)
 
 
 def read_reports_olt_busy(error: object) -> bool:
     """Whether a failed read says the limiter had no free session."""
-    try:
-        from app.services.network.olt_ssh_limiter import is_busy_message
-    except ImportError:
-        return False
-    return bool(is_busy_message(error))
+    return is_busy_message(error)
 
 
 def olt_has_active_operation(db: Session, olt_id: uuid.UUID) -> bool:
