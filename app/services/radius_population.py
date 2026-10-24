@@ -44,11 +44,11 @@ from app.db import SessionLocal
 from app.models.catalog import (
     AccessCredential,
     CatalogOffer,
-    GuaranteedSpeedType,
     RadiusProfile,
     Subscription,
     SubscriptionStatus,
 )
+from app.services import access_rate_profile
 from app.services.access_credential_secret import is_secret_reference_value
 from app.services.credential_crypto import (
     decrypt_credential_with_key,
@@ -139,78 +139,10 @@ def _captive_reject_work_item(
     )
 
 
-def _committed_mbps(offer: CatalogOffer) -> tuple[int, int] | None:
-    """The rate floor this offer promises, as (upload, download) Mbps.
-
-    ``None`` means best effort — the tier speed is a ceiling only, which is
-    what unlimited and home_flex sell. Only ``guaranteed_speed`` decides this;
-    plan family never does, so a family rename cannot silently grant or revoke
-    a guarantee.
-    """
-    if offer is None or not offer.speed_download_mbps or not offer.speed_upload_mbps:
-        return None
-
-    guaranteed = offer.guaranteed_speed
-    if guaranteed is GuaranteedSpeedType.fixed:
-        # An absolute floor in Mbps, capped at the line rate: a committed rate
-        # above the ceiling is unsatisfiable and RouterOS would reject the
-        # whole attribute, dropping the subscriber's rate limit entirely.
-        floor = offer.guaranteed_speed_limit_at
-        if not floor:
-            return None
-        return (
-            min(int(floor), offer.speed_upload_mbps),
-            min(int(floor), offer.speed_download_mbps),
-        )
-    if guaranteed is GuaranteedSpeedType.relative:
-        percent = offer.guaranteed_speed_limit_at
-        if not percent:
-            return None
-        percent = max(0, min(int(percent), 100))
-        upload = offer.speed_upload_mbps * percent // 100
-        download = offer.speed_download_mbps * percent // 100
-        if not upload or not download:
-            return None
-        return upload, download
-    return None
-
-
-def _rate_limit(offer: CatalogOffer, profile: RadiusProfile | None) -> str | None:
-    """Pick MikroTik rate-limit string: profile override > offer-derived > None.
-
-    The offer-derived form is rx/tx — NAS-perspective, so the subscriber's
-    UPLOAD first and DOWNLOAD second, per
-    ``app.services.bandwidth.to_subscriber_directions``.
-
-    An offer that promises a rate floor emits the full positional grammar so
-    the trailing committed rate can be reached:
-
-        rx/tx  burst-rx/tx  threshold-rx/tx  burst-time-rx/tx  priority  min-rx/tx
-
-    ``rx-rate-min``/``tx-rate-min`` is the CIR — the rate HTB reserves rather
-    than merely allows. Without it every tier is best effort no matter what the
-    catalogue charges for, which is what left dedicated circuits paying roughly
-    seven times the unlimited rate with no guarantee behind it.
-
-    Priority stays at RouterOS's default 8: with a committed rate set, HTB
-    honours the floor regardless of priority, which only orders the surplus.
-    Raising it here would change queue behaviour for every other subscriber on
-    the NAS, which is a separate decision from honouring a contract.
-    """
-    if profile and profile.mikrotik_rate_limit:
-        return profile.mikrotik_rate_limit
-    if not offer or not offer.speed_download_mbps or not offer.speed_upload_mbps:
-        return None
-
-    ceiling = f"{offer.speed_upload_mbps}M/{offer.speed_download_mbps}M"
-    committed = _committed_mbps(offer)
-    if committed is None:
-        return ceiling
-
-    upload_min, download_min = committed
-    # Burst fields are zeroed rather than omitted: the grammar is positional,
-    # so they must be present to reach the committed rate at the end.
-    return f"{ceiling} 0/0 0/0 0/0 8 {upload_min}M/{download_min}M"
+# The rate grammar lives with the single rate owner (access.rate_profile); the
+# names stay here because the sweep and its tests address them on this module.
+_committed_mbps = access_rate_profile.committed_mbps
+_rate_limit = access_rate_profile.legacy_rate_limit
 
 
 def _effective_profile(
@@ -280,6 +212,7 @@ def _radreply_attrs(
     suspended_list_name: str = SUSPENDED_ADDRESS_LIST,
     simultaneous_use_enabled: bool = False,
     full_test_access: bool = False,
+    owner_rate: access_rate_profile.EffectiveRate | None = None,
 ) -> list[RadiusAttribute]:
     """Compute the list of (attribute, op, value) tuples for radreply.
 
@@ -315,6 +248,10 @@ def _radreply_attrs(
     deployment alone does not silently change fleet-wide authentication policy.
     After cutover, `_radcheck_policy_attrs` owns the attribute and this reply
     builder omits it.
+
+    `owner_rate`: the single rate owner's decision (``radius.rate_owner_enabled``).
+    When given, its rate string is emitted; otherwise the rate is derived from
+    ``offer``/``profile`` exactly as before.
     """
     ipv4 = framed_ipv4 if framed_ipv4 is not None else sub.ipv4_address
     if ipv4 == "0.0.0.0":  # nosec B104  # noqa: S104 — IP-string compare, not a bind
@@ -338,7 +275,9 @@ def _radreply_attrs(
     if delegated:
         attrs.append(("Delegated-IPv6-Prefix", ":=", delegated))
 
-    rate = _rate_limit(offer, profile)
+    rate = (
+        owner_rate.rate_limit if owner_rate is not None else _rate_limit(offer, profile)
+    )
     if rate:
         attrs.append(("Mikrotik-Rate-Limit", ":=", rate))
 
@@ -626,6 +565,42 @@ def _projection_tables(config: dict):
     return radcheck, radreply, radusergroup
 
 
+def _reply_rate(attrs: Iterable[RadiusAttribute]) -> str | None:
+    return next((a[2] for a in attrs if a[0] == "Mikrotik-Rate-Limit"), None)
+
+
+def observed_rate_limits(
+    target: Mapping[str, object], usernames: Iterable[str]
+) -> tuple[dict[str, list[str]], dict[str, list[str]]]:
+    """Read back the rate rows actually written for each login.
+
+    Returns ``(rates, test_rates)``: the ``Mikrotik-Rate-Limit`` values per
+    login, and the test-access ``Mikrotik-Rate-Limit`` values per login. Read
+    only: SELECTs on one target, never a write.
+    """
+    _radcheck, radreply, _radusergroup = _projection_tables(dict(target))
+    engine = get_external_engine(str(target["db_url"]))
+    names = sorted({str(name) for name in usernames if name})
+    rates: dict[str, list[str]] = {}
+    test_rates: dict[str, list[str]] = {}
+    test_attribute = TEST_RADIUS_PREFIX + "Mikrotik-Rate-Limit"
+    with engine.connect() as conn:
+        for start in range(0, len(names), 2000):
+            chunk = names[start : start + 2000]
+            for row in conn.execute(
+                select(radreply.c.username, radreply.c.attribute, radreply.c.value)
+                .where(
+                    radreply.c.username.in_(chunk),
+                    radreply.c.attribute.in_(("Mikrotik-Rate-Limit", test_attribute)),
+                )
+                .order_by(radreply.c.username, radreply.c.value)
+            ):
+                bucket = test_rates if row.attribute == test_attribute else rates
+                bucket.setdefault(str(row.username), []).append(str(row.value))
+        conn.rollback()
+    return rates, test_rates
+
+
 def _write_radius_projection(
     conn,
     config: dict,
@@ -720,8 +695,14 @@ def populate(
     *,
     source_db=None,
     include_expected_fingerprints: bool = False,
+    include_projection_plan: bool = False,
 ) -> dict[str, object]:
-    """Project the authoritative subscriber state to every configured target."""
+    """Project the authoritative subscriber state to every configured target.
+
+    ``include_projection_plan`` adds the per-login plan (mode, the rate rows it
+    writes, whether a test grant is active) and whether the single rate owner
+    was in force, so a caller can verify exactly what was projected.
+    """
     stats: dict[str, object] = {
         "subscriptions_considered": 0,
         "skipped_no_credential": 0,
@@ -873,6 +854,16 @@ def populate(
         radius_profiles_by_id: dict = {
             p.id: p for p in db.scalars(profile_statement).all()
         }
+
+        # Single rate owner (``radius.rate_owner_enabled``). Off: the legacy
+        # credential > subscription precedence below is untouched.
+        rate_owner_ctx = (
+            access_rate_profile.RateContext.load(
+                db, cohort_subscription_ids if scoped else None
+            )
+            if access_rate_profile.rate_owner_enabled(db)
+            else None
+        )
 
         # Pre-fetch additional routed IP blocks,
         # keyed by subscriber_id, so each user's Framed-Routes are O(1) in the
@@ -1195,9 +1186,20 @@ def populate(
             # Credential-level profile (throttle/FUP) takes precedence over the
             # subscription profile, so an applied throttle actually shapes the
             # radreply instead of being reverted to full offer speed each sweep.
-            effective_profile = _effective_profile(
-                cred, sub.radius_profile, radius_profiles_by_id
-            )
+            owner_rate = None
+            plan_owner_rate = None
+            if rate_owner_ctx is not None:
+                owner_rate = access_rate_profile.derive(rate_owner_ctx, sub, cred)
+                plan_owner_rate = access_rate_profile.derive(
+                    rate_owner_ctx, sub, cred, include_enforcement=False
+                )
+                effective_profile = owner_rate.profile
+                plan_profile = plan_owner_rate.profile
+            else:
+                effective_profile = _effective_profile(
+                    cred, sub.radius_profile, radius_profiles_by_id
+                )
+                plan_profile = sub.radius_profile
             attrs = _radreply_attrs(
                 sub,
                 sub.offer,
@@ -1209,24 +1211,26 @@ def populate(
                 delegated_ipv6=delegated_ipv6,
                 suspended_list_name=suspended_list_name,
                 simultaneous_use_enabled=simultaneous_use_enabled,
+                owner_rate=owner_rate,
             )
             test_attrs = (
                 _radreply_attrs(
                     sub,
                     sub.offer,
-                    sub.radius_profile,
+                    plan_profile,
                     additional_routes=additional_routes,
                     framed_ipv4=eff_ipv4,
                     delegated_ipv6=delegated_ipv6,
                     simultaneous_use_enabled=simultaneous_use_enabled,
                     full_test_access=True,
+                    owner_rate=plan_owner_rate,
                 )
                 if test_access is not None
                 else []
             )
             test_checks = (
                 _radcheck_policy_attrs(
-                    sub.radius_profile,
+                    plan_profile,
                     simultaneous_use_enabled=simultaneous_use_enabled,
                 )
                 if test_access is not None
@@ -1260,9 +1264,7 @@ def populate(
                 test_access=test_access,
                 test_reply_attrs=tuple(test_attrs),
                 test_check_attrs=tuple(test_checks),
-                test_profile_group=sub.radius_profile.name
-                if sub.radius_profile
-                else None,
+                test_profile_group=plan_profile.name if plan_profile else None,
             )
 
         active_usernames = {sub.login for sub in rows if sub.login}
@@ -1279,6 +1281,17 @@ def populate(
         work = [item for item in work if item.username in only_usernames]
         stats["scoped_targets"] = len(only_usernames)
         unbuildable_usernames.intersection_update(only_usernames)
+    if include_projection_plan:
+        stats["rate_owner_enabled"] = rate_owner_ctx is not None
+        stats["projection_plan"] = {
+            item.username: {
+                "mode": item.mode,
+                "rate": _reply_rate(item.reply_attrs),
+                "test_access": item.test_access is not None,
+                "test_rate": _reply_rate(item.test_reply_attrs),
+            }
+            for item in work
+        }
     stats["projected_logins"] = len(work)
     stats["unbuildable_logins"] = len(unbuildable_usernames)
     stats["projection_complete"] = not unbuildable_usernames
