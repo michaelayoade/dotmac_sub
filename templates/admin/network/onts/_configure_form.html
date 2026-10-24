@@ -58,6 +58,9 @@
     {% if lifecycle.failure_message %}
     <p class="mt-2 rounded px-2 py-1.5 text-xs {% if phase == 'delivered_unverified' %}bg-amber-50 text-amber-800 dark:bg-amber-900/20 dark:text-amber-300{% else %}bg-rose-50 text-rose-800 dark:bg-rose-900/20 dark:text-rose-300{% endif %}">{{ lifecycle.failure_message }}{% if lifecycle.failure_code %} <span class="font-mono">({{ lifecycle.failure_code }})</span>{% endif %}</p>
     {% endif %}
+    {% if lifecycle.drift_fields %}
+    <p class="mt-2 text-xs text-slate-600 dark:text-slate-300" data-testid="readback-drift-fields">Fields still differing at last readback: <span class="font-mono">{{ lifecycle.drift_fields | join(', ') }}</span></p>
+    {% endif %}
     {% if is_lan_acs_task_drain %}
     <p class="mt-2 text-xs font-medium text-amber-700 dark:text-amber-300">Do not retry this LAN configuration while the ACS task is queued. Wait for the ONT to Inform, or force an OLT ONT reset to drain the queued task.</p>
     {% elif phase in ['saved', 'queued', 'applying', 'readback_pending'] %}
@@ -83,6 +86,14 @@
         <input type="hidden" name="idempotency_key" value="{{ verify_idempotency_key }}">
         <button type="submit" hx-disabled-elt="this" class="rounded border border-slate-300 bg-white px-2.5 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-50 disabled:opacity-50 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-200">Verify readback</button>
         <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">Reads the device back only; nothing is written. Needs a fresh ACS Inform after the failure.</p>
+    </form>
+    {% endif %}
+
+    {% if phase not in ['saved', 'queued', 'applying', 'readback_pending'] %}
+    <form class="mt-2" hx-post="/admin/network/onts/{{ ont_id }}/configure/rebind-tr069" hx-target="#configure-content" hx-swap="innerHTML" hx-confirm="Re-issue the TR-069 server-profile bind for this ONT on the OLT?">
+        {% include "components/forms/csrf_input.html" %}
+        <button type="submit" hx-disabled-elt="this" data-testid="rebind-tr069" class="rounded border border-slate-300 bg-white px-2.5 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-50 disabled:opacity-50 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-200">Re-bind TR-069 (OLT)</button>
+        <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">For an ONT that has stopped informing to ACS. Re-issues the OLT TR-069 server-profile bind through the management configuration lifecycle.</p>
     </form>
     {% endif %}
 

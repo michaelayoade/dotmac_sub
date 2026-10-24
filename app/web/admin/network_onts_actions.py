@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import uuid
 from urllib.parse import quote_plus
 
 from fastapi import APIRouter, Depends, Form, Query, Request
@@ -323,6 +324,17 @@ def _hosts_partial_response(
     return response
 
 
+def _acs_reboot_already_queued(db: Session, ont_id: str) -> bool:
+    from app.models.network import OntUnit
+    from app.services.network.ont_turnup_gaps import acs_pending_reboot_task
+
+    try:
+        ont = db.get(OntUnit, uuid.UUID(str(ont_id)))
+        return ont is not None and acs_pending_reboot_task(db, ont) is True
+    except Exception:  # noqa: BLE001 - unknown means fall back as before
+        return False
+
+
 @router.post(
     "/onts/{ont_id}/reboot",
     dependencies=[Depends(require_permission("network:ont:write"))],
@@ -360,6 +372,17 @@ def ont_reboot(
         and not result.success
         and not getattr(result, "waiting", False)
     ):
+        if _acs_reboot_already_queued(db, ont_id):
+            # A reboot task is already queued in GenieACS; an OMCI reboot now
+            # would race it. Report it instead of rebooting twice.
+            return _action_json_response(
+                success=True,
+                message="Reboot queued in ACS, will run on next inform.",
+                action="Reboot ONT",
+                request=request,
+                ont_id=ont_id,
+                waiting=True,
+            )
         ok, msg = web_network_ont_actions_service.execute_omci_reboot(
             db,
             ont_id,

@@ -276,6 +276,9 @@ class OntDesiredState:
     wifi_enabled: bool | None = None
     wifi_channel: int | None = None
     wifi_security_mode: str | None = None
+    #: Policy gate (setting ``ont_wifi_security_floor_enforced``, default off):
+    #: when on, an unset/default/open mode is raised to the WPA2-PSK floor.
+    wifi_security_floor_enforced: bool = False
     wifi_paths: Tr069WifiParameterPaths | None = None
     wan_remote_access_enabled: bool = False
     wan_remote_access_expires_at: datetime | None = None

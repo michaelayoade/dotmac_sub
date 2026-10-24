@@ -222,6 +222,9 @@ def reconcile_ont(
     ping_function: PingFunction | None = None,
     lifecycle_binding: ReconcileLifecycleBinding | None = None,
     readback_only: bool = False,
+    refresh_acs_paths: tuple[str, ...] = (),
+    refresh_fresh_since: datetime | None = None,
+    force_tr069_rebind: bool = False,
     ssh_priority: OltSshPriority | None = None,
 ) -> ReconcileResult:
     """Reconcile one ONT — bring live state into agreement with desired state.
@@ -252,6 +255,13 @@ def reconcile_ont(
         lifecycle_binding: Exact assignment, configuration head, revision and
             operation allowed to own this pass's current status projection.
         readback_only: Observe and verify without applying a device write.
+        force_tr069_rebind: Re-issue the OLT TR-069 server-profile bind even
+            when the OLT already reports the desired profile (``sync`` mode,
+            lifecycle management section only).
+        refresh_fresh_since: Cached refresh subtrees stamped at/after this are
+            accepted without a Connection Request.
+        refresh_acs_paths: ACS parameter subtrees refreshed from the device
+            before the first observation (readback verification freshness).
         ssh_priority: OLT SSH limiter priority for this pass. Defaults to
             INTERACTIVE for readback-only, BACKGROUND for ``mode="sweep"`` and
             WRITE otherwise.
@@ -356,6 +366,9 @@ def reconcile_ont(
                     }
                 )
             forced_fields: frozenset[str] | None = None
+            if force_tr069_rebind and mode == "sync" and not readback_only:
+                proposed_fields = proposed_fields | frozenset({"tr069_profile_id"})
+                forced_fields = frozenset({"tr069_profile_id"})
             if proposed_values:
                 # Filter the proposed_change to OntDesiredState fields only —
                 # callers may have copy-pasted extras.
@@ -501,6 +514,8 @@ def reconcile_ont(
                 deadline=deadline,
                 olt_observed_fallback=olt_observed_fallback,
                 acs_observed_fallback=acs_observed_fallback,
+                acs_refresh_paths=refresh_acs_paths if readback_only else (),
+                acs_fresh_since=refresh_fresh_since,
             )
 
             # ICMP reachability check on the mgmt IP. Runs from the reconciler
@@ -551,6 +566,38 @@ def reconcile_ont(
                             "OLT observation unavailable: "
                             f"{olt_result.error or 'no detail'}"
                         ),
+                    ),
+                    started_monotonic=started_monotonic,
+                    observed_after=observed_before,
+                    actions_applied=(),
+                    drift_before=(),
+                    drift_after=(),
+                    observed_surfaces=_surfaces_observed(
+                        olt_result,
+                        acs_result,
+                        olt_read_attempted=olt_read_attempted,
+                        acs_read_attempted=acs_read_attempted,
+                    ),
+                    olt_read_status=_observed_olt_read_status(
+                        olt_result, read_attempted=olt_read_attempted
+                    ),
+                )
+
+            # A readback whose freshness refresh was not delivered is pending,
+            # never a pass or a terminal failure: the lifecycle waits and retries.
+            if readback_only and acs_result.refresh_pending:
+                return finalise(
+                    db,
+                    ont,
+                    success=False,
+                    failure=ReconcileFailure(
+                        reason=ReconcileFailureReason.VERIFICATION_MISMATCH,
+                        message=READBACK_PENDING_MESSAGE,
+                        evidence={
+                            "readback_pending": True,
+                            "refresh_not_delivered": True,
+                            "drift_fields": [],
+                        },
                     ),
                     started_monotonic=started_monotonic,
                     observed_after=observed_before,
@@ -1284,12 +1331,19 @@ def _read_observed_parallel(
     deadline: datetime,
     olt_observed_fallback: OltObservedFields | None = None,
     acs_observed_fallback: AcsObservedFields | None = None,
+    acs_refresh_paths: tuple[str, ...] = (),
+    acs_fresh_since: datetime | None = None,
 ):
     """Run OLT + ACS reads in parallel.
 
     Two I/O-bound calls, one each — a small thread pool is the right fit.
     The readers themselves don't share state, so no synchronisation needed.
     """
+    refresh_kwargs: dict[str, Any] = (
+        {"refresh_paths": acs_refresh_paths, "fresh_since": acs_fresh_since}
+        if acs_refresh_paths
+        else {}
+    )
     if olt_adapter is None:
         # No adapter means the caller deliberately skipped OLT I/O (the
         # WiFi-only delivery path substitutes the last cached observation
@@ -1314,7 +1368,9 @@ def _read_observed_parallel(
                     error=None,
                 ),
             )
-        return olt_result, read_acs_state(acs_client, desired, deadline=deadline)
+        return olt_result, read_acs_state(
+            acs_client, desired, deadline=deadline, **refresh_kwargs
+        )
     if acs_client is None:
         acs_observed = acs_observed_fallback or _absent_acs()
         return (
@@ -1335,7 +1391,9 @@ def _read_observed_parallel(
             olt_context.run,
             partial(read_olt_state, olt_adapter, desired, deadline=deadline),
         )
-        acs_future = pool.submit(read_acs_state, acs_client, desired, deadline=deadline)
+        acs_future = pool.submit(
+            read_acs_state, acs_client, desired, deadline=deadline, **refresh_kwargs
+        )
         olt_result = olt_future.result()
         acs_result = acs_future.result()
     return olt_result, acs_result
