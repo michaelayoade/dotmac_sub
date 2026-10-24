@@ -181,12 +181,11 @@ def submit_wifi_change_for_bulk(
 
     The bulk route already checked ``network:ont:write`` for the initiator.
     """
+    raw_enabled = params.get("enabled")
     patch = wifi_patch(
         ssid=cast_text(params.get("ssid")),
         password=cast_text(params.get("password")),
-        enabled=params.get("enabled")
-        if isinstance(params.get("enabled"), bool)
-        else None,
+        enabled=raw_enabled if isinstance(raw_enabled, bool) else None,
         channel=cast_text(params.get("channel")),
         security_mode=cast_text(params.get("security_mode")),
     )
