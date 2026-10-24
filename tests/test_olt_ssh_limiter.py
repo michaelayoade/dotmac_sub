@@ -1369,3 +1369,34 @@ def test_scope_login_failures_are_metered(server, monkeypatch):
     outcomes = [r[2] for r in recorded]
     assert "auth_eof" in outcomes
     assert "login_skipped" in outcomes
+
+
+def test_write_scope_total_logins_capped_at_two(server, connect_env, monkeypatch):
+    """Inner EOF retry used -> no outer retry (2 logins, not 4)."""
+    monkeypatch.setattr(olt_ssh_limiter, "time", _TimeShim(lambda _s: None))
+    set_config_override(LimiterConfig(max_ma5608t=1, release_grace_seconds_ma5608t=0))
+    banner = "Error reading SSH protocol banner"
+    ScriptedTransport.script = [SSHException(banner)] * 4
+    olt = _device()
+    with olt_ssh_scope(olt, OltSshPriority.WRITE):
+        with pytest.raises(OSError):  # OltLoginFailed
+            olt_ssh._open_shell(olt)
+    assert ScriptedTransport.created == 2
+
+
+def test_write_scope_outer_retry_disables_inner_retry(server, connect_env, monkeypatch):
+    """Inner retry unavailable on attempt 1 -> outer retry runs once, still <= 2."""
+    monkeypatch.setattr(olt_ssh_limiter, "time", _TimeShim(lambda _s: None))
+    set_config_override(
+        LimiterConfig(
+            max_ma5608t=1,
+            release_grace_seconds_ma5608t=0,
+            auth_eof_retry_delay_seconds=0,  # inner retry off
+        )
+    )
+    ScriptedTransport.script = [SSHException("transport shut down or saw EOF")] * 4
+    olt = _device()
+    with olt_ssh_scope(olt, OltSshPriority.WRITE):
+        with pytest.raises(OSError):
+            olt_ssh._open_shell(olt)
+    assert ScriptedTransport.created == 2

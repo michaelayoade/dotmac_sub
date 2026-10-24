@@ -332,3 +332,67 @@ def test_rows_present_but_unparseable_never_returns_ok_with_zero(monkeypatch) ->
     assert ok is False
     assert "could not be parsed" in message
     assert entries == []
+
+
+def test_real_garki_capture_parses_exactly_16_with_4_online() -> None:
+    from pathlib import Path
+
+    raw = (
+        Path(__file__).parent / "fixtures/huawei/garki_0_2_1_display_ont_info_all.txt"
+    ).read_text()
+    entries = parse_registered_ont_inventory(raw, "0/2/1")
+    assert len(entries) == 16
+    assert [e.onu_id for e in entries] == list(range(16))
+    assert entries[0].real_serial == "48575443FAA65084"
+    assert entries[15].real_serial == "485754431DA6B7D1"
+    assert {e.onu_id for e in entries if e.run_state == "online"} == {0, 4, 6, 10}
+    assert sum(e.run_state == "online" for e in entries) == 4
+    assert all(e.fsp == "0/2/1" for e in entries)
+
+
+def test_real_garki_capture_through_get_registered_serials(monkeypatch) -> None:
+    from pathlib import Path
+
+    raw = (
+        Path(__file__).parent / "fixtures/huawei/garki_0_2_1_display_ont_info_all.txt"
+    ).read_text()
+    _huawei_reader(monkeypatch, raw)
+    ok, message, entries = get_registered_ont_serials(
+        OLTDevice(name="Garki", vendor="Huawei", model="MA5800-X2"), ["0/2/1"]
+    )
+    assert ok is True and len(entries) == 16, message
+
+
+_SUMMARY_PAGED = (
+    "display ont info summary 0/ 2/1\\n"
+    "  In port 0/ 2/1 , the total of ONTs are: 2, online: 1\\n"
+    "  ONT  Run     Last                Last                Last\\n"
+    "  ID   State   UpTime              DownTime            DownCause\\n"
+    "  0    online  2026-07-15 07:30:17 2026-07-15 07:29:44 dying-gasp\\n"
+    "  1    offline -                   -                   -\\n"
+    "  ONT        SN        Type          Distance Rx/Tx power  Description\\n"
+    "  ID                                    (m)      (dBm)\\n"
+    "---- More ( Press 'Q' to break ) ----\\x1b[37D                     \\x1b[37D"
+    "  0   48575443FAA65084 EG8145V5         206   -17.30/2.34  CUSTOMER_00\\n"
+    "  1   485754437D4733C3 -                -     -/-          CUSTOMER_01\\n"
+    "MA5800-X2#"
+)
+
+
+def test_ma5800_summary_paged_ansi_parses_with_states() -> None:
+    entries = parse_registered_ont_inventory(
+        _SUMMARY_PAGED.encode().decode("unicode_escape"), "0/2/1"
+    )
+    assert [(e.onu_id, e.real_serial, e.run_state) for e in entries] == [
+        (0, "48575443FAA65084", "online"),
+        (1, "485754437D4733C3", "offline"),
+    ]
+
+
+def test_ma5800_summary_cut_off_after_state_table_fails_closed(monkeypatch) -> None:
+    cut = _SUMMARY_PAGED.encode().decode("unicode_escape").split("  ONT        SN")[0]
+    _huawei_reader(monkeypatch, cut + "MA5800-X2#")
+    ok, message, entries = get_registered_ont_serials(
+        OLTDevice(name="Garki", vendor="Huawei", model="MA5800-X2"), ["0/2/1"]
+    )
+    assert ok is False and entries == []

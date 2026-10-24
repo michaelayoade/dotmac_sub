@@ -734,7 +734,11 @@ class OltSshScope:
                     logger.error("olt_ssh_scope_auth_rejected olt=%s", self.label)
                     raise
                 transient = isinstance(exc, EOFError) or is_login_refusal_message(exc)
-                if transient and attempt < attempts_allowed:
+                if (
+                    transient
+                    and attempt < attempts_allowed
+                    and not getattr(exc, "olt_eof_retry_used", False)
+                ):
                     if self.grace_seconds > 0:
                         time.sleep(self.grace_seconds)
                     continue
