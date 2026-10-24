@@ -41,6 +41,7 @@ from app.services.notification import (
 )
 from app.services.notification import notifications as notification_records
 from app.services.notification_template_renderer import render_template_text
+from app.services.outbound_effects import Effect, require
 
 logger = logging.getLogger(__name__)
 
@@ -274,6 +275,8 @@ def send_sms(
             ),
         )
         return queued.status == NotificationStatus.queued
+
+    require(Effect.sms)
 
     # Fail closed. This defaulted to "true", so a deployment that had never
     # configured SMS still presented the channel as live and queued sends into

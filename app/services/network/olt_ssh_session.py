@@ -31,6 +31,7 @@ from app.services.network.huawei_cli_response import (
     HuaweiCliErrorCode as ErrorCode,
 )
 from app.services.network.huawei_cli_response import classify_huawei_cli_response
+from app.services.outbound_effects import Effect, require
 
 if TYPE_CHECKING:
     from app.models.network import OLTDevice
@@ -315,6 +316,7 @@ def olt_session(olt: OLTDevice) -> Iterator[OltSession]:
         SSHException: If connection fails.
         ValueError: If OLT credentials are missing.
     """
+    require(Effect.device_ssh)
     from app.services.network.olt_ssh import (
         _open_shell,
         _read_until_prompt,

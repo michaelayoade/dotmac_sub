@@ -16,7 +16,6 @@
                 <th class="px-3 py-2 text-left text-xs font-medium uppercase text-slate-500 dark:text-slate-400">VLAN</th>
                 <th class="px-3 py-2 text-left text-xs font-medium uppercase text-slate-500 dark:text-slate-400">GEM</th>
                 <th class="px-3 py-2 text-left text-xs font-medium uppercase text-slate-500 dark:text-slate-400">State</th>
-                <th class="px-3 py-2 text-right text-xs font-medium uppercase text-slate-500 dark:text-slate-400"></th>
             </tr>
         </thead>
         <tbody class="divide-y divide-slate-200 bg-white dark:divide-slate-700 dark:bg-slate-900">
@@ -32,19 +31,6 @@
                     <span class="inline-flex items-center rounded-full bg-rose-100 px-2 py-0.5 text-xs font-medium text-rose-700 dark:bg-rose-900 dark:text-rose-200">Down</span>
                     {% endif %}
                 </td>
-                <td class="whitespace-nowrap px-3 py-2 text-right">
-                    <button type="button"
-                            hx-post="/admin/network/onts/{{ ont.id }}/service-ports/{{ sp.index }}/delete"
-                            hx-confirm="Delete service-port {{ sp.index }}?"
-                            hx-target="#service-ports-content"
-                            hx-swap="innerHTML"
-                            hx-disabled-elt="this"
-                            data-network-action
-                            data-loading-label="Deleting..."
-                            class="text-rose-600 hover:text-rose-800 dark:text-rose-400">
-                        <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"/></svg>
-                    </button>
-                </td>
             </tr>
             {% endfor %}
         </tbody>
@@ -54,44 +40,15 @@
 <p class="text-sm text-slate-500 dark:text-slate-400 py-4">No service ports found.</p>
 {% endif %}
 
-{# Create Service Port Form #}
-{% set service_port_intent = service_port_intent if service_port_intent is defined else {} %}
-<div class="mt-4 border-t border-slate-200 pt-4 dark:border-slate-700">
-    <form hx-post="/admin/network/onts/{{ ont.id }}/service-ports/create"
-          hx-target="#service-ports-content"
-          hx-swap="innerHTML"
-          hx-confirm="Create service-port?"
-          data-network-action
-          data-loading-label="Creating..."
-          class="flex flex-wrap items-end gap-3">
-        <div>
-            <label for="service_port_vlan_id" class="text-xs font-medium text-slate-600 dark:text-slate-400">VLAN</label>
-            <select id="service_port_vlan_id" name="vlan_id" required class="mt-0.5 block rounded border border-slate-300 px-2 py-1.5 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
-                {% for v in vlans %}
-                <option value="{{ v.tag }}">{{ v.tag }}</option>
-                {% endfor %}
-            </select>
-        </div>
-        <div>
-            <label for="service_port_gem_index" class="text-xs font-medium text-slate-600 dark:text-slate-400">GEM</label>
-            <select id="service_port_gem_index" name="gem_index" required class="mt-0.5 block w-20 rounded border border-slate-300 px-2 py-1.5 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
-                <option value="">--</option>
-                {% for gem in service_port_intent.gem_choices %}
-                <option value="{{ gem }}" {% if service_port_intent.primary_gem_index == gem %}selected{% endif %}>{{ gem }}</option>
-                {% endfor %}
-            </select>
-        </div>
-        <div>
-            <label for="service_port_tag_transform" class="text-xs font-medium text-slate-600 dark:text-slate-400">Transform</label>
-            <select id="service_port_tag_transform" name="tag_transform" class="mt-0.5 block rounded border border-slate-300 px-2 py-1.5 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
-                <option value="translate">translate</option>
-                <option value="transparent">transparent</option>
-            </select>
-        </div>
-        <button type="submit" class="rounded-lg bg-blue-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-blue-700">
-            Create
-        </button>
-    </form>
+{# Service ports are read-only: the ONT configuration lifecycle is the only writer. #}
+<div class="mt-4 border-t border-slate-200 pt-4 dark:border-slate-700" data-service-ports-read-only>
+    <p class="text-xs text-slate-500 dark:text-slate-400">
+        Read-only. Service ports are planned, created, repaired and removed by the ONT configuration lifecycle.
+    </p>
+    <a href="/admin/network/onts/{{ ont.id }}?tab=configuration"
+       class="mt-2 inline-flex rounded-lg bg-blue-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-blue-700">
+        Repair via configuration
+    </a>
 </div>
 
 {% endif %}

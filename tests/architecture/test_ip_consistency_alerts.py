@@ -1,22 +1,57 @@
 from pathlib import Path
 
-from app.services.ip_consistency_audit import _COLLISION_KINDS
+from app.services.ip_consistency_audit import (
+    _COLLISION_KINDS,
+    CRITICAL_KINDS,
+    INFORMATIONAL_KINDS,
+    WARNING_KINDS,
+)
 
 ROOT = Path(__file__).resolve().parents[2]
 RULES = ROOT / "deploy" / "observability" / "ip_consistency.rules.yml"
 
 
-def test_collision_alert_covers_every_hard_collision_kind() -> None:
+def _blocks() -> dict[str, str]:
     rules = RULES.read_text(encoding="utf-8")
+    out: dict[str, str] = {}
+    for chunk in rules.split("- alert: ")[1:]:
+        out[chunk.split("\n")[0].strip()] = chunk
+    return out
 
-    assert "IPv4CollisionDetected" in rules
+
+def test_every_collision_kind_is_classified_exactly_once() -> None:
+    tiers = (set(CRITICAL_KINDS), set(WARNING_KINDS), set(INFORMATIONAL_KINDS))
+    assert set().union(*tiers) == set(_COLLISION_KINDS)
+    assert sum(len(t) for t in tiers) == len(_COLLISION_KINDS)
+
+
+def test_collision_alert_fires_critical_only_on_critical_kinds() -> None:
+    rules = RULES.read_text(encoding="utf-8")
     assert "radius_ip_consistency_drift" in rules
-    for kind in _COLLISION_KINDS:
-        assert kind in rules
     assert "> 0" in rules
     runbook = "docs/designs/IP_ASSIGNMENT_LIFECYCLE_SOT.md"
     assert f'runbook: "{runbook}"' in rules
     assert (ROOT / runbook).is_file()
+
+    block = _blocks()["IPv4CollisionDetected"]
+    expr = block.split("expr:")[1].split("for:")[0]
+    assert "severity: critical" in block
+    for kind in CRITICAL_KINDS:
+        assert kind in expr
+    for kind in (*WARNING_KINDS, *INFORMATIONAL_KINDS):
+        assert kind not in expr
+
+
+def test_warning_kinds_warn_and_informational_kinds_never_alert() -> None:
+    blocks = _blocks()
+    for kind in WARNING_KINDS:
+        matching = [b for b in blocks.values() if f'kind="{kind}"' in b]
+        assert len(matching) == 1, kind
+        assert "severity: warning" in matching[0]
+    for name, block in blocks.items():
+        expr = block.split("expr:")[1].split("for:")[0]
+        for kind in INFORMATIONAL_KINDS:
+            assert kind not in expr, (name, kind)
 
 
 def test_terminal_assignment_kind_only_warns() -> None:

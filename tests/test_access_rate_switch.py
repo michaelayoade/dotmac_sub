@@ -896,3 +896,292 @@ def test_s2_a_moved_offer_entry_needs_the_pre_move_offer_id(tmp_path):
         with pytest.raises(DomainError) as invalid:
             switch.load_approved(path, digest)
         assert invalid.value.code == "access.rate_profile_switch.approved_list_invalid"
+
+
+# ------------------------------------------------ no-target mode (PR-1c)
+
+
+def _declare_env(monkeypatch, env: str) -> None:
+    import dataclasses
+
+    monkeypatch.setattr(
+        switch, "settings", dataclasses.replace(switch.settings, app_env_declared=env)
+    )
+
+
+def _no_targets(monkeypatch, env: str = "staging") -> None:
+    monkeypatch.setattr(
+        switch, "active_external_radius_targets", lambda db, capability=None: []
+    )
+    _declare_env(monkeypatch, env)
+
+
+def _no_target_on(db, world, ack, **kwargs):
+    return switch.switch_on(
+        db,
+        context=_context(),
+        apply=True,
+        populate=world.populate,
+        no_radius_target=True,
+        acknowledge_divergence_sha256=ack,
+        **kwargs,
+    )
+
+
+def _dry_digest(db, world, tmp_path):
+    record = tmp_path / "live.json"
+    dry = switch.switch_on(
+        db,
+        context=_context(),
+        populate=world.populate,
+        emit_approval_list_to=record,
+        no_radius_target=True,
+    )
+    return dry, record
+
+
+def test_no_target_refuses_while_a_user_target_exists_even_with_the_flag(
+    db_session, world, monkeypatch
+):
+    _clean_service(db_session)
+    _declare_env(monkeypatch, "staging")  # the world fixture still has a target
+
+    with pytest.raises(DomainError) as refused:
+        _no_target_on(db_session, world, "0" * 64)
+
+    assert refused.value.code == "access.rate_profile_switch.no_target_mode_refused"
+    assert refused.value.details["reason"] == "targets_present"
+    assert owner.rate_owner_enabled(db_session) is False
+    assert world.locks == 0 and world.calls == 0
+
+
+@pytest.mark.parametrize("env", ["prod", "production"])
+def test_no_target_refuses_in_production_even_with_zero_targets(
+    db_session, world, monkeypatch, env
+):
+    _clean_service(db_session)
+    _no_targets(monkeypatch, env)
+
+    with pytest.raises(DomainError) as refused:
+        _no_target_on(db_session, world, "0" * 64)
+
+    assert refused.value.code == "access.rate_profile_switch.no_target_mode_refused"
+    assert refused.value.details["reason"] == "production"
+    assert owner.rate_owner_enabled(db_session) is False
+
+
+def test_zero_targets_without_the_flag_is_the_usual_no_target_refusal(
+    db_session, world, monkeypatch
+):
+    _clean_service(db_session)
+    _no_targets(monkeypatch)
+
+    with pytest.raises(DomainError) as refused:
+        _on(db_session, world)
+
+    assert refused.value.code == "access.rate_profile_switch.no_target"
+    assert "--no-radius-target" in refused.value.message
+    assert owner.rate_owner_enabled(db_session) is False
+
+
+def test_the_dry_run_reports_eligibility_and_the_digest(
+    db_session, world, monkeypatch, tmp_path
+):
+    _divergent(db_session)
+    _no_targets(monkeypatch)
+
+    dry, record = _dry_digest(db_session, world, tmp_path)
+
+    assert dry.no_target_eligible is True and dry.no_target_refusal is None
+    assert dry.projection_target == "none"
+    assert dry.baseline is None and world.calls == 0  # nothing to project
+    assert dry.divergences == 1
+    # The acknowledged digest IS the emitted record's digest.
+    assert dry.divergence_set_sha256 == dry.emitted_list_sha256
+    assert dry.divergence_set_sha256 == hashlib.sha256(record.read_bytes()).hexdigest()
+
+    # With a user target the same dry run says the mode is not available.
+    monkeypatch.setattr(
+        switch, "active_external_radius_targets", lambda db, capability=None: [TARGET]
+    )
+    again = switch.switch_on(
+        db_session,
+        context=_context(),
+        populate=world.populate,
+        no_radius_target=True,
+    )
+    assert again.no_target_eligible is False
+    assert again.no_target_refusal == "targets_present"
+
+
+def test_a_changed_divergence_set_refuses_the_acknowledgement(
+    db_session, world, monkeypatch, tmp_path
+):
+    _divergent(db_session)
+    _no_targets(monkeypatch)
+    dry, _record = _dry_digest(db_session, world, tmp_path)
+
+    for ack in (None, "", "0" * 64):
+        with pytest.raises(DomainError) as refused:
+            _no_target_on(db_session, world, ack)
+        assert (
+            refused.value.code == "access.rate_profile_switch.divergence_ack_mismatch"
+        )
+        assert owner.rate_owner_enabled(db_session) is False
+
+    # The set changes after the acknowledgement was taken.
+    twelve = _profile(db_session, "Twelve", rate="12M/12M", code="twelve")
+    other_offer = _offer(db_session, "B", profile=twelve)
+    stale_profile = _profile(db_session, "Stale", rate="7M/7M", code="stale")
+    _service(db_session, other_offer, sub_profile=twelve, slot=stale_profile)
+    db_session.commit()
+    with pytest.raises(DomainError) as stale:
+        _no_target_on(db_session, world, dry.divergence_set_sha256)
+    assert stale.value.code == "access.rate_profile_switch.divergence_ack_mismatch"
+    assert owner.rate_owner_enabled(db_session) is False
+
+
+def test_no_target_happy_path_flips_audits_and_projects_nothing(
+    db_session, world, monkeypatch, tmp_path
+):
+    key = _divergent(db_session)
+    _no_targets(monkeypatch)
+    dry, _record = _dry_digest(db_session, world, tmp_path)
+
+    outcome = _no_target_on(db_session, world, dry.divergence_set_sha256)
+
+    assert outcome.applied and outcome.enabled
+    assert outcome.projection == "skipped_no_target"
+    assert outcome.projection_target == "none"
+    assert outcome.divergence_set_sha256 == dry.divergence_set_sha256
+    assert owner.rate_owner_enabled(db_session) is True
+    assert switch.flag_from_row(db_session) is True
+    assert world.calls == 0 and world.full == 0 and world.dry == 0  # no populate
+    event = db_session.scalars(
+        select(AuditEvent).where(AuditEvent.action == "access.rate_profile_switch.on")
+    ).one()
+    meta = event.metadata_
+    assert meta["projection_target"] == "none"
+    assert meta["app_env_declared"] == "staging"
+    assert meta["divergences"] == 1
+    assert meta["by_class"] == {key[1]: 1}
+    assert meta["divergence_set_sha256"] == dry.divergence_set_sha256
+
+
+def test_no_target_still_validates_a_supplied_approved_list(
+    db_session, world, monkeypatch, tmp_path
+):
+    """The list is optional here, but if given it is fully verified."""
+    sub, old_offer, new_offer = _moved_service(db_session, applied=False)
+    _no_targets(monkeypatch)
+    dry, _live = _dry_digest(db_session, world, tmp_path)
+    path, digest = _record(tmp_path, [_moved_entry(sub, old_offer)])
+    approved = switch.load_approved(path, digest)
+
+    with pytest.raises(DomainError) as refused:
+        _no_target_on(db_session, world, dry.divergence_set_sha256, approved=approved)
+
+    assert refused.value.code == "access.rate_profile_switch.moved_offer_unverified"
+    assert owner.rate_owner_enabled(db_session) is False
+    assert new_offer.id == sub.offer_id
+
+
+def test_the_eligibility_is_rechecked_under_the_lock(
+    db_session, world, monkeypatch, tmp_path
+):
+    _clean_service(db_session)
+    _no_targets(monkeypatch)
+    dry, _record = _dry_digest(db_session, world, tmp_path)
+    answers = iter(
+        [None, "targets_present"]
+    )  # the pre-check passes, then a target appears
+    monkeypatch.setattr(switch, "no_target_refusal", lambda db: next(answers))
+
+    with pytest.raises(DomainError) as refused:
+        _no_target_on(db_session, world, dry.divergence_set_sha256)
+
+    assert refused.value.code == "access.rate_profile_switch.no_target_mode_refused"
+    assert world.locks == 1
+    assert owner.rate_owner_enabled(db_session) is False
+
+
+def test_a_flag_that_is_not_visible_after_commit_is_reported(
+    db_session, world, monkeypatch, tmp_path
+):
+    _clean_service(db_session)
+    _no_targets(monkeypatch)
+    dry, _record = _dry_digest(db_session, world, tmp_path)
+    monkeypatch.setattr(switch, "_await_flag", lambda db, expected=True: False)
+
+    with pytest.raises(DomainError) as failed:
+        _no_target_on(db_session, world, dry.divergence_set_sha256)
+
+    assert failed.value.code == "access.rate_profile_switch.owner_not_active"
+    assert failed.value.details["flag"] is True  # committed, but not yet visible
+
+
+def test_the_ordinary_path_is_unchanged_with_a_target(db_session, world):
+    _clean_service(db_session)
+
+    outcome = _on(db_session, world)
+
+    assert outcome.enabled and outcome.read_back.mismatches == 0
+    assert outcome.projection is None  # projected for real
+    assert world.full == 1
+
+
+def test_cli_no_target_flags(db_session, world, monkeypatch, capsys, tmp_path):
+    _divergent(db_session)
+    _no_targets(monkeypatch)
+    record = tmp_path / "live.json"
+    monkeypatch.setattr("app.db.SessionLocal", lambda: db_session)
+    monkeypatch.setattr(db_session, "close", lambda: None)
+    monkeypatch.setattr(radius_population, "populate", world.populate)
+
+    assert (
+        switch.main(
+            [
+                "on",
+                "--reason",
+                "check",
+                "--no-radius-target",
+                "--emit-approval-list",
+                str(record),
+            ]
+        )
+        == 0
+    )
+    dry = json.loads(capsys.readouterr().out)
+    assert dry["no_target_eligible"] is True and dry["projection_target"] == "none"
+
+    assert (
+        switch.main(
+            [
+                "on",
+                "--reason",
+                "check",
+                "--apply",
+                "--no-radius-target",
+                "--acknowledge-divergence-sha256",
+                dry["divergence_set_sha256"],
+            ]
+        )
+        == 0
+    )
+    applied = json.loads(capsys.readouterr().out)
+    assert applied["projection"] == "skipped_no_target"
+
+    # The acknowledgement only makes sense for 'on --no-radius-target'.
+    for argv in (
+        ["on", "--reason", "x", "--acknowledge-divergence-sha256", "ab"],
+        [
+            "off",
+            "--reason",
+            "x",
+            "--no-radius-target",
+            "--acknowledge-divergence-sha256",
+            "ab",
+        ],
+    ):
+        with pytest.raises(SystemExit):
+            switch.main(argv)

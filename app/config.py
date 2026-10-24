@@ -26,6 +26,9 @@ def _env_bool(name: str, default: bool) -> bool:
 @dataclass(frozen=True)
 class Settings:
     app_env: str = os.getenv("APP_ENV", os.getenv("ENVIRONMENT", "development")).lower()
+    # Deploy-config allowlist of outbound effects permitted outside production
+    # (comma separated Effect names). Environment only; never a database row.
+    outbound_effects_allow: str = os.getenv("OUTBOUND_EFFECTS_ALLOW", "")
     #: The environment exactly as declared, EMPTY when neither APP_ENV nor
     #: ENVIRONMENT is set. ``app_env`` above defaults to "development", which
     #: would hide an omission from a fail-closed deploy guard.

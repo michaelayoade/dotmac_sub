@@ -21,6 +21,7 @@ from app.services.integrations.runtime import (
     OperationStatus,
     ValidationResult,
 )
+from app.services.outbound_effects import Effect, require
 
 EVENT_DELIVERY_CAPABILITY = "events.deliver.v1"
 
@@ -186,6 +187,7 @@ class HttpWebhookRunner:
         )
 
     def _request(self, method: str, url: str, **kwargs: Any) -> httpx.Response:
+        require(Effect.webhook_out)
         if self._client is not None:
             return self._client.request(method, url, **kwargs)
         return httpx.request(method, url, **kwargs)

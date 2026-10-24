@@ -215,6 +215,21 @@ class WifiConfigurationChange:
 
 
 @dataclass(frozen=True, slots=True)
+class WifiPatchConfigurationChange:
+    """Sparse operator WiFi patch: ``None`` keeps the current value.
+
+    Applied under the admission's row locks, so unchanged siblings are never
+    snapshotted by the caller and a concurrent change is not overwritten.
+    """
+
+    ssid: str | None = None
+    password: str | None = None
+    enabled: bool | None = None
+    channel: str | None = None
+    security_mode: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
 class CustomerWifiConfigurationChange:
     ssid: str
     password: str | None = None
@@ -249,6 +264,7 @@ OntConfigurationChange: TypeAlias = (
     WanConfigurationChange
     | LanConfigurationChange
     | WifiConfigurationChange
+    | WifiPatchConfigurationChange
     | ManagementConfigurationChange
     | AdvancedConfigurationChange
 )
@@ -672,6 +688,10 @@ def _change_updates(
             _refuse_reserved_wifi_password(change.password)
             updates["wifi.password"] = encrypt_credential(change.password)
             evidence["wifi.password"] = "changed"
+    elif section is OntConfigurationSection.wifi and isinstance(
+        change, WifiPatchConfigurationChange
+    ):
+        updates, evidence = _wifi_patch_updates(change)
     elif section is OntConfigurationSection.management and isinstance(
         change, ManagementConfigurationChange
     ):
@@ -756,6 +776,49 @@ def _customer_wifi_change_updates(
     if password is not None:
         updates["wifi.password"] = encrypt_credential(password)
         evidence["wifi.password"] = "changed"
+    return updates, evidence
+
+
+def _printable_ascii(value: str) -> bool:
+    return all(32 <= ord(char) <= 126 for char in value)
+
+
+def _wifi_patch_updates(
+    change: WifiPatchConfigurationChange,
+) -> tuple[dict[str, object], dict[str, object]]:
+    updates: dict[str, object] = {}
+    evidence: dict[str, object] = {}
+    if change.ssid is not None:
+        ssid = change.ssid.strip()
+        if not 1 <= len(ssid) <= 32 or not _printable_ascii(ssid):
+            raise _error(
+                "invalid_change", "WiFi name must be 1-32 printable ASCII characters."
+            )
+        updates["wifi.ssid"] = ssid
+        evidence["wifi.ssid"] = ssid
+    if change.password is not None:
+        password = change.password.strip()
+        if not 8 <= len(password) <= 63 or not _printable_ascii(password):
+            raise _error(
+                "invalid_change",
+                "WiFi password must be 8-63 printable ASCII characters.",
+            )
+        _refuse_reserved_wifi_password(password)
+        updates["wifi.password"] = encrypt_credential(password)
+        evidence["wifi.password"] = "changed"
+    if change.enabled is not None:
+        updates["wifi.enabled"] = bool(change.enabled)
+        evidence["wifi.enabled"] = bool(change.enabled)
+    for field, key in (
+        ("channel", "wifi.channel"),
+        ("security_mode", "wifi.security_mode"),
+    ):
+        value = _text(getattr(change, field))
+        if value is not None:
+            updates[key] = value
+            evidence[key] = value
+    if not updates:
+        raise _error("invalid_change", "A WiFi change must set at least one field.")
     return updates, evidence
 
 
@@ -2020,6 +2083,128 @@ def _parse_ts(value: object) -> datetime | None:
     return parsed
 
 
+def _defer_for_olt_busy(
+    db: Session,
+    *,
+    command: ExecuteOntServiceConfigurationCommand,
+    ont: OntUnit,
+    assignment: OntAssignment,
+    head: OntServiceConfigurationHead,
+    revision: OntServiceConfigurationRevision,
+    operation: NetworkOperation,
+    failure: Any,
+) -> ExecuteOntServiceConfigurationOutcome:
+    """Re-stage the apply with a delay while the OLT has no free SSH slot.
+
+    Deferrals are counted in the operation payload and capped by the
+    ``olt_busy_max_deferrals`` setting; at the cap the revision fails with
+    ``failure_code="olt_busy"`` and operator Retry. The operation is always
+    moved to ``waiting`` or ``failed`` here, never left to a worker exception,
+    so no ``reconciliation_needed`` dispatch is produced.
+    """
+    import random
+
+    from app.services.network.olt_ssh_limiter import get_config
+
+    _busy_jitter = random.SystemRandom()
+
+    payload = dict(operation.input_payload or {})
+    deferrals = int(payload.get("olt_busy_deferrals") or 0)
+    cap = get_config().busy_max_deferrals
+    detail = getattr(failure, "message", "") or "OLT SSH sessions are busy"
+    if deferrals >= cap:
+        message = (
+            f"The OLT stayed busy for {deferrals} deferrals; no change was made. "
+            "Retry when the OLT is idle."
+        )
+        head.phase = OntServiceConfigurationPhase.failed
+        revision.phase = OntServiceConfigurationPhase.failed
+        head.failure_code = "olt_busy"
+        head.failure_message = message
+        head.waiting_reason = None
+        network_operations.mark_failed(
+            db,
+            str(operation.id),
+            message,
+            output_payload={
+                "configuration_head_id": str(head.id),
+                "configuration_revision": revision.revision,
+                "phase": OntServiceConfigurationPhase.failed.value,
+                "failure_code": "olt_busy",
+                "olt_busy_deferrals": deferrals,
+            },
+        )
+        _record_execution_event(
+            db,
+            ont=ont,
+            assignment=assignment,
+            head=head,
+            revision=revision,
+            operation_id=operation.id,
+            phase=OntServiceConfigurationPhase.failed,
+            message=message,
+            success=False,
+        )
+        phase = OntServiceConfigurationPhase.failed
+    else:
+        attempt = deferrals + 1
+        payload["olt_busy_deferrals"] = attempt
+        operation.input_payload = payload
+        message = f"OLT SSH sessions are busy; apply deferred ({attempt}/{cap})."
+        head.phase = OntServiceConfigurationPhase.queued
+        revision.phase = OntServiceConfigurationPhase.queued
+        head.waiting_reason = "awaiting_olt_session"
+        head.failure_code = None
+        head.failure_message = None
+        network_operations.mark_waiting(db, str(operation.id), head.waiting_reason)
+        generation = _resume_generation(operation)
+        stage_dispatch(
+            db,
+            operation,
+            NetworkOperationCommand.ont_service_config_apply_v1,
+            dispatch_key=f"olt_busy:{attempt}"
+            + (f"@r{generation}" if generation else ""),
+            not_before=datetime.now(UTC)
+            + timedelta(seconds=30 * attempt + _busy_jitter.uniform(0, 10)),
+        )
+        _record_execution_event(
+            db,
+            ont=ont,
+            assignment=assignment,
+            head=head,
+            revision=revision,
+            operation_id=operation.id,
+            phase=OntServiceConfigurationPhase.queued,
+            message=f"{message} ({detail})",
+            success=False,
+            waiting=True,
+            extra_data={"olt_busy_deferrals": attempt},
+        )
+        phase = OntServiceConfigurationPhase.queued
+    emit_event(
+        db,
+        EventType.ont_service_configuration_phase_changed,
+        {
+            "ont_unit_id": str(ont.id),
+            "assignment_id": str(assignment.id),
+            "configuration_head_id": str(head.id),
+            "revision": revision.revision,
+            "operation_id": str(operation.id),
+            "phase": phase.value,
+        },
+        actor=command.context.actor,
+        subscriber_id=assignment.subscriber_id,
+    )
+    db.flush()
+    return ExecuteOntServiceConfigurationOutcome(
+        operation_id=operation.id,
+        phase=phase,
+        executed=True,
+        stale=False,
+        message=message,
+    )
+
+
 def _execution_locked(
     db: Session, command: ExecuteOntServiceConfigurationCommand
 ) -> ExecuteOntServiceConfigurationOutcome:
@@ -2089,8 +2274,10 @@ def _execution_locked(
     head.waiting_reason = None
     network_operations.mark_running(db, str(operation.id))
 
+    from app.services.network.olt_ssh_limiter import OltSshPriority
     from app.services.network.reconcile.core import reconcile_ont
     from app.services.network.reconcile.lifecycle import ReconcileLifecycleBinding
+    from app.services.network.reconcile.state import ReconcileFailureReason
 
     wifi_scope = _wifi_delivery_scope(revision)
     wan_scope = _wan_delivery_scope(db, ont, revision)
@@ -2130,7 +2317,28 @@ def _execution_locked(
         ),
         readback_only=readback_only,
         timeout_sec=SERVICE_CONFIGURATION_RECONCILE_TIMEOUT_SECONDS,
+        ssh_priority=(
+            OltSshPriority.INTERACTIVE if readback_only else OltSshPriority.WRITE
+        ),
     )
+    olt_busy = (
+        result.failure is not None
+        and result.failure.reason == ReconcileFailureReason.OLT_BUSY
+    )
+    if olt_busy and not readback_only and not result.actions_applied:
+        # Every OLT SSH slot was in use before any read or write: nothing
+        # changed. Defer and retry (capped) instead of failing the job or
+        # leaving a reconciliation_needed dispatch behind.
+        return _defer_for_olt_busy(
+            db,
+            command=command,
+            ont=ont,
+            assignment=assignment,
+            head=head,
+            revision=revision,
+            operation=operation,
+            failure=result.failure,
+        )
     delivered_without_readback = (
         result.success
         and _force_lan_delivery(revision)
@@ -2373,6 +2581,10 @@ def _execution_locked(
             failure is not None
             and isinstance(failure.evidence, dict)
             and failure.evidence.get("readback_pending")
+        ) or bool(
+            # Busy during a readback hop, or after a successful apply: the
+            # existing delayed-readback rail confirms later (capped).
+            olt_busy and (readback_only or result.actions_applied)
         )
         # A retry that began as a Connection Request drain wait stays one: a
         # readback-pending result must not replace that reason, and an
@@ -2924,13 +3136,24 @@ def _verify_locked(
             "stale_configuration",
             "Configuration lifecycle changed; refresh before verifying.",
         )
-    if (
+    # An operation that failed while the head was still in flight (the dispatch
+    # layer ended it without a lifecycle result) is an interrupted revision, not
+    # an in-flight one: the same projection that offers Retry also offers
+    # readback-only verify. A head whose latest operation is still active (or
+    # succeeded) stays refused.
+    interrupted = (
+        failed_operation.status
+        in {NetworkOperationStatus.failed, NetworkOperationStatus.canceled}
+        and head.phase in _IN_FLIGHT_PHASES
+        and revision.phase in _IN_FLIGHT_PHASES
+    )
+    if not interrupted and (
         head.phase is not OntServiceConfigurationPhase.failed
         or revision.phase is not OntServiceConfigurationPhase.failed
     ):
         raise _error(
             "verification_not_eligible",
-            "Only the owner's current terminally failed revision may be verified.",
+            "Only the owner's current failed or interrupted revision may be verified.",
         )
     if (
         head.latest_operation_id != failed_operation.id
@@ -3036,6 +3259,62 @@ def verify_ont_service_configuration_readback(
         context=command.context,
         operation=lambda: _verify_locked(db, command),
     )
+
+
+_IN_FLIGHT_PHASES = frozenset(
+    {
+        OntServiceConfigurationPhase.queued,
+        OntServiceConfigurationPhase.applying,
+        OntServiceConfigurationPhase.readback_pending,
+    }
+)
+
+
+def mark_configuration_operation_interrupted(
+    db: Session, operation: NetworkOperation
+) -> bool:
+    """Move a head out of flight when its operation ended without a result.
+
+    Called by the dispatch layer (inside its own transaction) after it fails or
+    cancels an ``ont_service_config`` operation whose worker never recorded a
+    lifecycle outcome. Only the head's *current* revision and *latest* operation
+    are touched, and only while still in flight; a head that already reached a
+    delivery verdict, or has moved to a newer operation, is left alone. Never
+    contacts a device. Returns whether a head was changed.
+    """
+    head = db.scalar(
+        select(OntServiceConfigurationHead)
+        .where(OntServiceConfigurationHead.latest_operation_id == operation.id)
+        .with_for_update()
+    )
+    if head is None or head.phase not in _IN_FLIGHT_PHASES:
+        return False
+    revision = db.scalar(
+        select(OntServiceConfigurationRevision)
+        .where(
+            OntServiceConfigurationRevision.head_id == head.id,
+            OntServiceConfigurationRevision.revision == head.current_revision,
+            OntServiceConfigurationRevision.operation_id == operation.id,
+        )
+        .with_for_update()
+    )
+    # Head and revision move together or not at all.
+    if revision is None or revision.phase not in _IN_FLIGHT_PHASES:
+        return False
+    message = str(
+        operation.error
+        or (operation.output_payload or {}).get("message")
+        or "Configuration worker stopped before recording a lifecycle result."
+    )[:2000]
+    head.phase = OntServiceConfigurationPhase.failed
+    head.waiting_reason = None
+    head.failure_code = "operation_interrupted"
+    head.failure_message = message
+    revision.phase = OntServiceConfigurationPhase.failed
+    revision.failure_code = "operation_interrupted"
+    revision.failure_message = message
+    db.flush()
+    return True
 
 
 def _event_view(event: OntProvisioningEvent) -> ConfigurationEventView:
@@ -3503,6 +3782,7 @@ __all__ = (
     "WanConfigurationChange",
     "WanVlanSource",
     "WifiConfigurationChange",
+    "WifiPatchConfigurationChange",
     "configure_cpe_wifi",
     "configure_customer_wifi",
     "configure_ont_service",

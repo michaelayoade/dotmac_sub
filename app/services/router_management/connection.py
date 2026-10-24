@@ -12,6 +12,7 @@ from sshtunnel import SSHTunnelForwarder
 from app.models.router_management import JumpHost, Router
 from app.schemas.router_management import ConnectionTestResult
 from app.services.credential_crypto import decrypt_credential
+from app.services.outbound_effects import Effect, require
 
 if TYPE_CHECKING:
     from app.services.topology.lldp_contracts import LldpJumpHost, LldpRouter
@@ -109,6 +110,7 @@ class RouterConnectionService:
     def _get_or_create_tunnel(
         cls, router: Router | LldpRouter, jump_host: JumpHost | LldpJumpHost
     ) -> SSHTunnelForwarder:
+        require(Effect.device_ssh)
         with cls._lock:
             tunnel_key = f"{jump_host.id}:{router.management_ip}:{router.rest_api_port}"
 
@@ -182,6 +184,7 @@ class RouterConnectionService:
     def get_client(
         cls, router: Router | LldpRouter, *, timeout: httpx.Timeout | None = None
     ) -> httpx.Client:
+        require(Effect.router_api)
         username = (
             decrypt_credential(router.rest_api_username) or router.rest_api_username
         )

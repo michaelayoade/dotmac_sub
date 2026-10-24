@@ -50,6 +50,7 @@ from app.services.enforcement_evidence import (
     record_enforcement_application as _record_enforcement_application,
 )
 from app.services.nas import DeviceProvisioner
+from app.services.outbound_effects import Effect, require
 from app.services.radius_address_lists import suspended_address_list
 from app.services.router_health import coa_evidence as _coa_evidence
 from app.services.router_health.contracts import CoaKind
@@ -457,6 +458,7 @@ def _exchange_coa_disconnect(
     and evidence recording on top; the router-health canary calls this directly
     so a synthetic probe can never poison real enforcement.
     """
+    require(Effect.radius_coa)
     client = Client(
         server=host,
         secret=secret,
@@ -653,6 +655,7 @@ def _attempt_coa_update(
     attributes, allowing mid-session speed changes without disconnecting
     the subscriber.
     """
+    require(Effect.radius_coa)
     if not _coa_enabled(db):
         return False, CoADisconnectDisposition.disabled.value
     if _coa_disabled_for_nas(nas_device.id):

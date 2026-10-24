@@ -25,6 +25,7 @@ from app.schemas.router_management import (
 )
 from app.services.common import apply_ordering, apply_pagination
 from app.services.credential_crypto import decrypt_credential, encrypt_credential
+from app.services.outbound_effects import Effect, require
 from app.services.response import ListResponseMixin
 
 logger = logging.getLogger(__name__)
@@ -375,6 +376,7 @@ class JumpHostInventory:
     @staticmethod
     def test_connection(db: Session, jh_id: uuid.UUID) -> dict:
         """Open a test SSH tunnel to the jump host and immediately close it."""
+        require(Effect.device_ssh)
         from sshtunnel import SSHTunnelForwarder
 
         jh = JumpHostInventory.get(db, jh_id)

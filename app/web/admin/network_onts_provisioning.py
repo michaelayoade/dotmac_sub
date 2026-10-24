@@ -10,7 +10,7 @@ from __future__ import annotations
 import json
 from urllib.parse import quote_plus
 
-from fastapi import APIRouter, Depends, Form, Query, Request
+from fastapi import APIRouter, Depends, Query, Request
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Response
 from sqlalchemy.orm import Session
 
@@ -31,6 +31,7 @@ from app.services.network.action_logging import actor_label, log_network_action_
 from app.services.network.ont_provisioning.credentials import mask_credentials
 from app.services.network.ont_provisioning.result import StepResult
 from app.services.network.ont_scope import can_manage_ont_from_request
+from app.web.retired_ont_writer import retired_writer_response
 from app.web.templates import templates
 
 # Add filter for credential masking in provisioning templates
@@ -259,86 +260,12 @@ def ont_preflight_check(
     "/onts/{ont_id}/save-provision-settings",
     dependencies=[Depends(require_permission("network:ont:write"))],
 )
-def ont_save_provision_settings(
-    request: Request,
-    ont_id: str,
-    onu_mode: str | None = Form(default=None),
-    mgmt_ip_mode: str | None = Form(default=None),
-    mgmt_ip_address: str | None = Form(default=None),
-    mgmt_subnet: str | None = Form(default=None),
-    mgmt_gateway: str | None = Form(default=None),
-    wan_protocol: str | None = Form(default=None),
-    ip_pool_id: str | None = Form(default=None),
-    static_ip_pool_id: str | None = Form(default=None),
-    static_ip: str | None = Form(default=None),
-    static_subnet: str | None = Form(default=None),
-    static_gateway: str | None = Form(default=None),
-    static_dns: str | None = Form(default=None),
-    lan_ip: str | None = Form(default=None),
-    lan_subnet: str | None = Form(default=None),
-    dhcp_enabled: str | None = Form(default=None),
-    dhcp_start: str | None = Form(default=None),
-    dhcp_end: str | None = Form(default=None),
-    wifi_enabled: str | None = Form(default=None),
-    wifi_ssid: str | None = Form(default=None),
-    wifi_password: str | None = Form(default=None),
-    wifi_security_mode: str | None = Form(default=None),
-    wifi_channel: str | None = Form(default=None),
-    pppoe_username: str | None = Form(default=None),
-    pppoe_password: str | None = Form(default=None),
-    db: Session = Depends(get_db),
-) -> Response:
-    """Persist provision-page WAN settings without starting provisioning."""
-    result = web_onts_provisioning_service.save_provision_settings(
-        db,
-        ont_id=ont_id,
-        onu_mode=onu_mode,
-        mgmt_ip_mode=mgmt_ip_mode,
-        mgmt_ip_address=mgmt_ip_address,
-        mgmt_subnet=mgmt_subnet,
-        mgmt_gateway=mgmt_gateway,
-        wan_protocol=wan_protocol,
-        ip_pool_id=ip_pool_id,
-        static_ip_pool_id=static_ip_pool_id,
-        static_ip=static_ip,
-        static_subnet=static_subnet,
-        static_gateway=static_gateway,
-        static_dns=static_dns,
-        lan_ip=lan_ip,
-        lan_subnet=lan_subnet,
-        dhcp_enabled=dhcp_enabled,
-        dhcp_start=dhcp_start,
-        dhcp_end=dhcp_end,
-        wifi_enabled=wifi_enabled,
-        wifi_ssid=wifi_ssid,
-        wifi_password=wifi_password,
-        wifi_security_mode=wifi_security_mode,
-        wifi_channel=wifi_channel,
-        pppoe_username=pppoe_username,
-        pppoe_password=pppoe_password,
-    )
-    success = bool(result.content.get("success"))
-    message = str(result.content.get("message") or "Provision settings failed")
-    log_network_action_result(
-        request=request,
-        resource_type="ont",
-        resource_id=ont_id,
-        action="Save Provisioning Configuration",
-        success=success,
-        message=message,
-        metadata={"status_code": result.status_code},
-    )
-    if request.headers.get("HX-Request") != "true":
-        status = "success" if success else "error"
-        from urllib.parse import quote_plus
-
-        return RedirectResponse(
-            f"/admin/network/onts/{ont_id}/provision?status={status}&message={quote_plus(message)}",
-            status_code=303,
-        )
-    return JSONResponse(
-        status_code=result.status_code,
-        content=result.content,
+def ont_save_provision_settings(ont_id: str) -> JSONResponse:
+    """Retired: wrote desired config outside the configuration lifecycle."""
+    return retired_writer_response(
+        "Save provisioning configuration",
+        "Save settings from the Configure tab; each section is admitted by the "
+        "ONT configuration lifecycle.",
     )
 
 
@@ -431,83 +358,20 @@ def step_deprovision(
     "/onts/{ont_id}/provision",
     dependencies=[Depends(require_permission("network:ont:write"))],
 )
-def provision_ont_direct(
-    request: Request,
-    ont_id: str,
-    dry_run: bool = Form(default=False),
-    async_execution: bool = Form(default=False),
-    db: Session = Depends(get_db),
-) -> Response:
-    """Repair/re-apply OLT authorization baseline for an ONT.
+def provision_ont_direct(ont_id: str) -> JSONResponse:
+    """Retired: legacy "Provision" created/deleted service ports directly.
 
-    Normal authorization applies this baseline automatically. This endpoint is
-    kept for manual repair of already-authorized ONTs.
+    Authorization and the ONT configuration lifecycle own the OLT baseline.
+    ``request_ont_provisioning`` and ``ont_provision_steps`` stay because the
+    authorization task (``app.tasks.ont_provisioning``) and bulk provisioning
+    (``app.services.network.bulk_provisioning``) still import them; only this
+    operator route is retired.
     """
-    denied = _ensure_ont_write_scope(request, db, ont_id)
-    if denied is not None:
-        return denied
-
-    # Device writes always run through the tracked worker lifecycle. A dry run
-    # is DB-only and remains synchronous for immediate preview feedback.
-    if not dry_run:
-        from app.services.network.ont_provisioning_commands import (
-            request_ont_provisioning,
-        )
-
-        initiated_by = actor_label(request)
-        command = request_ont_provisioning(
-            db,
-            ont_id,
-            initiated_by=initiated_by,
-        )
-        if not command.accepted:
-            message = f"Could not start ONT provisioning: {command.message}"
-            response = _step_response(
-                StepResult("authorization_baseline", False, message),
-                request=request,
-                ont_id=ont_id,
-            )
-            if _wants_html_response(request):
-                return _provision_page_redirect(
-                    ont_id,
-                    status="error",
-                    message=message,
-                )
-            return response
-        message = "ONT provisioning queued; waiting for device confirmation."
-        response = _step_response(
-            StepResult(
-                "authorization_baseline",
-                True,
-                message,
-                waiting=True,
-                data={
-                    "operation_id": command.operation_id,
-                    "dispatch_id": command.dispatch_id,
-                    "correlation_key": f"provision:{ont_id}",
-                    "waiting_reason": "device_confirmation",
-                    "duplicate": command.duplicate,
-                },
-            ),
-            request=request,
-            ont_id=ont_id,
-        )
-        if _wants_html_response(request):
-            return _provision_page_redirect(
-                ont_id,
-                status="info",
-                message=message,
-                operation_id=command.operation_id,
-            )
-        return response
-
-    from app.services.network.ont_provisioning_execution import (
-        preview_ont_provisioning,
+    return retired_writer_response(
+        "Provision ONT",
+        "Authorization applies the OLT baseline and the Configure tab applies "
+        "service settings; use Configure for any change.",
     )
-
-    result = preview_ont_provisioning(db, ont_id)
-
-    return _step_response(result, request=request, ont_id=ont_id)
 
 
 @router.post(

@@ -20,6 +20,11 @@ from app.celery_app import celery_app
 from app.models.network import OltConfigBackup, OltConfigBackupType, OLTDevice
 from app.services import backup_alerts
 from app.services.db_session_adapter import db_session_adapter
+from app.services.network.olt_ssh_limiter import (
+    OltSshPriority,
+    is_busy_message,
+    olt_ssh_priority,
+)
 
 if TYPE_CHECKING:
     from app.services.network.olt_protocol_adapters import OltConnectionConfig
@@ -116,8 +121,10 @@ def _fetch_running_config_via_ssh(target: _BackupTarget) -> str:
         from app.services.network.olt_protocol_adapters import (
             get_protocol_adapter_from_config,
         )
+        from app.services.network.olt_ssh import backup_config_read_cap
 
-        result = get_protocol_adapter_from_config(connection).fetch_running_config()
+        with backup_config_read_cap():
+            result = get_protocol_adapter_from_config(connection).fetch_running_config()
         raw_config_text = result.data.get("config_text") if result.success else ""
         config_text = raw_config_text if isinstance(raw_config_text, str) else ""
         if result.success and config_text.strip():
@@ -228,10 +235,17 @@ def backup_all_olts() -> OltBackupResult:
     try:
         for target in targets:
             try:
-                config_text = _fetch_running_config_via_ssh(target)
+                with olt_ssh_priority(OltSshPriority.BACKGROUND):
+                    config_text = _fetch_running_config_via_ssh(target)
             except SoftTimeLimitExceeded:
                 raise
             except Exception as e:
+                if is_busy_message(e):
+                    # No unreserved SSH slot: skip this OLT's backup now, it
+                    # is not a device failure and must not raise an alert.
+                    logger.info("olt_config_backup_skipped_busy olt=%s", target.name)
+                    skipped += 1
+                    continue
                 logger.error("Failed to fetch backup for OLT %s: %s", target.name, e)
                 errors += 1
                 error_details.append(

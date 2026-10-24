@@ -10,7 +10,9 @@ provides the resolve_policy() function for backward compatibility.
 
 from __future__ import annotations
 
+import contextvars
 import logging
+import random
 import re
 import socket
 import time
@@ -22,6 +24,7 @@ from paramiko.ssh_exception import SSHException
 from paramiko.transport import Transport
 
 from app.services.network.huawei_cli_response import describe_huawei_rejection
+from app.services.outbound_effects import Effect, require
 
 logger = logging.getLogger(__name__)
 
@@ -348,6 +351,27 @@ def _derive_prompt_regex(output: str, fallback: str) -> str:
     return fallback
 
 
+# Running-config backup read: absolute cap and idle-progress window (DESIGN s4).
+_BACKUP_COMMAND_MAX_SECONDS = 300
+_INTERACTIVE_CONFIG_MAX_SECONDS = 60
+_config_read_cap: contextvars.ContextVar[int] = contextvars.ContextVar(
+    "olt_config_read_cap", default=_INTERACTIVE_CONFIG_MAX_SECONDS
+)
+
+
+class backup_config_read_cap:  # noqa: N801 - context manager
+    """Allow the long (300 s) config read; web/preview paths keep 60 s."""
+
+    def __enter__(self) -> None:
+        self._token = _config_read_cap.set(_BACKUP_COMMAND_MAX_SECONDS)
+
+    def __exit__(self, *_exc: object) -> None:
+        _config_read_cap.reset(self._token)
+
+
+_BACKUP_COMMAND_IDLE_SECONDS = 30.0
+
+
 def _send_huawei_command(
     channel: Channel,
     command: str,
@@ -437,8 +461,221 @@ def _setup_prompt_timeout() -> float:
     return settings.olt_ssh_prompt_timeout_seconds
 
 
-def _open_shell(olt: OLTDevice) -> tuple[Transport, Channel, OltSshPolicy]:
-    """Open an SSH shell session to an OLT. Caller must close transport."""
+# Login-retry jitter only (not security); SystemRandom keeps bandit quiet.
+_JITTER = random.SystemRandom()
+_ANSI_RE = re.compile(r"\x1b\[[0-9;?]*[A-Za-z]")
+# A bare CLI prompt at the end of the received text: ``boi-olt>``, ``boi-olt#``,
+# ``boi-olt(config)#``. Pager ("More"), ``{ <cr>|...}:`` and ``(y/n)`` prompts
+# all end in something else, so they never count as clean.
+_CLEAN_PROMPT_RE = re.compile(r"(?:^|\r?\n)\S*[>#]\s*$")
+_LOGOUT_CONFIRM_RE = re.compile(r"log ?out\?\s*\(y/n\)", re.IGNORECASE)
+_LOGOUT_MAX_SECONDS = 3.0
+_LOGOUT_READ_SECONDS = 1.5
+
+
+def _instrument_channel(channel: Channel) -> None:
+    """Track whether the last thing received was a bare prompt.
+
+    Wraps ``send``/``recv`` on this channel instance. A send marks the channel
+    dirty until a read ends at a prompt again, so a logout is only ever typed
+    into a session that is verifiably idle at a prompt.
+    """
+    state: dict[str, Any] = {"clean": False, "tail": ""}
+    try:
+        raw_send = channel.send
+        raw_recv = channel.recv
+    except AttributeError:
+        return
+
+    def send(data: Any) -> Any:
+        state["clean"] = False
+        return raw_send(data)
+
+    def recv(nbytes: int) -> Any:
+        chunk = raw_recv(nbytes)
+        if chunk:
+            text = (
+                chunk.decode("utf-8", errors="replace")
+                if isinstance(chunk, bytes)
+                else str(chunk)
+            )
+            state["tail"] = _ANSI_RE.sub("", (state["tail"] + text))[-400:]
+            state["clean"] = bool(_CLEAN_PROMPT_RE.search(state["tail"]))
+        return chunk
+
+    try:
+        channel.send = send
+        channel.recv = recv
+        channel._olt_raw_send = raw_send
+        channel._olt_raw_recv = raw_recv
+        channel._olt_state = state
+    except AttributeError:
+        return
+
+
+def _channel_is_clean(channel: Channel | None) -> bool:
+    state = getattr(channel, "_olt_state", None)
+    return bool(state and state.get("clean"))
+
+
+def _logout_session(
+    channel: Channel, *, max_seconds: float = _LOGOUT_MAX_SECONDS
+) -> str:
+    """Log out of a session that is idle at a clean prompt. Never raises.
+
+    Sends ``quit`` up to 4 times. ``y`` is typed ONLY when the text matches the
+    exact logout confirmation; any other ``(y/n)`` prompt (for example a
+    destructive ``ont delete`` confirmation) ends the attempt without answering.
+    """
+    raw_send = getattr(channel, "_olt_raw_send", None) or channel.send
+    raw_recv = getattr(channel, "_olt_raw_recv", None) or channel.recv
+    end = time.monotonic() + max_seconds
+
+    def _read(window: float) -> tuple[str, bool]:
+        text = ""
+        limit = min(end, time.monotonic() + window)
+        try:
+            channel.settimeout(0.3)
+        except Exception:
+            pass
+        while time.monotonic() < limit:
+            try:
+                chunk = raw_recv(4096)
+            except TimeoutError:
+                if _CLEAN_PROMPT_RE.search(_ANSI_RE.sub("", text)):
+                    return text, False
+                continue
+            except Exception:
+                return text, True
+            if not chunk:
+                return text, True
+            text += (
+                chunk.decode("utf-8", errors="replace")
+                if isinstance(chunk, bytes)
+                else str(chunk)
+            )
+            if "(y/n)" in text.lower() or _CLEAN_PROMPT_RE.search(
+                _ANSI_RE.sub("", text)
+            ):
+                return text, False
+        return text, False
+
+    try:
+        for _ in range(4):
+            if getattr(channel, "closed", False) or time.monotonic() >= end:
+                return "forced"
+            raw_send("quit\n")
+            text, eof = _read(_LOGOUT_READ_SECONDS)
+            if eof:
+                return "clean"
+            if _LOGOUT_CONFIRM_RE.search(text):
+                raw_send("y\n")
+                _read(_LOGOUT_READ_SECONDS)
+                return "clean"
+            if "(y/n)" in text.lower():
+                return "forced"
+        return "forced"
+    except Exception:
+        return "forced"
+
+
+def _manage_transport(
+    transport: Transport,
+    *,
+    lease: Any | None,
+    logout_on_close: bool,
+    grace_seconds: float,
+    olt_label: str,
+    priority: str,
+    opened_at: float,
+) -> None:
+    """Rebind ``transport.close`` so every close path logs out cleanly and
+    releases the limiter slot exactly once.
+
+    All ~57 call sites already ``transport.close()`` in ``finally`` (and the
+    pool and ``olt_session`` close through it), so the limit, the logout and the
+    release apply without editing any of them. ``close_real`` is the plain
+    paramiko close with no logout and no slot release (used for dirty sessions).
+    """
+    from app.services.network import olt_ssh_limiter, olt_ssh_metrics
+
+    original_close = transport.close
+    holder: dict[str, Any] = {"channel": None, "closed": False}
+
+    def release_slot() -> None:
+        if lease is None:
+            return
+        try:
+            if grace_seconds > 0:
+                time.sleep(grace_seconds)
+        finally:
+            olt_ssh_limiter.mark_released(lease)
+        logger.info(
+            "olt_ssh_session olt=%s priority=%s wait_ms=%d hold_ms=%d scope_reused=false",
+            olt_label,
+            priority,
+            int(lease.wait_seconds * 1000),
+            int((time.monotonic() - opened_at) * 1000),
+        )
+
+    def close_real() -> None:
+        try:
+            original_close()
+        finally:
+            release_slot()
+
+    def close() -> None:
+        if holder["closed"]:
+            return
+        holder["closed"] = True
+        outcome = "skipped_dirty"
+        channel = holder["channel"]
+        try:
+            if logout_on_close and channel is not None and _channel_is_clean(channel):
+                try:
+                    active = transport.is_active()
+                except Exception:
+                    active = False
+                if active and not getattr(channel, "closed", False):
+                    outcome = _logout_session(channel)
+        except Exception:
+            outcome = "forced"
+        olt_ssh_metrics.record_logout(outcome)
+        try:
+            original_close()
+        except Exception:
+            logger.debug("olt_ssh_transport_close_failed", exc_info=True)
+        finally:
+            release_slot()
+
+    transport.close = close
+    transport.close_real = close_real
+    transport._olt_holder = holder
+    transport.session_clean = lambda: _channel_is_clean(holder["channel"])
+
+
+def _attach_channel(transport: Transport, channel: Channel) -> None:
+    holder = getattr(transport, "_olt_holder", None)
+    if holder is not None:
+        holder["channel"] = channel
+
+
+def _connect_unlimited(
+    olt: OLTDevice,
+    *,
+    lease: Any | None,
+    priority_name: str,
+) -> tuple[Transport, Channel, OltSshPolicy]:
+    """Open the SSH shell. The caller already holds any slot (``lease``).
+
+    Auth-phase EOF retry: at most ONE retry, only when ``start_client`` /
+    ``auth_password`` fail with an EOF/banner error before any channel exists,
+    never for BACKGROUND, never for a password reject, and only if the caller's
+    deadline allows. ``olt_ssh_auth_eof_retry_delay_seconds=0`` disables it.
+    """
+    require(Effect.device_ssh)
+    from app.services.network import olt_ssh_limiter, olt_ssh_metrics
+
     host = (olt.mgmt_ip or olt.hostname or "").strip()
     if not host:
         raise ValueError("Management IP or hostname is required")
@@ -454,24 +691,166 @@ def _open_shell(olt: OLTDevice) -> tuple[Transport, Channel, OltSshPolicy]:
     if not password:
         raise ValueError("SSH password could not be decrypted")
 
+    config = olt_ssh_limiter.get_config()
+    model_key = olt_ssh_limiter.model_key_for(getattr(olt, "model", None))
     port = int(olt.ssh_port or 22)
-    sock = socket.create_connection((host, port), timeout=20)
-    transport = Transport(sock)
-    _apply_preferred_algorithms(transport, policy)
-    transport.start_client(timeout=20)
-    transport.auth_password(username=olt.ssh_username, password=password)
-    if not transport.is_authenticated():
-        transport.close()
-        raise RuntimeError("SSH authentication failed")
-    channel = transport.open_session(timeout=20)
-    # Use wider PTY and set terminal type to avoid control sequence issues
-    channel.get_pty(term="dumb", width=400, height=50)
-    channel.invoke_shell()
-    initial_output = _prime_shell_prompt(channel, policy.prompt_regex)
+    retry_allowed = (
+        priority_name != "background" and config.auth_eof_retry_delay_seconds > 0
+    )
+    opened_at = time.monotonic()
+    retried = False
+    while True:
+        sock = socket.create_connection((host, port), timeout=20)
+        transport = Transport(sock)
+        try:
+            _apply_preferred_algorithms(transport, policy)
+            transport.start_client(timeout=20)
+            transport.auth_password(username=olt.ssh_username, password=password)
+            break
+        except (SSHException, EOFError) as exc:
+            _discard_failed_transport(transport, sock)
+            deadline = olt_ssh_limiter.current_deadline()
+            delay = config.auth_eof_retry_delay_seconds + _JITTER.uniform(-3, 3)
+            delay = max(1.0, delay)
+            fits = deadline is None or deadline - time.monotonic() > delay + 25
+            if (
+                retry_allowed
+                and not retried
+                and fits
+                and (
+                    isinstance(exc, EOFError)
+                    or olt_ssh_limiter.is_auth_eof_message(exc)
+                )
+            ):
+                retried = True
+                logger.warning(
+                    "OLT %s SSH login hit EOF before a channel existed; "
+                    "retrying once in %.1fs",
+                    olt.name,
+                    delay,
+                )
+                time.sleep(delay)
+                continue
+            raise
+        except BaseException:
+            _discard_failed_transport(transport, sock)
+            raise
+    try:
+        if not transport.is_authenticated():
+            raise RuntimeError("SSH authentication failed")
+        channel = transport.open_session(timeout=20)
+        # Use wider PTY and set terminal type to avoid control sequence issues
+        channel.get_pty(term="dumb", width=400, height=50)
+        channel.invoke_shell()
+        _instrument_channel(channel)
+        initial_output = _prime_shell_prompt(channel, policy.prompt_regex)
+    except BaseException:
+        _discard_failed_transport(transport, sock)
+        raise
+    _manage_transport(
+        transport,
+        lease=lease,
+        logout_on_close=config.logout_on_close,
+        grace_seconds=config.grace_for(model_key),
+        olt_label=str(getattr(olt, "name", "") or getattr(olt, "id", "")),
+        priority=priority_name,
+        opened_at=opened_at,
+    )
+    _attach_channel(transport, channel)
+    olt_ssh_metrics.record_open(
+        str(getattr(olt, "name", "") or getattr(olt, "id", "")),
+        priority_name,
+        "auth_eof_retried_ok" if retried else "ok",
+    )
     prompt_regex = _derive_prompt_regex(initial_output, policy.prompt_regex)
     if prompt_regex != policy.prompt_regex:
         policy = _replace_policy_prompt_regex(policy, prompt_regex)
     return transport, channel, policy
+
+
+def _discard_failed_transport(transport: Any, sock: Any) -> None:
+    """Close a half-open transport/socket without logout or slot handling."""
+    for closer in (getattr(transport, "close", None), getattr(sock, "close", None)):
+        if closer is None:
+            continue
+        try:
+            closer()
+        except Exception:
+            logger.debug("olt_ssh_failed_open_cleanup", exc_info=True)
+
+
+def _any_mode_policy(policy: OltSshPolicy) -> OltSshPolicy:
+    """Policy whose prompt regex matches the same host at `>` or `#`."""
+    regex = policy.prompt_regex
+    widened = re.sub(r">(\\s\*\$)$", r"[>#]\1", regex)
+    if widened == regex:
+        return policy
+    return _replace_policy_prompt_regex(policy, widened)
+
+
+def _scope_normaliser(
+    session: tuple[Transport, Channel, OltSshPolicy],
+) -> bool:
+    """Decide whether a scope session can be handed to the next caller.
+
+    Sends NOTHING. ``quit`` is reserved for the explicit logout path: on
+    Huawei it may ask a logout confirmation instead of leaving privileged
+    mode, so using it to "reset" would stall and force a re-login. A session
+    idle at a clean user (``>``) or privileged (``#``) prompt is reused as is;
+    callers already run ``enable`` themselves. Config mode, pager, unknown or
+    dirty state is reported unusable and the scope reopens inside its slot.
+    """
+    transport, channel, _policy = session
+    try:
+        if not transport.is_active() or getattr(channel, "closed", False):
+            return False
+    except Exception:
+        return False
+    if not _channel_is_clean(channel):
+        return False
+    state = getattr(channel, "_olt_state", {})
+    tail = str(state.get("tail", ""))
+    last_line = tail.strip().splitlines()[-1].strip() if tail.strip() else ""
+    if "(config" in last_line:
+        return False
+    return last_line.endswith((">", "#"))
+
+
+def _open_shell(olt: OLTDevice) -> tuple[Transport, Channel, OltSshPolicy]:
+    """Open an SSH shell session to an OLT. Caller must close transport.
+
+    Takes a per-OLT session slot first (cross-process Postgres semaphore, see
+    ``olt_ssh_limiter``) and raises ``OltSessionBusy`` (an ``olt_busy:``
+    ``TimeoutError``) before any socket is opened when none is free. Inside an
+    ``olt_ssh_scope`` the scope's single session is reused instead.
+    """
+    require(Effect.device_ssh)
+    from app.services.network import olt_ssh_limiter, olt_ssh_metrics
+
+    scope = olt_ssh_limiter.active_scope(olt)
+    priority_name = olt_ssh_limiter.current_priority().name.lower()
+    if scope is not None:
+        transport, channel, policy = scope.checkout(
+            lambda: _connect_unlimited(olt, lease=None, priority_name=priority_name),
+            _scope_normaliser,
+        )
+        # A reused session may sit at `#` (privileged) while the login prompt
+        # regex ends in `>`: accept either so callers never wait out a timeout.
+        return cast(
+            "tuple[Transport, Channel, OltSshPolicy]",
+            (transport, channel, _any_mode_policy(policy)),
+        )
+    lease = olt_ssh_limiter.acquire_for_olt(olt)
+    try:
+        return _connect_unlimited(olt, lease=lease, priority_name=priority_name)
+    except BaseException as exc:
+        olt_ssh_limiter.mark_released(lease)
+        olt_ssh_metrics.record_open(
+            str(getattr(olt, "name", "") or getattr(olt, "id", "")),
+            priority_name,
+            olt_ssh_metrics.classify_open_failure(exc),
+        )
+        raise
 
 
 def _cached_service_ports(olt: OLTDevice, fsp: str) -> list[ServicePortEntry] | None:
@@ -542,10 +921,56 @@ def _run_huawei_cmd(channel: Channel, command: str, prompt: str = r"#\s*$") -> s
     return out
 
 
-def _run_huawei_paged_cmd(
-    channel: Channel, command: str, prompt: str = r"#\s*$", *, timeout_sec: int = 60
+def _read_until_prompt_idle(
+    channel: Channel,
+    prompt_regex: str,
+    *,
+    idle_timeout_sec: float,
+    max_timeout_sec: float,
 ) -> str:
-    """Send a paged command within one cumulative deadline."""
+    """Read until ``prompt_regex`` matches, extending while bytes keep arriving.
+
+    Gives up after ``idle_timeout_sec`` with no bytes, or ``max_timeout_sec``
+    in total. Returns whatever was read; callers check for the prompt.
+    """
+    compiled = re.compile(prompt_regex)
+    buffer = ""
+    now = time.monotonic()
+    hard_deadline = now + max_timeout_sec
+    idle_deadline = now + idle_timeout_sec
+    channel.settimeout(0.8)
+    while True:
+        now = time.monotonic()
+        if now > hard_deadline or now > idle_deadline:
+            return buffer
+        try:
+            chunk = channel.recv(4096).decode("utf-8", errors="replace")
+        except TimeoutError:
+            if compiled.search(buffer):
+                return buffer
+            continue
+        if not chunk:
+            return buffer
+        buffer += chunk
+        idle_deadline = time.monotonic() + idle_timeout_sec
+        if compiled.search(buffer):
+            return buffer
+
+
+def _run_huawei_paged_cmd(
+    channel: Channel,
+    command: str,
+    prompt: str = r"#\s*$",
+    *,
+    timeout_sec: int = 60,
+    idle_timeout_sec: float | None = None,
+) -> str:
+    """Send a paged command within one cumulative deadline.
+
+    With ``idle_timeout_sec`` the deadline is idle-progress based: each read
+    keeps going while bytes arrive and gives up after that many silent
+    seconds; ``timeout_sec`` is then the absolute cap.
+    """
     logger.debug("OLT paged command: %r", command)
     _send_huawei_command(channel, command)
     output_parts: list[str] = []
@@ -559,11 +984,19 @@ def _run_huawei_paged_cmd(
             raise TimeoutError(
                 f"Huawei command did not return a shell prompt within {timeout_sec}s"
             )
-        chunk = _read_until_prompt(
-            channel,
-            combined_pattern,
-            timeout_sec=remaining,
-        )
+        if idle_timeout_sec is None:
+            chunk = _read_until_prompt(
+                channel,
+                combined_pattern,
+                timeout_sec=remaining,
+            )
+        else:
+            chunk = _read_until_prompt_idle(
+                channel,
+                combined_pattern,
+                idle_timeout_sec=idle_timeout_sec,
+                max_timeout_sec=remaining,
+            )
         output_parts.append(chunk)
 
         # A single recv can contain an earlier continuation marker and the final
@@ -853,22 +1286,17 @@ def rollback_firmware(olt: OLTDevice) -> tuple[bool, str]:
         return False, f"Connection failed: {exc}"
 
     try:
-        channel.send("enable\n")
-        _read_until_prompt(
-            channel, policy.prompt_regex, timeout_sec=_setup_prompt_timeout()
-        )
+        prompt = _prepare_huawei_read_shell(channel, policy.prompt_regex)
 
-        # First check if we have dual image support
-        ok, msg, info = get_firmware_info(olt)
+        # Reuse this channel: a second login here would hold two sessions.
+        version_output = _run_huawei_paged_cmd(
+            channel, "display version", prompt=prompt, timeout_sec=30
+        )
+        info = _parse_firmware_info(version_output)
         if not info.has_dual_image:
             return False, "OLT does not appear to have dual-image support"
         if not info.standby_version:
             return False, "No standby firmware version available for rollback"
-
-        channel.send("screen-length 0 temporary\n")
-        _read_until_prompt(
-            channel, policy.prompt_regex, timeout_sec=_setup_prompt_timeout()
-        )
 
         # Switch startup system software to standby
         # Huawei: startup system-software slave (or backup/standby depending on model)
@@ -878,7 +1306,7 @@ def rollback_firmware(olt: OLTDevice) -> tuple[bool, str]:
         # Handle confirmation prompt
         if re.search(r"y/n|\[Y/N\]", output, re.IGNORECASE):
             channel.send("y\n")
-            output += _read_until_prompt(channel, policy.prompt_regex, timeout_sec=15)
+            output += _read_until_prompt(channel, prompt, timeout_sec=15)
 
         if is_error_output(output):
             logger.warning(
@@ -945,23 +1373,23 @@ def fetch_running_config_ssh(olt: OLTDevice) -> tuple[bool, str, str]:
 
     try:
         with ssh_context as (channel, policy):
-            channel.send("enable\n")
-            _read_until_prompt(
-                channel, policy.prompt_regex, timeout_sec=_setup_prompt_timeout()
-            )
+            # ``enable`` moves the prompt from ``>`` to ``#``; derive the real
+            # privileged prompt and disable paging before the long read.
+            prompt = _prepare_huawei_read_shell(channel, policy.prompt_regex)
 
             output = _run_huawei_paged_cmd(
                 channel,
                 "display current-configuration",
-                prompt=policy.prompt_regex,
-                timeout_sec=60,
+                prompt=prompt,
+                timeout_sec=_config_read_cap.get(),
+                idle_timeout_sec=_BACKUP_COMMAND_IDLE_SECONDS,
             )
 
         # Strip echoed command and trailing prompt
         lines = output.splitlines()
         if lines and "display current-configuration" in lines[0]:
             lines = lines[1:]
-        if lines and re.search(policy.prompt_regex, lines[-1]):
+        if lines and re.search(prompt, lines[-1]):
             lines = lines[:-1]
         config_text = "\n".join(lines).strip()
 
@@ -999,6 +1427,76 @@ def _validate_readonly_command(command: str) -> tuple[bool, str]:
         Tuple of (is_valid, error_message).
     """
     return validate_readonly_command(command)
+
+
+class OltCliPromptError(TimeoutError):
+    """The CLI did not return to a clean prompt; the channel must be discarded.
+
+    Subclasses ``TimeoutError`` so the connection pool closes the channel
+    rather than returning it mid-pager or mid-prompt.
+    """
+
+
+_PAGER_PROMPT_RE = re.compile(r"---- More(?:\s*\([^)]*\)\s*)?----|Press any key")
+_CONFIRM_PROMPT_RE = re.compile(r"\(y/n\)|\[Y/N\]", re.IGNORECASE)
+_MAX_CR_ANSWERS = 3
+
+
+def _run_readonly_display_cmd(
+    channel: Channel,
+    command: str,
+    *,
+    prompt: str,
+    timeout_sec: float = 30.0,
+) -> str:
+    """Run one read-only display command and return only at a clean prompt.
+
+    Pager prompts get a space. A ``{ <cr>|... }:`` continuation prompt is
+    answered with Enter only when ``<cr>`` is among the offered options (at
+    most ``_MAX_CR_ANSWERS`` times); otherwise, and for any ``(y/n)``
+    question or a prompt that never returns, ``OltCliPromptError`` is raised.
+    Nothing but space/Enter is ever sent.
+    """
+    from app.services.network.parsers.cli import HUAWEI_OPTIONAL_ARG_PROMPT
+
+    _send_huawei_command(channel, command)
+    pending = (
+        f"{prompt}|{_PAGER_PROMPT_RE.pattern}|{HUAWEI_OPTIONAL_ARG_PROMPT}"
+        f"|{_CONFIRM_PROMPT_RE.pattern}"
+    )
+    deadline = time.monotonic() + timeout_sec
+    parts: list[str] = []
+    cr_answers = 0
+    while True:
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise OltCliPromptError(
+                f"Command did not return to a prompt within {timeout_sec:g}s"
+            )
+        chunk = _read_until_prompt(channel, pending, timeout_sec=remaining)
+        parts.append(chunk)
+        tail = chunk.rstrip()[-300:]
+        if re.search(prompt, chunk):
+            return "".join(parts)
+        if _CONFIRM_PROMPT_RE.search(tail):
+            raise OltCliPromptError("Command asked for confirmation; not answered")
+        if _PAGER_PROMPT_RE.search(tail):
+            channel.send(" ")
+            continue
+        option_match = re.search(HUAWEI_OPTIONAL_ARG_PROMPT, chunk)
+        if option_match:
+            options = option_match.group(0).strip()
+            if "<cr>" not in options:
+                raise OltCliPromptError(f"Command needs more arguments: {options}")
+            if cr_answers >= _MAX_CR_ANSWERS:
+                raise OltCliPromptError(
+                    f"Command still waiting for input after {_MAX_CR_ANSWERS} "
+                    f"Enter answers: {options}"
+                )
+            cr_answers += 1
+            channel.send("\n")
+            continue
+        raise OltCliPromptError("Command output ended before the shell prompt")
 
 
 def run_cli_command(olt: OLTDevice, command: str) -> tuple[bool, str, str]:
@@ -1040,24 +1538,24 @@ def run_cli_command(olt: OLTDevice, command: str) -> tuple[bool, str, str]:
 
     try:
         with ssh_context as (channel, policy):
-            channel.send("enable\n")
-            _read_until_prompt(
-                channel, policy.prompt_regex, timeout_sec=_setup_prompt_timeout()
-            )
-
-            channel.send(f"{command}\n")
-            output = _read_until_prompt(channel, policy.prompt_regex, timeout_sec=30)
+            prompt = _prepare_huawei_read_shell(channel, policy.prompt_regex)
+            # Any exception raised here (including OltCliPromptError) makes
+            # the pool discard the channel instead of reusing a dirty one.
+            output = _run_readonly_display_cmd(channel, command, prompt=prompt)
 
         # Strip the echoed command and trailing prompt from the output
         lines = output.splitlines()
         if lines and command in lines[0]:
             lines = lines[1:]
         # Remove trailing prompt line
-        if lines and re.search(policy.prompt_regex, lines[-1]):
+        if lines and re.search(prompt, lines[-1]):
             lines = lines[:-1]
         clean_output = "\n".join(lines).strip()
         olt_cache.set(str(olt.id), "running_config", clean_output, cache_params, ttl=60)
         return True, "Command executed", clean_output
+    except OltCliPromptError as exc:
+        logger.warning("CLI command on OLT %s did not complete: %s", olt.name, exc)
+        return False, str(exc), ""
     except (*_SSH_CONNECTION_ERRORS, RuntimeError, ValueError) as exc:
         logger.error(
             "Error running CLI command on OLT %s: %s", olt.name, exc, exc_info=True

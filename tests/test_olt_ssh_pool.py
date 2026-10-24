@@ -289,7 +289,11 @@ class TestOltSshPoolConnectionCap:
     def test_release_notifies_waiters_and_connection_is_reused(
         self, mock_olt, mock_transport, mock_channel, mock_policy
     ):
-        pool = OltSshPool(max_connections_per_olt=1, acquire_timeout_seconds=0.01)
+        pool = OltSshPool(
+            max_connections_per_olt=1,
+            acquire_timeout_seconds=0.01,
+            retire_on_release=False,
+        )
 
         with patch("app.services.rate_limiter_adapter.allow_operation") as mock_allow:
             mock_allow.return_value = SimpleNamespace(
@@ -314,6 +318,34 @@ class TestOltSshPoolConnectionCap:
 
                 assert second is first
                 mock_create.assert_called_once()
+
+    def test_release_retires_connection_by_default(
+        self, mock_olt, mock_transport, mock_channel, mock_policy
+    ):
+        """G4: an idle pooled channel would pin a limiter slot, so release()
+        closes it instead of keeping it for reuse."""
+        pool = OltSshPool(max_connections_per_olt=1, acquire_timeout_seconds=0.01)
+
+        with patch("app.services.rate_limiter_adapter.allow_operation") as mock_allow:
+            mock_allow.return_value = SimpleNamespace(
+                allowed=True, remaining=9, retry_after_seconds=None
+            )
+            with patch.object(pool, "_create_connection") as mock_create:
+                conn = PooledConnection(
+                    transport=mock_transport,
+                    channel=mock_channel,
+                    policy=mock_policy,
+                    olt_id=str(mock_olt.id),
+                    olt_name=mock_olt.name,
+                    in_use=True,
+                )
+                mock_create.return_value = conn
+
+                first = pool.acquire(mock_olt)
+                pool.release(first)
+
+                mock_transport.close.assert_called()
+                assert pool.get_stats()["total_connections"] == 0
 
 
 class TestOltSshPoolStats:

@@ -159,6 +159,14 @@ table or list that follows.
   backend-connection-scoped, so the `Session` must not release its
   connection mid-lock the way a plain `SessionLocal()` session would across
   commits).
+- `app/services/network/olt_ssh_limiter.py` (1) — `create_engine` (G4): a
+  dedicated `NullPool`, autocommit engine used only to pin one PostgreSQL
+  backend connection per held OLT SSH session slot (session advisory locks
+  are connection-scoped, and slot-holding connections must not draw on the
+  small per-worker app pool). It carries `application_name=olt_ssh_limiter`,
+  TCP keepalives and a 2 s `statement_timeout`; it runs only
+  `pg_try_advisory_lock`/`pg_advisory_unlock` and never touches tables or an
+  ORM `Session`. Same pinned-connection pattern as `_postgres_lock.py`.
 - `app/services/db_session_adapter.py` (1) — the same pinned-connection
   advisory-lock pattern (`:176-177`), as part of the `DbSessionProvider`
   Protocol this file also defines (`:16-37`) — the closest thing in Sub

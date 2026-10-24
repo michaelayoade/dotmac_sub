@@ -181,6 +181,11 @@ class SwitchOutcome:
     apply_derived: int = 0
     moved_offer: int = 0
     unverified_moves: int = 0
+    projection: str | None = None
+    projection_target: str | None = None
+    divergence_set_sha256: str | None = None
+    no_target_eligible: bool | None = None
+    no_target_refusal: str | None = None
 
     def as_dict(self) -> dict[str, object]:
         return {
@@ -199,6 +204,11 @@ class SwitchOutcome:
             "apply_derived": self.apply_derived,
             "moved_offer": self.moved_offer,
             "unverified_moves": self.unverified_moves,
+            "projection": self.projection,
+            "projection_target": self.projection_target,
+            "divergence_set_sha256": self.divergence_set_sha256,
+            "no_target_eligible": self.no_target_eligible,
+            "no_target_refusal": self.no_target_refusal,
             "baseline": None if self.baseline is None else self.baseline.as_dict(),
             "read_back": _read_back_dict(self.read_back),
         }
@@ -355,10 +365,12 @@ def load_approved(path: str | Path, expected_sha256: str) -> ApprovedDivergences
     )
 
 
-def emit_approval_list(
-    rows: Sequence[access_rate_profile.Divergence], path: str | Path
-) -> str:
-    """Write the live divergences as an exception record with blank decisions."""
+def record_bytes(rows: Sequence[access_rate_profile.Divergence]) -> bytes:
+    """The exception record for the live divergences, decisions left blank.
+
+    This one serialisation is both what ``--emit-approval-list`` writes and what
+    a digest acknowledgement hashes, so the two can never disagree.
+    """
     entries = [
         {
             "subscription_id": r.subscription_id,
@@ -374,12 +386,24 @@ def emit_approval_list(
         }
         for r in sorted(rows, key=lambda r: r.subscription_id)
     ]
-    raw = (
+    return (
         json.dumps(
             {"schema": RECORD_SCHEMA, "entries": entries}, indent=2, sort_keys=True
         )
         + "\n"
     ).encode()
+
+
+def divergence_set_sha256(rows: Sequence[access_rate_profile.Divergence]) -> str:
+    """sha256 of the live divergence set, as the emitted record would hash."""
+    return hashlib.sha256(record_bytes(rows)).hexdigest()
+
+
+def emit_approval_list(
+    rows: Sequence[access_rate_profile.Divergence], path: str | Path
+) -> str:
+    """Write the live divergences as an exception record with blank decisions."""
+    raw = record_bytes(rows)
     Path(path).write_bytes(raw)
     return hashlib.sha256(raw).hexdigest()
 
@@ -608,7 +632,11 @@ def read_back(
 
     targets = active_external_radius_targets(db, capability="users")
     if not targets:
-        raise _error("no_target", "No RADIUS projection target is configured.")
+        raise _error(
+            "no_target",
+            "No RADIUS projection target is configured. In a non-production "
+            "environment with no user target at all, use --no-radius-target.",
+        )
     mismatched: dict[str, str] = {}
     for target in targets:
         rates, test_rates = radius_population.observed_rate_limits(target, expected)
@@ -665,6 +693,34 @@ def _project_checked(
 # --------------------------------------------------------------------------
 
 
+#: Environments in which the no-target mode is never allowed.
+NO_TARGET_FORBIDDEN_ENVIRONMENTS = frozenset({"prod", "production"})
+
+
+def no_target_refusal(db: Session) -> str | None:
+    """Why the no-target mode may not be used here, or None when it may.
+
+    The mode exists for an environment that has never projected: with zero
+    active user targets the switch cannot change any live rate, so the
+    projection, baseline and read-back have nothing to act on. It is refused
+    wherever a user target exists (a live rate could change) and in production.
+    """
+    if settings.app_env_declared in NO_TARGET_FORBIDDEN_ENVIRONMENTS:
+        return "production"
+    if active_external_radius_targets(db, capability="users"):
+        return "targets_present"
+    return None
+
+
+def _refuse_no_target_mode(reason: str) -> DomainError:
+    return _error(
+        "no_target_mode_refused",
+        "The no-RADIUS-target mode is only for a non-production environment "
+        "with no active user target; nothing was changed.",
+        reason=reason,
+    )
+
+
 def switch_on(
     db: Session,
     *,
@@ -674,8 +730,17 @@ def switch_on(
     approved: ApprovedDivergences | None = None,
     emit_approval_list_to: str | Path | None = None,
     trace: dict[str, object] | None = None,
+    no_radius_target: bool = False,
+    acknowledge_divergence_sha256: str | None = None,
 ) -> SwitchOutcome:
     """Turn the single rate owner on (dry-run unless ``apply``).
+
+    ``no_radius_target`` is the mode for an environment with no user target at
+    all (never in production): the projection, baseline and read-back are
+    skipped, and the per-entry match is replaced by a digest acknowledgement of
+    the live divergence set (``acknowledge_divergence_sha256``), serialised
+    exactly as the emitted record. An ``approved`` list, if supplied, is still
+    fully validated.
 
     ``approved`` is the reviewed list of expected rate changes. The preflight
     passes only when the live divergence set equals it exactly; without a list
@@ -692,7 +757,11 @@ def switch_on(
             if emit_approval_list_to
             else None
         )
-        base = baseline_read_back(db, run_populate)
+        refusal = no_target_refusal(db)
+        # With no user target there is nothing to project or read back, so the
+        # baseline is skipped (it could only fail for want of a target).
+        no_target_dry_run = refusal is None
+        base = None if no_target_dry_run else baseline_read_back(db, run_populate)
         live = _live_keys(rows)
         wanted = set(approved.entries) if approved is not None else set()
         return SwitchOutcome(
@@ -707,17 +776,33 @@ def switch_on(
             approved_list_sha256=approved.sha256 if approved else None,
             emitted_list_sha256=emitted,
             unverified_moves=len(unverified_moves(db, approved)),
+            projection_target="none" if no_target_dry_run else "present",
+            divergence_set_sha256=divergence_set_sha256(rows),
+            no_target_eligible=no_target_dry_run,
+            no_target_refusal=refusal,
         )
 
-    base = baseline_read_back(db, run_populate)
-    trace["baseline_clean"] = base.clean
-    if not base.clean:
-        raise _error(
-            "baseline_not_clean",
-            "The current radreply does not match a dry-run projection; "
-            "nothing was changed.",
-            baseline=base.as_dict(),
-        )
+    if no_radius_target:
+        refusal = no_target_refusal(db)
+        if refusal is not None:
+            raise _refuse_no_target_mode(refusal)
+        base = None
+    else:
+        if not active_external_radius_targets(db, capability="users"):
+            raise _error(
+                "no_target",
+                "No RADIUS projection target is configured. In a non-production "
+                "environment with no user target at all, use --no-radius-target.",
+            )
+        base = baseline_read_back(db, run_populate)
+        trace["baseline_clean"] = base.clean
+        if not base.clean:
+            raise _error(
+                "baseline_not_clean",
+                "The current radreply does not match a dry-run projection; "
+                "nothing was changed.",
+                baseline=base.as_dict(),
+            )
 
     _release_reads(db)
 
@@ -734,7 +819,34 @@ def switch_on(
                 subscription_ids=bad_moves[:_MISMATCH_SAMPLE],
             )
         rows = access_rate_profile.preflight(db)
-        _check_divergence(rows, approved)
+        extra: dict[str, object] = {}
+        if no_radius_target:
+            # Re-checked under the lock: a target added since the dry run, or a
+            # production environment, ends the mode.
+            late = no_target_refusal(db)
+            if late is not None:
+                raise _refuse_no_target_mode(late)
+            live_digest = divergence_set_sha256(rows)
+            if (
+                not acknowledge_divergence_sha256
+                or live_digest != acknowledge_divergence_sha256.strip().lower()
+            ):
+                raise _error(
+                    "divergence_ack_mismatch",
+                    "The live divergence set does not match the acknowledged "
+                    "digest; nothing was changed. Run the dry run again.",
+                    divergences=len(rows),
+                    by_class=_count(rows),
+                    divergence_set_sha256=live_digest,
+                )
+            extra = {
+                "projection_target": "none",
+                "app_env_declared": settings.app_env_declared,
+                "by_class": _count(rows),
+                "divergence_set_sha256": live_digest,
+            }
+        else:
+            _check_divergence(rows, approved)
         _write_switch(
             db,
             context,
@@ -745,22 +857,56 @@ def switch_on(
             record_schema=RECORD_SCHEMA if approved else None,
             apply_derived=len(approved.entries) if approved else 0,
             moved_offer=approved.audit_only if approved else 0,
+            **extra,
         )
         return SwitchOutcome(
             action="switch_on",
             applied=True,
             enabled=True,
             divergences=len(rows),
+            by_class=_count(rows),
             approved_list_sha256=approved.sha256 if approved else None,
             switch_digest=approved.digest if approved else None,
             record_schema=RECORD_SCHEMA if approved else None,
             apply_derived=len(approved.entries) if approved else 0,
             moved_offer=approved.audit_only if approved else 0,
+            projection_target="none" if no_radius_target else None,
+            divergence_set_sha256=extra.get("divergence_set_sha256"),  # type: ignore[arg-type]
         )
 
     outcome = execute_owner_command(
         db, definition=_SWITCH_ON, context=context, operation=flip
     )
+
+    if no_radius_target:
+        # Nothing to project: confirm the committed flag from the stored row and
+        # the cache, and report the projection as skipped.
+        _invalidate_switch_cache()
+        visible = _await_flag(db)
+        stored = flag_from_row(db)
+        trace["flag"] = stored
+        if not (visible and stored is True):
+            raise _error(
+                "owner_not_active",
+                "The switch was committed but the flag is not visible; check the "
+                "final state.",
+                flag=stored,
+            )
+        return SwitchOutcome(
+            action="switch_on",
+            applied=True,
+            enabled=True,
+            divergences=outcome.divergences,
+            by_class=outcome.by_class,
+            approved_list_sha256=outcome.approved_list_sha256,
+            switch_digest=outcome.switch_digest,
+            record_schema=outcome.record_schema,
+            apply_derived=outcome.apply_derived,
+            moved_offer=outcome.moved_offer,
+            projection="skipped_no_target",
+            projection_target="none",
+            divergence_set_sha256=outcome.divergence_set_sha256,
+        )
 
     failure: str | None = None
     report: ReadBack | None = None
@@ -866,11 +1012,32 @@ def main(argv: Sequence[str] | None = None) -> int:
         help="dry run only: write the live divergences as an approval list",
     )
     parser.add_argument(
+        "--no-radius-target",
+        action="store_true",
+        help=(
+            "environment with no active RADIUS user target (never production): "
+            "skip projection and read-back"
+        ),
+    )
+    parser.add_argument(
+        "--acknowledge-divergence-sha256",
+        help=(
+            "with --no-radius-target on 'on': the sha256 of the live divergence "
+            "set, as reported by the dry run"
+        ),
+    )
+    parser.add_argument(
         "--apply",
         action="store_true",
         help="make the change; without it the command only reports",
     )
     args = parser.parse_args(list(sys.argv[1:] if argv is None else argv))
+    if args.no_radius_target and args.action != "on":
+        parser.error("--no-radius-target applies to 'on' only")
+    if args.acknowledge_divergence_sha256 and not (
+        args.no_radius_target and args.action == "on"
+    ):
+        parser.error("--acknowledge-divergence-sha256 needs 'on --no-radius-target'")
     if args.emit_approval_list and (args.apply or args.action != "on"):
         parser.error("--emit-approval-list is a dry-run option of 'on'")
 
@@ -902,6 +1069,8 @@ def main(argv: Sequence[str] | None = None) -> int:
                     approved=approved,
                     emit_approval_list_to=args.emit_approval_list,
                     trace=trace,
+                    no_radius_target=args.no_radius_target,
+                    acknowledge_divergence_sha256=args.acknowledge_divergence_sha256,
                 )
             else:
                 outcome = switch_off(db, context=context, apply=args.apply)

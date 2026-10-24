@@ -10,6 +10,7 @@ logger = logging.getLogger(__name__)
 from fastapi import APIRouter, Depends, Form, HTTPException, Query, Request
 from fastapi.responses import (
     HTMLResponse,
+    JSONResponse,
     RedirectResponse,
     Response,
 )
@@ -38,14 +39,17 @@ from app.services.network.ont_service_configuration import (
     OntConfigurationChange,
     OntConfigurationSection,
     RetryOntServiceConfigurationCommand,
+    VerifyOntServiceConfigurationReadbackCommand,
     WanConfigurationChange,
     WifiConfigurationChange,
     configure_ont_service,
     get_ont_service_configuration_projection,
     retry_ont_service_configuration,
+    verify_ont_service_configuration_readback,
 )
 from app.services.owner_commands import CommandContext
 from app.web.request_parsing import parse_form_data_sync
+from app.web.retired_ont_writer import retired_writer_response
 from app.web.templates import templates
 
 router = APIRouter(prefix="/network", tags=["web-admin-network"])
@@ -65,27 +69,10 @@ def _base_context(
         "sidebar_stats": get_sidebar_stats(db),
         "can_redrive_network_operations": bool(auth)
         and has_permission(auth, db, "network:operation:redrive"),
+        "can_resolve_network_dispatch": bool(auth)
+        and has_permission(auth, db, "network:ont:write"),
+        "can_break_glass": "admin" in {str(role) for role in (auth.get("roles") or [])},
     }
-
-
-def _service_ports_partial_response(
-    request: Request,
-    db: Session,
-    ont_id: str,
-    *,
-    toast_message: str | None = None,
-    toast_type: str = "success",
-) -> HTMLResponse:
-    context = web_network_service_ports_service.list_context(db, ont_id)
-    response = templates.TemplateResponse(
-        "admin/network/onts/_service_ports_tab.html",
-        {"request": request, **context},
-    )
-    if toast_message:
-        response.headers["HX-Trigger"] = json.dumps(
-            {"showToast": {"message": toast_message, "type": toast_type}}
-        )
-    return response
 
 
 def _toast_headers(message: str, toast_type: str) -> dict[str, str]:
@@ -525,64 +512,21 @@ def ont_service_ports(
     )
 
 
+_SERVICE_PORT_GUIDANCE = (
+    "Service ports are planned and applied by the ONT configuration lifecycle. "
+    "Use the Configure tab to change WAN or management settings; the lifecycle "
+    "allocates, repairs and removes service ports itself."
+)
+
+
 @router.post(
     "/onts/{ont_id}/service-ports/create",
     response_class=HTMLResponse,
     dependencies=[Depends(require_permission("network:ont:write"))],
 )
-def ont_service_port_create(
-    request: Request,
-    ont_id: str,
-    vlan_id: int = Form(...),
-    gem_index: int = Form(...),
-    user_vlan: str = Form(default=""),
-    tag_transform: str = Form(default="translate"),
-    db: Session = Depends(get_db),
-) -> HTMLResponse:
-    """Create a single service-port on the OLT for this ONT."""
-    resolved_user_vlan, error = web_network_service_ports_service.coerce_user_vlan(
-        user_vlan
-    )
-    if error:
-        _log_ont_action_result(
-            request=request,
-            ont_id=ont_id,
-            action="Create Service Port",
-            ok=False,
-            message=error,
-            metadata={"vlan_id": vlan_id, "user_vlan": user_vlan},
-        )
-        return _service_ports_partial_response(
-            request,
-            db,
-            ont_id,
-            toast_message=error,
-            toast_type="error",
-        )
-
-    ok, msg = web_network_service_ports_service.handle_create(
-        db,
-        ont_id,
-        vlan_id,
-        gem_index,
-        user_vlan=resolved_user_vlan,
-        tag_transform=tag_transform,
-    )
-    _log_ont_action_result(
-        request=request,
-        ont_id=ont_id,
-        action="Create Service Port",
-        ok=ok,
-        message=msg,
-        metadata={"vlan_id": vlan_id, "gem_index": gem_index},
-    )
-    return _service_ports_partial_response(
-        request,
-        db,
-        ont_id,
-        toast_message=msg,
-        toast_type="success" if ok else "error",
-    )
+def ont_service_port_create(ont_id: str) -> JSONResponse:
+    """Retired: operators no longer create OLT service ports directly."""
+    return retired_writer_response("Create Service Port", _SERVICE_PORT_GUIDANCE)
 
 
 @router.post(
@@ -590,29 +534,9 @@ def ont_service_port_create(
     response_class=HTMLResponse,
     dependencies=[Depends(require_permission("network:ont:write"))],
 )
-def ont_service_port_delete(
-    request: Request,
-    ont_id: str,
-    index: int,
-    db: Session = Depends(get_db),
-) -> HTMLResponse:
-    """Delete a service-port from the OLT by index."""
-    ok, msg = web_network_service_ports_service.handle_delete(db, ont_id, index)
-    _log_ont_action_result(
-        request=request,
-        ont_id=ont_id,
-        action="Delete Service Port",
-        ok=ok,
-        message=msg,
-        metadata={"service_port_index": index},
-    )
-    return _service_ports_partial_response(
-        request,
-        db,
-        ont_id,
-        toast_message=msg,
-        toast_type="success" if ok else "error",
-    )
+def ont_service_port_delete(ont_id: str, index: int) -> JSONResponse:
+    """Retired: operators no longer delete OLT service ports directly."""
+    return retired_writer_response("Delete Service Port", _SERVICE_PORT_GUIDANCE)
 
 
 @router.post(
@@ -620,29 +544,9 @@ def ont_service_port_delete(
     response_class=HTMLResponse,
     dependencies=[Depends(require_permission("network:ont:write"))],
 )
-def ont_service_port_clone(
-    request: Request,
-    ont_id: str,
-    ref_ont_id: str = Form(...),
-    db: Session = Depends(get_db),
-) -> HTMLResponse:
-    """Clone service-ports from a reference ONT."""
-    ok, msg = web_network_service_ports_service.handle_clone(db, ont_id, ref_ont_id)
-    _log_ont_action_result(
-        request=request,
-        ont_id=ont_id,
-        action="Clone Service Ports",
-        ok=ok,
-        message=msg,
-        metadata={"reference_ont_id": ref_ont_id},
-    )
-    return _service_ports_partial_response(
-        request,
-        db,
-        ont_id,
-        toast_message=msg,
-        toast_type="success" if ok else "error",
-    )
+def ont_service_port_clone(ont_id: str) -> JSONResponse:
+    """Retired: cloning service ports from another ONT bypassed the lifecycle."""
+    return retired_writer_response("Clone Service Ports", _SERVICE_PORT_GUIDANCE)
 
 
 # -- Configure Tab Routes (Database-backed ONT configuration) ------------------
@@ -927,6 +831,79 @@ def ont_configure_retry(
                 ont_unit_id=uuid.UUID(ont_id),
                 expected_head_id=uuid.UUID(configuration_head_id),
                 expected_revision=configuration_revision,
+            ),
+        )
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=400, detail="Invalid lifecycle identifier."
+        ) from exc
+    except DomainError as exc:
+        error = exc
+
+    if result is not None:
+        result_message = result.message
+    else:
+        assert error is not None
+        result_message = error.message
+
+    context = _base_context(request, db, active_page="onts")
+    context.update(_ont_configuration_form_context(db, ont_id))
+    if result is not None:
+        context["config_result"] = result
+    if error is not None:
+        context["config_error"] = error
+    response = templates.TemplateResponse(
+        "admin/network/onts/_configure_form.html", context
+    )
+    response.headers.update(
+        _toast_headers(
+            result_message,
+            "success" if result is not None else "error",
+        )
+    )
+    return response
+
+
+@router.post(
+    "/onts/{ont_id}/configure/verify",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("network:ont:write"))],
+)
+def ont_configure_verify(
+    request: Request,
+    ont_id: str,
+    configuration_head_id: str = Form(...),
+    configuration_revision: int = Form(..., ge=1),
+    failed_operation_id: str = Form(...),
+    idempotency_key: str = Form(...),
+    db: Session = Depends(get_db),
+) -> HTMLResponse:
+    """Queue a readback-only verification of the exact failed or interrupted revision.
+
+    Transport adapter only: it never writes to the device. The owner decides
+    eligibility and refuses in-flight heads.
+    """
+
+    auth = getattr(request.state, "auth", {}) or {}
+    permission_granted = bool(auth) and has_permission(auth, db, "network:ont:write")
+    finish_read_transaction(db)
+    result = None
+    error: DomainError | None = None
+    try:
+        if not permission_granted:
+            raise HTTPException(status_code=403, detail="Forbidden")
+        result = verify_ont_service_configuration_readback(
+            db,
+            VerifyOntServiceConfigurationReadbackCommand(
+                context=_ont_configuration_command_context(
+                    request,
+                    reason="Verify ONT service configuration by device readback",
+                    idempotency_key=idempotency_key,
+                ),
+                ont_unit_id=uuid.UUID(ont_id),
+                expected_head_id=uuid.UUID(configuration_head_id),
+                expected_revision=configuration_revision,
+                failed_operation_id=uuid.UUID(failed_operation_id),
             ),
         )
     except ValueError as exc:

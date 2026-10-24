@@ -409,6 +409,7 @@ def _configure_form_context_from_state(
         # route's required idempotency_key is never an empty field.
         "config_idempotency_key": str(uuid.uuid4()),
         "retry_idempotency_key": str(uuid.uuid4()),
+        "verify_idempotency_key": str(uuid.uuid4()),
         "wan_mode": values.get("wan_mode"),
         "ip_protocol": values.get("ip_protocol"),
         "wan_static_ip": str(values.get("wan_static_ip") or ""),

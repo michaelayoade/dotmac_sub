@@ -21,6 +21,7 @@ from app.config import settings
 from app.logging import get_logger
 from app.models.domain_settings import SettingDomain
 from app.models.oauth_token import OAuthToken
+from app.services.outbound_effects import Effect, require
 from app.services.settings_spec import resolve_value
 
 logger = logging.getLogger(__name__)
@@ -61,6 +62,7 @@ async def _request_with_retry(
     timeout: float | None = None,
     max_retries: int = 1,
 ) -> httpx.Response:
+    require(Effect.social_messaging)
     retries = 0
     while True:
         response = await client.request(
@@ -92,6 +94,7 @@ def _request_with_retry_sync(
     timeout: float | None = None,
     max_retries: int = 1,
 ) -> httpx.Response:
+    require(Effect.social_messaging)
     retries = 0
     while True:
         response = client.request(

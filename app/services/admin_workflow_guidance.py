@@ -475,14 +475,24 @@ WORKFLOW_GUIDANCE: tuple[AdminWorkflowGuidance, ...] = (
         "Push WiFi, PPPoE, and resync changes to an ONT",
         "NOC, field operations",
         "Update a customer's WiFi or PPPoE settings on their ONT, or recover a device stuck out of sync after a failed push.",
-        ("/admin/network/onts",),
+        (
+            "/admin/network/onts",
+            "/admin/network/dispatch-reconciliation",
+            "/admin/network/tr069",
+        ),
         "Confirm the exact ONT by serial number, account, and OLT/port before changing anything.",
-        "Use Set WiFi Password or Set WiFi SSID for a routine change; the value is saved immediately but only pushed to the device at its next check-in unless you force it.",
-        "Use Force-Push WiFi Password when the customer reports the change did not take effect (for example, after a factory reset wiped the device's saved settings) and it needs to apply right away.",
+        "Use Set WiFi Password or Set WiFi SSID for a routine change; it is queued through the ONT configuration lifecycle (the same owner as the Configure tab) and delivered at the device's next check-in. Fields you do not change, such as channel and security mode, are carried forward.",
+        "Force-Push WiFi Password now behaves exactly like Set WiFi Password: there is no direct push to the device. If the customer reports the change did not take effect, check the Configuration tab status and use Retry current configuration or Verify readback.",
         "Use Force Resync only after a previous attempt failed and you have checked it is safe to retry — this re-attempts the whole reconcile against the device, not just the one field you changed.",
         "If the device is on a known-slow OLT shelf, ask for the longer wait-time option so a slow OLT does not cut the change off partway through.",
+        "When a configuration shows Failed or interrupted, use Verify readback on the Configuration tab to check whether the device already has the wanted settings; it only reads the device and needs the ONT to have informed ACS since the failure.",
+        "A command whose delivery could not be confirmed shows Review current device state on the ONT's Operations tab and in Network > Dispatch reconciliation. Check the device first, then use Close dispatch to record whether it landed, was superseded, or is no longer wanted, with your evidence.",
         notes=(
+            "Close dispatch only records your verdict, evidence and name against the dispatch row. It never contacts the device, retries anything, or changes the operation's outcome; use Retry current configuration or Verify readback for device work. Do not paste passwords or keys into the evidence.",
             "When setting PPPoE, leave the WAN connection index blank unless you know it: Sub then selects an existing internet WAN container on the ONT or creates one, and never uses the management container. Creating one can take several minutes (until the ONT's next check-in); the change then resumes on its own.",
+            "The ONT configuration lifecycle is the only writer of ONT, OLT and ACS state. The Service Ports tab is read-only (use Repair via configuration to open the Configure tab), the old Provision ONT button and the Configure Management IP action are retired and answer HTTP 410, and the Management IP dialog now queues its change through the lifecycle's Management section. Use Configure for every service change.",
+            "Bind Internet WAN is break-glass: it writes straight to the device, is available to administrators only, needs a written reason of at least 10 characters, and is recorded in the audit log. Prefer the Configure tab's WAN section.",
+            "On the TR-069 page, device jobs such as reboot and the Configure Device push are also break-glass: administrators only, labelled Break-glass, and refused without a reason of at least 10 characters that is audited before the action runs. A direct push is not recorded as desired configuration, so confirm the ONT's Configuration tab shows no drift afterwards. Linking a device, Create ONT and firmware updates are not break-glass.",
             "Force Resync is refused on purpose when the last attempt left the ONT out of sync — that is a deliberate checkpoint asking you to confirm it is safe before retrying, not a bug.",
             "A failed push does not necessarily mean nothing happened on the device; check the ONT's actual status before assuming it is still on the old settings.",
             "Retry current configuration works directly from the ONT detail page's Configuration tab. Each page view issues a fresh one-time retry key, so a retry is accepted once, and a second submission of the same page is ignored as a duplicate; reload the page to get a new key.",
@@ -1625,6 +1635,18 @@ _ACTION_SPECS: dict[str, tuple[_ActionSpec, ...]] = {
         ),
         _action(
             "resync-ont", "Force an ONT resync", 3, 4, permission="network:ont:write"
+        ),
+        _action(
+            "verify-ont-readback",
+            "Verify a failed configuration by readback",
+            5,
+            permission="network:ont:write",
+        ),
+        _action(
+            "close-stuck-dispatch",
+            "Close a dispatch that needs reconciliation",
+            6,
+            permission="network:ont:write",
         ),
     ),
     "cpe-detail-wifi-actions": (

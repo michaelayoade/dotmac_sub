@@ -23,6 +23,7 @@ from paramiko.ssh_exception import AuthenticationException
 
 from app.config import settings
 from app.models.router_management import Router
+from app.services.outbound_effects import Effect, require
 
 logger = logging.getLogger(__name__)
 
@@ -166,6 +167,7 @@ def export_config_via_ssh(
     the command returns no config (so the caller records a failure rather than
     storing a blank snapshot).
     """
+    require(Effect.device_ssh)
     username = username or settings.router_config_ssh_username
     port = port or settings.router_config_ssh_port
     key_path = key_path if key_path is not None else settings.router_config_ssh_key_path

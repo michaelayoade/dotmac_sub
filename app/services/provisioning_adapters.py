@@ -14,6 +14,7 @@ from app.models.provisioning import ProvisioningVendor
 from app.services.adapters.base import AdapterResult
 from app.services.genieacs_client import create_genieacs_client
 from app.services.network.ont_action_common import set_and_verify
+from app.services.outbound_effects import Effect, require
 from app.services.response import ListResponseMixin
 
 logger = logging.getLogger(__name__)
@@ -97,6 +98,7 @@ def _resolve_connection(context: dict) -> dict:
 
 
 def _ssh_client(conn: dict) -> paramiko.SSHClient:
+    require(Effect.device_ssh)
     if not conn.get("host"):
         raise ValueError("SSH host is required")
     client = paramiko.SSHClient()
@@ -133,6 +135,7 @@ def _run_ssh_commands(conn: dict, commands: list[str]) -> list[str]:
 
 
 def _netconf_manager(conn: dict) -> manager.Manager:
+    require(Effect.device_ssh)
     if not conn.get("host"):
         raise ValueError("NETCONF host is required")
     return manager.connect(
@@ -148,6 +151,7 @@ def _netconf_manager(conn: dict) -> manager.Manager:
 
 
 def _routeros_api(conn: dict) -> routeros_api.RouterOsApiPool:
+    require(Effect.router_api)
     if not conn.get("host"):
         raise ValueError("RouterOS host is required")
     return routeros_api.RouterOsApiPool(
