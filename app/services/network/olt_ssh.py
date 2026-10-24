@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import contextvars
 import logging
+import random
 import re
 import socket
 import time
@@ -459,6 +460,8 @@ def _setup_prompt_timeout() -> float:
     return settings.olt_ssh_prompt_timeout_seconds
 
 
+# Login-retry jitter only (not security); SystemRandom keeps bandit quiet.
+_JITTER = random.SystemRandom()
 _ANSI_RE = re.compile(r"\x1b\[[0-9;?]*[A-Za-z]")
 # A bare CLI prompt at the end of the received text: ``boi-olt>``, ``boi-olt#``,
 # ``boi-olt(config)#``. Pager ("More"), ``{ <cr>|...}:`` and ``(y/n)`` prompts
@@ -476,7 +479,7 @@ def _instrument_channel(channel: Channel) -> None:
     dirty until a read ends at a prompt again, so a logout is only ever typed
     into a session that is verifiably idle at a prompt.
     """
-    state = {"clean": False, "tail": ""}
+    state: dict[str, Any] = {"clean": False, "tail": ""}
     try:
         raw_send = channel.send
         raw_recv = channel.recv
@@ -500,11 +503,11 @@ def _instrument_channel(channel: Channel) -> None:
         return chunk
 
     try:
-        channel.send = send  # type: ignore[method-assign]
-        channel.recv = recv  # type: ignore[method-assign]
-        channel._olt_raw_send = raw_send  # type: ignore[attr-defined]
-        channel._olt_raw_recv = raw_recv  # type: ignore[attr-defined]
-        channel._olt_state = state  # type: ignore[attr-defined]
+        channel.send = send
+        channel.recv = recv
+        channel._olt_raw_send = raw_send
+        channel._olt_raw_recv = raw_recv
+        channel._olt_state = state
     except AttributeError:
         return
 
@@ -642,10 +645,10 @@ def _manage_transport(
         finally:
             release_slot()
 
-    transport.close = close  # type: ignore[method-assign]
-    transport.close_real = close_real  # type: ignore[attr-defined]
-    transport._olt_holder = holder  # type: ignore[attr-defined]
-    transport.session_clean = lambda: _channel_is_clean(holder["channel"])  # type: ignore[attr-defined]
+    transport.close = close
+    transport.close_real = close_real
+    transport._olt_holder = holder
+    transport.session_clean = lambda: _channel_is_clean(holder["channel"])
 
 
 def _attach_channel(transport: Transport, channel: Channel) -> None:
@@ -667,8 +670,6 @@ def _connect_unlimited(
     never for BACKGROUND, never for a password reject, and only if the caller's
     deadline allows. ``olt_ssh_auth_eof_retry_delay_seconds=0`` disables it.
     """
-    import random
-
     from app.services.network import olt_ssh_limiter, olt_ssh_metrics
 
     host = (olt.mgmt_ip or olt.hostname or "").strip()
@@ -705,7 +706,7 @@ def _connect_unlimited(
         except (SSHException, EOFError) as exc:
             _discard_failed_transport(transport, sock)
             deadline = olt_ssh_limiter.current_deadline()
-            delay = config.auth_eof_retry_delay_seconds + random.uniform(-3, 3)  # noqa: S311 - jitter
+            delay = config.auth_eof_retry_delay_seconds + _JITTER.uniform(-3, 3)
             delay = max(1.0, delay)
             fits = deadline is None or deadline - time.monotonic() > delay + 25
             if (

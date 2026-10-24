@@ -48,6 +48,9 @@ from typing import Any
 
 logger = logging.getLogger(__name__)
 
+# Backoff jitter only (not security); SystemRandom keeps bandit quiet.
+_JITTER = random.SystemRandom()
+
 BUSY_PREFIX = "olt_busy:"
 _SLOT_NAMESPACE = "olt-ssh-slot"
 _INTENT_NAMESPACE = "olt-ssh-intent"
@@ -464,7 +467,7 @@ def acquire_slot(
                 )
             if priority is not OltSshPriority.BACKGROUND and not intent_held:
                 intent_held = _try("SELECT pg_try_advisory_lock_shared(:key)", intent)
-            time.sleep(min(random.uniform(0.5, 1.5), remaining))  # noqa: S311 - jitter
+            time.sleep(min(_JITTER.uniform(0.5, 1.5), remaining))
     except BaseException:
         try:
             # Closing releases every session lock this connection holds.

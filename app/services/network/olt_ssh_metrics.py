@@ -177,11 +177,11 @@ def held_slots_by_olt(
         ).all()
     held: dict[str, tuple[int, float]] = {}
     for classid, objid, age in rows:
-        name = wanted.get((int(classid), int(objid)))
-        if name is None:
+        olt_name = wanted.get((int(classid), int(objid)))
+        if olt_name is None:
             continue
-        count, oldest = held.get(name, (0, 0.0))
-        held[name] = (count + 1, max(oldest, float(age or 0.0)))
+        count, oldest = held.get(olt_name, (0, 0.0))
+        held[olt_name] = (count + 1, max(oldest, float(age or 0.0)))
     return held
 
 

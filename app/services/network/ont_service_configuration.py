@@ -2628,6 +2628,8 @@ def _defer_for_olt_busy(
 
     from app.services.network.olt_ssh_limiter import get_config
 
+    _busy_jitter = random.SystemRandom()
+
     payload = dict(operation.input_payload or {})
     deferrals = int(payload.get("olt_busy_deferrals") or 0)
     cap = get_config().busy_max_deferrals
@@ -2685,7 +2687,7 @@ def _defer_for_olt_busy(
             dispatch_key=f"olt_busy:{attempt}"
             + (f"@r{generation}" if generation else ""),
             not_before=datetime.now(UTC)
-            + timedelta(seconds=30 * attempt + random.uniform(0, 10)),  # noqa: S311 - jitter
+            + timedelta(seconds=30 * attempt + _busy_jitter.uniform(0, 10)),
         )
         _record_execution_event(
             db,
