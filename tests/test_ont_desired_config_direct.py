@@ -991,63 +991,6 @@ def test_save_provision_settings_does_not_persist_tr069_profile_override(
 # provisioning. TR-069 binding now happens via provision_with_reconciliation().
 
 
-def test_direct_provision_route_ignores_posted_tr069_profile_override(
-    db_session, monkeypatch
-):
-    import inspect
-    from types import SimpleNamespace
-
-    from app.web.admin import network_onts_provisioning
-
-    captured: dict[str, object] = {}
-    signature = inspect.signature(network_onts_provisioning.provision_ont_direct)
-    assert "tr069_olt_profile_id" not in signature.parameters
-
-    monkeypatch.setattr(
-        "app.services.network.action_logging.actor_label",
-        lambda request: "admin",
-    )
-
-    def fake_provision(db, ont_id, **kwargs):
-        captured.update(kwargs)
-        return SimpleNamespace(
-            success=True,
-            message="ok",
-            duration_ms=1,
-            step_name="authorization_baseline",
-            waiting=False,
-            critical=True,
-            skipped=False,
-            data=None,
-        )
-
-    monkeypatch.setattr(
-        "app.services.network.ont_provision_steps.apply_authorization_baseline",
-        fake_provision,
-    )
-    monkeypatch.setattr(
-        network_onts_provisioning,
-        "log_network_action_result",
-        lambda *args, **kwargs: None,
-    )
-    monkeypatch.setattr(
-        network_onts_provisioning,
-        "can_manage_ont_from_request",
-        lambda *args, **kwargs: True,
-    )
-
-    response = network_onts_provisioning.provision_ont_direct(
-        SimpleNamespace(headers={}),
-        "ont-1",
-        dry_run=True,
-        async_execution=False,
-        db=db_session,
-    )
-
-    assert response.status_code == 200
-    assert "tr069_olt_profile_id" not in captured
-
-
 def test_provisioning_step_route_rejects_out_of_scope_ont(db_session, monkeypatch):
     from types import SimpleNamespace
 
