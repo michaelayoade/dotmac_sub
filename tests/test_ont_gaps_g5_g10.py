@@ -499,6 +499,21 @@ def test_g8_pending_reboot_lookup(monkeypatch):
 # ── G10: stale OLT observations ─────────────────────────────────────────────
 
 
+def _factory(db_session):
+    from contextlib import contextmanager
+
+    @contextmanager
+    def _session():
+        try:
+            yield db_session
+            db_session.commit()
+        except Exception:
+            db_session.rollback()
+            raise
+
+    return _session
+
+
 @pytest.fixture
 def olt(db_session):
     row = OLTDevice(
@@ -610,7 +625,7 @@ def test_g10_refresh_is_bounded_read_only_and_updates_only_olt_age(db_session, o
         return SimpleNamespace(status="present", observed=_observed().olt, error=None)
 
     outcome = refresh_olt_observations(
-        db_session,
+        _factory(db_session),
         olt.id,
         ObservationRefreshPolicy(max_age=timedelta(hours=6), per_olt_limit=2),
         adapter_factory=lambda db, o: MagicMock(),
@@ -649,7 +664,7 @@ def test_g10_refresh_skips_an_olt_with_a_running_operation(db_session, olt):
     db_session.commit()
     read = MagicMock()
     outcome = refresh_olt_observations(
-        db_session,
+        _factory(db_session),
         olt.id,
         ObservationRefreshPolicy(max_age=timedelta(hours=6), per_olt_limit=5),
         adapter_factory=lambda db, o: MagicMock(),
@@ -670,7 +685,7 @@ def test_g10_unavailable_read_keeps_the_previous_observation(db_session, olt):
         .olt_observed_at
     )
     outcome = refresh_olt_observations(
-        db_session,
+        _factory(db_session),
         olt.id,
         ObservationRefreshPolicy(max_age=timedelta(hours=6), per_olt_limit=5),
         adapter_factory=lambda db, o: MagicMock(),

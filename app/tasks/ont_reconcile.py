@@ -371,8 +371,12 @@ class OltObservationRefreshOutcome:
     skipped_olt_busy: bool = False
 
 
+class _RollbackOnly(Exception):
+    """Ends a per-ONT session without committing (busy / not eligible)."""
+
+
 def refresh_olt_observations(
-    db: Session,
+    session_factory: Any,
     olt_id: Any,
     policy: Any,
     *,
@@ -381,10 +385,10 @@ def refresh_olt_observations(
 ) -> OltObservationRefreshOutcome:
     """Refresh up to ``policy.per_olt_limit`` stale OLT readings for one OLT.
 
-    Task adapter: owns the per-ONT transaction boundaries so one slow device
-    never holds a transaction open across the others. Skips the whole OLT
-    while any operation on it is pending or running, including one that
-    starts mid-cycle.
+    Task adapter: each ONT gets its own session (committed on exit by the
+    session adapter) so one slow device never holds a transaction open across
+    the others. Skips the whole OLT while any operation on it is pending or
+    running, including one that starts mid-cycle.
     """
     from app.models.network import OLTDevice
     from app.services.network.reconcile.observation_refresh import (
@@ -395,44 +399,55 @@ def refresh_olt_observations(
     )
 
     kwargs: dict[str, Any] = {"read_fn": read_fn} if read_fn is not None else {}
-    if olt_has_active_operation(db, olt_id):
-        db.commit()  # read-only: just end the transaction
-        return OltObservationRefreshOutcome(olt_id=olt_id, skipped_olt_busy=True)
-    ont_ids = stale_observation_ont_ids(
-        db,
-        olt_id,
-        older_than=datetime.now(UTC) - policy.max_age,
-        limit=policy.per_olt_limit,
-    )
-    olt = db.get(OLTDevice, olt_id)
-    if not ont_ids or olt is None:
-        db.commit()  # read-only: just end the transaction
-        return OltObservationRefreshOutcome(olt_id=olt_id)
-    if adapter_factory is None:
-        from app.services.network.olt_protocol_adapters import get_protocol_adapter
+    with session_factory() as db:
+        if olt_has_active_operation(db, olt_id):
+            return OltObservationRefreshOutcome(olt_id=olt_id, skipped_olt_busy=True)
+        ont_ids = stale_observation_ont_ids(
+            db,
+            olt_id,
+            older_than=datetime.now(UTC) - policy.max_age,
+            limit=policy.per_olt_limit,
+        )
+        olt = db.get(OLTDevice, olt_id)
+        if not ont_ids or olt is None:
+            return OltObservationRefreshOutcome(olt_id=olt_id)
+        if adapter_factory is None:
+            from app.services.network.olt_protocol_adapters import (
+                OltConnectionConfig,
+                get_protocol_adapter_from_config,
+            )
 
-        adapter = get_protocol_adapter(olt)
-    else:
-        adapter = adapter_factory(db, olt)
+            # Detached values: the adapter outlives this session.
+            adapter = get_protocol_adapter_from_config(
+                OltConnectionConfig.from_model(olt)
+            )
+        else:
+            adapter = adapter_factory(db, olt)
 
     counts = {"refreshed": 0, "failed": 0, "busy_ont": 0, "not_eligible": 0}
     busy = False
     for index, ont_id in enumerate(ont_ids):
-        if index and olt_has_active_operation(db, olt_id):
-            busy = True
-            break
-        result = refresh_one_ont_observation(db, ont_id, adapter, **kwargs)
+        result = None
+        try:
+            with session_factory() as db:
+                if index and olt_has_active_operation(db, olt_id):
+                    busy = True
+                    break
+                result = refresh_one_ont_observation(db, ont_id, adapter, **kwargs)
+                if result in (
+                    ObservationRefreshResult.busy,
+                    ObservationRefreshResult.not_eligible,
+                ):
+                    raise _RollbackOnly
+        except _RollbackOnly:
+            pass
         if result is ObservationRefreshResult.refreshed:
-            db.commit()
             counts["refreshed"] += 1
         elif result is ObservationRefreshResult.read_failed:
-            db.commit()  # nothing was written; keep the previous observation
             counts["failed"] += 1
         elif result is ObservationRefreshResult.busy:
-            db.rollback()
             counts["busy_ont"] += 1
-        else:
-            db.rollback()
+        elif result is ObservationRefreshResult.not_eligible:
             counts["not_eligible"] += 1
     return OltObservationRefreshOutcome(
         olt_id=olt_id,
@@ -473,8 +488,9 @@ def refresh_stale_olt_observations() -> dict[str, Any]:
             if not acquired:
                 totals["skipped_olt_busy"] += 1
                 continue
-            with db_session_adapter.session() as db:
-                outcome = refresh_olt_observations(db, olt_id, policy)
+            outcome = refresh_olt_observations(
+                db_session_adapter.session, olt_id, policy
+            )
         totals["olts"] += 1
         totals["refreshed"] += outcome.refreshed
         totals["failed"] += outcome.failed

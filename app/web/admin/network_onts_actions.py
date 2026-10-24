@@ -323,9 +323,9 @@ def _acs_reboot_already_queued(db: Session, ont_id: str) -> bool:
 
     try:
         ont = db.get(OntUnit, uuid.UUID(str(ont_id)))
-    except ValueError:
+        return ont is not None and acs_pending_reboot_task(db, ont) is True
+    except Exception:  # noqa: BLE001 - unknown means fall back as before
         return False
-    return ont is not None and acs_pending_reboot_task(db, ont) is True
 
 
 @router.post(
