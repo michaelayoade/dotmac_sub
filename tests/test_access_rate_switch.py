@@ -1185,3 +1185,10 @@ def test_cli_no_target_flags(db_session, world, monkeypatch, capsys, tmp_path):
     ):
         with pytest.raises(SystemExit):
             switch.main(argv)
+
+
+def test_cli_rejects_off_no_radius_target_alone(capsys):
+    """Switch-off is refused in this release; the no-target flag does not revive it."""
+    with pytest.raises(SystemExit) as exit_info:
+        switch.main(["off", "--reason", "x", "--no-radius-target"])
+    assert exit_info.value.code != 0
