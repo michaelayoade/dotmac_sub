@@ -25,6 +25,7 @@ from typing import Any
 
 from app.config import settings
 from app.services import team_inbox_health, team_inbox_smtp_inbound
+from app.services.outbound_effects import Effect, require
 
 logger = logging.getLogger(__name__)
 
@@ -51,6 +52,7 @@ def smtp_readiness(
     timeout: float = DEFAULT_READINESS_TIMEOUT_SECONDS,
 ) -> bool:
     """Return whether the listener accepts an SMTP ``NOOP``."""
+    require(Effect.email)
     try:
         with smtplib.SMTP(host=host, port=port, timeout=timeout) as client:
             code, _message = client.noop()

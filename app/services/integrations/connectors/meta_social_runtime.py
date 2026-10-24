@@ -22,6 +22,7 @@ from app.services.integrations.runtime import (
     OperationStatus,
     ValidationResult,
 )
+from app.services.outbound_effects import Effect, require
 
 META_SOCIAL_SEND_CAPABILITY = "messaging.send.v1"
 META_SOCIAL_RECEIVE_CAPABILITY = "messaging.receive.v1"
@@ -290,6 +291,7 @@ class MetaSocialRuntimeRunner:
         config: Mapping[str, Any],
         secret_material: Mapping[str, str],
     ) -> OperationResult:
+        require(Effect.social_messaging)
         action = str(envelope.payload.get("action") or "")
         if (
             envelope.capability_id == META_SOCIAL_SEND_CAPABILITY
@@ -931,6 +933,7 @@ class MetaCapiRunner:
         config: Mapping[str, Any],
         secret_material: Mapping[str, str],
     ) -> OperationResult:
+        require(Effect.social_messaging)
         if envelope.capability_id != META_WEBSITE_LEAD_CAPABILITY:
             return self._result(
                 envelope, OperationStatus.rejected, "capability_unsupported"

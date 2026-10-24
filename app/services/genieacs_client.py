@@ -17,6 +17,8 @@ from urllib.parse import quote
 
 import httpx
 
+from app.services.outbound_effects import Effect, require
+
 logger = logging.getLogger(__name__)
 
 # TR-069 CWMP Download File Types (per TR-069 Amendment 6)
@@ -156,6 +158,8 @@ class GenieACSClient:
         Raises:
             GenieACSError: On request failure
         """
+        if method.upper() not in {"GET", "HEAD"}:
+            require(Effect.acs_task)
         url = f"{self.base_url}{path}"
         try:
             with httpx.Client(timeout=self.timeout, headers=self.headers) as client:

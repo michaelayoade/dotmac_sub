@@ -35,6 +35,7 @@ from app.models.system_user import SystemUser
 from app.services import email as email_service
 from app.services import settings_spec
 from app.services.audit_adapter import record_audit_event
+from app.services.outbound_effects import Effect, require
 
 logger = logging.getLogger(__name__)
 
@@ -1080,6 +1081,7 @@ def _send_export_email(
     content: bytes,
     media_type: str,
 ) -> bool:
+    require(Effect.email)
     from app.services.branding_config import get_brand
 
     config = email_service.get_smtp_config(db, activity="notification_queue")

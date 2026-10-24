@@ -36,6 +36,7 @@ from app.schemas.wireguard import (
     WireGuardServerRead,
     WireGuardServerUpdate,
 )
+from app.services.outbound_effects import Effect, require
 from app.services.wireguard_crypto import (
     decrypt_private_key,
     encrypt_private_key,
@@ -1353,6 +1354,7 @@ class RouterSyncService:
         Returns:
             Tuple of (success, message)
         """
+        require(Effect.router_api)
         import routeros_api
 
         if server is None:
@@ -1436,6 +1438,7 @@ class RouterSyncService:
         Returns:
             Tuple of (success, message)
         """
+        require(Effect.router_api)
         import routeros_api
 
         if server is None:

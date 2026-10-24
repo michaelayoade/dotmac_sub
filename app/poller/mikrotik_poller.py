@@ -33,6 +33,7 @@ from app.models.catalog import (
 )
 from app.services.credential_crypto import decrypt_credential
 from app.services.db_session_adapter import db_session_adapter
+from app.services.outbound_effects import Effect, require
 from app.services.poller_health import POLLER_HEALTH_KEY
 from app.services.queue_mapping import queue_mapping
 
@@ -184,6 +185,7 @@ class MikroTikConnection:
 
     async def connect(self) -> bool:
         """Establish connection to the device."""
+        require(Effect.router_api)
         self._last_attempt = datetime.now(UTC)
         # RouterOS API is synchronous, run in executor. wait_for guarantees
         # the async loop is never blocked by a hung device even if the

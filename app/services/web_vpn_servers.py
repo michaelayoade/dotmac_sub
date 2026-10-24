@@ -16,6 +16,7 @@ from app.models.domain_settings import DomainSetting, SettingDomain
 from app.models.wireguard import WireGuardServer
 from app.schemas.wireguard import WireGuardServerCreate, WireGuardServerUpdate
 from app.services.audit_helpers import diff_dicts, log_audit_event, model_to_dict
+from app.services.outbound_effects import Effect, require
 from app.services.wireguard_crypto import encrypt_private_key
 
 logger = logging.getLogger(__name__)
@@ -628,6 +629,7 @@ def test_router_connection(
     Returns:
         Tuple of (success, response_dict, http_status_code).
     """
+    require(Effect.router_api)
     from app.services import wireguard as wg_service
 
     server = wg_service.wg_servers.get(db, server_id)

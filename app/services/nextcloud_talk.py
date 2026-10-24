@@ -12,6 +12,7 @@ from sqlalchemy.orm import Session
 from app.models.connector import ConnectorConfig
 from app.models.domain_settings import SettingDomain
 from app.services.common import coerce_uuid
+from app.services.outbound_effects import Effect, require
 from app.services.settings_spec import resolve_value
 
 logger = logging.getLogger(__name__)
@@ -130,6 +131,7 @@ class NextcloudTalkClient:
         params: dict | None = None,
         data: dict | None = None,
     ) -> Any:
+        require(Effect.webhook_out)
         url = f"{self.base_url}{self.ocs_base_path}{path}"
         try:
             with httpx.Client(timeout=self.timeout) as client:

@@ -31,6 +31,7 @@ from app.schemas.notification import NotificationCreate, PushIntent, PushIntentV
 from app.services.common import coerce_uuid
 from app.services.notification import notifications as notification_records
 from app.services.operator_tenant import operator_tenant_id
+from app.services.outbound_effects import Effect, require
 
 logger = logging.getLogger(__name__)
 
@@ -268,6 +269,7 @@ def send_push(
     configured) — both are non-error outcomes for the delivery queue. Returns
     False only on a real transport failure (so the queue retries).
     """
+    require(Effect.push)
     if notification_id is None:
         queued = notification_records.create_customer_notification(
             db,
@@ -343,6 +345,7 @@ def send_push_to_system_user(
     notification_id: str | None = None,
 ) -> bool:
     """Send a push to all of a staff/system user's active devices."""
+    require(Effect.push)
     tokens = active_system_user_tokens(db, str(system_user_id))
     if not tokens:
         logger.info("push: no active device tokens for system user %s", system_user_id)
