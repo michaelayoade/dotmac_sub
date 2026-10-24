@@ -98,7 +98,6 @@ network.ont_provisioning_execution
 network.ont_runtime_status
 network.ont_status_refresh
 network.ont_topology_observations
-network.operation_dispatch
 network.operation_ledger
 network.outage_impact
 network.routeros_sot

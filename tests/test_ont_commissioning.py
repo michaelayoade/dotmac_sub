@@ -644,6 +644,126 @@ def test_reconciler_redrives_interrupted_authorizing_intent_once(db_session):
     assert terminal.failure_code == "management_recovery_exhausted"
 
 
+def _closed_dispatch_intent(db_session, *, fsp, port, resolution):
+    """A landed-authorization intent whose unknown-delivery dispatch was closed."""
+    _olt, _candidate_row, target = _candidate(
+        db_session, serial="HWTC1D737DD1", fsp=fsp
+    )
+    ont = OntUnit(
+        serial_number=target.serial,
+        olt_device_id=target.olt_id,
+        board="0/1",
+        port=port,
+        external_id="1",
+        is_active=True,
+    )
+    db_session.add(ont)
+    db_session.flush()
+    prior = NetworkOperation(
+        operation_type=NetworkOperationType.ont_commission,
+        target_type=NetworkOperationTargetType.olt,
+        target_id=target.olt_id,
+        status=NetworkOperationStatus.failed,
+        max_retries=3,
+        input_payload={
+            "intent_id": "pending",
+            "olt_id": str(target.olt_id),
+            "fsp": target.fsp,
+            "serial_number": target.serial,
+        },
+        output_payload={
+            "completed_authorization": True,
+            "device_authorization": {
+                "olt_id": str(target.olt_id),
+                "fsp": target.fsp,
+                "serial_number": target.serial,
+                "ont_id_on_olt": 1,
+            },
+        },
+    )
+    db_session.add(prior)
+    db_session.flush()
+    db_session.add(
+        NetworkOperationDispatch(
+            operation_id=prior.id,
+            dispatch_key="initial",
+            command_name="ont_commission.v1",
+            task_name="app.tasks.ont_commissioning.commission_ont",
+            args_payload=[],
+            kwargs_payload={},
+            queue="tr069",
+            status=NetworkOperationDispatchStatus.resolved,
+            resolution=resolution,
+            resolution_evidence="Operator checked the OLT registration table.",
+            resolved_by="user-1",
+            resolved_at=datetime.now(UTC),
+            attempts=1,
+            max_attempts=5,
+        )
+    )
+    intent = OntCommissioningIntent(
+        autofind_candidate_id=target.candidate_id,
+        ont_unit_id=ont.id,
+        olt_id=target.olt_id,
+        canonical_serial=target.serial,
+        fsp=target.fsp,
+        state=OntCommissioningState.authorizing,
+        reason="partial success",
+        requested_by="noc.operator",
+        expires_at=datetime.now(UTC) + timedelta(hours=1),
+        device_authorized_at=datetime.now(UTC) - timedelta(minutes=5),
+        latest_operation_id=prior.id,
+    )
+    db_session.add(intent)
+    db_session.flush()
+    ids = (intent.id, prior.id)
+    db_session.commit()
+    return ids
+
+
+def _reconcile_commissioning(db_session, reason):
+    return reconcile_ont_commissioning(
+        db_session,
+        context=CommandContext.system(
+            actor="test-reconciler",
+            scope="network:ont:commission",
+            reason=reason,
+        ),
+    )
+
+
+def test_reconciler_recovers_after_dispatch_closed_as_confirmed_landed(db_session):
+    intent_id, prior_id = _closed_dispatch_intent(
+        db_session, fsp="0/1/14", port="14", resolution="confirmed_landed"
+    )
+
+    result = _reconcile_commissioning(db_session, "recover after operator closure")
+
+    recovered = db_session.get(OntCommissioningIntent, intent_id)
+    assert result.recovery_staged == 1
+    assert recovered.latest_operation_id != prior_id
+    assert db_session.get(
+        NetworkOperation, recovered.latest_operation_id
+    ).redrive_of_id == (prior_id)
+
+
+@pytest.mark.parametrize("resolution", ["superseded", "no_longer_wanted"])
+def test_reconciler_keeps_other_closure_verdicts_in_manual_review(
+    db_session, resolution
+):
+    intent_id, prior_id = _closed_dispatch_intent(
+        db_session, fsp="0/1/15", port="15", resolution=resolution
+    )
+
+    result = _reconcile_commissioning(db_session, "closure verdict is not a recovery")
+
+    intent = db_session.get(OntCommissioningIntent, intent_id)
+    assert result.recovery_staged == 0
+    assert result.recovery_failed_closed == 1
+    assert intent.state is OntCommissioningState.failed
+    assert intent.failure_code == "interrupted_execution_review_required"
+
+
 def test_reconciler_fails_closed_without_durable_authorization_evidence(db_session):
     _olt, _candidate_row, target = _candidate(
         db_session,

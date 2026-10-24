@@ -1,6 +1,9 @@
 """Architecture guards for lifecycle-safe ONT Configure delivery."""
 
+import re
 from pathlib import Path
+
+from tests.architecture import ont_direct_writer_scan
 
 ROOT = Path(__file__).resolve().parents[2]
 
@@ -134,3 +137,104 @@ def test_legacy_synchronous_configuration_writer_is_retired():
 
     assert "update_ont_config" not in package_source
     assert "def update_ont_config" not in legacy_source
+
+
+# -- Single-writer ratchet (2026-10-19 decision) ------------------------------
+
+_BASELINE = ROOT / "tests/architecture/ont_direct_writer_baseline.txt"
+
+
+def _load_direct_writer_baseline() -> dict[tuple[str, str], int]:
+    entries: dict[tuple[str, str], int] = {}
+    for line in _BASELINE.read_text(encoding="utf-8").splitlines():
+        if not line.strip():
+            continue
+        path, name, count = line.split()
+        entries[(path, name)] = int(count)
+    return entries
+
+
+def test_web_and_api_modules_gain_no_direct_ont_olt_acs_writers():
+    """The lifecycle is the only writer: the baseline may only shrink."""
+    baseline = _load_direct_writer_baseline()
+    current = ont_direct_writer_scan.scan()
+
+    grown = sorted(
+        f"{path}: {name} {baseline.get((path, name), 0)} -> {count}"
+        for (path, name), count in current.items()
+        if count > baseline.get((path, name), 0)
+    )
+    assert not grown, (
+        "New direct ONT/OLT/ACS writer in a web/api module. Route it through "
+        "configure_ont_service (the lifecycle) or make it break-glass:\n"
+        + "\n".join(grown)
+    )
+
+    stale = sorted(
+        f"{path}: {name} baseline {count} > actual {current.get((path, name), 0)}"
+        for (path, name), count in baseline.items()
+        if current.get((path, name), 0) < count
+    )
+    assert not stale, (
+        "Direct-writer baseline is stale; lower it in "
+        "tests/architecture/ont_direct_writer_baseline.txt:\n" + "\n".join(stale)
+    )
+
+
+def test_retired_direct_writers_stay_retired():
+    retired = {
+        "app/web/admin/network_onts.py": ("service_port_service_write",),
+        "app/web/admin/network_onts_actions.py": ("reconcile_ont",),
+        "app/web/admin/network_onts_inventory.py": ("ont_write",),
+        "app/api/network_ont_ops.py": ("reconcile_ont",),
+    }
+    current = ont_direct_writer_scan.scan()
+    for path, names in retired.items():
+        for name in names:
+            assert (path, name) not in current, (path, name)
+    api = _source("app/api/network_ont_ops.py")
+    assert not re.search(
+        r"ont_write\.(update_management_ip|update_service_port|move_ont)", api
+    )
+    assert not (ROOT / "app/web/admin/network_ont_service_ports.py").exists()
+
+
+def test_break_glass_routes_are_admin_only_reasoned_and_audited():
+    actions = _source("app/web/admin/network_onts_actions.py")
+    bind_slice = actions.split("def ont_bind_internet_wan(", 1)[0].rsplit(
+        "@router.post(", 1
+    )[1]
+    assert "require_role(BREAK_GLASS_ROLE)" in bind_slice
+    bind_body = actions.split("def ont_bind_internet_wan(", 1)[1].split(
+        "@router.post(", 1
+    )[0]
+    assert bind_body.index("authorize_break_glass(") < bind_body.index(
+        "bind_internet_wan("
+    )
+
+    tr069 = _source("app/web/admin/network_tr069.py")
+    for route, call in (
+        ("/tr069/devices/{device_id}/action", "queue_device_job("),
+        ("/tr069/devices/{device_id}/config", "create_config_push_job("),
+    ):
+        decorator = tr069.split(f'"{route}"', 1)[1].split("def ", 1)[0]
+        assert "require_role(BREAK_GLASS_ROLE)" in decorator, route
+        body = tr069.split(f'"{route}"', 1)[1].split("@router.post", 1)[0]
+        assert body.index("_break_glass_refusal(") < body.index(call), route
+
+
+def test_wifi_and_management_controls_use_the_lifecycle_admission():
+    actions = _source("app/web/admin/network_onts_actions.py")
+    for name in ("ont_set_wifi_ssid", "ont_set_wifi_password"):
+        body = actions.split(f"def {name}(", 1)[1].split("@router.post(", 1)[0]
+        assert "submit_wifi_change(" in body
+        assert "reconcile_ont" not in body
+    forms = _source("app/services/network/ont_web_forms.py")
+    mgmt = forms.split("def update_mgmt_ip_from_form(", 1)[1].split(
+        "def mgmt_ip_modal_context(", 1
+    )[0]
+    assert "submit_management_change(" in mgmt
+    assert "set_desired_config_values(" not in mgmt
+    admission = _source("app/services/web_network_ont_actions/lifecycle_admission.py")
+    assert "configure_ont_service(" in admission
+    assert "reconcile_ont(" not in admission

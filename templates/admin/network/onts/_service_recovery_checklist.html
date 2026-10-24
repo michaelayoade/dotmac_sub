@@ -151,6 +151,8 @@
                 <input type="checkbox" name="lan4" {% if not can_bind %}disabled{% endif %} class="h-3.5 w-3.5 rounded border-slate-300 text-cyan-600 focus:ring-cyan-500 disabled:opacity-50">
                 LAN4
             </label>
+            <span class="rounded bg-rose-100 px-2 py-0.5 text-xs font-semibold uppercase text-rose-700 dark:bg-rose-900/40 dark:text-rose-300" title="Writes straight to the device, bypassing the ONT configuration lifecycle. Admin only; audited.">Break-glass</span>
+            <input type="text" name="break_glass_reason" required minlength="10" maxlength="500" placeholder="Reason (audited)" {% if not can_bind %}disabled{% endif %} class="w-48 rounded border border-slate-300 px-2 py-1 text-xs dark:border-slate-600 dark:bg-slate-700 dark:text-white">
             <button {% if not can_bind %}disabled title="{{ recovery.bind_action_reason }}"{% endif %} class="inline-flex items-center justify-center rounded bg-cyan-600 px-3 py-1.5 text-xs font-semibold text-white shadow-sm hover:bg-cyan-700 disabled:cursor-not-allowed disabled:bg-slate-300 disabled:text-slate-600 dark:disabled:bg-slate-700 dark:disabled:text-slate-400">
                 <svg class="htmx-indicator mr-1 h-3 w-3 animate-spin" viewBox="0 0 24 24" fill="none"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"/><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"/></svg>
                 Bind Internet WAN

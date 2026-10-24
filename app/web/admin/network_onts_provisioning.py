@@ -31,6 +31,7 @@ from app.services.network.action_logging import actor_label, log_network_action_
 from app.services.network.ont_provisioning.credentials import mask_credentials
 from app.services.network.ont_provisioning.result import StepResult
 from app.services.network.ont_scope import can_manage_ont_from_request
+from app.web.retired_ont_writer import retired_writer_response
 from app.web.templates import templates
 
 # Add filter for credential masking in provisioning templates
@@ -431,83 +432,20 @@ def step_deprovision(
     "/onts/{ont_id}/provision",
     dependencies=[Depends(require_permission("network:ont:write"))],
 )
-def provision_ont_direct(
-    request: Request,
-    ont_id: str,
-    dry_run: bool = Form(default=False),
-    async_execution: bool = Form(default=False),
-    db: Session = Depends(get_db),
-) -> Response:
-    """Repair/re-apply OLT authorization baseline for an ONT.
+def provision_ont_direct(ont_id: str) -> JSONResponse:
+    """Retired: legacy "Provision" created/deleted service ports directly.
 
-    Normal authorization applies this baseline automatically. This endpoint is
-    kept for manual repair of already-authorized ONTs.
+    Authorization and the ONT configuration lifecycle own the OLT baseline.
+    ``request_ont_provisioning`` and ``ont_provision_steps`` stay because the
+    authorization task (``app.tasks.ont_provisioning``) and bulk provisioning
+    (``app.services.network.bulk_provisioning``) still import them; only this
+    operator route is retired.
     """
-    denied = _ensure_ont_write_scope(request, db, ont_id)
-    if denied is not None:
-        return denied
-
-    # Device writes always run through the tracked worker lifecycle. A dry run
-    # is DB-only and remains synchronous for immediate preview feedback.
-    if not dry_run:
-        from app.services.network.ont_provisioning_commands import (
-            request_ont_provisioning,
-        )
-
-        initiated_by = actor_label(request)
-        command = request_ont_provisioning(
-            db,
-            ont_id,
-            initiated_by=initiated_by,
-        )
-        if not command.accepted:
-            message = f"Could not start ONT provisioning: {command.message}"
-            response = _step_response(
-                StepResult("authorization_baseline", False, message),
-                request=request,
-                ont_id=ont_id,
-            )
-            if _wants_html_response(request):
-                return _provision_page_redirect(
-                    ont_id,
-                    status="error",
-                    message=message,
-                )
-            return response
-        message = "ONT provisioning queued; waiting for device confirmation."
-        response = _step_response(
-            StepResult(
-                "authorization_baseline",
-                True,
-                message,
-                waiting=True,
-                data={
-                    "operation_id": command.operation_id,
-                    "dispatch_id": command.dispatch_id,
-                    "correlation_key": f"provision:{ont_id}",
-                    "waiting_reason": "device_confirmation",
-                    "duplicate": command.duplicate,
-                },
-            ),
-            request=request,
-            ont_id=ont_id,
-        )
-        if _wants_html_response(request):
-            return _provision_page_redirect(
-                ont_id,
-                status="info",
-                message=message,
-                operation_id=command.operation_id,
-            )
-        return response
-
-    from app.services.network.ont_provisioning_execution import (
-        preview_ont_provisioning,
+    return retired_writer_response(
+        "Provision ONT",
+        "Authorization applies the OLT baseline and the Configure tab applies "
+        "service settings; use Configure for any change.",
     )
-
-    result = preview_ont_provisioning(db, ont_id)
-
-    return _step_response(result, request=request, ont_id=ont_id)
 
 
 @router.post(

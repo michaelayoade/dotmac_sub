@@ -6,7 +6,7 @@ import logging
 from typing import Any
 
 from celery.result import AsyncResult
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from sqlalchemy.orm import Session
 
 from app.db import get_db
@@ -39,6 +39,17 @@ from app.services.network.ont_action_common import ActionResult
 from app.services.network.ont_actions import ont_actions
 
 logger = logging.getLogger(__name__)
+
+
+def _retired_writer(what: str, guidance: str) -> HTTPException:
+    return HTTPException(
+        status_code=410,
+        detail=(
+            f"{what} through this API is retired: the ONT configuration "
+            f"lifecycle is the only writer of ONT/OLT/ACS state. {guidance}"
+        ),
+    )
+
 
 router = APIRouter(tags=["network-ont-operations"])
 
@@ -106,13 +117,16 @@ def get_running_config(ont_id: str, db: Session = Depends(get_db)) -> OntActionR
     dependencies=[Depends(require_permission("network:ont:write"))],
 )
 def set_wifi_ssid(
-    ont_id: str, payload: OntWifiSsidRequest, db: Session = Depends(get_db)
+    ont_id: str,
+    payload: OntWifiSsidRequest,
+    request: Request,
+    db: Session = Depends(get_db),
 ) -> OntActionResponse:
-    from app.services.web_network_ont_actions.config_setters import (
-        set_wifi_ssid as _reconcile_set_wifi_ssid,
+    from app.services.web_network_ont_actions.lifecycle_admission import (
+        submit_wifi_change,
     )
 
-    result = _reconcile_set_wifi_ssid(db, ont_id, payload.ssid)
+    result = submit_wifi_change(db, request, ont_id, ssid=payload.ssid)
     return _action_response(result)
 
 
@@ -122,13 +136,16 @@ def set_wifi_ssid(
     dependencies=[Depends(require_permission("network:ont:write"))],
 )
 def set_wifi_password(
-    ont_id: str, payload: OntWifiPasswordRequest, db: Session = Depends(get_db)
+    ont_id: str,
+    payload: OntWifiPasswordRequest,
+    request: Request,
+    db: Session = Depends(get_db),
 ) -> OntActionResponse:
-    from app.services.web_network_ont_actions.config_setters import (
-        set_wifi_password as _reconcile_set_wifi_password,
+    from app.services.web_network_ont_actions.lifecycle_admission import (
+        submit_wifi_change,
     )
 
-    result = _reconcile_set_wifi_password(db, ont_id, payload.password)
+    result = submit_wifi_change(db, request, ont_id, password=payload.password)
     return _action_response(result)
 
 
@@ -315,17 +332,11 @@ def update_ont_speed_profile(
 def update_ont_management_ip(
     ont_id: str, payload: OntMgmtIpUpdate, db: Session = Depends(get_db)
 ) -> OntActionResponse:
-    from app.services.network.ont_write import ont_write
-
-    result = ont_write.update_management_ip(
-        db,
-        ont_id,
-        mgmt_ip_mode=payload.mgmt_ip_mode,
-        mgmt_ip_address=payload.mgmt_ip_address,
-        mgmt_subnet=payload.mgmt_subnet,
-        mgmt_gateway=payload.mgmt_gateway,
+    """Retired: wrote the IPHOST directly to the OLT, bypassing the lifecycle."""
+    raise _retired_writer(
+        "Management IP updates",
+        "Use the admin Configure tab's Management section.",
     )
-    return _action_response(result)
 
 
 @router.post(
@@ -336,17 +347,12 @@ def update_ont_management_ip(
 def update_ont_service_port(
     ont_id: str, payload: OntServicePortUpdate, db: Session = Depends(get_db)
 ) -> OntActionResponse:
-    from app.services.network.ont_write import ont_write
-
-    result = ont_write.update_service_port(
-        db,
-        ont_id,
-        vlan_id=payload.vlan_id,
-        gem_index=payload.gem_index,
-        user_vlan=payload.user_vlan,
-        tag_transform=payload.tag_transform,
+    """Retired: created OLT service ports outside the lifecycle."""
+    raise _retired_writer(
+        "Service port creation",
+        "Service ports are planned by the ONT configuration lifecycle; "
+        "use the Configure tab's WAN or Management section.",
     )
-    return _action_response(result)
 
 
 @router.post(
@@ -357,12 +363,11 @@ def update_ont_service_port(
 def move_ont(
     ont_id: str, payload: OntMoveRequest, db: Session = Depends(get_db)
 ) -> OntActionResponse:
-    from app.services.network.ont_write import ont_write
-
-    result = ont_write.move_ont(
-        db, ont_id, target_pon_port_id=payload.target_pon_port_id
+    """Retired: moved the ONT without deleting its old service ports."""
+    raise _retired_writer(
+        "ONT move",
+        "Raise the move for manual handling until the lifecycle owns it.",
     )
-    return _action_response(result)
 
 
 @router.patch(

@@ -45,7 +45,6 @@ app/web/admin/network_authorization_presets.py 1
 app/web/admin/network_firmware_catalog.py 1
 app/web/admin/network_olts_inventory.py 1
 app/web/admin/network_olts_profiles.py 1
-app/web/admin/network_ont_service_ports.py 1
 app/web/admin/network_onts.py 1
 app/web/admin/network_onts_actions.py 2
 app/web/admin/surveys.py 1

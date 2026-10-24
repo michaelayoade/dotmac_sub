@@ -1,0 +1,5 @@
+app/api/network_olt_ops.py olt_adapter_write 4
+app/api/network_ont_ops.py ont_write 2
+app/api/reconcile_webhooks.py reconcile_ont 3
+app/web/admin/network_onts_actions.py ont_action_setter 16
+app/web/admin/network_onts_provisioning.py ont_provision_steps_write 4

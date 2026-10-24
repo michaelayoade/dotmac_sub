@@ -834,15 +834,17 @@ def ont_mgmt_ip_modal(
 def ont_mgmt_ip_update(
     ont_id: str, request: Request, db: Session = Depends(get_db)
 ) -> RedirectResponse:
-    """Update management/VoIP IP configuration."""
+    """Queue a management IP change via the ONT service-configuration lifecycle."""
     result = ont_web_forms_service.update_mgmt_ip_from_form(
         db, ont_id, parse_form_data_sync(request), request=request
     )
     if result.not_found:
         raise HTTPException(status_code=404, detail="ONT not found")
+    if result.error:
+        return _ont_redirect(ont_id, status="error", message=result.error)
 
     return _ont_redirect(
         ont_id,
         status="success",
-        message="Management IP settings updated.",
+        message="Management IP change queued through the ONT configuration lifecycle.",
     )

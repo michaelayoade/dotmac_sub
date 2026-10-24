@@ -8,7 +8,7 @@
     <div class="w-full max-w-lg rounded-2xl bg-white shadow-2xl dark:bg-slate-800 p-6"
          @click.outside="open = false; $nextTick(() => document.getElementById('modal-container').replaceChildren())">
         <div class="flex items-center justify-between mb-4">
-            <h3 id="mgmt-ip-modal-title" class="text-lg font-bold text-slate-900 dark:text-white">Management / VoIP IP</h3>
+            <h3 id="mgmt-ip-modal-title" class="text-lg font-bold text-slate-900 dark:text-white">Management IP</h3>
             <button @click="open = false; $nextTick(() => document.getElementById('modal-container').replaceChildren())"
                     aria-label="Close modal"
                     class="rounded-lg p-1 text-slate-400 hover:text-slate-600 dark:hover:text-slate-300 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 dark:focus:ring-offset-slate-800">
@@ -98,25 +98,6 @@
                                class="h-4 w-4 rounded border-slate-300 text-blue-600 focus:ring-blue-500 dark:border-slate-600">
                         Allow Remote Access
                     </label>
-                </div>
-
-                {# VoIP Service #}
-                <div>
-                    <label class="block text-sm font-medium text-slate-700 dark:text-slate-300 mb-2">VoIP Service</label>
-                    <div class="flex gap-4">
-                        <label class="inline-flex items-center gap-2 text-sm text-slate-700 dark:text-slate-300 cursor-pointer">
-                            <input type="radio" name="voip_enabled" value="false"
-                                   {% if not ont.voip_enabled %}checked{% endif %}
-                                   class="h-4 w-4 border-slate-300 text-blue-600 focus:ring-blue-500 dark:border-slate-600">
-                            Disabled
-                        </label>
-                        <label class="inline-flex items-center gap-2 text-sm text-slate-700 dark:text-slate-300 cursor-pointer">
-                            <input type="radio" name="voip_enabled" value="true"
-                                   {% if ont.voip_enabled %}checked{% endif %}
-                                   class="h-4 w-4 border-slate-300 text-blue-600 focus:ring-blue-500 dark:border-slate-600">
-                            Enabled
-                        </label>
-                    </div>
                 </div>
             </div>
 
