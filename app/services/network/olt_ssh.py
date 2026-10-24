@@ -773,7 +773,7 @@ def _connect_unlimited(
                 # Tell a scope's outer retry this login already got its one
                 # retry, so the pass never exceeds 2 logins.
                 try:
-                    exc.olt_eof_retry_used = True  # type: ignore[attr-defined]
+                    setattr(exc, "olt_eof_retry_used", True)
                 except Exception:  # noqa: BLE001
                     pass
             raise
