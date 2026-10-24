@@ -61,6 +61,13 @@ def run_single_olt_mac_harvest(olt_id: str) -> dict[str, Any]:
             result = harvest_olt_mac_table(db, parsed_olt_id)
             if result["olts_polled"] == 0:
                 return {"olt_id": olt_id, "skipped": "not_pollable"}
+            if result.get("olt_login_refused") and not result["olt_errors"]:
+                # The OLT refused the login. Retrying (even with backoff) adds
+                # logins to a refusing device; wait for the next scheduled run.
+                logger.warning(
+                    "olt_mac_harvest_login_refused_no_retry olt_id=%s", olt_id
+                )
+                return {"olt_id": olt_id, "skipped": "olt_login_failed"}
             if result["olt_errors"]:
                 raise RuntimeError(
                     f"OLT MAC harvest failed for {olt_id}; retrying independently"

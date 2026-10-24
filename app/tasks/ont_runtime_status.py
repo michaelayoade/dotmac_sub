@@ -16,6 +16,7 @@ from app.services.network.olt_ssh_limiter import (
     OltSshPriority,
     is_auth_eof_message,
     is_busy_message,
+    is_login_refusal_message,
     olt_ssh_priority,
 )
 from app.services.network_operation_dispatch import managed_network_operation_dispatch
@@ -162,7 +163,7 @@ def refresh_huawei_olt_status(olt_id: str) -> dict[str, int | str]:
                     if olt is not None and huawei_olt_status_pollable(olt):
                         record_olt_poll_failure(olt, error)
                         db.commit()
-                if is_auth_eof_message(message):
+                if is_auth_eof_message(message) or is_login_refusal_message(message):
                     # The OLT is refusing logins. Retrying 3x re-logs-in
                     # exactly when it is refusing; the next cycle tries again.
                     logger.warning("olt_status_poll_login_eof olt=%s", olt_id)

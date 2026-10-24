@@ -31,6 +31,7 @@ from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 from typing import cast
 
+from paramiko.ssh_exception import SSHException
 from sqlalchemy import delete, select
 from sqlalchemy.orm import Session
 
@@ -45,8 +46,10 @@ from app.models.network import (
 from app.services.network._common import normalize_mac_address
 from app.services.network.olt_ssh_diagnostics import _run_readonly_command
 from app.services.network.olt_ssh_limiter import (
+    OltLoginFailed,
     OltSessionBusy,
     OltSshPriority,
+    is_login_refusal_message,
     olt_ssh_scope,
 )
 from app.services.network.serial_utils import parse_ont_id_on_olt
@@ -354,6 +357,7 @@ def _new_counters() -> dict[str, int]:
         "observations": 0,
         "macs_seen": 0,
         "olt_errors": 0,
+        "olt_login_refused": 0,
         "pruned": 0,
         "drift_detected": 0,
         "linkable_no_assignment": 0,
@@ -436,6 +440,9 @@ def _harvest_olt_mac_tables(
                         f"display mac-address port {fsp}",
                     )
                     counters["ports_walked"] += 1
+                    if not ok and is_login_refusal_message(status):
+                        # Login refused: stop the walk; no further logins.
+                        raise OltLoginFailed(status)
                     if not ok:
                         logger.warning(
                             "olt_mac_harvest_port_read_failed "
@@ -448,6 +455,16 @@ def _harvest_olt_mac_tables(
                     walked.append((fsp, output))
         except OltSessionBusy:
             logger.info("olt_mac_harvest_skipped_busy olt_device_id=%s", olt_id)
+            continue
+        except (OltLoginFailed, EOFError, SSHException, OSError) as exc:
+            # Login refusal is not a harvest error: retrying would add logins
+            # to an OLT that is refusing them. Wait for the next scheduled run.
+            counters["olt_login_refused"] += 1
+            logger.warning(
+                "olt_mac_harvest_login_refused olt_device_id=%s error=%s",
+                olt_id,
+                type(exc).__name__,
+            )
             continue
         except Exception:  # noqa: BLE001 - isolate per-OLT failure, keep going
             counters["olt_errors"] += 1

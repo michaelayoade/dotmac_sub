@@ -46,6 +46,8 @@ from dataclasses import dataclass
 from enum import IntEnum
 from typing import Any
 
+from paramiko.ssh_exception import SSHException
+
 logger = logging.getLogger(__name__)
 
 # Backoff jitter only (not security); SystemRandom keeps bandit quiet.
@@ -75,6 +77,40 @@ class OltSessionBusy(TimeoutError):
     "connection failed, nothing sent". That is safe because no command was ever
     issued: the exception is raised before any socket is opened.
     """
+
+
+class OltLoginFailed(TimeoutError):
+    """The OLT refused (or dropped) an SSH login inside a scope.
+
+    Subclasses ``TimeoutError`` so existing ``except (SSHException, OSError,
+    TimeoutError)`` blocks treat it as "connection failed, nothing sent". Once
+    raised, every later checkout in the same scope raises it again without
+    opening a connection.
+    """
+
+
+LOGIN_FAILED_PREFIX = "olt_login_failed:"
+
+
+def login_failed_message(detail: str) -> str:
+    return f"{LOGIN_FAILED_PREFIX} {detail}"
+
+
+_LOGIN_REFUSAL_PATTERNS = (
+    re.compile(r"transport shut down or saw EOF", re.IGNORECASE),
+    re.compile(r"Error reading SSH protocol banner", re.IGNORECASE),
+    re.compile(r"Errno 104|Connection reset by peer", re.IGNORECASE),
+    re.compile(r"No existing session", re.IGNORECASE),
+    re.compile(r"Authentication timeout", re.IGNORECASE),
+    re.compile(r"\bEOFError\b"),
+    re.compile(re.escape(LOGIN_FAILED_PREFIX)),
+)
+
+
+def is_login_refusal_message(message: object) -> bool:
+    """True when ``message`` describes an OLT refusing/dropping a login."""
+    text = str(message or "")
+    return any(pattern.search(text) for pattern in _LOGIN_REFUSAL_PATTERNS)
 
 
 def busy_message(detail: str) -> str:
@@ -111,6 +147,7 @@ class LimiterConfig:
     auth_eof_retry_delay_seconds: int = 7
     logout_on_close: bool = True
     release_grace_seconds_ma5608t: int = 2
+    release_grace_seconds_default: int = 2
     busy_max_deferrals: int = 5
 
     def limit_for(self, model_key: str) -> int:
@@ -129,7 +166,9 @@ class LimiterConfig:
     def grace_for(self, model_key: str) -> float:
         if model_key == "ma5608t":
             return float(max(0, self.release_grace_seconds_ma5608t))
-        return 0.0
+        # Every model (MA5800 included) gets a small grace so the OLT can
+        # reclaim a VTY before a reopen or re-login.
+        return float(max(0, self.release_grace_seconds_default))
 
 
 _CONFIG_KEYS = {
@@ -575,6 +614,8 @@ class OltSshScope:
         self._session: tuple[Any, Any, Any] | None = None
         self.opens = 0
         self.reuses = 0
+        self.login_failures = 0
+        self.login_failure_detail: str | None = None
 
     def checkout(self, opener: Any, normaliser: Any) -> tuple[Any, Any, Any]:
         """Return a view of the scope's session.
@@ -584,6 +625,9 @@ class OltSshScope:
         whether it worked; on failure the session is discarded and reopened
         once, still inside the same slot.
         """
+        if self.login_failure_detail is not None:
+            # A login already failed in this scope: never touch the OLT again.
+            raise OltLoginFailed(login_failed_message(self.login_failure_detail))
         me = threading.get_ident()
         if self._owner == me:
             raise OltSessionBusy(
@@ -617,7 +661,23 @@ class OltSshScope:
                     self.reopens += 1
                     if self.grace_seconds > 0:
                         time.sleep(self.grace_seconds)
-                session = opener()
+                try:
+                    session = opener()
+                except (OltSessionBusy, OltLoginFailed):
+                    raise
+                except (SSHException, EOFError, OSError, RuntimeError) as exc:
+                    # First failed login fails the whole scope fast.
+                    self.login_failures += 1
+                    self.login_failure_detail = f"{type(exc).__name__}: {exc}"[:200]
+                    logger.warning(
+                        "olt_ssh_scope_login_failed olt=%s failures=%d error=%s",
+                        self.label,
+                        self.login_failures,
+                        self.login_failure_detail,
+                    )
+                    raise OltLoginFailed(
+                        login_failed_message(self.login_failure_detail)
+                    ) from exc
                 self._session = session
                 self.opens += 1
             transport, channel, policy = session

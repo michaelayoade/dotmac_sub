@@ -1233,3 +1233,52 @@ def test_scope_reopens_are_capped_and_wait_the_release_grace(server, monkeypatch
             olt_ssh._open_shell(olt)
         assert len(opens) == 4  # did not loop or log in again
     assert server.held_exclusive() == 0
+
+
+# ── Hotfix: login-failure amplification ─────────────────────────────────────
+
+
+def test_first_login_failure_means_one_connection_attempt_for_multi_port_scope(
+    server, monkeypatch
+):
+    from app.services.network.olt_ssh_limiter import OltLoginFailed
+
+    attempts: list[int] = []
+
+    def refusing(olt, **kw):
+        attempts.append(1)
+        raise EOFError
+
+    monkeypatch.setattr(olt_ssh, "_connect_unlimited", refusing)
+    monkeypatch.setattr(olt_ssh_limiter, "time", _TimeShim(lambda _s: None))
+    set_config_override(LimiterConfig(max_ma5608t=1, release_grace_seconds_ma5608t=0))
+    olt = _olt()
+    with olt_ssh_scope(olt, OltSshPriority.BACKGROUND):
+        for _port in range(6):
+            with pytest.raises(OltLoginFailed, match="olt_login_failed:"):
+                olt_ssh._open_shell(olt)
+    assert len(attempts) == 1
+    assert server.held_exclusive() == 0
+
+
+def test_grace_applies_on_ma5800_and_every_model():
+    config = LimiterConfig()
+    assert config.grace_for("ma5800") == 2.0
+    assert config.grace_for("ma5608t") == 2.0
+    assert config.grace_for("other") == 2.0
+    assert LimiterConfig(release_grace_seconds_default=0).grace_for("ma5800") == 0.0
+
+
+def test_login_refusal_message_matches_observed_failures():
+    from app.services.network.olt_ssh_limiter import is_login_refusal_message
+
+    for text in (
+        "EOFError",
+        "[Errno 104] Connection reset by peer",
+        "No existing session",
+        "Authentication timeout",
+        "Error reading SSH protocol banner",
+        "olt_login_failed: EOFError: ",
+    ):
+        assert is_login_refusal_message(text), text
+    assert not is_login_refusal_message("olt_busy: all slots in use")

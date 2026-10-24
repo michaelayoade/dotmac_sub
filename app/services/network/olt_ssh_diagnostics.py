@@ -370,7 +370,8 @@ def _run_readonly_command(olt: OLTDevice, command: str) -> tuple[bool, str, str]
 
     try:
         transport, channel, _policy = _open_shell(olt)
-    except (SSHException, OSError, TimeoutError, ValueError) as exc:
+    except (SSHException, EOFError, OSError, TimeoutError, ValueError) as exc:
+        # EOFError is what paramiko raises when the OLT drops the login.
         return False, f"Connection failed: {exc}", ""
 
     try:
