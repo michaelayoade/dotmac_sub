@@ -3077,15 +3077,6 @@ def mark_configuration_operation_interrupted(
     )
     if head is None or head.phase not in _IN_FLIGHT_PHASES:
         return False
-    message = str(
-        operation.error
-        or (operation.output_payload or {}).get("message")
-        or "Configuration worker stopped before recording a lifecycle result."
-    )[:2000]
-    head.phase = OntServiceConfigurationPhase.failed
-    head.waiting_reason = None
-    head.failure_code = "operation_interrupted"
-    head.failure_message = message
     revision = db.scalar(
         select(OntServiceConfigurationRevision)
         .where(
@@ -3095,10 +3086,21 @@ def mark_configuration_operation_interrupted(
         )
         .with_for_update()
     )
-    if revision is not None and revision.phase in _IN_FLIGHT_PHASES:
-        revision.phase = OntServiceConfigurationPhase.failed
-        revision.failure_code = "operation_interrupted"
-        revision.failure_message = message
+    # Head and revision move together or not at all.
+    if revision is None or revision.phase not in _IN_FLIGHT_PHASES:
+        return False
+    message = str(
+        operation.error
+        or (operation.output_payload or {}).get("message")
+        or "Configuration worker stopped before recording a lifecycle result."
+    )[:2000]
+    head.phase = OntServiceConfigurationPhase.failed
+    head.waiting_reason = None
+    head.failure_code = "operation_interrupted"
+    head.failure_message = message
+    revision.phase = OntServiceConfigurationPhase.failed
+    revision.failure_code = "operation_interrupted"
+    revision.failure_message = message
     db.flush()
     return True
 

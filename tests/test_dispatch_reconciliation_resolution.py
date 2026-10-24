@@ -460,3 +460,16 @@ def test_model_columns_match_migration():
     columns = NetworkOperationDispatch.__table__.c
     for name in ("resolution", "resolution_evidence", "resolved_by", "resolved_at"):
         assert columns[name].nullable is True
+
+
+def test_sync_leaves_head_alone_when_revision_is_missing_or_settled(db_session):
+    head, revision, operation, dispatch = _config_dispatch(db_session)
+    revision.phase = OntServiceConfigurationPhase.verified
+    db_session.commit()
+    dispatch_owner._mark_publish_exhausted(
+        db_session, dispatch, now=datetime.now(UTC), unknown_delivery=True
+    )
+    db_session.commit()
+    db_session.refresh(head)
+    assert head.phase is OntServiceConfigurationPhase.queued
+    assert head.failure_code is None
