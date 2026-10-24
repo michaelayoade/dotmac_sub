@@ -152,4 +152,5 @@ def test_review_and_apply_exact_subscription_correction(
     assert mistaken.status is SubscriptionStatus.canceled
     assert target.status is SubscriptionStatus.active
     assert credential.subscription_id == target.id
-    assert credential.radius_profile_id is not None
+    # Rebinding writes no rate: the rate owner derives it from the package.
+    assert credential.radius_profile_id is None
