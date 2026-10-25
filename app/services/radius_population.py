@@ -98,6 +98,8 @@ class RadiusProjectionWorkItem:
     test_check_attrs: tuple[RadiusAttribute, ...] = ()
     test_reply_attrs: tuple[RadiusAttribute, ...] = ()
     test_profile_group: str | None = None
+    # Canonical login owner chosen by the planner (``_prefer_login_candidate``).
+    subscription_id: str | None = None
 
 
 def _result_count(result: Mapping[str, object], key: str) -> int:
@@ -113,7 +115,7 @@ def _increment_result_count(
 
 
 def _captive_reject_work_item(
-    login: str, status: SubscriptionStatus
+    login: str, status: SubscriptionStatus, subscription_id: str | None = None
 ) -> RadiusProjectionWorkItem:
     """Build the reject fallback for a captive login with no usable credential.
 
@@ -136,6 +138,7 @@ def _captive_reject_work_item(
         status=status,
         mode="reject",
         profile_group=None,
+        subscription_id=subscription_id,
     )
 
 
@@ -1051,6 +1054,7 @@ def populate(
                     status=sub.status,
                     mode=projection.mode,
                     profile_group=None,
+                    subscription_id=selected_projection.subscription_id,
                 )
                 continue
 
@@ -1065,7 +1069,9 @@ def populate(
                         "no_credential",
                     )
                     _increment_result_count(stats, "captive_downgraded_to_reject")
-                    by_login[login] = _captive_reject_work_item(login, sub.status)
+                    by_login[login] = _captive_reject_work_item(
+                        login, sub.status, selected_projection.subscription_id
+                    )
                 else:
                     preserve_usernames.add(login)
                 continue
@@ -1079,7 +1085,9 @@ def populate(
                         "no_secret_hash",
                     )
                     _increment_result_count(stats, "captive_downgraded_to_reject")
-                    by_login[login] = _captive_reject_work_item(login, sub.status)
+                    by_login[login] = _captive_reject_work_item(
+                        login, sub.status, selected_projection.subscription_id
+                    )
                 else:
                     preserve_usernames.add(login)
                 continue
@@ -1098,7 +1106,9 @@ def populate(
                         "decrypt_failed",
                     )
                     _increment_result_count(stats, "captive_downgraded_to_reject")
-                    by_login[login] = _captive_reject_work_item(login, sub.status)
+                    by_login[login] = _captive_reject_work_item(
+                        login, sub.status, selected_projection.subscription_id
+                    )
                 else:
                     preserve_usernames.add(login)
                 continue
@@ -1112,7 +1122,9 @@ def populate(
                         "empty_password",
                     )
                     _increment_result_count(stats, "captive_downgraded_to_reject")
-                    by_login[login] = _captive_reject_work_item(login, sub.status)
+                    by_login[login] = _captive_reject_work_item(
+                        login, sub.status, selected_projection.subscription_id
+                    )
                 else:
                     preserve_usernames.add(login)
                 continue
@@ -1158,7 +1170,9 @@ def populate(
                             ", ".join(ambiguous_addresses),
                         )
                         _increment_result_count(stats, "captive_downgraded_to_reject")
-                        by_login[login] = _captive_reject_work_item(login, sub.status)
+                        by_login[login] = _captive_reject_work_item(
+                            login, sub.status, selected_projection.subscription_id
+                        )
                     else:
                         logger.error(
                             "ambiguous active IPv4 ledger for login %s "
@@ -1265,6 +1279,7 @@ def populate(
                 test_reply_attrs=tuple(test_attrs),
                 test_check_attrs=tuple(test_checks),
                 test_profile_group=plan_profile.name if plan_profile else None,
+                subscription_id=selected_projection.subscription_id,
             )
 
         active_usernames = {sub.login for sub in rows if sub.login}
@@ -1289,6 +1304,7 @@ def populate(
                 "rate": _reply_rate(item.reply_attrs),
                 "test_access": item.test_access is not None,
                 "test_rate": _reply_rate(item.test_reply_attrs),
+                "subscription_id": item.subscription_id,
             }
             for item in work
         }

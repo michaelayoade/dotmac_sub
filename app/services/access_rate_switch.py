@@ -64,7 +64,8 @@ import json
 import logging
 import sys
 import time
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Callable, Iterator, Mapping, Sequence
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
@@ -485,6 +486,27 @@ def _take_lock(db: Session) -> None:
         db.execute(select(func.pg_advisory_xact_lock(LOCK_KEY)))
 
 
+@contextmanager
+def _populate_lock() -> Iterator[None]:
+    """Hold the Celery populate single-flight lock for a whole apply.
+
+    The beat/event populate task takes the same session advisory lock, so while
+    the switch holds it no sweep can compute with the old flag and write after
+    the switch's projection. Busy means refuse before anything is changed.
+    """
+    from app.tasks._postgres_lock import postgres_session_advisory_lock
+    from app.tasks.radius_population import _POPULATE_LOCK_KEY
+
+    with postgres_session_advisory_lock(_POPULATE_LOCK_KEY) as acquired:
+        if not acquired:
+            raise _error(
+                "populate_busy",
+                "A RADIUS populate run holds the projection lock; nothing was "
+                "changed. Retry when it has finished.",
+            )
+        yield
+
+
 def _release_reads(db: Session) -> None:
     """An owner command needs a transaction-free session at entry."""
     if db.in_transaction():
@@ -595,14 +617,21 @@ def read_back(
     """
     subscriptions, credentials, ctx = access_rate_profile._provisioned_state(db)
     by_login = {s.login: s for s in subscriptions if s.login}
+    by_id = {str(s.id): s for s in subscriptions}
     expected: dict[str, tuple[str, str | None, bool, str | None]] = {}
+    #: Written logins whose canonical owner cannot be resolved: never skipped.
+    unresolved: dict[str, str] = {}
     for login, item in plan.items():
         if item.get("mode") not in _WRITTEN_MODES:
             continue
         if only is not None and login not in only:
             continue
-        subscription = by_login.get(login)
-        if subscription is None:
+        # The projection chose one canonical owner for the login; check against
+        # that subscription, never an arbitrary sibling sharing the login.
+        plan_sub_id = item.get("subscription_id")
+        subscription = by_id.get(str(plan_sub_id)) if plan_sub_id else None
+        if subscription is None or subscription.login != login:
+            unresolved[login] = str(plan_sub_id) if plan_sub_id else "unresolved"
             continue
         has_test = bool(item.get("test_access"))
         if against == "derived":
@@ -627,7 +656,7 @@ def read_back(
             "No RADIUS projection target is configured. In a non-production "
             "environment with no user target at all, use --no-radius-target.",
         )
-    mismatched: dict[str, str] = {}
+    mismatched: dict[str, str] = dict(unresolved)
     for target in targets:
         rates, test_rates = radius_population.observed_rate_limits(target, expected)
         for login, (sub_id, rate, has_test, test_rate) in expected.items():
@@ -637,10 +666,10 @@ def read_back(
                 [test_rate] if test_rate else []
             ):
                 mismatched[login] = sub_id
-    not_written = len(by_login) - len(expected) if only is None else 0
+    not_written = len(by_login) - len(expected) - len(unresolved) if only is None else 0
     return ReadBack(
         targets=len(targets),
-        compared=len(expected),
+        compared=len(expected) + len(unresolved),
         not_written=max(not_written, 0),
         mismatches=len(mismatched),
         sample=tuple(sorted(mismatched.values())[:_MISMATCH_SAMPLE]),
@@ -725,6 +754,9 @@ def switch_on(
 ) -> SwitchOutcome:
     """Turn the single rate owner on (dry-run unless ``apply``).
 
+    An apply holds the populate lock across the flip, projections, read-back and
+    any automatic switch-off, and refuses (``populate_busy``) if it is taken.
+
     ``no_radius_target`` is the mode for an environment with no user target at
     all (never in production): the projection, baseline and read-back are
     skipped, and the per-entry match is replaced by a digest acknowledgement of
@@ -736,6 +768,44 @@ def switch_on(
     passes only when the live divergence set equals it exactly; without a list
     any divergence refuses.
     """
+    if apply:
+        with _populate_lock():
+            return _switch_on(
+                db,
+                context=context,
+                apply=True,
+                populate=populate,
+                approved=approved,
+                emit_approval_list_to=emit_approval_list_to,
+                trace=trace,
+                no_radius_target=no_radius_target,
+                acknowledge_divergence_sha256=acknowledge_divergence_sha256,
+            )
+    return _switch_on(
+        db,
+        context=context,
+        apply=False,
+        populate=populate,
+        approved=approved,
+        emit_approval_list_to=emit_approval_list_to,
+        trace=trace,
+        no_radius_target=no_radius_target,
+        acknowledge_divergence_sha256=acknowledge_divergence_sha256,
+    )
+
+
+def _switch_on(
+    db: Session,
+    *,
+    context: CommandContext,
+    apply: bool,
+    populate: Callable[..., object] | None,
+    approved: ApprovedDivergences | None,
+    emit_approval_list_to: str | Path | None,
+    trace: dict[str, object] | None,
+    no_radius_target: bool,
+    acknowledge_divergence_sha256: str | None,
+) -> SwitchOutcome:
     run_populate = populate or radius_population.populate
     trace = trace if trace is not None else {}
 
@@ -964,7 +1034,7 @@ def switch_on(
     off_error: str | None = None
     reprojected = False
     try:
-        off = switch_off(db, context=off_context, apply=True, populate=run_populate)
+        off = _switch_off(db, context=off_context, apply=True, populate=run_populate)
         reprojected = off.applied
     except Exception as exc:  # noqa: BLE001 - the final state below says it all
         off_error = exc.code if isinstance(exc, DomainError) else type(exc).__name__
@@ -995,10 +1065,39 @@ def switch_off(
 ) -> SwitchOutcome:
     """Turn the single rate owner off and re-project (dry-run unless ``apply``).
 
+    An apply holds the populate lock throughout and refuses (``populate_busy``)
+    if it is taken.
+
     With ``no_radius_target`` (never in production, never with a user target)
     there is nothing to re-project: the flag is flipped and audited, the cache
     is invalidated, the flag is awaited false, and the projection is skipped.
     """
+    if apply:
+        with _populate_lock():
+            return _switch_off(
+                db,
+                context=context,
+                apply=True,
+                populate=populate,
+                no_radius_target=no_radius_target,
+            )
+    return _switch_off(
+        db,
+        context=context,
+        apply=False,
+        populate=populate,
+        no_radius_target=no_radius_target,
+    )
+
+
+def _switch_off(
+    db: Session,
+    *,
+    context: CommandContext,
+    apply: bool = False,
+    populate: Callable[..., object] | None = None,
+    no_radius_target: bool = False,
+) -> SwitchOutcome:
     run_populate = populate or radius_population.populate
     if not apply:
         enabled = access_rate_profile.rate_owner_enabled(db)
