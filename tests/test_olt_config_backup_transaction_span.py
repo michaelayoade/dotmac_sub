@@ -237,3 +237,29 @@ def test_busy_olt_is_skipped_not_failed_and_runs_as_background(
     assert result["skipped"] == 1
     assert result["backed_up"] == 1
     task_module.backup_alerts.queue_backup_failure_notification.assert_not_called()
+
+
+def test_backup_task_reads_config_under_the_300s_cap(monkeypatch) -> None:
+    """A paged backup read must not be killed by the 60 s interactive cap."""
+    from types import SimpleNamespace
+
+    from app.services.network import olt_protocol_adapters, olt_ssh
+
+    seen: list[int] = []
+
+    class _Adapter:
+        def fetch_running_config(self):
+            seen.append(olt_ssh._config_read_cap.get())
+            return SimpleNamespace(
+                success=True, message="ok", data={"config_text": "sysname x"}
+            )
+
+    monkeypatch.setattr(
+        olt_protocol_adapters,
+        "get_protocol_adapter_from_config",
+        lambda _c: _Adapter(),
+    )
+    text = task_module._fetch_running_config_via_ssh(_target("OLT-CAP"))
+    assert "sysname x" in text
+    assert seen == [300]
+    assert olt_ssh._config_read_cap.get() == 60  # restored afterwards

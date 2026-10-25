@@ -24,8 +24,9 @@ appear (use documentation ranges if an address is unavoidable).
 2. Register a parser for `<command>` in `PARSERS` in
    `tests/test_huawei_transcript_corpus.py` (a classifier is fine when no
    parser exists yet).
-3. Run `UPDATE_TRANSCRIPT_GOLDENS=1 pytest tests/test_huawei_transcript_corpus.py`
-   to write the golden, and review the JSON by hand before committing.
+3. Write the `.expected.json` by hand from the device output, checking each
+   field against the raw transcript. Goldens are never generated from the
+   parser: a golden produced by the code under test proves nothing.
 
 ## Notes on current contents
 

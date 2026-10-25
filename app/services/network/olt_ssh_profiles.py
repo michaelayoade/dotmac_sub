@@ -778,6 +778,17 @@ def get_tr069_server_profiles(
                 f"display ont tr069-server-profile profile-id {entry.profile_id}",
             )
             detail = _parse_tr069_profile_detail(detail_output)
+            if not (
+                detail.get("url") or detail.get("acs url") or detail.get("acs-url")
+            ):
+                # A cut-off or unparseable detail would look like "no matching
+                # profile" and trigger a duplicate auto-create. Fail closed.
+                return (
+                    False,
+                    "tr069 profile list unreadable: profile "
+                    f"{entry.profile_id} detail has no ACS URL",
+                    [],
+                )
             profiles.append(
                 Tr069ServerProfile(
                     profile_id=entry.profile_id,

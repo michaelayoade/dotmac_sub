@@ -474,12 +474,20 @@ def parse_ont_info_detail(output: str) -> OntInfoEntry | None:
 def parse_ont_info(
     output: str,
     vendor: str = "huawei",
+    *,
+    require_trailer: bool = False,
 ) -> ParseResult[OntInfoEntry]:
     """Parse `display ont info` output.
 
     Args:
         output: Raw CLI output from ont info display.
         vendor: OLT vendor (default: huawei).
+
+        require_trailer: When True, a missing ``the total of ONTs are: N``
+            trailer (and no explicit "No ONT" reply) is a failure, as it means
+            the read was cut off.
+
+    The trailer count is always enforced when present: parsed rows must equal N.
 
     Returns:
         ParseResult containing list of OntInfoEntry objects.
@@ -553,6 +561,25 @@ def parse_ont_info(
             raw_output=output,
             template_name=template_name,
             warnings=[*warnings, "ONT data rows present but none could be parsed"],
+            row_count=0,
+        )
+
+    # One trailer per port block; their sum is the expected row count.
+    trailers = re.findall(r"the total of ONTs are:\s*(\d+)", output, re.IGNORECASE)
+    failure: str | None = None
+    if trailers:
+        expected = sum(int(n) for n in trailers)
+        if expected != len(entries):
+            failure = f"trailer says {expected} ONTs but {len(entries)} rows parsed"
+    elif require_trailer and not re.search(r"No\s+ONT", output, re.IGNORECASE):
+        failure = "ONT total trailer missing (read cut off?)"
+    if failure:
+        return ParseResult(
+            success=False,
+            data=[],
+            raw_output=output,
+            template_name=template_name,
+            warnings=[*warnings, failure],
             row_count=0,
         )
 

@@ -3,14 +3,12 @@
 Layout: tests/transcripts/huawei/<model>/<command>.txt with a sibling
 <command>.expected.json. See tests/transcripts/README.md. A transcript with no
 registered parser, or no golden, fails the test so captures cannot be added
-silently. Set ``UPDATE_TRANSCRIPT_GOLDENS=1`` to (re)write goldens, then review
-the diff.
+silently. Goldens are hand-verified and are never regenerated from the parser.
 """
 
 from __future__ import annotations
 
 import json
-import os
 from collections.abc import Callable
 from dataclasses import asdict
 from pathlib import Path
@@ -77,8 +75,6 @@ def test_transcript_matches_golden(path: Path) -> None:
     assert path.stem in PARSERS, f"register a parser for {_id(path)}"
     actual = PARSERS[path.stem](path.read_text(encoding="utf-8"))
     golden = path.with_suffix(".expected.json")
-    if os.environ.get("UPDATE_TRANSCRIPT_GOLDENS") == "1":
-        golden.write_text(json.dumps(actual, indent=2, sort_keys=True) + "\n")
     assert golden.exists(), f"missing golden {golden.name}"
     assert actual == json.loads(golden.read_text())
 

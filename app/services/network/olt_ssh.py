@@ -179,6 +179,13 @@ def _auto_bind_tr069_after_authorize(
 
         ok, _msg, profiles = get_tr069_server_profiles(olt)
         if not ok:
+            # Incomplete/unreadable list: never auto-create (could duplicate).
+            logger.warning(
+                "TR-069 auto-bind skipped for OLT %s: tr069 profile list "
+                "unreadable (%s)",
+                olt.name,
+                _msg,
+            )
             return
         target_username = str(payload.get("username") or "").strip()
         profile = match_tr069_profile(
@@ -1000,17 +1007,35 @@ def _needs_huawei_command_confirm(output: str) -> bool:
     return needs_huawei_command_confirm(output)
 
 
+_PAGER_ERASE_RE = re.compile(
+    r"-{2,}\s*More\s*(?:\([^)]*\))?\s*-{2,}[ \t]*(?:\x1b\[\d+D[ ]*\x1b\[\d+D)?"
+)
+
+
+def _strip_pager(text: str) -> str:
+    """Remove ``---- More ----`` pager lines and ANSI cursor sequences."""
+    return _ANSI_RE.sub("", _PAGER_ERASE_RE.sub("", text))
+
+
 def _run_huawei_cmd(channel: Channel, command: str, prompt: str = r"#\s*$") -> str:
-    """Send a command to a Huawei shell, accepting optional-argument prompts."""
+    """Send a command to a Huawei shell and read it to the real prompt.
+
+    Answers the pager (space) and optional-argument prompts (Enter) through the
+    bounded paged reader, strips pager lines and ANSI redraws, and raises
+    ``TimeoutError`` instead of returning partial output (leaving the shell at
+    the pager) when no prompt returns.
+    """
     logger.debug("OLT command: %r", command)
-    _send_huawei_command(channel, command)
-    out = _read_until_prompt(
-        channel, rf"{prompt}|<cr>|{HUAWEI_OPTIONAL_ARG_PROMPT}", timeout_sec=12
+    return _strip_pager(
+        _run_huawei_paged_cmd(
+            channel,
+            command,
+            prompt,
+            timeout_sec=120,
+            read_timeout_sec=12.0,
+            answer_optional_args=True,
+        )
     )
-    if _needs_huawei_command_confirm(out):
-        channel.send("\n")
-        out = _read_until_prompt(channel, prompt, timeout_sec=12)
-    return out
 
 
 def _read_until_prompt_idle(
@@ -1056,8 +1081,14 @@ def _run_huawei_paged_cmd(
     *,
     timeout_sec: int = 60,
     idle_timeout_sec: float | None = None,
+    read_timeout_sec: float | None = None,
+    answer_optional_args: bool = False,
 ) -> str:
     """Send a paged command within one cumulative deadline.
+
+    ``read_timeout_sec`` caps each individual read (a page must arrive within
+    it) while ``timeout_sec`` bounds the whole command. ``answer_optional_args``
+    also answers ``{ ... }:`` argument prompts with Enter.
 
     With ``idle_timeout_sec`` the deadline is idle-progress based: each read
     keeps going while bytes arrive and gives up after that many silent
@@ -1065,8 +1096,30 @@ def _run_huawei_paged_cmd(
     """
     logger.debug("OLT paged command: %r", command)
     _send_huawei_command(channel, command)
+    return _read_paged_response(
+        channel,
+        prompt,
+        timeout_sec=timeout_sec,
+        idle_timeout_sec=idle_timeout_sec,
+        read_timeout_sec=read_timeout_sec,
+        answer_optional_args=answer_optional_args,
+    )
+
+
+def _read_paged_response(
+    channel: Channel,
+    prompt: str = r"#\s*$",
+    *,
+    timeout_sec: int | float = 60,
+    idle_timeout_sec: float | None = None,
+    read_timeout_sec: float | None = None,
+    answer_optional_args: bool = False,
+) -> str:
+    """Read the response to an already-sent command, answering the pager."""
     output_parts: list[str] = []
     pager_pattern = r"---- More(?:\s*\([^)]*\)\s*)?----|<cr>|Press any key"
+    if answer_optional_args:
+        pager_pattern += f"|{HUAWEI_OPTIONAL_ARG_PROMPT}"
     combined_pattern = rf"{prompt}|{pager_pattern}"
     deadline = time.monotonic() + max(float(timeout_sec), 0.1)
 
@@ -1080,7 +1133,11 @@ def _run_huawei_paged_cmd(
             chunk = _read_until_prompt(
                 channel,
                 combined_pattern,
-                timeout_sec=remaining,
+                timeout_sec=(
+                    remaining
+                    if read_timeout_sec is None
+                    else min(remaining, read_timeout_sec)
+                ),
             )
         else:
             chunk = _read_until_prompt_idle(
@@ -1098,7 +1155,9 @@ def _run_huawei_paged_cmd(
         elif "---- More" in chunk or "Press any key" in chunk:
             channel.send(" ")  # Send space to continue
             continue
-        elif "<cr>" in chunk:
+        elif "<cr>" in chunk or (
+            answer_optional_args and re.search(HUAWEI_OPTIONAL_ARG_PROMPT, chunk)
+        ):
             channel.send("\n")
             continue
         else:
