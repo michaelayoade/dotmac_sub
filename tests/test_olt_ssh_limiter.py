@@ -1400,3 +1400,54 @@ def test_write_scope_outer_retry_disables_inner_retry(server, connect_env, monke
         with pytest.raises(OSError):
             olt_ssh._open_shell(olt)
     assert ScriptedTransport.created == 2
+
+
+def test_inner_retry_connect_failure_is_marked_retry_used(connect_env, monkeypatch):
+    """The retry's own TCP connect failing must carry the retry-used flag."""
+    ScriptedTransport.script = [SSHException("Error reading SSH protocol banner")]
+    calls: list[int] = []
+
+    def connect(*_a, **_k):
+        calls.append(1)
+        if len(calls) == 2:
+            raise ConnectionResetError("Connection reset by peer")
+        return object()
+
+    monkeypatch.setattr(olt_ssh.socket, "create_connection", connect)
+    with pytest.raises(ConnectionResetError) as info:
+        olt_ssh._connect_unlimited(_device(), lease=None, priority_name="write")
+    assert getattr(info.value, "olt_eof_retry_used", False) is True
+    assert len(calls) == 2
+
+
+def test_first_connect_failure_is_not_marked(connect_env, monkeypatch):
+    def connect(*_a, **_k):
+        raise ConnectionResetError("Connection reset by peer")
+
+    monkeypatch.setattr(olt_ssh.socket, "create_connection", connect)
+    with pytest.raises(ConnectionResetError) as info:
+        olt_ssh._connect_unlimited(_device(), lease=None, priority_name="write")
+    assert not getattr(info.value, "olt_eof_retry_used", False)
+
+
+def test_write_scope_inner_connect_failure_gets_no_third_connect(
+    server, connect_env, monkeypatch
+):
+    """banner EOF -> inner retry's connect fails -> outer retry must not connect."""
+    monkeypatch.setattr(olt_ssh_limiter, "time", _TimeShim(lambda _s: None))
+    set_config_override(LimiterConfig(max_ma5608t=1, release_grace_seconds_ma5608t=0))
+    ScriptedTransport.script = [SSHException("Error reading SSH protocol banner")]
+    calls: list[int] = []
+
+    def connect(*_a, **_k):
+        calls.append(1)
+        if len(calls) >= 2:
+            raise EOFError("Connection reset by peer")
+        return object()
+
+    monkeypatch.setattr(olt_ssh.socket, "create_connection", connect)
+    olt = _device()
+    with olt_ssh_scope(olt, OltSshPriority.WRITE):
+        with pytest.raises(OSError):  # OltLoginFailed
+            olt_ssh._open_shell(olt)
+    assert len(calls) == 2

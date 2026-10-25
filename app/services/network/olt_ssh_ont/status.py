@@ -269,7 +269,11 @@ def get_ont_info_detail(
         return False, f"Connection failed: {exc}", None
 
     try:
-        prompt = core._prepare_huawei_read_shell(channel, policy.prompt_regex)
+        prompt = core._prepare_huawei_read_shell(
+            channel,
+            policy.prompt_regex,
+            paging_off_command=getattr(policy, "paging_off_command", None),
+        )
 
         from app.services.network.huawei_command_profiles import (
             get_huawei_command_profile,
@@ -310,7 +314,11 @@ def get_ont_status(
         return False, f"Connection failed: {exc}", None
 
     try:
-        prompt = core._prepare_huawei_read_shell(channel, policy.prompt_regex)
+        prompt = core._prepare_huawei_read_shell(
+            channel,
+            policy.prompt_regex,
+            paging_off_command=getattr(policy, "paging_off_command", None),
+        )
 
         from app.services.network.huawei_command_profiles import (
             get_huawei_command_profile,
@@ -380,7 +388,11 @@ def get_registered_ont_serials(
         return False, f"Connection failed: {exc}", []
 
     try:
-        prompt = core._prepare_huawei_read_shell(channel, policy.prompt_regex)
+        prompt = core._prepare_huawei_read_shell(
+            channel,
+            policy.prompt_regex,
+            paging_off_command=getattr(policy, "paging_off_command", None),
+        )
         from app.services.network.huawei_command_profiles import (
             get_huawei_command_profile,
         )
@@ -484,7 +496,11 @@ def find_ont_by_serial(
         return False, f"Connection failed: {exc}", None
 
     try:
-        prompt = core._prepare_huawei_read_shell(channel, policy.prompt_regex)
+        prompt = core._prepare_huawei_read_shell(
+            channel,
+            policy.prompt_regex,
+            paging_off_command=getattr(policy, "paging_off_command", None),
+        )
 
         # Use direct serial lookup - much more reliable than parsing all ONTs
         output = core._run_huawei_cmd(

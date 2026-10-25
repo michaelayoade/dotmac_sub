@@ -392,8 +392,18 @@ def _send_huawei_command(
             time.sleep(word_delay_sec)
 
 
-def _prepare_huawei_read_shell(channel: Channel, prompt_regex: str) -> str:
-    """Enter privileged mode, derive its real prompt, and disable paging."""
+def _prepare_huawei_read_shell(
+    channel: Channel,
+    prompt_regex: str,
+    *,
+    paging_off_command: str | None = None,
+) -> str:
+    """Enter privileged mode, derive its real prompt, and disable paging.
+
+    Paging is only disabled with ``paging_off_command`` (per-model policy). When
+    it is None no command is confirmed for the model, so nothing is sent and the
+    read paths answer the pager instead of burning rejected attempts.
+    """
     _send_huawei_command(channel, "enable", word_delay_sec=0)
     output = _read_until_prompt(
         channel,
@@ -404,6 +414,8 @@ def _prepare_huawei_read_shell(channel: Channel, prompt_regex: str) -> str:
     if "#" not in fallback_prompt:
         fallback_prompt = r"#\s*$"
     privileged_prompt = _derive_prompt_regex(output, fallback_prompt)
+    if not paging_off_command:
+        return privileged_prompt
     # Prod (MA5800-X2): the line editor echoed "screen-length0temporary" and
     # answered "% Unknown command", leaving paging ON. The editor drops spaces
     # when the line arrives while it is still redrawing the prompt, so let it
@@ -414,7 +426,7 @@ def _prepare_huawei_read_shell(channel: Channel, prompt_regex: str) -> str:
         _settle_channel(channel)
         paging_output = _run_huawei_cmd(
             channel,
-            "screen-length 0 temporary",
+            paging_off_command,
             prompt=privileged_prompt,
         )
         if not is_error_output(paging_output):
@@ -738,7 +750,14 @@ def _connect_unlimited(
     opened_at = time.monotonic()
     retried = False
     while True:
-        sock = socket.create_connection((host, port), timeout=20)
+        try:
+            sock = socket.create_connection((host, port), timeout=20)
+        except BaseException as exc:
+            if retried:
+                # The retry's own TCP connect failed: it already used the one
+                # retry, so a scope's outer retry must not connect a third time.
+                _mark_eof_retry_used(exc)
+            raise
         transport = Transport(sock)
         try:
             _apply_preferred_algorithms(transport, policy)
@@ -772,10 +791,7 @@ def _connect_unlimited(
             if retried:
                 # Tell a scope's outer retry this login already got its one
                 # retry, so the pass never exceeds 2 logins.
-                try:
-                    exc.__dict__["olt_eof_retry_used"] = True
-                except Exception:  # noqa: BLE001
-                    pass
+                _mark_eof_retry_used(exc)
             raise
         except BaseException:
             _discard_failed_transport(transport, sock)
@@ -811,6 +827,13 @@ def _connect_unlimited(
     if prompt_regex != policy.prompt_regex:
         policy = _replace_policy_prompt_regex(policy, prompt_regex)
     return transport, channel, policy
+
+
+def _mark_eof_retry_used(exc: BaseException) -> None:
+    try:
+        exc.__dict__["olt_eof_retry_used"] = True
+    except Exception:  # noqa: BLE001
+        pass
 
 
 def _discard_failed_transport(transport: Any, sock: Any) -> None:
@@ -1096,7 +1119,11 @@ def get_service_ports(
 
     try:
         with ssh_context as (channel, policy):
-            prompt = _prepare_huawei_read_shell(channel, policy.prompt_regex)
+            prompt = _prepare_huawei_read_shell(
+                channel,
+                policy.prompt_regex,
+                paging_off_command=getattr(policy, "paging_off_command", None),
+            )
 
             output = _run_huawei_paged_cmd(
                 channel,
@@ -1285,7 +1312,11 @@ def get_firmware_info(olt: OLTDevice) -> tuple[bool, str, FirmwareInfo]:
         return False, f"Connection failed: {exc}", FirmwareInfo()
 
     try:
-        prompt = _prepare_huawei_read_shell(channel, policy.prompt_regex)
+        prompt = _prepare_huawei_read_shell(
+            channel,
+            policy.prompt_regex,
+            paging_off_command=getattr(policy, "paging_off_command", None),
+        )
 
         output = _run_huawei_paged_cmd(
             channel,
@@ -1336,7 +1367,11 @@ def rollback_firmware(olt: OLTDevice) -> tuple[bool, str]:
         return False, f"Connection failed: {exc}"
 
     try:
-        prompt = _prepare_huawei_read_shell(channel, policy.prompt_regex)
+        prompt = _prepare_huawei_read_shell(
+            channel,
+            policy.prompt_regex,
+            paging_off_command=getattr(policy, "paging_off_command", None),
+        )
 
         # Reuse this channel: a second login here would hold two sessions.
         version_output = _run_huawei_paged_cmd(
@@ -1425,7 +1460,11 @@ def fetch_running_config_ssh(olt: OLTDevice) -> tuple[bool, str, str]:
         with ssh_context as (channel, policy):
             # ``enable`` moves the prompt from ``>`` to ``#``; derive the real
             # privileged prompt and disable paging before the long read.
-            prompt = _prepare_huawei_read_shell(channel, policy.prompt_regex)
+            prompt = _prepare_huawei_read_shell(
+                channel,
+                policy.prompt_regex,
+                paging_off_command=getattr(policy, "paging_off_command", None),
+            )
 
             output = _run_huawei_paged_cmd(
                 channel,
@@ -1588,7 +1627,11 @@ def run_cli_command(olt: OLTDevice, command: str) -> tuple[bool, str, str]:
 
     try:
         with ssh_context as (channel, policy):
-            prompt = _prepare_huawei_read_shell(channel, policy.prompt_regex)
+            prompt = _prepare_huawei_read_shell(
+                channel,
+                policy.prompt_regex,
+                paging_off_command=getattr(policy, "paging_off_command", None),
+            )
             # Any exception raised here (including OltCliPromptError) makes
             # the pool discard the channel instead of reusing a dirty one.
             output = _run_readonly_display_cmd(channel, command, prompt=prompt)
