@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import contextlib
 import hashlib
 import json
 from uuid import uuid4
@@ -10,11 +11,13 @@ import pytest
 from sqlalchemy import select
 
 from app.models.audit import AuditEvent
+from app.models.catalog import BillingMode, Subscription, SubscriptionStatus
 from app.services import access_rate_profile as owner
 from app.services import access_rate_switch as switch
 from app.services import radius_population
 from app.services.domain_errors import DomainError
 from app.services.owner_commands import CommandContext
+from app.services.radius_projection_planner import plan_login_radius_projections
 from tests.test_access_rate_profile import _offer, _profile, _service
 
 TARGET = {"target_name": "t", "target_fingerprint": "f", "db_url": "x"}
@@ -48,6 +51,13 @@ class World:
         self.fail_on: set[int] = set()  # populate call numbers that raise
         self.calls = 0
         monkeypatch.setattr(switch, "_take_lock", self._lock)
+        self.populate_lock_free = True
+        self.populate_lock_keys: list[int] = []
+        self.populate_lock_events: list[str] = []
+        monkeypatch.setattr(
+            "app.tasks._postgres_lock.postgres_session_advisory_lock",
+            self._populate_lock,
+        )
         monkeypatch.setattr(
             switch,
             "active_external_radius_targets",
@@ -62,6 +72,15 @@ class World:
             switch, "_sleep", lambda s: clock.__setitem__("t", clock["t"] + s)
         )
 
+    @contextlib.contextmanager
+    def _populate_lock(self, key, **kwargs):
+        self.populate_lock_keys.append(key)
+        self.populate_lock_events.append("acquire")
+        try:
+            yield self.populate_lock_free
+        finally:
+            self.populate_lock_events.append("release")
+
     def _lock(self, db):
         self.locks += 1
 
@@ -69,10 +88,25 @@ class World:
         self.invalidations += 1
         return True
 
+    def canonical(self):
+        """login -> (canonical owner subscription id, its derived rate)."""
+        subscriptions, credentials, ctx = owner._provisioned_state(self.db)
+        by_id = {str(s.id): s for s in subscriptions}
+        chosen = plan_login_radius_projections(self.db)
+        return {
+            login: (
+                projection.subscription_id,
+                owner.derive(
+                    ctx, by_id[projection.subscription_id], credentials.get(login)
+                ).rate_limit,
+            )
+            for login, projection in chosen.items()
+            if projection.subscription_id in by_id
+        }
+
     def plan(self, only=None):
-        rates = owner.derived_rates(self.db)
         plan = {}
-        for login, rate in rates.items():
+        for login, (sub_id, rate) in self.canonical().items():
             if only is not None and login not in only:
                 continue
             mode = self.modes.get(login, "active")
@@ -81,6 +115,7 @@ class World:
                 "rate": rate,
                 "test_access": login in self.test_logins,
                 "test_rate": rate if login in self.test_logins else None,
+                "subscription_id": sub_id,
             }
         return plan
 
@@ -110,7 +145,7 @@ class World:
         }
 
     def _observe(self, target, usernames):
-        expected = owner.derived_rates(self.db)
+        expected = {login: rate for login, (_, rate) in self.canonical().items()}
         rates, test_rates = {}, {}
         for login, rate in expected.items():
             if login in self.wrong:
@@ -870,7 +905,7 @@ from tests.test_access_rate_profile import _radius_env  # noqa: E402,F401
 
 @pytest.mark.usefixtures("_radius_env")
 def test_populate_reports_its_plan_and_whether_the_owner_ran(db_session, monkeypatch):
-    _clean_service(db_session)
+    _, _, sub, _ = _clean_service(db_session)
     monkeypatch.setattr(owner, "rate_owner_enabled", lambda _db: True)
 
     result = radius_population.populate(dry_run=True, include_projection_plan=True)
@@ -882,6 +917,7 @@ def test_populate_reports_its_plan_and_whether_the_owner_ran(db_session, monkeyp
         "rate": "10M/10M",
         "test_access": False,
         "test_rate": None,
+        "subscription_id": str(sub.id),
     }
     plain = radius_population.populate(dry_run=True)
     assert "projection_plan" not in plain and "rate_owner_enabled" not in plain
@@ -1278,3 +1314,169 @@ def test_cli_no_target_flags(db_session, world, monkeypatch, capsys, tmp_path):
     ):
         with pytest.raises(SystemExit):
             switch.main(argv)
+
+
+# ------------------------------------------------ canonical owner and lock
+
+
+def _shared_login_service(db):
+    """An active canonical owner and a disabled sibling on one login, other offer."""
+    ten = _profile(db, "Ten", rate="10M/10M")
+    twenty = _profile(db, "Twenty", rate="20M/20M")
+    owner_sub, credential = _service(db, _offer(db, "A", profile=ten), sub_profile=ten)
+    sibling = Subscription(
+        subscriber_id=owner_sub.subscriber_id,
+        offer_id=_offer(db, "B", down=20, up=20, profile=twenty).id,
+        status=SubscriptionStatus.disabled,
+        billing_mode=BillingMode.prepaid,
+        login=owner_sub.login,
+        radius_profile_id=twenty.id,
+    )
+    db.add(sibling)
+    db.commit()
+    return owner_sub, sibling
+
+
+def _sibling_scanned_last(monkeypatch, sibling_id):
+    real = owner._provisioned_state
+
+    def reordered(db):
+        subscriptions, credentials, ctx = real(db)
+        subscriptions.sort(key=lambda s: s.id == sibling_id)
+        return subscriptions, credentials, ctx
+
+    monkeypatch.setattr(owner, "_provisioned_state", reordered)
+
+
+def test_shared_login_read_back_checks_the_canonical_owner(
+    db_session, world, monkeypatch
+):
+    owner_sub, sibling = _shared_login_service(db_session)
+    _sibling_scanned_last(monkeypatch, sibling.id)
+
+    plan = world.plan()
+    assert plan[owner_sub.login]["subscription_id"] == str(owner_sub.id)
+    report = switch.read_back(db_session, plan, against="derived")
+
+    assert report.mismatches == 0
+    assert report.compared == 1
+
+    # A real change to the written rate is still caught.
+    world.wrong = {owner_sub.login}
+    assert switch.read_back(db_session, plan, against="derived").mismatches == 1
+
+
+def test_shared_login_switch_on_applies_cleanly(db_session, world, monkeypatch):
+    owner_sub, sibling = _shared_login_service(db_session)
+    _sibling_scanned_last(monkeypatch, sibling.id)
+
+    outcome = _on(db_session, world)
+
+    assert outcome.read_back.mismatches == 0
+    assert owner.rate_owner_enabled(db_session) is True
+
+
+def test_read_back_resolved_against_the_sibling_would_mismatch(
+    db_session, world, monkeypatch
+):
+    """Guard for the regression: the sibling's derived rate differs."""
+    owner_sub, sibling = _shared_login_service(db_session)
+    _sibling_scanned_last(monkeypatch, sibling.id)
+    plan = world.plan()
+    plan[owner_sub.login]["subscription_id"] = str(sibling.id)
+
+    assert switch.read_back(db_session, plan, against="derived").mismatches == 1
+
+
+def test_a_plan_entry_without_a_subscription_is_a_mismatch(db_session, world):
+    _, _, sub, _ = _clean_service(db_session)
+    plan = world.plan()
+    del plan[sub.login]["subscription_id"]
+
+    report = switch.read_back(db_session, plan, against="derived")
+
+    assert report.mismatches == 1
+    assert report.compared == 1
+    assert report.mismatched_logins == (sub.login,)
+
+
+def test_an_unknown_subscription_is_a_mismatch(db_session, world):
+    _, _, sub, _ = _clean_service(db_session)
+    plan = world.plan()
+    plan[sub.login]["subscription_id"] = str(uuid4())
+
+    assert switch.read_back(db_session, plan, against="plan").mismatches == 1
+
+
+def test_a_subscription_of_another_login_is_a_mismatch(db_session, world):
+    _, offer, sub, _ = _clean_service(db_session)
+    other, _ = _service(db_session, offer)
+    plan = world.plan()
+    plan[sub.login]["subscription_id"] = str(other.id)
+
+    assert switch.read_back(db_session, plan, against="derived").mismatches == 1
+
+
+def test_switch_on_holds_the_populate_lock_across_everything(db_session, world):
+    _clean_service(db_session)
+    _on(db_session, world)
+
+    assert world.populate_lock_keys == [778_001]
+    assert world.populate_lock_events == ["acquire", "release"]
+
+
+def test_switch_on_dry_run_does_not_take_the_populate_lock(db_session, world):
+    _clean_service(db_session)
+    switch.switch_on(db_session, context=_context(), populate=world.populate)
+
+    assert world.populate_lock_keys == []
+
+
+def test_switch_on_refuses_when_populate_is_busy(db_session, world):
+    _clean_service(db_session)
+    world.populate_lock_free = False
+
+    with pytest.raises(DomainError) as refused:
+        _on(db_session, world)
+
+    assert refused.value.code == "access.rate_profile_switch.populate_busy"
+    assert world.calls == 0 and world.locks == 0
+    assert owner.rate_owner_enabled(db_session) is False
+    assert _actions(db_session) == []
+
+
+def test_switch_off_refuses_when_populate_is_busy(db_session, world):
+    _clean_service(db_session)
+    _on(db_session, world)
+    calls, actions = world.calls, _actions(db_session)
+    world.populate_lock_free = False
+
+    with pytest.raises(DomainError) as refused:
+        switch.switch_off(
+            db_session, context=_context(), apply=True, populate=world.populate
+        )
+
+    assert refused.value.code == "access.rate_profile_switch.populate_busy"
+    assert world.calls == calls
+    assert owner.rate_owner_enabled(db_session) is True
+    assert _actions(db_session) == actions
+
+
+def test_the_automatic_switch_off_runs_under_the_held_lock(db_session, world):
+    _, _, sub, _ = _clean_service(db_session)
+    original = world.populate
+
+    def drift(dry_run=True, only_usernames=None, **kwargs):
+        result = original(dry_run=dry_run, only_usernames=only_usernames, **kwargs)
+        if not dry_run and owner.rate_owner_enabled(world.db):
+            world.wrong = {sub.login}
+        return result
+
+    world.populate = drift
+
+    with pytest.raises(DomainError) as failed:
+        _on(db_session, world)
+
+    assert failed.value.details["auto_switched_off"] is True
+    # one acquisition for the whole apply, not a second one for the switch-off
+    assert world.populate_lock_events == ["acquire", "release"]
