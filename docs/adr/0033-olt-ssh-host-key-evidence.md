@@ -1,6 +1,6 @@
 # ADR 0033: OLT SSH host-key observations are out-of-band evidence
 
-Status: proposed
+Status: accepted (Michael, 2026-10-25)
 
 Date: 2026-10-25
 
