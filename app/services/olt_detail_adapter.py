@@ -61,6 +61,9 @@ class OltDetailAdapter:
             activities = []
         available_firmware = olt_action_adapter.get_olt_firmware_images(db, olt_id)
         from app.services.control_plane_identity_view import olt_identity_view
+        from app.services.network.olt_ssh_hostkey import (
+            status_view as ssh_host_key_status,
+        )
 
         page_data.update(
             {
@@ -79,6 +82,7 @@ class OltDetailAdapter:
                     olt, available_firmware, operations
                 ),
                 "identity_view": olt_identity_view(olt),
+                "ssh_host_key": ssh_host_key_status(olt),
                 "config_context": self._build_config_context(page_data),
                 "ont_relationship_context": self._build_ont_relationship_context(
                     page_data

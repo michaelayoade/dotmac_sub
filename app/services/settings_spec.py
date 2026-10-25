@@ -3833,6 +3833,15 @@ SETTINGS_SPECS: list[SettingSpec] = [
     ),
     SettingSpec(
         domain=SettingDomain.network,
+        key="olt_ssh_host_key_enforcement",
+        env_var=None,
+        value_type=SettingValueType.string,
+        default="record",
+        allowed={"off", "record", "enforce"},
+        label="OLT SSH host-key pinning (off | record | enforce)",
+    ),
+    SettingSpec(
+        domain=SettingDomain.network,
         key="olt_ssh_logout_on_close",
         env_var=None,
         value_type=SettingValueType.boolean,

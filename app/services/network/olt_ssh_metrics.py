@@ -94,6 +94,11 @@ def record_logout(outcome: str) -> None:
     _incr(f"logout|{outcome}")
 
 
+def record_host_key_mismatch(olt: str) -> None:
+    """Counter ``olt_ssh_host_key_mismatch`` (published in the olt_ssh snapshot)."""
+    _incr(f"host_key_mismatch|{olt}")
+
+
 def classify_open_failure(exc: BaseException) -> str:
     """Map an open failure onto the bounded ``outcome`` label set."""
     from paramiko.ssh_exception import AuthenticationException
@@ -256,6 +261,14 @@ def publish_olt_ssh_snapshot(db: Any, *, now: Any = None) -> bool:
                 ),
             )
         )
+    # One bounded fleet-wide series: the snapshot is capped, so no per-OLT label.
+    observations.append(
+        StateObservation(
+            "olt_ssh_host_key_mismatch",
+            "all",
+            sum(v for k, v in counters.items() if k.startswith("host_key_mismatch|")),
+        )
+    )
     for outcome in ("clean", "forced", "skipped_dirty"):
         observations.append(
             StateObservation(

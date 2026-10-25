@@ -87,6 +87,30 @@
                         {% include "components/forms/csrf_input.html" %}
                         <button type="submit" class="text-xs font-medium text-blue-600 hover:text-blue-800 dark:text-blue-400">Test SSH</button>
                     </form>
+                    {% if ssh_host_key %}
+                    <span class="text-xs text-slate-500 dark:text-slate-400" data-testid="ssh-host-key">
+                        SSH host key:
+                        {% if ssh_host_key.sha256 %}
+                            {{ ssh_host_key.key_type }} <code class="font-mono">{{ ssh_host_key.sha256 }}</code>
+                            {% if ssh_host_key.state == 'mismatch' %}
+                            <span class="font-semibold text-red-600 dark:text-red-400">MISMATCH (last {{ ssh_host_key.last_mismatch_at }})</span>
+                            {% elif ssh_host_key.state == 'mismatch_history' %}
+                            <span class="text-amber-600 dark:text-amber-400">earlier mismatch {{ ssh_host_key.last_mismatch_at }}</span>
+                            {% else %}
+                            <span class="text-emerald-600 dark:text-emerald-400">matches</span>
+                            {% endif %}
+                        {% else %}
+                            not yet recorded
+                        {% endif %}
+                        (mode: {{ ssh_host_key.mode }})
+                    </span>
+                    {% if ssh_host_key.sha256 %}
+                    <form method="POST" action="/admin/network/olts/{{ olt.id }}/ssh-host-key/retrust" class="inline" onsubmit="return confirm('Clear the recorded SSH host key? The next login will record whatever key the device presents.');">
+                        {% include "components/forms/csrf_input.html" %}
+                        <button type="submit" class="text-xs font-medium text-amber-700 hover:text-amber-900 dark:text-amber-400">Re-trust host key</button>
+                    </form>
+                    {% endif %}
+                    {% endif %}
                 </div>
             </div>
             <div class="flex flex-wrap items-center gap-2">

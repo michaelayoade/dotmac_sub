@@ -464,6 +464,7 @@ WORKFLOW_GUIDANCE: tuple[AdminWorkflowGuidance, ...] = (
         "On the detail page, compare the native OLT poll, Ping, and SNMP evidence and open each timestamp tooltip when recency matters.",
         "Treat Expired or Not current evidence as historical, not as proof that the OLT is currently reachable.",
         "Use Refresh Telemetry or the explicit test actions when current verification is required, then reload the inventory comparison.",
+        "On the detail page, the SSH host key line shows the recorded fingerprint and any mismatch; after a confirmed OLT replacement or key change, use Re-trust host key so the next login records the new key.",
         notes=(
             "A fresh successful native OLT poll can confirm operation even when an older ping or linked monitoring record is stale.",
             "A linked monitoring record contributes fallback evidence only while that record is active and its polling observation is current.",
@@ -1629,6 +1630,12 @@ _ACTION_SPECS: dict[str, tuple[_ActionSpec, ...]] = {
             "refresh-olt-telemetry",
             "Refresh OLT telemetry",
             3,
+            permission="network:olt:write",
+        ),
+        _action(
+            "retrust-olt-ssh-host-key",
+            "Re-trust an OLT SSH host key",
+            4,
             permission="network:olt:write",
         ),
     ),
