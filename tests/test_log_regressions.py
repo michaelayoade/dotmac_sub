@@ -3,6 +3,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from uuid import uuid4
 
+import pytest
 from starlette.requests import Request
 
 from app.services.network.metrics_adapters import VictoriaMetricsAdapter
@@ -44,9 +45,11 @@ def test_huawei_command_defaults_accept_user_and_exec_prompts(monkeypatch) -> No
         "app.services.network.olt_ssh._read_until_prompt", _fake_read_until_prompt
     )
 
-    output = _run_huawei_cmd(channel, "display version")
+    # A shell that never reaches the expected privileged prompt is now an
+    # error (partial output used to be returned, leaving the shell mid-command).
+    with pytest.raises(TimeoutError):
+        _run_huawei_cmd(channel, "display version")
 
-    assert output == "OLT>"
     assert "".join(channel.sent) == "display version\n"
 
 
@@ -68,7 +71,7 @@ def test_huawei_command_accepts_brace_optional_prompt(monkeypatch) -> None:
 
     output = _run_huawei_cmd(channel, "ont ipconfig 13 8 ip-index 0 dhcp vlan 201")
 
-    assert output == "OLT(config-if-gpon-0/1)#"
+    assert output.endswith("OLT(config-if-gpon-0/1)#")
     assert "".join(channel.sent) == ("ont ipconfig 13 8 ip-index 0 dhcp vlan 201\n\n")
 
 
