@@ -95,11 +95,7 @@ class AccessCredentials(CRUDManager[AccessCredential]):
                 db, payload.subscription_id, payload.radius_profile_id
             )
         _refuse_reserved_secret(payload.secret_hash)
-        # The profile field is accepted for API compatibility but never
-        # stored: the rate owner derives a service's rate from its package.
-        credential = AccessCredential(
-            **payload.model_dump(exclude={"radius_profile_id"})
-        )
+        credential = AccessCredential(**payload.model_dump())
         db.add(credential)
         db.commit()
         db.refresh(credential)
@@ -171,7 +167,6 @@ class AccessCredentials(CRUDManager[AccessCredential]):
                 data.get("subscription_id", credential.subscription_id),
                 data["radius_profile_id"],
             )
-        data.pop("radius_profile_id", None)  # accepted, never stored (see create)
         for key, value in data.items():
             setattr(credential, key, value)
         if "is_active" in data:

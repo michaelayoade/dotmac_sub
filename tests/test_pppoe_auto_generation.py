@@ -67,12 +67,16 @@ def _ensure_credential(
     db,
     subscriber_id: str,
     *,
+    radius_profile_id: str | None = None,
     subscription_id: str | None = None,
 ) -> AccessCredential:
     outcome = ensure_pppoe_credential(
         db,
         EnsurePppoeCredentialCommand(
             subscriber_id=uuid.UUID(subscriber_id),
+            radius_profile_id=uuid.UUID(radius_profile_id)
+            if radius_profile_id
+            else None,
             subscription_id=uuid.UUID(subscription_id) if subscription_id else None,
         ),
     )
@@ -104,6 +108,9 @@ class TestAutoGeneratePppoeCredential:
         _seed_pppoe_settings(db_session, start=64000)
         _set_subscriber_number(db_session, subscriber, "SUB-064000")
         prior_profile = RadiusProfile(name="Prior replacement profile", is_active=True)
+        successor_profile = RadiusProfile(
+            name="Successor replacement profile", is_active=True
+        )
         old_subscription = Subscription(
             subscriber_id=subscriber.id,
             offer_id=catalog_offer.id,
@@ -115,7 +122,9 @@ class TestAutoGeneratePppoeCredential:
             offer_id=catalog_offer.id,
             status=SubscriptionStatus.pending,
         )
-        db_session.add_all([prior_profile, old_subscription, new_subscription])
+        db_session.add_all(
+            [prior_profile, successor_profile, old_subscription, new_subscription]
+        )
         db_session.flush()
         credential = AccessCredential(
             subscriber_id=subscriber.id,
@@ -133,6 +142,7 @@ class TestAutoGeneratePppoeCredential:
             EnsurePppoeCredentialCommand(
                 subscriber_id=subscriber.id,
                 subscription_id=new_subscription.id,
+                radius_profile_id=successor_profile.id,
             ),
         )
 
@@ -143,9 +153,7 @@ class TestAutoGeneratePppoeCredential:
         assert outcome.disposition is PppoeCredentialDisposition.rebound_replacement
         assert credential.subscription_id == new_subscription.id
         assert credential.secret_hash == "plain:existing-secret"
-        # Rebinding writes no rate: the slot is left as it was and the rate
-        # owner derives the service's rate from its package.
-        assert credential.radius_profile_id == prior_profile.id
+        assert credential.radius_profile_id == successor_profile.id
         assert new_subscription.login == "10064000"
         assert db_session.query(AccessCredential).count() == 1
 
@@ -321,16 +329,26 @@ class TestAutoGeneratePppoeCredential:
         # Without CREDENTIAL_ENCRYPTION_KEY, falls back to plain: prefix
         assert result.secret_hash.startswith(("enc:", "plain:"))
 
-    def test_no_rate_is_written_into_the_credential(self, db_session, subscriber):
-        """Ensuring a credential never stores a RADIUS profile (the rate owner
-        derives the rate from the package)."""
+    def test_radius_profile_id_assigned(self, db_session, subscriber):
+        """Passes through the radius_profile_id when provided."""
+        from app.models.catalog import RadiusProfile
+
         _seed_pppoe_settings(db_session, start=1)
         _set_subscriber_number(db_session, subscriber, "SUB-000001")
 
-        result = _ensure_credential(db_session, str(subscriber.id))
+        profile = RadiusProfile(name="Test Profile", is_active=True)
+        db_session.add(profile)
+        db_session.commit()
+        db_session.refresh(profile)
+
+        result = _ensure_credential(
+            db_session,
+            str(subscriber.id),
+            radius_profile_id=str(profile.id),
+        )
 
         assert result is not None
-        assert result.radius_profile_id is None
+        assert str(result.radius_profile_id) == str(profile.id)
 
     def test_falls_back_to_sequence_when_subscriber_number_not_canonical(
         self, db_session, subscriber

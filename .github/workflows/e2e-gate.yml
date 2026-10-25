@@ -158,9 +158,6 @@ jobs:
         env:
           DATABASE_URL: "postgresql+psycopg://postgres@127.0.0.1:55432/dotmac_sub_e2e"
           SECRET_KEY: "e2e-test-secret-key-not-for-production"
-          # An explicit non-deployed environment: the deploy-order guard exempts
-          # only development/test values, and this app has no governed switch.
-          APP_ENV: "ci"
           REDIS_URL: "redis://127.0.0.1:56379/0"
         run: |
           BOOTSTRAP_DATABASE_URL="$DATABASE_URL" \

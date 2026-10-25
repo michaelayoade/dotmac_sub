@@ -370,34 +370,6 @@ def _hold_boot_secrets(**_kwargs):
     install_settings_keyring()
 
 
-@worker_process_init.connect
-def _assert_rate_owner_switched_on(**_kwargs):
-    """A worker must not project rates before the governed switch has run.
-
-    Workers run no FastAPI lifespan, so the web guard never fires here, yet the
-    beat sweep and scoped reconciles project through the same writer. Fails the
-    worker process, loudly, instead of letting it project unverified rates.
-    """
-    from app.db import SessionLocal
-    from app.services.access_rate_profile import (
-        RateOwnerNotSwitchedOn,
-        enforce_switch_guard,
-    )
-
-    db = SessionLocal()
-    try:
-        enforce_switch_guard(db)
-    except RateOwnerNotSwitchedOn:
-        logger.critical(
-            "celery worker refused to start: the governed rate switch has not run",
-            extra={"event": "rate_owner_not_switched_on"},
-        )
-        raise
-    finally:
-        db.rollback()
-        db.close()
-
-
 @celeryd_after_setup.connect
 def _log_worker_boot(**_kwargs):
     _log_release_metadata("celery-worker")
