@@ -1014,23 +1014,12 @@ def olt_ssh_host_key_retrust(
     request: Request, olt_id: str, db: Session = Depends(get_db)
 ) -> RedirectResponse:
     """Clear the recorded SSH host key; the next login records the new one."""
-    from app.services.audit_helpers import log_audit_event
     from app.services.network import olt_ssh_hostkey
 
     olt = get_olt_or_none(db, olt_id)
     if not olt:
         raise HTTPException(status_code=404, detail="OLT not found")
-    cleared = olt_ssh_hostkey.retrust(db, olt)
-    db.commit()
-    log_audit_event(
-        db,
-        request,
-        action="olt_ssh_host_key_retrust",
-        entity_type="olt",
-        entity_id=str(olt.id),
-        actor_id=None,
-        metadata={"cleared": cleared},
-    )
+    olt_ssh_hostkey.retrust_with_audit(db, request, olt)
     message = (
         "Recorded SSH host key cleared; the next login will record the key it presents."
     )

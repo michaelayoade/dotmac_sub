@@ -215,6 +215,23 @@ def retrust(db: Any, olt: Any) -> dict[str, Any]:
     return before
 
 
+def retrust_with_audit(db: Any, request: Any, olt: Any) -> None:
+    """Clear the recorded key, commit, and write the audit entry."""
+    from app.services.audit_helpers import log_audit_event
+
+    cleared = retrust(db, olt)
+    db.commit()
+    log_audit_event(
+        db,
+        request,
+        action="olt_ssh_host_key_retrust",
+        entity_type="olt",
+        entity_id=str(olt.id),
+        actor_id=None,
+        metadata={"cleared": cleared},
+    )
+
+
 def status_view(olt: Any) -> dict[str, Any]:
     sha = getattr(olt, "olt_ssh_host_key_sha256", None)
     mismatch_at = getattr(olt, "olt_ssh_host_key_last_mismatch_at", None)

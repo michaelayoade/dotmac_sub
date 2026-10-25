@@ -86,6 +86,12 @@ APPROVED: frozenset[str] = frozenset(
 #: below, which fail the build on both a new, unclassified hit and a stale
 #: baseline entry that no longer matches.
 BASELINE: dict[str, str] = {
+    "app/services/network/olt_ssh_hostkey.py::record_observation": (
+        "D3 phase 1: records the public SSH host-key fingerprint after the OLT "
+        "login completed, in its own short transaction kept out of the SSH "
+        "critical path; fail-soft evidence only, never replaces a stored key. "
+        "Registry declaration (ADR 0017) is a follow-up if Michael wants it."
+    ),
     # -- Legacy out-of-band writers, already tracked by name in
     # -- test_out_of_band_evidence_ratchet.KNOWN_LEGACY_OUT_OF_BAND_WRITERS
     # -- (ADR 0017 follow-up debt, not yet migrated to the declared mode).
