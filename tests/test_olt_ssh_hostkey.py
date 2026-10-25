@@ -344,7 +344,12 @@ def staged(monkeypatch):
         "app.services.audit_helpers._resolve_request_actor_id", lambda r, a: "u1"
     )
     monkeypatch.setattr(
-        "app.services.audit_helpers._resolve_request_actor_type", lambda r, a: "user"
+        "app.services.audit_helpers._resolve_request_actor_type",
+        lambda r, a: (
+            __import__(
+                "app.models.audit", fromlist=["AuditActorType"]
+            ).AuditActorType.user
+        ),
     )
     monkeypatch.setattr(
         "app.services.network.action_logging.actor_label", lambda r: "tester"
@@ -371,8 +376,8 @@ def test_trust_pins_exact_presented_fingerprint_and_audits_before_commit(
     real_commit = db_session.commit
     db_session.commit = lambda: (order.append("commit"), db_session.flush())
     try:
-        out = olt_ssh_hostkey.trust_presented(
-            db_session, object(), olt, _obs(b"b").sha256
+        out = olt_ssh_hostkey.pin_presented_key(
+            db=db_session, request=object(), olt=olt, expected_sha256=_obs(b"b").sha256
         )
     finally:
         db_session.commit = real_commit
@@ -389,7 +394,12 @@ def test_trust_refuses_when_presented_key_changed_since_operator_looked(
 ):
     olt = _mismatched(db_session)
     with pytest.raises(olt_ssh_hostkey.HostKeyTrustError, match="changed since"):
-        olt_ssh_hostkey.trust_presented(db_session, object(), olt, _obs(b"zzz").sha256)
+        olt_ssh_hostkey.pin_presented_key(
+            db=db_session,
+            request=object(),
+            olt=olt,
+            expected_sha256=_obs(b"zzz").sha256,
+        )
     assert olt.olt_ssh_host_key_sha256 == _obs(b"a").sha256 and not staged
 
 
@@ -398,14 +408,18 @@ def test_trust_works_with_no_stored_key_for_enforce_first_seen(db_session, stage
     olt.olt_ssh_presented_key_type = "ssh-rsa"
     olt.olt_ssh_presented_key_sha256 = _obs(b"n").sha256
     db_session.flush()
-    olt_ssh_hostkey.trust_presented(db_session, object(), olt, _obs(b"n").sha256)
+    olt_ssh_hostkey.pin_presented_key(
+        db=db_session, request=object(), olt=olt, expected_sha256=_obs(b"n").sha256
+    )
     assert olt.olt_ssh_host_key_sha256 == _obs(b"n").sha256
 
 
 def test_trust_with_nothing_presented_is_refused(db_session, staged):
     olt = _real_olt(db_session)
     with pytest.raises(olt_ssh_hostkey.HostKeyTrustError):
-        olt_ssh_hostkey.trust_presented(db_session, object(), olt, "SHA256:x")
+        olt_ssh_hostkey.pin_presented_key(
+            db=db_session, request=object(), olt=olt, expected_sha256="SHA256:x"
+        )
 
 
 def test_trust_route_redirects_with_outcome_and_is_admin_gated(
@@ -483,7 +497,9 @@ def test_mismatch_gauge_counts_untrusted_mismatches_only(db_session, staged):
     base = olt_ssh_metrics.host_key_mismatch_olts(db_session)
     olt = _mismatched(db_session)
     assert olt_ssh_metrics.host_key_mismatch_olts(db_session) == base + 1
-    olt_ssh_hostkey.trust_presented(db_session, object(), olt, _obs(b"b").sha256)
+    olt_ssh_hostkey.pin_presented_key(
+        db=db_session, request=object(), olt=olt, expected_sha256=_obs(b"b").sha256
+    )
     assert olt_ssh_metrics.host_key_mismatch_olts(db_session) == base
 
 

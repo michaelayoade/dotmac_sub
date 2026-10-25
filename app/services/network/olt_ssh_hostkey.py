@@ -189,7 +189,7 @@ def record_observation(olt_id: Any, observed: HostKeyObservation, *, mode: str) 
     3. Otherwise: remember the presented key (what an operator may trust) and,
        when a key IS stored, stamp ``last_mismatch_at``.
 
-    A stored key is never replaced here; only :func:`trust_presented` does
+    A stored key is never replaced here; only :func:`pin_presented_key` does
     that. Fail-soft: evidence loss must never fail an SSH login.
     """
     if mode == MODE_OFF or olt_id is None:
@@ -273,14 +273,14 @@ class HostKeyTrustError(ValueError):
     """The operator's trust request cannot be applied; message is safe to show."""
 
 
-def trust_presented(db: Any, request: Any, olt: Any, expected_sha256: str) -> dict:
+def pin_presented_key(*, db: Any, request: Any, olt: Any, expected_sha256: str) -> dict:
     """Pin the exact fingerprint the operator saw (caller's session).
 
     Refuses unless it still equals the key the OLT last presented. Works with
     or without a stored key (so ``enforce`` cannot lock an OLT out for good).
     The audit event is staged in the same transaction as the key change.
     """
-    from app.services.audit_adapter import stage_audit_event
+    from app.services.audit_adapter import AuditActor, stage_audit_event
     from app.services.audit_helpers import (
         _resolve_request_actor_id,
         _resolve_request_actor_type,
@@ -318,9 +318,11 @@ def trust_presented(db: Any, request: Any, olt: Any, expected_sha256: str) -> di
         action="olt_ssh_host_key_trust",
         entity_type="olt",
         entity_id=str(olt.id),
-        actor_type=_resolve_request_actor_type(request, actor_id),
-        actor_id=actor_id,
-        actor_label=actor_label(request),
+        actor=AuditActor(
+            actor_type=_resolve_request_actor_type(request, actor_id),
+            actor_id=actor_id,
+            label=actor_label(request),
+        ),
         metadata=before,
     )
     db.commit()

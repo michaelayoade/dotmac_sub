@@ -1026,7 +1026,9 @@ def olt_ssh_host_key_trust(
     if not olt:
         raise HTTPException(status_code=404, detail="OLT not found")
     try:
-        olt_ssh_hostkey.trust_presented(db, request, olt, fingerprint)
+        olt_ssh_hostkey.pin_presented_key(
+            db=db, request=request, olt=olt, expected_sha256=fingerprint
+        )
         status = "success"
         message = "SSH host key trusted: the reviewed fingerprint is now pinned."
     except olt_ssh_hostkey.HostKeyTrustError as exc:

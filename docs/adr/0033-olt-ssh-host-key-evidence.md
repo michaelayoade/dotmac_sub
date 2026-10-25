@@ -28,7 +28,7 @@ record the key an OLT presents, warn on change, and optionally refuse
    caller's row locks. Each step is one conditional UPDATE; first sight is
    `WHERE sha IS NULL`, so concurrent logins cannot overwrite a pinned key. It
    never replaces a pinned key.
-3. **Trust is an explicit admin command**, `trust_presented`, which pins exactly
+3. **Trust is an explicit admin command**, `pin_presented_key`, which pins exactly
    the fingerprint the operator reviewed and only while it still equals the
    presented fingerprint. It runs in the request transaction with its audit
    event, is admin-only, and also works when no key is pinned, so `enforce`
