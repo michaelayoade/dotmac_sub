@@ -288,3 +288,86 @@ def test_unknown_line_profile_never_picks_majority_priority(db_session) -> None:
         )
         == 2
     )
+
+
+# --- TR-069 global-config readback walks interface -> config -> enable ---------
+
+
+class _ModeChannel:
+    """Prompt changes after each ``quit`` like a real shelf (no mocked reader)."""
+
+    def __init__(self) -> None:
+        self.sent: list[str] = []
+        self.queue: list[str] = []
+        self.quits = 0
+
+    def settimeout(self, _v: float) -> None:
+        return None
+
+    def send(self, value: str) -> None:
+        self.sent.append(value)
+        cmd = value.strip()
+        if cmd == "quit":
+            self.quits += 1
+            prompt = "OLT(config)#" if self.quits == 1 else "OLT#"
+            self.queue.append(f"quit\r\n{prompt}")
+        elif cmd.startswith("display current-configuration"):
+            self.queue.append(
+                f"{cmd}\r\n  ont tr069-server-config 0 3 profile-id 5\r\nOLT#"
+            )
+
+    def recv(self, _n: int) -> bytes:
+        if self.queue:
+            return self.queue.pop(0).encode()
+        time.sleep(0.01)
+        raise TimeoutError
+
+
+def test_tr069_global_config_readback_walks_modes_via_quits() -> None:
+    from app.services.network.olt_ssh_ont import tr069
+
+    ch = _ModeChannel()
+    profile_id, source = tr069._read_tr069_binding_from_current_config(
+        olt_ssh,
+        channel=ch,
+        port_num=0,
+        ont_id=3,
+        prompt=r"OLT\(config-if-gpon-0/1\)#\s*$",
+    )
+    assert profile_id == 5
+    assert source and source.startswith("display current-configuration")
+    assert ch.quits == 2
+
+
+def test_one_complete_and_one_incomplete_port_skip_the_sweep(db_session) -> None:
+    from datetime import UTC, datetime
+
+    from app.models.network import OLTDevice, OltOntRegistration
+    from app.services.network.olt_state_import import _deactivate_unseen_registrations
+
+    olt = OLTDevice(name="OLT-MIX", mgmt_ip="192.0.2.7", is_active=True)
+    db_session.add(olt)
+    db_session.flush()
+    stale = OltOntRegistration(
+        olt_id=olt.id, fsp="0/2/1", ont_id_on_olt=99, serial_number="S", is_active=True
+    )
+    live_elsewhere = OltOntRegistration(
+        olt_id=olt.id, fsp="0/2/2", ont_id_on_olt=1, serial_number="T", is_active=True
+    )
+    db_session.add_all([stale, live_elsewhere])
+    db_session.flush()
+
+    good, good_ok = _read_port_registrations(_runner(GARKI), _Profile(), "0/2/1", [])
+    cut = GARKI[: GARKI.index("---- More")]
+    bad, bad_ok = _read_port_registrations(_runner(cut), _Profile(), "0/2/2", [])
+    assert good_ok is True and bad_ok is False and len(good) == 16 and bad == []
+
+    seen = {(r.fsp, r.ont_id) for r in good + bad}
+    assert seen  # non-empty, so the guard under test is read_complete itself
+    n = _deactivate_unseen_registrations(
+        db_session, olt.id, seen, datetime.now(UTC), read_complete=good_ok and bad_ok
+    )
+    assert n == -1
+    db_session.refresh(stale)
+    db_session.refresh(live_elsewhere)
+    assert stale.is_active is True and live_elsewhere.is_active is True
