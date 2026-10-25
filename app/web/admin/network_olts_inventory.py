@@ -23,7 +23,7 @@ from app.services import web_network_onts as web_network_onts_service
 from app.services import (
     web_network_pon_interfaces as web_network_pon_interfaces_service,
 )
-from app.services.auth_dependencies import require_permission
+from app.services.auth_dependencies import require_permission, require_role
 from app.services.db_session_adapter import db_session_adapter
 from app.services.domain_errors import DomainError
 from app.services.ipam_adapter import ipam_adapter
@@ -1000,6 +1000,40 @@ def olt_test_ssh_connection(
         message=message,
     )
     status = "success" if ok else "error"
+    return RedirectResponse(
+        f"/admin/network/olts/{olt_id}?ssh_test_status={status}&ssh_test_message={quote_plus(message)}",
+        status_code=303,
+    )
+
+
+@router.post(
+    "/olts/{olt_id}/ssh-host-key/trust",
+    dependencies=[
+        Depends(require_permission("network:olt:write")),
+        Depends(require_role("admin")),
+    ],
+)
+def olt_ssh_host_key_trust(
+    request: Request,
+    olt_id: str,
+    fingerprint: str = Form(""),
+    db: Session = Depends(get_db),
+) -> RedirectResponse:
+    """Pin the exact presented fingerprint the operator reviewed (admin only)."""
+    from app.services.network import olt_ssh_hostkey
+
+    olt = get_olt_or_none(db, olt_id)
+    if not olt:
+        raise HTTPException(status_code=404, detail="OLT not found")
+    try:
+        olt_ssh_hostkey.pin_presented_key(
+            db=db, request=request, olt=olt, expected_sha256=fingerprint
+        )
+        status = "success"
+        message = "SSH host key trusted: the reviewed fingerprint is now pinned."
+    except olt_ssh_hostkey.HostKeyTrustError as exc:
+        status = "error"
+        message = str(exc)
     return RedirectResponse(
         f"/admin/network/olts/{olt_id}?ssh_test_status={status}&ssh_test_message={quote_plus(message)}",
         status_code=303,

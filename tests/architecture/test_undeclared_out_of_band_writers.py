@@ -78,6 +78,8 @@ APPROVED: frozenset[str] = frozenset(
         # ADR 0018: hourly CoA outcome counters, plus its bounded retention prune.
         "app/services/router_health/coa_evidence.py::record_coa_outcome",
         "app/services/router_health/coa_evidence.py::prune_coa_outcome_buckets",
+        # ADR 0033: OLT SSH host-key observation, written after the login.
+        "app/services/network/olt_ssh_hostkey.py::record_observation",
     }
 )
 

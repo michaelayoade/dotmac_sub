@@ -775,6 +775,8 @@ def _connect_unlimited(
     )
     opened_at = time.monotonic()
     retried = False
+    host_key_verdict: Any = None
+    host_key_observed: Any = None
     while True:
         try:
             sock = socket.create_connection((host, port), timeout=20)
@@ -788,6 +790,7 @@ def _connect_unlimited(
         try:
             _apply_preferred_algorithms(transport, policy)
             transport.start_client(timeout=20)
+            host_key_verdict, host_key_observed = _check_host_key(olt, transport)
             transport.auth_password(username=olt.ssh_username, password=password)
             break
         except (SSHException, EOFError) as exc:
@@ -844,6 +847,7 @@ def _connect_unlimited(
         opened_at=opened_at,
     )
     _attach_channel(transport, channel)
+    _record_host_key(olt, host_key_verdict, host_key_observed)
     olt_ssh_metrics.record_open(
         str(getattr(olt, "name", "") or getattr(olt, "id", "")),
         priority_name,
@@ -853,6 +857,49 @@ def _connect_unlimited(
     if prompt_regex != policy.prompt_regex:
         policy = _replace_policy_prompt_regex(policy, prompt_regex)
     return transport, channel, policy
+
+
+def _check_host_key(olt: OLTDevice, transport: Any) -> tuple[Any, Any]:
+    """Judge the negotiated host key BEFORE any credential is sent.
+
+    No database access here: the recorded fingerprint comes from the already
+    loaded ``olt``. Phase 1 (``record``) never refuses; ``enforce`` does, and
+    then records the refusal evidence before raising.
+    """
+    from app.services.network import olt_ssh_hostkey as hostkey
+
+    mode = hostkey.get_mode()
+    if mode == hostkey.MODE_OFF:
+        return None, None
+    label = str(getattr(olt, "name", "") or getattr(olt, "id", ""))
+    try:
+        observed = hostkey.observe(transport)
+    except Exception:  # noqa: BLE001 - evidence only, unless enforcing
+        logger.warning("OLT %s SSH host key could not be read", label, exc_info=True)
+        observed = None
+    stored = getattr(olt, "olt_ssh_host_key_sha256", None)
+    verdict = hostkey.evaluate(mode=mode, stored_sha256=stored, observed=observed)
+    if observed is not None:
+        hostkey.log_and_count(label, stored, observed, verdict)
+    if verdict.refuse:
+        if observed is not None:
+            hostkey.record_observation(getattr(olt, "id", None), observed, mode=mode)
+        raise hostkey.OltHostKeyRefused(
+            f"SSH host key {verdict.outcome.replace('_', ' ')} for OLT {label}; "
+            "credentials were not sent"
+        )
+    return verdict, observed
+
+
+def _record_host_key(olt: OLTDevice, verdict: Any, observed: Any) -> None:
+    """After the login completed: short separate transaction, fail-soft."""
+    if verdict is None or observed is None:
+        return
+    from app.services.network import olt_ssh_hostkey as hostkey
+
+    hostkey.record_observation(
+        getattr(olt, "id", None), observed, mode=hostkey.get_mode()
+    )
 
 
 def _mark_eof_retry_used(exc: BaseException) -> None:

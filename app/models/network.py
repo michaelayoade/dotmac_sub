@@ -1031,6 +1031,23 @@ class OLTDevice(Base):
     ssh_username: Mapped[str | None] = mapped_column(String(120))
     ssh_password: Mapped[str | None] = mapped_column(String(512))
     ssh_port: Mapped[int | None] = mapped_column(Integer, default=22)
+    # SSH host-key trust-on-first-use evidence (public key fingerprint only).
+    # Written solely by app.services.network.olt_ssh_hostkey.
+    olt_ssh_host_key_type: Mapped[str | None] = mapped_column(String(40))
+    olt_ssh_host_key_sha256: Mapped[str | None] = mapped_column(String(80))
+    olt_ssh_host_key_first_seen_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True)
+    )
+    olt_ssh_host_key_last_seen_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True)
+    )
+    olt_ssh_host_key_last_mismatch_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True)
+    )
+    # Last key a login presented that is NOT the recorded one (or any key while
+    # none is recorded under enforce); what an operator may explicitly trust.
+    olt_ssh_presented_key_type: Mapped[str | None] = mapped_column(String(40))
+    olt_ssh_presented_key_sha256: Mapped[str | None] = mapped_column(String(80))
     snmp_enabled: Mapped[bool] = mapped_column(Boolean, default=False)
     snmp_port: Mapped[int | None] = mapped_column(Integer, default=161)
     snmp_version: Mapped[str | None] = mapped_column(String(10), default="v2c")

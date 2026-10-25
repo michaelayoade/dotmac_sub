@@ -1130,6 +1130,9 @@ def test_snapshot_publishes_held_slots_and_counters_within_the_registered_bound(
         def execute(self, *_a, **_k):
             return FakeResult(olts[:14])  # the producer's LIMIT 14
 
+        def scalar(self, *_a, **_k):
+            return 0  # host-key mismatch gauge
+
     monkeypatch.setattr(
         olt_ssh_metrics, "held_slots_by_olt", lambda db, o, c: dict(held_names)
     )
