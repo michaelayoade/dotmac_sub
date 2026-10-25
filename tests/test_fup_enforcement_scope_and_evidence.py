@@ -35,7 +35,7 @@ from app.models.catalog import (
 )
 from app.services.enforcement import (
     SubscriptionCredentialScopeError,
-    apply_radius_profile_to_subscription,
+    subscription_credential_scope,
 )
 from app.services.fup_enforcement import EvaluateFupSubscriptionCommand
 from app.services.fup_usage import FupUsageWindow, fup_window_bounds
@@ -75,12 +75,11 @@ def _cred(db, subscriber, subscription, profile, username):
 # ---------------------------------------------------------------------------
 
 
-def test_throttle_does_not_touch_a_sibling_subscription(
+def test_throttle_scope_names_only_the_breaching_service_and_writes_nothing(
     db_session, subscriber, catalog_offer
 ):
     full = RadiusProfile(name=f"full-{uuid4().hex[:6]}", is_active=True)
-    throttle = RadiusProfile(name=f"throttle-{uuid4().hex[:6]}", is_active=True)
-    db_session.add_all([full, throttle])
+    db_session.add(full)
     db_session.flush()
 
     breaching = _sub(db_session, subscriber, catalog_offer)
@@ -89,44 +88,15 @@ def test_throttle_does_not_touch_a_sibling_subscription(
     sibling_cred = _cred(db_session, subscriber, sibling, full, "paid-service")
     db_session.commit()
 
-    application = apply_radius_profile_to_subscription(
-        db_session, str(breaching.id), str(throttle.id)
-    )
+    scope = subscription_credential_scope(db_session, str(breaching.id))
 
-    assert application.matched == 1
-    assert application.updated == 1
-    assert application.usernames == frozenset({"capped-service"})
+    assert scope.matched == 1
+    assert scope.usernames == frozenset({"capped-service"})
+    # FUP records its throttle in fup_states; it writes no rate into a credential.
     db_session.refresh(breaching_cred)
     db_session.refresh(sibling_cred)
-    assert breaching_cred.radius_profile_id == throttle.id
-    # The customer's other service is still paid for and must stay at full rate.
+    assert breaching_cred.radius_profile_id == full.id
     assert sibling_cred.radius_profile_id == full.id
-
-
-def test_reasserting_an_existing_throttle_still_reports_a_match(
-    db_session, subscriber, catalog_offer
-):
-    """ "Already throttled" is not "nothing to enforce".
-
-    A re-assertion after a cooldown changes nothing on the wire, but the caller
-    still has to record the decision. Reporting only `updated` made this
-    indistinguishable from having no credentials at all, so state, event and
-    customer notification were all skipped.
-    """
-    throttle = RadiusProfile(name=f"throttle-{uuid4().hex[:6]}", is_active=True)
-    db_session.add(throttle)
-    db_session.flush()
-
-    sub = _sub(db_session, subscriber, catalog_offer)
-    _cred(db_session, subscriber, sub, throttle, "already-throttled")
-    db_session.commit()
-
-    application = apply_radius_profile_to_subscription(
-        db_session, str(sub.id), str(throttle.id)
-    )
-
-    assert application.matched == 1
-    assert application.updated == 0
 
 
 def test_unlinked_credential_is_claimed_only_when_no_sibling_serves(
@@ -138,33 +108,22 @@ def test_unlinked_credential_is_claimed_only_when_no_sibling_serves(
     sibling is also serving would throttle traffic that may belong to the
     sibling.
     """
-    full = RadiusProfile(name=f"full-{uuid4().hex[:6]}", is_active=True)
-    throttle = RadiusProfile(name=f"throttle-{uuid4().hex[:6]}", is_active=True)
-    db_session.add_all([full, throttle])
-    db_session.flush()
-
     only = _sub(db_session, subscriber, catalog_offer)
     legacy = AccessCredential(
         subscriber_id=subscriber.id,
         subscription_id=None,
         username="legacy-user",
         is_active=True,
-        radius_profile_id=full.id,
     )
     db_session.add(legacy)
     db_session.commit()
 
-    application = apply_radius_profile_to_subscription(
-        db_session, str(only.id), str(throttle.id)
-    )
-    assert application.updated == 1
-    db_session.refresh(legacy)
-    assert legacy.radius_profile_id == throttle.id
+    scope = subscription_credential_scope(db_session, str(only.id))
+    assert scope.matched == 1
+    assert scope.usernames == frozenset({"legacy-user"})
 
     # Introduce a serving sibling; the unlinked credential is now ambiguous and
     # must no longer be swept up by either service.
-    db_session.refresh(legacy)
-    legacy.radius_profile_id = full.id
     _sub(db_session, subscriber, catalog_offer)
     db_session.commit()
 
@@ -172,24 +131,19 @@ def test_unlinked_credential_is_claimed_only_when_no_sibling_serves(
     # state, event and notification, so a breaching service was silently left
     # at full speed while the sweep counted the enforcement as done.
     with pytest.raises(SubscriptionCredentialScopeError) as captured:
-        apply_radius_profile_to_subscription(db_session, str(only.id), str(throttle.id))
+        subscription_credential_scope(db_session, str(only.id))
 
     assert captured.value.code == ("access.session_enforcement.credentials_ambiguous")
-    db_session.refresh(legacy)
-    assert legacy.radius_profile_id == full.id
 
 
 def test_a_subscription_with_no_credential_at_all_fails_visibly(
     db_session, subscriber, catalog_offer
 ):
-    throttle = RadiusProfile(name=f"throttle-{uuid4().hex[:6]}", is_active=True)
-    db_session.add(throttle)
-    db_session.flush()
     sub = _sub(db_session, subscriber, catalog_offer)
     db_session.commit()
 
     with pytest.raises(SubscriptionCredentialScopeError) as captured:
-        apply_radius_profile_to_subscription(db_session, str(sub.id), str(throttle.id))
+        subscription_credential_scope(db_session, str(sub.id))
 
     assert captured.value.code == (
         "access.session_enforcement.no_subscription_credentials"
@@ -197,27 +151,16 @@ def test_a_subscription_with_no_credential_at_all_fails_visibly(
 
 
 # ---------------------------------------------------------------------------
-# 2. The apply must not own the transaction
+# 2. The scope must not own the transaction
 # ---------------------------------------------------------------------------
 
 
-def test_apply_does_not_commit_the_caller_owns_the_transaction(
+def test_scope_does_not_commit_the_caller_owns_the_transaction(
     db_session, subscriber, catalog_offer
 ):
-    """A throttle with no state row explaining it is unrecoverable evidence.
-
-    Event handlers run on a savepoint-backed child session and the dispatcher
-    commits the parent even when a handler raises, so a commit *inside* this
-    helper released the savepoint and put the credential change beyond the
-    handler's own rollback. The change must stay pending, so that the FupState
-    row recording WHY it happened lands in the same transaction.
-
-    Asserted on the invariant (no commit) rather than by rolling back, so the
-    test does not depend on the fixture's transaction isolation strategy.
-    """
+    """The state row recording WHY must land in the caller's transaction."""
     full = RadiusProfile(name=f"full-{uuid4().hex[:6]}", is_active=True)
-    throttle = RadiusProfile(name=f"throttle-{uuid4().hex[:6]}", is_active=True)
-    db_session.add_all([full, throttle])
+    db_session.add(full)
     db_session.flush()
 
     sub = _sub(db_session, subscriber, catalog_offer)
@@ -225,16 +168,12 @@ def test_apply_does_not_commit_the_caller_owns_the_transaction(
     db_session.flush()
 
     with patch.object(
-        db_session, "commit", side_effect=AssertionError("apply must not commit")
+        db_session, "commit", side_effect=AssertionError("scope must not commit")
     ):
-        application = apply_radius_profile_to_subscription(
-            db_session, str(sub.id), str(throttle.id)
-        )
+        scope = subscription_credential_scope(db_session, str(sub.id))
 
-    assert application.updated == 1
-    assert application.usernames == frozenset({"commit-owner"})
-    # Applied in-session and visible to the caller, but not yet durable.
-    assert cred.radius_profile_id == throttle.id
+    assert scope.usernames == frozenset({"commit-owner"})
+    assert cred.radius_profile_id == full.id
 
 
 # ---------------------------------------------------------------------------
