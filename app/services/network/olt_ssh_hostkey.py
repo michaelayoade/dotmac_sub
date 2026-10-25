@@ -2,9 +2,11 @@
 
 * ``observe`` turns the key paramiko negotiated into a public fingerprint.
 * ``evaluate`` is pure: compare it with the recorded key and the mode.
-* ``record_observation`` / ``retrust`` are the ONLY writers of the
-  ``olt_ssh_host_key_*`` columns. Each runs in its own short transaction,
-  never inside the SSH critical path and never on the caller's session.
+* ``record_observation`` and ``pin_presented_key`` are the ONLY writers of the
+  ``olt_ssh_host_key_*`` / ``olt_ssh_presented_key_*`` columns.
+  ``record_observation`` runs after the login in its own short out-of-band
+  transaction (never on the caller's session, no DB access before auth);
+  ``pin_presented_key`` is the explicit admin command on the request session.
 
 Only public-key evidence is handled (type, SHA256 fingerprint). No password,
 private key or full key blob is logged or stored.

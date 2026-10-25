@@ -551,3 +551,13 @@ def test_migration_up_and_down(monkeypatch):
     assert fake.added == []  # idempotent
     module.downgrade()
     assert len(fake.dropped) == 7
+
+
+def test_mismatch_gauge_drops_after_a_matching_login(owner_session):
+    base = olt_ssh_metrics.host_key_mismatch_olts(owner_session)
+    olt = _real_olt(owner_session)
+    olt_ssh_hostkey.record_observation(olt.id, _obs(b"a"), mode="record")
+    olt_ssh_hostkey.record_observation(olt.id, _obs(b"b"), mode="record")
+    assert olt_ssh_metrics.host_key_mismatch_olts(owner_session) == base + 1
+    olt_ssh_hostkey.record_observation(olt.id, _obs(b"a"), mode="record")
+    assert olt_ssh_metrics.host_key_mismatch_olts(owner_session) == base

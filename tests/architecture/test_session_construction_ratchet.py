@@ -299,6 +299,8 @@ BASELINE = Path("tests/architecture/session_construction_baseline.txt")
 #: migrated clone engine and one Session for the existing owner to seed canaries.
 #: Party import reuses that fixture and adds no constructor. These are reviewed
 #: test-only constructions; the production construction baseline is unchanged.
+#: +2 test-only file-backed engines (one engine, one sessionmaker) for the
+#: OLT SSH host-key concurrency test in tests/test_olt_ssh_hostkey.py.
 TEST_FIXTURE_BASELINE_TOTAL = 792
 
 

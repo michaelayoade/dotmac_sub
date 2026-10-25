@@ -100,7 +100,7 @@ def record_host_key_mismatch(olt: str) -> None:
 
 
 def host_key_mismatch_olts(db: Any) -> int:
-    """Count active OLTs with an un-trusted host-key mismatch."""
+    """Count active OLTs currently presenting a key other than the pinned one."""
     from sqlalchemy import func, select
 
     from app.models.network import OLTDevice
@@ -112,7 +112,9 @@ def host_key_mismatch_olts(db: Any) -> int:
             .where(
                 OLTDevice.is_active.is_(True),
                 OLTDevice.olt_ssh_host_key_sha256.is_not(None),
-                OLTDevice.olt_ssh_host_key_last_mismatch_at.is_not(None),
+                # A presented key that differs from the pinned one; cleared by a
+                # matching login or by an explicit trust, so the gauge drops.
+                OLTDevice.olt_ssh_presented_key_sha256.is_not(None),
             )
         )
         or 0
