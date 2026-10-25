@@ -104,10 +104,15 @@
                         {% endif %}
                         (mode: {{ ssh_host_key.mode }})
                     </span>
-                    {% if ssh_host_key.sha256 %}
-                    <form method="POST" action="/admin/network/olts/{{ olt.id }}/ssh-host-key/retrust" class="inline">
+                    {% if ssh_host_key.presented_sha256 %}
+                    <span class="text-xs text-red-700 dark:text-red-400" data-testid="ssh-host-key-presented">
+                        Presented now: {{ ssh_host_key.presented_type }} <code class="font-mono">{{ ssh_host_key.presented_sha256 }}</code>
+                        (recorded: <code class="font-mono">{{ ssh_host_key.sha256 or 'none' }}</code>)
+                    </span>
+                    <form method="POST" action="/admin/network/olts/{{ olt.id }}/ssh-host-key/trust" class="inline">
                         {% include "components/forms/csrf_input.html" %}
-                        <button type="submit" data-confirm="Clear the recorded SSH host key? The next login will record whatever key the device presents." data-confirm-variant="warning" data-confirm-label="Re-trust" class="text-xs font-medium text-amber-700 hover:text-amber-900 dark:text-amber-400">Re-trust host key</button>
+                        <input type="hidden" name="fingerprint" value="{{ ssh_host_key.presented_sha256 }}">
+                        <button type="submit" data-confirm="Trust exactly {{ ssh_host_key.presented_sha256 }} for this OLT? Verify it out of band first." data-confirm-variant="warning" data-confirm-label="Trust this fingerprint" class="text-xs font-medium text-amber-700 hover:text-amber-900 dark:text-amber-400">Trust this fingerprint</button>
                     </form>
                     {% endif %}
                     {% endif %}

@@ -1,6 +1,6 @@
 """Record OLT SSH host-key fingerprints (trust on first use, phase 1).
 
-Adds five nullable columns to ``olt_devices``: key type, SHA256 fingerprint
+Adds seven nullable columns to ``olt_devices``: key type, SHA256 fingerprint
 and first/last seen / last mismatch timestamps. Public-key evidence only.
 Additive; no backfill; idempotent.
 
@@ -29,6 +29,8 @@ _COLUMNS: tuple[tuple[str, sa.types.TypeEngine], ...] = (
     ("olt_ssh_host_key_first_seen_at", sa.DateTime(timezone=True)),
     ("olt_ssh_host_key_last_seen_at", sa.DateTime(timezone=True)),
     ("olt_ssh_host_key_last_mismatch_at", sa.DateTime(timezone=True)),
+    ("olt_ssh_presented_key_type", sa.String(40)),
+    ("olt_ssh_presented_key_sha256", sa.String(80)),
 )
 
 

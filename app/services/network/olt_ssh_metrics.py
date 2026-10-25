@@ -99,6 +99,26 @@ def record_host_key_mismatch(olt: str) -> None:
     _incr(f"host_key_mismatch|{olt}")
 
 
+def host_key_mismatch_olts(db: Any) -> int:
+    """Count active OLTs with an un-trusted host-key mismatch."""
+    from sqlalchemy import func, select
+
+    from app.models.network import OLTDevice
+
+    return int(
+        db.scalar(
+            select(func.count())
+            .select_from(OLTDevice)
+            .where(
+                OLTDevice.is_active.is_(True),
+                OLTDevice.olt_ssh_host_key_sha256.is_not(None),
+                OLTDevice.olt_ssh_host_key_last_mismatch_at.is_not(None),
+            )
+        )
+        or 0
+    )
+
+
 def classify_open_failure(exc: BaseException) -> str:
     """Map an open failure onto the bounded ``outcome`` label set."""
     from paramiko.ssh_exception import AuthenticationException
@@ -267,6 +287,13 @@ def publish_olt_ssh_snapshot(db: Any, *, now: Any = None) -> bool:
             "olt_ssh_host_key_mismatch",
             "all",
             sum(v for k, v in counters.items() if k.startswith("host_key_mismatch|")),
+        )
+    )
+    # Gauge from the database truth: OLTs whose recorded key was contradicted
+    # and not yet explicitly trusted (trusting clears last_mismatch_at).
+    observations.append(
+        StateObservation(
+            "olt_ssh_host_key_mismatch_olts", "all", float(host_key_mismatch_olts(db))
         )
     )
     for outcome in ("clean", "forced", "skipped_dirty"):

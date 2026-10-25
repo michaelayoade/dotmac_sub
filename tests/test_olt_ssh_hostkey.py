@@ -5,7 +5,6 @@ from __future__ import annotations
 import importlib.util
 import logging
 import uuid
-from contextlib import contextmanager
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -204,18 +203,29 @@ def test_setting_registered_with_record_default():
     assert spec.default == "record" and spec.allowed == {"off", "record", "enforce"}
 
 
-# ── persistence (owner path) ────────────────────────────────────────────────
+# ── persistence (out-of-band evidence writer) ───────────────────────────────
 
 
 @pytest.fixture
 def owner_session(db_session, monkeypatch):
-    @contextmanager
-    def _session():
-        yield db_session
-        db_session.flush()
+    """Route create_session() at the test session; commit => flush, close no-op."""
+
+    class _Wrapped:
+        def __init__(self, inner):
+            self._inner = inner
+
+        def commit(self):
+            self._inner.flush()
+
+        def close(self):
+            pass
+
+        def __getattr__(self, name):
+            return getattr(self._inner, name)
 
     monkeypatch.setattr(
-        "app.services.db_session_adapter.db_session_adapter.session", _session
+        "app.services.db_session_adapter.db_session_adapter.create_session",
+        lambda: _Wrapped(db_session),
     )
     return db_session
 
@@ -243,28 +253,238 @@ def test_record_first_seen_then_refresh_then_mismatch_keeps_key(owner_session):
     owner_session.refresh(olt)
     assert olt.olt_ssh_host_key_first_seen_at == first
     assert olt.olt_ssh_host_key_last_mismatch_at is None
+    assert olt.olt_ssh_presented_key_sha256 is None
     olt_ssh_hostkey.record_observation(olt.id, _obs(b"b"), mode="record")
     owner_session.refresh(olt)
     assert olt.olt_ssh_host_key_sha256 == _obs(b"a").sha256  # never replaced
     assert olt.olt_ssh_host_key_last_mismatch_at is not None
+    assert olt.olt_ssh_presented_key_sha256 == _obs(b"b").sha256
     assert olt_ssh_hostkey.status_view(olt)["state"] == "mismatch"
+    # The pinned key coming back clears the presented key.
+    olt_ssh_hostkey.record_observation(olt.id, _obs(b"a"), mode="record")
+    owner_session.refresh(olt)
+    assert olt.olt_ssh_presented_key_sha256 is None
 
 
-def test_enforce_never_self_trusts_unknown_key(owner_session):
+def test_enforce_never_self_trusts_but_remembers_presented_key(owner_session):
     olt = _real_olt(owner_session)
     olt_ssh_hostkey.record_observation(olt.id, _obs(b"a"), mode="enforce")
     owner_session.refresh(olt)
     assert olt.olt_ssh_host_key_sha256 is None
-
-
-def test_retrust_clears_everything(owner_session):
-    olt = _real_olt(owner_session)
-    olt_ssh_hostkey.record_observation(olt.id, _obs(b"a"), mode="record")
-    olt_ssh_hostkey.record_observation(olt.id, _obs(b"b"), mode="record")
-    cleared = olt_ssh_hostkey.retrust(owner_session, olt)
-    assert cleared["sha256"] == _obs(b"a").sha256
-    assert olt.olt_ssh_host_key_sha256 is None
+    assert olt.olt_ssh_presented_key_sha256 == _obs(b"a").sha256
     assert olt.olt_ssh_host_key_last_mismatch_at is None
+
+
+def test_first_sight_race_pins_exactly_one_key(tmp_path, monkeypatch):
+    import threading
+
+    from sqlalchemy import create_engine
+    from sqlalchemy.orm import sessionmaker
+
+    from app.db import Base
+
+    engine = create_engine(
+        f"sqlite:///{tmp_path / 'race.db'}", connect_args={"timeout": 30}
+    )
+    Base.metadata.create_all(engine, tables=[OLTDevice.__table__])
+    factory = sessionmaker(bind=engine)
+    setup = factory()
+    olt = OLTDevice(name="race", is_active=True)
+    setup.add(olt)
+    setup.commit()
+    olt_id = olt.id
+    monkeypatch.setattr(
+        "app.services.db_session_adapter.db_session_adapter.create_session", factory
+    )
+    barrier = threading.Barrier(6)
+
+    def worker(blob: bytes) -> None:
+        barrier.wait()
+        olt_ssh_hostkey.record_observation(olt_id, _obs(blob), mode="record")
+
+    blobs = [f"key-{i}".encode() for i in range(6)]
+    threads = [threading.Thread(target=worker, args=(b,)) for b in blobs]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+    check = factory()
+    row = check.get(OLTDevice, olt_id)
+    pinned = row.olt_ssh_host_key_sha256
+    assert pinned in {_obs(b).sha256 for b in blobs}
+    # Losers are recorded as mismatches against the winner, never overwriting it.
+    assert row.olt_ssh_host_key_last_mismatch_at is not None
+    assert row.olt_ssh_presented_key_sha256 != pinned
+    olt_ssh_hostkey.record_observation(olt_id, _obs(b"key-0"), mode="record")
+    check.expire_all()
+    assert check.get(OLTDevice, olt_id).olt_ssh_host_key_sha256 == pinned
+
+
+# ── explicit trust ──────────────────────────────────────────────────────────
+
+
+class _Events(list):
+    def __init__(self) -> None:
+        super().__init__()
+        self.order: list[str] = []
+
+    def add(self, event: dict) -> None:
+        self.order.append("audit")
+        self.append(event)
+
+
+@pytest.fixture
+def staged(monkeypatch):
+    events: _Events = _Events()
+    monkeypatch.setattr(
+        "app.services.audit_adapter.stage_audit_event",
+        lambda db, **kw: events.add(kw),
+    )
+    monkeypatch.setattr(
+        "app.services.audit_helpers._resolve_request_actor_id", lambda r, a: "u1"
+    )
+    monkeypatch.setattr(
+        "app.services.audit_helpers._resolve_request_actor_type", lambda r, a: "user"
+    )
+    monkeypatch.setattr(
+        "app.services.network.action_logging.actor_label", lambda r: "tester"
+    )
+    return events
+
+
+def _mismatched(db):
+    olt = _real_olt(db)
+    olt.olt_ssh_host_key_type = "ssh-rsa"
+    olt.olt_ssh_host_key_sha256 = _obs(b"a").sha256
+    olt.olt_ssh_host_key_last_mismatch_at = olt.created_at
+    olt.olt_ssh_presented_key_type = "ssh-rsa"
+    olt.olt_ssh_presented_key_sha256 = _obs(b"b").sha256
+    db.flush()
+    return olt
+
+
+def test_trust_pins_exact_presented_fingerprint_and_audits_before_commit(
+    db_session, staged
+):
+    olt = _mismatched(db_session)
+    order = staged.order
+    real_commit = db_session.commit
+    db_session.commit = lambda: (order.append("commit"), db_session.flush())
+    try:
+        out = olt_ssh_hostkey.trust_presented(
+            db_session, object(), olt, _obs(b"b").sha256
+        )
+    finally:
+        db_session.commit = real_commit
+    assert olt.olt_ssh_host_key_sha256 == _obs(b"b").sha256
+    assert olt.olt_ssh_presented_key_sha256 is None
+    assert olt.olt_ssh_host_key_last_mismatch_at is None
+    assert order == ["audit", "commit"]  # same transaction: staged, then commit
+    assert out["previous_sha256"] == _obs(b"a").sha256
+    assert staged[0]["action"] == "olt_ssh_host_key_trust"
+
+
+def test_trust_refuses_when_presented_key_changed_since_operator_looked(
+    db_session, staged
+):
+    olt = _mismatched(db_session)
+    with pytest.raises(olt_ssh_hostkey.HostKeyTrustError, match="changed since"):
+        olt_ssh_hostkey.trust_presented(db_session, object(), olt, _obs(b"zzz").sha256)
+    assert olt.olt_ssh_host_key_sha256 == _obs(b"a").sha256 and not staged
+
+
+def test_trust_works_with_no_stored_key_for_enforce_first_seen(db_session, staged):
+    olt = _real_olt(db_session)
+    olt.olt_ssh_presented_key_type = "ssh-rsa"
+    olt.olt_ssh_presented_key_sha256 = _obs(b"n").sha256
+    db_session.flush()
+    olt_ssh_hostkey.trust_presented(db_session, object(), olt, _obs(b"n").sha256)
+    assert olt.olt_ssh_host_key_sha256 == _obs(b"n").sha256
+
+
+def test_trust_with_nothing_presented_is_refused(db_session, staged):
+    olt = _real_olt(db_session)
+    with pytest.raises(olt_ssh_hostkey.HostKeyTrustError):
+        olt_ssh_hostkey.trust_presented(db_session, object(), olt, "SHA256:x")
+
+
+def test_trust_route_redirects_with_outcome_and_is_admin_gated(
+    db_session, staged, monkeypatch
+):
+    from fastapi import HTTPException
+
+    from app.web.admin import network_olts_inventory as routes
+
+    olt = _mismatched(db_session)
+    monkeypatch.setattr(routes, "get_olt_or_none", lambda db, oid: olt)
+    ok = routes.olt_ssh_host_key_trust(
+        object(), str(olt.id), _obs(b"b").sha256, db_session
+    )
+    assert "ssh_test_status=success" in ok.headers["location"]
+    olt2 = _mismatched(db_session)
+    monkeypatch.setattr(routes, "get_olt_or_none", lambda db, oid: olt2)
+    bad = routes.olt_ssh_host_key_trust(
+        object(), str(olt2.id), "SHA256:old", db_session
+    )
+    assert "ssh_test_status=error" in bad.headers["location"]
+
+    route = next(
+        r
+        for r in routes.router.routes
+        if getattr(r, "path", "").endswith("/ssh-host-key/trust")
+    )
+    gates = [d.call for d in route.dependant.dependencies]
+    role_gate = next(g for g in gates if "_require_role" in g.__qualname__)
+
+    class _Q:
+        def query(self, *a, **k):
+            return self
+
+        def filter(self, *a, **k):
+            return self
+
+        def first(self):
+            return None
+
+    with pytest.raises(HTTPException) as exc:
+        role_gate(auth={"principal_id": "p", "roles": ["operator"]}, db=_Q())
+    assert exc.value.status_code == 403
+
+
+# ── mode fail-safe ──────────────────────────────────────────────────────────
+
+
+def test_unreadable_mode_keeps_last_good_enforce(monkeypatch):
+    import app.services.settings_spec as spec
+
+    olt_ssh_hostkey.clear_mode_cache()
+    monkeypatch.setattr(spec, "resolve_value", lambda *a, **k: "enforce")
+    assert olt_ssh_hostkey.get_mode() == "enforce"
+
+    def boom(*a, **k):
+        raise RuntimeError("db down")
+
+    monkeypatch.setattr(spec, "resolve_value", boom)
+    olt_ssh_hostkey._mode_cache = None  # force a re-read, keep last good
+    assert olt_ssh_hostkey.get_mode() == "enforce"
+    olt_ssh_hostkey._mode_cache = None
+    monkeypatch.setattr(spec, "resolve_value", lambda *a, **k: "bogus")
+    assert olt_ssh_hostkey.get_mode() == "enforce"
+    olt_ssh_hostkey.clear_mode_cache()
+    olt_ssh_hostkey._mode_cache = None
+    assert olt_ssh_hostkey.get_mode() == "record"  # no prior value -> default
+    olt_ssh_hostkey.clear_mode_cache()
+
+
+# ── mismatch gauge ──────────────────────────────────────────────────────────
+
+
+def test_mismatch_gauge_counts_untrusted_mismatches_only(db_session, staged):
+    base = olt_ssh_metrics.host_key_mismatch_olts(db_session)
+    olt = _mismatched(db_session)
+    assert olt_ssh_metrics.host_key_mismatch_olts(db_session) == base + 1
+    olt_ssh_hostkey.trust_presented(db_session, object(), olt, _obs(b"b").sha256)
+    assert olt_ssh_metrics.host_key_mismatch_olts(db_session) == base
 
 
 # ── migration ───────────────────────────────────────────────────────────────
@@ -309,9 +529,9 @@ def test_migration_up_and_down(monkeypatch):
     assert module.revision == "701_olt_ssh_host_key_record"
     assert module.down_revision == "700_ont_service_config_drift_fields"
     module.upgrade()
-    assert len(fake.added) == 5 and fake.added[0] == "olt_ssh_host_key_type"
+    assert len(fake.added) == 7 and fake.added[0] == "olt_ssh_host_key_type"
     module, fake = _migration(monkeypatch, set(fake.added))
     module.upgrade()
     assert fake.added == []  # idempotent
     module.downgrade()
-    assert len(fake.dropped) == 5
+    assert len(fake.dropped) == 7

@@ -86,7 +86,6 @@ app.services.network.olt_hardware_crud
 app.services.network.olt_lifecycle
 app.services.network.olt_operations
 app.services.network.olt_read_cache
-app.services.network.olt_ssh_hostkey
 app.services.network.olt_state_import
 app.services.network.olt_tr069_admin
 app.services.network.olt_web_forms

@@ -1044,6 +1044,10 @@ class OLTDevice(Base):
     olt_ssh_host_key_last_mismatch_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True)
     )
+    # Last key a login presented that is NOT the recorded one (or any key while
+    # none is recorded under enforce); what an operator may explicitly trust.
+    olt_ssh_presented_key_type: Mapped[str | None] = mapped_column(String(40))
+    olt_ssh_presented_key_sha256: Mapped[str | None] = mapped_column(String(80))
     snmp_enabled: Mapped[bool] = mapped_column(Boolean, default=False)
     snmp_port: Mapped[int | None] = mapped_column(Integer, default=161)
     snmp_version: Mapped[str | None] = mapped_column(String(10), default="v2c")

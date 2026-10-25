@@ -71,23 +71,31 @@ def observe(transport: Any) -> HostKeyObservation | None:
 
 _MODE_TTL_SECONDS = 60.0
 _mode_cache: tuple[float, str] | None = None
+_last_good_mode: str | None = None
 _mode_lock = threading.Lock()
 
 
 def clear_mode_cache() -> None:
-    global _mode_cache
+    """Test hook: forget the cache AND the last successfully read mode."""
+    global _mode_cache, _last_good_mode
     with _mode_lock:
         _mode_cache = None
+        _last_good_mode = None
 
 
 def get_mode() -> str:
-    """Current mode (60 s cache). Unreadable or invalid -> default ``record``."""
-    global _mode_cache
+    """Current mode (60 s cache).
+
+    If the setting cannot be read (or holds an invalid value) the last mode
+    read successfully by this process is used, so an outage can never silently
+    downgrade ``enforce``. With no prior value the default is ``record``.
+    """
+    global _mode_cache, _last_good_mode
     now = time.monotonic()
     cached = _mode_cache
     if cached is not None and now - cached[0] < _MODE_TTL_SECONDS:
         return cached[1]
-    mode = DEFAULT_MODE
+    mode: str | None = None
     try:
         from app.models.domain_settings import SettingDomain
         from app.services.db_session_adapter import db_session_adapter
@@ -101,6 +109,11 @@ def get_mode() -> str:
     except Exception:
         logger.debug("olt_ssh_host_key_mode_unreadable", exc_info=True)
     with _mode_lock:
+        if mode is not None:
+            _last_good_mode = mode
+        else:
+            mode = _last_good_mode or DEFAULT_MODE
+            logger.warning("olt_ssh_host_key_mode_unreadable using=%s", mode)
         _mode_cache = (now, mode)
     return mode
 
@@ -160,76 +173,158 @@ def log_and_count(
         logger.debug("olt_ssh_host_key_metric_failed", exc_info=True)
 
 
-def record_observation(olt_id: Any, observed: HostKeyObservation, *, mode: str) -> None:
-    """Persist first-seen / last-seen / last-mismatch in a short transaction.
+_LOCK_TIMEOUT_MS = 200
+_STATEMENT_TIMEOUT_MS = 500
 
-    Fail-soft: the SSH login has already succeeded (or been refused) and must
-    never fail because evidence could not be written. A recorded key is never
-    replaced here; changing it needs the audited ``retrust`` action.
+
+def record_observation(olt_id: Any, observed: HostKeyObservation, *, mode: str) -> None:
+    """Persist what a login saw, out of band (ADR 0017 evidence writer).
+
+    One short ``create_session()`` transaction, independent of any caller, with
+    a lock and statement timeout. Every step is a single conditional UPDATE, so
+    concurrent first sightings cannot overwrite each other:
+
+    1. ``record`` mode, no key stored yet: pin it (``WHERE sha IS NULL``).
+    2. Stored key equals the presented one: refresh ``last_seen``.
+    3. Otherwise: remember the presented key (what an operator may trust) and,
+       when a key IS stored, stamp ``last_mismatch_at``.
+
+    A stored key is never replaced here; only :func:`trust_presented` does
+    that. Fail-soft: evidence loss must never fail an SSH login.
     """
     if mode == MODE_OFF or olt_id is None:
         return
+    session = None
     try:
+        from sqlalchemy import text, update
+
         from app.models.network import OLTDevice
         from app.services.db_session_adapter import db_session_adapter
 
         now = datetime.now(UTC)
-        with db_session_adapter.session() as db:
-            olt = db.get(OLTDevice, olt_id)
-            if olt is None:
-                return
-            if not olt.olt_ssh_host_key_sha256:
-                if mode != MODE_RECORD:
-                    return  # enforce never trusts an unknown key on its own
-                olt.olt_ssh_host_key_type = observed.key_type
-                olt.olt_ssh_host_key_sha256 = observed.sha256
-                olt.olt_ssh_host_key_first_seen_at = now
-                olt.olt_ssh_host_key_last_seen_at = now
-            elif olt.olt_ssh_host_key_sha256 == observed.sha256:
-                olt.olt_ssh_host_key_last_seen_at = now
-            else:
-                olt.olt_ssh_host_key_last_mismatch_at = now
+        session = db_session_adapter.create_session()
+        if session.get_bind().dialect.name == "postgresql":
+            session.execute(text(f"SET LOCAL lock_timeout = '{_LOCK_TIMEOUT_MS}ms'"))
+            session.execute(
+                text(f"SET LOCAL statement_timeout = '{_STATEMENT_TIMEOUT_MS}ms'")
+            )
+        col = OLTDevice
+        done = False
+        if mode == MODE_RECORD:
+            res = session.execute(
+                update(col)
+                .where(col.id == olt_id, col.olt_ssh_host_key_sha256.is_(None))
+                .values(
+                    olt_ssh_host_key_type=observed.key_type,
+                    olt_ssh_host_key_sha256=observed.sha256,
+                    olt_ssh_host_key_first_seen_at=now,
+                    olt_ssh_host_key_last_seen_at=now,
+                    olt_ssh_presented_key_type=None,
+                    olt_ssh_presented_key_sha256=None,
+                )
+            )
+            done = bool(res.rowcount)
+        if not done:
+            res = session.execute(
+                update(col)
+                .where(col.id == olt_id, col.olt_ssh_host_key_sha256 == observed.sha256)
+                .values(
+                    olt_ssh_host_key_last_seen_at=now,
+                    olt_ssh_presented_key_type=None,
+                    olt_ssh_presented_key_sha256=None,
+                )
+            )
+            done = bool(res.rowcount)
+        if not done:
+            session.execute(
+                update(col)
+                .where(col.id == olt_id)
+                .values(
+                    olt_ssh_presented_key_type=observed.key_type,
+                    olt_ssh_presented_key_sha256=observed.sha256,
+                )
+            )
+            session.execute(
+                update(col)
+                .where(
+                    col.id == olt_id,
+                    col.olt_ssh_host_key_sha256.is_not(None),
+                    col.olt_ssh_host_key_sha256 != observed.sha256,
+                )
+                .values(olt_ssh_host_key_last_mismatch_at=now)
+            )
+        session.commit()
     except Exception:
         logger.warning("olt_ssh_host_key_record_failed olt=%s", olt_id, exc_info=True)
+        if session is not None:
+            try:
+                session.rollback()
+            except Exception:  # noqa: BLE001
+                pass
+    finally:
+        if session is not None:
+            try:
+                session.close()
+            except Exception:  # noqa: BLE001
+                pass
 
 
-def retrust(db: Any, olt: Any) -> dict[str, Any]:
-    """Clear the recorded key so the next login re-records (caller commits).
+class HostKeyTrustError(ValueError):
+    """The operator's trust request cannot be applied; message is safe to show."""
 
-    Returns the cleared public evidence for the audit entry.
+
+def trust_presented(db: Any, request: Any, olt: Any, expected_sha256: str) -> dict:
+    """Pin the exact fingerprint the operator saw (caller's session).
+
+    Refuses unless it still equals the key the OLT last presented. Works with
+    or without a stored key (so ``enforce`` cannot lock an OLT out for good).
+    The audit event is staged in the same transaction as the key change.
     """
+    from app.services.audit_adapter import stage_audit_event
+    from app.services.audit_helpers import (
+        _resolve_request_actor_id,
+        _resolve_request_actor_type,
+    )
+    from app.services.network.action_logging import actor_label
+
+    expected = (expected_sha256 or "").strip()
+    presented = getattr(olt, "olt_ssh_presented_key_sha256", None)
+    if not expected or not presented:
+        raise HostKeyTrustError(
+            "The OLT has not presented a key to trust. Test SSH first, then retry."
+        )
+    if presented != expected:
+        raise HostKeyTrustError(
+            "The presented host key changed since you looked. Review the new "
+            "fingerprint and confirm again."
+        )
+    now = datetime.now(UTC)
     before = {
-        "key_type": olt.olt_ssh_host_key_type,
-        "sha256": olt.olt_ssh_host_key_sha256,
-        "last_mismatch_at": (
-            olt.olt_ssh_host_key_last_mismatch_at.isoformat()
-            if olt.olt_ssh_host_key_last_mismatch_at
-            else None
-        ),
+        "previous_sha256": olt.olt_ssh_host_key_sha256,
+        "previous_type": olt.olt_ssh_host_key_type,
+        "trusted_sha256": presented,
+        "trusted_type": olt.olt_ssh_presented_key_type,
     }
-    olt.olt_ssh_host_key_type = None
-    olt.olt_ssh_host_key_sha256 = None
-    olt.olt_ssh_host_key_first_seen_at = None
-    olt.olt_ssh_host_key_last_seen_at = None
+    olt.olt_ssh_host_key_type = olt.olt_ssh_presented_key_type
+    olt.olt_ssh_host_key_sha256 = presented
+    olt.olt_ssh_host_key_first_seen_at = now
+    olt.olt_ssh_host_key_last_seen_at = now
     olt.olt_ssh_host_key_last_mismatch_at = None
-    return before
-
-
-def retrust_with_audit(db: Any, request: Any, olt: Any) -> None:
-    """Clear the recorded key, commit, and write the audit entry."""
-    from app.services.audit_helpers import log_audit_event
-
-    cleared = retrust(db, olt)
-    db.commit()
-    log_audit_event(
+    olt.olt_ssh_presented_key_type = None
+    olt.olt_ssh_presented_key_sha256 = None
+    actor_id = _resolve_request_actor_id(request, None)
+    stage_audit_event(
         db,
-        request,
-        action="olt_ssh_host_key_retrust",
+        action="olt_ssh_host_key_trust",
         entity_type="olt",
         entity_id=str(olt.id),
-        actor_id=None,
-        metadata={"cleared": cleared},
+        actor_type=_resolve_request_actor_type(request, actor_id),
+        actor_id=actor_id,
+        actor_label=actor_label(request),
+        metadata=before,
     )
+    db.commit()
+    return before
 
 
 def status_view(olt: Any) -> dict[str, Any]:
@@ -250,6 +345,8 @@ def status_view(olt: Any) -> dict[str, Any]:
         "first_seen_at": getattr(olt, "olt_ssh_host_key_first_seen_at", None),
         "last_seen_at": seen_at,
         "last_mismatch_at": mismatch_at,
+        "presented_type": getattr(olt, "olt_ssh_presented_key_type", None),
+        "presented_sha256": getattr(olt, "olt_ssh_presented_key_sha256", None),
         "state": state,
         "mode": get_mode(),
     }
