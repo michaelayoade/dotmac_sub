@@ -318,21 +318,9 @@ def test_throttle_profile_mismatch_is_medium(db_session, subscriber):
 
     # A deactivated profile still referenced by a live credential — the FK
     # forbids a truly-missing one, so "inactive" is the realistic drift.
-    from app.models.domain_settings import SettingDomain, SettingValueType
-    from app.schemas.settings import DomainSettingUpdate
-    from app.services.domain_settings import DomainSettings
-
     dead_profile = RadiusProfile(name="retired-throttle", is_active=False)
     db_session.add(dead_profile)
     db_session.flush()
-    # The collections throttle profile is configured, then retired.
-    DomainSettings(SettingDomain.collections).upsert_by_key(
-        db_session,
-        "throttle_radius_profile_id",
-        DomainSettingUpdate(
-            value_type=SettingValueType.string, value_text=str(dead_profile.id)
-        ),
-    )
     db_session.add(
         AccessCredential(
             subscriber_id=subscriber.id,

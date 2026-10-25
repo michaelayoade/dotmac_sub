@@ -115,6 +115,7 @@ def test_h1_staging_refuses_reserved_password(
             subscription_id=pending.id,
             username="typed-login",
             plain_password=typed,
+            radius_profile_id=None,
         )
     assert db_session.query(AccessCredential).count() == 0
 

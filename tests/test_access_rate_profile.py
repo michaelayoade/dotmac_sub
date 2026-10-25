@@ -60,6 +60,11 @@ def owner_on(monkeypatch):
 
 
 @pytest.fixture()
+def owner_off(monkeypatch):
+    monkeypatch.setattr(owner, "rate_owner_enabled", lambda _db: False)
+
+
+@pytest.fixture()
 def _radius_env(monkeypatch, db_session):
     monkeypatch.setattr(
         radius_population,
@@ -240,6 +245,20 @@ def test_switch_reads_the_domain_setting(db_session):
 
 
 # --------------------------------------------- import residue reproduction
+
+
+def test_import_residue_old_precedence_keeps_the_stale_rate(
+    db_session, _radius_env, owner_off, monkeypatch
+):
+    """A credential profile from the import (no throttle markers) wins today."""
+    ten = _profile(db_session, "Ten", rate="10M/10M")
+    fifteen = _profile(db_session, "Fifteen", rate="15M/15M")
+    offer_a = _offer(db_session, "A", profile=ten)
+    sub, credential = _service(db_session, offer_a, sub_profile=ten, slot=fifteen)
+
+    rates = _sweep_rates(monkeypatch)
+
+    assert rates[sub.login][0] == "15M/15M"  # characterises the bug
 
 
 def test_import_residue_owner_derives_the_package_rate(
@@ -536,10 +555,67 @@ def test_ambiguous_package_link_is_deterministic(db_session, owner_on):
     assert owner.resolve_effective_rate(db_session, sub, credential).plan_ambiguous
 
 
-# ------------------------------------------------------------- rate grammar
+# -------------------------------------------------------- switch-off parity
 
 
-def test_the_rate_grammar_is_the_owners():
+def test_switch_off_sweep_keeps_the_previous_precedence(
+    db_session, _radius_env, owner_off, monkeypatch
+):
+    ten = _profile(db_session, "Ten", rate="10M/10M")
+    fifteen = _profile(db_session, "Fifteen", rate="15M/15M")
+    slow = _profile(db_session, "Slow", rate="1M/1M")
+    offer = _offer(db_session, "A", down=100, up=100, profile=ten)
+    no_link = _offer(db_session, "N", down=30, up=20)
+    cases = {
+        "cred_wins": _service(db_session, offer, sub_profile=ten, slot=fifteen)[0],
+        "sub_only": _service(db_session, offer, sub_profile=fifteen)[0],
+        "none_offer_speed": _service(db_session, no_link)[0],
+    }
+    throttled = _service(db_session, offer, sub_profile=ten, slot=slow)[0]
+    fup = _profile(db_session, "Fup", rate="500k/500k", down=500, code="fup")
+    _fup_throttle(db_session, throttled, fup)  # ignored with the switch off
+
+    rates = _sweep_rates(monkeypatch)
+
+    assert rates[cases["cred_wins"].login][0] == "15M/15M"
+    assert rates[cases["sub_only"].login][0] == "15M/15M"
+    assert rates[cases["none_offer_speed"].login][0] == "20M/30M"
+    assert rates[throttled.login][0] == "1M/1M"
+
+
+def test_switch_off_resolvers_and_mirror_are_unchanged(db_session, owner_off):
+    from app.services import enforcement
+    from app.services.radius import ensure_radius_users_for_subscription
+
+    ten = _profile(db_session, "Ten", rate="10M/10M")
+    fifteen = _profile(db_session, "Fifteen", rate="15M/15M")
+    offer = _offer(db_session, "A", profile=ten)
+    sub, credential = _service(db_session, offer, slot=fifteen)
+
+    assert enforcement._resolve_effective_profile(db_session, sub, credential).id == (
+        fifteen.id
+    )
+    assert enforcement._resolve_effective_profile(db_session, sub).id == ten.id
+    assert enforcement._resolve_plan_profile(db_session, sub).id == ten.id
+    ensure_radius_users_for_subscription(db_session, sub)
+    db_session.commit()
+    assert db_session.query(RadiusUser).one().radius_profile_id == fifteen.id
+
+
+def test_switch_off_guards_are_inert(db_session, owner_off):
+    ten = _profile(db_session, "Ten", rate="10M/10M")
+    other = _profile(db_session, "Other", rate="3M/3M")
+    slow = _profile(db_session, "Slow", rate="1M/1M")
+    offer = _offer(db_session, "A", profile=ten)
+    _service(db_session, offer, slot=slow, pre_throttle=ten)
+    _set_collections_profile(db_session, slow)
+
+    owner.refuse_unrecorded_override(db_session, offer_id=offer.id, profile_id=other.id)
+    # D6: changing the throttle profile is allowed while the owner is off.
+    _set_collections_profile(db_session, other)
+
+
+def test_switch_off_leaves_the_rate_grammar_untouched():
     from app.services import enforcement
 
     profile = RadiusProfile(
@@ -694,7 +770,7 @@ def _reply_rate(attrs):
     )
 
 
-def test_nas_reply_attributes_follow_the_package(db_session):
+def test_nas_reply_attributes_follow_the_package_when_enabled(db_session, monkeypatch):
     from app.services.connection_type_provisioning import (
         build_radius_reply_attributes,
     )
@@ -704,6 +780,10 @@ def test_nas_reply_attributes_follow_the_package(db_session):
     offer = _offer(db_session, "A", profile=ten)
     sub, _ = _service(db_session, offer, sub_profile=fifteen)
 
+    monkeypatch.setattr(owner, "rate_owner_enabled", lambda _db: False)
+    assert _reply_rate(build_radius_reply_attributes(db_session, sub)) == "15M/15M"
+
+    monkeypatch.setattr(owner, "rate_owner_enabled", lambda _db: True)
     assert _reply_rate(build_radius_reply_attributes(db_session, sub)) == "10M/10M"
 
 
@@ -748,22 +828,29 @@ def test_identity_signature_sees_a_derived_profile_change(db_session, monkeypatc
     assert after[3] == str(twenty.id)
 
 
-def test_admin_credential_form_never_stores_a_profile(db_session):
+def test_admin_credential_form_refuses_a_non_package_profile(db_session, owner_on):
     from app.services.web_catalog_subscriptions import _upsert_access_credential
 
     ten = _profile(db_session, "Ten", rate="10M/10M")
+    other = _profile(db_session, "Other", rate="3M/3M")
     offer = _offer(db_session, "A", profile=ten)
-    sub, credential = _service(db_session, offer)
+    sub, credential = _service(db_session, offer, slot=ten)
 
+    with pytest.raises(DomainError):
+        _upsert_access_credential(
+            db_session,
+            subscriber_id=sub.subscriber_id,
+            username=sub.login,
+            radius_profile_id=str(other.id),
+            subscription_id=sub.id,
+        )
     _upsert_access_credential(
         db_session,
         subscriber_id=sub.subscriber_id,
         username=sub.login,
+        radius_profile_id=str(ten.id),
         subscription_id=sub.id,
     )
-
-    db_session.refresh(credential)
-    assert credential.radius_profile_id is None
 
 
 # ------------------------------------------------------- review fixes R1-R5
@@ -826,15 +913,17 @@ def test_r3_the_switch_cannot_be_written_outside_its_command(db_session, monkeyp
         )
     assert generic.value.status_code == 403
 
-    # The audited admin path validates through the same check. In this release
-    # EVERY value is refused unless the governed switch-on command is the
-    # caller: a `false` would only stop the next restart.
+    # The audited admin path validates through the same check: true is
+    # refused unless the governed switch command is the caller.
     service = DomainSettings(SettingDomain.radius)
-    for value in (True, "true", "1", False, "false", "0"):
+    for value in (True, "true", "1"):
         with pytest.raises(HTTPException):
             service._validate_relationship_change(
                 db_session, SettingDomain.radius, "rate_owner_enabled", value
             )
+    service._validate_relationship_change(
+        db_session, SettingDomain.radius, "rate_owner_enabled", False
+    )
     monkeypatch.setattr(
         "app.services.owner_commands.owner_command_active",
         lambda _db, owner=None: owner == SWITCH_OWNER,
@@ -842,11 +931,6 @@ def test_r3_the_switch_cannot_be_written_outside_its_command(db_session, monkeyp
     service._validate_relationship_change(
         db_session, SettingDomain.radius, "rate_owner_enabled", True
     )
-    # ...and even inside the command, turning it off is still refused.
-    with pytest.raises(HTTPException):
-        service._validate_relationship_change(
-            db_session, SettingDomain.radius, "rate_owner_enabled", False
-        )
 
 
 def test_r4_a_literal_only_collections_profile_beats_a_faster_fup(db_session, owner_on):

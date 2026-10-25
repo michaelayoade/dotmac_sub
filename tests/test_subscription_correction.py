@@ -264,55 +264,10 @@ def test_newer_stopped_sibling_is_not_offered_as_a_correction_target(
     assert "target_not_prior" in {issue.code for issue in crafted_preview.issues}
 
 
-def test_correction_is_atomic_and_rebinds_credential_and_fup(
+def test_correction_is_atomic_and_rebinds_credential_profile_and_fup(
     db_session, subscriber, catalog_offer, monkeypatch
 ):
     wrong, target, credential, profile = _fixture(db_session, subscriber, catalog_offer)
-    wrong_id, target_id = wrong.id, target.id
-    preview = preview_subscription_correction(
-        db_session,
-        active_subscription_id=wrong.id,
-        target_subscription_id=target.id,
-    )
-    db_session.commit()
-
-    # Delivery is separately tested by the event handlers. Keep this owner test
-    # focused on the committed authoritative state.
-    monkeypatch.setattr(
-        "app.services.events.dispatcher.dispatch_pending_events_after_commit",
-        lambda *_args, **_kwargs: None,
-        raising=False,
-    )
-    outcome = correct_subscription(
-        db_session,
-        _command(wrong_id, target_id, preview.fingerprint, key=f"test:{uuid4()}"),
-    )
-
-    db_session.refresh(wrong)
-    db_session.refresh(target)
-    db_session.refresh(credential)
-    state = db_session.get(FupState, wrong.id)
-    assert outcome.replayed is False
-    assert wrong.status is SubscriptionStatus.canceled
-    assert target.status is SubscriptionStatus.active
-    assert credential.subscription_id == target.id
-    # Rebinding writes no rate: the rate owner derives it from the package.
-    assert credential.radius_profile_id is None
-    assert credential.pre_throttle_radius_profile_id is None
-    if state is not None:
-        assert state.action_status is FupActionStatus.none
-        assert state.throttle_profile_id is None
-
-
-def test_correction_keeps_the_credentials_throttle_marker(
-    db_session, subscriber, catalog_offer, monkeypatch
-):
-    wrong, target, credential, profile = _fixture(db_session, subscriber, catalog_offer)
-    # The account is throttled by collections: slot and marker are the account's,
-    # and a correction between its services does not change the account.
-    credential.radius_profile_id = profile.id
-    credential.pre_throttle_radius_profile_id = profile.id
-    db_session.commit()
     wrong_id, target_id = wrong.id, target.id
     preview = preview_subscription_correction(
         db_session,
@@ -342,7 +297,7 @@ def test_correction_keeps_the_credentials_throttle_marker(
     assert target.status is SubscriptionStatus.active
     assert credential.subscription_id == target.id
     assert credential.radius_profile_id == profile.id
-    assert credential.pre_throttle_radius_profile_id == profile.id
+    assert credential.pre_throttle_radius_profile_id is None
     if state is not None:
         assert state.action_status is FupActionStatus.none
         assert state.throttle_profile_id is None

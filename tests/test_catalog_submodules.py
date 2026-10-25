@@ -1062,20 +1062,16 @@ class TestAccessCredentials:
     def test_create_credential_with_radius_profile(
         self, mock_sync, db_session, subscriber
     ):
-        """A credential never carries a rate: a non-package profile is refused."""
-        from app.services.domain_errors import DomainError
-
         profile = _make_radius_profile(db_session)
-        with pytest.raises(DomainError) as refused:
-            catalog_service.access_credentials.create(
-                db_session,
-                AccessCredentialCreate(
-                    subscriber_id=subscriber.id,
-                    username=f"raduser-{uuid.uuid4().hex[:8]}",
-                    radius_profile_id=profile.id,
-                ),
-            )
-        assert refused.value.code == "access.rate_profile.override_not_supported"
+        cred = catalog_service.access_credentials.create(
+            db_session,
+            AccessCredentialCreate(
+                subscriber_id=subscriber.id,
+                username=f"raduser-{uuid.uuid4().hex[:8]}",
+                radius_profile_id=profile.id,
+            ),
+        )
+        assert cred.radius_profile_id == profile.id
 
     @patch("app.services.catalog.credentials._sync_credential_to_radius")
     def test_create_credential_radius_profile_not_found(
@@ -1893,7 +1889,7 @@ class TestSubscriptions:
         assert updated.radius_profile_id == second_profile.id
         assert updated.start_at is not None
 
-    def test_update_subscription_offer_projects_the_new_package_profile(
+    def test_update_subscription_offer_changes_equivalent_legacy_radius_profile(
         self, db_session, subscriber
     ):
         first_offer = _make_offer(
@@ -1911,6 +1907,12 @@ class TestSubscriptions:
         first_profile = _make_radius_profile(
             db_session,
             name="Unlimited Basic Profile",
+            download_speed=6000,
+            upload_speed=6000,
+        )
+        legacy_profile = _make_radius_profile(
+            db_session,
+            name="6 Mbps Fiber",
             download_speed=6000,
             upload_speed=6000,
         )
@@ -1939,9 +1941,10 @@ class TestSubscriptions:
                 subscriber_id=subscriber.id,
                 offer_id=first_offer.id,
                 status=SubscriptionStatus.pending,
+                radius_profile_id=legacy_profile.id,
             ),
         )
-        assert sub.radius_profile_id == first_profile.id
+        assert sub.radius_profile_id == legacy_profile.id
 
         updated = catalog_service.subscriptions.update(
             db_session,
