@@ -1,4 +1,4 @@
-"""Flush-only owner for one access credential service/profile binding."""
+"""Flush-only owner for one access credential service binding."""
 
 from __future__ import annotations
 
@@ -63,9 +63,10 @@ def stage_access_credential_binding(
         _error("radius_profile_inactive", "The target RADIUS profile is unavailable.")
     previous_subscription_id = credential.subscription_id
     previous_profile_id = credential.radius_profile_id
+    # Rebinding moves the credential to the target service. It writes no rate:
+    # the rate owner derives it from the service's package, and the credential's
+    # throttle marker belongs to the account, which a correction does not change.
     credential.subscription_id = target.id
-    credential.radius_profile_id = profile.id
-    credential.pre_throttle_radius_profile_id = None
     db.flush()
     emit_event(
         db,
