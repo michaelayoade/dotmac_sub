@@ -302,7 +302,7 @@ def resolve_authorization_profiles(
     from app.services.network import olt_ssh as core
 
     try:
-        transport, channel, _policy = core._open_shell(olt)
+        transport, channel, policy = core._open_shell(olt)
     except (core.SSHException, OSError, ValueError) as exc:
         return False, f"Connection failed while resolving OLT profiles: {exc}", None
     except Exception as exc:
@@ -314,7 +314,7 @@ def resolve_authorization_profiles(
     try:
         channel.send("enable\n")
         core._read_until_prompt(channel, r"#\s*$", timeout_sec=5)
-        core._run_huawei_cmd(channel, "screen-length 0 temporary")
+        core._apply_paging_off(channel, policy, r"#\s*$")
 
         line_output = core._run_huawei_cmd(channel, "display ont-lineprofile gpon all")
         line_profiles = _parse_profile_table(line_output)
@@ -417,7 +417,7 @@ def ensure_ont_service_profile_match(
     port_num = parts.port
 
     try:
-        transport, channel, _policy = core._open_shell(olt)
+        transport, channel, policy = core._open_shell(olt)
     except (core.SSHException, OSError, ValueError) as exc:
         return False, f"Connection failed while checking profile match: {exc}"
     except Exception as exc:
@@ -427,7 +427,7 @@ def ensure_ont_service_profile_match(
     try:
         channel.send("enable\n")
         core._read_until_prompt(channel, r"#\s*$", timeout_sec=5)
-        core._run_huawei_cmd(channel, "screen-length 0 temporary")
+        core._apply_paging_off(channel, policy, r"#\s*$")
         channel.send("config\n")
         core._read_until_prompt(channel, r"[#)]\s*$", timeout_sec=5)
         channel.send(f"interface gpon {frame_slot}\n")

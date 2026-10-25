@@ -474,12 +474,20 @@ def parse_ont_info_detail(output: str) -> OntInfoEntry | None:
 def parse_ont_info(
     output: str,
     vendor: str = "huawei",
+    *,
+    require_trailer: bool = False,
 ) -> ParseResult[OntInfoEntry]:
     """Parse `display ont info` output.
 
     Args:
         output: Raw CLI output from ont info display.
         vendor: OLT vendor (default: huawei).
+
+        require_trailer: When True, a missing ``the total of ONTs are: N``
+            trailer (and no explicit "No ONT" reply) is a failure, as it means
+            the read was cut off.
+
+    The trailer count is always enforced when present: parsed rows must equal N.
 
     Returns:
         ParseResult containing list of OntInfoEntry objects.
@@ -497,6 +505,14 @@ def parse_ont_info(
             row_count=0,
         )
 
+    # Strip ANSI redraws and pager markers and compact "0/ 2/1" before the
+    # template sees the text, as the paged OLT output would otherwise hide rows.
+    from app.services.network.olt_ssh_ont.status import (
+        inventory_has_data_rows,
+        normalize_inventory_output,
+    )
+
+    output = normalize_inventory_output(output)
     headers, rows = _parse_with_template(output, template_name, vendor)
 
     entries: list[OntInfoEntry] = []
@@ -517,6 +533,55 @@ def parse_ont_info(
             )
         except (KeyError, IndexError) as e:
             warnings.append(f"Row parse error: {e}")
+
+    if not entries:
+        # Template missed (column drift): fall back to the row shape itself.
+        from app.services.network.olt_ssh_ont.status import _ONT_ROW_FALLBACK_RE
+
+        entries = [
+            OntInfoEntry(
+                fsp=f"{m.group(1)}/{m.group(2)}/{m.group(3)}",
+                ont_id=int(m.group(4)),
+                serial_number=m.group(5),
+                control_flag="",
+                run_state=m.group(6).lower(),
+                config_state="",
+                match_state="",
+            )
+            for m in _ONT_ROW_FALLBACK_RE.finditer(output)
+        ]
+        if entries:
+            warnings.append("Template matched no rows; used regex fallback")
+
+    if not entries and inventory_has_data_rows(output):
+        # Rows are present but none parsed: unreadable, never an empty port.
+        return ParseResult(
+            success=False,
+            data=[],
+            raw_output=output,
+            template_name=template_name,
+            warnings=[*warnings, "ONT data rows present but none could be parsed"],
+            row_count=0,
+        )
+
+    # One trailer per port block; their sum is the expected row count.
+    trailers = re.findall(r"the total of ONTs are:\s*(\d+)", output, re.IGNORECASE)
+    failure: str | None = None
+    if trailers:
+        expected = sum(int(n) for n in trailers)
+        if expected != len(entries):
+            failure = f"trailer says {expected} ONTs but {len(entries)} rows parsed"
+    elif require_trailer and not re.search(r"No\s+ONT", output, re.IGNORECASE):
+        failure = "ONT total trailer missing (read cut off?)"
+    if failure:
+        return ParseResult(
+            success=False,
+            data=[],
+            raw_output=output,
+            template_name=template_name,
+            warnings=[*warnings, failure],
+            row_count=0,
+        )
 
     return ParseResult(
         success=True,

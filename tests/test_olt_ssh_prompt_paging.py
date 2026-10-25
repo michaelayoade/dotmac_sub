@@ -111,9 +111,8 @@ def test_backup_completes_with_hash_prompt_and_paging(pool) -> None:
     assert "sysname boi-olt" in config
     assert config.rstrip().endswith("return")
     # Paging disabled before the config read; pager answered with a space.
-    assert channel.sent[:3] == [
+    assert channel.sent[:2] == [
         "enable\n",
-        "screen-length 0 temporary\n",
         "display current-configuration\n",
     ]
     assert " " in channel.sent
@@ -158,7 +157,6 @@ def test_cli_command_uses_privileged_prompt_and_pages(pool) -> None:
     assert "line one" in output and "line two" in output
     assert channel.sent == [
         "enable\n",
-        "screen-length 0 temporary\n",
         "display version\n",
         " ",
     ]
@@ -196,7 +194,6 @@ def test_cli_command_without_cr_option_fails_and_channel_is_discarded(pool) -> N
     # Nothing was typed into the pending prompt.
     assert channel.sent == [
         "enable\n",
-        "screen-length 0 temporary\n",
         "display ont info\n",
     ]
     assert fake.release_close_flags == [True]
@@ -269,7 +266,7 @@ def test_rollback_firmware_reuses_one_session(monkeypatch) -> None:
 
     monkeypatch.setattr(olt_ssh, "_open_shell", open_shell)
     monkeypatch.setattr(
-        olt_ssh, "_prepare_huawei_read_shell", lambda *_: r"boi\-olt#\s*$"
+        olt_ssh, "_prepare_huawei_read_shell", lambda *_a, **_k: r"boi\-olt#\s*$"
     )
     monkeypatch.setattr(
         olt_ssh,
@@ -301,6 +298,11 @@ def test_rollback_firmware_reuses_one_session(monkeypatch) -> None:
         "displayx",
         "showtime",
         "pingx 1.1.1.1",
+        "more",
+        "more flash:/x",
+        "dir",
+        "dir flash:",
+        "pwd",
     ],
 )
 def test_validator_rejects_chaining_and_loose_prefixes(command) -> None:

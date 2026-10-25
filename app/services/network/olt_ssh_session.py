@@ -178,9 +178,8 @@ class OltSession:
             CommandResult with success/error classification.
         """
         from app.services.network.olt_ssh import (
-            HUAWEI_OPTIONAL_ARG_PROMPT,
-            _needs_huawei_command_confirm,
-            _read_until_prompt,
+            _read_paged_response,
+            _strip_pager,
         )
 
         try:
@@ -193,19 +192,17 @@ class OltSession:
             logger.debug("OLT command: %r (paced=%s)", command, slow_send)
             _send(self.olt, self.channel, command, paced=slow_send)
 
-            # Read response
-            output = _read_until_prompt(
-                self.channel,
-                rf"{self.prompt_regex}|<cr>|{HUAWEI_OPTIONAL_ARG_PROMPT}",
-                timeout_sec=timeout_sec,
-            )
-
-            # Handle optional argument prompts
-            if _needs_huawei_command_confirm(output):
-                self.channel.send("\n")
-                output = _read_until_prompt(
-                    self.channel, self.prompt_regex, timeout_sec=timeout_sec
+            # Read response through the bounded paged reader: answers the pager
+            # and argument prompts, strips pager/ANSI, raises if no prompt.
+            output = _strip_pager(
+                _read_paged_response(
+                    self.channel,
+                    self.prompt_regex,
+                    timeout_sec=max(120.0, timeout_sec),
+                    read_timeout_sec=timeout_sec,
+                    answer_optional_args=True,
                 )
+            )
 
             return parse_command_result(output)
 
@@ -318,8 +315,8 @@ def olt_session(olt: OLTDevice) -> Iterator[OltSession]:
     """
     require(Effect.device_ssh)
     from app.services.network.olt_ssh import (
+        _apply_paging_off,
         _open_shell,
-        _read_until_prompt,
     )
 
     transport: Transport | None = None
@@ -337,8 +334,7 @@ def olt_session(olt: OLTDevice) -> Iterator[OltSession]:
 
         # Enter enable mode and set terminal length
         session._enter_enable_mode()
-        _send(olt, channel, "screen-length 0 temporary")
-        _read_until_prompt(channel, r"#\s*$", timeout_sec=5)
+        _apply_paging_off(channel, policy, r"#\s*$")
 
         yield session
 

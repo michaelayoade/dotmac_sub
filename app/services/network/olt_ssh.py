@@ -179,6 +179,13 @@ def _auto_bind_tr069_after_authorize(
 
         ok, _msg, profiles = get_tr069_server_profiles(olt)
         if not ok:
+            # Incomplete/unreadable list: never auto-create (could duplicate).
+            logger.warning(
+                "TR-069 auto-bind skipped for OLT %s: tr069 profile list "
+                "unreadable (%s)",
+                olt.name,
+                _msg,
+            )
             return
         target_username = str(payload.get("username") or "").strip()
         profile = match_tr069_profile(
@@ -392,8 +399,18 @@ def _send_huawei_command(
             time.sleep(word_delay_sec)
 
 
-def _prepare_huawei_read_shell(channel: Channel, prompt_regex: str) -> str:
-    """Enter privileged mode, derive its real prompt, and disable paging."""
+def _prepare_huawei_read_shell(
+    channel: Channel,
+    prompt_regex: str,
+    *,
+    paging_off_command: str | None = None,
+) -> str:
+    """Enter privileged mode, derive its real prompt, and disable paging.
+
+    Paging is only disabled with ``paging_off_command`` (per-model policy). When
+    it is None no command is confirmed for the model, so nothing is sent and the
+    read paths answer the pager instead of burning rejected attempts.
+    """
     _send_huawei_command(channel, "enable", word_delay_sec=0)
     output = _read_until_prompt(
         channel,
@@ -404,7 +421,9 @@ def _prepare_huawei_read_shell(channel: Channel, prompt_regex: str) -> str:
     if "#" not in fallback_prompt:
         fallback_prompt = r"#\s*$"
     privileged_prompt = _derive_prompt_regex(output, fallback_prompt)
-    # Prod (MA5800-X2): the line editor echoed "screen-length0temporary" and
+    if not paging_off_command:
+        return privileged_prompt
+    # Prod (MA5800-X2): the line editor echoed the paging command without spaces and
     # answered "% Unknown command", leaving paging ON. The editor drops spaces
     # when the line arrives while it is still redrawing the prompt, so let it
     # go quiet and drain unread bytes first, send the line atomically, verify
@@ -414,7 +433,7 @@ def _prepare_huawei_read_shell(channel: Channel, prompt_regex: str) -> str:
         _settle_channel(channel)
         paging_output = _run_huawei_cmd(
             channel,
-            "screen-length 0 temporary",
+            paging_off_command,
             prompt=privileged_prompt,
         )
         if not is_error_output(paging_output):
@@ -426,6 +445,25 @@ def _prepare_huawei_read_shell(channel: Channel, prompt_regex: str) -> str:
         )
     logger.error("OLT paging could not be disabled; continuing with pager handling")
     return privileged_prompt
+
+
+def _apply_paging_off(
+    channel: Channel,
+    policy: Any,
+    prompt_regex: str,
+    *,
+    timeout_sec: float = 5.0,
+) -> None:
+    """Disable paging only if the model's policy has a confirmed command.
+
+    ``policy.paging_off_command`` is None for MA5608T/MA5800/MA5600, so nothing
+    is sent and callers keep answering the pager.
+    """
+    command = getattr(policy, "paging_off_command", None)
+    if not command:
+        return
+    _send_huawei_command(channel, command, word_delay_sec=0)
+    _read_until_prompt(channel, prompt_regex, timeout_sec=timeout_sec)
 
 
 _PAGING_OFF_ATTEMPTS = 3
@@ -485,7 +523,7 @@ def _validate_serial(serial_number: str) -> tuple[bool, str]:
 
 
 def _setup_prompt_timeout() -> float:
-    """Prompt timeout for session-setup reads (``enable`` / ``screen-length``).
+    """Prompt timeout for session-setup reads (``enable`` / paging-off).
 
     Env-tunable via ``OLT_SSH_PROMPT_TIMEOUT_SECONDS`` (default 15, floor 5;
     resolved once at startup by ``app.config``). The old hardcoded 5s left
@@ -740,7 +778,14 @@ def _connect_unlimited(
     host_key_verdict: Any = None
     host_key_observed: Any = None
     while True:
-        sock = socket.create_connection((host, port), timeout=20)
+        try:
+            sock = socket.create_connection((host, port), timeout=20)
+        except BaseException as exc:
+            if retried:
+                # The retry's own TCP connect failed: it already used the one
+                # retry, so a scope's outer retry must not connect a third time.
+                _mark_eof_retry_used(exc)
+            raise
         transport = Transport(sock)
         try:
             _apply_preferred_algorithms(transport, policy)
@@ -775,10 +820,7 @@ def _connect_unlimited(
             if retried:
                 # Tell a scope's outer retry this login already got its one
                 # retry, so the pass never exceeds 2 logins.
-                try:
-                    exc.__dict__["olt_eof_retry_used"] = True
-                except Exception:  # noqa: BLE001
-                    pass
+                _mark_eof_retry_used(exc)
             raise
         except BaseException:
             _discard_failed_transport(transport, sock)
@@ -858,6 +900,13 @@ def _record_host_key(olt: OLTDevice, verdict: Any, observed: Any) -> None:
     hostkey.record_observation(
         getattr(olt, "id", None), observed, mode=hostkey.get_mode()
     )
+
+
+def _mark_eof_retry_used(exc: BaseException) -> None:
+    try:
+        exc.__dict__["olt_eof_retry_used"] = True
+    except Exception:  # noqa: BLE001
+        pass
 
 
 def _discard_failed_transport(transport: Any, sock: Any) -> None:
@@ -1005,17 +1054,35 @@ def _needs_huawei_command_confirm(output: str) -> bool:
     return needs_huawei_command_confirm(output)
 
 
+_PAGER_ERASE_RE = re.compile(
+    r"-{2,}\s*More\s*(?:\([^)]*\))?\s*-{2,}[ \t]*(?:\x1b\[\d+D[ ]*\x1b\[\d+D)?"
+)
+
+
+def _strip_pager(text: str) -> str:
+    """Remove ``---- More ----`` pager lines and ANSI cursor sequences."""
+    return _ANSI_RE.sub("", _PAGER_ERASE_RE.sub("", text))
+
+
 def _run_huawei_cmd(channel: Channel, command: str, prompt: str = r"#\s*$") -> str:
-    """Send a command to a Huawei shell, accepting optional-argument prompts."""
+    """Send a command to a Huawei shell and read it to the real prompt.
+
+    Answers the pager (space) and optional-argument prompts (Enter) through the
+    bounded paged reader, strips pager lines and ANSI redraws, and raises
+    ``TimeoutError`` instead of returning partial output (leaving the shell at
+    the pager) when no prompt returns.
+    """
     logger.debug("OLT command: %r", command)
-    _send_huawei_command(channel, command)
-    out = _read_until_prompt(
-        channel, rf"{prompt}|<cr>|{HUAWEI_OPTIONAL_ARG_PROMPT}", timeout_sec=12
+    return _strip_pager(
+        _run_huawei_paged_cmd(
+            channel,
+            command,
+            prompt,
+            timeout_sec=120,
+            read_timeout_sec=12.0,
+            answer_optional_args=True,
+        )
     )
-    if _needs_huawei_command_confirm(out):
-        channel.send("\n")
-        out = _read_until_prompt(channel, prompt, timeout_sec=12)
-    return out
 
 
 def _read_until_prompt_idle(
@@ -1061,8 +1128,14 @@ def _run_huawei_paged_cmd(
     *,
     timeout_sec: int = 60,
     idle_timeout_sec: float | None = None,
+    read_timeout_sec: float | None = None,
+    answer_optional_args: bool = False,
 ) -> str:
     """Send a paged command within one cumulative deadline.
+
+    ``read_timeout_sec`` caps each individual read (a page must arrive within
+    it) while ``timeout_sec`` bounds the whole command. ``answer_optional_args``
+    also answers ``{ ... }:`` argument prompts with Enter.
 
     With ``idle_timeout_sec`` the deadline is idle-progress based: each read
     keeps going while bytes arrive and gives up after that many silent
@@ -1070,8 +1143,30 @@ def _run_huawei_paged_cmd(
     """
     logger.debug("OLT paged command: %r", command)
     _send_huawei_command(channel, command)
+    return _read_paged_response(
+        channel,
+        prompt,
+        timeout_sec=timeout_sec,
+        idle_timeout_sec=idle_timeout_sec,
+        read_timeout_sec=read_timeout_sec,
+        answer_optional_args=answer_optional_args,
+    )
+
+
+def _read_paged_response(
+    channel: Channel,
+    prompt: str = r"#\s*$",
+    *,
+    timeout_sec: int | float = 60,
+    idle_timeout_sec: float | None = None,
+    read_timeout_sec: float | None = None,
+    answer_optional_args: bool = False,
+) -> str:
+    """Read the response to an already-sent command, answering the pager."""
     output_parts: list[str] = []
     pager_pattern = r"---- More(?:\s*\([^)]*\)\s*)?----|<cr>|Press any key"
+    if answer_optional_args:
+        pager_pattern += f"|{HUAWEI_OPTIONAL_ARG_PROMPT}"
     combined_pattern = rf"{prompt}|{pager_pattern}"
     deadline = time.monotonic() + max(float(timeout_sec), 0.1)
 
@@ -1085,7 +1180,11 @@ def _run_huawei_paged_cmd(
             chunk = _read_until_prompt(
                 channel,
                 combined_pattern,
-                timeout_sec=remaining,
+                timeout_sec=(
+                    remaining
+                    if read_timeout_sec is None
+                    else min(remaining, read_timeout_sec)
+                ),
             )
         else:
             chunk = _read_until_prompt_idle(
@@ -1103,7 +1202,9 @@ def _run_huawei_paged_cmd(
         elif "---- More" in chunk or "Press any key" in chunk:
             channel.send(" ")  # Send space to continue
             continue
-        elif "<cr>" in chunk:
+        elif "<cr>" in chunk or (
+            answer_optional_args and re.search(HUAWEI_OPTIONAL_ARG_PROMPT, chunk)
+        ):
             channel.send("\n")
             continue
         else:
@@ -1143,7 +1244,11 @@ def get_service_ports(
 
     try:
         with ssh_context as (channel, policy):
-            prompt = _prepare_huawei_read_shell(channel, policy.prompt_regex)
+            prompt = _prepare_huawei_read_shell(
+                channel,
+                policy.prompt_regex,
+                paging_off_command=getattr(policy, "paging_off_command", None),
+            )
 
             output = _run_huawei_paged_cmd(
                 channel,
@@ -1191,8 +1296,9 @@ def create_service_ports(
     try:
         channel.send("enable\n")
         _read_until_prompt(channel, r"#\s*$", timeout_sec=_setup_prompt_timeout())
-        channel.send("screen-length 0 temporary\n")
-        _read_until_prompt(channel, r"#\s*$", timeout_sec=_setup_prompt_timeout())
+        _apply_paging_off(
+            channel, policy, r"#\s*$", timeout_sec=_setup_prompt_timeout()
+        )
 
         config_prompt = r"[#)]\s*$"
         _run_huawei_cmd(channel, "config", prompt=config_prompt)
@@ -1273,8 +1379,9 @@ def upgrade_firmware(
     try:
         channel.send("enable\n")
         _read_until_prompt(channel, r"#\s*$", timeout_sec=_setup_prompt_timeout())
-        channel.send("screen-length 0 temporary\n")
-        _read_until_prompt(channel, r"#\s*$", timeout_sec=_setup_prompt_timeout())
+        _apply_paging_off(
+            channel, policy, r"#\s*$", timeout_sec=_setup_prompt_timeout()
+        )
 
         # Huawei firmware upgrade command
         cmd = f"system-software upgrade {file_url}"
@@ -1332,7 +1439,11 @@ def get_firmware_info(olt: OLTDevice) -> tuple[bool, str, FirmwareInfo]:
         return False, f"Connection failed: {exc}", FirmwareInfo()
 
     try:
-        prompt = _prepare_huawei_read_shell(channel, policy.prompt_regex)
+        prompt = _prepare_huawei_read_shell(
+            channel,
+            policy.prompt_regex,
+            paging_off_command=getattr(policy, "paging_off_command", None),
+        )
 
         output = _run_huawei_paged_cmd(
             channel,
@@ -1383,7 +1494,11 @@ def rollback_firmware(olt: OLTDevice) -> tuple[bool, str]:
         return False, f"Connection failed: {exc}"
 
     try:
-        prompt = _prepare_huawei_read_shell(channel, policy.prompt_regex)
+        prompt = _prepare_huawei_read_shell(
+            channel,
+            policy.prompt_regex,
+            paging_off_command=getattr(policy, "paging_off_command", None),
+        )
 
         # Reuse this channel: a second login here would hold two sessions.
         version_output = _run_huawei_paged_cmd(
@@ -1472,7 +1587,11 @@ def fetch_running_config_ssh(olt: OLTDevice) -> tuple[bool, str, str]:
         with ssh_context as (channel, policy):
             # ``enable`` moves the prompt from ``>`` to ``#``; derive the real
             # privileged prompt and disable paging before the long read.
-            prompt = _prepare_huawei_read_shell(channel, policy.prompt_regex)
+            prompt = _prepare_huawei_read_shell(
+                channel,
+                policy.prompt_regex,
+                paging_off_command=getattr(policy, "paging_off_command", None),
+            )
 
             output = _run_huawei_paged_cmd(
                 channel,
@@ -1635,7 +1754,11 @@ def run_cli_command(olt: OLTDevice, command: str) -> tuple[bool, str, str]:
 
     try:
         with ssh_context as (channel, policy):
-            prompt = _prepare_huawei_read_shell(channel, policy.prompt_regex)
+            prompt = _prepare_huawei_read_shell(
+                channel,
+                policy.prompt_regex,
+                paging_off_command=getattr(policy, "paging_off_command", None),
+            )
             # Any exception raised here (including OltCliPromptError) makes
             # the pool discard the channel instead of reusing a dirty one.
             output = _run_readonly_display_cmd(channel, command, prompt=prompt)

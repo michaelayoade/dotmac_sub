@@ -114,9 +114,8 @@ def test_get_active_alarms_runs_display_command(monkeypatch) -> None:
 
     assert ok is True
     assert message == "Found 2 active alarm(s)"
-    assert sent[:3] == [
+    assert sent[:2] == [
         "enable\n",
-        "screen-length 0 temporary\n",
         "display alarm active all",
     ]
     assert sent[-1] == "close"
@@ -167,9 +166,8 @@ def test_get_ont_optical_info_runs_profiled_display_command(monkeypatch) -> None
     assert message == "ONT optical info read"
     assert info is not None
     assert info.rx_power_dbm == -20.13
-    assert sent[:3] == [
+    assert sent[:2] == [
         "enable\n",
-        "screen-length 0 temporary\n",
         "display ont optical-info 0/2 11 13",
     ]
     assert sent[-1] == "close"
@@ -218,9 +216,8 @@ def test_get_ont_info_runs_profiled_display_command(monkeypatch) -> None:
     assert ok is True
     assert message == "ONT info read"
     assert info is not None
-    assert sent[:3] == [
+    assert sent[:2] == [
         "enable\n",
-        "screen-length 0 temporary\n",
         "display ont info 0/2 11 13",
     ]
     assert sent[-1] == "close"
@@ -265,9 +262,8 @@ def test_get_ont_traffic_stats_runs_display_command(monkeypatch) -> None:
     assert message == "ONT traffic stats read"
     assert stats is not None
     assert stats.downstream_bytes == 987654321
-    assert sent[:3] == [
+    assert sent[:2] == [
         "enable\n",
-        "screen-length 0 temporary\n",
         "display ont traffic 0/2/11 13",
     ]
     assert sent[-1] == "close"

@@ -93,7 +93,7 @@ class Settings:
     # Per-process Postgres application_name (pg_stat_activity attribution).
     db_application_name: str = os.getenv("DB_APPLICATION_NAME", "")
     db_lock_timeout_ms: int = int(os.getenv("DB_LOCK_TIMEOUT_MS", "10000"))
-    # Prompt timeout for OLT SSH session-setup reads (enable/screen-length);
+    # Prompt timeout for OLT SSH session-setup reads (enable/paging-off);
     # floor 5s — see app/services/network/olt_ssh.py:_setup_prompt_timeout.
     olt_ssh_prompt_timeout_seconds: float = max(
         5.0, float(os.getenv("OLT_SSH_PROMPT_TIMEOUT_SECONDS", "15"))

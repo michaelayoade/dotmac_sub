@@ -486,7 +486,7 @@ def execute_job(db: Session, *, job_id: str) -> dict[str, Any]:
                         # cycle with no path back.
                         unit_price=contracted_amount_for_offer(db, offer.id),
                     )
-                    apply_offer_radius_profile(db, target, sync_credentials=False)
+                    apply_offer_radius_profile(db, target)
                     db.add(target)
                 elif offer is not None:
                     from app.services.billing_profile import (
@@ -510,14 +510,9 @@ def execute_job(db: Session, *, job_id: str) -> dict[str, Any]:
                             ),
                             subscription_id=target.id,
                         )
-                    previous_offer_id = target.offer_id
                     target.offer_id = offer.id
                     target.billing_mode = target_billing_mode
-                    apply_offer_radius_profile(
-                        db,
-                        target,
-                        previous_offer_id=previous_offer_id,
-                    )
+                    apply_offer_radius_profile(db, target)
                 elif target.radius_profile_id is None:
                     apply_offer_radius_profile(db, target)
                 desired_status = (

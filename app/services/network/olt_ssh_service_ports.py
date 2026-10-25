@@ -109,7 +109,11 @@ def get_service_port_by_index(
         return False, f"Unexpected error: {type(exc).__name__}", None
 
     try:
-        prompt = core._prepare_huawei_read_shell(channel, policy.prompt_regex)
+        prompt = core._prepare_huawei_read_shell(
+            channel,
+            policy.prompt_regex,
+            paging_off_command=getattr(policy, "paging_off_command", None),
+        )
         output = core._run_huawei_paged_cmd(
             channel,
             f"display service-port {index}",

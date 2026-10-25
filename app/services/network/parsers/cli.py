@@ -16,9 +16,6 @@ _CONTROL_CHARS_RE = re.compile(r"[\x00-\x1f\x7f]")
 READONLY_COMMAND_PREFIXES = (
     "display",
     "show",
-    "dir",
-    "pwd",
-    "more",
     "ping",
     "tracert",
 )

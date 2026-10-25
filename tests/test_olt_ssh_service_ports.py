@@ -35,7 +35,7 @@ def _patch_successful_shell(monkeypatch, command_output: str) -> None:
     )
     monkeypatch.setattr(
         "app.services.network.olt_ssh._prepare_huawei_read_shell",
-        lambda _channel, prompt: prompt,
+        lambda _channel, prompt, **_k: prompt,
     )
     monkeypatch.setattr(
         "app.services.network.olt_ssh._run_huawei_cmd",
@@ -202,7 +202,7 @@ def test_get_service_port_by_index_parses_huawei_detail_output(monkeypatch) -> N
     )
     monkeypatch.setattr(
         "app.services.network.olt_ssh._prepare_huawei_read_shell",
-        lambda _channel, prompt: prompt,
+        lambda _channel, prompt, **_k: prompt,
     )
     monkeypatch.setattr(
         "app.services.network.olt_ssh._run_huawei_paged_cmd",
