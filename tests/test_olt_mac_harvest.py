@@ -540,3 +540,102 @@ def test_harvest_skips_a_busy_olt_without_counting_an_error(db_session, monkeypa
 
     assert counters["olt_errors"] == 0
     assert counters["observations"] == 0
+
+
+def test_harvest_login_refusal_is_not_an_error_and_stops_the_walk(
+    db_session, monkeypatch
+):
+    olt = _huawei_olt(db_session)
+    _online_ont(db_session, olt, board="0/1", port="7", ont_id=5, serial="HWTC00000007")
+    _online_ont(db_session, olt, board="0/1", port="8", ont_id=6, serial="HWTC00000008")
+    db_session.commit()
+    calls: list[str] = []
+
+    def _run(olt, command):
+        calls.append(command)
+        return False, "Connection failed: olt_login_failed: EOFError: ", ""
+
+    monkeypatch.setattr(olt_mac_harvest, "_run_readonly_command", _run)
+    counters = harvest_olt_mac_tables(db_session)
+
+    assert len(calls) == 1
+    assert counters["olt_login_refused"] == 1
+    assert counters["olt_errors"] == 0
+
+
+def test_single_olt_task_does_not_retry_on_login_refusal(monkeypatch):
+    import uuid
+    from contextlib import contextmanager
+
+    from app.tasks import olt_mac_harvest as task_mod
+
+    @contextmanager
+    def _lock(_key):
+        yield True
+
+    @contextmanager
+    def _session():
+        yield object()
+
+    monkeypatch.setattr(task_mod, "postgres_session_advisory_lock", _lock)
+    monkeypatch.setattr(task_mod.db_session_adapter, "session", _session)
+    monkeypatch.setattr(
+        olt_mac_harvest,
+        "harvest_olt_mac_table",
+        lambda db, olt_id: {"olts_polled": 1, "olt_errors": 0, "olt_login_refused": 1},
+    )
+    olt_id = str(uuid.uuid4())
+    # Returns (no RuntimeError), so Celery autoretry is never triggered.
+    assert task_mod.run_single_olt_mac_harvest(olt_id) == {
+        "olt_id": olt_id,
+        "skipped": "olt_login_failed",
+    }
+
+
+def test_harvest_auth_failure_is_logged_and_not_counted_as_refusal(
+    db_session, monkeypatch, caplog
+):
+    olt = _huawei_olt(db_session)
+    _online_ont(db_session, olt, board="0/1", port="7", ont_id=5, serial="HWTC00000007")
+    db_session.commit()
+    monkeypatch.setattr(
+        olt_mac_harvest,
+        "_run_readonly_command",
+        lambda o, c: (False, "Connection failed: Authentication failed.", ""),
+    )
+    with caplog.at_level("ERROR"):
+        counters = harvest_olt_mac_tables(db_session)
+
+    assert counters["olt_auth_failed"] == 1
+    assert counters["olt_login_refused"] == 0
+    assert any(
+        "olt_mac_harvest_auth_rejected" in r.getMessage() for r in caplog.records
+    )
+
+
+def test_single_olt_task_reports_auth_failure_without_retry(monkeypatch, caplog):
+    import uuid
+    from contextlib import contextmanager
+
+    from app.tasks import olt_mac_harvest as task_mod
+
+    @contextmanager
+    def _lock(_key):
+        yield True
+
+    @contextmanager
+    def _session():
+        yield object()
+
+    monkeypatch.setattr(task_mod, "postgres_session_advisory_lock", _lock)
+    monkeypatch.setattr(task_mod.db_session_adapter, "session", _session)
+    monkeypatch.setattr(
+        olt_mac_harvest,
+        "harvest_olt_mac_table",
+        lambda db, olt_id: {"olts_polled": 1, "olt_errors": 0, "olt_auth_failed": 1},
+    )
+    olt_id = str(uuid.uuid4())
+    with caplog.at_level("ERROR"):
+        result = task_mod.run_single_olt_mac_harvest(olt_id)
+    assert result == {"olt_id": olt_id, "skipped": "olt_auth_failed"}
+    assert any("auth_rejected" in r.getMessage() for r in caplog.records)

@@ -311,3 +311,19 @@ def test_status_poll_still_raises_for_other_failures(db_session, monkeypatch):
 
     with pytest.raises(RuntimeError, match="not recognized"):
         _poll_with(db_session, monkeypatch, fake_registered)
+
+
+def test_status_poll_auth_failure_is_logged_and_not_a_refusal_skip(
+    db_session, monkeypatch, caplog
+):
+    def fake_registered(_olt, fsps, **_kwargs):
+        return False, "Connection failed: Authentication failed.", []
+
+    with caplog.at_level("ERROR"):
+        olt, result = _poll_with(db_session, monkeypatch, fake_registered)
+
+    assert result == {"olt_id": str(olt.id), "skipped": "olt_auth_failed"}
+    assert result["skipped"] != "olt_login_failed"
+    assert any(
+        "olt_status_poll_auth_rejected" in r.getMessage() for r in caplog.records
+    )

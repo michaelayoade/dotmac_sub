@@ -1233,3 +1233,170 @@ def test_scope_reopens_are_capped_and_wait_the_release_grace(server, monkeypatch
             olt_ssh._open_shell(olt)
         assert len(opens) == 4  # did not loop or log in again
     assert server.held_exclusive() == 0
+
+
+# ── Hotfix: login-failure amplification ─────────────────────────────────────
+
+
+def test_first_login_failure_means_one_connection_attempt_for_multi_port_scope(
+    server, monkeypatch
+):
+    from app.services.network.olt_ssh_limiter import OltLoginFailed
+
+    attempts: list[int] = []
+
+    def refusing(olt, **kw):
+        attempts.append(1)
+        raise EOFError
+
+    monkeypatch.setattr(olt_ssh, "_connect_unlimited", refusing)
+    monkeypatch.setattr(olt_ssh_limiter, "time", _TimeShim(lambda _s: None))
+    set_config_override(LimiterConfig(max_ma5608t=1, release_grace_seconds_ma5608t=0))
+    olt = _olt()
+    with olt_ssh_scope(olt, OltSshPriority.BACKGROUND):
+        for _port in range(6):
+            with pytest.raises(OltLoginFailed, match="olt_login_failed:"):
+                olt_ssh._open_shell(olt)
+    assert len(attempts) == 1
+    assert server.held_exclusive() == 0
+
+
+def test_relogin_grace_applies_on_ma5800_but_not_on_release():
+    config = LimiterConfig()
+    assert config.relogin_grace_for("ma5800") == 2.0
+    assert config.relogin_grace_for("ma5608t") == 2.0
+    assert config.relogin_grace_for("other") == 2.0
+    assert config.grace_for("ma5800") == 0.0  # not on every session close
+    assert LimiterConfig(relogin_grace_seconds=0).relogin_grace_for("ma5800") == 0.0
+    assert "olt_ssh_relogin_grace_seconds" in olt_ssh_limiter._CONFIG_KEYS
+
+
+def test_login_refusal_message_matches_observed_failures():
+    from app.services.network.olt_ssh_limiter import (
+        is_login_failed_message,
+        is_login_refusal_message,
+    )
+
+    for text in (
+        "EOFError",
+        "[Errno 104] Connection reset by peer",
+        "No existing session",
+        "Authentication timeout",
+        "Error reading SSH protocol banner",
+    ):
+        assert is_login_refusal_message(text), text
+    assert not is_login_refusal_message("olt_busy: all slots in use")
+    assert not is_login_refusal_message("Authentication failed.")
+    # our own prefix is not a refusal pattern, only a sticky-outcome marker
+    assert not is_login_refusal_message("olt_login_failed: x")
+    assert is_login_failed_message("olt_login_failed: x")
+
+
+def test_write_scope_gets_exactly_one_retry_after_grace(server, monkeypatch):
+    from app.services.network.olt_ssh_limiter import OltLoginFailed
+
+    sleeps: list[float] = []
+    monkeypatch.setattr(olt_ssh_limiter, "time", _TimeShim(sleeps.append))
+    opens: list[FakeSessionTransport] = []
+    attempts: list[int] = []
+
+    def flaky(olt, **kw):
+        attempts.append(1)
+        if len(attempts) == 1:
+            raise OSError("No existing session")
+        return _clean_session(opens)
+
+    monkeypatch.setattr(olt_ssh, "_connect_unlimited", flaky)
+    set_config_override(LimiterConfig(max_ma5608t=1, release_grace_seconds_ma5608t=0))
+    olt = _olt()
+    with olt_ssh_scope(olt, OltSshPriority.WRITE):
+        transport, _channel, _ = olt_ssh._open_shell(olt)
+        transport.close()
+    assert len(attempts) == 2
+    assert 2.0 in sleeps  # grace before the second attempt
+
+    attempts.clear()
+    monkeypatch.setattr(
+        olt_ssh,
+        "_connect_unlimited",
+        lambda olt, **kw: (attempts.append(1), (_ for _ in ()).throw(EOFError()))[1],
+    )
+    with olt_ssh_scope(olt, OltSshPriority.INTERACTIVE):
+        with pytest.raises(OltLoginFailed):
+            olt_ssh._open_shell(olt)
+        with pytest.raises(OltLoginFailed):
+            olt_ssh._open_shell(olt)  # sticky after the cap
+    assert len(attempts) == 2
+
+
+def test_auth_rejection_is_not_swallowed_and_is_sticky(server, monkeypatch):
+    attempts: list[int] = []
+
+    def bad_creds(olt, **kw):
+        attempts.append(1)
+        raise AuthenticationException("Authentication failed.")
+
+    monkeypatch.setattr(olt_ssh, "_connect_unlimited", bad_creds)
+    set_config_override(LimiterConfig(max_ma5608t=1, release_grace_seconds_ma5608t=0))
+    olt = _olt()
+    for priority in (OltSshPriority.BACKGROUND, OltSshPriority.WRITE):
+        attempts.clear()
+        with olt_ssh_scope(olt, priority):
+            for _ in range(3):
+                with pytest.raises(AuthenticationException):
+                    olt_ssh._open_shell(olt)
+        assert len(attempts) == 1
+
+
+def test_scope_login_failures_are_metered(server, monkeypatch):
+    from app.services.network import olt_ssh_metrics
+
+    recorded: list[tuple[str, str, str]] = []
+    monkeypatch.setattr(
+        olt_ssh_metrics, "record_open", lambda o, p, out: recorded.append((o, p, out))
+    )
+    monkeypatch.setattr(
+        olt_ssh,
+        "_connect_unlimited",
+        lambda olt, **kw: (_ for _ in ()).throw(EOFError()),
+    )
+    set_config_override(LimiterConfig(max_ma5608t=1, release_grace_seconds_ma5608t=0))
+    olt = _olt()
+    with olt_ssh_scope(olt, OltSshPriority.BACKGROUND):
+        for _ in range(2):
+            with pytest.raises(OSError):
+                olt_ssh._open_shell(olt)
+    outcomes = [r[2] for r in recorded]
+    assert "auth_eof" in outcomes
+    assert "login_skipped" in outcomes
+
+
+def test_write_scope_total_logins_capped_at_two(server, connect_env, monkeypatch):
+    """Inner EOF retry used -> no outer retry (2 logins, not 4)."""
+    monkeypatch.setattr(olt_ssh_limiter, "time", _TimeShim(lambda _s: None))
+    set_config_override(LimiterConfig(max_ma5608t=1, release_grace_seconds_ma5608t=0))
+    banner = "Error reading SSH protocol banner"
+    ScriptedTransport.script = [SSHException(banner)] * 4
+    olt = _device()
+    with olt_ssh_scope(olt, OltSshPriority.WRITE):
+        with pytest.raises(OSError):  # OltLoginFailed
+            olt_ssh._open_shell(olt)
+    assert ScriptedTransport.created == 2
+
+
+def test_write_scope_outer_retry_disables_inner_retry(server, connect_env, monkeypatch):
+    """Inner retry unavailable on attempt 1 -> outer retry runs once, still <= 2."""
+    monkeypatch.setattr(olt_ssh_limiter, "time", _TimeShim(lambda _s: None))
+    set_config_override(
+        LimiterConfig(
+            max_ma5608t=1,
+            release_grace_seconds_ma5608t=0,
+            auth_eof_retry_delay_seconds=0,  # inner retry off
+        )
+    )
+    ScriptedTransport.script = [SSHException("transport shut down or saw EOF")] * 4
+    olt = _device()
+    with olt_ssh_scope(olt, OltSshPriority.WRITE):
+        with pytest.raises(OSError):
+            olt_ssh._open_shell(olt)
+    assert ScriptedTransport.created == 2
