@@ -271,3 +271,18 @@ def test_get_ont_traffic_stats_runs_display_command(monkeypatch) -> None:
         "display ont traffic 0/2/11 13",
     ]
     assert sent[-1] == "close"
+
+
+def test_run_readonly_command_catches_eoferror_as_connection_failure(monkeypatch):
+    from types import SimpleNamespace
+
+    from app.services.network import olt_ssh
+    from app.services.network.olt_ssh_diagnostics import _run_readonly_command
+
+    def boom(_olt):
+        raise EOFError
+
+    monkeypatch.setattr(olt_ssh, "_open_shell", boom)
+    ok, message, output = _run_readonly_command(SimpleNamespace(name="x"), "display x")
+    assert (ok, output) == (False, "")
+    assert message.startswith("Connection failed")

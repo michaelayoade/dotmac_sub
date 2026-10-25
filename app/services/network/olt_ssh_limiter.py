@@ -46,6 +46,8 @@ from dataclasses import dataclass
 from enum import IntEnum
 from typing import Any
 
+from paramiko.ssh_exception import AuthenticationException, SSHException
+
 logger = logging.getLogger(__name__)
 
 # Backoff jitter only (not security); SystemRandom keeps bandit quiet.
@@ -75,6 +77,50 @@ class OltSessionBusy(TimeoutError):
     "connection failed, nothing sent". That is safe because no command was ever
     issued: the exception is raised before any socket is opened.
     """
+
+
+class OltLoginFailed(TimeoutError):
+    """The OLT refused (or dropped) an SSH login inside a scope.
+
+    Subclasses ``TimeoutError`` so existing ``except (SSHException, OSError,
+    TimeoutError)`` blocks treat it as "connection failed, nothing sent". Once
+    raised, every later checkout in the same scope raises it again without
+    opening a connection.
+    """
+
+
+LOGIN_FAILED_PREFIX = "olt_login_failed:"
+
+
+def login_failed_message(detail: str) -> str:
+    return f"{LOGIN_FAILED_PREFIX} {detail}"
+
+
+_LOGIN_REFUSAL_PATTERNS = (
+    re.compile(r"transport shut down or saw EOF", re.IGNORECASE),
+    re.compile(r"Error reading SSH protocol banner", re.IGNORECASE),
+    re.compile(r"Errno 104|Connection reset by peer", re.IGNORECASE),
+    re.compile(r"No existing session", re.IGNORECASE),
+    re.compile(r"Authentication timeout", re.IGNORECASE),
+    re.compile(r"\bEOFError\b"),
+)
+
+
+def is_login_refusal_message(message: object) -> bool:
+    """True when ``message`` describes an OLT refusing/dropping a login."""
+    text = str(message or "")
+    return any(pattern.search(text) for pattern in _LOGIN_REFUSAL_PATTERNS)
+
+
+def is_login_failed_message(message: object) -> bool:
+    """True for the sticky scope outcome (``olt_login_failed:``)."""
+    return LOGIN_FAILED_PREFIX in str(message or "")
+
+
+def is_auth_rejected_message(message: object) -> bool:
+    """True for a credential rejection (a real fault, never a transient skip)."""
+    text = str(message or "").lower()
+    return "authentication failed" in text or "auth_rejected" in text
 
 
 def busy_message(detail: str) -> str:
@@ -111,6 +157,7 @@ class LimiterConfig:
     auth_eof_retry_delay_seconds: int = 7
     logout_on_close: bool = True
     release_grace_seconds_ma5608t: int = 2
+    relogin_grace_seconds: int = 2
     busy_max_deferrals: int = 5
 
     def limit_for(self, model_key: str) -> int:
@@ -131,6 +178,14 @@ class LimiterConfig:
             return float(max(0, self.release_grace_seconds_ma5608t))
         return 0.0
 
+    def relogin_grace_for(self, model_key: str) -> float:
+        """Grace before a reopen or re-login: every model, MA5800 included.
+        Not applied on ordinary session close."""
+        base = float(max(0, self.relogin_grace_seconds))
+        if model_key == "ma5608t":
+            return max(base, self.grace_for(model_key))
+        return base
+
 
 _CONFIG_KEYS = {
     "olt_ssh_limiter_enabled": "enabled",
@@ -143,6 +198,7 @@ _CONFIG_KEYS = {
     "olt_ssh_auth_eof_retry_delay_seconds": "auth_eof_retry_delay_seconds",
     "olt_ssh_logout_on_close": "logout_on_close",
     "olt_ssh_release_grace_seconds_ma5608t": "release_grace_seconds_ma5608t",
+    "olt_ssh_relogin_grace_seconds": "relogin_grace_seconds",
     "olt_busy_max_deferrals": "busy_max_deferrals",
 }
 
@@ -564,8 +620,10 @@ class OltSshScope:
         lease: SlotLease,
         label: str,
         grace_seconds: float = 0.0,
+        priority: OltSshPriority = OltSshPriority.BACKGROUND,
     ) -> None:
         self.grace_seconds = grace_seconds
+        self.priority = priority
         self.reopens = 0
         self.olt_key = olt_key
         self.lease = lease
@@ -575,6 +633,9 @@ class OltSshScope:
         self._session: tuple[Any, Any, Any] | None = None
         self.opens = 0
         self.reuses = 0
+        self.login_failures = 0
+        self.login_failure_detail: str | None = None
+        self.auth_failure_detail: str | None = None
 
     def checkout(self, opener: Any, normaliser: Any) -> tuple[Any, Any, Any]:
         """Return a view of the scope's session.
@@ -584,6 +645,13 @@ class OltSshScope:
         whether it worked; on failure the session is discarded and reopened
         once, still inside the same slot.
         """
+        if self.auth_failure_detail is not None:
+            self._record_open_metric("login_skipped")
+            raise AuthenticationException(self.auth_failure_detail)
+        if self.login_failure_detail is not None:
+            # A login already failed in this scope: never touch the OLT again.
+            self._record_open_metric("login_skipped")
+            raise OltLoginFailed(login_failed_message(self.login_failure_detail))
         me = threading.get_ident()
         if self._owner == me:
             raise OltSessionBusy(
@@ -617,7 +685,7 @@ class OltSshScope:
                     self.reopens += 1
                     if self.grace_seconds > 0:
                         time.sleep(self.grace_seconds)
-                session = opener()
+                session = self._open_checked(opener)
                 self._session = session
                 self.opens += 1
             transport, channel, policy = session
@@ -627,6 +695,63 @@ class OltSshScope:
             self._owner = None
             self._use_lock.release()
             raise
+
+    def _record_open_metric(self, outcome: str) -> None:
+        from app.services.network import olt_ssh_metrics
+
+        olt_ssh_metrics.record_open(self.label, self.priority.name.lower(), outcome)
+
+    def _open_checked(self, opener: Any) -> Any:
+        """Open a session; failed logins are metered and (BACKGROUND) sticky.
+
+        BACKGROUND fails the whole scope on the first failed login. WRITE and
+        INTERACTIVE get exactly one more attempt after the grace for a
+        transient refusal. A credential rejection propagates unwrapped and is
+        sticky for every priority (never retry bad credentials).
+        """
+        from app.services.network import olt_ssh_metrics
+
+        attempts_allowed = 1 if self.priority is OltSshPriority.BACKGROUND else 2
+        attempt = 0
+        while True:
+            attempt += 1
+            try:
+                return opener()
+            except (OltSessionBusy, OltLoginFailed):
+                raise
+            except BaseException as exc:
+                if not isinstance(
+                    exc, SSHException | EOFError | OSError | RuntimeError
+                ):
+                    raise
+                outcome = olt_ssh_metrics.classify_open_failure(exc)
+                self._record_open_metric(outcome)
+                self.login_failures += 1
+                if outcome == "auth_rejected":
+                    self.auth_failure_detail = (
+                        str(exc)[:200] or "Authentication failed."
+                    )
+                    logger.error("olt_ssh_scope_auth_rejected olt=%s", self.label)
+                    raise
+                transient = isinstance(exc, EOFError) or is_login_refusal_message(exc)
+                if (
+                    transient
+                    and attempt < attempts_allowed
+                    and not getattr(exc, "olt_eof_retry_used", False)
+                ):
+                    if self.grace_seconds > 0:
+                        time.sleep(self.grace_seconds)
+                    continue
+                self.login_failure_detail = f"{type(exc).__name__}: {exc}"[:200]
+                logger.warning(
+                    "olt_ssh_scope_login_failed olt=%s failures=%d error=%s",
+                    self.label,
+                    self.login_failures,
+                    self.login_failure_detail,
+                )
+                raise OltLoginFailed(
+                    login_failed_message(self.login_failure_detail)
+                ) from exc
 
     def checkin(self, *, discard: bool) -> None:
         if self._owner is None:
@@ -719,7 +844,10 @@ def olt_ssh_scope(
             olt_key=olt_key,
             lease=lease,
             label=str(getattr(olt, "name", None) or olt_key),
-            grace_seconds=config.grace_for(model_key_for(getattr(olt, "model", None))),
+            grace_seconds=config.relogin_grace_for(
+                model_key_for(getattr(olt, "model", None))
+            ),
+            priority=priority,
         )
         token = _scopes_var.set((*_scopes_var.get(), (olt_key, scope)))
         started = time.monotonic()

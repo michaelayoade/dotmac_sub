@@ -3851,6 +3851,16 @@ SETTINGS_SPECS: list[SettingSpec] = [
     ),
     SettingSpec(
         domain=SettingDomain.network,
+        key="olt_ssh_relogin_grace_seconds",
+        env_var=None,
+        value_type=SettingValueType.integer,
+        default=2,
+        label="OLT SSH grace before a re-login or reopen, all models (seconds)",
+        min_value=0,
+        max_value=30,
+    ),
+    SettingSpec(
+        domain=SettingDomain.network,
         key="olt_busy_max_deferrals",
         env_var=None,
         value_type=SettingValueType.integer,

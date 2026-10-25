@@ -404,12 +404,47 @@ def _prepare_huawei_read_shell(channel: Channel, prompt_regex: str) -> str:
     if "#" not in fallback_prompt:
         fallback_prompt = r"#\s*$"
     privileged_prompt = _derive_prompt_regex(output, fallback_prompt)
-    _run_huawei_cmd(
-        channel,
-        "screen-length 0 temporary",
-        prompt=privileged_prompt,
-    )
+    # Prod (MA5800-X2): the line editor echoed "screen-length0temporary" and
+    # answered "% Unknown command", leaving paging ON. The editor drops spaces
+    # when the line arrives while it is still redrawing the prompt, so let it
+    # go quiet and drain unread bytes first, send the line atomically, verify
+    # the reply, and retry (settling again) before giving up. If paging still
+    # cannot be disabled we continue: every read path answers "---- More ----".
+    for attempt in range(_PAGING_OFF_ATTEMPTS):
+        _settle_channel(channel)
+        paging_output = _run_huawei_cmd(
+            channel,
+            "screen-length 0 temporary",
+            prompt=privileged_prompt,
+        )
+        if not is_error_output(paging_output):
+            return privileged_prompt
+        logger.warning(
+            "OLT rejected paging disable (attempt %d): %s",
+            attempt + 1,
+            paging_output.strip()[-120:],
+        )
+    logger.error("OLT paging could not be disabled; continuing with pager handling")
     return privileged_prompt
+
+
+_PAGING_OFF_ATTEMPTS = 3
+_SETTLE_SECONDS = 0.4
+
+
+def _settle_channel(channel: Channel) -> None:
+    """Let the OLT finish redrawing its prompt, then discard unread bytes."""
+    time.sleep(_SETTLE_SECONDS)
+    ready = getattr(channel, "recv_ready", None)
+    if not callable(ready):
+        return
+    for _ in range(20):
+        try:
+            if not ready():
+                return
+            channel.recv(4096)
+        except Exception:
+            return
 
 
 def _replace_policy_prompt_regex(
@@ -665,6 +700,7 @@ def _connect_unlimited(
     *,
     lease: Any | None,
     priority_name: str,
+    allow_eof_retry: bool = True,
 ) -> tuple[Transport, Channel, OltSshPolicy]:
     """Open the SSH shell. The caller already holds any slot (``lease``).
 
@@ -695,7 +731,9 @@ def _connect_unlimited(
     model_key = olt_ssh_limiter.model_key_for(getattr(olt, "model", None))
     port = int(olt.ssh_port or 22)
     retry_allowed = (
-        priority_name != "background" and config.auth_eof_retry_delay_seconds > 0
+        allow_eof_retry
+        and priority_name != "background"
+        and config.auth_eof_retry_delay_seconds > 0
     )
     opened_at = time.monotonic()
     retried = False
@@ -731,6 +769,13 @@ def _connect_unlimited(
                 )
                 time.sleep(delay)
                 continue
+            if retried:
+                # Tell a scope's outer retry this login already got its one
+                # retry, so the pass never exceeds 2 logins.
+                try:
+                    exc.__dict__["olt_eof_retry_used"] = True
+                except Exception:  # noqa: BLE001
+                    pass
             raise
         except BaseException:
             _discard_failed_transport(transport, sock)
@@ -831,7 +876,12 @@ def _open_shell(olt: OLTDevice) -> tuple[Transport, Channel, OltSshPolicy]:
     priority_name = olt_ssh_limiter.current_priority().name.lower()
     if scope is not None:
         transport, channel, policy = scope.checkout(
-            lambda: _connect_unlimited(olt, lease=None, priority_name=priority_name),
+            lambda: _connect_unlimited(
+                olt,
+                lease=None,
+                priority_name=priority_name,
+                allow_eof_retry=scope.login_failures == 0,
+            ),
             _scope_normaliser,
         )
         # A reused session may sit at `#` (privileged) while the login prompt
