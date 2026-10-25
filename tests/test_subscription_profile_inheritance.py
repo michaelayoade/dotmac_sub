@@ -1,102 +1,132 @@
-"""The package profile is projected onto the subscription; credentials are not touched.
+from types import SimpleNamespace
+from unittest.mock import MagicMock, patch
+from uuid import uuid4
 
-``apply_offer_radius_profile`` is the one writer of ``Subscription.radius_profile_id``
-and it mirrors the package link. It used to guess from the previous offer whether
-each credential "inherited" the old profile and rewrite every credential of the
-subscriber, so a plan change on one service rewrote another service's credential
-and a stale imported profile stayed forever. It now writes the subscription only.
-"""
-
-from __future__ import annotations
-
-from app.services import access_rate_profile as owner
 from app.services.catalog.subscriptions import apply_offer_radius_profile
-from tests.test_access_rate_profile import _account, _offer, _profile, _service
 
 
-def test_sets_the_package_profile_for_a_subscription_without_one(db_session):
-    ten = _profile(db_session, "Ten", rate="10M/10M")
-    offer = _offer(db_session, "A", profile=ten)
-    sub, credential = _service(db_session, offer)
-
-    resolved = apply_offer_radius_profile(db_session, sub)
-
-    assert resolved == ten.id
-    assert sub.radius_profile_id == ten.id
-    assert credential.radius_profile_id is None
-
-
-def test_a_plan_change_projects_the_new_package_and_rewrites_no_credential(db_session):
-    ten = _profile(db_session, "Ten", rate="10M/10M")
-    twenty = _profile(db_session, "Twenty", rate="20M/20M")
-    fifteen = _profile(db_session, "Fifteen", rate="15M/15M")
-    offer_a = _offer(db_session, "A", profile=ten)
-    offer_b = _offer(db_session, "B", profile=twenty)
-    # A stale imported profile in the slot: the old heuristic left it forever.
-    sub, credential = _service(db_session, offer_a, sub_profile=ten, slot=fifteen)
-
-    sub.offer_id = offer_b.id
-    apply_offer_radius_profile(db_session, sub)
-    db_session.commit()
-
-    assert sub.radius_profile_id == twenty.id
-    assert credential.radius_profile_id == fifteen.id  # untouched
-    assert owner.resolve_effective_rate(db_session, sub, credential).rate_limit == (
-        "20M/20M"
+def _mock_db_with_credentials(*credentials):
+    db = MagicMock()
+    db.query.return_value.filter.return_value.filter.return_value.all.return_value = (
+        list(credentials)
     )
+    db.get.return_value = None
+    return db
 
 
-def test_a_plan_change_on_one_service_leaves_the_other_service_alone(db_session):
-    """Two services on one account: changing service 1 must not touch service 2."""
-    ten = _profile(db_session, "Ten", rate="10M/10M")
-    twenty = _profile(db_session, "Twenty", rate="20M/20M")
-    offer_a = _offer(db_session, "A", profile=ten)
-    offer_b = _offer(db_session, "B", profile=twenty)
-    account = _account(db_session)
-    first, first_cred = _service(db_session, offer_a, sub_profile=ten, account=account)
-    second, second_cred = _service(
-        db_session, offer_a, sub_profile=ten, slot=ten, account=account
+def test_apply_offer_radius_profile_sets_offer_default_for_inherited_subscription():
+    subscription = SimpleNamespace(
+        subscriber_id=uuid4(),
+        offer_id=uuid4(),
+        radius_profile_id=None,
     )
+    credential = SimpleNamespace(radius_profile_id=None)
+    new_profile_id = uuid4()
+    db = _mock_db_with_credentials(credential)
 
-    first.offer_id = offer_b.id
-    apply_offer_radius_profile(db_session, first)
-    db_session.commit()
+    with patch(
+        "app.services.catalog.subscriptions._resolve_offer_radius_profile_id",
+        side_effect=[None, new_profile_id],
+    ):
+        resolved = apply_offer_radius_profile(
+            db,
+            subscription,
+            previous_offer_id=uuid4(),
+        )
 
-    assert first.radius_profile_id == twenty.id
-    assert second.radius_profile_id == ten.id
-    assert second_cred.radius_profile_id == ten.id  # not rewritten
-    assert first_cred.radius_profile_id is None
-    assert owner.resolve_effective_rate(db_session, second, second_cred).rate_limit == (
-        "10M/10M"
+    assert resolved == new_profile_id
+    assert subscription.radius_profile_id == new_profile_id
+    assert credential.radius_profile_id == new_profile_id
+
+
+def test_apply_offer_radius_profile_preserves_manual_override():
+    old_default = uuid4()
+    new_default = uuid4()
+    manual_profile = uuid4()
+    subscription = SimpleNamespace(
+        subscriber_id=uuid4(),
+        offer_id=uuid4(),
+        radius_profile_id=manual_profile,
     )
-    assert owner.resolve_effective_rate(db_session, first, first_cred).rate_limit == (
-        "20M/20M"
+    credential = SimpleNamespace(radius_profile_id=manual_profile)
+    db = _mock_db_with_credentials(credential)
+
+    with patch(
+        "app.services.catalog.subscriptions._resolve_offer_radius_profile_id",
+        side_effect=[old_default, new_default],
+    ):
+        resolved = apply_offer_radius_profile(
+            db,
+            subscription,
+            previous_offer_id=uuid4(),
+        )
+
+    assert resolved == new_default
+    assert subscription.radius_profile_id == manual_profile
+    assert credential.radius_profile_id == manual_profile
+
+
+def test_apply_offer_radius_profile_inherits_equivalent_legacy_profile():
+    old_default = uuid4()
+    new_default = uuid4()
+    legacy_same_speed = uuid4()
+    previous_offer_id = uuid4()
+    subscription = SimpleNamespace(
+        subscriber_id=uuid4(),
+        offer_id=uuid4(),
+        radius_profile_id=legacy_same_speed,
     )
+    credential = SimpleNamespace(radius_profile_id=legacy_same_speed)
+    db = _mock_db_with_credentials(credential)
+
+    with (
+        patch(
+            "app.services.catalog.subscriptions._resolve_offer_radius_profile_id",
+            side_effect=[old_default, new_default],
+        ),
+        patch(
+            "app.services.catalog.subscriptions._radius_profiles_are_speed_equivalent",
+            return_value=True,
+        ),
+        patch(
+            "app.services.catalog.subscriptions._radius_profile_matches_offer",
+            return_value=False,
+        ),
+    ):
+        resolved = apply_offer_radius_profile(
+            db,
+            subscription,
+            previous_offer_id=previous_offer_id,
+        )
+
+    assert resolved == new_default
+    assert subscription.radius_profile_id == new_default
+    assert credential.radius_profile_id == new_default
 
 
-def test_an_ambiguous_package_uses_the_requested_link_when_it_is_one(db_session):
-    from app.models.catalog import OfferRadiusProfile
-
-    ten = _profile(db_session, "Ten", rate="10M/10M")
-    twelve = _profile(db_session, "Twelve", rate="12M/12M")
-    offer = _offer(db_session, "A", profile=ten)
-    db_session.add(OfferRadiusProfile(offer_id=offer.id, profile_id=twelve.id))
-    db_session.commit()
-    sub, _ = _service(db_session, offer)
-
-    assert apply_offer_radius_profile(db_session, sub, target_profile_id=twelve.id) == (
-        twelve.id
+def test_apply_offer_radius_profile_forced_profile_updates_credentials():
+    old_default = uuid4()
+    manual_profile = uuid4()
+    subscription = SimpleNamespace(
+        subscriber_id=uuid4(),
+        offer_id=uuid4(),
+        radius_profile_id=old_default,
     )
-    # A value that is not one of the links is ignored, never stored.
-    other = _profile(db_session, "Other", rate="3M/3M")
-    resolved = apply_offer_radius_profile(db_session, sub, target_profile_id=other.id)
-    assert resolved in {ten.id, twelve.id}
+    credential = SimpleNamespace(radius_profile_id=old_default)
+    db = _mock_db_with_credentials(credential)
 
+    with patch(
+        "app.services.catalog.subscriptions._resolve_offer_radius_profile_id",
+        return_value=old_default,
+    ):
+        resolved = apply_offer_radius_profile(
+            db,
+            subscription,
+            previous_offer_id=uuid4(),
+            target_profile_id=manual_profile,
+            force=True,
+        )
 
-def test_no_package_link_clears_the_projection(db_session):
-    ten = _profile(db_session, "Ten", rate="10M/10M")
-    offer = _offer(db_session, "Unlinked")
-    sub, _ = _service(db_session, offer, sub_profile=ten)
-
-    assert apply_offer_radius_profile(db_session, sub) is None
-    assert sub.radius_profile_id is None
+    assert resolved == manual_profile
+    assert subscription.radius_profile_id == manual_profile
+    assert credential.radius_profile_id == manual_profile

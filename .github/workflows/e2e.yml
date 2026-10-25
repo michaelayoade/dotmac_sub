@@ -103,7 +103,6 @@ jobs:
           COMMON="--network e2e-net \
             -e DATABASE_URL=postgresql+psycopg://postgres@e2e-db:5432/dotmac_sub_e2e \
             -e SECRET_KEY=e2e-test-secret-key-not-for-production \
-            -e APP_ENV=ci \
             -e REDIS_URL=redis://e2e-redis:6379/0"
           docker run --rm $COMMON dotmac-sub:e2e sh -c \
             'BOOTSTRAP_DATABASE_URL="$DATABASE_URL" python scripts/bootstrap_commercial_module_prereqs.py'

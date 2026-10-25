@@ -1456,6 +1456,7 @@ def activate_subscription(
         EnsurePppoeCredentialCommand(
             subscriber_id=subscription.subscriber_id,
             subscription_id=subscription.id,
+            radius_profile_id=subscription.radius_profile_id,
         ),
     )
     # Make active the final staged mutation. The anchor writer locks through a

@@ -29,6 +29,7 @@ from app.models.catalog import (
     SubscriptionStatus,
 )
 from app.models.subscriber import Subscriber
+from app.services.collections._core import _restore_throttle, _throttle_account
 
 
 def _profile(db, name: str) -> RadiusProfile:
@@ -95,6 +96,87 @@ def _credential(db, account, subscription, profile) -> AccessCredential:
     db.commit()
     db.refresh(cred)
     return cred
+
+
+# --- S1: the throttle must be undone exactly ---------------------------------
+
+
+def test_throttle_persists_the_profile_it_replaces(db_session, monkeypatch):
+    """The customer's real speed must survive the throttle."""
+    account = _account(db_session)
+    offer = _offer(db_session)
+    subscription = _subscription(db_session, account, offer)
+    real = _profile(db_session, "Gold 100Mbps")
+    throttle = _profile(db_session, "Collections Throttle")
+    cred = _credential(db_session, account, subscription, real)
+
+    monkeypatch.setattr(
+        "app.services.collections._core.settings_spec.resolve_value",
+        lambda db, domain, key: str(throttle.id),
+    )
+
+    ok, count = _throttle_account(db_session, str(account.id))
+    db_session.commit()
+    db_session.refresh(cred)
+
+    assert ok and count == 1
+    assert cred.radius_profile_id == throttle.id
+    assert cred.pre_throttle_radius_profile_id == real.id, (
+        "the profile the throttle replaced was not persisted — the customer's "
+        "real speed is unrecoverable once they pay"
+    )
+
+
+def test_paying_restores_the_exact_profile_that_was_throttled(db_session, monkeypatch):
+    account = _account(db_session)
+    offer = _offer(db_session)
+    subscription = _subscription(db_session, account, offer)
+    real = _profile(db_session, "Gold 100Mbps")
+    throttle = _profile(db_session, "Collections Throttle")
+    cred = _credential(db_session, account, subscription, real)
+
+    monkeypatch.setattr(
+        "app.services.collections._core.settings_spec.resolve_value",
+        lambda db, domain, key: str(throttle.id),
+    )
+
+    _throttle_account(db_session, str(account.id))
+    db_session.commit()
+
+    restored = _restore_throttle(db_session, str(account.id))
+    db_session.commit()
+    db_session.refresh(cred)
+
+    assert restored == 1
+    assert cred.radius_profile_id == real.id, (
+        "the customer paid and did not get their speed back"
+    )
+    assert cred.pre_throttle_radius_profile_id is None
+
+
+def test_rethrottling_does_not_overwrite_the_real_profile(db_session, monkeypatch):
+    """A second throttle pass must not record the throttle AS the real profile."""
+    account = _account(db_session)
+    offer = _offer(db_session)
+    subscription = _subscription(db_session, account, offer)
+    real = _profile(db_session, "Gold 100Mbps")
+    throttle = _profile(db_session, "Collections Throttle")
+    cred = _credential(db_session, account, subscription, real)
+
+    monkeypatch.setattr(
+        "app.services.collections._core.settings_spec.resolve_value",
+        lambda db, domain, key: str(throttle.id),
+    )
+
+    _throttle_account(db_session, str(account.id))
+    db_session.commit()
+    _throttle_account(db_session, str(account.id))  # sweep runs again
+    db_session.commit()
+    db_session.refresh(cred)
+
+    assert cred.pre_throttle_radius_profile_id == real.id, (
+        "re-throttling overwrote the remembered profile with the throttle profile"
+    )
 
 
 # --- S2: suspension must not take out the customer's other services ----------

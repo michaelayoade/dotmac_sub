@@ -1098,6 +1098,7 @@ def _build_staged_device_intent(
             EnsurePppoeCredentialCommand(
                 subscriber_id=subscriber_id,
                 subscription_id=subscription_id,
+                radius_profile_id=subscription.radius_profile_id,
             ),
         )
         credential = db.get(AccessCredential, outcome.credential_id)

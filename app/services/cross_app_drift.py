@@ -35,6 +35,8 @@ from app.models.billing import (
     PaymentStatus,
 )
 from app.models.catalog import (
+    AccessCredential,
+    RadiusProfile,
     Subscription,
     SubscriptionStatus,
 )
@@ -397,20 +399,24 @@ class ServiceEnforcementCheck:
             )
 
     def _throttle_profile_mismatch(self, db: Session) -> Iterable[Finding]:
-        from app.services import access_rate_profile
-
-        # A collections throttle (marker, or the configured throttle profile) is
-        # recognised by the rate owner; it must resolve to an active profile, or
-        # the intended throttle silently does not apply.
-        for (
-            credential,
-            profile,
-        ) in access_rate_profile.collections_throttled_credentials(db):
-            if profile is not None and profile.is_active:
+        active_profile_ids = set(
+            db.scalars(
+                select(RadiusProfile.id).where(RadiusProfile.is_active.is_(True))
+            ).all()
+        )
+        rows = db.execute(
+            select(
+                AccessCredential.subscriber_id,
+                AccessCredential.username,
+                AccessCredential.radius_profile_id,
+            ).where(
+                AccessCredential.is_active.is_(True),
+                AccessCredential.radius_profile_id.isnot(None),
+            )
+        ).all()
+        for subscriber_id, username, profile_id in rows:
+            if profile_id in active_profile_ids:
                 continue
-            subscriber_id = credential.subscriber_id
-            username = credential.username
-            profile_id = credential.radius_profile_id
             yield Finding(
                 check_name=self.name,
                 entity_type="subscriber",
@@ -419,7 +425,7 @@ class ServiceEnforcementCheck:
                 severity=SEVERITY_MEDIUM,
                 evidence={
                     "credential_username": username,
-                    "radius_profile_id": str(profile_id) if profile_id else None,
+                    "radius_profile_id": str(profile_id),
                     "radius_profile": "missing_or_inactive",
                     "expected_profile": "an active RadiusProfile",
                 },
