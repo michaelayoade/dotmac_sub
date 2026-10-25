@@ -124,7 +124,7 @@ def test_restore_from_backup_persists_startup_config(monkeypatch) -> None:
         "save",
     ]
     assert "enable\n" in sent
-    assert "screen-length 0 temporary\n" in sent
+    assert not any(c.startswith("screen-length") for c in sent)
     assert "y\n" in sent
 
 

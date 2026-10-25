@@ -155,8 +155,7 @@ def get_tr069_server_profile_binding(
         enable_prompt = getattr(policy, "prompt_regex", r"#\s*$")
         channel.send("enable\n")
         core._read_until_prompt(channel, enable_prompt, timeout_sec=5)
-        channel.send("screen-length 0 temporary\n")
-        core._read_until_prompt(channel, enable_prompt, timeout_sec=5)
+        core._apply_paging_off(channel, policy, enable_prompt)
 
         generic_config_prompt = r"[#)]\s*$"
         config_output = core._run_huawei_cmd(
@@ -277,6 +276,8 @@ def bind_tr069_server_profile(
         cmd = f"ont tr069-server-config {port_num} {ont_id} profile-id {profile_id}"
         output = core._run_huawei_cmd(channel, cmd, prompt=config_prompt)
         if core.is_error_output(output) and is_huawei_cli_unsupported(output):
+            # TODO(D6): not approved yet, needs a lab check; see
+            # .cutover-private/device-cli-20261025/DESIGN.md section 9, D6.
             # Some Huawei builds expect only the ONT ID after entering
             # `interface gpon F/S`; the port is already implied by context.
             fallback_cmd = f"ont tr069-server-config {ont_id} profile-id {profile_id}"

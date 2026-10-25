@@ -318,8 +318,8 @@ def olt_session(olt: OLTDevice) -> Iterator[OltSession]:
     """
     require(Effect.device_ssh)
     from app.services.network.olt_ssh import (
+        _apply_paging_off,
         _open_shell,
-        _read_until_prompt,
     )
 
     transport: Transport | None = None
@@ -337,8 +337,7 @@ def olt_session(olt: OLTDevice) -> Iterator[OltSession]:
 
         # Enter enable mode and set terminal length
         session._enter_enable_mode()
-        _send(olt, channel, "screen-length 0 temporary")
-        _read_until_prompt(channel, r"#\s*$", timeout_sec=5)
+        _apply_paging_off(channel, policy, r"#\s*$")
 
         yield session
 

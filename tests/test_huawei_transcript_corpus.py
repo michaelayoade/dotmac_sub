@@ -88,3 +88,51 @@ def test_transcript_matches_golden(path: Path) -> None:
 )
 def test_paging_rejections_are_errors(path: Path) -> None:
     assert _classify(path.read_text())["has_error_marker"] is True
+
+
+# --- parse_ont_info fail-closed rule (rows present but none parse) -----------
+
+GARKI = CORPUS / "MA5800-X2" / "display_ont_info_port_all.txt"
+
+
+def test_parse_ont_info_reads_paged_garki_transcript() -> None:
+    from app.services.network.parsers.loader import parse_ont_info
+
+    result = parse_ont_info(GARKI.read_text())
+    assert result.success is True
+    assert result.row_count == 16
+    assert {e.fsp for e in result.data} == {"0/2/1"}
+    assert result.data[0].serial_number == "48575443FAA65084"
+
+
+def test_parse_ont_info_regex_fallback_when_template_misses(monkeypatch) -> None:
+    from app.services.network.parsers import loader
+
+    monkeypatch.setattr(loader, "_parse_with_template", lambda *_a, **_k: ([], []))
+    result = loader.parse_ont_info(GARKI.read_text())
+    assert result.success is True
+    assert result.row_count == 16
+    assert "regex fallback" in " ".join(result.warnings)
+
+
+def test_parse_ont_info_unreadable_rows_are_failure_not_empty(monkeypatch) -> None:
+    import re
+
+    from app.services.network.olt_ssh_ont import status
+    from app.services.network.parsers import loader
+
+    # Rows are present (hint matches) but neither the template nor the row
+    # fallback can read them: must be a failure, never an empty success.
+    monkeypatch.setattr(loader, "_parse_with_template", lambda *_a, **_k: ([], []))
+    monkeypatch.setattr(status, "_ONT_ROW_FALLBACK_RE", re.compile(r"(?!x)x"))
+    assert status.inventory_has_data_rows(GARKI.read_text())
+    result = loader.parse_ont_info(GARKI.read_text())
+    assert result.data == []
+    assert result.success is False
+
+
+def test_parse_ont_info_explicit_empty_is_still_success() -> None:
+    from app.services.network.parsers.loader import parse_ont_info
+
+    result = parse_ont_info("  Failure: No ONT is configured\nboi-olt#\n")
+    assert result.success is True and result.data == []

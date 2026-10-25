@@ -567,6 +567,7 @@ def get_line_profiles(olt: OLTDevice) -> tuple[bool, str, list[OltProfileEntry]]
         Tuple of (success, message, list of profiles).
     """
     from app.services.network.olt_ssh import (
+        _apply_paging_off,
         _open_shell,
         _read_until_prompt,
         _run_huawei_cmd,
@@ -580,8 +581,7 @@ def get_line_profiles(olt: OLTDevice) -> tuple[bool, str, list[OltProfileEntry]]
     try:
         channel.send("enable\n")
         _read_until_prompt(channel, r"#\s*$", timeout_sec=5)
-        channel.send("screen-length 0 temporary\n")
-        _read_until_prompt(channel, r"#\s*$", timeout_sec=5)
+        _apply_paging_off(channel, policy, r"#\s*$")
 
         output = _run_huawei_cmd(channel, "display ont-lineprofile gpon all")
         entries = _parse_profile_table(output)
@@ -602,6 +602,7 @@ def get_service_profiles(olt: OLTDevice) -> tuple[bool, str, list[OltProfileEntr
         Tuple of (success, message, list of profiles).
     """
     from app.services.network.olt_ssh import (
+        _apply_paging_off,
         _open_shell,
         _read_until_prompt,
         _run_huawei_cmd,
@@ -615,8 +616,7 @@ def get_service_profiles(olt: OLTDevice) -> tuple[bool, str, list[OltProfileEntr
     try:
         channel.send("enable\n")
         _read_until_prompt(channel, r"#\s*$", timeout_sec=5)
-        channel.send("screen-length 0 temporary\n")
-        _read_until_prompt(channel, r"#\s*$", timeout_sec=5)
+        _apply_paging_off(channel, policy, r"#\s*$")
 
         output = _run_huawei_cmd(channel, "display ont-srvprofile gpon all")
         entries = _parse_profile_table(output)
@@ -636,21 +636,21 @@ def get_service_profiles(olt: OLTDevice) -> tuple[bool, str, list[OltProfileEntr
 def get_dba_profiles(olt: OLTDevice) -> tuple[bool, str, list[DbaProfileEntry]]:
     """Query OLT for DBA profiles."""
     from app.services.network.olt_ssh import (
+        _apply_paging_off,
         _open_shell,
         _read_until_prompt,
         _run_huawei_cmd,
     )
 
     try:
-        transport, channel, _policy = _open_shell(olt)
+        transport, channel, policy = _open_shell(olt)
     except (SSHException, OSError, TimeoutError, ValueError) as exc:
         return False, f"Connection failed: {exc}", []
 
     try:
         channel.send("enable\n")
         _read_until_prompt(channel, r"#\s*$", timeout_sec=5)
-        channel.send("screen-length 0 temporary\n")
-        _read_until_prompt(channel, r"#\s*$", timeout_sec=5)
+        _apply_paging_off(channel, policy, r"#\s*$")
 
         output = _run_huawei_cmd(channel, "display dba-profile all")
         entries = parse_dba_profiles(output)
@@ -670,6 +670,7 @@ def get_dba_profiles(olt: OLTDevice) -> tuple[bool, str, list[DbaProfileEntry]]:
 def get_traffic_tables(olt: OLTDevice) -> tuple[bool, str, list[TrafficTableEntry]]:
     """Query OLT for IP traffic tables."""
     from app.services.network.olt_ssh import (
+        _apply_paging_off,
         _open_shell,
         _read_until_prompt,
         _run_huawei_paged_cmd,
@@ -683,8 +684,7 @@ def get_traffic_tables(olt: OLTDevice) -> tuple[bool, str, list[TrafficTableEntr
     try:
         channel.send("enable\n")
         _read_until_prompt(channel, r"#\s*$", timeout_sec=5)
-        channel.send("screen-length 0 temporary\n")
-        _read_until_prompt(channel, r"#\s*$", timeout_sec=5)
+        _apply_paging_off(channel, policy, r"#\s*$")
 
         # ``display ... all`` can stream indefinitely on Huawei shelves with a
         # large legacy table.  The indexed form is bounded and is supported by
@@ -712,21 +712,21 @@ def get_traffic_tables(olt: OLTDevice) -> tuple[bool, str, list[TrafficTableEntr
 def get_wan_profiles(olt: OLTDevice) -> tuple[bool, str, list[WanProfileEntry]]:
     """Query OLT for ONT WAN profiles."""
     from app.services.network.olt_ssh import (
+        _apply_paging_off,
         _open_shell,
         _read_until_prompt,
         _run_huawei_cmd,
     )
 
     try:
-        transport, channel, _policy = _open_shell(olt)
+        transport, channel, policy = _open_shell(olt)
     except (SSHException, OSError, TimeoutError, ValueError) as exc:
         return False, f"Connection failed: {exc}", []
 
     try:
         channel.send("enable\n")
         _read_until_prompt(channel, r"#\s*$", timeout_sec=5)
-        channel.send("screen-length 0 temporary\n")
-        _read_until_prompt(channel, r"#\s*$", timeout_sec=5)
+        _apply_paging_off(channel, policy, r"#\s*$")
 
         output = _run_huawei_cmd(channel, "display ont wan-profile all")
         entries = parse_wan_profiles(output)
@@ -752,6 +752,7 @@ def get_tr069_server_profiles(
         Tuple of (success, message, list of Tr069ServerProfile).
     """
     from app.services.network.olt_ssh import (
+        _apply_paging_off,
         _open_shell,
         _read_until_prompt,
         _run_huawei_cmd,
@@ -765,8 +766,7 @@ def get_tr069_server_profiles(
     try:
         channel.send("enable\n")
         _read_until_prompt(channel, r"#\s*$", timeout_sec=5)
-        channel.send("screen-length 0 temporary\n")
-        _read_until_prompt(channel, r"#\s*$", timeout_sec=5)
+        _apply_paging_off(channel, policy, r"#\s*$")
 
         output = _run_huawei_cmd(channel, "display ont tr069-server-profile all")
         summary = _parse_profile_table(output)

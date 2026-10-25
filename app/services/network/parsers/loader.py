@@ -497,6 +497,14 @@ def parse_ont_info(
             row_count=0,
         )
 
+    # Strip ANSI redraws and pager markers and compact "0/ 2/1" before the
+    # template sees the text, as the paged OLT output would otherwise hide rows.
+    from app.services.network.olt_ssh_ont.status import (
+        inventory_has_data_rows,
+        normalize_inventory_output,
+    )
+
+    output = normalize_inventory_output(output)
     headers, rows = _parse_with_template(output, template_name, vendor)
 
     entries: list[OntInfoEntry] = []
@@ -517,6 +525,36 @@ def parse_ont_info(
             )
         except (KeyError, IndexError) as e:
             warnings.append(f"Row parse error: {e}")
+
+    if not entries:
+        # Template missed (column drift): fall back to the row shape itself.
+        from app.services.network.olt_ssh_ont.status import _ONT_ROW_FALLBACK_RE
+
+        entries = [
+            OntInfoEntry(
+                fsp=f"{m.group(1)}/{m.group(2)}/{m.group(3)}",
+                ont_id=int(m.group(4)),
+                serial_number=m.group(5),
+                control_flag="",
+                run_state=m.group(6).lower(),
+                config_state="",
+                match_state="",
+            )
+            for m in _ONT_ROW_FALLBACK_RE.finditer(output)
+        ]
+        if entries:
+            warnings.append("Template matched no rows; used regex fallback")
+
+    if not entries and inventory_has_data_rows(output):
+        # Rows are present but none parsed: unreadable, never an empty port.
+        return ParseResult(
+            success=False,
+            data=[],
+            raw_output=output,
+            template_name=template_name,
+            warnings=[*warnings, "ONT data rows present but none could be parsed"],
+            row_count=0,
+        )
 
     return ParseResult(
         success=True,

@@ -905,7 +905,7 @@ def import_olt_state(db: Session, olt_id: str) -> OltStateImportResult:
     finish_read_transaction(db)
 
     try:
-        transport, channel, _policy = core._open_shell(olt)
+        transport, channel, policy = core._open_shell(olt)
     except Exception as exc:
         return OltStateImportResult(
             success=False,
@@ -916,7 +916,7 @@ def import_olt_state(db: Session, olt_id: str) -> OltStateImportResult:
     try:
         channel.send("enable\n")
         core._read_until_prompt(channel, r"#\s*$", timeout_sec=5)
-        core._run_huawei_cmd(channel, "screen-length 0 temporary")
+        core._apply_paging_off(channel, policy, r"#\s*$")
 
         line_output = core._run_huawei_cmd(channel, "display ont-lineprofile gpon all")
         line_profiles = _parse_profile_table(line_output)
@@ -986,6 +986,12 @@ def import_olt_state(db: Session, olt_id: str) -> OltStateImportResult:
                 read_complete = False
                 continue
             summary = parse_ont_info(summary_output)
+            if not summary.success:
+                # Rows present but unreadable: not an empty port. Skip the
+                # destructive sweep for this run.
+                warnings.append(f"Skipped {fsp}: ONT rows could not be parsed")
+                read_complete = False
+                continue
             for entry in summary.data:
                 detail_fsp = entry.fsp or fsp
                 try:

@@ -416,7 +416,7 @@ def _prepare_huawei_read_shell(
     privileged_prompt = _derive_prompt_regex(output, fallback_prompt)
     if not paging_off_command:
         return privileged_prompt
-    # Prod (MA5800-X2): the line editor echoed "screen-length0temporary" and
+    # Prod (MA5800-X2): the line editor echoed the paging command without spaces and
     # answered "% Unknown command", leaving paging ON. The editor drops spaces
     # when the line arrives while it is still redrawing the prompt, so let it
     # go quiet and drain unread bytes first, send the line atomically, verify
@@ -438,6 +438,25 @@ def _prepare_huawei_read_shell(
         )
     logger.error("OLT paging could not be disabled; continuing with pager handling")
     return privileged_prompt
+
+
+def _apply_paging_off(
+    channel: Channel,
+    policy: Any,
+    prompt_regex: str,
+    *,
+    timeout_sec: float = 5.0,
+) -> None:
+    """Disable paging only if the model's policy has a confirmed command.
+
+    ``policy.paging_off_command`` is None for MA5608T/MA5800/MA5600, so nothing
+    is sent and callers keep answering the pager.
+    """
+    command = getattr(policy, "paging_off_command", None)
+    if not command:
+        return
+    _send_huawei_command(channel, command, word_delay_sec=0)
+    _read_until_prompt(channel, prompt_regex, timeout_sec=timeout_sec)
 
 
 _PAGING_OFF_ATTEMPTS = 3
@@ -497,7 +516,7 @@ def _validate_serial(serial_number: str) -> tuple[bool, str]:
 
 
 def _setup_prompt_timeout() -> float:
-    """Prompt timeout for session-setup reads (``enable`` / ``screen-length``).
+    """Prompt timeout for session-setup reads (``enable`` / paging-off).
 
     Env-tunable via ``OLT_SSH_PROMPT_TIMEOUT_SECONDS`` (default 15, floor 5;
     resolved once at startup by ``app.config``). The old hardcoded 5s left
@@ -1171,8 +1190,9 @@ def create_service_ports(
     try:
         channel.send("enable\n")
         _read_until_prompt(channel, r"#\s*$", timeout_sec=_setup_prompt_timeout())
-        channel.send("screen-length 0 temporary\n")
-        _read_until_prompt(channel, r"#\s*$", timeout_sec=_setup_prompt_timeout())
+        _apply_paging_off(
+            channel, policy, r"#\s*$", timeout_sec=_setup_prompt_timeout()
+        )
 
         config_prompt = r"[#)]\s*$"
         _run_huawei_cmd(channel, "config", prompt=config_prompt)
@@ -1253,8 +1273,9 @@ def upgrade_firmware(
     try:
         channel.send("enable\n")
         _read_until_prompt(channel, r"#\s*$", timeout_sec=_setup_prompt_timeout())
-        channel.send("screen-length 0 temporary\n")
-        _read_until_prompt(channel, r"#\s*$", timeout_sec=_setup_prompt_timeout())
+        _apply_paging_off(
+            channel, policy, r"#\s*$", timeout_sec=_setup_prompt_timeout()
+        )
 
         # Huawei firmware upgrade command
         cmd = f"system-software upgrade {file_url}"

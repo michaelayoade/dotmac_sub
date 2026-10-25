@@ -175,8 +175,7 @@ def _open_enabled_olt_shell(olt: OLTDevice):
 
     channel.send("enable\n")
     core._read_until_prompt(channel, policy.prompt_regex, timeout_sec=5)
-    channel.send("screen-length 0 temporary\n")
-    core._read_until_prompt(channel, policy.prompt_regex, timeout_sec=5)
+    core._apply_paging_off(channel, policy, policy.prompt_regex)
     return True, "Connected.", transport, channel, policy
 
 

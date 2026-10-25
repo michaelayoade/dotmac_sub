@@ -298,6 +298,11 @@ def test_rollback_firmware_reuses_one_session(monkeypatch) -> None:
         "displayx",
         "showtime",
         "pingx 1.1.1.1",
+        "more",
+        "more flash:/x",
+        "dir",
+        "dir flash:",
+        "pwd",
     ],
 )
 def test_validator_rejects_chaining_and_loose_prefixes(command) -> None:

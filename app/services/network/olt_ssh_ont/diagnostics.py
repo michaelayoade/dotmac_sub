@@ -46,7 +46,7 @@ def remote_ping_ont(
     frame_slot = parts.frame_slot
     port_num = parts.port
     try:
-        transport, channel, _policy = core._open_shell(olt)
+        transport, channel, policy = core._open_shell(olt)
     except (SSHException, OSError, TimeoutError, ValueError) as exc:
         return False, f"Connection failed: {exc}"
 
@@ -119,7 +119,7 @@ def diagnose_service_ports(
     port_num = parts.port
 
     try:
-        transport, channel, _policy = core._open_shell(olt)
+        transport, channel, policy = core._open_shell(olt)
     except (SSHException, OSError, TimeoutError, ValueError) as exc:
         return False, f"Connection failed: {exc}", None
 
@@ -129,8 +129,7 @@ def diagnose_service_ports(
     try:
         channel.send("enable\n")
         core._read_until_prompt(channel, r"#\s*$", timeout_sec=5)
-        channel.send("screen-length 0 temporary\n")
-        core._read_until_prompt(channel, r"#\s*$", timeout_sec=5)
+        core._apply_paging_off(channel, policy, r"#\s*$")
 
         # 1. Get ONT info (online/offline status)
         ont_info_cmd = (
