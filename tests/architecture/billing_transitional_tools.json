@@ -53,7 +53,7 @@
     {
       "path": "scripts/migration/billing_opening_export.py",
       "purpose": "CLI entry for the read-only opening evidence census export.",
-      "baseline_lines": 149,
+      "baseline_lines": 168,
       "deletion_trigger": "Delete with opening_export.py after the opening import is sealed in dotmac-billing.",
       "owner": "michaelayoade"
     },
