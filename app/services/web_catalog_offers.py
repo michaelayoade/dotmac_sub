@@ -505,7 +505,10 @@ def sync_offer_radius_profile_to_subscriptions(
         )
         if inherited_profile:
             apply_offer_radius_profile(
-                db, subscription, target_profile_id=new_profile_uuid
+                db,
+                subscription,
+                target_profile_id=new_profile_uuid,
+                force=True,
             )
             if subscription.status == SubscriptionStatus.active:
                 active_subscription_ids.append(str(subscription.id))

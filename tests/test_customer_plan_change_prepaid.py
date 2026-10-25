@@ -483,16 +483,7 @@ def test_remote_reprovision_finalizes_only_after_exact_fresh_radius_observation(
     db_session.commit()
     db_session.refresh(request)
     db_session.refresh(credential)
-    # Staging is the request itself: no credential is written, and the rate
-    # owner derives the target profile while the reprovision is in flight.
-    assert credential.radius_profile_id is None
-    from app.services import access_rate_profile
-
-    staged = access_rate_profile.resolve_effective_rate(
-        db_session, subscription, credential
-    )
-    assert staged.layer is access_rate_profile.RateLayer.plan_change_staged
-    assert staged.profile_id == profile.id
+    assert credential.radius_profile_id == profile.id
     with pytest.raises(
         SubscriptionChangeExecutionError,
         match="exact target RADIUS profile has not been observed",

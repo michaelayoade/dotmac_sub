@@ -36,7 +36,7 @@ from app.models.notification import (
 )
 from app.models.provisioning import ProvisioningVendor
 from app.models.subscriber import SubscriberStatus as AccountStatus
-from app.services.enforcement import SubscriptionCredentialScope
+from app.services.enforcement import RadiusProfileApplication
 from app.services.events.dispatcher import EventDispatcher
 from app.services.events.handlers.enforcement import EnforcementHandler
 from app.services.events.handlers.lifecycle import LifecycleHandler
@@ -980,7 +980,9 @@ class TestEnforcementHandler:
 
     @patch("app.services.events.handlers.enforcement.project_credentials_to_radius")
     @patch("app.services.events.handlers.enforcement.disconnect_subscription_sessions")
-    @patch("app.services.events.handlers.enforcement.subscription_credential_scope")
+    @patch(
+        "app.services.events.handlers.enforcement.apply_radius_profile_to_subscription"
+    )
     @patch("app.services.enforcement_event_policy.settings_spec")
     def test_usage_exhausted_throttle_action(
         self,
@@ -1010,8 +1012,8 @@ class TestEnforcementHandler:
             return None
 
         mock_settings.resolve_value.side_effect = settings_side_effect
-        mock_apply_profile.return_value = SubscriptionCredentialScope(
-            matched=1, usernames=frozenset({"fup-user"})
+        mock_apply_profile.return_value = RadiusProfileApplication(
+            matched=1, updated=1, usernames=frozenset({"fup-user"})
         )
 
         handler = EnforcementHandler()
@@ -1024,7 +1026,9 @@ class TestEnforcementHandler:
 
         # A FUP breach is scoped to the breaching SUBSCRIPTION. Applying it by
         # account throttled every service the customer owned.
-        mock_apply_profile.assert_called_once_with(db_session, str(subscription_id))
+        mock_apply_profile.assert_called_once_with(
+            db_session, str(subscription_id), str(throttle_profile_id)
+        )
         mock_disconnect.assert_called_once_with(
             db_session, str(subscription_id), reason="fup_throttle"
         )
@@ -1032,64 +1036,9 @@ class TestEnforcementHandler:
 
     @patch("app.services.events.handlers.enforcement.project_credentials_to_radius")
     @patch("app.services.events.handlers.enforcement.disconnect_subscription_sessions")
-    @patch("app.services.events.handlers.enforcement.subscription_credential_scope")
-    @patch("app.services.enforcement_event_policy.settings_spec")
-    def test_a_reasserted_throttle_does_not_project_or_disconnect_again(
-        self,
-        mock_settings,
-        mock_scope,
-        mock_disconnect,
-        mock_project,
-        db_session,
-        subscription,
-    ):
-        """Only a throttle that is new or different reaches the wire."""
-        throttle_profile = RadiusProfile(
-            name=f"FUP throttle {uuid.uuid4()}", is_active=True
-        )
-        other_profile = RadiusProfile(name=f"Other {uuid.uuid4()}", is_active=True)
-        db_session.add_all([throttle_profile, other_profile])
-        db_session.commit()
-        current = {"id": str(throttle_profile.id)}
-
-        def settings_side_effect(db, domain, key):
-            if key == "fup_action":
-                return "throttle"
-            if key == "fup_throttle_radius_profile_id":
-                return current["id"]
-            if key == "refresh_sessions_on_profile_change":
-                return "true"
-            return None
-
-        mock_settings.resolve_value.side_effect = settings_side_effect
-        mock_scope.return_value = SubscriptionCredentialScope(
-            matched=1, usernames=frozenset({"fup-user"})
-        )
-        handler = EnforcementHandler()
-
-        def assert_once():
-            handler.handle(
-                db_session,
-                self._make_event(
-                    EventType.usage_exhausted,
-                    subscription_id=subscription.id,
-                    account_id=subscription.subscriber_id,
-                ),
-            )
-
-        assert_once()  # new throttle: projected and sessions refreshed once
-        assert mock_project.call_count == 1 and mock_disconnect.call_count == 1
-
-        assert_once()  # same throttle again: nothing new on the wire
-        assert mock_project.call_count == 1 and mock_disconnect.call_count == 1
-
-        current["id"] = str(other_profile.id)
-        assert_once()  # a different throttle is a real change
-        assert mock_project.call_count == 2 and mock_disconnect.call_count == 2
-
-    @patch("app.services.events.handlers.enforcement.project_credentials_to_radius")
-    @patch("app.services.events.handlers.enforcement.disconnect_subscription_sessions")
-    @patch("app.services.events.handlers.enforcement.subscription_credential_scope")
+    @patch(
+        "app.services.events.handlers.enforcement.apply_radius_profile_to_subscription"
+    )
     @patch("app.services.enforcement_event_policy.settings_spec")
     def test_usage_exhausted_payload_reduce_speed_overrides_global_block(
         self,
@@ -1119,8 +1068,8 @@ class TestEnforcementHandler:
             return None
 
         mock_settings.resolve_value.side_effect = settings_side_effect
-        mock_apply_profile.return_value = SubscriptionCredentialScope(
-            matched=1, usernames=frozenset({"fup-user"})
+        mock_apply_profile.return_value = RadiusProfileApplication(
+            matched=1, updated=1, usernames=frozenset({"fup-user"})
         )
 
         handler = EnforcementHandler()
@@ -1132,12 +1081,16 @@ class TestEnforcementHandler:
         )
         handler.handle(db_session, event)
 
-        mock_apply_profile.assert_called_once_with(db_session, str(subscription_id))
+        mock_apply_profile.assert_called_once_with(
+            db_session, str(subscription_id), str(throttle_profile_id)
+        )
         mock_disconnect.assert_called_once_with(
             db_session, str(subscription_id), reason="fup_throttle"
         )
 
-    @patch("app.services.events.handlers.enforcement.subscription_credential_scope")
+    @patch(
+        "app.services.events.handlers.enforcement.apply_radius_profile_to_subscription"
+    )
     @patch("app.services.enforcement_event_policy.settings_spec")
     def test_usage_exhausted_throttle_without_any_resolvable_profile_fails_visibly(
         self, mock_settings, mock_apply_profile, db_session, subscription

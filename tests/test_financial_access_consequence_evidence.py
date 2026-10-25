@@ -371,30 +371,23 @@ def test_restore_confirmation_links_lock_case_and_exact_profile(
     }
     assert subscription.status == SubscriptionStatus.active
     assert case.status == DunningCaseStatus.resolved
-    # Restoring clears the slot and the marker: the plan rate is derived by the
-    # rate owner, never put back from a snapshot.
-    assert credential.radius_profile_id is None
+    assert credential.radius_profile_id == full_profile.id
     assert credential.pre_throttle_radius_profile_id is None
 
 
-def test_restore_lifts_the_throttle_of_a_credential_with_no_profile_of_its_own(
+def test_restore_does_not_guess_legacy_pre_throttle_profile(
     db_session, subscriber_account, subscription, monkeypatch
 ):
-    """An inherited credential (no own profile before the throttle) is restored.
-
-    It used to be skipped as "legacy" because no pre-throttle profile was
-    recorded, so a customer who paid stayed throttled for good.
-    """
     invoice = _prepare_postpaid(db_session, subscriber_account, subscription)
     invoice.status = InvoiceStatus.paid
     invoice.balance_due = Decimal("0.00")
-    throttle_profile = RadiusProfile(name="Collections throttle", is_active=True)
+    throttle_profile = RadiusProfile(name="Legacy throttle", is_active=True)
     db_session.add(throttle_profile)
     db_session.flush()
     credential = AccessCredential(
         subscriber_id=subscriber_account.id,
         subscription_id=subscription.id,
-        username=f"inherited-{uuid.uuid4().hex[:8]}",
+        username=f"legacy-{uuid.uuid4().hex[:8]}",
         is_active=True,
         radius_profile_id=throttle_profile.id,
         pre_throttle_radius_profile_id=None,
@@ -412,18 +405,8 @@ def test_restore_lifts_the_throttle_of_a_credential_with_no_profile_of_its_own(
         db_session, str(subscriber_account.id)
     )
 
-    (change,) = preview.credential_changes
-    assert change.credential_id == credential.id
-    assert change.profile_before_id == throttle_profile.id
-    assert change.profile_after_id is None
-
-    confirm_financial_access_restoration(
-        db_session,
-        str(subscriber_account.id),
-        preview_fingerprint=preview.fingerprint,
-        idempotency_key=f"test-inherited-restore-{subscriber_account.id}",
-        resolved_by="test:payment",
-    )
-    db_session.refresh(credential)
-    assert credential.radius_profile_id is None
-    assert credential.pre_throttle_radius_profile_id is None
+    assert preview.credential_changes == ()
+    assert preview.decision_inputs["legacy_throttle_credential_ids"] == [
+        str(credential.id)
+    ]
+    assert preview.outcome == "no_change"

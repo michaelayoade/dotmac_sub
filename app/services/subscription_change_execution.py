@@ -64,6 +64,7 @@ from app.services.prepaid_plan_changes import (
     PrepaidPlanChangeDecision,
     resolve_prepaid_plan_change,
 )
+from app.services.radius_access_state import stage_subscription_radius_profile
 from app.services.subscription_changes import subscription_change_requests
 from app.services.work_order_commands import work_order_commands
 
@@ -361,6 +362,7 @@ def _recover_remote_provision_failure(
     *,
     command: RemoteProvisionActionCommand,
     credential_id: UUID,
+    previous_radius_profile_id: UUID | None,
     operation_reference: str,
     failure: Exception,
 ) -> bool:
@@ -413,15 +415,18 @@ def _recover_remote_provision_failure(
             "remote_access_credential_ambiguous",
             "The previous RADIUS credential is unavailable for recovery",
         )
-    # Recovery clears the staging on the request itself; the rate owner then
-    # derives the previous plan again. No credential is written.
-    request.execution_state = SubscriptionChangeExecutionState.provisioning
-    request.remote_reprovision_requested_at = None
-    request.provisioning_verified_at = None
-    db.flush()
+    stage_subscription_radius_profile(
+        db,
+        subscription_id=subscription.id,
+        credential_id=credential.id,
+        radius_profile_id=previous_radius_profile_id,
+    )
     from app.services.radius import reconcile_subscription_connectivity
 
     reconcile_subscription_connectivity(db, str(subscription.id)).require_projected()
+    request.execution_state = SubscriptionChangeExecutionState.provisioning
+    request.remote_reprovision_requested_at = None
+    request.provisioning_verified_at = None
     stage_audit_event(
         db,
         action="rollback_remote_plan_change_provisioning",
@@ -928,8 +933,12 @@ def stage_remote_reprovision(
             "remote_access_credential_ambiguous",
             "Remote reprovisioning requires exactly one active subscription credential",
         )
-    # The staging IS this request's timestamp: the rate owner derives the target
-    # profile from remote_radius_profile_id while the reprovision is in flight.
+    stage_subscription_radius_profile(
+        db,
+        subscription_id=request.subscription_id,
+        credential_id=credential.id,
+        radius_profile_id=prepared.radius_profile_id,
+    )
     request.remote_reprovision_requested_at = datetime.now(UTC)
     request.execution_state = SubscriptionChangeExecutionState.provisioning
     db.flush()
@@ -1125,6 +1134,7 @@ def _provision_and_verify_remote_change(
             "Remote reprovisioning requires exactly one active subscription credential",
         )
     credential_id = credential.id
+    previous_radius_profile_id = credential.radius_profile_id
     projection_attempted = False
     commercial_finalization_started = False
     try:
@@ -1189,6 +1199,7 @@ def _provision_and_verify_remote_change(
                 db,
                 command=command,
                 credential_id=credential_id,
+                previous_radius_profile_id=previous_radius_profile_id,
                 operation_reference=operation_reference,
                 failure=failure,
             )

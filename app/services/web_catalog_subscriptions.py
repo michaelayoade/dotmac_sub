@@ -1239,6 +1239,7 @@ def _upsert_access_credential(
     subscriber_id: UUID,
     username: str,
     plain_password: str | None = None,
+    radius_profile_id: str | None = None,
     subscription_id: UUID | None = None,
 ) -> None:
     reject_reserved_service_password(plain_password)
@@ -1291,12 +1292,31 @@ def _upsert_access_credential(
         if plain_password
         else None
     )
+    radius_profile_uuid: UUID | None = None
+    if radius_profile_id:
+        try:
+            radius_profile_uuid = UUID(str(radius_profile_id))
+        except ValueError:
+            radius_profile_uuid = None
+    if radius_profile_uuid:
+        # D1: refuse an unrecorded per-service speed override once the single
+        # rate owner is enabled. The admin form shows the profile read-only.
+        owning_subscription = (
+            db.get(Subscription, subscription_id) if subscription_id else None
+        )
+        access_rate_profile.refuse_unrecorded_override(
+            db,
+            offer_id=owning_subscription.offer_id if owning_subscription else None,
+            profile_id=radius_profile_uuid,
+        )
     if credential:
         credential.username = normalized_username
         if secret_hash:
             credential.secret_hash = secret_hash
         credential.is_active = True
         credential.deactivation_reason = None
+        if radius_profile_uuid:
+            credential.radius_profile_id = radius_profile_uuid
         try:
             db.commit()
         except IntegrityError as exc:
@@ -1315,6 +1335,7 @@ def _upsert_access_credential(
             username=normalized_username,
             secret_hash=secret_hash,
             is_active=True,
+            radius_profile_id=radius_profile_uuid,
         )
     )
     try:
@@ -4209,13 +4230,10 @@ def subscription_detail_context(
     )
     password_sync = _password_sync_evidence(credential)
     commercial_policy = _subscription_commercial_policy(db, subscription)
-    effective_rate = access_rate_profile.resolve_effective_rate(
-        db, subscription, credential
-    )
     reply_attributes = build_radius_reply_attributes(
         db,
         subscription,
-        profile=effective_rate.profile,
+        profile=subscription.radius_profile,
         nas_device=subscription.provisioning_nas_device,
     )
     connection_status = _subscription_connection_status(db, subscription, credential)
@@ -4254,8 +4272,6 @@ def subscription_detail_context(
     vacation_hold = _subscription_vacation_hold(db, subscription)
     administrative_pause = _subscription_administrative_pause(db, subscription)
     return {
-        "effective_rate_profile": effective_rate.profile,
-        "effective_rate_layer": effective_rate.layer.value,
         "access_credential": credential,
         "password_sync": password_sync,
         "radius_reply_attributes": reply_attributes,
@@ -4490,6 +4506,7 @@ def subscription_form_context(
         "ip_addon_options": ip_addon_options,
         "ip_addon_options_json": ip_addon_options_json,
         "radius_profiles": radius_profiles,
+        "rate_profile_read_only": access_rate_profile.rate_owner_enabled(db),
         "subscription_statuses": [item.value for item in SubscriptionStatus],
         "billing_modes": [item.value for item in BillingMode],
         "contract_terms": [item.value for item in ContractTerm],
@@ -4956,6 +4973,9 @@ def create_subscription_with_audit(
                 subscriber_id=created.subscriber_id,
                 username=selected_login,
                 plain_password=selected_password,
+                radius_profile_id=str(created.radius_profile_id)
+                if created.radius_profile_id
+                else None,
                 subscription_id=created.id,
             )
         except ValueError:
@@ -4997,6 +5017,7 @@ def create_subscription_with_audit(
             subscription_id=created.id,
             username=selected_login,
             plain_password=typed_password or None,
+            radius_profile_id=created.radius_profile_id,
         )
         commit_credential(db, selected_login)
         if additional_routes:
@@ -5191,6 +5212,7 @@ def update_subscription_with_audit(
                 subscription_id=after.id,
                 username=new_username,
                 plain_password=entered_password or None,
+                radius_profile_id=after.radius_profile_id,
             )
             commit_credential(db, new_username)
         elif credential_change and bound_credential is not None:
@@ -5199,7 +5221,16 @@ def update_subscription_with_audit(
                 bound_credential.secret_hash = auth_flow_service.hash_service_secret(
                     entered_password
                 )
+            if after.radius_profile_id:
+                bound_credential.radius_profile_id = after.radius_profile_id
             commit_credential(db, new_username)
+        elif (
+            bound_credential is not None
+            and after.radius_profile_id
+            and bound_credential.radius_profile_id != after.radius_profile_id
+        ):
+            bound_credential.radius_profile_id = after.radius_profile_id
+            commit_credential(db, current_username)
     except ValueError:
         db.rollback()
         raise
