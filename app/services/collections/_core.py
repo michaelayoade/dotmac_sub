@@ -9,7 +9,7 @@ from typing import cast
 from uuid import UUID
 
 from fastapi import HTTPException
-from sqlalchemy import and_, func, or_, select
+from sqlalchemy import ColumnElement, and_, func, or_, select
 from sqlalchemy.orm import Session
 
 from app.models.billing import Invoice, InvoiceStatus
@@ -1142,7 +1142,6 @@ def preview_financial_access_restoration(
     credential_changes: list[FinancialAccessCredentialChange] = []
     receivables: list[dict] = []
     prepaid_funding: dict | None = None
-    legacy_throttle_ids: list[str] = []
     clear_prepaid_timers = False
     eligible = True
     outcome = "restore_ready"
@@ -1195,31 +1194,36 @@ def preview_financial_access_restoration(
             throttle_profile_id = settings_spec.resolve_value(
                 db, SettingDomain.collections, "throttle_radius_profile_id"
             )
+            # A credential is throttled when it carries the pre-throttle marker
+            # or sits on the configured throttle profile -- the same recognition
+            # the rate owner applies. Restoring does not depend on the credential
+            # ever having had a profile of its own: the plan rate is derived, so
+            # the slot and the marker are simply cleared.
+            throttled: ColumnElement[bool] = (
+                AccessCredential.pre_throttle_radius_profile_id.isnot(None)
+            )
             if throttle_profile_id:
-                credentials = (
-                    db.query(AccessCredential)
-                    .filter(AccessCredential.subscriber_id == account.id)
-                    .filter(
-                        AccessCredential.radius_profile_id
-                        == coerce_uuid(throttle_profile_id)
-                    )
-                    .filter(AccessCredential.is_active.is_(True))
-                    .order_by(AccessCredential.id.asc())
-                    .all()
+                throttled = or_(
+                    throttled,
+                    AccessCredential.radius_profile_id
+                    == coerce_uuid(throttle_profile_id),
                 )
-                for credential in credentials:
-                    if credential.pre_throttle_radius_profile_id is None:
-                        legacy_throttle_ids.append(str(credential.id))
-                        continue
-                    credential_changes.append(
-                        FinancialAccessCredentialChange(
-                            credential_id=credential.id,
-                            profile_before_id=credential.radius_profile_id,
-                            profile_after_id=(
-                                credential.pre_throttle_radius_profile_id
-                            ),
-                        )
+            credentials = (
+                db.query(AccessCredential)
+                .filter(AccessCredential.subscriber_id == account.id)
+                .filter(throttled)
+                .filter(AccessCredential.is_active.is_(True))
+                .order_by(AccessCredential.id.asc())
+                .all()
+            )
+            for credential in credentials:
+                credential_changes.append(
+                    FinancialAccessCredentialChange(
+                        credential_id=credential.id,
+                        profile_before_id=credential.radius_profile_id,
+                        profile_after_id=None,
                     )
+                )
 
         if not profile.has_collectible_subscriptions:
             target_locks.extend(
@@ -1314,7 +1318,6 @@ def preview_financial_access_restoration(
             }
             for change in credential_changes
         ],
-        "legacy_throttle_credential_ids": legacy_throttle_ids,
         "clear_prepaid_timers": clear_prepaid_timers,
         "prepaid_low_balance_at": (
             account.prepaid_low_balance_at.isoformat()
@@ -1519,13 +1522,14 @@ def confirm_financial_access_restoration(
         if (
             credential is None
             or credential.radius_profile_id != change.profile_before_id
-            or credential.pre_throttle_radius_profile_id != change.profile_after_id
         ):
             raise HTTPException(
                 status_code=409,
                 detail="Throttled credential changed after preview",
             )
-        credential.radius_profile_id = change.profile_after_id
+        # Always clear both: the plan rate is derived by the rate owner, never
+        # restored from a snapshot.
+        credential.radius_profile_id = None
         credential.pre_throttle_radius_profile_id = None
         restored_credentials.append(change)
 
@@ -1617,9 +1621,6 @@ def confirm_financial_access_restoration(
                 "restored_credential_ids": [
                     str(change.credential_id) for change in restored_credentials
                 ],
-                "legacy_throttle_credential_ids": preview.decision_inputs.get(
-                    "legacy_throttle_credential_ids", []
-                ),
             },
         ),
     )
@@ -1685,149 +1686,6 @@ def _get_account_email(db: Session, account_id: str) -> str | None:
     if not account:
         return None
     return str(account.email) if account.email else None
-
-
-def _throttle_account(db: Session, account_id: str) -> tuple[bool, int]:
-    """Apply throttle RADIUS profile to account's access credentials.
-
-    Throttling reduces bandwidth for the subscriber without fully suspending
-    service. This requires a 'throttle' RADIUS profile to be configured.
-
-    Args:
-        db: Database session
-        account_id: The account to throttle
-
-    Returns:
-        Tuple of (success: bool, credentials_throttled: int)
-    """
-    # Get throttle profile ID from settings
-    throttle_profile_id = settings_spec.resolve_value(
-        db, SettingDomain.collections, "throttle_radius_profile_id"
-    )
-    if not throttle_profile_id:
-        logger.warning(
-            f"Cannot throttle account {account_id}: throttle_radius_profile_id not configured"
-        )
-        return False, 0
-
-    # Verify the throttle profile exists
-    throttle_profile = db.get(RadiusProfile, throttle_profile_id)
-    if not throttle_profile or not throttle_profile.is_active:
-        logger.warning(
-            f"Cannot throttle account {account_id}: throttle profile {throttle_profile_id} not found or inactive"
-        )
-        return False, 0
-
-    # Get all active access credentials for the account
-    credentials = (
-        db.query(AccessCredential)
-        .filter(AccessCredential.subscriber_id == coerce_uuid(account_id))
-        .filter(AccessCredential.is_active.is_(True))
-        .all()
-    )
-
-    if not credentials:
-        logger.info(f"No active credentials to throttle for account {account_id}")
-        return True, 0
-
-    throttled_count = 0
-    for cred in credentials:
-        # PERSIST the profile we are about to replace. The throttle is a temporary
-        # override, so the value it overrides has to survive it — previously this
-        # was only written to a log line, which meant a customer who paid could
-        # never get their speed back.
-        #
-        # Only capture on the FIRST throttle: re-throttling an already-throttled
-        # credential must not overwrite the real profile with the throttle profile.
-        if cred.radius_profile_id and str(cred.radius_profile_id) != str(
-            throttle_profile_id
-        ):
-            cred.pre_throttle_radius_profile_id = cred.radius_profile_id
-        cred.radius_profile_id = throttle_profile.id
-        throttled_count += 1
-
-    # Emit throttle event
-    emit_event(
-        db,
-        EventType.subscriber_throttled,
-        {
-            "account_id": str(account_id),
-            "credentials_throttled": throttled_count,
-            "throttle_profile_id": str(throttle_profile_id),
-        },
-        account_id=coerce_uuid(account_id),
-    )
-
-    logger.info(f"Throttled {throttled_count} credentials for account {account_id}")
-    return True, throttled_count
-
-
-def _restore_throttle(db: Session, account_id: str) -> int:
-    """Remove throttle and restore original RADIUS profiles.
-
-    When a throttled account makes payment, restore their original
-    bandwidth by removing the throttle profile.
-
-    Args:
-        db: Database session
-        account_id: The account to restore
-
-    Returns:
-        Number of credentials restored
-    """
-    throttle_profile_id = settings_spec.resolve_value(
-        db, SettingDomain.collections, "throttle_radius_profile_id"
-    )
-    if not throttle_profile_id:
-        return 0
-
-    # Get credentials with throttle profile
-    credentials = (
-        db.query(AccessCredential)
-        .filter(AccessCredential.subscriber_id == coerce_uuid(account_id))
-        .filter(AccessCredential.radius_profile_id == coerce_uuid(throttle_profile_id))
-        .filter(AccessCredential.is_active.is_(True))
-        .all()
-    )
-
-    if not credentials:
-        return 0
-
-    restored_count = 0
-    for cred in credentials:
-        if cred.pre_throttle_radius_profile_id is not None:
-            # Give back exactly what we took. This preserves credential-level
-            # overrides and provides exact restoration evidence.
-            cred.radius_profile_id = cred.pre_throttle_radius_profile_id
-            cred.pre_throttle_radius_profile_id = None
-            restored_count += 1
-            continue
-
-        logger.warning(
-            "Legacy throttled credential %s has no exact pre-throttle profile; "
-            "leaving it unchanged for reviewed reconciliation",
-            cred.id,
-        )
-
-    if restored_count:
-        logger.info(
-            f"Restored {restored_count} throttled credentials for account {account_id}"
-        )
-        # The throttle emits ``subscriber_throttled``, which enqueues a RADIUS
-        # refresh. The un-throttle emitted nothing, so the customer's speed came
-        # back only on the next scheduled sweep — the throttle landed in seconds
-        # and the release took up to 15 minutes. Emit the mirror event.
-        emit_event(
-            db,
-            EventType.subscriber_unthrottled,
-            {
-                "account_id": str(account_id),
-                "credentials_restored": restored_count,
-            },
-            account_id=coerce_uuid(account_id),
-        )
-
-    return restored_count
 
 
 def _create_throttle_notification(

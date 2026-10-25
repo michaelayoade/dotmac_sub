@@ -222,7 +222,6 @@ def test_upsert_access_credential_does_not_clear_password_when_blank_on_edit(
         subscriber_id=subscriber.id,
         username="10004167",
         plain_password="InitialPass123",
-        radius_profile_id=None,
         subscription_id=subscription.id,
     )
 
@@ -335,7 +334,6 @@ def test_upsert_access_credential_prefers_active_matching_username(
         subscriber_id=subscriber.id,
         username="100015322",
         plain_password="NewPass123",
-        radius_profile_id=None,
     )
 
     db_session.refresh(active_credential)
@@ -372,7 +370,6 @@ def test_upsert_access_credential_rejects_username_owned_by_other_subscriber(
             subscriber_id=subscriber.id,
             username="100015322",
             plain_password="NewPass123",
-            radius_profile_id=None,
         )
 
     assert str(exc.value) == (
@@ -390,7 +387,6 @@ def test_upsert_access_credential_stores_service_password_in_reversible_format(
         subscriber_id=subscriber.id,
         username="10004167",
         plain_password="InitialPass123",
-        radius_profile_id=None,
     )
 
     credential = (
@@ -415,7 +411,6 @@ def test_subscription_form_context_never_exposes_current_service_password(
         subscriber_id=subscriber.id,
         username="10004167",
         plain_password="VisiblePass123",
-        radius_profile_id=None,
         subscription_id=subscription.id,
     )
 
@@ -965,7 +960,6 @@ def test_subscription_detail_context_exposes_events_notifications_and_radius_syn
         subscriber_id=subscriber.id,
         username="105000111",
         plain_password="VisiblePass123",
-        radius_profile_id=None,
         subscription_id=subscription.id,
     )
     credential = (
@@ -1128,7 +1122,6 @@ def test_subscription_detail_context_reads_live_external_radius_rows(
         subscriber_id=subscriber.id,
         username="105000222",
         plain_password="SecretPass123",
-        radius_profile_id=None,
         subscription_id=subscription.id,
     )
 
@@ -1229,7 +1222,6 @@ def test_send_subscription_credentials_uses_email_and_sms_targets(
         subscriber_id=subscriber.id,
         username="10004167",
         plain_password="SendablePass123",
-        radius_profile_id=None,
     )
 
     sent_emails = []
@@ -1418,8 +1410,7 @@ def test_pending_subscription_create_does_not_mutate_live_service_credential(
     catalog_offer,
 ):
     live_profile = RadiusProfile(name="Live profile", is_active=True)
-    pending_profile = RadiusProfile(name="Pending profile", is_active=True)
-    db_session.add_all([live_profile, pending_profile])
+    db_session.add(live_profile)
     db_session.flush()
     # Model the legacy subscriber-level credential that exposed the regression.
     # A second pending subscription cannot coexist with an active subscription,
@@ -1444,7 +1435,6 @@ def test_pending_subscription_create_does_not_mutate_live_service_credential(
             "account_id": subscriber.id,
             "offer_id": catalog_offer.id,
             "status": SubscriptionStatus.pending,
-            "radius_profile_id": pending_profile.id,
         },
         FormData([]),
         None,

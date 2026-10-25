@@ -888,6 +888,7 @@ jobs:
           common_args="--network ci-net \
             -e DATABASE_URL=postgresql+psycopg://postgres:postgres@ci-db:5432/dotmac_sub_ci \
             -e SECRET_KEY=ci-test-secret-key-not-for-production \
+            -e APP_ENV=ci \
             -e REDIS_URL=redis://ci-redis:6379/0"
           docker run --rm $common_args dotmac-sub:ci sh -c \
             'BOOTSTRAP_DATABASE_URL="$DATABASE_URL" python scripts/bootstrap_commercial_module_prereqs.py'

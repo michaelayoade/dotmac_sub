@@ -817,7 +817,7 @@
                                         </div>
                                         <div>
                                             <p class="text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">RADIUS Profile</p>
-                                            <p class="mt-1 text-sm text-slate-700 dark:text-slate-300">{{ subscription.radius_profile.name if subscription.radius_profile else '—' }}</p>
+                                            <p class="mt-1 text-sm text-slate-700 dark:text-slate-300">{{ effective_rate_profile.name if effective_rate_profile else '—' }}{% if effective_rate_layer and effective_rate_layer != 'plan' %} <span class="text-xs text-slate-500">({{ effective_rate_layer|replace('_', ' ') }})</span>{% endif %}</p>
                                         </div>
                                         <div>
                                             <p class="text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">Service Status Raw</p>

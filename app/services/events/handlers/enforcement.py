@@ -7,16 +7,17 @@ from uuid import UUID
 from sqlalchemy.orm import Session
 
 from app.models.catalog import Subscription, SubscriptionStatus
+from app.models.fup_state import FupActionStatus
 from app.services import fup_enforcement
 from app.services import radius as radius_service
 from app.services import radius_reject as radius_reject_service
 from app.services.enforcement import (
     _resolve_plan_profile,
-    apply_radius_profile_to_subscription,
     disconnect_account_sessions,
     disconnect_subscription_sessions,
     project_credentials_to_radius,
     remove_subscription_address_list_block,
+    subscription_credential_scope,
     update_subscription_sessions,
 )
 from app.services.enforcement_event_policy import (
@@ -31,6 +32,7 @@ from app.services.events.types import Event, EventType
 from app.services.fup_state import (
     ApplyFupRuntimeState,
     FupRuntimeStateError,
+    fup_state,
 )
 from app.services.fup_throttle_profile import resolve_fup_throttle_profile
 
@@ -631,8 +633,16 @@ class EnforcementHandler:
             # account moved every active credential the subscriber owned onto the
             # throttle profile, so one capped service degraded the customer's
             # unrelated services too.
-            application = apply_radius_profile_to_subscription(
-                db, str(subscription_id), str(throttle_profile_id)
+            application = subscription_credential_scope(db, str(subscription_id))
+            # What the throttle was BEFORE this assertion. A re-assertion with the
+            # same throttle (after a cooldown, a re-evaluation) changes nothing on
+            # the wire, so it must not project again or drop the customer's
+            # sessions; only a throttle that is new or different does.
+            prior_state = fup_state.get(db, str(subscription_id))
+            throttle_changed = not (
+                prior_state is not None
+                and prior_state.action_status == FupActionStatus.throttled
+                and prior_state.throttle_profile_id == throttle_profile_id
             )
             if application.matched:
                 # Gate on MATCHED, not updated. A re-assertion after a cooldown
@@ -657,17 +667,17 @@ class EnforcementHandler:
                     cap_resets_at=cap_resets_at_raw,
                     notes="FUP throttle applied",
                 )
-                if application.updated:
-                    # Consequences follow the authoritative state, never precede
-                    # it: project the credential rows first, then move live
-                    # sessions onto them. Disconnecting before the state existed
-                    # meant a CoA could land with nothing recording why.
-                    #
-                    # RADIUS projection is idempotent, so a failure here is
-                    # drift a later reconcile repairs. Both still run before the
-                    # dispatcher's outer commit — true post-commit delivery
-                    # needs a durable consequence intent and a post-commit
-                    # consumer, which this handler cannot express.
+                # Consequences follow the authoritative state, never precede
+                # it: project the credential rows first, then move live
+                # sessions onto them. Disconnecting before the state existed
+                # meant a CoA could land with nothing recording why.
+                #
+                # RADIUS projection is idempotent, so a failure here is
+                # drift a later reconcile repairs. Both still run before the
+                # dispatcher's outer commit — true post-commit delivery
+                # needs a durable consequence intent and a post-commit
+                # consumer, which this handler cannot express.
+                if throttle_changed:
                     project_credentials_to_radius(db, application.usernames)
                     if policy.refresh_sessions:
                         disconnect_subscription_sessions(
