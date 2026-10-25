@@ -64,6 +64,7 @@ def restore_config_from_backup(
 ) -> tuple[bool, str]:
     """Replay a backed-up running config to an OLT over SSH."""
     from app.services.network.olt_ssh import (
+        _apply_paging_off,
         _open_shell,
         _read_until_prompt,
         _run_huawei_cmd,
@@ -82,8 +83,7 @@ def restore_config_from_backup(
     try:
         channel.send("enable\n")
         _read_until_prompt(channel, policy.prompt_regex, timeout_sec=5)
-        channel.send("screen-length 0 temporary\n")
-        _read_until_prompt(channel, policy.prompt_regex, timeout_sec=5)
+        _apply_paging_off(channel, policy, policy.prompt_regex)
 
         config_prompt = r"\][ \t]*$"
         system_view = _run_huawei_cmd(channel, "system-view", prompt=config_prompt)

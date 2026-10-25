@@ -10,6 +10,7 @@ from __future__ import annotations
 import logging
 import re
 from collections import Counter
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
@@ -866,6 +867,79 @@ def import_olt_state_from_dump(
         )
 
 
+_ONT_TOTAL_TRAILER_RE = re.compile(r"the total of ONTs are:\s*(\d+)", re.IGNORECASE)
+
+
+def _read_port_registrations(
+    run_cmd: Callable[[str], str],
+    command_profile: Any,
+    fsp: str,
+    warnings: list[str],
+) -> tuple[list[_LiveRegistrationRead], bool]:
+    """Read one PON port's ONT registrations; report whether the read is whole.
+
+    Incomplete (so the destructive sweep must be skipped) when the command
+    fails or times out, the ``the total of ONTs are: N`` trailer is missing or
+    disagrees with the parsed rows, or any ONT detail is unreadable. A detail
+    read missing its line/service profile ids is treated as cut off and is
+    never written, so a partial read cannot overwrite good data with None.
+    """
+    reads: list[_LiveRegistrationRead] = []
+    try:
+        summary_output = run_cmd(command_profile.display_ont_info_all(fsp))
+    except (ValueError, TimeoutError) as exc:
+        warnings.append(f"Skipped {fsp}: {exc}")
+        return reads, False
+    summary = parse_ont_info(summary_output, require_trailer=True)
+    if not summary.success:
+        warnings.append(
+            f"Skipped {fsp}: ONT list incomplete or unreadable "
+            f"({'; '.join(summary.warnings)[:160]})"
+        )
+        return reads, False
+    complete = True
+    for entry in summary.data:
+        detail_fsp = entry.fsp or fsp
+        try:
+            detail_output = run_cmd(
+                command_profile.display_ont_info(detail_fsp, entry.ont_id)
+            )
+        except (ValueError, TimeoutError) as exc:
+            warnings.append(f"Skipped ONT detail {detail_fsp} {entry.ont_id}: {exc}")
+            complete = False
+            continue
+        # ``parsed_detail`` is distinct from the raw ``detail_output`` string.
+        parsed_detail = parse_ont_info_detail(detail_output)
+        if (
+            parsed_detail is None
+            or parsed_detail.line_profile_id is None
+            or parsed_detail.service_profile_id is None
+        ):
+            warnings.append(
+                f"Skipped ONT detail {detail_fsp} {entry.ont_id}: unreadable or "
+                "cut off; existing data left unchanged"
+            )
+            complete = False
+            continue
+        registration_fsp = parsed_detail.fsp or detail_fsp
+        registration_ont_id = parsed_detail.ont_id or entry.ont_id
+        reads.append(
+            _LiveRegistrationRead(
+                fsp=registration_fsp,
+                ont_id=registration_ont_id,
+                serial_number=parsed_detail.serial_number or entry.serial_number,
+                equipment_id=parsed_detail.equipment_id or parsed_detail.model,
+                line_profile_id=parsed_detail.line_profile_id,
+                service_profile_id=parsed_detail.service_profile_id,
+                tr069_profile_id=parsed_detail.tr069_profile_id,
+                match_state=parsed_detail.match_state or entry.match_state,
+                description=parsed_detail.description or entry.description,
+                raw_config=detail_output,
+            )
+        )
+    return reads, complete
+
+
 def import_olt_state(db: Session, olt_id: str) -> OltStateImportResult:
     """Import OLT profile/registration state into DB records.
 
@@ -905,7 +979,7 @@ def import_olt_state(db: Session, olt_id: str) -> OltStateImportResult:
     finish_read_transaction(db)
 
     try:
-        transport, channel, _policy = core._open_shell(olt)
+        transport, channel, policy = core._open_shell(olt)
     except Exception as exc:
         return OltStateImportResult(
             success=False,
@@ -916,7 +990,7 @@ def import_olt_state(db: Session, olt_id: str) -> OltStateImportResult:
     try:
         channel.send("enable\n")
         core._read_until_prompt(channel, r"#\s*$", timeout_sec=5)
-        core._run_huawei_cmd(channel, "screen-length 0 temporary")
+        core._apply_paging_off(channel, policy, r"#\s*$")
 
         line_output = core._run_huawei_cmd(channel, "display ont-lineprofile gpon all")
         line_profiles = _parse_profile_table(line_output)
@@ -976,56 +1050,15 @@ def import_olt_state(db: Session, olt_id: str) -> OltStateImportResult:
         # enumeration was complete; only run the destructive sweep if it was.
         read_complete = True
         for fsp in pon_fsps:
-            try:
-                summary_output = core._run_huawei_cmd(
-                    channel,
-                    command_profile.display_ont_info_all(fsp),
-                )
-            except ValueError as exc:
-                warnings.append(f"Skipped {fsp}: {exc}")
-                read_complete = False
-                continue
-            summary = parse_ont_info(summary_output)
-            for entry in summary.data:
-                detail_fsp = entry.fsp or fsp
-                try:
-                    detail_cmd = command_profile.display_ont_info(
-                        detail_fsp,
-                        entry.ont_id,
-                    )
-                    detail_output = core._run_huawei_cmd(channel, detail_cmd)
-                except ValueError as exc:
-                    warnings.append(
-                        f"Skipped ONT detail {detail_fsp} {entry.ont_id}: {exc}"
-                    )
-                    read_complete = False
-                    continue
-                # Renamed to keep ``detail`` (the raw command output, ``str``)
-                # distinct from the parsed dataclass — earlier loops in this
-                # function bind ``detail`` to ``core._run_huawei_cmd``'s
-                # return, so reusing the name confuses mypy and any future
-                # reader.
-                parsed_detail = parse_ont_info_detail(detail_output)
-                if parsed_detail is None:
-                    continue
-                registration_fsp = parsed_detail.fsp or detail_fsp
-                registration_ont_id = parsed_detail.ont_id or entry.ont_id
-                seen_registration_keys.add((registration_fsp, registration_ont_id))
-                serial_number = parsed_detail.serial_number or entry.serial_number
-                registration_reads.append(
-                    _LiveRegistrationRead(
-                        fsp=registration_fsp,
-                        ont_id=registration_ont_id,
-                        serial_number=serial_number,
-                        equipment_id=parsed_detail.equipment_id or parsed_detail.model,
-                        line_profile_id=parsed_detail.line_profile_id,
-                        service_profile_id=parsed_detail.service_profile_id,
-                        tr069_profile_id=parsed_detail.tr069_profile_id,
-                        match_state=parsed_detail.match_state or entry.match_state,
-                        description=parsed_detail.description or entry.description,
-                        raw_config=detail_output,
-                    )
-                )
+            port_reads, port_complete = _read_port_registrations(
+                lambda command: core._run_huawei_cmd(channel, command),
+                command_profile,
+                fsp,
+                warnings,
+            )
+            registration_reads.extend(port_reads)
+            seen_registration_keys.update((r.fsp, r.ont_id) for r in port_reads)
+            read_complete = read_complete and port_complete
 
         # Every SSH operation has completed. The remaining work is local and
         # runs in one short transaction, so the import cannot be terminated as

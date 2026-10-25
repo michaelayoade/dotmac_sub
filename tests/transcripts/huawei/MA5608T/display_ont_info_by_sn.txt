@@ -1,0 +1,15 @@
+display ont info by-sn 48575443AAAA0001
+  F/S/P                   : 0/1/6
+  ONT-ID                  : 3
+  Control flag            : active
+  Run state               : offline
+  Config state            : initial
+  Match state             : initial
+  ONT distance(m)         : -
+  Description             : CUSTOMER_zone_Zone_1_descr
+  Last down cause         : -
+  ---- More ( Press 'Q' to break ) ----[37D                                     [37D  Last up time            : -
+  Last down time          : -
+  Last dying gasp time    : -
+
+boi-olt#

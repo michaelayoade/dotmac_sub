@@ -1,0 +1,25 @@
+{
+  "classification": {
+    "error_code": "NONE",
+    "has_error_marker": false,
+    "resource_absent": false
+  },
+  "detail": {
+    "config_state": "initial",
+    "control_flag": "active",
+    "description": "CUSTOMER_zone_Zone_1_descr",
+    "equipment_id": "",
+    "fsp": "0/1/6",
+    "last_down_cause": "-",
+    "line_profile_id": null,
+    "match_state": "initial",
+    "model": "",
+    "ont_id": 3,
+    "run_state": "offline",
+    "serial_number": "",
+    "service_profile_id": null,
+    "software_version": "",
+    "tr069_profile_id": null,
+    "vendor_id": ""
+  }
+}

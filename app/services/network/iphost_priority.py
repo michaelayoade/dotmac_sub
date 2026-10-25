@@ -114,6 +114,11 @@ def _resolve_mapping_priority(
         for priority in db.scalars(stmt).all()
         if priority is not None and 0 <= int(priority) <= 7
     ]
+    if line_profile_id is None:
+        # Line profile unknown (e.g. a cut-off import read left it None): a
+        # majority vote across profiles could pick the wrong priority, so only
+        # an unambiguous value (every profile agrees) is returned.
+        return priorities[0] if priorities and len(set(priorities)) == 1 else None
     return _only_or_most_common(priorities)
 
 

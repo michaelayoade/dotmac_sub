@@ -76,7 +76,7 @@ def test_registered_inventory_uses_explicit_profile_scoped_ports(monkeypatch) ->
     )
     monkeypatch.setattr(
         "app.services.network.olt_ssh._prepare_huawei_read_shell",
-        lambda _channel, prompt: prompt,
+        lambda _channel, prompt, **_k: prompt,
     )
 
     def _read(_channel, command, *, prompt, timeout_sec):
@@ -115,7 +115,7 @@ def test_registered_inventory_rejects_cli_errors(monkeypatch) -> None:
     )
     monkeypatch.setattr(
         "app.services.network.olt_ssh._prepare_huawei_read_shell",
-        lambda _channel, prompt: prompt,
+        lambda _channel, prompt, **_k: prompt,
     )
     monkeypatch.setattr(
         "app.services.network.olt_ssh._run_huawei_paged_cmd",
@@ -155,7 +155,7 @@ def _huawei_reader(monkeypatch, output):
     )
     monkeypatch.setattr(
         "app.services.network.olt_ssh._prepare_huawei_read_shell",
-        lambda _channel, prompt: prompt,
+        lambda _channel, prompt, **_k: prompt,
     )
     monkeypatch.setattr(
         "app.services.network.olt_ssh._run_huawei_paged_cmd",
@@ -338,7 +338,8 @@ def test_real_garki_capture_parses_exactly_16_with_4_online() -> None:
     from pathlib import Path
 
     raw = (
-        Path(__file__).parent / "fixtures/huawei/garki_0_2_1_display_ont_info_all.txt"
+        Path(__file__).parent
+        / "transcripts/huawei/MA5800-X2/display_ont_info_port_all.txt"
     ).read_text()
     entries = parse_registered_ont_inventory(raw, "0/2/1")
     assert len(entries) == 16
@@ -354,7 +355,8 @@ def test_real_garki_capture_through_get_registered_serials(monkeypatch) -> None:
     from pathlib import Path
 
     raw = (
-        Path(__file__).parent / "fixtures/huawei/garki_0_2_1_display_ont_info_all.txt"
+        Path(__file__).parent
+        / "transcripts/huawei/MA5800-X2/display_ont_info_port_all.txt"
     ).read_text()
     _huawei_reader(monkeypatch, raw)
     ok, message, entries = get_registered_ont_serials(

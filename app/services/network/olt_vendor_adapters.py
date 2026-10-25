@@ -48,6 +48,15 @@ class OltSshPolicy:
     macs: tuple[str, ...]
     prompt_regex: str = r"[>#]\s*$"
     version_command: str = "display version"
+    # Command that turns the pager off for the session, or None when no command
+    # is CONFIRMED for the model. None means "do not send anything": the read
+    # paths answer the "---- More ----" pager instead. Prod evidence (BOI
+    # MA5608T V800R013, Garki MA5800-X2) shows ``screen-length 0 temporary``
+    # (Huawei switch/VRP syntax) is rejected as "% Unknown command". No
+    # alternative (``scroll``, ``mmi-mode original-output``) is confirmed in
+    # Knowledge or the repo; set one here only after a lab/BOI capture
+    # confirms it (design s7), and add its transcript under tests/transcripts.
+    paging_off_command: str | None = None
 
 
 @dataclass(frozen=True)
