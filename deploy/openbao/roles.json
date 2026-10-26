@@ -20,6 +20,7 @@
         "job_workflow_ref": ["michaelayoade/dotmac_sub/.github/workflows/staging-deploy.yml@refs/heads/main"]
       },
       "token_policies": ["sub-staging-ci"],
+      "token_no_default_policy": true,
       "token_ttl": "20m",
       "token_max_ttl": "60m"
     },
@@ -39,6 +40,7 @@
         "job_workflow_ref": ["michaelayoade/dotmac_sub/.github/workflows/production-deploy.yml@refs/heads/main"]
       },
       "token_policies": ["sub-production-ci"],
+      "token_no_default_policy": true,
       "token_ttl": "20m",
       "token_max_ttl": "60m"
     },
@@ -58,6 +60,7 @@
         "job_workflow_ref": ["michaelayoade/dotmac_sub/.github/workflows/openbao-jwt-proof.yml@refs/heads/main"]
       },
       "token_policies": ["gate0-proof"],
+      "token_no_default_policy": true,
       "token_ttl": "10m",
       "token_max_ttl": "10m"
     }

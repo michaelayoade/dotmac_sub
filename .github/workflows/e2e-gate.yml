@@ -27,7 +27,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 45
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           fetch-depth: 0
 
@@ -103,21 +103,21 @@ jobs:
       - name: Install Python + Poetry
         if: steps.relevance.outputs.relevant == 'true'
         id: python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
         with:
           python-version: ${{ env.PYTHON_VERSION }}
 
       - name: Restore Poetry installation
         if: steps.relevance.outputs.relevant == 'true'
         id: poetry-cache
-        uses: actions/cache@v4
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
         with:
           path: ~/.local
           key: poetry-v1-${{ runner.os }}-${{ steps.python.outputs.python-version }}-${{ env.POETRY_VERSION }}
 
       - name: Install Poetry
         if: steps.relevance.outputs.relevant == 'true' && steps.poetry-cache.outputs.cache-hit != 'true'
-        uses: snok/install-poetry@v1
+        uses: snok/install-poetry@a783c322200f0519c7926aa6faa857c4e23e9263 # v1.4.2
         with:
           version: ${{ env.POETRY_VERSION }}
           virtualenvs-create: true
@@ -140,7 +140,7 @@ jobs:
       - name: Restore Python environment
         if: steps.relevance.outputs.relevant == 'true'
         id: python-cache
-        uses: actions/cache@v4
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
         with:
           path: .venv
           key: python-venv-v3-${{ runner.os }}-${{ steps.python.outputs.python-version }}-${{ env.POETRY_VERSION }}-${{ hashFiles('poetry.lock', 'pyproject.toml') }}
@@ -196,7 +196,7 @@ jobs:
 
       - name: Upload browser failure evidence
         if: failure() && steps.relevance.outputs.relevant == 'true'
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: e2e-failure-evidence
           # test-results/ holds a Playwright trace, video, screenshot,
