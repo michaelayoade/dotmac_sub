@@ -126,6 +126,7 @@ def test_proof_workflow_is_dispatch_only_with_pass_verdict() -> None:
     triggers = _load(PROOF).get(True) or _load(PROOF).get("on")
     assert set(triggers) == {"workflow_dispatch"}
     assert 'echo "GATE0 PROOF 1: PASS"' in source
+    assert "PASS (row 4 unexercised" in source
     assert "vault-action" not in source
 
 
@@ -145,6 +146,7 @@ def test_roles_json_matches_golden_and_never_binds_network() -> None:
     assert actual["default_role"] == ""
     assert set(actual["roles"]) == set(POLICIES)
     for role in actual["roles"].values():
+        assert role["token_no_default_policy"] is True
         assert role["bound_audiences"] == ["dotmac-openbao"]
         assert "token_num_uses" not in role
         assert "token_bound_cidrs" not in role

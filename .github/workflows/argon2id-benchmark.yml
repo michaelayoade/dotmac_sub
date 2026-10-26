@@ -41,15 +41,15 @@ jobs:
           test "$WORKFLOW_REF" = refs/heads/main
           test "$EXECUTE" = true
 
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           ref: ${{ github.sha }}
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
         with:
           python-version: ${{ env.PYTHON_VERSION }}
 
-      - uses: snok/install-poetry@v1
+      - uses: snok/install-poetry@a783c322200f0519c7926aa6faa857c4e23e9263 # v1.4.2
         with:
           version: ${{ env.POETRY_VERSION }}
           virtualenvs-create: true
@@ -79,7 +79,7 @@ jobs:
               --warmups 1 --max-seconds 120 > argon2id-single-op.json
 
       - name: Preserve complete measurements with exact source provenance
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: argon2id-single-op-${{ github.sha }}-${{ github.run_id }}
           path: argon2id-single-op.json

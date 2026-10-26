@@ -205,7 +205,13 @@ def test_ghcr_isolated_to_the_pinned_genieacs_runtime() -> None:
     assert "branches: [main]" in workflow
     assert "docker/genieacs/**" in workflow
     assert "context: docker/genieacs" in workflow
-    assert workflow.count("uses: docker/build-push-action@v6") == 1
+    assert (
+        workflow.count(
+            "uses: docker/build-push-action@"
+            "10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6.19.2"
+        )
+        == 1
+    )
     assert "context: .\n" not in workflow
     assert "type=raw,value=latest" not in workflow
 
@@ -237,7 +243,13 @@ def test_release_candidate_build_is_explicit_green_main_and_digest_evidenced() -
     assert "Cannot safely determine whether" in workflow
     assert "runs-on: ubuntu-latest" in workflow
     assert "self-hosted" not in workflow
-    assert workflow.count("uses: docker/build-push-action@v6") == 1
+    assert (
+        workflow.count(
+            "uses: docker/build-push-action@"
+            "10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6.19.2"
+        )
+        == 1
+    )
     assert "id: build" in workflow
     assert "${{ steps.build.outputs.digest }}" in workflow
     assert "python -m scripts.product_manifest emit" in dockerfile
@@ -329,7 +341,9 @@ def test_staging_deploy_is_disabled_and_pinned_to_the_staging_host() -> None:
         "git reset --hard",
     ):
         assert forbidden_branch_mutation not in workflow
-    assert "actions/download-artifact@v4" in workflow
+    assert (
+        "actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093" in workflow
+    )
     assert "python -m scripts.release_candidate_evidence verify-candidate" in workflow
     assert 'bash scripts/deploy_staging.sh "$IMAGE_DIGEST"' in workflow
     assert 'bash scripts/deploy.sh "$IMAGE_DIGEST"' not in workflow
