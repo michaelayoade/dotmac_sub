@@ -73,6 +73,13 @@ def _require(payload: Mapping[str, object], key: str) -> object:
     return value
 
 
+def _require_int(payload: Mapping[str, object], key: str) -> int:
+    value = _require(payload, key)
+    if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+        raise MalformedObservation(f"observation {key!r} is not a counter")
+    return value
+
+
 def _observed_at(payload: Mapping[str, object]) -> datetime:
     raw = _require(payload, "observed_at")
     try:
@@ -115,9 +122,9 @@ def translate_observation(
             nas_ref=nas_ref,
             session_ref=str(_require(payload, "session_ref")),
             event_kind=str(_require(payload, "event_kind")),
-            input_octets=int(_require(payload, "input_octets")),  # type: ignore[arg-type]
-            output_octets=int(_require(payload, "output_octets")),  # type: ignore[arg-type]
-            session_seconds=int(_require(payload, "session_seconds")),  # type: ignore[arg-type]
+            input_octets=_require_int(payload, "input_octets"),
+            output_octets=_require_int(payload, "output_octets"),
+            session_seconds=_require_int(payload, "session_seconds"),
             observed_at=observed_at,
             source_ref=source_ref,
             fingerprint=fingerprint,

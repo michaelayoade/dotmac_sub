@@ -54,6 +54,7 @@ from uuid import UUID
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 
+from app.config import settings
 from app.db import get_db
 from app.schemas.integrator_observation import (
     IntegratorMirrorFieldDisagreement,
@@ -71,6 +72,10 @@ from app.schemas.integrator_settlement_observation import (
     SettlementProductPortDescriptorV2,
     SettlementProductPortDescriptorV3,
 )
+from app.schemas.projection_secret_fetch import (
+    ProjectionSecretFetchRequest,
+    ProjectionSecretFetchResponse,
+)
 from app.services import payment_webhook_commands as settlement_commands
 from app.services import (
     team_inbox_integrator_envelope as envelopes,
@@ -82,16 +87,13 @@ from app.services import (
     team_inbox_observations,
     team_inbox_processing,
 )
-from app.config import settings
-from app.schemas.projection_secret_fetch import (
-    ProjectionSecretFetchRequest,
-    ProjectionSecretFetchResponse,
-)
 from app.services.auth_dependencies import require_any_permission, require_permission
 from app.services.db_session_adapter import db_session_adapter
 from app.services.integrations import inbox as integration_inbox
-from app.services.integrations import network_capability_contracts
-from app.services.integrations import projection_secret_fetch
+from app.services.integrations import (
+    network_capability_contracts,
+    projection_secret_fetch,
+)
 from app.services.integrations import product_port_descriptor as descriptors
 from app.services.integrations.connectors.integrator_http import (
     INTEGRATOR_RECEIVE_CAPABILITY,
@@ -123,12 +125,10 @@ _require_descriptor_auth = require_any_permission(
 #: The one scope that may redeem a projection secret. Narrower than every
 #: other Integrator scope: it can fetch a secret the owner already opened a
 #: request for, once, and can do nothing else on this port.
-PROJECTION_SECRET_FETCH_SCOPE = "integration:projection-secret:fetch"
+PROJECTION_SECRET_FETCH_SCOPE = "integration:projection-secret:reveal"
 
 
-@router.post(
-    "/projection-secret", response_model=ProjectionSecretFetchResponse
-)
+@router.post("/projection-secret", response_model=ProjectionSecretFetchResponse)
 def fetch_projection_secret(
     body: ProjectionSecretFetchRequest,
     db: Session = Depends(get_db),
@@ -151,11 +151,9 @@ def fetch_projection_secret(
             secret_version=body.secret_version,
         )
     except projection_secret_fetch.SecretFetchRefused as exc:
-        db.rollback()
         raise HTTPException(
             status_code=409, detail="projection secret refused"
         ) from exc
-    db.commit()
     return ProjectionSecretFetchResponse(secret=secret)
 
 

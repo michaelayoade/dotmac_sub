@@ -77,11 +77,12 @@ def redeem_projection_secret(
 ) -> str:
     """Burn the request and return the cleartext, or refuse opaquely.
 
-    The burn (`redeemed_at`) is written and flushed before decryption is
-    attempted, inside the caller's transaction: a caller that crashes
-    after receiving the secret cannot redeem the same ref again, and a
-    failed decrypt still spends the authorization rather than leaving it
-    replayable.
+    This command owns its transaction (the API port delegates and never
+    commits). The burn (`redeemed_at`) is committed before decryption is
+    attempted: a caller that crashes after receiving the secret cannot
+    redeem the same ref again, and a failed decrypt still spends the
+    authorization rather than leaving it replayable. Pre-burn refusals
+    roll back having written nothing.
     """
     moment = now or datetime.now(UTC)
     request = db.scalar(
@@ -96,6 +97,7 @@ def redeem_projection_secret(
         or request.secret_version != secret_version
         or moment > request.expires_at
     ):
+        db.rollback()
         raise SecretFetchRefused("projection secret fetch refused")
     credential = db.get(AccessCredential, credential_id)
     if (
@@ -105,15 +107,19 @@ def redeem_projection_secret(
         or not credential.secret_hash
         or is_secret_reference_value(credential.secret_hash)
     ):
+        db.rollback()
         raise SecretFetchRefused("projection secret fetch refused")
     request.redeemed_at = moment
-    db.flush()
+    db.commit()
     try:
-        return decrypt_credential_with_key(
+        secret = decrypt_credential_with_key(
             credential.secret_hash, get_encryption_key()
         )
     except Exception as exc:  # noqa: BLE001 - refusal must stay opaque
         raise SecretFetchRefused("projection secret fetch refused") from exc
+    if not secret:
+        raise SecretFetchRefused("projection secret fetch refused")
+    return secret
 
 
 __all__ = [

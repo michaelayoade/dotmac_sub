@@ -1677,6 +1677,25 @@ DOMAIN = DomainSOT(
             ),
         ),
         SOTService(
+            name="access.projection_secret_fetch",
+            module="app.services.integrations.projection_secret_fetch",
+            owns=(
+                "single-use projection secret fetch authorizations",
+                "projection secret request open/redeem lifecycle",
+            ),
+            depends_on=("access.radius_projection",),
+            notes=(
+                "Credential-owner side of the ADR-0076 section 7 fetch: a "
+                "request is opened when a projection plan is authored and "
+                "burned by the one redeem that releases the secret, with "
+                "every refusal collapsed to one opaque outcome. The request "
+                "rows name the credential and secret version only; no secret "
+                "material is persisted here or in any plan. Replaced at the "
+                "suite cutover by the access-credentials module's native "
+                "secret versions."
+            ),
+        ),
+        SOTService(
             name="access.session_enforcement",
             module="app.services.enforcement",
             owns=("typed access-state CoA/disconnect execution",),

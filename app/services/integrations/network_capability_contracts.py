@@ -510,12 +510,14 @@ def published_source_revision() -> str:
     the revision changes exactly when a published contract changes and can
     never drift from what is actually served.
     """
-    return canonical_digest(
-        sorted(
-            document.contract_digest
-            for _cid, _owner, _summary, document in NETWORK_CAPABILITY_CONTRACTS
-        )
-    )
+    digests = [
+        document.contract_digest
+        for _cid, _owner, _summary, document in NETWORK_CAPABILITY_CONTRACTS
+    ]
+    present = [digest for digest in digests if digest is not None]
+    if len(present) != len(digests):
+        raise ValueError("a network capability contract has no digest")
+    return canonical_digest(sorted(present))
 
 
 def capability_registry_document(
