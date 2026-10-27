@@ -82,9 +82,16 @@ from app.services import (
     team_inbox_observations,
     team_inbox_processing,
 )
+from app.config import settings
+from app.schemas.projection_secret_fetch import (
+    ProjectionSecretFetchRequest,
+    ProjectionSecretFetchResponse,
+)
 from app.services.auth_dependencies import require_any_permission, require_permission
 from app.services.db_session_adapter import db_session_adapter
 from app.services.integrations import inbox as integration_inbox
+from app.services.integrations import network_capability_contracts
+from app.services.integrations import projection_secret_fetch
 from app.services.integrations import product_port_descriptor as descriptors
 from app.services.integrations.connectors.integrator_http import (
     INTEGRATOR_RECEIVE_CAPABILITY,
@@ -111,6 +118,64 @@ INTEGRATOR_MIRROR_SCOPE = "integration:observations:mirror"
 _require_descriptor_auth = require_any_permission(
     INTEGRATOR_OBSERVATION_SCOPE, INTEGRATOR_MIRROR_SCOPE
 )
+
+
+#: The one scope that may redeem a projection secret. Narrower than every
+#: other Integrator scope: it can fetch a secret the owner already opened a
+#: request for, once, and can do nothing else on this port.
+PROJECTION_SECRET_FETCH_SCOPE = "integration:projection-secret:fetch"
+
+
+@router.post(
+    "/projection-secret", response_model=ProjectionSecretFetchResponse
+)
+def fetch_projection_secret(
+    body: ProjectionSecretFetchRequest,
+    db: Session = Depends(get_db),
+    _auth: dict = Depends(require_permission(PROJECTION_SECRET_FETCH_SCOPE)),
+) -> ProjectionSecretFetchResponse:
+    """Redeem one open projection request for its credential's secret.
+
+    Disarmed with the rest of outbound provisioning: while
+    `network_provision_enabled` is off nothing can have opened a request
+    through the composition, and the endpoint answers the same opaque 409
+    as every other refusal rather than confirming it exists.
+    """
+    if not settings.network_provision_enabled:
+        raise HTTPException(status_code=409, detail="projection secret refused")
+    try:
+        secret = projection_secret_fetch.redeem_projection_secret(
+            db,
+            request_ref=body.projection_request_ref,
+            credential_id=body.credential_id,
+            secret_version=body.secret_version,
+        )
+    except projection_secret_fetch.SecretFetchRefused as exc:
+        db.rollback()
+        raise HTTPException(
+            status_code=409, detail="projection secret refused"
+        ) from exc
+    db.commit()
+    return ProjectionSecretFetchResponse(secret=secret)
+
+
+@router.get("/network-capability-registry")
+def read_network_capability_registry(
+    _auth: dict = Depends(_require_descriptor_auth),
+) -> dict[str, object]:
+    """Publish Sub's network capability contracts for Integrator install.
+
+    Off by default until the network-suite-v1 cutover arms it
+    (`NETWORK_CAPABILITY_REGISTRY_ENABLED`). When off the route answers 404,
+    the same as an unknown capability, so an authenticated caller cannot
+    learn what Sub would publish. The Integrator pins the document's
+    `descriptor_digest`; serving a different digest refuses its startup.
+    """
+    if not settings.network_capability_registry_enabled:
+        raise HTTPException(
+            status_code=404, detail="Network capability registry not published"
+        )
+    return network_capability_contracts.capability_registry_document()
 
 
 def _settlement_observation(

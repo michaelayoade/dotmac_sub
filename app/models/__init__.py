@@ -849,6 +849,7 @@ from app.models.prepaid_funding import (  # noqa: F401
     PrepaidFundingReconstructionBatch,
     PrepaidOpeningFundingConsumption,
 )
+from app.models.projection_secret_request import ProjectionSecretRequest  # noqa: F401
 from app.models.project import (  # noqa: F401
     Project,
     ProjectComment,
