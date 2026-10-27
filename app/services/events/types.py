@@ -95,6 +95,7 @@ class EventType(enum.Enum):
     subscription_correction_applied = "subscription.correction_applied"
     access_credential_ensured = "access_credential.ensured"
     access_credential_binding_changed = "access_credential.binding_changed"
+    access_projection_secret_revealed = "access_projection_secret.revealed"
 
     # Billing - Invoice events (4)
     invoice_created = "invoice.created"

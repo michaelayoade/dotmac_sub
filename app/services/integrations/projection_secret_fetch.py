@@ -32,6 +32,8 @@ from app.services.credential_crypto import (
     get_encryption_key,
     is_secret_reference_value,
 )
+from app.services.events.dispatcher import emit_event
+from app.services.events.types import EventType
 
 REQUEST_TTL = timedelta(minutes=15)
 
@@ -78,11 +80,13 @@ def redeem_projection_secret(
     """Burn the request and return the cleartext, or refuse opaquely.
 
     This command owns its transaction (the API port delegates and never
-    commits). The burn (`redeemed_at`) is committed before decryption is
-    attempted: a caller that crashes after receiving the secret cannot
-    redeem the same ref again, and a failed decrypt still spends the
-    authorization rather than leaving it replayable. Pre-burn refusals
-    roll back having written nothing.
+    commits). Decryption happens in memory first; the burn
+    (`redeemed_at`) and the audited reveal event then commit together
+    before the secret is returned, so a caller that crashes after
+    receiving it cannot redeem the same ref again, and a reveal the
+    audit trail cannot see never happened. A failed decrypt releases
+    nothing and burns nothing — single-use bounds successful releases.
+    Pre-burn refusals roll back having written nothing.
     """
     moment = now or datetime.now(UTC)
     request = db.scalar(
@@ -109,16 +113,30 @@ def redeem_projection_secret(
     ):
         db.rollback()
         raise SecretFetchRefused("projection secret fetch refused")
-    request.redeemed_at = moment
-    db.commit()
     try:
         secret = decrypt_credential_with_key(
             credential.secret_hash, get_encryption_key()
         )
     except Exception as exc:  # noqa: BLE001 - refusal must stay opaque
+        db.rollback()
         raise SecretFetchRefused("projection secret fetch refused") from exc
     if not secret:
+        db.rollback()
         raise SecretFetchRefused("projection secret fetch refused")
+    request.redeemed_at = moment
+    emit_event(
+        db,
+        EventType.access_projection_secret_revealed,
+        {
+            "schema_version": 1,
+            "credential_id": str(credential.id),
+            "secret_version": secret_version,
+            "request_ref": request_ref,
+        },
+        account_id=credential.subscriber_id,
+        subscription_id=credential.subscription_id,
+    )
+    db.commit()
     return secret
 
 

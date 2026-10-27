@@ -99,8 +99,9 @@ def test_armed_client_never_sends_the_password() -> None:
 
 def test_armed_client_refuses_a_payload_that_would_carry_material() -> None:
     poisoned = dict(STEP, username="Sup3rSecretPw@radius")
-    with _armed(), pytest.raises(
-        client.NetworkProvisionRefused, match="credential material"
+    with (
+        _armed(),
+        pytest.raises(client.NetworkProvisionRefused, match="credential material"),
     ):
         client.submit_projection(
             capability_binding_id="binding-7",

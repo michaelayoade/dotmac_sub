@@ -1679,10 +1679,7 @@ DOMAIN = DomainSOT(
         SOTService(
             name="access.projection_secret_fetch",
             module="app.services.integrations.projection_secret_fetch",
-            owns=(
-                "single-use projection secret fetch authorizations",
-                "projection secret request open/redeem lifecycle",
-            ),
+            owns=("single-use projection secret fetch authorizations",),
             depends_on=("access.radius_projection",),
             notes=(
                 "Credential-owner side of the ADR-0076 section 7 fetch: a "
@@ -1703,6 +1700,7 @@ DOMAIN = DomainSOT(
                             "owner-authored projection plan",
                             "single-use redeem request",
                         ),
+                        canonical_writer="access.projection_secret_fetch",
                     ),
                 ),
                 authoritative_inputs=(
@@ -1759,6 +1757,20 @@ DOMAIN = DomainSOT(
                         "unknown, expired or already-redeemed request ref",
                         "credential rotated since the plan was authored",
                         "credential inactive, missing or reference-typed",
+                    ),
+                ),
+                events=EventContract(
+                    event_types=("access_projection_secret.revealed",),
+                    schema_version=1,
+                    delivery_owner="events.dispatcher",
+                    compatibility=(
+                        "Version 1 carries credential id, secret version and "
+                        "request ref only; the secret and username are omitted."
+                    ),
+                    replay=(
+                        "One event per successful reveal; the burn and the "
+                        "event commit atomically, so replay cannot duplicate "
+                        "a reveal."
                     ),
                 ),
                 migration=MigrationContract(

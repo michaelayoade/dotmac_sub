@@ -14,6 +14,7 @@ from sqlalchemy.orm import Session, sessionmaker
 os.environ.setdefault("CREDENTIAL_ENCRYPTION_KEY", Fernet.generate_key().decode())
 
 from app.models.catalog import AccessCredential  # noqa: E402
+from app.models.event_store import EventStore  # noqa: E402
 from app.models.projection_secret_request import ProjectionSecretRequest  # noqa: E402
 from app.services.credential_crypto import encrypt_credential  # noqa: E402
 from app.services.integrations.projection_secret_fetch import (  # noqa: E402
@@ -27,9 +28,19 @@ NOW = datetime(2026, 10, 27, 12, 0, tzinfo=UTC)
 
 
 def _session() -> Session:
+    # The shared conftest patches JSONB rendering for SQLite; this file's
+    # two-table fixture needs the same shim for the event store table.
+    from sqlalchemy.dialects.postgresql import JSONB
+    from sqlalchemy.ext.compiler import compiles
+
+    @compiles(JSONB, "sqlite")
+    def _jsonb_as_json(type_: object, compiler: object, **kw: object) -> str:
+        return "JSON"
+
     engine = create_engine("sqlite://")
     AccessCredential.__table__.create(engine)
     ProjectionSecretRequest.__table__.create(engine)
+    EventStore.__table__.create(engine)
     return sessionmaker(bind=engine)()
 
 
