@@ -669,6 +669,10 @@ Dashboard implementation notes:
 - Needs attention shows owner-computed counts for unassigned support tickets, tickets approaching or past their response target, and customer onboarding cases older than 72 hours. It does not show infrastructure alerts, worker failures, or overdue monetary amounts.
 - The active subscriber KPI includes only visible accounts whose account lifecycle status is active and which have an active subscription. A live RADIUS session is not required.
 - Collections This Month and Overdue remain in the KPI strip.
+- Collections This Month counts settled value on paid and partially-paid invoices
+  created in the current UTC month. Overdue counts outstanding balance only on
+  invoices currently marked overdue, across all months. Each card links to its
+  matching filtered invoice cohort.
 - Infrastructure health and recent audit events are system-admin content rendered on `GET /admin/system`, not on the general-admin dashboard.
 - Launchpads are support navigation, not the primary payload.
 - If network and billing metrics both appear, keep them grouped by task instead of mixing them into one undifferentiated KPI wall.
