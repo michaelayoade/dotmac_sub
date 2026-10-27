@@ -3358,9 +3358,18 @@ def _subscription_public_ip_addon_form_row(
         return "", "1"
 
     rows = (
-        db.query(SubscriptionAddOn, AddOn)
+        db.query(SubscriptionAddOn, AddOn, SubscriberAdditionalRoute.id)
         .join(AddOn, AddOn.id == SubscriptionAddOn.add_on_id)
         .join(Subscription, Subscription.id == SubscriptionAddOn.subscription_id)
+        .outerjoin(
+            SubscriberAdditionalRoute,
+            and_(
+                SubscriberAdditionalRoute.subscriber_id
+                == subscription_obj.subscriber_id,
+                SubscriberAdditionalRoute.prefix_length == AddOn.ip_prefix_length,
+                SubscriberAdditionalRoute.is_active.is_(True),
+            ),
+        )
         .filter(Subscription.subscriber_id == subscription_obj.subscriber_id)
         .filter(AddOn.ip_is_public.is_(True))
         .filter(SubscriptionAddOn.end_at.is_(None))
@@ -3383,26 +3392,13 @@ def _subscription_public_ip_addon_form_row(
         None,
     )
     if row is None:
-        active_route_prefixes = {
-            int(prefix_length)
-            for (prefix_length,) in db.query(SubscriberAdditionalRoute.prefix_length)
-            .filter(
-                SubscriberAdditionalRoute.subscriber_id
-                == subscription_obj.subscriber_id
-            )
-            .filter(SubscriberAdditionalRoute.is_active.is_(True))
-            .distinct()
-            .all()
+        compatible_rows = {
+            candidate[0].id: candidate for candidate in rows if candidate[2] is not None
         }
-        compatible_rows = [
-            candidate
-            for candidate in rows
-            if candidate[1].ip_prefix_length in active_route_prefixes
-        ]
         if len(compatible_rows) != 1:
             return "", "1"
-        row = compatible_rows[0]
-    sub_addon, _add_on = row
+        row = next(iter(compatible_rows.values()))
+    sub_addon, _add_on, _route_id = row
     return str(sub_addon.add_on_id), str(sub_addon.quantity or 1)
 
 
@@ -3423,17 +3419,29 @@ def sync_public_ip_addon_for_subscription(
         raise ValueError("Additional IP add-on quantity must be 1 or higher.")
 
     now = datetime.now(UTC)
-    active_rows = (
+    active_rows_query = (
         db.query(SubscriptionAddOn, AddOn)
         .join(AddOn, AddOn.id == SubscriptionAddOn.add_on_id)
-        .filter(SubscriptionAddOn.subscription_id == subscription_obj.id)
-        .filter(AddOn.ip_is_public.is_(True))
         .filter(SubscriptionAddOn.end_at.is_(None))
-        .all()
     )
+    if subscription_obj.subscriber_id:
+        active_rows_query = active_rows_query.join(
+            Subscription,
+            Subscription.id == SubscriptionAddOn.subscription_id,
+        ).filter(Subscription.subscriber_id == subscription_obj.subscriber_id)
+    else:
+        active_rows_query = active_rows_query.filter(
+            SubscriptionAddOn.subscription_id == subscription_obj.id
+        )
+    active_rows = active_rows_query.all()
 
     if not selected:
-        for sub_addon, _add_on in active_rows:
+        for sub_addon, candidate_add_on in active_rows:
+            if (
+                sub_addon.subscription_id != subscription_obj.id
+                or not candidate_add_on.ip_is_public
+            ):
+                continue
             sub_addon.end_at = now
         db.commit()
         return None
@@ -3456,8 +3464,13 @@ def sync_public_ip_addon_for_subscription(
         raise ValueError("Selected additional IP add-on is not available.")
 
     matched = None
-    for sub_addon, _add_on in active_rows:
-        if str(sub_addon.add_on_id) == selected:
+    for sub_addon, candidate_add_on in active_rows:
+        if (
+            sub_addon.subscription_id != subscription_obj.id
+            or not candidate_add_on.ip_is_public
+        ):
+            continue
+        if sub_addon.add_on_id == selected_uuid:
             matched = sub_addon
             sub_addon.quantity = qty
         else:
@@ -3467,14 +3480,11 @@ def sync_public_ip_addon_for_subscription(
     # Reuse one matching legacy/migrated add-on already active for the same
     # subscriber so a repeat save cannot create duplicate billing coverage.
     if matched is None and subscription_obj.subscriber_id:
-        subscriber_matches = (
-            db.query(SubscriptionAddOn)
-            .join(Subscription, Subscription.id == SubscriptionAddOn.subscription_id)
-            .filter(Subscription.subscriber_id == subscription_obj.subscriber_id)
-            .filter(SubscriptionAddOn.add_on_id == selected_uuid)
-            .filter(SubscriptionAddOn.end_at.is_(None))
-            .all()
-        )
+        subscriber_matches = [
+            sub_addon
+            for sub_addon, _candidate_add_on in active_rows
+            if sub_addon.add_on_id == selected_uuid
+        ]
         if len(subscriber_matches) == 1:
             matched = subscriber_matches[0]
             matched.quantity = qty
