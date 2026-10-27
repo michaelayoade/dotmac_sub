@@ -77,6 +77,7 @@ def main() -> int:
                         else None
                     ),
                     "expected_subscription_id": str(preview.expected_subscription_id),
+                    "subscription_status": preview.subscription_status,
                     "ip_version": preview.ip_version,
                     "address_id": (
                         str(preview.address_id)
@@ -84,6 +85,12 @@ def main() -> int:
                         else None
                     ),
                     "address": preview.address,
+                    "served_address": preview.served_address,
+                    "served_address_matches_assignment": (
+                        preview.served_address_matches_assignment
+                    ),
+                    "live_session_checked": preview.live_session_checked,
+                    "live_session_present": preview.live_session_present,
                     "is_primary": preview.is_primary,
                     "decision": preview.decision.value,
                     "applicable": preview.applicable,

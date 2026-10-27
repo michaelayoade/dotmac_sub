@@ -327,6 +327,12 @@ class ServiceIPAssignmentUnlinkPreview:
     ip_version: str | None
     address_id: UUID | None
     address: str | None
+    served_address: str | None
+    served_address_matches_assignment: bool
+    # IPv4 only: find_ipv4_live_use has no IPv6 equivalent, so IPv6 previews
+    # leave this unchecked/None instead of inventing session semantics.
+    live_session_checked: bool
+    live_session_present: bool | None
     is_primary: bool
     service_address_id: UUID | None
     decision: IPAssignmentServiceUnlinkDecision
@@ -1321,7 +1327,12 @@ def preview_ip_assignment_service_unlink(
     """Read-only plan to undo one exact service link (IPv4 or IPv6).
 
     Fingerprints the full linked state, so apply refuses if anything the
-    rollback depends on moved after preview.
+    rollback depends on moved after preview. The served column and (IPv4)
+    live-session evidence are fingerprint-bound the same way, but for
+    evidence only: a live session or a matching served address never makes
+    the preview inapplicable, so rollback stays possible. There is no IPv6
+    equivalent of ``find_ipv4_live_use``, so IPv6 previews report the live
+    session as unchecked instead of inventing session semantics.
     """
 
     assignment = db.get(IPAssignment, assignment_id)
@@ -1375,6 +1386,33 @@ def preview_ip_assignment_service_unlink(
         else:
             decision = IPAssignmentServiceUnlinkDecision.ready_unlink
 
+    served_address: str | None = None
+    if assignment is not None and subscription is not None:
+        served_value = (
+            subscription.ipv6_address
+            if assignment.ip_version == IPVersion.ipv6
+            else subscription.ipv4_address
+        )
+        served_address = _normalized_ip(served_value) or None
+    served_address_matches_assignment = (
+        served_address is not None and served_address == address
+    )
+    live_session_checked = False
+    live_session_present: bool | None = None
+    if (
+        assignment is not None
+        and assignment.ip_version == IPVersion.ipv4
+        and current_subscription_id is not None
+        and address
+    ):
+        live_session_checked = True
+        live_session_present = find_ipv4_live_use(
+            db,
+            subscription_id=current_subscription_id,
+            addresses={address},
+            exclude_own_sessions=False,
+        ).live_session
+
     payload: dict[str, object] = {
         "assignment_id": str(assignment_id),
         "subscriber_id": str(subscriber_id) if subscriber_id is not None else None,
@@ -1393,6 +1431,10 @@ def preview_ip_assignment_service_unlink(
         "ip_version": ip_version,
         "address_id": str(address_id) if address_id is not None else None,
         "address": address,
+        "served_address": served_address,
+        "served_address_matches_assignment": served_address_matches_assignment,
+        "live_session_checked": live_session_checked,
+        "live_session_present": live_session_present,
         "is_primary": is_primary,
         "service_address_id": (
             str(service_address_id) if service_address_id is not None else None
@@ -1409,6 +1451,10 @@ def preview_ip_assignment_service_unlink(
         ip_version=ip_version,
         address_id=address_id,
         address=address,
+        served_address=served_address,
+        served_address_matches_assignment=served_address_matches_assignment,
+        live_session_checked=live_session_checked,
+        live_session_present=live_session_present,
         is_primary=is_primary,
         service_address_id=service_address_id,
         decision=decision,

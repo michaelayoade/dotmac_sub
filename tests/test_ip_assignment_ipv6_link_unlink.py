@@ -13,6 +13,7 @@ fingerprinted preview, and never deactivates or releases the address.
 
 from __future__ import annotations
 
+from datetime import UTC, datetime
 from uuid import UUID, uuid4
 
 import pytest
@@ -27,10 +28,12 @@ from app.models.network import (
     IPv6Address,
     IPVersion,
 )
-from app.models.subscriber import Subscriber
+from app.models.radius_active_session import RadiusActiveSession
+from app.models.subscriber import Address, AddressType, Subscriber
 from app.services.ip_assignment_lifecycle import (
     IPAssignmentOwnershipError,
     IPAssignmentServiceUnlinkDecision,
+    IPv4AssignmentLifecycleError,
     IPv4AssignmentRepairDecision,
     IPv6AssignmentLinkDecision,
     LinkServiceIPv6AssignmentCommand,
@@ -514,3 +517,326 @@ def test_unlink_preview_refuses_wrong_expected_subscription_and_unlinked(
     )
     assert unlinked.decision is IPAssignmentServiceUnlinkDecision.assignment_not_linked
     assert unlinked.applicable is False
+
+
+def _service_address(db, subscriber_id: UUID) -> Address:
+    address = Address(
+        subscriber_id=subscriber_id,
+        address_type=AddressType.service,
+        label="Primary service",
+        address_line1="1 Test Street",
+        city="Abuja",
+        region="FCT",
+        country_code="NG",
+    )
+    db.add(address)
+    db.flush()
+    return address
+
+
+def test_unlink_preserves_served_columns_and_clears_matching_service_address(
+    db_session,
+    catalog_offer,
+) -> None:
+    assignment, subscription_id = _link_ipv4_assignment(
+        db_session, catalog_offer, "servedkeep"
+    )
+    subscription = db_session.get(Subscription, subscription_id)
+    assert subscription is not None
+    assert assignment.subscriber_id is not None
+    service_address = _service_address(db_session, assignment.subscriber_id)
+    subscription.ipv4_address = "10.30.0.50"
+    subscription.ipv6_address = "2001:db8:30::50"
+    subscription.service_address_id = service_address.id
+    assignment.service_address_id = service_address.id
+    assignment_id = assignment.id
+    service_address_id = service_address.id
+    db_session.commit()
+
+    preview = preview_ip_assignment_service_unlink(
+        db_session,
+        assignment_id=assignment_id,
+        expected_subscription_id=subscription_id,
+    )
+    assert preview.decision is IPAssignmentServiceUnlinkDecision.ready_unlink
+    assert preview.subscription_status == "active"
+    # Live-use evidence: the served column for this family, normalized.
+    assert preview.served_address == "10.30.0.50"
+    assert preview.served_address_matches_assignment is True
+    assert preview.live_session_checked is True
+    assert preview.live_session_present is False
+    db_session.commit()
+
+    unlink_ip_assignment_service_ownership(
+        db_session,
+        _unlink_command(
+            assignment_id=assignment_id,
+            expected_subscription_id=subscription_id,
+            fingerprint=preview.fingerprint,
+            key="ipam-unlink-servedkeep",
+        ),
+    )
+
+    db_session.refresh(assignment)
+    db_session.refresh(subscription)
+    assert assignment.subscription_id is None
+    # Matching service address is cleared from the assignment only.
+    assert assignment.service_address_id is None
+    # Served columns and the subscription's own service address survive.
+    assert subscription.ipv4_address == "10.30.0.50"
+    assert subscription.ipv6_address == "2001:db8:30::50"
+    assert subscription.service_address_id == service_address_id
+
+
+def test_unlink_preserves_non_matching_service_address(
+    db_session,
+    catalog_offer,
+) -> None:
+    assignment, subscription_id = _link_ipv4_assignment(
+        db_session, catalog_offer, "servedother"
+    )
+    subscription = db_session.get(Subscription, subscription_id)
+    assert subscription is not None
+    assert assignment.subscriber_id is not None
+    own_address = _service_address(db_session, assignment.subscriber_id)
+    other_address = _service_address(db_session, assignment.subscriber_id)
+    subscription.ipv4_address = "10.30.0.99"
+    subscription.service_address_id = own_address.id
+    assignment.service_address_id = other_address.id
+    assignment_id = assignment.id
+    other_address_id = other_address.id
+    db_session.commit()
+
+    preview = preview_ip_assignment_service_unlink(
+        db_session,
+        assignment_id=assignment_id,
+        expected_subscription_id=subscription_id,
+    )
+    assert preview.decision is IPAssignmentServiceUnlinkDecision.ready_unlink
+    assert preview.served_address == "10.30.0.99"
+    assert preview.served_address_matches_assignment is False
+    db_session.commit()
+
+    unlink_ip_assignment_service_ownership(
+        db_session,
+        _unlink_command(
+            assignment_id=assignment_id,
+            expected_subscription_id=subscription_id,
+            fingerprint=preview.fingerprint,
+            key="ipam-unlink-servedother",
+        ),
+    )
+
+    db_session.refresh(assignment)
+    db_session.refresh(subscription)
+    assert assignment.subscription_id is None
+    # A service address that is not the subscription's own is left alone.
+    assert assignment.service_address_id == other_address_id
+    assert subscription.ipv4_address == "10.30.0.99"
+
+
+def test_unlink_preview_reports_ipv4_live_session_without_refusing(
+    db_session,
+    catalog_offer,
+) -> None:
+    assignment, subscription_id = _link_ipv4_assignment(
+        db_session, catalog_offer, "livesession"
+    )
+    db_session.add(
+        RadiusActiveSession(
+            subscription_id=subscription_id,
+            username="ipam-live-session",
+            acct_session_id=f"ipam-live-{uuid4().hex[:8]}",
+            framed_ip_address="10.30.0.50",
+            session_start=datetime.now(UTC),
+        )
+    )
+    assignment_id = assignment.id
+    db_session.commit()
+
+    preview = preview_ip_assignment_service_unlink(
+        db_session,
+        assignment_id=assignment_id,
+        expected_subscription_id=subscription_id,
+    )
+    # Evidence only: a live session never blocks the rollback.
+    assert preview.live_session_checked is True
+    assert preview.live_session_present is True
+    assert preview.decision is IPAssignmentServiceUnlinkDecision.ready_unlink
+    assert preview.applicable is True
+    db_session.commit()
+
+    unlink_ip_assignment_service_ownership(
+        db_session,
+        _unlink_command(
+            assignment_id=assignment_id,
+            expected_subscription_id=subscription_id,
+            fingerprint=preview.fingerprint,
+            key="ipam-unlink-livesession",
+        ),
+    )
+    db_session.refresh(assignment)
+    assert assignment.subscription_id is None
+
+
+def test_unlink_preview_ipv6_served_evidence_without_live_session_helper(
+    db_session,
+    catalog_offer,
+) -> None:
+    subscriber = _subscriber(db_session, "unlink6-served")
+    subscription = _subscription(
+        db_session,
+        subscriber,
+        catalog_offer,
+        served_ipv6="2001:db8:30::61",
+    )
+    pool = _ipv6_pool(db_session, "unlink6-served")
+    desired = _ipv6_address(db_session, pool, "2001:db8:30::61")
+    assignment = _ipv6_assignment(
+        db_session, subscriber, desired, subscription=subscription
+    )
+    assignment_id = assignment.id
+    subscription_id = subscription.id
+    db_session.commit()
+
+    preview = preview_ip_assignment_service_unlink(
+        db_session,
+        assignment_id=assignment_id,
+        expected_subscription_id=subscription_id,
+    )
+    assert preview.decision is IPAssignmentServiceUnlinkDecision.ready_unlink
+    assert preview.served_address == "2001:db8:30::61"
+    assert preview.served_address_matches_assignment is True
+    # No IPv6 equivalent of find_ipv4_live_use exists; the preview says so
+    # instead of inventing session semantics for IPv6.
+    assert preview.live_session_checked is False
+    assert preview.live_session_present is None
+
+
+def test_unlink_refuses_when_served_column_moves_after_preview(
+    db_session,
+    catalog_offer,
+) -> None:
+    assignment, subscription_id = _link_ipv4_assignment(
+        db_session, catalog_offer, "servedmoved"
+    )
+    subscription = db_session.get(Subscription, subscription_id)
+    assert subscription is not None
+    subscription.ipv4_address = "10.30.0.50"
+    assignment_id = assignment.id
+    db_session.commit()
+
+    preview = preview_ip_assignment_service_unlink(
+        db_session,
+        assignment_id=assignment_id,
+        expected_subscription_id=subscription_id,
+    )
+    assert preview.decision is IPAssignmentServiceUnlinkDecision.ready_unlink
+    db_session.commit()
+
+    moved = db_session.get(Subscription, subscription_id)
+    assert moved is not None
+    moved.ipv4_address = "10.30.0.77"
+    db_session.commit()
+
+    with pytest.raises(IPAssignmentOwnershipError) as exc_info:
+        unlink_ip_assignment_service_ownership(
+            db_session,
+            _unlink_command(
+                assignment_id=assignment_id,
+                expected_subscription_id=subscription_id,
+                fingerprint=preview.fingerprint,
+                key="ipam-unlink-servedmoved",
+            ),
+        )
+    assert exc_info.value.code.endswith(".stale_preview")
+    db_session.rollback()
+    db_session.refresh(assignment)
+    assert assignment.subscription_id == subscription_id
+    assert assignment.is_active is True
+
+
+def test_ipv6_link_apply_refuses_stale_fingerprint_and_writes_nothing(
+    db_session,
+    catalog_offer,
+) -> None:
+    subscriber = _subscriber(db_session, "link-stale")
+    subscription = _subscription(db_session, subscriber, catalog_offer)
+    pool = _ipv6_pool(db_session, "link-stale")
+    desired = _ipv6_address(db_session, pool, "2001:db8:30::70")
+    assignment = _ipv6_assignment(db_session, subscriber, desired)
+    subscription_id = subscription.id
+    desired_id = desired.id
+    db_session.commit()
+
+    preview = preview_service_ipv6_assignment_link(
+        db_session,
+        subscription_id=subscription_id,
+        desired_address_id=desired_id,
+    )
+    assert preview.decision is IPv6AssignmentLinkDecision.ready_link
+    db_session.commit()
+
+    assignment.is_active = False
+    db_session.commit()
+
+    with pytest.raises(IPv4AssignmentLifecycleError) as exc_info:
+        link_service_ipv6_assignment(
+            db_session,
+            _link_command(
+                subscription_id=subscription_id,
+                desired_address_id=desired_id,
+                fingerprint=preview.fingerprint,
+                key="ipam-ipv6-link-stale",
+            ),
+        )
+    assert exc_info.value.code.endswith(".stale_preview")
+    db_session.rollback()
+    db_session.refresh(assignment)
+    assert assignment.subscription_id is None
+    assert assignment.service_address_id is None
+
+
+def test_ipv6_link_apply_refuses_non_applicable_preview_and_writes_nothing(
+    db_session,
+    catalog_offer,
+) -> None:
+    subscriber = _subscriber(db_session, "link-unsafe")
+    subscription = _subscription(
+        db_session,
+        subscriber,
+        catalog_offer,
+        status=SubscriptionStatus.canceled,
+    )
+    pool = _ipv6_pool(db_session, "link-unsafe")
+    desired = _ipv6_address(db_session, pool, "2001:db8:30::71")
+    assignment = _ipv6_assignment(db_session, subscriber, desired)
+    subscription_id = subscription.id
+    desired_id = desired.id
+    db_session.commit()
+
+    preview = preview_service_ipv6_assignment_link(
+        db_session,
+        subscription_id=subscription_id,
+        desired_address_id=desired_id,
+    )
+    assert preview.decision is IPv6AssignmentLinkDecision.subscription_not_serviceable
+    assert preview.applicable is False
+    db_session.commit()
+
+    with pytest.raises(IPv4AssignmentLifecycleError) as exc_info:
+        link_service_ipv6_assignment(
+            db_session,
+            _link_command(
+                subscription_id=subscription_id,
+                desired_address_id=desired_id,
+                fingerprint=preview.fingerprint,
+                key="ipam-ipv6-link-unsafe",
+            ),
+        )
+    assert exc_info.value.code.endswith(".unsafe_repair")
+    db_session.rollback()
+    db_session.refresh(assignment)
+    assert assignment.subscription_id is None
+    assert assignment.service_address_id is None
+    assert assignment.is_active is True
