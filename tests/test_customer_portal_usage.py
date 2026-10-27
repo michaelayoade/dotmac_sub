@@ -1,10 +1,91 @@
+from dataclasses import replace
 from datetime import UTC, date, datetime
+from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 from uuid import UUID
 
+from jinja2 import Environment, FileSystemLoader
+
 
 class TestCustomerPortalUsagePage:
+    def test_admin_stats_render_complete_filtered_totals_and_unavailable_state(
+        self,
+    ) -> None:
+        from app.services.customer_portal_flow_services import (
+            UsagePageResult,
+            UsageSummaryProjection,
+        )
+        from app.services.usage_summary import (
+            FilteredUsageTotals,
+            UsageDateRange,
+            UsagePeriod,
+        )
+
+        environment = Environment(
+            loader=FileSystemLoader(Path(__file__).resolve().parents[1] / "templates"),
+            autoescape=True,
+        )
+
+        def format_datetime(value: object, *_args: object) -> str:
+            return str(value)
+
+        environment.filters["portal_datetime"] = format_datetime
+        template = environment.get_template("admin/customers/_stats_panel.html")
+        result = UsagePageResult(
+            usage_records=(),
+            chart_records=(),
+            period=UsagePeriod.custom,
+            page=2,
+            per_page=2,
+            total=3,
+            total_pages=2,
+            usage_summary=UsageSummaryProjection(
+                average_daily_usage_gb=0,
+                average_speed_mbps=0,
+                average_download_mbps=0,
+                average_upload_mbps=0,
+            ),
+            fup_status=None,
+            usage_source="postgres",
+            has_subscription=True,
+            period_total_gb=7.5,
+            filtered_totals=FilteredUsageTotals(
+                total_gb=7.5,
+                download_gb=4.5,
+                upload_gb=3.0,
+                daily_average_gb=2.5,
+                days=3,
+            ),
+            date_range=UsageDateRange(date(2026, 5, 1), date(2026, 5, 3)),
+        )
+        context = {
+            "customer_id": "test-customer",
+            "usage_subscription_id": None,
+            "bandwidth_chart_initial_stats": None,
+            "usage_view": "table",
+        }
+        html = template.render(usage_portal=result.to_template_context(), **context)
+        for expected in (
+            "Total data used",
+            "7.50",
+            "Download",
+            "4.50",
+            "Upload",
+            "3.00",
+            "Daily average",
+            "2.50",
+            "2026-05-01 to 2026-05-03",
+        ):
+            assert expected in html
+
+        unavailable = replace(result, usage_source="unavailable", filtered_totals=None)
+        unavailable_html = template.render(
+            usage_portal=unavailable.to_template_context(), **context
+        )
+        assert "Usage summary is unavailable" in unavailable_html
+        assert "Total data used" not in unavailable_html
+
     def test_typed_custom_date_range_is_inclusive(
         self, db_session, subscriber, subscription
     ) -> None:
@@ -12,11 +93,12 @@ class TestCustomerPortalUsagePage:
             UsageDateRange,
             UsagePageQuery,
             UsagePeriod,
+            UsageRecordProjection,
             query_usage_page,
         )
 
         chart_source_records = [
-            SimpleNamespace(
+            UsageRecordProjection(
                 recorded_at=datetime(2026, 5, 2, tzinfo=UTC),
                 amount=2.5,
                 usage_amount=2.5,
@@ -63,6 +145,13 @@ class TestCustomerPortalUsagePage:
         assert result.date_range.start_date == date(2026, 5, 1)
         assert result.date_range.end_date == date(2026, 5, 2)
         assert result.usage_records[0].amount == 2.5
+        assert result.filtered_totals is not None
+        assert result.filtered_totals.total_gb == 2.5
+        assert result.filtered_totals.download_gb == 1.5
+        assert result.filtered_totals.upload_gb == 1.0
+        assert result.filtered_totals.daily_average_gb == 1.25
+        assert result.filtered_totals.days == 2
+        assert result.to_template_context()["filtered_totals"] == result.filtered_totals
         call = daily_records.call_args.kwargs
         assert call["start_at"] == datetime(2026, 5, 1, tzinfo=UTC)
         assert call["end_at"] == datetime(2026, 5, 2, 23, 59, 59, 999999, tzinfo=UTC)
@@ -139,6 +228,7 @@ class TestCustomerPortalUsagePage:
         assert page["chart_records"] == []
         assert page["has_subscription"] is True
         assert page["usage_source"] == "unavailable"
+        assert page["filtered_totals"] is None
         daily_bandwidth_usage.assert_not_called()
         usage_summary_stats.assert_not_called()
         get_fup_status.assert_not_called()
@@ -254,33 +344,42 @@ class TestCustomerPortalUsagePage:
     def test_get_usage_page_returns_full_chart_records_with_paginated_table(
         self, db_session, subscription
     ) -> None:
-        from app.services.customer_portal_flow_services import get_usage_page
+        from app.services.customer_portal_flow_services import (
+            UsageRecordProjection,
+            get_usage_page,
+        )
 
         customer = {"subscription_id": str(subscription.id)}
         chart_source_records = [
-            SimpleNamespace(
+            UsageRecordProjection(
                 recorded_at=datetime(2026, 5, 1, tzinfo=UTC),
                 amount=1.25,
                 usage_amount=1.25,
                 download_amount=0.75,
                 upload_amount=0.5,
                 unit="GB",
+                usage_type="Daily Usage",
+                description="Total usage for 2026-05-01",
             ),
-            SimpleNamespace(
+            UsageRecordProjection(
                 recorded_at=datetime(2026, 5, 2, tzinfo=UTC),
                 amount=2.5,
                 usage_amount=2.5,
                 download_amount=1.5,
                 upload_amount=1.0,
                 unit="GB",
+                usage_type="Daily Usage",
+                description="Total usage for 2026-05-02",
             ),
-            SimpleNamespace(
+            UsageRecordProjection(
                 recorded_at=datetime(2026, 5, 3, tzinfo=UTC),
                 amount=3.75,
                 usage_amount=3.75,
                 download_amount=2.25,
                 upload_amount=1.5,
                 unit="GB",
+                usage_type="Daily Usage",
+                description="Total usage for 2026-05-03",
             ),
         ]
 
@@ -316,6 +415,11 @@ class TestCustomerPortalUsagePage:
         # Period total is summed over the full record set (7.5), never the
         # paginated page (which would be 1.25 + 2.5 = 3.75).
         assert page["period_total_gb"] == 7.5
+        filtered_totals = page["filtered_totals"]
+        assert filtered_totals.total_gb == 7.5
+        assert filtered_totals.download_gb == 4.5
+        assert filtered_totals.upload_gb == 3.0
+        assert filtered_totals.daily_average_gb == 7.5 / filtered_totals.days
         assert len(page["chart_records"]) == 3
         assert [record["label"] for record in page["chart_records"]] == [
             "May 01",

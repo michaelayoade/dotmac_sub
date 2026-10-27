@@ -67,7 +67,13 @@ from app.services.prepaid_service_coverage import (
 )
 from app.services.provisioning_lifecycle import latest_readiness
 from app.services.ui_contracts import StateValue
-from app.services.usage_summary import UsageDateRange, UsagePeriod, UsageQueryError
+from app.services.usage_summary import (
+    FilteredUsageTotals,
+    UsageDateRange,
+    UsagePeriod,
+    UsageQueryError,
+    summarize_filtered_daily_usage,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -197,6 +203,7 @@ class UsagePageResult:
     usage_source: str
     has_subscription: bool
     period_total_gb: float
+    filtered_totals: FilteredUsageTotals | None
     date_range: UsageDateRange | None
 
     def to_template_context(self) -> dict[str, object]:
@@ -214,6 +221,7 @@ class UsagePageResult:
             "usage_source": self.usage_source,
             "has_subscription": self.has_subscription,
             "period_total_gb": self.period_total_gb,
+            "filtered_totals": self.filtered_totals,
             "start_date": (
                 self.date_range.start_date.isoformat() if self.date_range else ""
             ),
@@ -992,6 +1000,7 @@ def get_usage_page(
         "usage_source": "none",
         "has_subscription": False,
         "period_total_gb": 0.0,
+        "filtered_totals": None,
     }
     if not subscription_id_str:
         return empty_result
@@ -1024,8 +1033,9 @@ def get_usage_page(
     )
 
     usage_source = "postgres"
-    chart_source_records: list[Any] = []
+    chart_source_records: list[UsageRecordProjection] = []
     period_total_gb = 0.0
+    filtered_totals: FilteredUsageTotals | None = None
     if not allow_postgres_fallback:
         return {
             **empty_result,
@@ -1046,13 +1056,11 @@ def get_usage_page(
         page_start = (page - 1) * per_page
         page_end = page_start + per_page
         usage_records = chart_source_records[page_start:page_end]
-        # Period total is summed over the COMPLETE record set, not the paginated
-        # page — the same per-row amount the template used to sum, moved to the
-        # owner so the figure is right on every page.
-        period_total_gb = sum(
-            float(getattr(r, "amount", None) or getattr(r, "usage_amount", 0) or 0)
-            for r in chart_source_records
+        # Summarize the complete filtered set, independent of the visible page.
+        filtered_totals = summarize_filtered_daily_usage(
+            chart_source_records, start_at=start_at, end_at=end_at
         )
+        period_total_gb = filtered_totals.total_gb
         usage_summary = _usage_summary_stats(
             db,
             subscription_ids=subscription_ids,
@@ -1082,6 +1090,7 @@ def get_usage_page(
         "usage_source": usage_source,
         "has_subscription": True,
         "period_total_gb": period_total_gb,
+        "filtered_totals": filtered_totals,
     }
 
 
@@ -1137,6 +1146,7 @@ def query_usage_page(db: Session, query: UsagePageQuery) -> UsagePageResult:
     raw_records = raw.get("usage_records") or []
     raw_chart_records = raw.get("chart_records") or []
     raw_summary = raw.get("usage_summary") or {}
+    raw_totals = raw.get("filtered_totals")
     return UsagePageResult(
         usage_records=tuple(_usage_record_projection(record) for record in raw_records),
         chart_records=tuple(
@@ -1168,6 +1178,9 @@ def query_usage_page(db: Session, query: UsagePageQuery) -> UsagePageResult:
         usage_source=str(raw.get("usage_source") or "none"),
         has_subscription=bool(raw.get("has_subscription")),
         period_total_gb=float(raw.get("period_total_gb") or 0),
+        filtered_totals=(
+            raw_totals if isinstance(raw_totals, FilteredUsageTotals) else None
+        ),
         date_range=query.date_range,
     )
 
