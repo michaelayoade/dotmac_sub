@@ -497,6 +497,7 @@ SERVICES: tuple[SOTService, ...] = (
             "optional Inbox form enrichment and legacy form conversion",
         ),
         depends_on=(
+            "communications.website_handoff_attribution",
             "ai.intake",
             "auth.staff_provisioning",
             "communications.team_inbox_contact_resolution",

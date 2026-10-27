@@ -38,6 +38,7 @@ from app.models.service_team import ServiceTeamMember
 from app.models.subscriber import Reseller
 from app.models.system_user import SystemUser
 from app.models.team_inbox import InboxConversation, InboxParticipantRelationship
+from app.schemas.sales import LeadOriginCaptureCreate
 from app.services import (
     conversation_lead_relationships,
     team_inbox_contact_links,
@@ -923,7 +924,7 @@ def _operation(db: Session, command: AuthorLeadCommand) -> AuthorLeadOutcome:
         lead_source=source,
         binding_source="sales.lead_authoring",
         binding_reason="Person Party created atomically with the admin Lead",
-        origin_capture=origin,
+        origin_capture=LeadOriginCaptureCreate.model_validate(origin),
         region=region.name if region else None,
         notes=(command.notes or "").strip() or None,
         metadata=lead_metadata,

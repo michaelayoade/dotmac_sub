@@ -745,6 +745,55 @@ def _http_webhook_manifest(
     )
 
 
+def _meta_capi_manifest(*, version: str, include_whatsapp: bool) -> ConnectorManifest:
+    properties: dict[str, object] = {
+        "pixel_id": {"type": "string", "default": "410389919883152"},
+        "api_version": {"type": "string", "default": "v26.0"},
+        "test_event_code": {"type": "string"},
+        "timeout_seconds": {"type": "integer", "default": 10},
+        "max_attempts": {"type": "integer", "default": 8},
+    }
+    if include_whatsapp:
+        properties["report_whatsapp_leads"] = {"type": "boolean", "default": False}
+    return ConnectorManifest(
+        key="meta.capi",
+        name="Meta Conversions API",
+        version=version,
+        connector_type="marketing",
+        description=(
+            "Server-side website and attributed WhatsApp Lead delivery to a Meta dataset."
+            if include_whatsapp
+            else "Server-side website Lead delivery to a Meta dataset."
+        ),
+        runtime=RuntimeManifest(
+            type=ConnectorRuntimeType.builtin_worker,
+            module="app.services.integrations.connectors.meta_social_runtime",
+        ),
+        capabilities=(
+            CapabilityManifest(
+                id="marketing.website_lead.send.v1",
+                modes=(CapabilityMode.event, CapabilityMode.reconcile),
+            ),
+        ),
+        config_schema={
+            "type": "object",
+            "properties": properties,
+            "required": ["pixel_id", "api_version"],
+            "additionalProperties": False,
+        },
+        secrets=(SecretBindingManifest(name="access_token"),),
+        data_access=DataAccessManifest(
+            reads=("sales.website_fiber_lead", "sales.attributed_whatsapp_lead")
+            if include_whatsapp
+            else ("sales.website_fiber_lead",),
+            emits=("marketing.meta_lead_delivery_receipt",),
+            classifications=("sales_acquisition", "hashed_customer_contact"),
+        ),
+        egress=EgressManifest(hosts=("graph.facebook.com",)),
+        health=HealthManifest(operation="connection.validate.v1"),
+    )
+
+
 _DEFINITIONS: tuple[ConnectorManifest, ...] = (
     _fiber_inquiry_manifest(
         version="1.1.0",
@@ -842,43 +891,7 @@ _DEFINITIONS: tuple[ConnectorManifest, ...] = (
         egress=EgressManifest(allow_installation_hosts=True),
         health=HealthManifest(operation="connection.validate.v1"),
     ),
-    ConnectorManifest(
-        key="meta.capi",
-        name="Meta Conversions API",
-        version="1.0.0",
-        connector_type="marketing",
-        description="Server-side website Lead delivery to a Meta dataset.",
-        runtime=RuntimeManifest(
-            type=ConnectorRuntimeType.builtin_worker,
-            module="app.services.integrations.connectors.meta_social_runtime",
-        ),
-        capabilities=(
-            CapabilityManifest(
-                id="marketing.website_lead.send.v1",
-                modes=(CapabilityMode.event, CapabilityMode.reconcile),
-            ),
-        ),
-        config_schema={
-            "type": "object",
-            "properties": {
-                "pixel_id": {"type": "string", "default": "410389919883152"},
-                "api_version": {"type": "string", "default": "v26.0"},
-                "test_event_code": {"type": "string"},
-                "timeout_seconds": {"type": "integer", "default": 10},
-                "max_attempts": {"type": "integer", "default": 8},
-            },
-            "required": ["pixel_id", "api_version"],
-            "additionalProperties": False,
-        },
-        secrets=(SecretBindingManifest(name="access_token"),),
-        data_access=DataAccessManifest(
-            reads=("sales.website_fiber_lead",),
-            emits=("marketing.meta_lead_delivery_receipt",),
-            classifications=("sales_acquisition", "hashed_customer_contact"),
-        ),
-        egress=EgressManifest(hosts=("graph.facebook.com",)),
-        health=HealthManifest(operation="connection.validate.v1"),
-    ),
+    _meta_capi_manifest(version="1.1.0", include_whatsapp=True),
     _meta_social_manifest(
         version="1.2.0",
         include_shared_oauth=True,
@@ -970,6 +983,7 @@ _DEFINITIONS: tuple[ConnectorManifest, ...] = (
 )
 
 _HISTORICAL_DEFINITIONS: tuple[ConnectorManifest, ...] = (
+    _meta_capi_manifest(version="1.0.0", include_whatsapp=False),
     _fiber_inquiry_manifest(
         version="1.0.0",
         include_coverage_defaults=False,

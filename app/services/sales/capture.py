@@ -207,7 +207,7 @@ def capture_lead(
             lead_source=payload.lead_source,
             binding_source="sales.lead_capture",
             binding_reason="Exact Party supplied or created for the captured interaction",
-            origin_capture=origin,
+            origin_capture=type(payload.origin).model_validate(origin),
             region=payload.region,
             address=payload.address,
             notes=payload.notes,

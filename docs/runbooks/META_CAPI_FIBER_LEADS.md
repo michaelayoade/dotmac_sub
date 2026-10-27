@@ -15,7 +15,25 @@ Endpoint receipt, signature success, and form validation are not conversions.
 - `external_form_id == fiber-coverage-v1`;
 - the signed inbox payload's `interest == new_connection`.
 
-This excludes support/contact forms and every non-fiber sales or Inbox Lead.
+This legacy eligibility excludes support/contact forms and non-fiber sales or
+Inbox Leads. The opt-in attributed WhatsApp contract below is additive.
+
+### Attributed WhatsApp Leads (connector 1.1.0)
+
+`report_whatsapp_leads` defaults to false. When explicitly enabled on a validated
+1.1.0 installation, the same owner can project a committed `ai.intake` WhatsApp
+Lead carrying the `fiber-whatsapp-v1` origin. It rechecks the website enquiry
+reference, phone, destination account, chronology and saved journey. Website
+enquiry persistence alone never sends a Lead event. The business decision and
+Lead writer remain `sales.lead_intake`.
+
+These are CRM-generated Lead events (`action_source=system_generated`) using
+the origin creation time. They omit `event_source_url`; the signed form is an
+earlier enquiry, not the moment the CRM Lead was created. Delivery still uses
+the same stable origin-derived event ID and contact hashes. They do not invent
+`ctwa_clid`, `fbc`, or browser metadata. Test Events must establish actual Meta
+acceptance and matching before production enablement. This is not a claim that
+Meta will attribute every recorded first-party campaign reference.
 
 ## Delivery and idempotency
 
@@ -38,7 +56,7 @@ only: this repository cannot establish it is `fbclid`/`fbc` (tests use a Google
 
 ## Configuration and secrets
 
-Install connector `meta.capi` version `1.0.0` in Integration Marketplace and
+Install connector `meta.capi` version `1.1.0` in Integration Marketplace and
 bind `marketing.website_lead.send.v1`. The binding and installation must both
 be enabled; disabled is the `META_CAPI_ENABLED=false` equivalent.
 
@@ -51,6 +69,7 @@ Create an immutable configuration revision with:
 | `META_CAPI_TEST_EVENT_CODE` | `test_event_code` | optional; staging only |
 | timeout | `timeout_seconds` | `10` recommended |
 | bounded retry | `max_attempts` | `8` recommended |
+| attributed WhatsApp CRM Leads | `report_whatsapp_leads` | false until staging acceptance |
 
 Bind secret `access_token` to
 `bao://secret/integrations/meta_capi#access_token`. This is the

@@ -59,10 +59,12 @@ from app.schemas.lead_intake import (
 from app.schemas.lead_intake import (
     LeadIntakePartyType as LeadIntakePartyTypeValue,
 )
+from app.schemas.sales import LeadOriginCaptureCreate
 from app.services import (
     conversation_lead_relationships,
     team_inbox_operations,
     team_inbox_participants,
+    website_handoff_attribution,
 )
 from app.services import party as party_service
 from app.services.audit_adapter import stage_audit_event
@@ -74,6 +76,7 @@ from app.services.owner_commands import (
     CommandContext,
     OwnerCommandDefinition,
     execute_owner_command,
+    execute_owner_savepoint,
 )
 from app.services.sales import lifecycle
 from app.services.settings_spec import resolve_value
@@ -873,6 +876,42 @@ def _materialize_lead_candidate(
     )
     template = _candidate_template(db, party_type)
     attribution = command.attribution
+    website_failure: str | None = None
+    try:
+        website = execute_owner_savepoint(
+            db,
+            lambda: website_handoff_attribution.resolve_for_message(
+                db,
+                query=website_handoff_attribution.WebsiteHandoffMessageQuery(
+                    message.id
+                ),
+            ),
+        )
+    except Exception as error:
+        # Optional attribution must never suppress an otherwise valid Sales Lead.
+        # Durable evidence below is staged only after the optional rollback.
+        website = None
+        website_failure = type(error).__name__
+    website_origin = (
+        {
+            "journey_id": website.attribution.journey_id,
+            "external_campaign_id": website.attribution.campaign_id,
+            "external_ad_set_id": website.attribution.ad_set_id,
+            "external_ad_id": website.attribution.ad_id,
+            "external_form_id": website.form_version,
+            "external_click_id": website.attribution.click_id,
+            "utm_source": website.attribution.utm_source,
+            "utm_medium": website.attribution.utm_medium,
+            "utm_campaign": website.attribution.utm_campaign,
+            "utm_content": website.attribution.utm_content,
+            "utm_term": website.attribution.utm_term,
+            "landing_path": website.attribution.landing_path,
+            "captured_at": website.attribution.captured_at,
+            "submitted_at": website.submitted_at,
+        }
+        if website is not None
+        else {}
+    )
     fingerprint = hashlib.sha256(
         (
             f"{conversation.id}:{message.id}:{party_type.value}:"
@@ -889,19 +928,22 @@ def _materialize_lead_candidate(
         binding_reason=(
             "Party created atomically from a final Inbox AI sales classification"
         ),
-        origin_capture={
-            "capture_method": LeadCaptureMethod.inbox_classification.value,
-            "source_platform": LeadSourcePlatform.team_inbox.value,
-            "source_interaction_id": f"inbox-message:{message.id}",
-            "capture_fingerprint": fingerprint,
-            "external_ad_id": attribution.external_ad_id,
-            "external_click_id": attribution.campaign_ref,
-            "capture_source": "ai.intake",
-            "capture_reason": (
-                "Final shared AI intake result classified the Inbox conversation "
-                "as a sales prospect"
-            ),
-        },
+        origin_capture=LeadOriginCaptureCreate.model_validate(
+            {
+                "capture_method": LeadCaptureMethod.inbox_classification.value,
+                "source_platform": LeadSourcePlatform.team_inbox.value,
+                "source_interaction_id": f"inbox-message:{message.id}",
+                "capture_fingerprint": fingerprint,
+                "external_ad_id": attribution.external_ad_id,
+                "external_click_id": attribution.campaign_ref,
+                "capture_source": "ai.intake",
+                "capture_reason": (
+                    "Final shared AI intake result classified the Inbox conversation "
+                    "as a sales prospect"
+                ),
+                **website_origin,
+            }
+        ),
         metadata={
             "origin_conversation_id": str(conversation.id),
             "origin_message_id": str(message.id),
@@ -913,6 +955,11 @@ def _materialize_lead_candidate(
             "ai_party_type_confidence": (command.classification.party_type_confidence),
             "meta_referral_source": attribution.referral_source,
             "meta_referral_type": attribution.referral_type,
+            "website_enquiry_reference": website.reference if website else None,
+            "website_enquiry_observation_id": str(website.observation_id)
+            if website
+            else None,
+            "website_attribution_failure": website_failure,
             "representative_party_id": (
                 str(representative_party_id) if representative_party_id else None
             ),
@@ -969,6 +1016,7 @@ def _materialize_lead_candidate(
             "party_id": str(lead_party.id),
             "status": lead.status,
             "lead_source": lead.lead_source,
+            "origin_capture_id": str(lead.origin_capture.id),
             "origin_conversation_id": str(conversation.id),
         },
         actor=command.context.actor,
@@ -1874,14 +1922,16 @@ def submit_form(
                 lead_source=_lead_source(invitation.channel_type),
                 binding_source=OWNER,
                 binding_reason="Party created atomically from a completed Inbox lead-intake invitation",
-                origin_capture={
-                    "capture_method": LeadCaptureMethod.inbox_form.value,
-                    "source_platform": LeadSourcePlatform.team_inbox.value,
-                    "source_interaction_id": f"lead-intake:{invitation.id}",
-                    "capture_fingerprint": fingerprint,
-                    "capture_source": "public_inbox_lead_intake_form",
-                    "capture_reason": "Customer saved the single-use form issued from an unknown Meta Inbox conversation",
-                },
+                origin_capture=LeadOriginCaptureCreate.model_validate(
+                    {
+                        "capture_method": LeadCaptureMethod.inbox_form.value,
+                        "source_platform": LeadSourcePlatform.team_inbox.value,
+                        "source_interaction_id": f"lead-intake:{invitation.id}",
+                        "capture_fingerprint": fingerprint,
+                        "capture_source": "public_inbox_lead_intake_form",
+                        "capture_reason": "Customer saved the single-use form issued from an unknown Meta Inbox conversation",
+                    }
+                ),
                 region=address.state,
                 address=address.display_name,
                 metadata={

@@ -130,6 +130,7 @@ class LeadOriginCaptureCreate(BaseModel):
     submitted_at: datetime | None = None
     capture_source: str = Field(min_length=1, max_length=80)
     capture_reason: str = Field(min_length=1)
+    capture_fingerprint: str | None = Field(default=None, pattern=r"^[a-f0-9]{64}$")
 
 
 class LeadContactObservation(BaseModel):

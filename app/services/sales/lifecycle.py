@@ -27,6 +27,7 @@ from app.models.sales import (
     LeadStatus,
 )
 from app.models.subscriber import Subscriber
+from app.schemas.sales import LeadOriginCaptureCreate
 
 
 class LeadLifecycleError(ValueError):
@@ -183,7 +184,7 @@ def create_party_lead(
     lead_source: str,
     binding_source: str,
     binding_reason: str,
-    origin_capture: dict[str, Any],
+    origin_capture: LeadOriginCaptureCreate,
     region: str | None = None,
     address: str | None = None,
     notes: str | None = None,
@@ -243,7 +244,7 @@ def create_party_lead(
         db,
         lead_id=lead.id,
         lead_source=lead_source,
-        capture=origin_capture,
+        capture=origin_capture.model_dump(mode="python"),
     )
     return lead
 

@@ -153,7 +153,7 @@ def resolve_fiber_identity(
 def render_fiber_inquiry_body(payload: FiberInquiryRequest) -> str:
     phone = payload.phone or "Not supplied"
     message = payload.message or "No additional message."
-    return (
+    body = (
         "Fiber website inquiry\n\n"
         f"Name: {payload.full_name}\n"
         f"Email: {payload.email or 'Not supplied'}\n"
@@ -161,6 +161,11 @@ def render_fiber_inquiry_body(payload: FiberInquiryRequest) -> str:
         f"Interest: {payload.interest.label}\n\n"
         f"{message}"
     )
+    if payload.is_whatsapp_handoff and payload.location is not None:
+        body += f"\n\nInstallation address: {payload.location.address}"
+        if payload.location.area:
+            body += f"\nArea: {payload.location.area}"
+    return body
 
 
 def capture_fiber_prospect(
@@ -405,6 +410,7 @@ def receive_fiber_inquiry_committed(
                     if command.payload.selected_plan
                     else None
                 ),
+                whatsapp_account_id=command.payload.whatsapp_account_id,
             ),
         ),
     )

@@ -1019,6 +1019,7 @@ DOMAIN = DomainSOT(
                 "Meta website Lead delivery lifecycle",
             ),
             depends_on=(
+                "communications.website_handoff_attribution",
                 "events.store",
                 "integration.installations",
                 "integration.runtime",
@@ -1085,7 +1086,7 @@ DOMAIN = DomainSOT(
                         owner="integration.meta_capi_lead",
                         kind=AuthorityKind.CONTROL_INPUT,
                         source=(
-                            "Explicit fiber coverage/new-connection eligibility, deterministic "
+                            "Explicit fiber coverage/new-connection and verified WhatsApp handoff eligibility, deterministic "
                             "event identity, data minimization, bounded retry, and terminal states."
                         ),
                     ),

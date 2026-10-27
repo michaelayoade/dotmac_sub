@@ -22,6 +22,7 @@ from app.models.sales import (
     PipelineStage,
 )
 from app.models.team_inbox import InboxConversation
+from app.schemas.sales import LeadOriginCaptureCreate
 from app.services import conversation_lead_relationships, team_inbox_contact_links
 from app.services.audit_adapter import stage_audit_event
 from app.services.domain_errors import DomainError
@@ -624,14 +625,16 @@ def create_lead_for_party(
                 lead_source=source,
                 binding_source=OWNER,
                 binding_reason="Existing authoritative Inbox Party reused for Lead creation",
-                origin_capture={
-                    "capture_method": LeadCaptureMethod.agent_declared.value,
-                    "source_platform": LeadSourcePlatform.team_inbox.value,
-                    "source_interaction_id": f"inbox-conversation:{conversation.id}",
-                    "capture_fingerprint": fingerprint,
-                    "capture_source": OWNER,
-                    "capture_reason": "Authorized operator created a Lead from an exact Inbox Party relationship",
-                },
+                origin_capture=LeadOriginCaptureCreate.model_validate(
+                    {
+                        "capture_method": LeadCaptureMethod.agent_declared.value,
+                        "source_platform": LeadSourcePlatform.team_inbox.value,
+                        "source_interaction_id": f"inbox-conversation:{conversation.id}",
+                        "capture_fingerprint": fingerprint,
+                        "capture_source": OWNER,
+                        "capture_reason": "Authorized operator created a Lead from an exact Inbox Party relationship",
+                    }
+                ),
                 metadata={"origin_conversation_id": str(conversation.id)},
                 owner_agent_id=command.actor_system_user_id,
                 pipeline_id=pipeline.id,

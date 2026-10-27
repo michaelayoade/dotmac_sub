@@ -2639,6 +2639,44 @@ DOMAIN = DomainSOT(
             ),
         ),
         SOTService(
+            name="communications.website_handoff_attribution",
+            module="app.services.website_handoff_attribution",
+            owns=("verified website to WhatsApp acquisition resolution",),
+            depends_on=(
+                "communications.team_inbox_observations",
+                "communications.team_inbox_threads",
+            ),
+            contract=_team_inbox_contract(
+                service_name="communications.website_handoff_attribution",
+                concerns=(
+                    (
+                        "verified website to WhatsApp acquisition resolution",
+                        OwnerRole.RESOLVER,
+                    ),
+                ),
+                inputs=(
+                    AuthorityInput(
+                        name="signed website and WhatsApp observations",
+                        owner="communications.team_inbox_observations",
+                        kind=AuthorityKind.OBSERVATION,
+                        source="Immutable signed website enquiry and verified WhatsApp sender/account/time.",
+                    ),
+                    AuthorityInput(
+                        name="persisted enquiry reference",
+                        owner="communications.team_inbox_threads",
+                        kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                        source="Confirmed enquiry message and observation link.",
+                    ),
+                ),
+                transaction_mode=TransactionMode.READ_ONLY,
+                design_refs=("docs/designs/WHATSAPP_WEBSITE_ATTRIBUTION.md",),
+                test_refs=(
+                    "tests/test_website_handoff_attribution.py",
+                    "tests/architecture/test_website_handoff_boundary.py",
+                ),
+            ),
+        ),
+        SOTService(
             name="communications.team_inbox_processing",
             module="app.services.team_inbox_processing",
             owns=("provider observation consequence coordination",),
@@ -2652,6 +2690,7 @@ DOMAIN = DomainSOT(
                 "communications.conversation_lead_relationships",
                 "sales.capture",
                 "sales.fiber_feasibility",
+                "communications.website_handoff_attribution",
             ),
             contract=_team_inbox_contract(
                 service_name="communications.team_inbox_processing",
