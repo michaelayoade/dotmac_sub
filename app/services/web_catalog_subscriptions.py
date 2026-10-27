@@ -3352,21 +3352,56 @@ def _route_range_options_for_blocks(blocks: list[IpBlock]) -> list[dict[str, obj
 def _subscription_public_ip_addon_form_row(
     db: Session,
     *,
-    subscription_id,
+    subscription_obj: Subscription,
 ) -> tuple[str, str]:
-    if not subscription_id:
+    if not subscription_obj.id or not subscription_obj.subscriber_id:
         return "", "1"
-    row = (
+
+    rows = (
         db.query(SubscriptionAddOn, AddOn)
         .join(AddOn, AddOn.id == SubscriptionAddOn.add_on_id)
-        .filter(SubscriptionAddOn.subscription_id == subscription_id)
+        .join(Subscription, Subscription.id == SubscriptionAddOn.subscription_id)
+        .filter(Subscription.subscriber_id == subscription_obj.subscriber_id)
         .filter(AddOn.ip_is_public.is_(True))
         .filter(SubscriptionAddOn.end_at.is_(None))
         .order_by(SubscriptionAddOn.start_at.desc().nullslast())
-        .first()
+        .all()
+    )
+    if not rows:
+        return "", "1"
+
+    # Additional routes are subscriber-scoped. Prefer the add-on attached to
+    # this subscription, then fall back only when the subscriber has one
+    # unambiguous active public-IP add-on. This keeps legacy/migrated routes
+    # visible without guessing when several commercial add-ons are active.
+    row = next(
+        (
+            candidate
+            for candidate in rows
+            if candidate[0].subscription_id == subscription_obj.id
+        ),
+        None,
     )
     if row is None:
-        return "", "1"
+        active_route_prefixes = {
+            int(prefix_length)
+            for (prefix_length,) in db.query(SubscriberAdditionalRoute.prefix_length)
+            .filter(
+                SubscriberAdditionalRoute.subscriber_id
+                == subscription_obj.subscriber_id
+            )
+            .filter(SubscriberAdditionalRoute.is_active.is_(True))
+            .distinct()
+            .all()
+        }
+        compatible_rows = [
+            candidate
+            for candidate in rows
+            if candidate[1].ip_prefix_length in active_route_prefixes
+        ]
+        if len(compatible_rows) != 1:
+            return "", "1"
+        row = compatible_rows[0]
     sub_addon, _add_on = row
     return str(sub_addon.add_on_id), str(sub_addon.quantity or 1)
 
@@ -3427,6 +3462,22 @@ def sync_public_ip_addon_for_subscription(
             sub_addon.quantity = qty
         else:
             sub_addon.end_at = now
+
+    # Routed blocks belong to the subscriber rather than one subscription.
+    # Reuse one matching legacy/migrated add-on already active for the same
+    # subscriber so a repeat save cannot create duplicate billing coverage.
+    if matched is None and subscription_obj.subscriber_id:
+        subscriber_matches = (
+            db.query(SubscriptionAddOn)
+            .join(Subscription, Subscription.id == SubscriptionAddOn.subscription_id)
+            .filter(Subscription.subscriber_id == subscription_obj.subscriber_id)
+            .filter(SubscriptionAddOn.add_on_id == selected_uuid)
+            .filter(SubscriptionAddOn.end_at.is_(None))
+            .all()
+        )
+        if len(subscriber_matches) == 1:
+            matched = subscriber_matches[0]
+            matched.quantity = qty
     if matched is None:
         db.add(
             SubscriptionAddOn(
@@ -3623,7 +3674,7 @@ def edit_form_data(db: Session, subscription_obj: Subscription) -> dict[str, obj
     )
     ip_addon_id, ip_addon_quantity = _subscription_public_ip_addon_form_row(
         db,
-        subscription_id=subscription_obj.id,
+        subscription_obj=subscription_obj,
     )
     return {
         "id": str(subscription_obj.id),
