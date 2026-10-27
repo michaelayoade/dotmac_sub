@@ -2227,6 +2227,7 @@ def _repair_service_ipv4_assignment(
 def _prior_ipv6_link_outcome(
     db: Session,
     *,
+    subscription_id: UUID,
     idempotency_key: str,
     preview_fingerprint: str,
 ) -> ServiceIPv6AssignmentLinkOutcome | None:
@@ -2247,8 +2248,12 @@ def _prior_ipv6_link_outcome(
             "The idempotency key was already used for different IPAM evidence.",
         )
     desired_assignment_id = metadata.get("desired_assignment_id")
+    # The preview fingerprint binds subscription_id (it is in the preview
+    # payload), so a fingerprint match ties this prior batch to the caller's
+    # subscription. Take it from the command, not audit metadata: metadata
+    # is provenance only (ADR 0007 invariant 4), never identity authority.
     return ServiceIPv6AssignmentLinkOutcome(
-        subscription_id=UUID(str(metadata["subscription_id"])),
+        subscription_id=subscription_id,
         desired_assignment_id=(
             UUID(str(desired_assignment_id)) if desired_assignment_id else None
         ),
@@ -2268,6 +2273,7 @@ def _link_service_ipv6_assignment(
 
     prior = _prior_ipv6_link_outcome(
         db,
+        subscription_id=command.subscription_id,
         idempotency_key=idempotency_key,
         preview_fingerprint=command.preview_fingerprint,
     )
@@ -2319,6 +2325,7 @@ def _link_service_ipv6_assignment(
 
     prior = _prior_ipv6_link_outcome(
         db,
+        subscription_id=command.subscription_id,
         idempotency_key=idempotency_key,
         preview_fingerprint=command.preview_fingerprint,
     )
@@ -2368,8 +2375,7 @@ def _link_service_ipv6_assignment(
         action=_LIFECYCLE_ITEM_AUDIT_ACTION,
         entity_type="ip_assignment",
         entity_id=str(desired_assignment.id),
-        actor_type=AuditActorType.service,
-        actor_id=command.context.actor,
+        actor=AuditActor.service(command.context.actor),
         metadata={
             "action": "linked",
             "subscription_id": str(command.subscription_id),
@@ -2383,8 +2389,7 @@ def _link_service_ipv6_assignment(
         action=_IPV6_LIFECYCLE_BATCH_AUDIT_ACTION,
         entity_type="ip_assignment_ipv6_lifecycle",
         entity_id=idempotency_key,
-        actor_type=AuditActorType.service,
-        actor_id=command.context.actor,
+        actor=AuditActor.service(command.context.actor),
         metadata={
             "subscription_id": str(subscription.id),
             "desired_assignment_id": str(desired_assignment.id),
@@ -2542,8 +2547,7 @@ def _unlink_ip_assignment_service_ownership(
         action=_UNLINK_ITEM_AUDIT_ACTION,
         entity_type="ip_assignment",
         entity_id=str(assignment.id),
-        actor_type=AuditActorType.service,
-        actor_id=command.context.actor,
+        actor=AuditActor.service(command.context.actor),
         metadata={
             "previous_subscription_id": (
                 str(previous_subscription_id)
@@ -2559,8 +2563,7 @@ def _unlink_ip_assignment_service_ownership(
         action=_UNLINK_BATCH_AUDIT_ACTION,
         entity_type="ip_assignment_service_ownership_unlink",
         entity_id=idempotency_key,
-        actor_type=AuditActorType.service,
-        actor_id=command.context.actor,
+        actor=AuditActor.service(command.context.actor),
         metadata={
             "assignment_id": str(assignment.id),
             "previous_subscription_id": (

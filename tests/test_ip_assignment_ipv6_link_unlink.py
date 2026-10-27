@@ -185,18 +185,17 @@ def test_ipv6_link_links_legacy_assignment_without_primary_or_served_write(
     assert preview.applicable is True
     db_session.commit()
 
-    outcome = link_service_ipv6_assignment(
-        db_session,
-        _link_command(
-            subscription_id=subscription_id,
-            desired_address_id=desired_id,
-            fingerprint=preview.fingerprint,
-        ),
+    command = _link_command(
+        subscription_id=subscription_id,
+        desired_address_id=desired_id,
+        fingerprint=preview.fingerprint,
     )
+    outcome = link_service_ipv6_assignment(db_session, command)
 
     assert outcome.linked_count == 1
     assert outcome.replayed is False
     assert outcome.desired_assignment_id == assignment.id
+    assert outcome.subscription_id == subscription_id
     db_session.refresh(assignment)
     db_session.refresh(subscription)
     assert assignment.subscription_id == subscription_id
@@ -204,6 +203,26 @@ def test_ipv6_link_links_legacy_assignment_without_primary_or_served_write(
     # IPv6 has no primary-served marker; linking must not invent one.
     assert assignment.is_primary is False
     assert subscription.ipv6_address == "2001:db8:30::99"
+    # New commands are typed audit-actor adopters: the staged batch row
+    # carries the service actor built from the command context.
+    batch_event = db_session.scalar(
+        select(AuditEvent).where(
+            AuditEvent.action == "network.ip_assignment.ipv6_lifecycle_repaired",
+            AuditEvent.entity_id == "ipam-ipv6-link-test-1",
+        )
+    )
+    assert batch_event is not None
+    assert batch_event.actor_type.value == "service"
+    assert batch_event.actor_id == "test-operator"
+
+    db_session.commit()
+    # Replay takes subscription_id from the command (bound by the preview
+    # fingerprint), not from audit metadata.
+    replay = link_service_ipv6_assignment(db_session, command)
+    assert replay.replayed is True
+    assert replay.subscription_id == subscription_id
+    assert replay.desired_assignment_id == assignment.id
+    assert replay.linked_count == 1
 
 
 def test_ipv6_link_preview_refuses_cross_customer_target(
