@@ -243,6 +243,8 @@ def env(
         kind="credit_note",
         assembly_doc=assembly,
         principal_name=principal[0],
+        window_id=str(uuid4()),
+        epoch=str(uuid4()),
     )
     observer = HybridObserver(world.census_bytes, held)
     world.observer = observer
@@ -274,8 +276,8 @@ def _provision(env: Env) -> OpeningWindowV1:
     w = env.world
     window = OpeningWindowV1(
         env.scope,
-        UUID(s.WINDOW_ID),
-        UUID(s.EPOCH),
+        UUID(w.window["window_id"]),
+        UUID(w.window["epoch"]),
         2,
         w.ev.fingerprint,
         w.ev.manifest,

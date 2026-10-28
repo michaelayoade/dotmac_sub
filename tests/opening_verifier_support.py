@@ -437,6 +437,8 @@ class World:
         assembly_doc: dict[str, Any] | None = None,
         originals_rows: list[tuple[str, str, int]] | None = None,
         principal_name: str = "opening_window_role",
+        window_id: str = WINDOW_ID,
+        epoch: str = EPOCH,
     ) -> None:
         self.tmp = tmp
         self.env = environment
@@ -494,16 +496,16 @@ class World:
         installation = census_doc["capture"]["declared_source"]["installation_id"]
         self.audience = RESTORE_ID if rehearsal else f"production:{installation}"
         self.window = {
-            "window_id": WINDOW_ID,
-            "epoch": EPOCH,
+            "window_id": window_id,
+            "epoch": epoch,
             "principal_name": principal_name,
             "provision_authority_ref": (
                 "rehearsal:provision-authority" if rehearsal else "michael:provision"
             ),
         }
         self.seal_body = {
-            "window_id": WINDOW_ID,
-            "epoch": EPOCH,
+            "window_id": window_id,
+            "epoch": epoch,
             "manifest_fingerprint": self.ev.fingerprint,
             "coupled_watermark": "sub-census-content:"
             + census_doc["content_fingerprint"],
