@@ -15,11 +15,12 @@ counts constructions); sessions come from the shared ``census_factory``.
 
 from __future__ import annotations
 
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
+from typing import TypeVar
 from uuid import UUID, uuid4
 
 import pytest
@@ -46,13 +47,31 @@ from tests import opening_verifier_support as s
 from tests.integration.test_billing_opening_export import census_factory  # noqa: F401
 
 pytestmark = pytest.mark.integration
+T = TypeVar("T")
 
 
 class HybridObserver(ov.SqlSourceObservationPort):
-    """Real marker and pg_roles observation; the census re-render is controllable."""
+    """Real marker and pg_roles observation; the census re-render is controllable.
 
-    def __init__(self, wire: bytes) -> None:
-        self.wire = wire
+    The verifier observes as its own (unrestricted) reader, never as the window
+    principal or migration role the caller transaction happens to be using.
+    """
+
+    def __init__(self, wire: bytes, held: list[str | None]) -> None:
+        self.wire, self._held = wire, held
+
+    def _unrestricted(self, call: Callable[[], T]) -> T:
+        saved, self._held[0] = self._held[0], None
+        try:
+            return call()
+        finally:
+            self._held[0] = saved
+
+    def marker(self) -> str | None:
+        return self._unrestricted(super().marker)
+
+    def role(self, name: str) -> ov.RoleObservation | None:
+        return self._unrestricted(lambda: super(HybridObserver, self).role(name))
 
     def census_wire(
         self, query: object, snapshot_id: str, captured_at: datetime
@@ -186,7 +205,7 @@ def env(
         assembly_doc=assembly,
         principal_name=principal[0],
     )
-    observer = HybridObserver(world.census_bytes)
+    observer = HybridObserver(world.census_bytes, held)
     world.observer = observer
     try:
         yield Env(
