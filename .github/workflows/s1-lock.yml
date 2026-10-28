@@ -84,7 +84,9 @@ jobs:
           assert len(added) == 1, "Expected exactly one device-cli package"
           package = added[0]
           assert package["version"] == "0.1.0a1", "Unexpected device-cli version"
-          assert package["source"]["url"] == "https://registry.dotmac.io/api/packages/dotmac/pypi/simple/"
+          registry = next(p["source"] for p in before["package"] if p["name"] == "dotmac-kernel")
+          assert registry["url"] == "https://registry.dotmac.io/api/packages/dotmac/pypi/simple"
+          assert package["source"] == registry, "Device-cli must use the existing locked registry identity"
           assert package["files"] and all(f["hash"].startswith("sha256:") and len(f["hash"]) == 71 for f in package["files"])
           retained = [p for p in after["package"] if p["name"] != "dotmac-device-cli"]
           assert retained == before["package"], "Unrelated locked package entries changed; review required"
