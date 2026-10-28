@@ -47,6 +47,14 @@ No number on this page may be produced by a query or threshold in
 | What's new | `admin_whats_new_service` | ✅ owner |
 | Recent activity | `audit_adapter` | ✅ owner (two competing builders today) |
 
+The "Collections This Month" card sums settled value (`total - balance_due`)
+only for collectible paid and partially-paid invoices created in the current UTC
+month. Its invoice-list drill-down uses `status=dashboard_collections`. The
+"Overdue" card sums positive balances only for eligible invoices whose status
+is overdue, regardless of creation month; its drill-down uses
+`status=dashboard_overdue`. The broader billing overview retains its existing
+revenue definition.
+
 The composed result is one typed **overview snapshot**. Status meaning
 (`status`, `reason`, `tone`) is owner-provided; templates map `tone → color`
 only (reuse the `status_presentation` pattern). Colors never encode domain, and
