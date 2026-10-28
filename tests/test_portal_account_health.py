@@ -241,7 +241,11 @@ def test_portal_templates_share_owner_projection_and_remove_generic_balance():
 
     assert "account_health" in customer
     assert "account_health" in reseller
-    assert "financial_health" in customer and "service_health_strip" in customer
+    assert "dashboard_highlights" in customer
+    assert (
+        "status_presentation_badge(service.connection.value.status_presentation"
+        in customer
+    )
     assert "financial_health" in reseller and "service_health_strip" in reseller
     assert "account.balance" not in customer
     assert "account.open_balance" not in reseller
@@ -249,6 +253,57 @@ def test_portal_templates_share_owner_projection_and_remove_generic_balance():
     assert "Current Balance" not in customer
     assert "Outstanding receivables" in shared
     assert "Prepaid service funding" in shared
+
+
+def test_customer_dashboard_highlights_read_credit_and_plan_speed(
+    db_session, subscriber_account, subscription, monkeypatch
+):
+    subscriber_account.billing_mode = BillingMode.postpaid
+    subscription.billing_mode = BillingMode.postpaid
+    subscription.status = SubscriptionStatus.active
+    subscription.offer.speed_download_mbps = 6
+    subscription.offer.speed_upload_mbps = 6
+    db_session.commit()
+    health = build_portal_account_health(
+        db_session,
+        subscriber_account.id,
+        as_of=datetime(2026, 10, 28, 12, tzinfo=UTC),
+    )
+    from app.services.billing import _common as billing_common
+
+    monkeypatch.setattr(
+        billing_common,
+        "get_account_credit_balance",
+        lambda _db, _account_id, *, currency: Decimal("12500.00"),
+    )
+    highlights = portal_account_health.get_customer_dashboard_highlights(
+        db_session,
+        portal_account_health.CustomerDashboardHighlightsQuery(account_health=health),
+    )
+    assert highlights.greeting_period == "afternoon"
+    assert highlights.account_credit.value.amount == Decimal("12500.00")
+    assert highlights.services[0].health.subscription_id == subscription.id
+    assert highlights.services[0].download_mbps == 6
+    assert highlights.services[0].upload_mbps == 6
+
+
+def test_customer_dashboard_highlights_do_not_show_zero_when_credit_fails(
+    db_session, subscriber_account, monkeypatch
+):
+    subscriber_account.billing_mode = BillingMode.postpaid
+    db_session.commit()
+    health = build_portal_account_health(db_session, subscriber_account.id)
+    from app.services.billing import _common as billing_common
+
+    def unavailable(_db, _account_id, *, currency):
+        raise RuntimeError("credit unavailable")
+
+    monkeypatch.setattr(billing_common, "get_account_credit_balance", unavailable)
+    highlights = portal_account_health.get_customer_dashboard_highlights(
+        db_session,
+        portal_account_health.CustomerDashboardHighlightsQuery(account_health=health),
+    )
+    assert highlights.account_credit.kind.value == "unavailable"
 
 
 def test_portal_account_health_templates_compile():

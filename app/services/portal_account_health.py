@@ -14,6 +14,7 @@ from datetime import UTC, date, datetime
 from decimal import Decimal
 from enum import StrEnum
 from uuid import UUID
+from zoneinfo import ZoneInfo
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session, selectinload
@@ -203,6 +204,29 @@ class PortalAccountHealth:
             primary_action=None,
             customer_primary_action_url=None,
         )
+
+
+@dataclass(frozen=True, slots=True)
+class CustomerDashboardHighlightsQuery:
+    """Compose dashboard-only facts around an already scoped account projection."""
+
+    account_health: PortalAccountHealth
+
+
+@dataclass(frozen=True, slots=True)
+class CustomerDashboardService:
+    health: PortalServiceHealth
+    download_mbps: int | None
+    upload_mbps: int | None
+
+
+@dataclass(frozen=True, slots=True)
+class CustomerDashboardHighlights:
+    greeting_name: str
+    greeting_period: str
+    observed_at: datetime
+    account_credit: StateValue
+    services: tuple[CustomerDashboardService, ...]
 
 
 _CUSTOMER_ACTION_URLS = {
@@ -591,4 +615,101 @@ def build_portal_account_health(
         primary_action=primary_action,
         customer_primary_action_url=_customer_action_url(primary_action),
         as_of=evaluated_at,
+    )
+
+
+def get_customer_dashboard_highlights(
+    db: Session,
+    query: CustomerDashboardHighlightsQuery,
+) -> CustomerDashboardHighlights:
+    """Read dashboard-only identity, credit, and plan facts without new decisions."""
+    health = query.account_health
+    account = db.get(Subscriber, health.account_id)
+    greeting_name = (
+        (account.first_name or account.company_name or health.display_name)
+        if account is not None
+        else health.display_name
+    )
+    local_hour = health.as_of.astimezone(ZoneInfo("Africa/Lagos")).hour
+    greeting_period = (
+        "morning" if local_hour < 12 else "afternoon" if local_hour < 17 else "evening"
+    )
+
+    credit = StateValue.unavailable()
+    try:
+        lanes = (
+            health.financial.receivables.value
+            if health.financial.receivables.is_present
+            else ()
+        )
+        if len(lanes) <= 1:
+            from app.services.billing._common import get_account_credit_balance
+
+            currency = (
+                lanes[0].currency if lanes else display_format.default_currency(db)
+            )
+            if health.financial.prepaid_funding.is_present:
+                currency = health.financial.prepaid_funding.value.currency
+            amount = get_account_credit_balance(
+                db, str(health.account_id), currency=currency
+            )
+            if amount >= Decimal("0.00"):
+                credit = StateValue.present(
+                    MoneyAmount(amount=amount, currency=currency),
+                    as_of=health.as_of,
+                )
+    except Exception as exc:
+        logger.warning(
+            "customer_dashboard_credit_unavailable",
+            extra={
+                "account_id": str(health.account_id),
+                "error_type": type(exc).__name__,
+            },
+        )
+
+    subscription_ids = tuple(service.subscription_id for service in health.services)
+    subscriptions: dict[UUID, Subscription] = {}
+    if subscription_ids:
+        try:
+            subscriptions = {
+                row.id: row
+                for row in db.scalars(
+                    select(Subscription)
+                    .where(Subscription.id.in_(subscription_ids))
+                    .where(Subscription.subscriber_id == health.account_id)
+                    .options(selectinload(Subscription.offer))
+                ).all()
+            }
+        except Exception as exc:
+            logger.warning(
+                "customer_dashboard_plan_speed_unavailable",
+                extra={
+                    "account_id": str(health.account_id),
+                    "error_type": type(exc).__name__,
+                },
+            )
+    services = tuple(
+        CustomerDashboardService(
+            health=service,
+            download_mbps=(
+                subscriptions[service.subscription_id].offer.speed_download_mbps
+                if service.subscription_id in subscriptions
+                and subscriptions[service.subscription_id].offer is not None
+                else None
+            ),
+            upload_mbps=(
+                subscriptions[service.subscription_id].offer.speed_upload_mbps
+                if service.subscription_id in subscriptions
+                and subscriptions[service.subscription_id].offer is not None
+                else None
+            ),
+        )
+        for service in health.services
+    )
+    return CustomerDashboardHighlights(
+        greeting_name=greeting_name or "Customer",
+        greeting_period=greeting_period,
+        observed_at=health.as_of,
+        account_credit=credit,
+        services=services,
     )

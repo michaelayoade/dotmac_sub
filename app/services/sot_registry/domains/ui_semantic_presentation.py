@@ -695,6 +695,7 @@ DOMAIN = DomainSOT(
             module="app.services.portal_account_health",
             owns=(
                 "customer and reseller account-health first-viewport projection",
+                "customer dashboard identity, credit, and plan highlights",
                 "subscription-scoped service-health row projection",
                 "portal financial-position currency-lane projection",
                 "mobile account-health transport projection",
@@ -705,6 +706,7 @@ DOMAIN = DomainSOT(
                 "customer.accounts",
                 "customer.financial_position",
                 "customer.service_status",
+                "financial.account_credit_applications",
                 "financial.billing_profile",
                 "financial.prepaid_funding_reconstruction",
                 "network.connection_health",
@@ -734,6 +736,16 @@ DOMAIN = DomainSOT(
                             "canonical customer financial position",
                             "canonical service-health rows",
                             "UI projection vocabulary",
+                        ),
+                    ),
+                    ConcernContract(
+                        name="customer dashboard identity, credit, and plan highlights",
+                        role=OwnerRole.RESOLVER,
+                        input_names=(
+                            "canonical account-health projection",
+                            "canonical account state",
+                            "canonical account credit",
+                            "canonical current subscriptions",
                         ),
                     ),
                     ConcernContract(
@@ -782,11 +794,17 @@ DOMAIN = DomainSOT(
                         source="Subscriber identity and lifecycle status",
                     ),
                     AuthorityInput(
+                        name="canonical account credit",
+                        owner="financial.account_credit_applications",
+                        kind=AuthorityKind.DERIVED_PROJECTION,
+                        source="currency-scoped unallocated credit from the customer ledger",
+                    ),
+                    AuthorityInput(
                         name="canonical current subscriptions",
                         owner="access.subscription_lifecycle",
                         kind=AuthorityKind.AUTHORITATIVE_RECORD,
                         source=(
-                            "operationally-current Subscription identity, offer, "
+                            "operationally-current Subscription identity, offer and speed, "
                             "billing mode, and lifecycle status"
                         ),
                     ),

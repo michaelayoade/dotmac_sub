@@ -67,7 +67,15 @@ OLT, ONT, NAS, or RADIUS polling.
 
 ## Surface contracts
 
-- Customer dashboard renders the shared financial and service-health macros.
+- Customer dashboard composes the shared Account Health projection with a typed,
+  dashboard-only identity, currency-scoped unallocated-credit, and offer-speed
+  read. The first viewport shows the canonical action when one exists, account
+  credit separately from prepaid funding and receivables, and one service card
+  per operationally-current subscription. A missing credit or speed read shows
+  an explicit unavailable message. A missing action is described as no payment
+  action only when Account Health is complete. The topbar remains owned by the
+  shared customer layout. The later dashboard slice adds exact service-period
+  progress, usage, support, and recent activity.
 - Customer service detail narrows the same account projection to the requested
   subscription after the existing ownership check. If an owned subscription is
   missing from that projection, the detail service returns no result so the
@@ -82,6 +90,33 @@ OLT, ONT, NAS, or RADIUS polling.
   an independent connection or change-status summary.
 - Mobile calls `GET /api/v1/me/account-health` and renders the transport schema
   in `app.schemas.portal_account_health`.
+
+### Customer dashboard page contract, first slice
+
+- Screen: `/portal/dashboard`, customer glance dashboard. The customer decides
+  whether an owner-confirmed action is needed and which service to inspect.
+- Primary identity: authenticated account number and operationally-current
+  subscription IDs. The customer session scopes the read before projection.
+- Read owner: `ui.portal_account_health_projection`; dashboard highlights use
+  its typed `CustomerDashboardHighlightsQuery` and result. Source records are
+  the account, currency-scoped unallocated-credit ledger, and scoped offers.
+- First viewport: local greeting, account lifecycle, canonical primary action,
+  account credit, and per-service lifecycle, access, session, connection,
+  plan speed, next charge date, and connection evidence time.
+- Actions: the primary action uses the service-status owner's label and URL;
+  billing history and service details are read-only drill-downs. View-only
+  sessions do not show a payment action. No destructive or bulk action exists.
+- Availability: absent account health shows a page warning; unavailable credit,
+  speed, charge date, or connection shows an explicit message. Confirmed zero
+  credit remains zero. Multiple currencies do not collapse into one credit
+  amount. No operational service yields a dedicated empty state.
+- Freshness and provenance: Account Health and connection observations carry
+  their own timestamps. The dashboard does not poll equipment or cache a second
+  status decision. Dates display in Lagos time. Sensitive financial amounts
+  remain inside the authenticated customer session.
+- Layout: the same facts stack on mobile. The shared customer layout owns the
+  topbar. Later slices add only owner-backed service-period, usage, support, and
+  activity sections.
 
 Templates and mobile clients may choose navigation and native layout. They do
 not derive billing position, access eligibility, session freshness, outage
@@ -109,6 +144,12 @@ The account projection is one request and receives the exact current service
 cohort once. Live sessions are batch-resolved for that cohort. Full topology
 diagnosis runs only for active services. No historical subscription receives a
 diagnosis and no client issues a second connection-status request.
+
+The customer dashboard highlights read reuses that projection and batch-loads
+offer speeds for its already-scoped service IDs. It reads ledger credit in one
+currency lane; it never nets credit against receivables or infers a payment
+amount from a future charge. A separate account-credit read failure does not
+replace a confirmed zero or fail the whole page.
 
 The one-active-service fixture currently uses 26 SQL statements and is guarded
 at a maximum of 28. Any increase must identify the new authoritative input and

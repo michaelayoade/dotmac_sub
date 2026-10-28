@@ -1,60 +1,104 @@
 {% extends "layouts/customer.html" %}
 {% from "components/ui/macros.html" import status_presentation_badge %}
-{% from "components/portal/account_health.html" import financial_health, service_health_strip %}
 
 {% block title %}Dashboard - My Account{% endblock %}
 
 {% block content %}
-<div class="space-y-8">
+<div class="space-y-5">
     {% if stats_error or not account_health %}
-    <div class="flex items-start gap-3 rounded-2xl border border-amber-300 bg-amber-50 px-5 py-4 text-sm text-amber-900 dark:border-amber-900/50 dark:bg-amber-900/20 dark:text-amber-200">
-        <svg class="mt-0.5 h-5 w-5 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
-        <div>
-            <p class="font-semibold">We couldn't load your complete account health.</p>
-            <p class="mt-1">Refresh the page or contact support if this continues.</p>
-        </div>
+    <div role="status" class="rounded-2xl border border-amber-300 bg-amber-50 px-5 py-4 text-sm text-amber-900 dark:border-amber-900/50 dark:bg-amber-900/20 dark:text-amber-200">
+        Some account information is unavailable right now. Refresh the page or contact support if this continues.
     </div>
     {% endif %}
 
-    {% if account_health %}
-    <section class="relative overflow-hidden rounded-3xl bg-gradient-to-br from-stone-900 via-stone-800 to-stone-900 text-white shadow-lg">
-        <div class="pointer-events-none absolute -right-20 -top-24 h-64 w-64 rounded-full bg-[var(--color-brand-500)]/20 blur-3xl"></div>
-        <div class="relative flex flex-col gap-5 px-6 py-6 sm:px-8 sm:py-7 lg:flex-row lg:items-center lg:justify-between lg:px-9 lg:py-8">
-            <div class="min-w-0 flex-1">
-                <div class="flex flex-wrap items-center gap-2">
-                    {{ status_presentation_badge(account_health.lifecycle, size="sm") }}
-                    {% if account_health.account_number %}<span class="font-mono text-xs text-stone-300">{{ account_health.account_number }}</span>{% endif %}
-                </div>
-                <h1 class="mt-4 break-words text-3xl font-display font-bold lg:text-4xl">Welcome back, {{ user.first_name }}</h1>
-                <p class="mt-2 max-w-2xl leading-relaxed text-stone-300">Your account, service access, connection evidence and next action in one place.</p>
-            </div>
-            {% if account_health.primary_action and account_health.customer_primary_action_url %}
-            <div class="w-full max-w-md rounded-2xl border border-white/15 bg-white/10 p-4 backdrop-blur-sm lg:w-auto lg:shrink-0">
-                <p class="text-sm text-stone-200">{{ account_health.primary_action.message }}</p>
-                <a href="{{ account_health.customer_primary_action_url }}" class="mt-3 inline-flex rounded-xl bg-white px-4 py-2 text-sm font-semibold text-stone-900 hover:bg-stone-100">{{ account_health.primary_action.label }}</a>
-            </div>
-            {% else %}
-            <a href="/portal/services" class="inline-flex w-fit shrink-0 rounded-xl border border-white/20 bg-white/10 px-4 py-2 text-sm font-semibold text-white hover:bg-white/15">Manage services</a>
+    {% if account_health and dashboard_highlights is defined %}
+    <header class="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
+        <div>
+            <p class="text-xs font-bold uppercase tracking-wider text-[var(--color-brand-700)] dark:text-[var(--color-brand-300)]">{{ dashboard_highlights.observed_at | portal_datetime('%A, %d %B %Y', include_tz=False) }}</p>
+            <h1 class="mt-2 font-display text-3xl font-bold tracking-tight text-stone-950 dark:text-white">Good {{ dashboard_highlights.greeting_period }}, {{ dashboard_highlights.greeting_name }}.</h1>
+        </div>
+        <div class="flex flex-wrap items-center gap-2">
+            {{ status_presentation_badge(account_health.lifecycle, size="sm") }}
+            {% if account_health.account_number %}
+            <span class="inline-flex w-fit items-center rounded-xl border border-stone-200 bg-white px-4 py-2.5 text-sm font-semibold text-stone-900 dark:border-stone-700 dark:bg-stone-800 dark:text-white">Account · {{ account_health.account_number }}</span>
             {% endif %}
+        </div>
+    </header>
+
+    <section class="grid gap-4 lg:grid-cols-3" aria-label="Account overview">
+        <div class="flex min-h-52 flex-col justify-between rounded-3xl bg-[var(--color-brand-900)] p-6 text-white lg:col-span-2">
+            <div>
+                {% if account_health.primary_action and account_health.customer_primary_action_url %}
+                <span class="inline-flex rounded-full bg-lime-200 px-3 py-1 text-xs font-bold text-stone-950">Action needed</span>
+                <h2 class="mt-4 max-w-2xl font-display text-2xl font-bold leading-tight sm:text-3xl">{{ account_health.primary_action.message }}</h2>
+                {% elif account_health.has_partial_data %}
+                <span class="inline-flex rounded-full bg-amber-100 px-3 py-1 text-xs font-bold text-amber-950">Status unavailable</span>
+                <h2 class="mt-4 font-display text-2xl font-bold">We can't confirm your next action right now.</h2>
+                {% else %}
+                <span class="inline-flex rounded-full bg-lime-200 px-3 py-1 text-xs font-bold text-stone-950">Account overview</span>
+                <h2 class="mt-4 font-display text-2xl font-bold">No urgent action is needed right now.</h2>
+                {% endif %}
+                {% if dashboard_highlights.services|length == 1 and dashboard_highlights.services[0].health.next_charge_at %}
+                <p class="mt-3 text-sm text-lime-100">Next charge date: {{ dashboard_highlights.services[0].health.next_charge_at | portal_datetime('%d %B %Y', include_tz=False) }}</p>
+                {% endif %}
+            </div>
+            {% if account_health.primary_action and account_health.customer_primary_action_url and not (customer and customer.read_only) %}
+            <a href="{{ account_health.customer_primary_action_url }}" class="mt-5 inline-flex w-fit items-center rounded-xl bg-lime-200 px-4 py-2.5 text-sm font-bold text-stone-950 transition hover:bg-lime-100">{{ account_health.primary_action.label }} <span aria-hidden="true" class="ml-2">→</span></a>
+            {% endif %}
+        </div>
+
+        <div class="flex min-h-52 flex-col rounded-3xl border border-stone-200 bg-white p-6 dark:border-stone-700 dark:bg-stone-800">
+            <span class="inline-flex w-fit rounded-full bg-emerald-50 px-3 py-1 text-xs font-bold text-emerald-800 dark:bg-emerald-900/30 dark:text-emerald-200">Account credit</span>
+            {% if dashboard_highlights.account_credit.is_present %}
+            <p class="mt-5 font-display text-3xl font-bold tabular-nums text-stone-950 dark:text-white">{{ dashboard_highlights.account_credit.value.amount | money(dashboard_highlights.account_credit.value.currency) }}</p>
+            <p class="mt-1 text-sm text-stone-500 dark:text-stone-400">Unallocated credit on your account</p>
+            {% else %}
+            <p class="mt-5 text-lg font-semibold text-stone-900 dark:text-white">Credit unavailable</p>
+            <p class="mt-1 text-sm text-stone-500 dark:text-stone-400">We can't confirm your credit right now.</p>
+            {% endif %}
+            <a href="/portal/billing" class="mt-auto inline-flex justify-center rounded-xl border border-stone-200 px-4 py-2.5 text-sm font-semibold text-stone-950 transition hover:bg-stone-50 dark:border-stone-600 dark:text-white dark:hover:bg-stone-700">View billing history</a>
         </div>
     </section>
 
-    {{ financial_health(account_health.financial, "/portal/billing") }}
-    {{ service_health_strip(account_health, "/portal/services/", true) }}
-
-    <section class="grid gap-4 md:grid-cols-3" aria-label="Account work shortcuts">
-        <a href="/portal/billing" class="rounded-2xl border border-stone-200 bg-white p-5 shadow-sm transition hover:shadow-md dark:border-stone-700 dark:bg-stone-800">
-            <p class="font-semibold text-stone-900 dark:text-white">Billing and payments</p>
-            <p class="mt-1 text-sm text-stone-500 dark:text-stone-400">Invoices, receipts, payment methods and account credit.</p>
-        </a>
-        <a href="/portal/usage" class="rounded-2xl border border-stone-200 bg-white p-5 shadow-sm transition hover:shadow-md dark:border-stone-700 dark:bg-stone-800">
-            <p class="font-semibold text-stone-900 dark:text-white">Usage</p>
-            <p class="mt-1 text-sm text-stone-500 dark:text-stone-400">Load bandwidth and allowance evidence when you need it.</p>
-        </a>
-        <a href="/portal/support" class="rounded-2xl border border-stone-200 bg-white p-5 shadow-sm transition hover:shadow-md dark:border-stone-700 dark:bg-stone-800">
-            <p class="font-semibold text-stone-900 dark:text-white">Support</p>
-            <p class="mt-1 text-sm text-stone-500 dark:text-stone-400">{{ tickets.open_count }} open ticket{% if tickets.open_count != 1 %}s{% endif %}. View conversations or request help.</p>
-        </a>
+    <section class="space-y-4" aria-labelledby="dashboard-services-heading">
+        <h2 id="dashboard-services-heading" class="sr-only">Your services</h2>
+        {% for row in dashboard_highlights.services %}
+        {% set service = row.health %}
+        <article class="rounded-2xl border border-stone-200 bg-white p-5 dark:border-stone-700 dark:bg-stone-800">
+            <div class="flex flex-wrap items-start justify-between gap-3">
+                <div>
+                    <h3 class="font-display text-lg font-bold text-stone-950 dark:text-white">{{ service.offer_name }}{% if row.download_mbps is not none %} · {{ row.download_mbps }} Mbps{% endif %}</h3>
+                    <p class="mt-1 text-sm text-stone-500 dark:text-stone-400">Your service</p>
+                </div>
+                <div class="flex flex-wrap gap-2">
+                    {{ status_presentation_badge(service.lifecycle, size="sm") }}
+                    {{ status_presentation_badge(service.access, size="sm") }}
+                    {{ status_presentation_badge(service.session_presentation, size="sm") }}
+                    {% if service.connection.is_present %}{{ status_presentation_badge(service.connection.value.status_presentation, size="sm") }}{% endif %}
+                </div>
+            </div>
+            <div class="mt-5 grid gap-4 border-t border-stone-100 pt-4 text-sm dark:border-stone-700 sm:grid-cols-3">
+                <div>
+                    <p class="text-stone-500 dark:text-stone-400">Plan speed</p>
+                    <p class="mt-1 font-semibold text-stone-900 dark:text-white">{% if row.download_mbps is not none or row.upload_mbps is not none %}↓ {{ row.download_mbps if row.download_mbps is not none else '—' }} · ↑ {{ row.upload_mbps if row.upload_mbps is not none else '—' }} Mbps{% else %}Speed unavailable{% endif %}</p>
+                </div>
+                <div>
+                    <p class="text-stone-500 dark:text-stone-400">Next charge</p>
+                    <p class="mt-1 font-semibold text-stone-900 dark:text-white">{{ service.next_charge_at | portal_datetime('%d %B %Y', 'Date unavailable', include_tz=False) }}</p>
+                </div>
+                <div>
+                    <p class="text-stone-500 dark:text-stone-400">Connection</p>
+                    <p class="mt-1 font-semibold text-stone-900 dark:text-white">{{ service.connection.value.headline if service.connection.is_present else 'Connection status unavailable' }}</p>
+                    {% if service.connection.is_present %}<p class="mt-1 text-xs text-stone-500 dark:text-stone-400">{% if service.connection.is_stale %}Outage information may be out of date{% elif service.connection.value.area_outage %}Known area outage{% else %}No known area outage{% endif %} · Checked {{ service.connection.value.checked_at | portal_datetime('%d %b, %I:%M %p') }}</p>{% endif %}
+                </div>
+            </div>
+            <div class="mt-4 flex justify-end border-t border-stone-100 pt-4 dark:border-stone-700">
+                <a href="/portal/services/{{ service.subscription_id }}" class="text-sm font-semibold text-[var(--color-brand-700)] hover:underline dark:text-[var(--color-brand-300)]">Service details <span aria-hidden="true">→</span></a>
+            </div>
+        </article>
+        {% else %}
+        <div class="rounded-2xl border border-stone-200 bg-white p-6 text-sm text-stone-600 dark:border-stone-700 dark:bg-stone-800 dark:text-stone-300">No current services are available for this account. <a href="/portal/support" class="font-semibold text-[var(--color-brand-700)] hover:underline dark:text-[var(--color-brand-300)]">Contact support</a> if you expected one.</div>
+        {% endfor %}
     </section>
     {% endif %}
 </div>
