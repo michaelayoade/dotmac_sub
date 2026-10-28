@@ -225,14 +225,18 @@ def _provision(env: Env) -> OpeningWindowV1:
         w.window["provision_authority_ref"],
         s.NOW,
     )
-    with env.factory() as migrator:
-        billing.provision_opening_window(
-            migrator,
-            scope=env.scope,
-            command=ProvisionOpeningWindowV1(window),
-            verifier=env.verifiers.provision,
-        )
-        migrator.commit()
+    env.role[0] = "app_admin"  # the migration role: Billing's trigger requires it
+    try:
+        with env.factory() as migrator:
+            billing.provision_opening_window(
+                migrator,
+                scope=env.scope,
+                command=ProvisionOpeningWindowV1(window),
+                verifier=env.verifiers.provision,
+            )
+            migrator.commit()
+    finally:
+        env.role[0] = None
     return window
 
 
