@@ -109,6 +109,12 @@ account credit, and service status. It adds typed dashboard-only identity,
 account-credit, and plan-speed highlights while retaining the shared health
 decision. It presents unavailable inputs explicitly and never calculates a
 payment shortfall in Jinja. Billing details remain available on `/portal/billing`.
+Each service card also shows progress through an exact active funded prepaid
+entitlement when one exists. A companion card shows recorded usage for one
+current capped quota bucket matching that service's offer allowance, with the
+allowance window and recording time. Missing, ambiguous, or uncapped evidence
+has its own plain-language state; the template does not invent a period, total,
+or zero. Support and activity remain for the next dashboard slice.
 Service detail and reseller Jinja surfaces share
 `templates/components/portal/account_health.html`; mobile
 uses `GET /api/v1/me/account-health`. Neither client derives those semantics or

@@ -13,18 +13,21 @@ from dataclasses import dataclass, replace
 from datetime import UTC, date, datetime
 from decimal import Decimal
 from enum import StrEnum
+from math import ceil
 from uuid import UUID
 from zoneinfo import ZoneInfo
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session, selectinload
 
+from app.models.billing import ServiceEntitlement, ServiceEntitlementStatus
 from app.models.catalog import BillingMode, Subscription, SubscriptionStatus
 from app.models.subscriber import Subscriber
 from app.models.subscription_change import (
     SubscriptionChangeRequest,
     SubscriptionChangeStatus,
 )
+from app.models.usage import QuotaBucket
 from app.schemas.service_status import ServiceStatusAction, ServiceStatusItem
 from app.schemas.status_presentation import StatusPresentation
 from app.services import display_format
@@ -218,6 +221,26 @@ class CustomerDashboardService:
     health: PortalServiceHealth
     download_mbps: int | None
     upload_mbps: int | None
+    service_period: StateValue
+    data_usage: StateValue
+
+
+@dataclass(frozen=True, slots=True)
+class CustomerDashboardPeriod:
+    starts_at: datetime
+    ends_at: datetime
+    elapsed_percent: int
+    elapsed_days: int
+    total_days: int
+    days_remaining: int
+
+
+@dataclass(frozen=True, slots=True)
+class CustomerDashboardUsage:
+    used_gb: Decimal
+    allowance_gb: Decimal
+    starts_at: datetime
+    ends_at: datetime
 
 
 @dataclass(frozen=True, slots=True)
@@ -688,6 +711,138 @@ def get_customer_dashboard_highlights(
                     "error_type": type(exc).__name__,
                 },
             )
+    period_by_service: dict[UUID, StateValue] = {}
+    usage_by_service: dict[UUID, StateValue] = {}
+    if subscription_ids:
+        try:
+            entitlement_rows = db.scalars(
+                select(ServiceEntitlement)
+                .where(ServiceEntitlement.account_id == health.account_id)
+                .where(ServiceEntitlement.subscription_id.in_(subscription_ids))
+                .where(ServiceEntitlement.status == ServiceEntitlementStatus.active)
+                .where(ServiceEntitlement.starts_at <= health.as_of)
+                .where(ServiceEntitlement.ends_at > health.as_of)
+            ).all()
+            entitlements: dict[UUID, list[ServiceEntitlement]] = {}
+            for entitlement_row in entitlement_rows:
+                entitlements.setdefault(entitlement_row.subscription_id, []).append(
+                    entitlement_row
+                )
+            for service_id in subscription_ids:
+                entitlement_candidates = entitlements.get(service_id, [])
+                if len(entitlement_candidates) != 1:
+                    period_by_service[service_id] = StateValue.unknown()
+                    continue
+                entitlement_row = entitlement_candidates[0]
+                starts_at = (
+                    entitlement_row.starts_at.replace(tzinfo=UTC)
+                    if entitlement_row.starts_at.tzinfo is None
+                    else entitlement_row.starts_at
+                )
+                ends_at = (
+                    entitlement_row.ends_at.replace(tzinfo=UTC)
+                    if entitlement_row.ends_at.tzinfo is None
+                    else entitlement_row.ends_at
+                )
+                duration = (ends_at - starts_at).total_seconds()
+                if duration <= 0:
+                    period_by_service[service_id] = StateValue.unknown()
+                    continue
+                remaining = (ends_at - health.as_of).total_seconds()
+                total_days = ceil(duration / 86400)
+                period_by_service[service_id] = StateValue.present(
+                    CustomerDashboardPeriod(
+                        starts_at=starts_at,
+                        ends_at=ends_at,
+                        elapsed_percent=max(
+                            0, min(100, round((1 - remaining / duration) * 100))
+                        ),
+                        elapsed_days=max(
+                            1,
+                            min(total_days, ceil((duration - remaining) / 86400)),
+                        ),
+                        total_days=total_days,
+                        days_remaining=max(0, ceil(remaining / 86400)),
+                    ),
+                    as_of=health.as_of,
+                )
+        except Exception as exc:
+            logger.warning(
+                "customer_dashboard_period_unavailable",
+                extra={
+                    "account_id": str(health.account_id),
+                    "error_type": type(exc).__name__,
+                },
+            )
+            period_by_service = {
+                service_id: StateValue.unavailable() for service_id in subscription_ids
+            }
+
+        try:
+            bucket_rows = db.scalars(
+                select(QuotaBucket)
+                .where(QuotaBucket.subscription_id.in_(subscription_ids))
+                .where(QuotaBucket.period_start <= health.as_of)
+                .where(QuotaBucket.period_end > health.as_of)
+            ).all()
+            buckets: dict[UUID, list[QuotaBucket]] = {}
+            for bucket_row in bucket_rows:
+                buckets.setdefault(bucket_row.subscription_id, []).append(bucket_row)
+            for service_id in subscription_ids:
+                subscription = subscriptions.get(service_id)
+                allowance_id = (
+                    subscription.offer.usage_allowance_id
+                    if subscription is not None and subscription.offer is not None
+                    else None
+                )
+                bucket_candidates = [
+                    candidate
+                    for candidate in buckets.get(service_id, [])
+                    if allowance_id is not None
+                    and candidate.usage_allowance_id == allowance_id
+                ]
+                if len(bucket_candidates) != 1:
+                    usage_by_service[service_id] = StateValue.unknown()
+                    continue
+                bucket_row = bucket_candidates[0]
+                if bucket_row.included_gb is None:
+                    usage_by_service[service_id] = StateValue.not_applicable()
+                    continue
+                allowance_gb = (
+                    bucket_row.included_gb
+                    + (bucket_row.rollover_gb or Decimal("0"))
+                    + (bucket_row.topup_gb or Decimal("0"))
+                )
+                if (
+                    bucket_row.used_gb is None
+                    or bucket_row.used_gb < 0
+                    or allowance_gb < 0
+                ):
+                    usage_by_service[service_id] = StateValue.unknown()
+                    continue
+                usage_by_service[service_id] = StateValue.present(
+                    CustomerDashboardUsage(
+                        used_gb=bucket_row.used_gb,
+                        allowance_gb=allowance_gb,
+                        starts_at=bucket_row.period_start,
+                        ends_at=bucket_row.period_end,
+                    ),
+                    as_of=bucket_row.updated_at.replace(tzinfo=UTC)
+                    if bucket_row.updated_at.tzinfo is None
+                    else bucket_row.updated_at,
+                )
+        except Exception as exc:
+            logger.warning(
+                "customer_dashboard_usage_unavailable",
+                extra={
+                    "account_id": str(health.account_id),
+                    "error_type": type(exc).__name__,
+                },
+            )
+            usage_by_service = {
+                service_id: StateValue.unavailable() for service_id in subscription_ids
+            }
+
     services = tuple(
         CustomerDashboardService(
             health=service,
@@ -702,6 +857,12 @@ def get_customer_dashboard_highlights(
                 if service.subscription_id in subscriptions
                 and subscriptions[service.subscription_id].offer is not None
                 else None
+            ),
+            service_period=period_by_service.get(
+                service.subscription_id, StateValue.unknown()
+            ),
+            data_usage=usage_by_service.get(
+                service.subscription_id, StateValue.unknown()
             ),
         )
         for service in health.services

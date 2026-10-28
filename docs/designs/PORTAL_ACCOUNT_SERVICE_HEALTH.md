@@ -74,8 +74,9 @@ OLT, ONT, NAS, or RADIUS polling.
   per operationally-current subscription. A missing credit or speed read shows
   an explicit unavailable message. A missing action is described as no payment
   action only when Account Health is complete. The topbar remains owned by the
-  shared customer layout. The later dashboard slice adds exact service-period
-  progress, usage, support, and recent activity.
+  shared customer layout. Stage 2A adds exact funded prepaid service-period
+  progress and rated capped-allowance usage per service. Stage 2B adds support
+  and recent activity.
 - Customer service detail narrows the same account projection to the requested
   subscription after the existing ownership check. If an owned subscription is
   missing from that projection, the detail service returns no result so the
@@ -91,7 +92,7 @@ OLT, ONT, NAS, or RADIUS polling.
 - Mobile calls `GET /api/v1/me/account-health` and renders the transport schema
   in `app.schemas.portal_account_health`.
 
-### Customer dashboard page contract, first slice
+### Customer dashboard page contract
 
 - Screen: `/portal/dashboard`, customer glance dashboard. The customer decides
   whether an owner-confirmed action is needed and which service to inspect.
@@ -99,24 +100,29 @@ OLT, ONT, NAS, or RADIUS polling.
   subscription IDs. The customer session scopes the read before projection.
 - Read owner: `ui.portal_account_health_projection`; dashboard highlights use
   its typed `CustomerDashboardHighlightsQuery` and result. Source records are
-  the account, currency-scoped unallocated-credit ledger, and scoped offers.
+  the account, currency-scoped unallocated-credit ledger, scoped offers, funded
+  service entitlements, and rated quota buckets.
 - First viewport: local greeting, account lifecycle, canonical primary action,
   account credit, and per-service lifecycle, access, session, connection,
-  plan speed, next charge date, and connection evidence time.
+  plan speed, next charge date, connection evidence time, funded service period,
+  and rated capped-allowance usage.
 - Actions: the primary action uses the service-status owner's label and URL;
   billing history and service details are read-only drill-downs. View-only
   sessions do not show a payment action. No destructive or bulk action exists.
 - Availability: absent account health shows a page warning; unavailable credit,
   speed, charge date, or connection shows an explicit message. Confirmed zero
   credit remains zero. Multiple currencies do not collapse into one credit
-  amount. No operational service yields a dedicated empty state.
+  amount. A period progress bar appears only for one unambiguous active funded
+  entitlement. Usage appears only for one current quota bucket matching the
+  service's offer allowance; an uncapped bucket is identified separately.
+  Missing or ambiguous evidence shows an unavailable message. No operational
+  service yields a dedicated empty state.
 - Freshness and provenance: Account Health and connection observations carry
   their own timestamps. The dashboard does not poll equipment or cache a second
   status decision. Dates display in Lagos time. Sensitive financial amounts
   remain inside the authenticated customer session.
 - Layout: the same facts stack on mobile. The shared customer layout owns the
-  topbar. Later slices add only owner-backed service-period, usage, support, and
-  activity sections.
+  topbar. Stage 2B adds only owner-backed support and activity sections.
 
 Templates and mobile clients may choose navigation and native layout. They do
 not derive billing position, access eligibility, session freshness, outage
@@ -150,6 +156,14 @@ offer speeds for its already-scoped service IDs. It reads ledger credit in one
 currency lane; it never nets credit against receivables or infers a payment
 amount from a future charge. A separate account-credit read failure does not
 replace a confirmed zero or fail the whole page.
+
+The dashboard batch-reads active funded entitlements for exact prepaid service
+periods and current rated quota buckets for capped usage. It never infers a paid
+period from `next_billing_at`, merges multiple quota windows, or treats an
+unlimited bucket's zero as measured usage. Quota usage carries the bucket's
+recorded time and may lag live traffic. Missing or conflicting source evidence
+does not produce a percentage or fabricated data amount. The new entitlement
+and quota reads are each batched across the already-scoped service IDs.
 
 The one-active-service fixture currently uses 26 SQL statements and is guarded
 at a maximum of 28. Any increase must identify the new authoritative input and

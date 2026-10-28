@@ -11,17 +11,24 @@ from fastapi.templating import Jinja2Templates
 from sqlalchemy import event
 
 from app.api import me as me_api
-from app.models.billing import Invoice, InvoiceStatus
+from app.models.billing import (
+    Invoice,
+    InvoiceStatus,
+    ServiceEntitlement,
+    ServiceEntitlementStatus,
+)
 from app.models.catalog import (
     BillingMode,
     CatalogOffer,
     Subscription,
     SubscriptionStatus,
+    UsageAllowance,
 )
 from app.models.subscription_change import (
     SubscriptionChangeRequest,
     SubscriptionChangeStatus,
 )
+from app.models.usage import QuotaBucket
 from app.schemas.portal_account_health import PortalAccountHealthRead
 from app.services import catalog as catalog_service
 from app.services import portal_account_health
@@ -304,6 +311,59 @@ def test_customer_dashboard_highlights_do_not_show_zero_when_credit_fails(
         portal_account_health.CustomerDashboardHighlightsQuery(account_health=health),
     )
     assert highlights.account_credit.kind.value == "unavailable"
+
+
+def test_customer_dashboard_period_and_usage_require_current_scoped_evidence(
+    db_session, subscriber_account, subscription
+):
+    as_of = datetime(2026, 10, 28, 12, tzinfo=UTC)
+    subscription.status = SubscriptionStatus.active
+    allowance = UsageAllowance(name="250 GB plan", included_gb=250)
+    db_session.add(allowance)
+    db_session.flush()
+    subscription.offer.usage_allowance_id = allowance.id
+    entitlement = ServiceEntitlement(
+        account_id=subscriber_account.id,
+        subscription_id=subscription.id,
+        starts_at=as_of - timedelta(days=15),
+        ends_at=as_of + timedelta(days=15),
+        amount_funded=Decimal("0.00"),
+        currency="NGN",
+        status=ServiceEntitlementStatus.active,
+    )
+    bucket = QuotaBucket(
+        subscription_id=subscription.id,
+        usage_allowance_id=allowance.id,
+        period_start=as_of - timedelta(days=15),
+        period_end=as_of + timedelta(days=15),
+        included_gb=Decimal("250.00"),
+        used_gb=Decimal("184.00"),
+    )
+    db_session.add_all([entitlement, bucket])
+    db_session.commit()
+
+    health = build_portal_account_health(db_session, subscriber_account.id, as_of=as_of)
+    query = portal_account_health.CustomerDashboardHighlightsQuery(
+        account_health=health
+    )
+    row = portal_account_health.get_customer_dashboard_highlights(
+        db_session, query
+    ).services[0]
+    assert row.service_period.value.elapsed_percent == 50
+    assert row.service_period.value.elapsed_days == 15
+    assert row.service_period.value.total_days == 30
+    assert row.service_period.value.days_remaining == 15
+    assert row.data_usage.value.used_gb == Decimal("184.00")
+    assert row.data_usage.value.allowance_gb == Decimal("250.00")
+
+    db_session.delete(entitlement)
+    db_session.delete(bucket)
+    db_session.commit()
+    row = portal_account_health.get_customer_dashboard_highlights(
+        db_session, query
+    ).services[0]
+    assert row.service_period.kind.value == "unknown"
+    assert row.data_usage.kind.value == "unknown"
 
 
 def test_portal_account_health_templates_compile():

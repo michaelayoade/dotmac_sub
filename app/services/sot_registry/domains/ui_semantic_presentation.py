@@ -695,7 +695,7 @@ DOMAIN = DomainSOT(
             module="app.services.portal_account_health",
             owns=(
                 "customer and reseller account-health first-viewport projection",
-                "customer dashboard identity, credit, and plan highlights",
+                "customer dashboard identity, credit, plan, period, and usage highlights",
                 "subscription-scoped service-health row projection",
                 "portal financial-position currency-lane projection",
                 "mobile account-health transport projection",
@@ -708,6 +708,7 @@ DOMAIN = DomainSOT(
                 "customer.service_status",
                 "financial.account_credit_applications",
                 "financial.billing_profile",
+                "financial.prepaid_service_renewals",
                 "financial.prepaid_funding_reconstruction",
                 "network.connection_health",
                 "network.outage_lifecycle",
@@ -715,6 +716,7 @@ DOMAIN = DomainSOT(
                 "service_intent.subscription_lifecycle",
                 "ui.projection_contracts",
                 "ui.status_presentation",
+                "usage.quota_cycle_policy",
             ),
             notes=(
                 "One read owner composes lifecycle, billing mode, currency-typed "
@@ -739,13 +741,15 @@ DOMAIN = DomainSOT(
                         ),
                     ),
                     ConcernContract(
-                        name="customer dashboard identity, credit, and plan highlights",
+                        name="customer dashboard identity, credit, plan, period, and usage highlights",
                         role=OwnerRole.RESOLVER,
                         input_names=(
                             "canonical account-health projection",
                             "canonical account state",
                             "canonical account credit",
                             "canonical current subscriptions",
+                            "funded prepaid service period evidence",
+                            "rated quota period and usage evidence",
                         ),
                     ),
                     ConcernContract(
@@ -807,6 +811,18 @@ DOMAIN = DomainSOT(
                             "operationally-current Subscription identity, offer and speed, "
                             "billing mode, and lifecycle status"
                         ),
+                    ),
+                    AuthorityInput(
+                        name="funded prepaid service period evidence",
+                        owner="financial.prepaid_service_renewals",
+                        kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                        source="active account- and subscription-scoped ServiceEntitlement interval",
+                    ),
+                    AuthorityInput(
+                        name="rated quota period and usage evidence",
+                        owner="usage.quota_cycle_policy",
+                        kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                        source="current exact-subscription QuotaBucket with matching offer allowance",
                     ),
                     AuthorityInput(
                         name="canonical billing profile",
