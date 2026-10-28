@@ -399,19 +399,6 @@ def test_invoice_creation_snapshots_customer_wht_from_vat_exclusive_basis(
     db_session, subscriber, monkeypatch
 ):
     _patch_policy(monkeypatch)
-    monkeypatch.setattr(
-        svc.customer_tax_policies,
-        "get_customer_withholding_tax_policy",
-        lambda *_args, **_kwargs: (
-            svc.customer_tax_policies.CustomerWithholdingTaxPolicy(
-                account_id=subscriber.id,
-                withholding_tax_enabled=True,
-                version=3,
-                updated_by="admin-1",
-                updated_at=None,
-            )
-        ),
-    )
     invoice = Invoice(
         account_id=subscriber.id,
         status=InvoiceStatus.issued,
@@ -420,6 +407,10 @@ def test_invoice_creation_snapshots_customer_wht_from_vat_exclusive_basis(
         tax_total=Decimal("7500.00"),
         total=Decimal("107500.00"),
         balance_due=Decimal("107500.00"),
+        withholding_tax_rate_percent=Decimal("5.00"),
+        withholding_tax_amount=Decimal("5000.00"),
+        withholding_tax_policy_version=3,
+        net_amount_payable=Decimal("102500.00"),
     )
     db_session.add(invoice)
     db_session.commit()
@@ -455,19 +446,6 @@ def test_invoice_creation_omits_wht_snapshot_when_customer_policy_disabled(
     db_session, subscriber, monkeypatch
 ):
     _patch_policy(monkeypatch)
-    monkeypatch.setattr(
-        svc.customer_tax_policies,
-        "get_customer_withholding_tax_policy",
-        lambda *_args, **_kwargs: (
-            svc.customer_tax_policies.CustomerWithholdingTaxPolicy(
-                account_id=subscriber.id,
-                withholding_tax_enabled=False,
-                version=0,
-                updated_by=None,
-                updated_at=None,
-            )
-        ),
-    )
     invoice = Invoice(
         account_id=subscriber.id,
         status=InvoiceStatus.issued,
@@ -497,19 +475,6 @@ def test_invoice_creation_snapshot_survives_later_setting_change(
     db_session, subscriber, monkeypatch
 ):
     _patch_policy(monkeypatch)
-    monkeypatch.setattr(
-        svc.customer_tax_policies,
-        "get_customer_withholding_tax_policy",
-        lambda *_args, **_kwargs: (
-            svc.customer_tax_policies.CustomerWithholdingTaxPolicy(
-                account_id=subscriber.id,
-                withholding_tax_enabled=True,
-                version=7,
-                updated_by="admin-1",
-                updated_at=None,
-            )
-        ),
-    )
     invoice = Invoice(
         account_id=subscriber.id,
         status=InvoiceStatus.issued,
@@ -518,6 +483,10 @@ def test_invoice_creation_snapshot_survives_later_setting_change(
         tax_total=Decimal("7500.00"),
         total=Decimal("107500.00"),
         balance_due=Decimal("107500.00"),
+        withholding_tax_rate_percent=Decimal("5.00"),
+        withholding_tax_amount=Decimal("5000.00"),
+        withholding_tax_policy_version=7,
+        net_amount_payable=Decimal("102500.00"),
     )
     db_session.add(invoice)
     db_session.commit()

@@ -143,15 +143,23 @@ def test_tax_owner_stages_wht_audit_and_events_once() -> None:
 
 def test_wht_policy_and_basis_stay_server_owned() -> None:
     direct_transfer_source = _read("app/services/direct_transfer_intents.py")
+    invoice_source = _read("app/services/billing/invoices.py")
     proof_source = _read("app/services/payment_proofs.py")
     reseller_route = _read("app/web/reseller/routes.py")
     reseller_template = _read("templates/reseller/billing/index.html")
     customer_template = _read("templates/customer/billing/topup_transfer.html")
+    invoice_template = _read("templates/customer/billing/invoice.html")
+    invoice_pdf = _read("app/services/billing_invoice_pdf.py")
+    starter_issuance = _read("app/services/billing/starter_issuance.py")
 
-    assert "customer_tax_policies.get_customer_withholding_tax_policy" in (
-        direct_transfer_source
-    )
-    assert "subtotal * rate_percent" in direct_transfer_source
+    assert "customer_tax_policies.get_customer_withholding_tax_policy" in invoice_source
+    assert "invoice.subtotal * rate_percent" in invoice_source
+    assert "invoice.withholding_tax_amount" in direct_transfer_source
+    assert "get_customer_withholding_tax_policy" not in direct_transfer_source
+    assert "snapshot_invoice_withholding_tax_for_issuance" in starter_issuance
+    assert "invoice_tax_presentation" in invoice_pdf
+    assert "invoice_tax_presentation.vat_label" in invoice_template
+    assert "invoice_tax_presentation.wht_label" in invoice_template
     assert "wht_amount = round_money(total * rate_percent" not in (
         direct_transfer_source
     )
@@ -163,6 +171,22 @@ def test_wht_policy_and_basis_stay_server_owned() -> None:
     assert "gross_amount: str | None = Form" not in reseller_route
     assert "WHT rate" in customer_template
     assert "Certificate amount outstanding" in customer_template
+
+
+def test_invoice_wht_snapshot_migration_is_additive_and_constrained() -> None:
+    migration = _read("alembic/versions/702_invoice_withholding_tax_snapshot.py")
+    model = _read("app/models/billing.py")
+
+    for field in (
+        "withholding_tax_rate_percent",
+        "withholding_tax_amount",
+        "withholding_tax_policy_version",
+        "net_amount_payable",
+    ):
+        assert field in migration
+        assert field in model
+    assert "ck_invoices_withholding_tax_snapshot" in migration
+    assert "ck_invoices_withholding_tax_snapshot" in model
 
 
 def test_credit_note_owner_persists_tax_point_for_issuance_adapters() -> None:

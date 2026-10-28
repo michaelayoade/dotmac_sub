@@ -64,6 +64,7 @@ from app.models.billing import (
 from app.models.subscriber import Subscriber
 from app.schemas.audit import AuditEventCreate
 from app.services.audit import AuditEvents
+from app.services.billing.invoices import snapshot_invoice_withholding_tax_for_issuance
 from app.services.billing.starter_policies import (
     StarterBillingPolicies,
     StarterBillingPolicyError,
@@ -673,6 +674,7 @@ def _issue_via_starter(
     invoice.invoice_number = document_number
     invoice.status = InvoiceStatus.issued
     invoice.issued_at = issued_at
+    snapshot_invoice_withholding_tax_for_issuance(db, invoice)
     link = StarterInvoiceLink(
         tenant_id=OPERATOR_TENANT_ID,
         invoice_id=invoice.id,

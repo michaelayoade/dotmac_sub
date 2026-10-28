@@ -50,7 +50,7 @@ STALE_EXPORT_SECONDS = 20
 # fallback) includes the glyph; renderers without it use an "NGN " prefix.
 NAIRA_SIGN = "₦"
 INVOICE_PDF_CACHE_METRICS_KEY = "invoice_pdf_cache_metrics"
-INVOICE_PDF_TEMPLATE_REFRESHED_AT = datetime(2026, 9, 3, 12, 0, tzinfo=UTC)
+INVOICE_PDF_TEMPLATE_REFRESHED_AT = datetime(2026, 10, 28, 12, 0, tzinfo=UTC)
 INVOICE_PDF_PAYMENT_PRESENTMENT_KEY = "invoice_pdf_payment_presentment"
 CUSTOMER_PAYMENT_METHOD_PAYSTACK_VALUES = frozenset(
     {"paystack", "card", "cards", "online", "online_payment"}
@@ -366,6 +366,9 @@ def _ensure_weasyprint_pydyf_compat() -> None:
 
 
 def _render_invoice_html(invoice: Invoice, db: Session) -> str:
+    from app.services.billing.invoices import invoice_tax_presentation
+
+    tax_presentation = invoice_tax_presentation(invoice)
     lines = [line for line in (invoice.lines or []) if getattr(line, "is_active", True)]
     rows = "".join(
         (
@@ -400,10 +403,10 @@ def _render_invoice_html(invoice: Invoice, db: Session) -> str:
     )
     company_name = html.escape(brand.legal_name)
     accent_invoice_id = invoice.invoice_number or str(invoice.id)
-    tax_label = "Tax"
+    tax_label = tax_presentation.vat_label
     vat_number = html.escape((company_info.get("company_vat_number") or "").strip())
     if vat_number:
-        tax_label = f"Tax / VAT ({vat_number})"
+        tax_label = f"{tax_label} · VAT No. {vat_number}"
     logo_markup = (
         f'<img src="{html.escape(logo_src)}" alt="{company_name} logo" class="logo">'
         if logo_src
@@ -531,8 +534,8 @@ def _render_invoice_html(invoice: Invoice, db: Session) -> str:
           </td>
           <td style=\"width: 30%;\">
             <div class=\"card highlight-card\">
-              <p class=\"card-title\">Balance Due</p>
-              <p class=\"highlight-value\">{NAIRA_SIGN}{_money(invoice.balance_due)}</p>
+              <p class=\"card-title\">{"Net amount payable" if tax_presentation.wht_label else "Balance Due"}</p>
+              <p class=\"highlight-value\">{NAIRA_SIGN}{_money(tax_presentation.net_amount_payable if tax_presentation.wht_label else invoice.balance_due)}</p>
             </div>
           </td>
           <td style=\"width: 30%;\">
@@ -567,6 +570,8 @@ def _render_invoice_html(invoice: Invoice, db: Session) -> str:
             {f'<tr><td>Discount</td><td class="num">-{NAIRA_SIGN}{_money(invoice.discount_amount)}</td></tr>' if invoice.discount_amount else ""}
             <tr><td>{tax_label}</td><td class=\"num\">{NAIRA_SIGN}{_money(invoice.tax_total)}</td></tr>
             <tr class=\"grand-total\"><td>Total</td><td class=\"num\">{NAIRA_SIGN}{_money(invoice.total)}</td></tr>
+            {f'<tr><td>{tax_presentation.wht_label}</td><td class="num">-{NAIRA_SIGN}{_money(tax_presentation.withholding_tax_amount)}</td></tr>' if tax_presentation.wht_label else ""}
+            {f'<tr class="grand-total"><td>Net amount payable</td><td class="num">{NAIRA_SIGN}{_money(tax_presentation.net_amount_payable)}</td></tr>' if tax_presentation.wht_label else ""}
           </table>
         </div>
       </div>
@@ -655,6 +660,9 @@ def _render_invoice_text_lines(
 ) -> list[str]:
     # The minimal text PDF is encoded latin-1, so use "NGN" (no naira glyph).
     lines = [line for line in (invoice.lines or []) if getattr(line, "is_active", True)]
+    from app.services.billing.invoices import invoice_tax_presentation
+
+    tax_presentation = invoice_tax_presentation(invoice)
     out = [
         f"Invoice {invoice.invoice_number or invoice.id}",
         f"Status: {invoice.status.value if invoice.status else 'draft'}",
@@ -684,9 +692,17 @@ def _render_invoice_text_lines(
                 if invoice.discount_amount
                 else []
             ),
-            f"Tax: NGN {_money(invoice.tax_total)}",
+            f"{tax_presentation.vat_label}: NGN {_money(invoice.tax_total)}",
             f"Total: NGN {_money(invoice.total)}",
-            f"Balance Due: NGN {_money(invoice.balance_due)}",
+            *(
+                [
+                    f"{tax_presentation.wht_label}: -NGN {_money(tax_presentation.withholding_tax_amount)}",
+                    f"Net amount payable: NGN {_money(tax_presentation.net_amount_payable)}",
+                ]
+                if tax_presentation.wht_label
+                else []
+            ),
+            f"{'Gross balance due' if tax_presentation.wht_label else 'Balance Due'}: NGN {_money(invoice.balance_due)}",
         ]
     )
     if db is not None:
@@ -747,8 +763,10 @@ def _build_branded_fallback_pdf(db: Session, invoice: Invoice) -> bytes:
     page = Image.new("RGB", (width, height), "#ffffff")
     draw = ImageDraw.Draw(page)
 
+    from app.services.billing.invoices import invoice_tax_presentation
     from app.services.brand_profiles import resolve_brand
 
+    tax_presentation = invoice_tax_presentation(invoice)
     account_id = getattr(getattr(invoice, "account", None), "id", None)
     brand = resolve_brand(db, subscriber_id=account_id)
     payment_presentment = _invoice_payment_presentment(db, brand, invoice)
@@ -843,8 +861,8 @@ def _build_branded_fallback_pdf(db: Session, invoice: Invoice) -> bytes:
             slate_900,
         ),
         (
-            "Balance Due",
-            f"{naira}{_money(invoice.balance_due)}",
+            "Net amount payable" if tax_presentation.wht_label else "Balance Due",
+            f"{naira}{_money(tax_presentation.net_amount_payable if tax_presentation.wht_label else invoice.balance_due)}",
             f"Currency: {invoice.currency or 'NGN'}",
             green_50,
             green_900,
@@ -972,11 +990,24 @@ def _build_branded_fallback_pdf(db: Session, invoice: Invoice) -> bytes:
             if invoice.discount_amount
             else []
         ),
-        ("Tax", f"{naira}{_money(invoice.tax_total)}"),
+        (tax_presentation.vat_label, f"{naira}{_money(invoice.tax_total)}"),
         ("Total", f"{naira}{_money(invoice.total)}"),
     ]
+    if tax_presentation.wht_label:
+        totals.extend(
+            [
+                (
+                    tax_presentation.wht_label,
+                    f"-{naira}{_money(tax_presentation.withholding_tax_amount)}",
+                ),
+                (
+                    "Net amount payable",
+                    f"{naira}{_money(tax_presentation.net_amount_payable)}",
+                ),
+            ]
+        )
     for index, (label, value) in enumerate(totals):
-        ty = totals_top + 22 + (index * 44)
+        ty = totals_top + 22 + (index * 28)
         draw.text(
             (totals_left + 22, ty),
             label,

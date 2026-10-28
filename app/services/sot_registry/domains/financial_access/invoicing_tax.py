@@ -1305,6 +1305,7 @@ SERVICES: tuple[SOTService, ...] = (
             "invoice adjustment and reversal postings",
             "automation invoice creation and draft issuance",
             "issued invoice due-date provenance and immutability",
+            "issued invoice VAT and withholding-tax presentation snapshot",
             "automation invoice-line construction and source-fact replay",
             "usage-charge invoice and invoice-line construction",
             "overdue invoice state and observation event",
@@ -1324,6 +1325,8 @@ SERVICES: tuple[SOTService, ...] = (
             "financial.billing_accounts",
             "financial.subscription_billing_grants",
             "financial.subscription_billing_treatments",
+            "financial.customer_tax_policies",
+            "control.settings_spec",
         ),
         notes=(
             "Native issuance accepts one typed InvoiceIssuanceInput containing "
@@ -1346,7 +1349,11 @@ SERVICES: tuple[SOTService, ...] = (
             "not approved for deployment: complete census, preview parity, "
             "incumbent-writer exclusion and an accepted inverse remain "
             "prerequisites. Credit-note numbering stays with its separate "
-            "incumbent owner."
+            "incumbent owner. Issuance snapshots the customer WHT policy, "
+            "configured percentage, deduction, and net payable amount; invoice "
+            "lines remain the authority for VAT percentages. Portal and PDF "
+            "adapters render those immutable facts and do not reread mutable "
+            "tax settings for an issued invoice."
         ),
     ),
     SOTService(

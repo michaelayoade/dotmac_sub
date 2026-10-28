@@ -14,7 +14,7 @@ from sqlalchemy.orm import Session
 
 from app.models.billing import Invoice, InvoiceStatus
 from app.models.domain_settings import SettingDomain
-from app.services import customer_tax_policies, topup_intents
+from app.services import topup_intents
 from app.services.account_credit_deposits import (
     SUPPORTED_CURRENCY,
     AccountCreditDeposits,
@@ -41,7 +41,6 @@ _CREATE_COMMAND = OwnerCommandDefinition(
 _MINIMUM_SETTING = "topup_min_amount"
 _MAXIMUM_SETTING = "topup_max_amount"
 _TTL_SETTING = "direct_bank_transfer_intent_ttl_days"
-_WITHHOLDING_TAX_RATE_SETTING = "withholding_tax_rate_percent"
 
 
 class DirectTransferIntentError(DomainError, ValueError):
@@ -103,36 +102,12 @@ class DirectTransferIntentResult:
         }
 
 
-def _withholding_tax_rate_percent(db: Session) -> Decimal:
-    raw = resolve_value(db, SettingDomain.billing, _WITHHOLDING_TAX_RATE_SETTING)
-    try:
-        value = round_money(to_decimal(raw))
-    except (InvalidOperation, TypeError, ValueError) as exc:
-        raise _error(
-            "withholding_tax_configuration_invalid",
-            "Configured withholding-tax percentage is invalid",
-            setting=_WITHHOLDING_TAX_RATE_SETTING,
-        ) from exc
-    if value <= Decimal("0.00") or value >= Decimal("100.00"):
-        raise _error(
-            "withholding_tax_configuration_invalid",
-            "Configured withholding-tax percentage must be greater than 0 and less than 100",
-            setting=_WITHHOLDING_TAX_RATE_SETTING,
-        )
-    return value
-
-
 def _invoice_withholding_tax_snapshot(
-    db: Session,
     *,
     account_id: UUID,
     invoice: Invoice,
 ) -> dict[str, object] | None:
-    policy = customer_tax_policies.get_customer_withholding_tax_policy(
-        db,
-        account_id=account_id,
-    )
-    if not policy.withholding_tax_enabled:
+    if invoice.withholding_tax_amount is None:
         return None
 
     subtotal = round_money(invoice.subtotal or 0)
@@ -158,9 +133,9 @@ def _invoice_withholding_tax_snapshot(
             invoice_id=str(invoice.id),
         )
 
-    rate_percent = _withholding_tax_rate_percent(db)
-    wht_amount = round_money(subtotal * rate_percent / Decimal("100.00"))
-    net_amount = round_money(total - wht_amount)
+    rate_percent = round_money(invoice.withholding_tax_rate_percent or 0)
+    wht_amount = round_money(invoice.withholding_tax_amount)
+    net_amount = round_money(invoice.net_amount_payable or 0)
     if wht_amount <= Decimal("0.00") or net_amount <= Decimal("0.00"):
         raise _error(
             "invoice_withholding_tax_basis_unavailable",
@@ -170,7 +145,7 @@ def _invoice_withholding_tax_snapshot(
     return {
         "schema_version": 1,
         "account_id": str(account_id),
-        "policy_version": policy.version,
+        "policy_version": invoice.withholding_tax_policy_version,
         "source_invoice_id": str(invoice.id),
         "currency": str(invoice.currency or "").strip().upper(),
         "vat_exclusive_amount": str(subtotal),
@@ -287,7 +262,6 @@ def _create_direct_transfer_intent(
                 currency=currency,
             )
         withholding_tax = _invoice_withholding_tax_snapshot(
-            db,
             account_id=command.account_id,
             invoice=invoice,
         )

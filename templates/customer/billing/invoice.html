@@ -82,7 +82,7 @@
                         </div>
                         {% endif %}
                         <div class="flex items-center justify-between text-sm text-stone-600 dark:text-stone-300">
-                            <span>Tax</span>
+                            <span>{{ invoice_tax_presentation.vat_label }}</span>
                             <span class="font-semibold text-stone-900 dark:text-white">{{ invoice_currency }} {{ "{:,.2f}".format(invoice.tax_total or 0) }}</span>
                         </div>
                         <div class="border-t border-stone-200 pt-3 dark:border-stone-700">
@@ -91,6 +91,18 @@
                                 <span class="text-xl font-bold text-stone-900 dark:text-white" style="font-family: var(--font-display);">{{ invoice_currency }} {{ "{:,.2f}".format(invoice.total or 0) }}</span>
                             </div>
                         </div>
+                        {% if invoice_tax_presentation.wht_label %}
+                        <div class="flex items-center justify-between text-sm text-emerald-700 dark:text-emerald-300">
+                            <span>{{ invoice_tax_presentation.wht_label }}</span>
+                            <span class="font-semibold">-{{ invoice_currency }} {{ "{:,.2f}".format(invoice_tax_presentation.withholding_tax_amount) }}</span>
+                        </div>
+                        <div class="border-t border-stone-200 pt-3 dark:border-stone-700">
+                            <div class="flex items-center justify-between">
+                                <span class="text-base font-bold text-stone-900 dark:text-white" style="font-family: var(--font-display);">Net amount payable</span>
+                                <span class="text-xl font-bold text-stone-900 dark:text-white" style="font-family: var(--font-display);">{{ invoice_currency }} {{ "{:,.2f}".format(invoice_tax_presentation.net_amount_payable) }}</span>
+                            </div>
+                        </div>
+                        {% endif %}
                     </div>
                 </div>
             </div>
@@ -143,9 +155,9 @@
         <div class="space-y-6">
             <!-- Amount Due Card -->
             <div class="overflow-hidden rounded-2xl border border-stone-200/60 bg-white/80 p-6 shadow-premium dark:border-stone-700/60 dark:bg-stone-800/80">
-                <h3 class="text-xs font-bold uppercase tracking-wider text-stone-500 dark:text-stone-400">Amount Due</h3>
+                <h3 class="text-xs font-bold uppercase tracking-wider text-stone-500 dark:text-stone-400">{{ 'Net amount payable' if invoice_tax_presentation.wht_label else 'Amount Due' }}</h3>
                 <p class="mt-3 text-4xl font-bold text-stone-900 dark:text-white" style="font-family: var(--font-display);">
-                    {{ invoice_currency }} {{ "{:,.2f}".format(invoice.balance_due or invoice.total or 0) }}
+                    {{ invoice_currency }} {{ "{:,.2f}".format(invoice_tax_presentation.net_amount_payable if invoice_tax_presentation.wht_label else (invoice.balance_due or invoice.total or 0)) }}
                 </p>
                 <p class="mt-2 flex items-center gap-2 text-sm text-stone-500 dark:text-stone-400">
                     <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z"/></svg>

@@ -8,7 +8,7 @@ import logging
 import re
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
-from decimal import Decimal
+from decimal import Decimal, InvalidOperation
 from enum import Enum
 from uuid import UUID
 
@@ -50,7 +50,7 @@ from app.schemas.billing import (
     LedgerEntryCreate,
     SystemInvoiceLineCreate,
 )
-from app.services import numbering, settings_spec
+from app.services import customer_tax_policies, numbering, settings_spec
 from app.services.audit import AuditEvents
 from app.services.billing._common import (
     _calculate_tax_amount,
@@ -99,10 +99,121 @@ _BACKDATED_SERVICE_INVOICE_OWNER = "financial.backdated_service_invoicing"
 _BACKDATED_SERVICE_INVOICE_MARKER = "backdated_service_invoice"
 _BACKDATED_SERVICE_INVOICE_REF_PREFIX = "backdated-service-invoicing:"
 _IDEMPOTENCY_KEY_RE = re.compile(r"^[A-Za-z0-9._~-]{16,120}$")
+_WITHHOLDING_TAX_RATE_SETTING = "withholding_tax_rate_percent"
 
 
 class InvoiceOwnerError(DomainError):
     """Transport-neutral failure from an invoice-owner participant."""
+
+
+@dataclass(frozen=True, slots=True)
+class InvoiceTaxPresentation:
+    """Issued-document tax labels and immutable WHT amounts for adapters."""
+
+    vat_label: str
+    wht_label: str | None
+    withholding_tax_amount: Decimal | None
+    net_amount_payable: Decimal | None
+
+
+def _percentage_text(value: Decimal) -> str:
+    normalized = value.normalize()
+    return format(normalized, "f")
+
+
+def invoice_tax_presentation(invoice: Invoice) -> InvoiceTaxPresentation:
+    """Project invoice-owned tax snapshots without consulting mutable settings."""
+
+    vat_rates = sorted(
+        {
+            Decimal(line.tax_rate_percent_snapshot)
+            for line in (invoice.lines or ())
+            if getattr(line, "is_active", True)
+            and line.tax_rate_percent_snapshot is not None
+            and Decimal(line.tax_rate_percent_snapshot) > 0
+        }
+    )
+    vat_label = (
+        f"VAT ({', '.join(f'{_percentage_text(rate)}%' for rate in vat_rates)})"
+        if vat_rates
+        else "VAT"
+    )
+    wht_rate = invoice.withholding_tax_rate_percent
+    return InvoiceTaxPresentation(
+        vat_label=vat_label,
+        wht_label=(
+            f"WHT ({_percentage_text(Decimal(wht_rate))}%)"
+            if wht_rate is not None
+            else None
+        ),
+        withholding_tax_amount=(
+            round_money(invoice.withholding_tax_amount)
+            if invoice.withholding_tax_amount is not None
+            else None
+        ),
+        net_amount_payable=(
+            round_money(invoice.net_amount_payable)
+            if invoice.net_amount_payable is not None
+            else None
+        ),
+    )
+
+
+def snapshot_invoice_withholding_tax_for_issuance(
+    db: Session, invoice: Invoice
+) -> None:
+    """Snapshot the customer's WHT decision on one newly issued invoice."""
+
+    policy = customer_tax_policies.get_customer_withholding_tax_policy(
+        db,
+        account_id=invoice.account_id,
+    )
+    if not policy.withholding_tax_enabled:
+        invoice.withholding_tax_rate_percent = None
+        invoice.withholding_tax_amount = None
+        invoice.withholding_tax_policy_version = None
+        invoice.net_amount_payable = None
+        return
+
+    if invoice.subtotal <= Decimal("0.00") or invoice.total <= Decimal("0.00"):
+        invoice.withholding_tax_rate_percent = None
+        invoice.withholding_tax_amount = None
+        invoice.withholding_tax_policy_version = None
+        invoice.net_amount_payable = None
+        return
+
+    raw_rate = settings_spec.resolve_value(
+        db,
+        SettingDomain.billing,
+        _WITHHOLDING_TAX_RATE_SETTING,
+    )
+    try:
+        rate_percent = round_money(to_decimal(raw_rate))
+    except (InvalidOperation, TypeError, ValueError) as exc:
+        raise InvoiceOwnerError(
+            code="financial.invoice.withholding_tax_configuration_invalid",
+            message="Configured withholding-tax percentage is invalid.",
+        ) from exc
+    if not Decimal("0.00") < rate_percent < Decimal("100.00"):
+        raise InvoiceOwnerError(
+            code="financial.invoice.withholding_tax_configuration_invalid",
+            message=(
+                "Configured withholding-tax percentage must be greater than "
+                "zero and less than 100."
+            ),
+        )
+
+    wht_amount = round_money(invoice.subtotal * rate_percent / Decimal("100.00"))
+    net_amount = round_money(invoice.total - wht_amount)
+    if wht_amount <= Decimal("0.00") or net_amount <= Decimal("0.00"):
+        raise InvoiceOwnerError(
+            code="financial.invoice.withholding_tax_basis_unavailable",
+            message="Invoice cannot apply withholding tax to its current totals.",
+        )
+    invoice.withholding_tax_rate_percent = rate_percent
+    invoice.withholding_tax_amount = wht_amount
+    invoice.withholding_tax_policy_version = policy.version
+    invoice.net_amount_payable = net_amount
 
 
 def _controlled_draft_metadata(invoice: Invoice) -> dict[str, object] | None:
@@ -1254,6 +1365,8 @@ def _stage_invoice_closure_audit(
 
 
 class Invoices(ListResponseMixin):
+    tax_presentation = staticmethod(invoice_tax_presentation)
+
     @staticmethod
     def create_with_lines(
         db: Session,
@@ -2406,6 +2519,7 @@ class Invoices(ListResponseMixin):
         invoice.due_date_basis = issuance.due_date_basis
         invoice.due_date_basis_ref = issuance.due_date_basis_ref
         invoice.due_date_policy_version = issuance.due_date_policy_version
+        snapshot_invoice_withholding_tax_for_issuance(db, invoice)
         AuditEvents.stage(
             db,
             AuditEventCreate(
@@ -2519,6 +2633,7 @@ class Invoices(ListResponseMixin):
         invoice.is_proforma = False
         invoice.status = InvoiceStatus.issued
         invoice.issued_at = issuance.issued_at
+        snapshot_invoice_withholding_tax_for_issuance(db, invoice)
         emit_event(
             db,
             EventType.invoice_sent,

@@ -1835,6 +1835,10 @@ class InvoiceRead(InvoiceBase):
     discount_applied_by_system_user_id: UUID | None = None
     discount_applied_at: datetime | None = None
     discount_revision: int = 0
+    withholding_tax_rate_percent: Decimal | None = None
+    withholding_tax_amount: Decimal | None = None
+    withholding_tax_policy_version: int | None = None
+    net_amount_payable: Decimal | None = None
     created_at: datetime
     updated_at: datetime
     lines: list[InvoiceLineRead] = Field(default_factory=list)

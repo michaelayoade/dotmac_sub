@@ -965,6 +965,23 @@ implementation.
 - Responsive: panel facts stack; the history table scrolls horizontally inside
   its card; the editor is a single column at every width.
 
+## Customer Invoice Tax Presentation Contract
+
+- Authority: `financial.invoices` supplies immutable issued-document tax
+  presentation. Active invoice-line snapshots supply VAT rates; invoice header
+  snapshots supply WHT applicability, rate, deduction, policy version, and net
+  payable amount. Templates and PDF renderers do not consult mutable settings.
+- The totals area labels output tax as **VAT (<rate>%)**. When WHT applies it
+  keeps **Total** as the gross legal invoice value, shows **WHT (<rate>%)** as a
+  deduction, and ends with **Net amount payable**.
+- Customer portal HTML, downloaded PDFs, email-attached PDFs, and every PDF
+  fallback use the same labels and values. A customer without a WHT snapshot
+  sees no WHT row and owes the gross total.
+- A mixed-rate invoice names every positive VAT percentage rather than
+  presenting one rate as though it applied to the whole document. Missing
+  historical rate evidence is rendered as **VAT**, never reconstructed from
+  amount arithmetic or current configuration.
+
 ## Retired manual subscription-service invoice workspaces
 
 The next-period and backdated invoice workspaces introduced in PR #3605 are

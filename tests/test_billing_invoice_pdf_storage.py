@@ -8,6 +8,7 @@ from sqlalchemy.orm import sessionmaker
 from app.models.billing import (
     CollectionAccount,
     CollectionAccountType,
+    InvoiceLine,
     InvoicePdfExport,
     InvoicePdfExportStatus,
 )
@@ -273,6 +274,45 @@ def test_render_invoice_html_includes_branding_and_company_info(
     assert "text-overflow: ellipsis" in html
     assert "company-name" not in html
     assert "company-copy" not in html
+
+
+def test_invoice_pdf_renders_vat_rate_wht_and_net_payable(
+    db_session, subscriber_account
+):
+    invoice = _invoice(db_session, subscriber_account)
+    invoice.subtotal = Decimal("100000.00")
+    invoice.tax_total = Decimal("7500.00")
+    invoice.total = Decimal("107500.00")
+    invoice.balance_due = Decimal("107500.00")
+    invoice.withholding_tax_rate_percent = Decimal("5.00")
+    invoice.withholding_tax_amount = Decimal("5000.00")
+    invoice.withholding_tax_policy_version = 2
+    invoice.net_amount_payable = Decimal("102500.00")
+    db_session.add(
+        InvoiceLine(
+            invoice_id=invoice.id,
+            description="Managed internet service",
+            quantity=Decimal("1.000"),
+            unit_price=Decimal("100000.00"),
+            amount=Decimal("100000.00"),
+            tax_rate_snapshot_version=1,
+            tax_rate_code_snapshot="VAT75",
+            tax_rate_percent_snapshot=Decimal("7.5000"),
+            tax_rate_is_active_snapshot=True,
+        )
+    )
+    db_session.commit()
+    db_session.refresh(invoice)
+
+    html = pdf_service._render_invoice_html(invoice, db_session)
+    text_lines = pdf_service._render_invoice_text_lines(invoice, db_session)
+
+    assert "VAT (7.5%)" in html
+    assert "WHT (5%)" in html
+    assert "Net amount payable" in html
+    assert any("VAT (7.5%): NGN 7,500.00" in line for line in text_lines)
+    assert any("WHT (5%): -NGN 5,000.00" in line for line in text_lines)
+    assert any("Net amount payable: NGN 102,500.00" in line for line in text_lines)
 
 
 def test_direct_bank_transfer_context_surfaces_owned_accounts(db_session):

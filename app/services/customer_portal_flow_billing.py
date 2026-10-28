@@ -602,12 +602,14 @@ def get_invoice_detail(
         return None
 
     billing_contact = get_invoice_billing_contact(db, invoice, customer)
+    tax_presentation = billing_service.invoices.invoice_tax_presentation(invoice)
 
     return {
         "invoice": invoice,
         "invoice_status_presentation": invoice_status_presentation(invoice.status),
         "billing_name": billing_contact["billing_name"],
         "billing_email": billing_contact["billing_email"],
+        "invoice_tax_presentation": tax_presentation,
     }
 
 

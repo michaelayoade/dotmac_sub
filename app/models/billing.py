@@ -581,6 +581,19 @@ class Invoice(Base):
             "length(trim(due_date_policy_version)) > 0)",
             name="ck_invoices_verified_due_date_basis",
         ),
+        CheckConstraint(
+            "(withholding_tax_rate_percent IS NULL AND "
+            "withholding_tax_amount IS NULL AND "
+            "withholding_tax_policy_version IS NULL AND "
+            "net_amount_payable IS NULL) OR "
+            "(withholding_tax_rate_percent > 0 AND "
+            "withholding_tax_rate_percent < 100 AND "
+            "withholding_tax_amount > 0 AND "
+            "withholding_tax_policy_version > 0 AND "
+            "net_amount_payable > 0 AND "
+            "net_amount_payable + withholding_tax_amount = total)",
+            name="ck_invoices_withholding_tax_snapshot",
+        ),
         Index(
             "ix_invoices_due_date_basis_due_at",
             "due_date_basis",
@@ -632,6 +645,10 @@ class Invoice(Base):
     discount_revision: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     tax_total: Mapped[Decimal] = mapped_column(Numeric(12, 2), default=Decimal("0.00"))
     total: Mapped[Decimal] = mapped_column(Numeric(12, 2), default=Decimal("0.00"))
+    withholding_tax_rate_percent: Mapped[Decimal | None] = mapped_column(Numeric(6, 2))
+    withholding_tax_amount: Mapped[Decimal | None] = mapped_column(Numeric(12, 2))
+    withholding_tax_policy_version: Mapped[int | None] = mapped_column(Integer)
+    net_amount_payable: Mapped[Decimal | None] = mapped_column(Numeric(12, 2))
     balance_due: Mapped[Decimal] = mapped_column(
         Numeric(12, 2), default=Decimal("0.00")
     )
