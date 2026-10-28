@@ -10,7 +10,11 @@
         </div>
         <span class="rounded-full bg-slate-200 px-2 py-0.5 text-xs text-slate-600 dark:bg-slate-600 dark:text-slate-200">Locked</span>
     </div>
-    <input type="hidden" name="account_id" value="{{ selected_account_id }}">
+    <input type="hidden" name="account_id" value="{{ selected_account_id }}"
+           data-vat-locked="{{ 'true' if invoice_config.accountVatLocked else 'false' }}"
+           data-vat-rate-id="{{ invoice_config.accountVatRateId or '' }}"
+           data-vat-name="{{ invoice_config.accountVatName or '' }}"
+           data-vat-percent="{{ invoice_config.accountVatPercent if invoice_config.accountVatPercent is not none else '' }}">
 </div>
 {% else %}
 <div>

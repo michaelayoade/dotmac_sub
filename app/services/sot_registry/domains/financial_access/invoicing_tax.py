@@ -924,6 +924,7 @@ SERVICES: tuple[SOTService, ...] = (
             "customer.accounts",
             "financial.invoices",
             "financial.invoice_discounts",
+            "financial.customer_tax_policies",
             "financial.tax_configuration",
             "events.dispatcher",
         ),
@@ -931,7 +932,9 @@ SERVICES: tuple[SOTService, ...] = (
             "This coordinator is the only administrative writer for a "
             "complete draft invoice aggregate. It admits a typed header and "
             "line set, locks the account before the invoice, and commits the "
-            "document, totals, audit, idempotency evidence, and outbox event "
+            "document with an active configured account VAT rate applied "
+            "exactly once in place of manual line tax selection. It commits "
+            "totals, audit, idempotency evidence, and the outbox event "
             "once. It also owns locked, idempotent administrative proforma "
             "conversion and derives the final status only after canonical "
             "account credit is applied. Generic conversion fails closed for "
@@ -951,6 +954,7 @@ SERVICES: tuple[SOTService, ...] = (
                         "canonical customer account",
                         "canonical invoice draft aggregate",
                         "canonical invoice tax rates",
+                        "canonical customer VAT exemption policy",
                     ),
                 ),
                 ConcernContract(
@@ -1003,6 +1007,12 @@ SERVICES: tuple[SOTService, ...] = (
                     owner="financial.tax_configuration",
                     kind=AuthorityKind.AUTHORITATIVE_RECORD,
                     source="referenced TaxRate rows",
+                ),
+                AuthorityInput(
+                    name="canonical customer VAT exemption policy",
+                    owner="financial.customer_tax_policies",
+                    kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                    source="versioned customer-account VAT exemption decision",
                 ),
                 AuthorityInput(
                     name="canonical invoice numbering policy",
