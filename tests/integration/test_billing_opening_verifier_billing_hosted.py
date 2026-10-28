@@ -131,6 +131,44 @@ def _principal(factory: sessionmaker[Session]) -> tuple[str, int]:
     return role, int(oid)
 
 
+ADMIN_NEEDS = [
+    (f"mod_billing.{name}", "SELECT") for name in billing_models.TENANT_TABLES
+] + [
+    ("mod_billing.opening_windows", "INSERT"),
+    ("mod_billing.opening_windows", "UPDATE"),
+]
+
+
+def _grant_migrator(factory: sessionmaker[Session]) -> list[tuple[str, str]]:
+    """Give app_admin (the migration role) only the privileges it lacks here.
+
+    Starter's scratch databases are owned by app_admin; the shared Sub test
+    database is not. Returns exactly what was granted, for the teardown.
+    """
+    granted: list[tuple[str, str]] = []
+    with factory() as db:
+        db.execute(sa.text("GRANT USAGE ON SCHEMA mod_billing TO app_admin"))
+        for table, privilege in ADMIN_NEEDS:
+            has = db.scalar(
+                sa.text("SELECT has_table_privilege('app_admin', :t, :p)"),
+                {"t": table, "p": privilege},
+            )
+            if not has:
+                db.execute(sa.text(f"GRANT {privilege} ON {table} TO app_admin"))
+                granted.append((table, privilege))
+        db.commit()
+    return granted
+
+
+def _revoke_migrator(
+    factory: sessionmaker[Session], granted: list[tuple[str, str]]
+) -> None:
+    with factory() as db:
+        for table, privilege in granted:
+            db.execute(sa.text(f"REVOKE {privilege} ON {table} FROM app_admin"))
+        db.commit()
+
+
 @pytest.fixture()
 def env(
     census_factory: sessionmaker[Session],  # noqa: F811
@@ -162,6 +200,7 @@ def env(
         )
         db.commit()
     principal = _principal(census_factory)
+    granted = _grant_migrator(census_factory)
     accounts = []
     with census_factory() as db:
         for _ in range(2):
@@ -213,6 +252,7 @@ def env(
         )
     finally:
         sa.event.remove(census_factory, "after_begin", begin)
+        _revoke_migrator(census_factory, granted)
         with census_factory() as db:
             db.execute(sa.text("DROP TABLE IF EXISTS public.rehearsal_marker"))
             db.execute(sa.text(f'DROP OWNED BY "{principal[0]}"'))
