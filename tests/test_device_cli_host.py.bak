@@ -1,0 +1,1254 @@
+"""Host adapters for ``dotmac-device-cli`` (PR-S1): goldens, adapters, wiring.
+
+Everything here runs without a database or a device: the package's own test
+doubles (``ReplayChannel``, ``FakeClock``) stand in for the OLT and Sub's
+in-memory advisory-lock server stands in for PostgreSQL. Hosts and addresses are
+documentation values.
+
+The cross-engine slot-sharing proof against real PostgreSQL lives in
+``tests/integration/test_device_cli_slot_sharing.py``.
+"""
+
+from __future__ import annotations
+
+import importlib
+import socket
+import sys
+import threading
+import uuid
+from types import SimpleNamespace
+from typing import Any
+
+import pytest
+from dotmac_device_cli import (
+    DeviceBusy,
+    NoProfile,
+    Reason,
+    builtin_registry,
+)
+from dotmac_device_cli import intent_key as package_intent_key
+from dotmac_device_cli import slot_key as package_slot_key
+from dotmac_device_cli.testing import FakeClock, ReplayChannel
+
+from app.services.network import (
+    device_cli_gate as gate,
+)
+from app.services.network import (
+    device_cli_host,
+    olt_ssh,
+    olt_ssh_limiter,
+    olt_ssh_metrics,
+)
+from app.services.network.olt_ssh_limiter import (
+    LimiterConfig,
+    OltSessionBusy,
+    OltSshPriority,
+    set_config_override,
+)
+from app.services.network.olt_ssh_ont.status import get_registered_ont_serials
+
+# ── lock-key goldens ─────────────────────────────────────────────────────────
+# KEEP IN SYNC WITH STARTER. These vectors are the ones pinned by
+# dotmac-device-cli 0.1.0a1 (tests/unit/test_device_cli_limiter.py) and were
+# computed with the derivation in ``olt_ssh_limiter._signed_key`` (blake2b, 8-byte
+# digest, big-endian, signed). Sub had no pinned vectors before this PR, so a
+# drift here was previously undetectable. They are asserted against BOTH engines:
+# if either side changes its derivation the two stop sharing slots in the shared
+# database and briefly allow twice the sessions.
+SLOT_VECTORS = {
+    "00000000-0000-4000-8000-000000000001": (
+        -3148890172339245725,
+        -9068375865187576960,
+        -1039721830728024854,
+    ),
+    "lab-olt": (-8678444213299380193, 1909821310459583165, -318973743125864412),
+    "203.0.113.7-test": (
+        8375931043202659789,
+        -4874932496492983623,
+        -647553131079769680,
+    ),
+}
+INTENT_VECTORS = {
+    "00000000-0000-4000-8000-000000000001": -7864250139092424918,
+    "lab-olt": 1790200665425164038,
+    "203.0.113.7-test": -4163376672186175071,
+}
+
+
+@pytest.mark.parametrize("key", sorted(SLOT_VECTORS))
+def test_sub_limiter_keys_match_the_pinned_vectors(key: str) -> None:
+    assert (
+        tuple(olt_ssh_limiter.slot_key(key, i) for i in range(3)) == SLOT_VECTORS[key]
+    )
+    assert olt_ssh_limiter.intent_key(key) == INTENT_VECTORS[key]
+
+
+@pytest.mark.parametrize("key", sorted(SLOT_VECTORS))
+def test_package_limiter_keys_match_the_same_vectors(key: str) -> None:
+    assert tuple(package_slot_key(key, i) for i in range(3)) == SLOT_VECTORS[key]
+    assert package_intent_key(key) == INTENT_VECTORS[key]
+
+
+def test_the_device_key_is_the_olt_id_and_never_the_name() -> None:
+    olt_id = uuid.uuid4()
+    assert device_cli_host.device_key_for(SimpleNamespace(id=olt_id, name="x")) == str(
+        olt_id
+    )
+    for empty in (None, "", 0):
+        with pytest.raises(ValueError):
+            device_cli_host.device_key_for(SimpleNamespace(id=empty, name="by-name"))
+
+
+# ── fakes ────────────────────────────────────────────────────────────────────
+
+PG_URL = "postgresql+psycopg://user:pw@db.invalid:5432/example"  # documentation host
+
+
+class _Result:
+    def __init__(self, value: object) -> None:
+        self._value = value
+
+    def scalar(self) -> object:
+        return self._value
+
+
+class FakeLockServer:
+    """In-memory advisory locks with PostgreSQL session semantics."""
+
+    def __init__(self) -> None:
+        self.mutex = threading.Lock()
+        self.exclusive: dict[int, int] = {}
+        self.shared: dict[int, set[int]] = {}
+        self.next_conn = 0
+        self.statements: list[str] = []
+
+    def connect(self) -> FakeConn:
+        with self.mutex:
+            self.next_conn += 1
+            return FakeConn(self, self.next_conn)
+
+
+class FakeConn:
+    def __init__(self, server: FakeLockServer, ident: int) -> None:
+        self.server = server
+        self.ident = ident
+        self.closed = False
+        self.invalidated = False
+
+    def execute(self, statement: object, params: dict[str, int]) -> _Result:
+        sql = str(statement)
+        key = params["key"]
+        s = self.server
+        with s.mutex:
+            s.statements.append(sql)
+            if "pg_try_advisory_lock_shared" in sql:
+                owner = s.exclusive.get(key)
+                if owner is not None and owner != self.ident:
+                    return _Result(False)
+                s.shared.setdefault(key, set()).add(self.ident)
+                return _Result(True)
+            if "pg_try_advisory_lock" in sql:
+                owner = s.exclusive.get(key)
+                others = s.shared.get(key, set()) - {self.ident}
+                if (owner is not None and owner != self.ident) or others:
+                    return _Result(False)
+                s.exclusive[key] = self.ident
+                return _Result(True)
+            if "pg_advisory_unlock_shared" in sql:
+                held = self.ident in s.shared.get(key, set())
+                s.shared.get(key, set()).discard(self.ident)
+                return _Result(held)
+            if "pg_advisory_unlock" in sql:
+                if s.exclusive.get(key) == self.ident:
+                    del s.exclusive[key]
+                    return _Result(True)
+                return _Result(False)
+        raise AssertionError(f"unexpected SQL: {sql}")
+
+    def invalidate(self) -> None:
+        self.invalidated = True
+        self._free()
+
+    def close(self) -> None:
+        self._free()
+
+    def _free(self) -> None:
+        if self.closed:
+            return
+        self.closed = True
+        with self.server.mutex:
+            for key in [k for k, v in self.server.exclusive.items() if v == self.ident]:
+                del self.server.exclusive[key]
+            for holders in self.server.shared.values():
+                holders.discard(self.ident)
+
+
+@pytest.fixture
+def server(monkeypatch) -> FakeLockServer:
+    fake = FakeLockServer()
+    monkeypatch.setattr(
+        olt_ssh_limiter,
+        "_limiter_engine",
+        lambda url: SimpleNamespace(connect=fake.connect),
+    )
+    monkeypatch.setattr(olt_ssh_limiter, "_database_url", lambda: PG_URL)
+    set_config_override(LimiterConfig())
+    yield fake
+    set_config_override(None)
+
+
+PROFILE_56 = builtin_registry().get("huawei-ma5608t-v800r013")
+PROFILE_58 = builtin_registry().get("huawei-ma5800-x2-v100r019")
+assert PROFILE_56 is not None and PROFILE_58 is not None
+
+
+def _olt(
+    *,
+    model: str = "MA5608T",
+    firmware: str | None = "V800R013C00",
+    active: bool | None = True,
+    olt_id: object | None = None,
+    name: str = "OLT-A",
+    vendor: str = "Huawei",
+) -> Any:
+    return SimpleNamespace(
+        id=uuid.uuid4() if olt_id is None else olt_id,
+        name=name,
+        vendor=vendor,
+        model=model,
+        firmware_version=firmware,
+        software_version=None,
+        is_active=active,
+    )
+
+
+# ── lock-store adapter ───────────────────────────────────────────────────────
+
+
+def test_pg_store_runs_the_same_four_statements_as_the_legacy_limiter(server) -> None:
+    store = device_cli_host.PgAdvisoryLockStore(server.connect())
+    assert store.try_lock(7) is True
+    assert store.try_lock_shared(8) is True
+    store.unlock(7)
+    store.unlock_shared(8)
+    assert [
+        s.split("(")[0].strip().removeprefix("SELECT ") for s in server.statements
+    ] == [
+        "pg_try_advisory_lock",
+        "pg_try_advisory_lock_shared",
+        "pg_advisory_unlock",
+        "pg_advisory_unlock_shared",
+    ]
+
+
+def test_pg_store_close_invalidates_so_locks_free_even_if_unlock_failed(server) -> None:
+    conn = server.connect()
+    store = device_cli_host.PgAdvisoryLockStore(conn)
+    assert store.try_lock(11)
+    store.close()  # no explicit unlock
+    assert conn.invalidated and conn.closed
+    assert server.exclusive == {}
+    store.close()  # idempotent
+    with pytest.raises(RuntimeError):  # a closed store never silently no-ops
+        store.try_lock(11)
+
+
+def test_there_is_no_null_lane_on_a_non_postgres_url() -> None:
+    factory = device_cli_host.pg_store_factory("sqlite:///:memory:")
+    with pytest.raises(RuntimeError):
+        factory()
+
+
+def test_a_store_that_cannot_connect_fails_closed_as_busy() -> None:
+    from dotmac_device_cli import Priority
+    from dotmac_device_cli import acquire_slot as package_acquire_slot
+    from dotmac_device_cli.testing import FakeClock as Clock
+
+    def broken() -> Any:
+        raise RuntimeError("database unavailable")
+
+    with pytest.raises(DeviceBusy) as exc:
+        package_acquire_slot(
+            broken,
+            device_key="lab-olt",
+            limit=2,
+            reserved=1,
+            priority=Priority.BACKGROUND,
+            wait_seconds=0,
+            clock=Clock(),
+        )
+    assert olt_ssh_limiter.is_busy_message(str(exc.value))
+
+
+def test_package_slot_makes_the_legacy_limiter_see_it_taken(server) -> None:
+    olt = _olt()
+    lease = device_cli_host.acquire_device_slot(
+        olt,
+        PROFILE_56,
+        priority=OltSshPriority.BACKGROUND,
+        store_factory=lambda: device_cli_host.PgAdvisoryLockStore(server.connect()),
+    )
+    assert lease.slot_index == 0
+    with pytest.raises(OltSessionBusy):
+        olt_ssh_limiter.acquire_slot(
+            olt_key=str(olt.id),
+            limit=2,
+            reserved=1,
+            priority=OltSshPriority.BACKGROUND,
+            wait_seconds=0,
+        )
+    lease.release()
+    legacy = olt_ssh_limiter.acquire_slot(
+        olt_key=str(olt.id),
+        limit=2,
+        reserved=1,
+        priority=OltSshPriority.BACKGROUND,
+        wait_seconds=0,
+    )
+    legacy.release()
+
+
+def test_legacy_slot_makes_the_package_see_it_taken(server) -> None:
+    olt = _olt()
+    legacy = olt_ssh_limiter.acquire_slot(
+        olt_key=str(olt.id),
+        limit=2,
+        reserved=1,
+        priority=OltSshPriority.BACKGROUND,
+        wait_seconds=0,
+    )
+    with pytest.raises(DeviceBusy) as exc:
+        device_cli_host.acquire_device_slot(
+            olt,
+            PROFILE_56,
+            priority=OltSshPriority.BACKGROUND,
+            store_factory=lambda: device_cli_host.PgAdvisoryLockStore(server.connect()),
+        )
+    assert olt_ssh_limiter.is_busy_message(str(exc.value))
+    legacy.release()
+
+
+def test_settings_can_only_lower_the_profile_slot_count(server, monkeypatch) -> None:
+    captured: dict[str, Any] = {}
+
+    def fake_acquire(factory, **kwargs):
+        captured.update(kwargs)
+        return "lease"
+
+    monkeypatch.setattr(device_cli_host, "package_acquire_slot", fake_acquire)
+    factory = lambda: device_cli_host.PgAdvisoryLockStore(server.connect())  # noqa: E731
+
+    # Profile caps MA5608T at 2: a raised Sub setting never raises it.
+    set_config_override(LimiterConfig(max_ma5608t=8))
+    device_cli_host.acquire_device_slot(
+        _olt(), PROFILE_56, priority=OltSshPriority.BACKGROUND, store_factory=factory
+    )
+    assert captured["limit"] == 2
+
+    # A lowered Sub setting wins.
+    set_config_override(LimiterConfig(max_ma5608t=1))
+    device_cli_host.acquire_device_slot(
+        _olt(), PROFILE_56, priority=OltSshPriority.BACKGROUND, store_factory=factory
+    )
+    assert captured["limit"] == 1 and captured["reserved"] == 0
+
+
+def test_empty_olt_id_is_refused_before_any_lock_is_taken(server) -> None:
+    with pytest.raises(ValueError):
+        device_cli_host.acquire_device_slot(
+            _olt(olt_id=""),
+            PROFILE_56,
+            store_factory=lambda: device_cli_host.PgAdvisoryLockStore(server.connect()),
+        )
+    assert server.statements == []
+
+
+# ── channel adapter ──────────────────────────────────────────────────────────
+
+
+class _RawChannel:
+    def __init__(self, chunks: list[Any]) -> None:
+        self.chunks = chunks
+        self.sent: list[str] = []
+        self.timeout: float | None = None
+        self.closed = False
+
+    def send(self, data: str) -> None:  # paramiko may return a count; fakes may not
+        self.sent.append(data)
+
+    def recv(self, nbytes: int) -> Any:
+        item = self.chunks.pop(0)
+        if isinstance(item, BaseException):
+            raise item
+        return item
+
+    def recv_ready(self) -> bool:
+        return bool(self.chunks)
+
+    def settimeout(self, seconds: float) -> None:
+        self.timeout = seconds
+
+
+def test_channel_surfaces_idle_as_timeout_and_passes_bytes_and_eof() -> None:
+    assert socket.timeout is TimeoutError  # the alias the adapter relies on
+    raw = _RawChannel([TimeoutError("timed out"), b"abc", "txt", b""])
+    channel = device_cli_host.ParamikoShellChannel(raw)
+    with pytest.raises(TimeoutError):
+        channel.recv(4096)
+    assert channel.recv(4096) == b"abc"
+    assert channel.recv(4096) == b"txt"
+    assert channel.recv(4096) == b""  # EOF stays b""
+    assert channel.send("x\n") == 2 and raw.sent == ["x\n"]
+    channel.settimeout(0.5)
+    assert raw.timeout == 0.5
+    assert channel.closed is False
+    raw.closed = True
+    assert channel.closed is True
+
+
+# ── profile resolution ───────────────────────────────────────────────────────
+
+
+@pytest.mark.parametrize(
+    ("model", "firmware", "expected"),
+    [
+        ("MA5608T", "V800R013C00", "huawei-ma5608t-v800r013"),
+        ("MA5800-X2", "V100R019C10", "huawei-ma5800-x2-v100r019"),
+        ("MA5608T", "V800R015C00", None),  # home-gateway train: no layer yet
+        ("MA5608T", "V800R018C10", None),
+        ("MA5800-X2", "V800R019C00", None),
+        ("MA5800-X2", "V100R020C00", None),
+        ("MA5600T", "V800R011C00", None),  # Sub has an SSH policy; no package profile
+        ("MA5683T", "V800R013C00", None),
+        ("MA5608T", None, None),
+        ("MA5608T", "", None),
+    ],
+)
+def test_each_registry_firmware_resolves_to_a_profile_or_nothing(
+    model: str, firmware: str | None, expected: str | None
+) -> None:
+    resolved = device_cli_host.resolve_profile(_olt(model=model, firmware=firmware))
+    if expected is None:
+        assert isinstance(resolved, NoProfile)
+    else:
+        assert resolved.id == expected
+
+
+def test_only_the_configured_vendor_resolves() -> None:
+    assert isinstance(
+        device_cli_host.resolve_profile(_olt(vendor="ZTE", model="C300")), NoProfile
+    )
+    assert isinstance(
+        device_cli_host.resolve_profile(_olt(vendor="", model="MA5608T")), NoProfile
+    )
+
+
+def test_firmware_falls_back_to_software_version() -> None:
+    olt = _olt(firmware=None)
+    olt.software_version = "V800R013C00"
+    assert device_cli_host.resolve_profile(olt).id == "huawei-ma5608t-v800r013"
+
+
+@pytest.mark.parametrize(
+    ("model", "firmware"),
+    [("MA5608T", "V800R013C00"), ("MA5800-X2", "V100R019C10")],
+)
+def test_profile_ssh_data_agrees_with_the_legacy_ssh_policy(
+    model: str, firmware: str
+) -> None:
+    """Drift between the package profile and OltSshPolicy is a test failure."""
+    olt = _olt(model=model, firmware=firmware)
+    profile = device_cli_host.resolve_profile(olt)
+    assert (
+        device_cli_host.ssh_policy_mismatch(profile, olt_ssh.resolve_policy(olt))
+        is None
+    )
+
+
+def test_ssh_policy_drift_is_reported() -> None:
+    policy = olt_ssh.resolve_policy(_olt())
+    from dataclasses import replace
+
+    drifted = replace(policy, ciphers=("aes256-ctr",))
+    assert (
+        device_cli_host.ssh_policy_mismatch(PROFILE_56, drifted) == "ssh ciphers differ"
+    )
+
+
+def test_ma5608t_inventory_command_is_byte_identical_to_legacy() -> None:
+    olt = _olt()
+    for fsp in ("0/2/1", "0/1/12"):
+        assert device_cli_host.package_inventory_command(
+            PROFILE_56, fsp
+        ) == device_cli_host.legacy_inventory_command(olt, fsp)
+
+
+def test_ma5800_inventory_command_differs_from_legacy_so_it_stays_legacy() -> None:
+    """Legacy polls MA5800 with ``summary``; the package renders the ``all`` form.
+
+    That grammar question is settled (with transcripts) in a later Starter PR.
+    Until then the host must refuse to run it, whatever the flags say.
+    """
+    olt = _olt(model="MA5800-X2", firmware="V100R019C10")
+    assert device_cli_host.package_inventory_command(
+        PROFILE_58, "0/2/1"
+    ) != device_cli_host.legacy_inventory_command(olt, "0/2/1")
+
+
+# ── flags ────────────────────────────────────────────────────────────────────
+
+
+@pytest.fixture
+def events(monkeypatch) -> list[tuple[str, str, str]]:
+    recorded: list[tuple[str, str, str]] = []
+    monkeypatch.setattr(
+        olt_ssh_metrics,
+        "record_device_cli_event",
+        lambda kind, olt, op: recorded.append((kind, olt, op)),
+    )
+    return recorded
+
+
+@pytest.fixture(autouse=True)
+def _reset_flags():
+    yield
+    gate.set_read_settings_override(None)
+
+
+def _enable(olt: Any, ops: str = "list_onts") -> None:
+    gate.set_read_settings_override(
+        gate.DeviceCliReadSettings(
+            enabled=True,
+            olts=gate.parse_csv(str(olt.id)),
+            ops=gate.parse_csv(ops),
+        )
+    )
+
+
+def test_defaults_are_off_and_empty() -> None:
+    defaults = gate.DeviceCliReadSettings()
+    assert defaults.enabled is False and not defaults.olts and not defaults.ops
+
+
+def test_csv_parsing() -> None:
+    assert gate.parse_csv(None) == frozenset()
+    assert gate.parse_csv("") == frozenset()
+    assert gate.parse_csv(" A, b ,,C ") == frozenset({"a", "b", "c"})
+
+
+def test_the_settings_specs_default_off() -> None:
+    from app.models.domain_settings import SettingDomain
+    from app.services.settings_spec import SETTINGS_SPECS
+
+    by_key = {
+        spec.key: spec
+        for spec in SETTINGS_SPECS
+        if spec.domain == SettingDomain.network
+    }
+    assert by_key["olt_device_cli_reads_enabled"].default is False
+    assert by_key["olt_device_cli_reads_olts"].default == ""
+    assert by_key["olt_device_cli_reads_ops"].default == ""
+
+
+def test_unreadable_settings_mean_off(monkeypatch) -> None:
+    def boom() -> Any:
+        raise RuntimeError("settings database unavailable")
+
+    gate.set_read_settings_override(None)
+    monkeypatch.setattr(gate, "_settings_cache", None)
+    monkeypatch.setattr(gate, "_load_read_settings", boom)
+    assert gate.get_read_settings() == gate.DeviceCliReadSettings()
+
+
+def test_a_non_boolean_enabled_value_is_off(monkeypatch) -> None:
+    from app.services import settings_spec
+
+    monkeypatch.setattr(
+        settings_spec,
+        "resolve_values_atomic",
+        lambda db, domain, keys: {
+            "olt_device_cli_reads_enabled": "true",  # a string is not True
+            "olt_device_cli_reads_olts": "a",
+            "olt_device_cli_reads_ops": "list_onts",
+        },
+    )
+    monkeypatch.setattr(
+        "app.services.db_session_adapter.db_session_adapter.read_session",
+        lambda: _NullSession(),
+    )
+    assert gate._load_read_settings().enabled is False
+
+
+class _NullSession:
+    def __enter__(self) -> object:
+        return object()
+
+    def __exit__(self, *_exc: object) -> None:
+        return None
+
+
+@pytest.fixture(autouse=True)
+def _background_priority():
+    """The package path is BACKGROUND-only; the wired caller is the status poll."""
+    token = olt_ssh_limiter._priority_var.set(OltSshPriority.BACKGROUND)
+    yield
+    olt_ssh_limiter._priority_var.reset(token)
+
+
+def test_the_gate_requires_every_condition(events) -> None:
+    olt = _olt()
+    gate.set_read_settings_override(
+        gate.DeviceCliReadSettings(
+            enabled=False,
+            olts=frozenset({str(olt.id)}),
+            ops=frozenset({"list_onts"}),
+        )
+    )
+    assert gate.selected(olt, "list_onts") is False  # master switch off
+
+    _enable(olt, ops="list_onts")
+    assert gate.selected(olt, "list_onts") is True
+    assert gate.selected(_olt(), "list_onts") is False  # OLT not allowlisted
+    assert gate.selected(olt, "ont_detail") is False  # unwired operation
+    _enable(olt, ops="")
+    assert gate.selected(olt, "list_onts") is False  # op not allowlisted
+    assert events == []  # none of those refusals is a metric-worthy fallback
+
+
+def test_version_is_not_wired_in_s1() -> None:
+    olt = _olt()
+    _enable(olt, ops="version,list_onts")
+    assert gate.selected(olt, "version") is False
+    assert gate.WIRED_OPERATIONS == frozenset({"list_onts"})
+
+
+@pytest.mark.parametrize(
+    "priority", [OltSshPriority.WRITE, OltSshPriority.INTERACTIVE, None]
+)
+def test_only_background_priority_takes_the_package_path(priority) -> None:
+    """Post-write verification (WRITE) and interactive callers stay legacy."""
+    olt = _olt()
+    _enable(olt)
+    token = olt_ssh_limiter._priority_var.set(priority)
+    try:
+        assert gate.selected(olt, "list_onts") is False
+    finally:
+        olt_ssh_limiter._priority_var.reset(token)
+    assert gate.selected(olt, "list_onts") is True  # BACKGROUND (autouse)
+
+
+def test_inactive_olts_are_always_skipped_even_when_allowlisted(events) -> None:
+    for active in (False, None):
+        olt = _olt(active=active)
+        _enable(olt)
+        assert gate.selected(olt, "list_onts") is False
+
+
+def test_an_olt_without_an_id_is_never_selected() -> None:
+    olt = _olt(olt_id="")
+    gate.set_read_settings_override(
+        gate.DeviceCliReadSettings(
+            enabled=True, olts=frozenset({""}), ops=frozenset({"list_onts"})
+        )
+    )
+    assert gate.selected(olt, "list_onts") is False
+
+
+def test_an_active_scope_keeps_the_read_on_legacy(events, monkeypatch) -> None:
+    olt = _olt()
+    _enable(olt)
+    monkeypatch.setattr(olt_ssh_limiter, "active_scope", lambda _olt: object())
+    assert gate.selected(olt, "list_onts") is False
+    assert events == [("scope_active_legacy", "OLT-A", "list_onts")]
+
+
+def test_a_gate_exception_means_legacy(monkeypatch) -> None:
+    olt = _olt()
+    _enable(olt)
+    monkeypatch.setattr(
+        olt_ssh_limiter,
+        "active_scope",
+        lambda _olt: (_ for _ in ()).throw(RuntimeError("boom")),
+    )
+    assert gate.selected(olt, "list_onts") is False
+
+
+def test_unresolved_profile_stays_legacy_with_a_metric(events) -> None:
+    olt = _olt(firmware="V800R015C00")
+    assert device_cli_host.plan_read(olt, "list_onts", fsps=["0/2/1"]) is None
+    assert events == [("profile_unresolved", "OLT-A", "list_onts")]
+
+
+def test_an_unverified_profile_is_refused_on_the_package_path(events) -> None:
+    olt = _olt(model="MA5800-X2", firmware="V100R019C10")
+    assert PROFILE_58.verification.status == "unverified"
+    assert device_cli_host.plan_read(olt, "list_onts", fsps=["0/2/1"]) is None
+    assert events == [("profile_unverified", "OLT-A", "list_onts")]
+
+
+def test_ma5608t_plans_cleanly() -> None:
+    plan = device_cli_host.plan_read(_olt(), "list_onts", fsps=["0/2/1", "0/1/12"])
+    assert plan is not None and plan.profile.id == "huawei-ma5608t-v800r013"
+
+
+def test_paging_disagreement_is_refused(events, monkeypatch) -> None:
+    from dataclasses import replace
+
+    real = olt_ssh.resolve_policy
+    monkeypatch.setattr(
+        olt_ssh,
+        "resolve_policy",
+        lambda olt: replace(real(olt), paging_off_command="screen-length 0 temporary"),
+    )
+    assert device_cli_host.plan_read(_olt(), "list_onts", fsps=["0/2/1"]) is None
+    assert events == [("profile_mismatch", "OLT-A", "list_onts")]
+
+
+def test_a_planning_exception_falls_back_before_anything_is_sent(
+    events, monkeypatch
+) -> None:
+    def boom(_olt: Any) -> Any:
+        raise RuntimeError("registry exploded")
+
+    monkeypatch.setattr(device_cli_host, "resolve_profile", boom)
+    assert device_cli_host.plan_read(_olt(), "list_onts", fsps=["0/2/1"]) is None
+    assert events == [("plan_error", "OLT-A", "list_onts")]
+
+
+# ── legacy-result mapping ────────────────────────────────────────────────────
+
+
+def test_the_reason_message_map_is_the_callers_compatibility_surface() -> None:
+    msg = device_cli_host.unreadable_message
+    assert olt_ssh_limiter.is_busy_message(msg(Reason.OLT_BUSY, fsp=None, detail="x"))
+    assert olt_ssh_limiter.is_login_failed_message(
+        msg(Reason.LOGIN_REFUSED, fsp=None, detail="x")
+    )
+    assert olt_ssh_limiter.is_auth_rejected_message(
+        msg(Reason.AUTH_REJECTED, fsp=None, detail="x")
+    )
+    for reason in (
+        Reason.UNKNOWN_COMMAND,
+        Reason.PARAMETER_ERROR,
+        Reason.INSUFFICIENT_PRIVILEGE,
+        Reason.BOARD_TYPE_ERROR,
+    ):
+        assert msg(reason, fsp="0/2/1", detail="").startswith("OLT rejected: ")
+    assert "could not be parsed" in msg(Reason.ROWS_UNPARSED, fsp="0/2/1", detail="")
+    assert "truncated read" in msg(Reason.TRUNCATED, fsp="0/2/1", detail="")
+    assert "was not recognized" in msg(
+        Reason.UNRECOGNIZED_RESPONSE, fsp="0/2/1", detail=""
+    )
+    # Every reason produces a non-empty failure, never a success-looking text.
+    for reason in Reason:
+        assert msg(reason, fsp="0/2/1", detail="d")
+
+
+# ── end-to-end through the real wrappers (fake device) ───────────────────────
+
+INVENTORY_REPLY = (
+    "display ont info 0 2 1 all\r\n"
+    "  -----------------------------------------------------------------------------\r\n"
+    "  F/S/P   ONT         SN         Control     Run      Config   Match    Protect\r\n"
+    "          ID                     flag        state    state    state    side\r\n"
+    "  -----------------------------------------------------------------------------\r\n"
+    "  0/ 2/1     0  4857544300000001  active      online   normal   match    no \r\n"
+    "  0/ 2/1     1  4857544300000002  active      offline  initial  initial  no \r\n"
+    "  -----------------------------------------------------------------------------\r\n"
+    "  F/S/P   ONT-ID   Description\r\n"
+    "  -----------------------------------------------------------------------------\r\n"
+    "  0/ 2/1      0   CUSTOMER_01\r\n"
+    "  0/ 2/1      1   CUSTOMER_02\r\n"
+    "  -----------------------------------------------------------------------------\r\n"
+    "  In port 0/ 2/1 , the total of ONTs are: 2, online: 1\r\n"
+    "  -----------------------------------------------------------------------------\r\n"
+    "\r\nlab-olt#"
+)
+EMPTY_REPLY = "display ont info 0 2 1 all\r\n  No ONT is configured\r\n\r\nlab-olt#"
+UNPARSED_REPLY = (
+    "display ont info 0 2 1 all\r\n"
+    "  F/S/P   ONT         SN         Control     Run      Config   Match    Protect\r\n"
+    "  0/ 2/1     0  4857544300000001  active      online\r\n"
+    "\r\nlab-olt#"
+)
+PARAMETER_ERROR_REPLY = (
+    "display ont info 0 2 1 all\r\n  % Parameter error, the error locates at '^'\r\n"
+    "\r\nlab-olt#"
+)
+VERSION_REPLY = (
+    "display version\r\n"
+    "  VERSION : MA5608V800R013C00\r\n"
+    "  PRODUCT : MA5608T\r\n"
+    "\r\nlab-olt#"
+)
+LOGOUT_REPLIES = {
+    "quit\n": "quit\r\nAre you sure to log out? (y/n)[n]:",
+}
+
+
+class _Rig:
+    """A fake OLT behind Sub's REAL ``_manage_transport`` / ``_instrument_channel``.
+
+    The legacy close path is genuinely armed: if the package path let it run too,
+    a second ``quit`` sequence would show up in ``channel.sent``.
+    """
+
+    def __init__(self, monkeypatch, replies: dict[str, str]) -> None:
+        self.clock = FakeClock()
+        self.channel = ReplayChannel(
+            self.clock,
+            replies={**LOGOUT_REPLIES, **replies},
+            eof_after_answer=True,
+        )
+        olt_ssh._instrument_channel(self.channel)
+        self.opens = 0
+        self.original_close_calls = 0
+        self.close_real_calls = 0
+        self.releases = 0
+        self.logouts: list[str] = []
+        rig = self
+
+        class _Transport:
+            def close(self) -> None:  # becomes the raw paramiko close
+                rig.original_close_calls += 1
+
+            def is_active(self) -> bool:
+                return True
+
+        self.transport = _Transport()
+        lease = SimpleNamespace(wait_seconds=0.0)
+        monkeypatch.setattr(
+            olt_ssh_limiter,
+            "mark_released",
+            lambda _lease: setattr(rig, "releases", rig.releases + 1),
+        )
+        olt_ssh._manage_transport(
+            self.transport,
+            lease=lease,
+            logout_on_close=True,
+            grace_seconds=0,
+            olt_label="OLT-A",
+            priority="background",
+            opened_at=0.0,
+        )
+        olt_ssh._attach_channel(self.transport, self.channel)
+        real_close_real = self.transport.close_real
+
+        def counting_close_real() -> None:
+            rig.close_real_calls += 1
+            real_close_real()
+
+        self.transport.close_real = counting_close_real
+        monkeypatch.setattr(
+            olt_ssh_metrics,
+            "record_logout",
+            lambda outcome: rig.logouts.append(outcome),
+        )
+
+        def open_shell(_olt: Any) -> Any:
+            rig.opens += 1
+            return rig.transport, rig.channel, SimpleNamespace(prompt_regex=r"#\s*$")
+
+        monkeypatch.setattr(olt_ssh, "_open_shell", open_shell)
+        self.reads: list[tuple[str, str, str, str]] = []
+        monkeypatch.setattr(
+            olt_ssh_metrics,
+            "record_device_cli_read",
+            lambda olt, op, result, reason="": rig.reads.append(
+                (olt, op, result, reason)
+            ),
+        )
+        monkeypatch.setattr(olt_ssh_metrics, "_incr", lambda *a, **k: None)
+
+    @property
+    def quits(self) -> int:
+        return self.channel.sent.count("quit\n")
+
+    def assert_closed_exactly_once(self) -> None:
+        assert self.original_close_calls == 1
+        assert self.close_real_calls == 1
+        assert self.releases == 1  # slot released once
+        assert len(self.logouts) == 1  # olt_ssh_logout recorded once
+        # A late caller-side transport.close() must be a no-op (no 2nd quit).
+        before = list(self.channel.sent)
+        self.transport.close()
+        assert self.channel.sent == before
+        assert self.original_close_calls == 1 and self.releases == 1
+        assert len(self.logouts) == 1
+
+
+@pytest.fixture
+def rig_factory(monkeypatch):
+    def make(replies: dict[str, str]) -> _Rig:
+        return _Rig(monkeypatch, replies)
+
+    return make
+
+
+def _forget_host(monkeypatch) -> None:
+    """Make the next ``import device_cli_host`` re-execute the module."""
+    import app.services.network as network_pkg
+
+    monkeypatch.delitem(
+        sys.modules, "app.services.network.device_cli_host", raising=False
+    )
+    monkeypatch.delattr(network_pkg, "device_cli_host", raising=False)
+
+
+def _legacy_reader(monkeypatch) -> None:
+    monkeypatch.setattr(olt_ssh, "_prepare_huawei_read_shell", lambda *a, **k: "#")
+    monkeypatch.setattr(
+        olt_ssh, "_run_huawei_paged_cmd", lambda *a, **k: "No ONT is configured\nx#"
+    )
+
+
+def test_flag_off_runs_legacy_and_never_imports_the_host(
+    monkeypatch, rig_factory
+) -> None:
+    rig = rig_factory({})
+    olt = _olt()
+    _legacy_reader(monkeypatch)
+    # Poison the package AND the host: flag-off must not even look at them.
+    monkeypatch.setitem(sys.modules, "dotmac_device_cli", None)
+    _forget_host(monkeypatch)
+    gate.set_read_settings_override(gate.DeviceCliReadSettings())
+    ok, message, entries = get_registered_ont_serials(olt, ["0/2/1"])
+    assert (ok, entries) == (True, [])
+    assert message == "Found 0 registered ONTs on 1 ports"
+    assert rig.opens == 1  # one legacy login
+    assert "app.services.network.device_cli_host" not in sys.modules
+
+
+def test_a_missing_package_means_legacy_plus_a_metric(
+    monkeypatch, rig_factory, events
+) -> None:
+    """Enabled and selected, but the package cannot import: legacy runs."""
+    rig = rig_factory({})
+    olt = _olt()
+    _enable(olt)
+    _legacy_reader(monkeypatch)
+    monkeypatch.setitem(sys.modules, "dotmac_device_cli", None)
+    _forget_host(monkeypatch)
+    ok, message, entries = get_registered_ont_serials(olt, ["0/2/1"])
+    assert (ok, entries) == (True, [])
+    assert message == "Found 0 registered ONTs on 1 ports"
+    assert rig.opens == 1
+    assert events == [("import_failed", "OLT-A", "list_onts")]
+
+
+def test_the_gate_itself_never_imports_the_package(monkeypatch) -> None:
+    monkeypatch.setitem(sys.modules, "dotmac_device_cli", None)
+    olt = _olt()
+    _enable(olt)
+    importlib.reload(gate)  # would raise ImportError if it named the package
+    assert gate.selected(olt, "list_onts") is False  # reload reset the override
+
+
+def test_list_onts_over_the_package_path_maps_to_legacy_entries(rig_factory) -> None:
+    rig = rig_factory({"display ont info 0 2 1 all\n": INVENTORY_REPLY})
+    olt = _olt()
+    _enable(olt)
+    ok, message, entries = get_registered_ont_serials(olt, ["gpon-0/2/1", "0/2/1"])
+    assert ok is True
+    assert message == "Found 2 registered ONTs on 1 ports"
+    assert [(e.fsp, e.onu_id, e.real_serial, e.run_state) for e in entries] == [
+        ("0/2/1", 0, "4857544300000001", "online"),
+        ("0/2/1", 1, "4857544300000002", "offline"),
+    ]
+    assert rig.opens == 1
+    assert "display ont info 0 2 1 all\n" in rig.channel.sent
+    assert rig.quits == 1 and rig.channel.sent.count("y\n") == 1
+    assert rig.logouts == ["clean"]
+    rig.assert_closed_exactly_once()
+    assert rig.reads[-1][1:3] == ("list_onts", "ok")
+
+
+def test_an_explicitly_empty_port_succeeds_with_zero_rows(rig_factory) -> None:
+    rig = rig_factory({"display ont info 0 2 1 all\n": EMPTY_REPLY})
+    olt = _olt()
+    _enable(olt)
+    ok, message, entries = get_registered_ont_serials(olt, ["0/2/1"])
+    assert (ok, entries) == (True, [])
+    assert message == "Found 0 registered ONTs on 1 ports"
+    rig.assert_closed_exactly_once()
+
+
+@pytest.mark.parametrize(
+    ("reply", "needle", "reason"),
+    [
+        (UNPARSED_REPLY, "had ONT rows that could not be parsed", "rows_unparsed"),
+        (PARAMETER_ERROR_REPLY, "OLT rejected: ", "parameter_error"),
+    ],
+)
+def test_unreadable_fails_the_call_with_no_legacy_relogin(
+    rig_factory, reply: str, needle: str, reason: str
+) -> None:
+    rig = rig_factory({"display ont info 0 2 1 all\n": reply})
+    olt = _olt()
+    _enable(olt)
+    ok, message, entries = get_registered_ont_serials(olt, ["0/2/1"])
+    assert ok is False and entries == []
+    assert needle in message
+    assert rig.opens == 1  # exactly one login: no legacy retry in the same call
+    assert rig.reads[-1] == ("OLT-A", "list_onts", "unreadable", reason)
+    rig.assert_closed_exactly_once()
+
+
+def test_a_session_that_never_reaches_a_prompt_types_no_logout(rig_factory) -> None:
+    rig = rig_factory({})
+    rig.channel._out.clear()  # no prompt at all after login
+    rig.channel.send = lambda data: len(data)  # type: ignore[method-assign]
+    olt = _olt()
+    _enable(olt)
+    ok, message, entries = get_registered_ont_serials(olt, ["0/2/1"])
+    assert ok is False and entries == []
+    assert rig.logouts == ["skipped_dirty"]
+    rig.assert_closed_exactly_once()
+
+
+def test_an_adapter_bug_fails_the_call_and_still_closes_once(
+    monkeypatch, rig_factory
+) -> None:
+    rig = rig_factory({"display ont info 0 2 1 all\n": INVENTORY_REPLY})
+    olt = _olt()
+    _enable(olt)
+
+    def boom(*_a: Any, **_k: Any) -> Any:
+        raise KeyError("adapter bug")
+
+    monkeypatch.setattr(device_cli_host, "list_onts", boom)
+    ok, message, entries = get_registered_ont_serials(olt, ["0/2/1"])
+    assert ok is False and entries == []
+    assert "adapter failure" in message
+    assert rig.opens == 1
+    assert rig.reads[-1][2] == "adapter_error"
+    rig.assert_closed_exactly_once()
+
+
+def test_connection_failure_matches_the_legacy_message(
+    monkeypatch, rig_factory
+) -> None:
+    rig = rig_factory({})
+    olt = _olt()
+    _enable(olt)
+
+    def refuse(_olt: Any) -> Any:
+        raise OltSessionBusy(
+            "olt_busy: all 2 SSH session slot(s) for this OLT are in use"
+        )
+
+    monkeypatch.setattr(olt_ssh, "_open_shell", refuse)
+    ok, message, entries = get_registered_ont_serials(olt, ["0/2/1"])
+    assert ok is False and entries == []
+    assert message.startswith("Connection failed: olt_busy:")
+    assert olt_ssh_limiter.is_busy_message(message)
+    assert rig.original_close_calls == 0
+
+
+def test_the_overall_inventory_deadline_is_enforced(monkeypatch, rig_factory) -> None:
+    rig = rig_factory({"display ont info 0 2 1 all\n": INVENTORY_REPLY})
+    olt = _olt()
+    _enable(olt)
+    ok, message, entries = get_registered_ont_serials(olt, ["0/2/1"], timeout_sec=0)
+    assert ok is False and entries == []
+    assert message == "Error: Huawei inventory exceeded 0s before port 0/2/1"
+    rig.assert_closed_exactly_once()
+
+
+def test_invalid_ports_are_rejected_before_the_package_is_consulted(
+    monkeypatch,
+) -> None:
+    called: list[Any] = []
+    monkeypatch.setattr(
+        device_cli_host, "read_registered_onts", lambda *a, **k: called.append(1)
+    )
+    ok, message, entries = get_registered_ont_serials(_olt(), ["not-a-port"])
+    assert ok is False and entries == [] and called == []
+
+
+def test_logout_on_close_false_types_nothing_on_the_package_path(rig_factory) -> None:
+    rig = rig_factory({"display ont info 0 2 1 all\n": INVENTORY_REPLY})
+    set_config_override(LimiterConfig(logout_on_close=False))
+    try:
+        olt = _olt()
+        _enable(olt)
+        ok, _message, entries = get_registered_ont_serials(olt, ["0/2/1"])
+    finally:
+        set_config_override(None)
+    assert ok is True and len(entries) == 2
+    assert rig.quits == 0 and "y\n" not in rig.channel.sent
+    assert rig.logouts == ["skipped_dirty"]
+    rig.assert_closed_exactly_once()
+
+
+def test_a_value_error_after_the_open_is_an_adapter_error_not_connectivity(
+    monkeypatch, rig_factory
+) -> None:
+    rig = rig_factory({"display ont info 0 2 1 all\n": INVENTORY_REPLY})
+    olt = _olt()
+    _enable(olt)
+
+    def bad(*_a: Any, **_k: Any) -> Any:
+        raise ValueError("adapter bug")
+
+    monkeypatch.setattr(device_cli_host, "list_onts", bad)
+    ok, message, _entries = get_registered_ont_serials(olt, ["0/2/1"])
+    assert ok is False and "adapter failure" in message
+    assert rig.reads[-1][2] == "adapter_error"
+    rig.assert_closed_exactly_once()
+
+
+def test_an_oserror_after_the_open_is_connectivity(monkeypatch, rig_factory) -> None:
+    rig = rig_factory({"display ont info 0 2 1 all\n": INVENTORY_REPLY})
+    olt = _olt()
+    _enable(olt)
+
+    def drop(*_a: Any, **_k: Any) -> Any:
+        raise OSError("connection reset")
+
+    monkeypatch.setattr(device_cli_host, "list_onts", drop)
+    ok, message, _entries = get_registered_ont_serials(olt, ["0/2/1"])
+    assert ok is False and message == "Error: connection reset"
+    assert rig.reads[-1][2:] == ("unreadable", "connection_failed")
+    rig.assert_closed_exactly_once()
+
+
+def test_each_port_is_bounded_by_a_deadline_the_channel_enforces() -> None:
+    import time as _time
+
+    raw = _RawChannel([b"never read"])
+    channel = device_cli_host.ParamikoShellChannel(raw)
+    channel.deadline = _time.monotonic() - 1  # already past
+    assert channel.recv(4096) == b""  # EOF: the session ends CLOSED, nothing typed
+    assert raw.chunks == [b"never read"]
+    channel.deadline = _time.monotonic() + 60
+    assert channel.recv(4096) == b"never read"
+
+
+def test_the_per_port_deadline_is_min_30_and_the_remaining_budget(
+    monkeypatch, rig_factory
+) -> None:
+    rig = rig_factory({"display ont info 0 2 1 all\n": INVENTORY_REPLY})
+    olt = _olt()
+    _enable(olt)
+    seen: list[float] = []
+    real_recv = device_cli_host.ParamikoShellChannel.recv
+
+    def spy(self, n):
+        if self.deadline is not None:
+            seen.append(self.deadline - _real_monotonic())
+        return real_recv(self, n)
+
+    import time as _t
+
+    _real_monotonic = _t.monotonic
+    monkeypatch.setattr(device_cli_host.ParamikoShellChannel, "recv", spy)
+    get_registered_ont_serials(olt, ["0/2/1"], timeout_sec=5)
+    assert seen and max(seen) <= 5.0 + 0.5  # capped by the remaining budget
+    rig.assert_closed_exactly_once()
+
+
+def test_write_priority_takes_the_reserved_slot_and_background_cannot(server) -> None:
+    """The reserved slot (index limit-1) is for WRITE, in both engines."""
+    olt = _olt()
+    factory = lambda: device_cli_host.PgAdvisoryLockStore(server.connect())  # noqa: E731
+    package_write = device_cli_host.acquire_device_slot(
+        olt, PROFILE_56, priority=OltSshPriority.WRITE, store_factory=factory
+    )
+    assert package_write.slot_index == 1  # reserved slot first
+    # legacy BACKGROUND uses only slot 0 and is unaffected
+    bg = olt_ssh_limiter.acquire_slot(
+        olt_key=str(olt.id),
+        limit=2,
+        reserved=1,
+        priority=OltSshPriority.BACKGROUND,
+        wait_seconds=0,
+    )
+    assert bg.slot_index == 0
+    # both slots are now held: a legacy WRITE is busy, and so is a package WRITE
+    with pytest.raises(OltSessionBusy):
+        olt_ssh_limiter.acquire_slot(
+            olt_key=str(olt.id),
+            limit=2,
+            reserved=1,
+            priority=OltSshPriority.WRITE,
+            wait_seconds=0,
+        )
+    with pytest.raises(DeviceBusy):
+        device_cli_host.acquire_device_slot(
+            olt, PROFILE_56, priority=OltSshPriority.WRITE, store_factory=factory
+        )
+    bg.release()
+    # a package WRITE now finds slot 0 free, a legacy WRITE finds nothing
+    second = device_cli_host.acquire_device_slot(
+        olt, PROFILE_56, priority=OltSshPriority.WRITE, store_factory=factory
+    )
+    assert second.slot_index == 0
+    package_write.release()
+    second.release()
+
+
+def test_a_deadline_expiring_mid_command_ends_forced_with_no_quit(
+    monkeypatch, rig_factory
+) -> None:
+    """The port deadline fires while the command is unanswered: the read fails as
+    prompt_timeout, and logout must NOT mistake the forced EOF for a clean one."""
+    # No reply for the command: the device never answers.
+    rig = rig_factory({})
+    olt = _olt()
+    _enable(olt)
+
+    class _Clock:
+        offset = 0.0
+
+        @staticmethod
+        def monotonic() -> float:
+            return time.monotonic() + _Clock.offset
+
+    monkeypatch.setattr(device_cli_host, "time", _Clock)
+    sent_before_expiry = rig.channel.send
+
+    def send(data: str) -> int:
+        if data.startswith("display ont info"):
+            _Clock.offset += 3600  # the deadline passes while we wait for output
+        return sent_before_expiry(data)
+
+    rig.channel.send = send  # type: ignore[method-assign]
+    ok, message, entries = get_registered_ont_serials(olt, ["0/2/1"])
+    assert ok is False and entries == []
+    assert rig.reads[-1][2:] == ("unreadable", "prompt_timeout")
+    assert rig.quits == 0 and "y\n" not in rig.channel.sent
+    assert rig.logouts == ["forced"]
+    rig.assert_closed_exactly_once()
+
+
+def test_the_deadline_is_cleared_before_logout_after_a_successful_read(
+    rig_factory,
+) -> None:
+    rig = rig_factory({"display ont info 0 2 1 all\n": INVENTORY_REPLY})
+    olt = _olt()
+    _enable(olt)
+    ok, _message, _entries = get_registered_ont_serials(olt, ["0/2/1"])
+    assert ok is True and rig.logouts == ["clean"] and rig.quits == 1
+
+
+def test_any_failure_importing_the_host_means_legacy(
+    monkeypatch, rig_factory, events
+) -> None:
+    class _Broken:
+        @staticmethod
+        def find_spec(name, path=None, target=None):
+            if name == "app.services.network.device_cli_host":
+                raise RuntimeError("package import side effect exploded")
+            return None
+
+    rig = rig_factory({})
+    olt = _olt()
+    _enable(olt)
+    _legacy_reader(monkeypatch)
+    _forget_host(monkeypatch)
+    monkeypatch.setattr(sys, "meta_path", [_Broken, *sys.meta_path])
+    ok, message, entries = get_registered_ont_serials(olt, ["0/2/1"])
+    assert (ok, entries) == (True, [])
+    assert rig.opens == 1  # legacy, one login
+    assert events == [("import_failed", "OLT-A", "list_onts")]

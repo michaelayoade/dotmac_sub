@@ -389,7 +389,7 @@ def get_registered_ont_serials(
     if device_cli_gate.selected(olt, device_cli_gate.OP_LIST_ONTS):
         try:
             from app.services.network import device_cli_host
-        except ImportError:
+        except Exception:  # ImportError, or the package failing while importing
             logger.exception("device_cli_host_import_failed olt=%s", olt.name)
             from app.services.network import olt_ssh_metrics
 

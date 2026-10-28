@@ -99,6 +99,9 @@ _OPEN_ERRORS = (SSHException, EOFError, OSError, TimeoutError, ValueError)
 # RuntimeError there are programming errors (adapter_error), not connectivity.
 _SESSION_CONNECTION_ERRORS = (SSHException, EOFError, OSError, TimeoutError)
 
+# Reasons the engine reports when the channel hits EOF (our deadline does this).
+_EOF_REASONS = frozenset({Reason.CONNECTION_FAILED, Reason.PROMPT_TIMEOUT})
+
 # Per-port cap, as legacy (``_run_huawei_paged_cmd(timeout_sec=min(30, ...))``).
 _PER_PORT_SECONDS = 30
 
@@ -124,12 +127,15 @@ class ParamikoShellChannel:
         #: the session as CLOSED: the read fails and nothing more is typed).
         self.deadline: float | None = None
 
+    def expired(self) -> bool:
+        return self.deadline is not None and time.monotonic() >= self.deadline
+
     def send(self, data: str) -> int:
         sent = self._channel.send(data)
         return sent if isinstance(sent, int) else len(data)
 
     def recv(self, nbytes: int) -> bytes:
-        if self.deadline is not None and time.monotonic() >= self.deadline:
+        if self.expired():
             return b""
         chunk = self._channel.recv(nbytes)
         if isinstance(chunk, str):
@@ -597,6 +603,7 @@ def read_registered_onts(
         return False, f"Connection failed: {exc}", []
 
     session: CliSession | None = None
+    shell: ParamikoShellChannel | None = None
     try:
         shell = ParamikoShellChannel(channel)
         session = CliSession.attach(shell, plan.profile, events=_event_sink(label))
@@ -637,15 +644,19 @@ def read_registered_onts(
                 )
             if isinstance(result, Unreadable):
                 _evidence_log(label, OP_LIST_ONTS, result)
-                _record(label, OP_LIST_ONTS, "unreadable", result.reason.value)
+                reason = result.reason
+                if shell.expired() and reason in _EOF_REASONS:
+                    reason = Reason.PROMPT_TIMEOUT  # our own deadline ended it
+                _record(label, OP_LIST_ONTS, "unreadable", reason.value)
                 return (
                     False,
-                    unreadable_message(result.reason, fsp=fsp, detail=result.detail),
+                    unreadable_message(reason, fsp=fsp, detail=result.detail),
                     [],
                 )
             assert isinstance(result, Ok) and isinstance(result.value, OntInventory)
             _evidence_log(label, OP_LIST_ONTS, result)
             entries.extend(map_inventory(result.value))
+        shell.deadline = None  # a late deadline must not fake a logout answer
         _record(label, OP_LIST_ONTS, "ok")
         return (
             True,
@@ -654,7 +665,12 @@ def read_registered_onts(
         )
     except Exception as exc:
         if isinstance(exc, _SESSION_CONNECTION_ERRORS):
-            _record(label, OP_LIST_ONTS, "unreadable", Reason.CONNECTION_FAILED.value)
+            reason = (
+                Reason.PROMPT_TIMEOUT
+                if shell is not None and shell.expired()
+                else Reason.CONNECTION_FAILED
+            )
+            _record(label, OP_LIST_ONTS, "unreadable", reason.value)
             logger.error(
                 "Error getting registered ONT serials from OLT %s: %s", label, exc
             )
@@ -663,6 +679,10 @@ def read_registered_onts(
         # connectivity: counted as adapter_error.
         return False, _adapter_failure(label, OP_LIST_ONTS, exc), []
     finally:
+        if shell is not None:
+            # Logout reads must see the real channel: with the deadline still
+            # armed, EOF would be reported as a clean logout nobody answered.
+            shell.deadline = None
         _close_package_owned(transport, session)
 
 

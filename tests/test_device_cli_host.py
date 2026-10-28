@@ -15,6 +15,7 @@ import importlib
 import socket
 import sys
 import threading
+import time
 import uuid
 from types import SimpleNamespace
 from typing import Any
@@ -1186,3 +1187,71 @@ def test_write_priority_takes_the_reserved_slot_and_background_cannot(server) ->
     assert second.slot_index == 0
     package_write.release()
     second.release()
+
+
+def test_a_deadline_expiring_mid_command_ends_unclean_with_no_quit(
+    monkeypatch, rig_factory
+) -> None:
+    """The port deadline fires while the command is unanswered: the read fails as
+    prompt_timeout, and logout must NOT mistake the forced EOF for a clean one."""
+    # No reply for the command: the device never answers.
+    rig = rig_factory({})
+    olt = _olt()
+    _enable(olt)
+
+    class _Clock:
+        offset = 0.0
+
+        @staticmethod
+        def monotonic() -> float:
+            return time.monotonic() + _Clock.offset
+
+    monkeypatch.setattr(device_cli_host, "time", _Clock)
+    sent_before_expiry = rig.channel.send
+
+    def send(data: str) -> int:
+        if data.startswith("display ont info"):
+            _Clock.offset += 3600  # the deadline passes while we wait for output
+        return sent_before_expiry(data)
+
+    rig.channel.send = send  # type: ignore[method-assign]
+    ok, message, entries = get_registered_ont_serials(olt, ["0/2/1"])
+    assert ok is False and entries == []
+    assert rig.reads[-1][2:] == ("unreadable", "prompt_timeout")
+    assert rig.quits == 0 and "y\n" not in rig.channel.sent
+    # The session is not provably idle at a prompt, so logout types nothing and
+    # reports skipped_dirty (never a false "clean").
+    assert rig.logouts == ["skipped_dirty"]
+    rig.assert_closed_exactly_once()
+
+
+def test_the_deadline_is_cleared_before_logout_after_a_successful_read(
+    rig_factory,
+) -> None:
+    rig = rig_factory({"display ont info 0 2 1 all\n": INVENTORY_REPLY})
+    olt = _olt()
+    _enable(olt)
+    ok, _message, _entries = get_registered_ont_serials(olt, ["0/2/1"])
+    assert ok is True and rig.logouts == ["clean"] and rig.quits == 1
+
+
+def test_any_failure_importing_the_host_means_legacy(
+    monkeypatch, rig_factory, events
+) -> None:
+    class _Broken:
+        @staticmethod
+        def find_spec(name, path=None, target=None):
+            if name == "app.services.network.device_cli_host":
+                raise RuntimeError("package import side effect exploded")
+            return None
+
+    rig = rig_factory({})
+    olt = _olt()
+    _enable(olt)
+    _legacy_reader(monkeypatch)
+    _forget_host(monkeypatch)
+    monkeypatch.setattr(sys, "meta_path", [_Broken, *sys.meta_path])
+    ok, message, entries = get_registered_ont_serials(olt, ["0/2/1"])
+    assert (ok, entries) == (True, [])
+    assert rig.opens == 1  # legacy, one login
+    assert events == [("import_failed", "OLT-A", "list_onts")]
