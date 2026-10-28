@@ -3,13 +3,24 @@
 Transitional composition. Implements Billing's opening verifier ports (import
 V2, window provision, window seal) by RECOMPUTING the expected manifest and
 commands from pinned evidence bytes and accepting a request only when it equals
-that recomputation. Request-supplied digests are compared, never trusted as
-inputs. Authority comes from Ed25519-signed statements whose anchors are typed
-at ship time (rehearsal: inline public keys; production: OpenBao pointers with
-typed fingerprints). It reads the source through a read-only port and writes
-nothing. Fail-closed contract: ``None`` is an authoritative rejection,
-``OpeningVerificationUnavailable`` means evidence or custody is unavailable,
-and a partially trusted verifier is never built.
+that recomputation. Request-supplied digests are compared, never used as
+inputs. Authority is Ed25519-signed statements; anchors are typed at ship time
+(rehearsal: inline public keys; production: OpenBao pointers with typed
+fingerprints). The source is read through a read-only port; nothing is written.
+Contract: ``None`` is an authoritative rejection, ``OpeningVerificationUnavailable``
+means evidence or custody is unavailable, and a partially trusted verifier is
+never built.
+
+Separation caveat: rehearsal output is unusable in production because of the
+signing domain, the anchor source and the DB marker, but Billing itself accepts
+any non-empty proof refs, so the runtime separator at the Billing target is the
+source marker plus these controls (a planted marker would need prod DDL, the
+shredded rehearsal keys and code execution: the accepted fake-verifier
+residual). The Step 6 runner must therefore hard-code ``production`` (no
+environment flag) and a post-import audit must assert every receipt ref starts
+``gapb1:production:``. Production anchors are re-resolved on every call, so
+revocation by deleting the KV entry lags by the OpenBao cache TTL (default 60 s,
+up to 3600 s via ``OPENBAO_CACHE_TTL_SECONDS``).
 """
 
 from __future__ import annotations
@@ -37,9 +48,6 @@ from dotmac_billing.opening_contracts import (
     OpeningVerificationUnavailable,
 )
 from dotmac_billing.opening_receivable_contracts import (
-    ImportOpeningAccountV2,
-    OpeningImportReversalVerificationRequestV2,
-    OpeningImportReversalVerificationV2,
     OpeningImportVerificationRequestV2,
     OpeningImportVerificationV2,
 )
@@ -61,106 +69,61 @@ from dotmac_billing.opening_window_contracts import (
     OpeningWindowSealVerificationV1,
     opening_admission_population_digest,
 )
-
-__all__ = [
-    "OpeningEvidencePaths",
-    "OpeningStatementPaths",
-    "OpeningTrustProfile",
-    "OpeningVerifierConstructionError",
-    "OpeningVerifiers",
-    "RoleObservation",
-    "SourceObservationPort",
-    "SqlSourceObservationPort",
-    "StatementMeta",
-    "build_opening_verifiers",
-    "draft_statement",
-    "load_evidence",
-    "signing_message",
-    "statement_sha256",
-    "utc_text",
-]
+from sqlalchemy import text
+from sqlalchemy.exc import SQLAlchemyError
 
 SCHEMA = "dotmac-sub.billing.opening.authority-statement"
 DOMAIN = "dotmac-sub-opening-authority-v1"
-ATTESTATION = "source_attestation"
-APPROVAL = "window_import_approval"
-SEAL = "seal_approval"
+ATTESTATION, APPROVAL, SEAL = (
+    "source_attestation",
+    "window_import_approval",
+    "seal_approval",
+)
 _ROLE = {
     ATTESTATION: "finance_attestor",
     APPROVAL: "migration_approver",
     SEAL: "migration_approver",
 }
+# Reviewed adapter bytes (Starter dotmac-billing a8). Changing this is a reviewed diff.
+_PINNED_ADAPTER_SHA256 = frozenset(
+    {"aad4c84608fa74ab71d285ceeb1b5a4713563e0e9f48b46f686527695e7cb59b"}
+)
 _MAX_VALIDITY = {"rehearsal": timedelta(days=14), "production": timedelta(hours=72)}
 _ISOLATION = frozenset({"repeatable read", "serializable"})
-_ENVELOPE = frozenset(
-    {
-        "schema",
-        "purpose",
-        "environment",
-        "audience",
-        "statement_id",
-        "issued_at",
-        "not_before",
-        "not_after",
-        "signer_role",
-        "body",
-    }
+
+
+def _keys(names: str) -> frozenset[str]:
+    return frozenset(names.split())
+
+
+_ENVELOPE = _keys(
+    "schema purpose environment audience statement_id issued_at not_before "
+    "not_after signer_role body"
 )
 _BODY_KEYS = {
-    ATTESTATION: frozenset(
-        {
-            "scope",
-            "installation_id",
-            "source_system",
-            "census_sha256",
-            "census_content_fingerprint",
-            "census_snapshot_id",
-            "census_captured_at",
-            "economic_cutoff",
-            "population_version",
-            "source_repository_sha",
-            "schema_heads",
-            "assembly_digest",
-            "original_evidence_sha256",
-            "cash_lot_evidence_sha256",
-            "adapter_sha256",
-            "manifest_fingerprint",
-            "source_authority_ref",
-        }
+    ATTESTATION: _keys(
+        "scope installation_id source_system census_sha256 "
+        "census_content_fingerprint census_snapshot_id census_captured_at "
+        "economic_cutoff population_version source_repository_sha schema_heads "
+        "assembly_digest original_evidence_sha256 cash_lot_evidence_sha256 "
+        "adapter_sha256 manifest_fingerprint source_authority_ref"
     ),
-    APPROVAL: frozenset(
-        {
-            "source_attestation_sha256",
-            "window",
-            "migration_authority_ref",
-            "import_commands",
-        }
+    APPROVAL: _keys(
+        "source_attestation_sha256 window migration_authority_ref import_commands"
     ),
-    SEAL: frozenset(
-        {"source_attestation_sha256", "window_import_approval_sha256", "seal"}
-    ),
+    SEAL: _keys("source_attestation_sha256 window_import_approval_sha256 seal"),
 }
-_WINDOW_KEYS = frozenset(
-    {"window_id", "epoch", "principal_name", "provision_authority_ref"}
+_WINDOW_KEYS = _keys("window_id epoch principal_name provision_authority_ref")
+_SEAL_KEYS = _keys(
+    "window_id epoch manifest_fingerprint coupled_watermark command_key "
+    "authority_ref occurred_at"
 )
-_SEAL_KEYS = frozenset(
-    {
-        "window_id",
-        "epoch",
-        "manifest_fingerprint",
-        "coupled_watermark",
-        "command_key",
-        "authority_ref",
-        "occurred_at",
-    }
-)
-_LANE_FIELDS = (
-    ("unapplied_customer_credit", "unapplied_customer_credit_minor"),
-    ("prepaid_funding_reserved", "prepaid_funding_reserved_minor"),
-    ("prepaid_funding_consumed", "prepaid_funding_consumed_minor"),
-    ("written_off_total", "written_off_total_minor"),
-    ("refunded_total", "refunded_total_minor"),
-    ("adjustment_total", "adjustment_total_minor"),
+_LANE_FIELDS = tuple(
+    (name, f"{name}_minor")
+    for name in (
+        "unapplied_customer_credit prepaid_funding_reserved "
+        "prepaid_funding_consumed written_off_total refunded_total adjustment_total"
+    ).split()
 )
 
 
@@ -190,14 +153,14 @@ def _sha(raw: bytes) -> str:
 
 
 def canonical_json(value: object) -> bytes:
-    text = json.dumps(
+    text_ = json.dumps(
         value,
         ensure_ascii=False,
         sort_keys=True,
         separators=(",", ":"),
         allow_nan=False,
     )
-    return (text + "\n").encode("utf-8")
+    return (text_ + "\n").encode("utf-8")
 
 
 def statement_sha256(raw: bytes) -> str:
@@ -254,19 +217,10 @@ def _minor(value: object, precision: int) -> int:
     return number
 
 
-# ---------------------------------------------------------------------------
-# Observation port (read-only)
-# ---------------------------------------------------------------------------
-
-
 @dataclass(frozen=True, slots=True)
 class RoleObservation:
     oid: int
-    rolsuper: bool
-    rolbypassrls: bool
-    rolcreaterole: bool
-    rolcreatedb: bool
-    rolreplication: bool
+    privileged: bool  # any of super/bypassrls/createrole/createdb/replication
 
 
 class SourceObservationPort(Protocol):
@@ -283,54 +237,51 @@ class SqlSourceObservationPort:
     """Default port: its own REPEATABLE READ, READ ONLY snapshot, never the caller's."""
 
     @staticmethod
-    def _session() -> Any:
+    def _read(statements: Callable[[Any], Any], code: str) -> Any:
         from app.db import read_only_snapshot_session
 
-        return read_only_snapshot_session()
+        try:
+            with read_only_snapshot_session() as db:
+                return statements(db)
+        except SQLAlchemyError as exc:
+            raise OpeningVerificationUnavailable(code) from exc
 
     def marker(self) -> str | None:
-        from sqlalchemy import text
-        from sqlalchemy.exc import SQLAlchemyError
+        def read(db: Any) -> list[Any] | None:
+            present = db.execute(
+                text("SELECT to_regclass('public.rehearsal_marker') IS NOT NULL")
+            ).scalar()
+            if not present:
+                return None
+            return db.execute(
+                text("SELECT restore_id FROM public.rehearsal_marker")
+            ).all()
 
-        try:
-            with self._session() as db:
-                present = db.execute(
-                    text("SELECT to_regclass('public.rehearsal_marker') IS NOT NULL")
-                ).scalar()
-                if not present:
-                    return None
-                rows = db.execute(
-                    text("SELECT restore_id FROM public.rehearsal_marker")
-                ).all()
-        except SQLAlchemyError as exc:
-            raise OpeningVerificationUnavailable("marker_unavailable") from exc
+        rows = self._read(read, "marker_unavailable")
+        if rows is None:
+            return None
         if len(rows) != 1:
             raise OpeningVerificationUnavailable("marker_ambiguous")
         return str(rows[0][0])
 
     def role(self, name: str) -> RoleObservation | None:
-        from sqlalchemy import text
-        from sqlalchemy.exc import SQLAlchemyError
-
-        try:
-            with self._session() as db:
-                row = db.execute(
-                    text(
-                        "SELECT oid::bigint, rolsuper, rolbypassrls, rolcreaterole,"
-                        " rolcreatedb, rolreplication FROM pg_roles WHERE rolname = :n"
-                    ),
-                    {"n": name},
-                ).one_or_none()
-        except SQLAlchemyError as exc:
-            raise OpeningVerificationUnavailable("role_unavailable") from exc
-        return (
-            None if row is None else RoleObservation(int(row[0]), *map(bool, row[1:]))
+        row = self._read(
+            lambda db: db.execute(
+                text(
+                    "SELECT oid::bigint, (rolsuper OR rolbypassrls OR rolcreaterole "
+                    "OR rolcreatedb OR rolreplication) FROM pg_roles WHERE rolname = :n"
+                ),
+                {"n": name},
+            ).one_or_none(),
+            "role_unavailable",
         )
+        return None if row is None else RoleObservation(int(row[0]), bool(row[1]))
 
     def census_wire(self, query: Any, snapshot_id: str, captured_at: datetime) -> bytes:
-        from sqlalchemy.exc import SQLAlchemyError
-
-        from app.services.billing.opening_census_wire import render_opening_census_wire
+        from app.services.billing.opening_census_wire import (
+            OpeningCensusWireError,
+            render_opening_census_wire,
+        )
         from app.services.billing.opening_export import (
             BillingOpeningExportError,
             preview_billing_opening_export,
@@ -340,23 +291,25 @@ class SqlSourceObservationPort:
         )
 
         try:
-            with self._session() as db:
-                preview = preview_billing_opening_export(db, query=query)
-        except (SQLAlchemyError, BillingOpeningExportError) as exc:
+            preview = self._read(
+                lambda db: preview_billing_opening_export(db, query=query),
+                "census_unavailable",
+            )
+            _require(
+                isinstance(preview, BillingOpeningExportPreviewV3), "census_not_v3"
+            )
+            capture = replace(
+                preview.capture, snapshot_id=snapshot_id, captured_at=captured_at
+            )
+            return render_opening_census_wire(replace(preview, capture=capture)).encode(
+                "utf-8"
+            )
+        except (
+            BillingOpeningExportError,
+            OpeningCensusWireError,
+            OpeningVerifierConstructionError,
+        ) as exc:
             raise OpeningVerificationUnavailable("census_unavailable") from exc
-        if not isinstance(preview, BillingOpeningExportPreviewV3):
-            raise OpeningVerificationUnavailable("census_not_v3")
-        capture = replace(
-            preview.capture, snapshot_id=snapshot_id, captured_at=captured_at
-        )
-        return render_opening_census_wire(replace(preview, capture=capture)).encode(
-            "utf-8"
-        )
-
-
-# ---------------------------------------------------------------------------
-# Trust profile
-# ---------------------------------------------------------------------------
 
 
 def _parse_key(value: str) -> bytes:
@@ -379,13 +332,16 @@ def _default_resolver(reference: str) -> str:
 
 @dataclass(frozen=True, eq=False)
 class OpeningTrustProfile:
-    """Anchors and domain for one environment; built only from typed parameters."""
+    """Anchors and domain for one environment; built only from typed parameters.
+
+    ``_resolver`` is a test seam: production callers must go through OpenBao.
+    """
 
     environment: str
     inline_anchors: Mapping[str, str] = field(default_factory=dict)
     anchor_refs: Mapping[str, str] = field(default_factory=dict)
     anchor_fingerprints: Mapping[str, str] = field(default_factory=dict)
-    resolver: Callable[[str], str] | None = None
+    _resolver: Callable[[str], str] | None = None
 
     def __post_init__(self) -> None:
         roles = {"finance_attestor", "migration_approver"}
@@ -395,24 +351,21 @@ class OpeningTrustProfile:
             _require(
                 not self.anchor_refs and not self.anchor_fingerprints, "profile_anchors"
             )
-        else:
-            _require(not self.inline_anchors, "production_inline_anchor_refused")
+            return
+        _require(not self.inline_anchors, "production_inline_anchor_refused")
+        _require(
+            set(self.anchor_refs) == roles == set(self.anchor_fingerprints),
+            "profile_anchors",
+        )
+        for ref in self.anchor_refs.values():
             _require(
-                set(self.anchor_refs) == roles == set(self.anchor_fingerprints),
-                "profile_anchors",
+                isinstance(ref, str) and ref.startswith("bao://"), "anchor_ref_scheme"
             )
-            for ref in self.anchor_refs.values():
-                _require(
-                    isinstance(ref, str) and ref.startswith("bao://"),
-                    "anchor_ref_scheme",
-                )
-            for fingerprint in self.anchor_fingerprints.values():
-                _require(
-                    isinstance(fingerprint, str)
-                    and fingerprint.startswith("sha256:")
-                    and len(fingerprint) == 71,
-                    "anchor_fingerprint_malformed",
-                )
+        for fp in self.anchor_fingerprints.values():
+            _require(
+                isinstance(fp, str) and fp.startswith("sha256:") and len(fp) == 71,
+                "anchor_fingerprint_malformed",
+            )
 
     def anchors(self) -> dict[str, bytes]:
         """Resolve public keys; production re-resolves on every call."""
@@ -422,10 +375,13 @@ class OpeningTrustProfile:
             keys = {}
             for role, ref in self.anchor_refs.items():
                 try:
-                    value = (self.resolver or _default_resolver)(ref)
+                    value = (self._resolver or _default_resolver)(ref)
                 except Exception as exc:  # noqa: BLE001 - any custody failure is unavailable
                     raise OpeningVerificationUnavailable("anchor_unavailable") from exc
-                keys[role] = _parse_key(value)
+                try:
+                    keys[role] = _parse_key(value)
+                except OpeningVerifierConstructionError:
+                    raise _AnchorMismatch(role) from None
                 if "sha256:" + _sha(keys[role]) != self.anchor_fingerprints[role]:
                     raise _AnchorMismatch(role)
         _require(
@@ -436,11 +392,6 @@ class OpeningTrustProfile:
 
     def ref_ok(self, ref: str) -> bool:
         return ref.startswith("rehearsal:") == (self.environment == "rehearsal")
-
-
-# ---------------------------------------------------------------------------
-# Evidence: pinned bytes, recomputation, cross-checks
-# ---------------------------------------------------------------------------
 
 
 @dataclass(frozen=True)
@@ -473,7 +424,7 @@ class _Evidence:
     adapter_sha: str
     manifest: Any
     fingerprint: str
-    expected: Mapping[OpeningPartitionV1, ImportOpeningAccountV2]
+    expected: Mapping[OpeningPartitionV1, Any]
     digests: Mapping[OpeningPartitionV1, str]
     query: Any
 
@@ -486,30 +437,35 @@ def _read(path: Path) -> bytes:
 
 
 def _load_adapter(raw: bytes, sha: str) -> types.ModuleType:
+    """Execute ONLY reviewed bytes: the pin is checked before compile/exec."""
+    _require(_sha(raw) == sha and sha in _PINNED_ADAPTER_SHA256, "adapter_not_pinned")
     name = f"_pinned_opening_adapter_{sha[:16]}"
     module = types.ModuleType(name)
     code = compile(raw, f"<pinned-adapter:{sha}>", "exec", dont_inherit=True)
     sys.modules[name] = module
     try:
-        exec(code, module.__dict__)  # noqa: S102 - bytes were hash-pinned above
+        exec(code, module.__dict__)  # noqa: S102 - bytes are code-pinned above
         return module
     finally:
         sys.modules.pop(name, None)
 
 
-def load_evidence(paths: OpeningEvidencePaths) -> _Evidence:
+def load_evidence(
+    paths: OpeningEvidencePaths, adapter_bytes: bytes | None = None
+) -> _Evidence:
     """Read each input once, recompute M* and the commands, run X1-X7."""
     _require(paths.cash_lots is None, "cash_lot_evidence_unsupported")
     census_bytes, assembly_bytes = _read(paths.census), _read(paths.assembly)
-    adapter_bytes = _read(paths.adapter)
+    adapter_bytes = _read(paths.adapter) if adapter_bytes is None else adapter_bytes
     census = _json(census_bytes, "census_malformed")
     _require(
         isinstance(census, dict) and canonical_json(census) == census_bytes,
         "census_not_canonical",
     )
-    assembly_payload = _json(assembly_bytes, "assembly_malformed")
     try:
-        declaration = parse_opening_rehearsal_assembly(assembly_payload)
+        declaration = parse_opening_rehearsal_assembly(
+            _json(assembly_bytes, "assembly_malformed")
+        )
     except OpeningEvidenceError:
         raise _refuse("assembly_malformed") from None
     assembly_digest = opening_rehearsal_assembly_digest(declaration)
@@ -621,23 +577,29 @@ def _cross_check(ev: _Evidence, originals: Mapping[uuid.UUID, Any], run: Any) ->
             row.source_account_key, row.account_id, row.currency, row.precision
         )
     partitions = tuple(keymap.values())
-    _require(len(set(partitions)) == len(partitions), "partition_duplicate")
     _require(
         len({p.account_id for p in partitions}) == len(partitions),
         "partition_account_collision",
     )
+    sources = {k[0] for k in keymap}
     invoices = {_uuid(i["invoice_id"]): i for i in census["invoices"]}
     _require(len(invoices) == len(census["invoices"]), "x2_duplicate_invoice")
 
     def key_of(row: Mapping[str, Any]) -> tuple[uuid.UUID, str]:
         return (_uuid(row["account_id"]), row["currency"])
 
-    # X2: complete population (closes the adapter's silent drop of unmapped accounts).
-    for row in census["invoices"]:
+    # X2: complete population. Closes the adapter's silent drop of unmapped rows.
+    for row in (*census["invoices"], *census["lanes"]):
         _require(key_of(row) in keymap, "x2_unmapped_population")
     for row in census["controls"]:
-        if row["account_id"] is not None and row["currency"] is not None:
-            _require(key_of(row) in keymap, "x2_unmapped_population")
+        if row["account_id"] is not None:
+            _require(
+                row["currency"] is not None and key_of(row) in keymap,
+                "x2_unmapped_population",
+            )
+    for row in census["blocking_exceptions"]:
+        _require(row["account_id"] is not None, "x2_accountless_exception")
+        _require(_uuid(row["account_id"]) in sources, "x2_unmapped_population")
     eligible = {_uuid(i) for i in census["eligible_invoice_ids"]}
     _require(eligible <= set(invoices), "x2_unknown_eligible")
     mapping = {m.source_invoice_id: m for m in decl.invoice_mappings}
@@ -647,9 +609,9 @@ def _cross_check(ev: _Evidence, originals: Mapping[uuid.UUID, Any], run: Any) ->
         else ("invoice", str(i))
         for i in invoices
     )
-    _require(len(manifest.dispositions) == len(invoices), "x2_dispositions")
     _require(
-        Counter((d.identity.kind, d.identity.key) for d in manifest.dispositions)
+        len(manifest.dispositions) == len(invoices)
+        and Counter((d.identity.kind, d.identity.key) for d in manifest.dispositions)
         == expected_ids,
         "x2_dispositions",
     )
@@ -682,9 +644,7 @@ def _cross_check(ev: _Evidence, originals: Mapping[uuid.UUID, Any], run: Any) ->
             r.residual_minor for r in manifest.receivables if r.partition == p
         )
         controls = [
-            c
-            for c in census["controls"]
-            if c["account_id"] is not None and key_of(c) == key
+            c for c in census["controls"] if c["account_id"] and key_of(c) == key
         ]
         mcs = [c for c in manifest.controls if c.partition == p]
         _require(len(controls) == 1 and len(mcs) == 1, "x3_control_missing")
@@ -739,11 +699,6 @@ def _cross_check(ev: _Evidence, originals: Mapping[uuid.UUID, Any], run: Any) ->
             )
 
 
-# ---------------------------------------------------------------------------
-# Statements
-# ---------------------------------------------------------------------------
-
-
 @dataclass(frozen=True)
 class StatementMeta:
     environment: str
@@ -764,10 +719,6 @@ class _Statement:
     not_after: datetime
 
 
-def _scope_wire(ev: _Evidence) -> Any:
-    return opening_rehearsal_assembly_wire(ev.declaration)["scope"]
-
-
 def _import_commands(ev: _Evidence) -> list[dict[str, str]]:
     return sorted(
         (
@@ -786,7 +737,7 @@ def _attestation_body(ev: _Evidence) -> dict[str, Any]:
     census = ev.census
     declared = census["capture"]["declared_source"]
     return {
-        "scope": _scope_wire(ev),
+        "scope": opening_rehearsal_assembly_wire(ev.declaration)["scope"],
         "installation_id": declared["installation_id"],
         "source_system": ev.declaration.source_system,
         "census_sha256": ev.census_sha,
@@ -884,209 +835,178 @@ def _proof(env: str, kind: str, value: str) -> str:
     return f"gapb1:{env}:{kind}:{value}"
 
 
-# ---------------------------------------------------------------------------
-# The verifier
-# ---------------------------------------------------------------------------
+class _Verifier:
+    """Implements the import V2, provision and seal ports over one trusted state."""
 
+    def __init__(
+        self,
+        profile: OpeningTrustProfile,
+        ev: _Evidence,
+        attestation: _Statement,
+        approval: _Statement,
+        seal_approval: _Statement | None,
+        observer: SourceObservationPort,
+        now: Callable[[], datetime],
+    ) -> None:
+        self._profile, self._ev = profile, ev
+        self._att, self._app, self._seal = attestation, approval, seal_approval
+        self._observer, self._now = observer, now
+        self._window = dict(approval.body["window"])
+        self._env = profile.environment
 
-@dataclass(frozen=True)
-class _Core:
-    profile: OpeningTrustProfile
-    ev: _Evidence
-    attestation: _Statement
-    approval: _Statement
-    seal_approval: _Statement | None
-    observer: SourceObservationPort
-    now: Callable[[], datetime]
-    window: Mapping[str, str]
-    approved: frozenset[str]
-
-    @property
-    def env(self) -> str:
-        return self.profile.environment
-
-    def live(self, *statements: _Statement) -> bool:
+    def _live(self, *statements: _Statement) -> bool:
         try:
-            self.profile.anchors()
+            self._profile.anchors()
         except _AnchorMismatch:
             return False
-        moment = self.now()
+        moment = self._now()
         return all(s.not_before <= moment <= s.not_after for s in statements)
 
-    def marker_ok(self) -> bool:
-        marker = self.observer.marker()
-        if self.env == "rehearsal":
-            return marker is not None and marker == self.attestation.audience
+    def _marker_ok(self) -> bool:
+        marker = self._observer.marker()
+        if self._env == "rehearsal":
+            return marker is not None and marker == self._att.audience
         return marker is None
 
-    def fenced(self) -> bool:
+    def _fenced(self) -> bool:
         """Re-render the census from the source; any content movement differs."""
-        cap = self.ev.census["capture"]
-        wire = self.observer.census_wire(
-            self.ev.query, cap["snapshot_id"], _instant(cap["captured_at"])
+        cap = self._ev.census["capture"]
+        wire = self._observer.census_wire(
+            self._ev.query, cap["snapshot_id"], _instant(cap["captured_at"])
         )
-        return wire == self.ev.census_bytes
-
-
-class _ImportVerifier:
-    def __init__(self, core: _Core) -> None:
-        self._c = core
+        return wire == self._ev.census_bytes
 
     def verify_import_v2(
         self, request: OpeningImportVerificationRequestV2
     ) -> OpeningImportVerificationV2 | None:
-        c = self._c
+        ev = self._ev
         if type(request) is not OpeningImportVerificationRequestV2:
             return None
-        if not c.live(c.attestation, c.approval):
+        if not self._live(self._att, self._app):
             return None
         command = request.command
-        expected = c.ev.expected.get(command.partition)
+        expected = ev.expected.get(command.partition)
         if expected is None or not (command is expected or command == expected):
             return None
-        digest = c.ev.digests[command.partition]
+        digest = ev.digests[command.partition]
         if (
-            opening_account_command_digest_v2(command) != digest
-            or request.command_digest != digest
-            or digest not in c.approved
-            or request.manifest_fingerprint != c.ev.fingerprint
+            request.command_digest != digest
+            or request.manifest_fingerprint != ev.fingerprint
         ):
             return None
-        b = c.ev.census_sha
-        has_originals = c.ev.originals_sha is not None
-        mapping_ref = c.ev.originals_sha if has_originals else f"none-{b}"
-        env, att = c.env, c.attestation.body
+        b, env = ev.census_sha, self._env
+        mapping_ref = ev.originals_sha or f"none-{b}"
+        att = self._att.body
         return OpeningImportVerificationV2(
             operation="billing.opening.import.v2",
             scope=expected.scope,
             command_digest=digest,
-            manifest_fingerprint=c.ev.fingerprint,
+            manifest_fingerprint=ev.fingerprint,
             partition=expected.partition,
             target=expected.target,
             installation_id=str(att["installation_id"]),
-            migration_authority_ref=str(c.approval.body["migration_authority_ref"]),
+            migration_authority_ref=str(self._app.body["migration_authority_ref"]),
             source_authority_ref=str(att["source_authority_ref"]),
-            source_binding_proof_ref=_proof(env, "source_binding", c.attestation.sha),
+            source_binding_proof_ref=_proof(env, "source_binding", self._att.sha),
             cash_lifecycle_proof_ref=_proof(env, "cash_lifecycle", f"empty-{b}"),
             receivable_lifecycle_proof_ref=_proof(env, "receivable_lifecycle", b),
             documentary_tax_mapping_proof_ref=_proof(
-                env, "documentary_tax_mapping", str(mapping_ref)
+                env, "documentary_tax_mapping", mapping_ref
             ),
             historical_discharge_mapping_proof_ref=_proof(
-                env, "historical_discharge_mapping", str(mapping_ref)
+                env, "historical_discharge_mapping", mapping_ref
             ),
             migration_authority_proof_ref=_proof(
-                env, "migration_authority", c.approval.sha
+                env, "migration_authority", self._app.sha
             ),
         )
 
-    def verify_import_reversal_v2(
-        self, request: OpeningImportReversalVerificationRequestV2
-    ) -> OpeningImportReversalVerificationV2 | None:
+    def verify_import_reversal_v2(self, request: object) -> None:
         return None  # v1 has no reversal purpose: an abort is a restore, not an unwind
-
-
-class _ProvisionVerifier:
-    def __init__(self, core: _Core) -> None:
-        self._c = core
 
     def verify_provision(
         self, request: OpeningWindowProvisionVerificationRequestV1
     ) -> OpeningWindowProvisionVerificationV1 | None:
-        c = self._c
+        ev, approved = self._ev, self._window
         if type(request) is not OpeningWindowProvisionVerificationRequestV1:
             return None
-        if not c.live(c.attestation, c.approval):
+        if not self._live(self._att, self._app):
             return None
-        w, approved = request.command.window, c.window
+        w = request.command.window
         if (
-            w.scope != c.ev.declaration.scope
+            w.scope != ev.declaration.scope
             or w.manifest_version != 2
-            or w.manifest != c.ev.manifest
-            or w.manifest_fingerprint != c.ev.fingerprint
+            or w.manifest != ev.manifest
+            or w.manifest_fingerprint != ev.fingerprint
             or (
                 str(w.window_id),
                 str(w.epoch),
                 w.principal_name,
                 w.provision_authority_ref,
             )
-            != (
-                approved["window_id"],
-                approved["epoch"],
-                approved["principal_name"],
-                approved["provision_authority_ref"],
-            )
-            or not (c.approval.not_before <= w.recorded_at <= c.approval.not_after)
-        ):
-            return None
-        role = c.observer.role(w.principal_name)
-        if (
-            role is None
-            or role.oid != w.principal_oid
-            or any(
-                (
-                    role.rolsuper,
-                    role.rolbypassrls,
-                    role.rolcreaterole,
-                    role.rolcreatedb,
-                    role.rolreplication,
+            != tuple(
+                approved[k]
+                for k in (
+                    "window_id",
+                    "epoch",
+                    "principal_name",
+                    "provision_authority_ref",
                 )
             )
+            or not (self._app.not_before <= w.recorded_at <= self._app.not_after)
         ):
             return None
-        if not c.marker_ok() or not c.fenced():
+        role = self._observer.role(w.principal_name)
+        if role is None or role.oid != w.principal_oid or role.privileged:
+            return None
+        if not self._marker_ok() or not self._fenced():
             return None
         return OpeningWindowProvisionVerificationV1(
             operation="billing.opening.window.provision.v1",
             scope=w.scope,
             window_id=w.window_id,
             epoch=w.epoch,
-            manifest_fingerprint=c.ev.fingerprint,
+            manifest_fingerprint=ev.fingerprint,
             principal_name=w.principal_name,
             principal_oid=w.principal_oid,
             command_digest=request.command_digest,
             authority_ref=approved["provision_authority_ref"],
             complete_population_proof_ref=_proof(
-                c.env, "complete_population", f"census-reobserved-{c.ev.census_sha}"
+                self._env, "complete_population", f"census-reobserved-{ev.census_sha}"
             ),
-            authority_proof_ref=_proof(c.env, "authority", c.approval.sha),
+            authority_proof_ref=_proof(self._env, "authority", self._app.sha),
         )
-
-
-class _SealVerifier:
-    def __init__(self, core: _Core) -> None:
-        self._c = core
 
     def verify_seal(
         self, request: OpeningWindowSealVerificationRequestV1
     ) -> OpeningWindowSealVerificationV1 | None:
-        c = self._c
-        seal_approval = c.seal_approval
+        ev, seal_approval = self._ev, self._seal
         if (
             type(request) is not OpeningWindowSealVerificationRequestV1
             or seal_approval is None
         ):
             return None
-        if not c.live(c.attestation, c.approval, seal_approval):
+        if not self._live(self._att, self._app, seal_approval):
             return None
-        cmd, ev = request.command, c.ev
+        cmd = request.command
         seal = seal_approval.body["seal"]
-        watermark = "sub-census-content:" + str(ev.census["content_fingerprint"])
+        # fingerprint and watermark were bound to the evidence when the verifier was built
         if (
             cmd.scope != ev.declaration.scope
             or (str(cmd.window_id), str(cmd.epoch), cmd.manifest_fingerprint)
             != (seal["window_id"], seal["epoch"], seal["manifest_fingerprint"])
-            or cmd.manifest_fingerprint != ev.fingerprint
             or cmd.coupled_watermark != seal["coupled_watermark"]
-            or cmd.coupled_watermark != watermark
             or cmd.command_key != seal["command_key"]
             or cmd.authority_ref != seal["authority_ref"]
             or cmd.occurred_at != _instant(seal["occurred_at"])
         ):
             return None
-        # Independent expected population: the same rule Billing applies under the lock.
-        funded = {r.partition for r in ev.manifest.receivables if r.residual_minor > 0}
-        by_account = {p.account_id: p for p in funded}
+        # Independent expected population: the rule Billing applies under the lock.
+        by_account = {
+            r.partition.account_id: r.partition
+            for r in ev.manifest.receivables
+            if r.residual_minor > 0
+        }
         accounts = [a.billing_account_id for a in cmd.admissions]
         if len(accounts) != len(set(accounts)) or set(accounts) != set(by_account):
             return None
@@ -1105,7 +1025,7 @@ class _SealVerifier:
             != request.population_digest
         ):
             return None
-        if not c.marker_ok() or not c.fenced():
+        if not self._marker_ok() or not self._fenced():
             return None
         return OpeningWindowSealVerificationV1(
             operation="billing.opening.window.seal.v1",
@@ -1119,20 +1039,22 @@ class _SealVerifier:
             coupled_watermark=cmd.coupled_watermark,
             authority_ref=cmd.authority_ref,
             complete_population_proof_ref=_proof(
-                c.env, "complete_population", f"admissions-{request.population_digest}"
+                self._env,
+                "complete_population",
+                f"admissions-{request.population_digest}",
             ),
             coupled_watermark_proof_ref=_proof(
-                c.env, "coupled_watermark", f"census-reobserved-{ev.census_sha}"
+                self._env, "coupled_watermark", f"census-reobserved-{ev.census_sha}"
             ),
-            authority_proof_ref=_proof(c.env, "authority", seal_approval.sha),
+            authority_proof_ref=_proof(self._env, "authority", seal_approval.sha),
         )
 
 
 @dataclass(frozen=True)
 class OpeningVerifiers:
-    import_v2: _ImportVerifier
-    provision: _ProvisionVerifier
-    seal: _SealVerifier | None
+    import_v2: _Verifier
+    provision: _Verifier
+    seal: _Verifier | None
 
 
 def build_opening_verifiers(
@@ -1149,7 +1071,8 @@ def build_opening_verifiers(
         raise _refuse("anchor_fingerprint_mismatch") from None
     except OpeningVerificationUnavailable:
         raise _refuse("anchor_unavailable") from None
-    ev = load_evidence(evidence)
+    # Authenticate the attested adapter hash BEFORE any evidence byte is executed.
+    adapter_bytes = _read(evidence.adapter)
     att = _load_statement(
         ATTESTATION,
         _read(statements.attestation),
@@ -1157,6 +1080,8 @@ def build_opening_verifiers(
         profile,
         anchors,
     )
+    _require(att.body["adapter_sha256"] == _sha(adapter_bytes), "attestation_mismatch")
+    ev = load_evidence(evidence, adapter_bytes)
     app = _load_statement(
         APPROVAL,
         _read(statements.approval),
@@ -1186,18 +1111,6 @@ def build_opening_verifiers(
         _require(
             isinstance(ref, str) and profile.ref_ok(ref), "authority_ref_environment"
         )
-    installation = str(att.body["installation_id"])
-    if profile.environment == "production":
-        for statement in (att, app):
-            _require(
-                statement.audience == f"production:{installation}", "audience_mismatch"
-            )
-    _require(att.audience == app.audience, "audience_mismatch")
-    marker = observer.marker()
-    if profile.environment == "rehearsal":
-        _require(marker is not None and marker == att.audience, "marker_required")
-    else:
-        _require(marker is None, "marker_forbidden")
     seal_approval = None
     if (statements.seal_approval is None) != (statements.seal_approval_sig is None):
         raise _refuse("seal_statement_incomplete")
@@ -1230,25 +1143,23 @@ def build_opening_verifiers(
             profile.ref_ok(str(seal["authority_ref"])), "authority_ref_environment"
         )
         _instant(seal["occurred_at"])
-        _require(seal_approval.audience == att.audience, "audience_mismatch")
-    for statement in (att, app, *([seal_approval] if seal_approval else [])):
+    signed = (att, app, *([seal_approval] if seal_approval else []))
+    expected_audience = (
+        f"production:{att.body['installation_id']}"
+        if profile.environment == "production"
+        else None
+    )
+    for statement in signed:
+        _require(statement.audience == att.audience, "audience_mismatch")
+        _require(expected_audience in (None, statement.audience), "audience_mismatch")
         _require(
             statement.not_before <= now() <= statement.not_after,
             "statement_not_current",
         )
-    core = _Core(
-        profile=profile,
-        ev=ev,
-        attestation=att,
-        approval=app,
-        seal_approval=seal_approval,
-        observer=observer,
-        now=now,
-        window=dict(window),
-        approved=frozenset(r["command_digest"] for r in body["import_commands"]),
-    )
-    return OpeningVerifiers(
-        _ImportVerifier(core),
-        _ProvisionVerifier(core),
-        _SealVerifier(core) if seal_approval else None,
-    )
+    marker = observer.marker()
+    if profile.environment == "rehearsal":
+        _require(marker is not None and marker == att.audience, "marker_required")
+    else:
+        _require(marker is None, "marker_forbidden")
+    verifier = _Verifier(profile, ev, att, app, seal_approval, observer, now)
+    return OpeningVerifiers(verifier, verifier, verifier if seal_approval else None)

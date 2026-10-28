@@ -92,15 +92,7 @@ def test_marker_and_restricted_role_observations(
         assert port.marker() == "hosted-test"
         observed = port.role(role)
         assert observed is not None and observed.oid > 0
-        assert not any(
-            (
-                observed.rolsuper,
-                observed.rolbypassrls,
-                observed.rolcreaterole,
-                observed.rolcreatedb,
-                observed.rolreplication,
-            )
-        )
+        assert not observed.privileged
         assert port.role(f"{role}_absent") is None
     finally:
         with census_factory() as admin:

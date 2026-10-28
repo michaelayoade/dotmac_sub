@@ -3,17 +3,20 @@
 
 Never signs, never holds a private key and writes no file (redirect stdout).
 ``verify`` runs every construction check the verifier runs and prints PASS or
-the refusal code; exit 0 pass, 1 refusal, 2 usage or I/O error.
+a refusal code only; exit 0 pass, 1 refusal, 2 unavailable, usage or I/O error.
 """
 
 from __future__ import annotations
 
 import argparse
+import re
 import sys
 import uuid
 from collections.abc import Callable, Sequence
 from datetime import UTC, datetime
 from pathlib import Path
+
+from dotmac_billing.opening_contracts import OpeningVerificationUnavailable
 
 from app.services.billing import opening_verifier as ov
 
@@ -38,41 +41,32 @@ def _pairs(values: Sequence[str] | None) -> dict[str, str]:
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     sub = parser.add_subparsers(dest="command", required=True)
-    for name in ("draft", "verify"):
-        p = sub.add_parser(name)
-        p.add_argument("--census", type=Path, required=True)
-        p.add_argument("--assembly", type=Path, required=True)
-        p.add_argument("--adapter", type=Path, required=True)
+    draft, verify = sub.add_parser("draft"), sub.add_parser("verify")
+    for p in (draft, verify):
+        for name in ("census", "assembly", "adapter"):
+            p.add_argument(f"--{name}", type=Path, required=True)
         p.add_argument("--originals", type=Path)
         p.add_argument(
             "--environment", choices=("rehearsal", "production"), required=True
         )
-    draft = sub.choices["draft"]
     draft.add_argument(
         "--purpose", choices=(ov.ATTESTATION, ov.APPROVAL, ov.SEAL), required=True
     )
     draft.add_argument("--audience", required=True)
-    draft.add_argument("--issued-at", type=_instant, required=True)
-    draft.add_argument("--not-before", type=_instant, required=True)
-    draft.add_argument("--not-after", type=_instant, required=True)
-    draft.add_argument("--statement-id", default=None)
-    draft.add_argument("--attestation", type=Path, help="signed attestation statement")
-    draft.add_argument(
-        "--approval", type=Path, help="signed window approval (seal only)"
-    )
-    draft.add_argument("--window-id")
-    draft.add_argument("--epoch")
-    draft.add_argument("--principal-name")
-    draft.add_argument("--provision-authority-ref")
-    draft.add_argument("--command-key")
-    draft.add_argument("--authority-ref")
+    for name in ("issued-at", "not-before", "not-after"):
+        draft.add_argument(f"--{name}", type=_instant, required=True)
     draft.add_argument("--occurred-at", type=_instant)
-    verify = sub.choices["verify"]
+    draft.add_argument("--statement-id")
+    for name in ("attestation", "approval"):
+        draft.add_argument(f"--{name}", type=Path, help="signed statement file")
+    for name in (
+        "window-id epoch principal-name provision-authority-ref command-key authority-ref"
+    ).split():
+        draft.add_argument(f"--{name}")
     for flag in ("attestation", "approval", "seal-approval"):
-        verify.add_argument(f"--{flag}", type=Path, required=flag != "seal-approval")
-        verify.add_argument(
-            f"--{flag}-sig", type=Path, required=flag != "seal-approval"
-        )
+        required = flag != "seal-approval"
+        verify.add_argument(f"--{flag}", type=Path, required=required)
+        verify.add_argument(f"--{flag}-sig", type=Path, required=required)
     verify.add_argument(
         "--anchor", action="append", help="rehearsal ROLE=ed25519:<b64>"
     )
@@ -83,13 +77,6 @@ def _parser() -> argparse.ArgumentParser:
         "--anchor-fingerprint", action="append", help="ROLE=sha256:<hex>"
     )
     return parser
-
-
-def _body_of(path: Path) -> tuple[str, dict[str, object]]:
-    import json
-
-    raw = path.read_bytes()
-    return ov.statement_sha256(raw), json.loads(raw)["body"]
 
 
 def _draft(args: argparse.Namespace) -> bytes:
@@ -108,7 +95,9 @@ def _draft(args: argparse.Namespace) -> bytes:
     )
     params: dict[str, object] = {}
     if args.purpose in (ov.APPROVAL, ov.SEAL):
-        params["source_attestation_sha256"] = _body_of(args.attestation)[0]
+        params["source_attestation_sha256"] = ov.statement_sha256(
+            args.attestation.read_bytes()
+        )
     if args.purpose == ov.APPROVAL:
         params["window"] = {
             "window_id": args.window_id,
@@ -117,12 +106,12 @@ def _draft(args: argparse.Namespace) -> bytes:
             "provision_authority_ref": args.provision_authority_ref,
         }
     if args.purpose == ov.SEAL:
-        approval_sha, approval = _body_of(args.approval)
-        window = approval["window"]
-        params["window_import_approval_sha256"] = approval_sha
+        raw = args.approval.read_bytes()
+        window = ov._json(raw, "statement_malformed")["body"]["window"]
+        params["window_import_approval_sha256"] = ov.statement_sha256(raw)
         params["seal"] = {
-            "window_id": window["window_id"],  # type: ignore[index]
-            "epoch": window["epoch"],  # type: ignore[index]
+            "window_id": window["window_id"],
+            "epoch": window["epoch"],
             "manifest_fingerprint": evidence.fingerprint,
             "coupled_watermark": "sub-census-content:"
             + str(evidence.census["content_fingerprint"]),
@@ -138,17 +127,12 @@ def _verify(
     observer: ov.SourceObservationPort | None,
     now: Callable[[], datetime],
 ) -> None:
-    if args.environment == "rehearsal":
-        profile = ov.OpeningTrustProfile(
-            "rehearsal", inline_anchors=_pairs(args.anchor)
-        )
-    else:
-        profile = ov.OpeningTrustProfile(
-            "production",
-            inline_anchors=_pairs(args.anchor),
-            anchor_refs=_pairs(args.anchor_ref),
-            anchor_fingerprints=_pairs(args.anchor_fingerprint),
-        )
+    profile = ov.OpeningTrustProfile(
+        args.environment,
+        inline_anchors=_pairs(args.anchor),
+        anchor_refs=_pairs(args.anchor_ref),
+        anchor_fingerprints=_pairs(args.anchor_fingerprint),
+    )
     statements = ov.OpeningStatementPaths(
         args.attestation,
         args.attestation_sig,
@@ -184,6 +168,13 @@ def main(
     except ov.OpeningVerifierConstructionError as exc:
         print(f"REFUSED:{exc.code}")
         return 1
+    except OpeningVerificationUnavailable as exc:
+        # Never print the cause: it may carry connection detail.
+        code = str(exc.args[0]) if exc.args else ""
+        print(
+            f"UNAVAILABLE:{code if re.fullmatch(r'[a-z_]+', code) else 'unavailable'}"
+        )
+        return 2
     except (OSError, KeyError, TypeError, ValueError, argparse.ArgumentTypeError):
         print("ERROR:usage_or_io")
         return 2

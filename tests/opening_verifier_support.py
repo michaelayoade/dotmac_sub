@@ -433,6 +433,10 @@ class World:
         mutate_assembly: Any = None,
         seal: bool = True,
         kind: str = "credit_note",
+        census_doc: dict[str, Any] | None = None,
+        assembly_doc: dict[str, Any] | None = None,
+        originals_rows: list[tuple[str, str, int]] | None = None,
+        principal_name: str = "opening_window_role",
     ) -> None:
         self.tmp = tmp
         self.env = environment
@@ -441,7 +445,8 @@ class World:
             Ed25519PrivateKey.generate(),
             Ed25519PrivateKey.generate(),
         )
-        census_doc, assembly_doc = census(kind), assembly(kind)
+        census_doc = census_doc or census(kind)
+        assembly_doc = assembly_doc or assembly(kind)
         if not rehearsal:
             assembly_doc["source_authority_ref"] = "finance:source-authority"
             assembly_doc["migration_authority_ref"] = "michael:migration-authority"
@@ -467,6 +472,15 @@ class World:
                 parse_opening_rehearsal_assembly(assembly_doc)
             )
             wire = originals_wire(ov._sha(self.census_bytes), digest, kind)
+            if originals_rows:
+                wire["invoices"] = [
+                    {
+                        "source_invoice_id": inv,
+                        "original": _wire_value(original(number, minor)),
+                        "historical_discharges": [],
+                    }
+                    for inv, number, minor in originals_rows
+                ]
             self.paths["originals"] = self._put(
                 "originals.json", json.dumps(wire).encode()
             )
@@ -477,11 +491,12 @@ class World:
             marker_value=RESTORE_ID if rehearsal else None, wire=self.census_bytes
         )
         self.clock = Clock()
-        self.audience = RESTORE_ID if rehearsal else f"production:{INSTALLATION}"
+        installation = census_doc["capture"]["declared_source"]["installation_id"]
+        self.audience = RESTORE_ID if rehearsal else f"production:{installation}"
         self.window = {
             "window_id": WINDOW_ID,
             "epoch": EPOCH,
-            "principal_name": "opening_window_role",
+            "principal_name": principal_name,
             "provision_authority_ref": (
                 "rehearsal:provision-authority" if rehearsal else "michael:provision"
             ),
@@ -490,7 +505,8 @@ class World:
             "window_id": WINDOW_ID,
             "epoch": EPOCH,
             "manifest_fingerprint": self.ev.fingerprint,
-            "coupled_watermark": "sub-census-content:" + CONTENT_FP,
+            "coupled_watermark": "sub-census-content:"
+            + census_doc["content_fingerprint"],
             "command_key": "seal-command-1",
             "authority_ref": (
                 "rehearsal:seal-authority" if rehearsal else "michael:seal"
@@ -573,7 +589,7 @@ class World:
             "production",
             anchor_refs={r: f"bao://kv/anchors/{r}#key" for r in keys},
             anchor_fingerprints={r: fingerprint(k) for r, k in keys.items()},
-            resolver=resolver or self.resolved.__getitem__,
+            _resolver=resolver or self.resolved.__getitem__,
         )
 
     def build(

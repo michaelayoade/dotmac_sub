@@ -81,15 +81,6 @@ _SHADOW_IMPORTS = {
         ("dotmac_billing.opening_contracts", "OpeningEvidenceError"),
         ("dotmac_billing.opening_contracts", "OpeningPartitionV1"),
         ("dotmac_billing.opening_contracts", "OpeningVerificationUnavailable"),
-        ("dotmac_billing.opening_receivable_contracts", "ImportOpeningAccountV2"),
-        (
-            "dotmac_billing.opening_receivable_contracts",
-            "OpeningImportReversalVerificationRequestV2",
-        ),
-        (
-            "dotmac_billing.opening_receivable_contracts",
-            "OpeningImportReversalVerificationV2",
-        ),
         (
             "dotmac_billing.opening_receivable_contracts",
             "OpeningImportVerificationRequestV2",

@@ -7,6 +7,7 @@ import json
 from pathlib import Path
 
 import pytest
+from dotmac_billing.opening_contracts import OpeningVerificationUnavailable
 
 from app.services.billing import opening_verifier as ov
 from scripts.migration import billing_opening_authority as cli
@@ -171,3 +172,17 @@ def test_cli_holds_no_private_key_signing_or_file_writes():
             assert node.attr not in {"write_bytes", "write_text"}
         if isinstance(node, ast.Call) and getattr(node.func, "id", "") == "open":
             pytest.fail("CLI must not open files for writing")
+
+
+def test_unavailable_prints_code_only_and_exits_2(tmp_path, capsys):
+    w = s.World(tmp_path)
+
+    class Down:
+        def marker(self):
+            raise OpeningVerificationUnavailable("postgresql://user:secret@db/x")
+
+    code = cli.main(_verify_args(w), observer=Down(), now=w.clock)
+    out = capsys.readouterr().out
+    assert code == 2
+    assert out.strip() == "UNAVAILABLE:unavailable"
+    assert "secret" not in out

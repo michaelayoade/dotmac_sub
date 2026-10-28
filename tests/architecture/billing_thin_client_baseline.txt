@@ -6,7 +6,7 @@
 # approval from Michael.
 # Regenerate with tests.architecture.billing_thin_client_inventory
 # .render_baseline(<repo root>).
-TOTAL 98251
+TOTAL 98153
 app/services/account_billing_approval.py
 app/services/api_billing_webhooks.py
 app/services/billing/__init__.py

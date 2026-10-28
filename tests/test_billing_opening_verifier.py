@@ -38,7 +38,7 @@ from app.services.billing import opening_verifier as ov
 from tests import opening_verifier_support as s
 
 SCOPE = TenantScope(uuid.UUID(s.TENANT))
-GOOD_ROLE = ov.RoleObservation(4242, False, False, False, False, False)
+GOOD_ROLE = ov.RoleObservation(4242, False)
 
 
 @pytest.fixture()
@@ -414,10 +414,12 @@ def test_n11_provision_binding_and_role(world, variant):
         over["principal_oid"] = 1
     elif variant == "bypassrls":
         world.observer.roles["opening_window_role"] = replace(
-            GOOD_ROLE, rolbypassrls=True
+            GOOD_ROLE, privileged=True
         )
     elif variant == "superuser":
-        world.observer.roles["opening_window_role"] = replace(GOOD_ROLE, rolsuper=True)
+        world.observer.roles["opening_window_role"] = replace(
+            GOOD_ROLE, privileged=True
+        )
     else:
         world.observer.roles.clear()
     assert (
@@ -658,7 +660,7 @@ def test_sql_port_uses_read_only_snapshot_and_selects_only(monkeypatch):
         result = MagicMock()
         result.scalar.return_value = True
         result.all.return_value = [("restore-1",)]
-        result.one_or_none.return_value = (7, False, False, False, False, False)
+        result.one_or_none.return_value = (7, False)
         return result
 
     session.execute.side_effect = execute
@@ -672,7 +674,7 @@ def test_sql_port_uses_read_only_snapshot_and_selects_only(monkeypatch):
     monkeypatch.setattr("app.db.read_only_snapshot_session", snapshot)
     port = ov.SqlSourceObservationPort()
     assert port.marker() == "restore-1"
-    assert port.role("r") == ov.RoleObservation(7, False, False, False, False, False)
+    assert port.role("r") == ov.RoleObservation(7, False)
     assert len(entered) == 2
     assert executed and all(
         sql.lstrip().upper().startswith("SELECT") for sql in executed
@@ -730,3 +732,141 @@ def test_payment_discharge_verifies_but_billing_blocks_until_cash_lots_exist(tmp
     for p in previews:
         assert {b.code for b in p.blockers} == {"historical_cash_source_unclaimed"}
     assert verify_opening_account_import_v2(commands(w)[1], verifiers.import_v2)
+
+
+# ----------------------------------------------------------------------------
+# Review fixes (REVIEW-GAPB): pin before exec, X2 completeness, error mapping
+# ----------------------------------------------------------------------------
+
+SENTINEL = b"\nimport builtins as _b\n_b._gapb_sentinel = True\n"
+
+
+@pytest.fixture()
+def sentinel():
+    import builtins
+
+    if hasattr(builtins, "_gapb_sentinel"):
+        delattr(builtins, "_gapb_sentinel")
+    yield lambda: hasattr(builtins, "_gapb_sentinel")
+    if hasattr(builtins, "_gapb_sentinel"):
+        delattr(builtins, "_gapb_sentinel")
+
+
+def test_tampered_adapter_never_executes_under_build(world, sentinel):
+    path = world.paths["adapter"]
+    path.write_bytes(path.read_bytes() + SENTINEL)
+    with pytest.raises(ov.OpeningVerifierConstructionError):
+        world.build()
+    assert not sentinel()
+
+
+def test_tampered_adapter_never_executes_under_load_evidence_and_draft(
+    world, sentinel, capsys
+):
+    from scripts.migration import billing_opening_authority as cli
+
+    path = world.paths["adapter"]
+    path.write_bytes(path.read_bytes() + SENTINEL)
+    with pytest.raises(ov.OpeningVerifierConstructionError) as info:
+        ov.load_evidence(world.evidence_paths)
+    assert info.value.code == "adapter_not_pinned"
+    meta = world.meta()
+    code = cli.main(
+        [
+            "draft",
+            "--census",
+            str(world.paths["census"]),
+            "--assembly",
+            str(world.paths["assembly"]),
+            "--adapter",
+            str(path),
+            "--environment",
+            "rehearsal",
+            "--purpose",
+            ov.ATTESTATION,
+            "--audience",
+            meta.audience,
+            "--issued-at",
+            ov.utc_text(meta.issued_at),
+            "--not-before",
+            ov.utc_text(meta.not_before),
+            "--not-after",
+            ov.utc_text(meta.not_after),
+        ]
+    )
+    assert code == 1
+    assert "adapter_not_pinned" in capsys.readouterr().out
+    assert not sentinel()
+
+
+def test_x2_refuses_control_with_account_and_null_currency(tmp_path):
+    def mutate(doc):
+        row = s.control(s.SRC3, 1, 0, 0, "0.00", "0.00", "0.00", "0.00")
+        row["currency"] = None
+        doc["controls"].append(row)
+
+    with pytest.raises(ov.OpeningVerifierConstructionError) as info:
+        s.World(tmp_path, mutate_census=mutate)
+    assert info.value.code == "x2_unmapped_population"
+
+
+def test_x2_refuses_accountless_blocking_exception(tmp_path):
+    def mutate(doc):
+        doc["blocking_exceptions"].append(
+            {
+                "code": "orphan_line",
+                "account_id": None,
+                "currency": None,
+                "source_id": s.INV4,
+                "detail": "orphan",
+            }
+        )
+
+    with pytest.raises(ov.OpeningVerifierConstructionError) as info:
+        s.World(tmp_path, mutate_census=mutate)
+    assert info.value.code == "x2_accountless_exception"
+
+
+def test_malformed_openbao_key_at_verify_time_is_a_rejection_not_a_leak(tmp_path):
+    w = s.World(tmp_path, environment="production")
+    state = {"bad": False}
+
+    def resolver(ref):
+        return "garbage" if state["bad"] else w.resolved[ref]
+
+    verifiers = w.build(w.production_profile(resolver))
+    state["bad"] = True
+    assert verifiers.import_v2.verify_import_v2(import_request(commands(w)[0])) is None
+
+
+def test_census_render_error_maps_to_unavailable(monkeypatch):
+    from contextlib import contextmanager
+    from dataclasses import replace as rep
+    from unittest.mock import MagicMock
+
+    from tests.test_opening_census_wire import _preview
+
+    bad = _preview()
+    declared = rep(
+        bad.capture.declared_source, population_version="sub-billing-opening-census-v1"
+    )
+    bad = rep(bad, capture=rep(bad.capture, declared_source=declared))
+
+    @contextmanager
+    def snapshot():
+        yield MagicMock()
+
+    monkeypatch.setattr("app.db.read_only_snapshot_session", snapshot)
+    monkeypatch.setattr(
+        "app.services.billing.opening_export.preview_billing_opening_export",
+        lambda db, query: bad,
+    )
+    with pytest.raises(OpeningVerificationUnavailable):
+        ov.SqlSourceObservationPort().census_wire(object(), "snap", s.NOW)
+
+
+def test_production_resolver_is_not_a_public_parameter():
+    import dataclasses
+
+    names = {f.name for f in dataclasses.fields(ov.OpeningTrustProfile)}
+    assert "resolver" not in names and "_resolver" in names
