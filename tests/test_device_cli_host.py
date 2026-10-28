@@ -11,7 +11,9 @@ The cross-engine slot-sharing proof against real PostgreSQL lives in
 
 from __future__ import annotations
 
+import importlib
 import socket
+import sys
 import threading
 import uuid
 from types import SimpleNamespace
@@ -28,6 +30,9 @@ from dotmac_device_cli import intent_key as package_intent_key
 from dotmac_device_cli import slot_key as package_slot_key
 from dotmac_device_cli.testing import FakeClock, ReplayChannel
 
+from app.services.network import (
+    device_cli_gate as gate,
+)
 from app.services.network import (
     device_cli_host,
     olt_ssh,
@@ -507,28 +512,28 @@ def events(monkeypatch) -> list[tuple[str, str, str]]:
 @pytest.fixture(autouse=True)
 def _reset_flags():
     yield
-    device_cli_host.set_read_settings_override(None)
+    gate.set_read_settings_override(None)
 
 
-def _enable(olt: Any, ops: str = "version,list_onts") -> None:
-    device_cli_host.set_read_settings_override(
-        device_cli_host.DeviceCliReadSettings(
+def _enable(olt: Any, ops: str = "list_onts") -> None:
+    gate.set_read_settings_override(
+        gate.DeviceCliReadSettings(
             enabled=True,
-            olts=device_cli_host.parse_csv(str(olt.id)),
-            ops=device_cli_host.parse_csv(ops),
+            olts=gate.parse_csv(str(olt.id)),
+            ops=gate.parse_csv(ops),
         )
     )
 
 
 def test_defaults_are_off_and_empty() -> None:
-    defaults = device_cli_host.DeviceCliReadSettings()
+    defaults = gate.DeviceCliReadSettings()
     assert defaults.enabled is False and not defaults.olts and not defaults.ops
 
 
 def test_csv_parsing() -> None:
-    assert device_cli_host.parse_csv(None) == frozenset()
-    assert device_cli_host.parse_csv("") == frozenset()
-    assert device_cli_host.parse_csv(" A, b ,,C ") == frozenset({"a", "b", "c"})
+    assert gate.parse_csv(None) == frozenset()
+    assert gate.parse_csv("") == frozenset()
+    assert gate.parse_csv(" A, b ,,C ") == frozenset({"a", "b", "c"})
 
 
 def test_the_settings_specs_default_off() -> None:
@@ -549,12 +554,10 @@ def test_unreadable_settings_mean_off(monkeypatch) -> None:
     def boom() -> Any:
         raise RuntimeError("settings database unavailable")
 
-    device_cli_host.set_read_settings_override(None)
-    monkeypatch.setattr(device_cli_host, "_settings_cache", None)
-    monkeypatch.setattr(device_cli_host, "_load_read_settings", boom)
-    assert (
-        device_cli_host.get_read_settings() == device_cli_host.DeviceCliReadSettings()
-    )
+    gate.set_read_settings_override(None)
+    monkeypatch.setattr(gate, "_settings_cache", None)
+    monkeypatch.setattr(gate, "_load_read_settings", boom)
+    assert gate.get_read_settings() == gate.DeviceCliReadSettings()
 
 
 def test_a_non_boolean_enabled_value_is_off(monkeypatch) -> None:
@@ -573,7 +576,7 @@ def test_a_non_boolean_enabled_value_is_off(monkeypatch) -> None:
         "app.services.db_session_adapter.db_session_adapter.read_session",
         lambda: _NullSession(),
     )
-    assert device_cli_host._load_read_settings().enabled is False
+    assert gate._load_read_settings().enabled is False
 
 
 class _NullSession:
@@ -584,81 +587,132 @@ class _NullSession:
         return None
 
 
-def test_plan_requires_every_gate(events) -> None:
+@pytest.fixture(autouse=True)
+def _background_priority():
+    """The package path is BACKGROUND-only; the wired caller is the status poll."""
+    token = olt_ssh_limiter._priority_var.set(OltSshPriority.BACKGROUND)
+    yield
+    olt_ssh_limiter._priority_var.reset(token)
+
+
+def test_the_gate_requires_every_condition(events) -> None:
     olt = _olt()
-    # master switch off
-    device_cli_host.set_read_settings_override(
-        device_cli_host.DeviceCliReadSettings(
+    gate.set_read_settings_override(
+        gate.DeviceCliReadSettings(
             enabled=False,
             olts=frozenset({str(olt.id)}),
             ops=frozenset({"list_onts"}),
         )
     )
-    assert device_cli_host.plan_read(olt, "list_onts", fsps=["0/2/1"]) is None
+    assert gate.selected(olt, "list_onts") is False  # master switch off
 
     _enable(olt, ops="list_onts")
-    assert device_cli_host.plan_read(olt, "list_onts", fsps=["0/2/1"]) is not None
-    # op not allowlisted
-    assert device_cli_host.plan_read(olt, "version") is None
-    # OLT not allowlisted
-    assert device_cli_host.plan_read(_olt(), "list_onts", fsps=["0/2/1"]) is None
-    # unwired operation
-    assert device_cli_host.plan_read(olt, "ont_detail") is None
+    assert gate.selected(olt, "list_onts") is True
+    assert gate.selected(_olt(), "list_onts") is False  # OLT not allowlisted
+    assert gate.selected(olt, "ont_detail") is False  # unwired operation
+    _enable(olt, ops="")
+    assert gate.selected(olt, "list_onts") is False  # op not allowlisted
     assert events == []  # none of those refusals is a metric-worthy fallback
+
+
+def test_version_is_not_wired_in_s1() -> None:
+    olt = _olt()
+    _enable(olt, ops="version,list_onts")
+    assert gate.selected(olt, "version") is False
+    assert gate.WIRED_OPERATIONS == frozenset({"list_onts"})
+
+
+@pytest.mark.parametrize(
+    "priority", [OltSshPriority.WRITE, OltSshPriority.INTERACTIVE, None]
+)
+def test_only_background_priority_takes_the_package_path(priority) -> None:
+    """Post-write verification (WRITE) and interactive callers stay legacy."""
+    olt = _olt()
+    _enable(olt)
+    token = olt_ssh_limiter._priority_var.set(priority)
+    try:
+        assert gate.selected(olt, "list_onts") is False
+    finally:
+        olt_ssh_limiter._priority_var.reset(token)
+    assert gate.selected(olt, "list_onts") is True  # BACKGROUND (autouse)
 
 
 def test_inactive_olts_are_always_skipped_even_when_allowlisted(events) -> None:
     for active in (False, None):
         olt = _olt(active=active)
         _enable(olt)
-        assert device_cli_host.plan_read(olt, "list_onts", fsps=["0/2/1"]) is None
-        assert device_cli_host.plan_read(olt, "version") is None
+        assert gate.selected(olt, "list_onts") is False
 
 
 def test_an_olt_without_an_id_is_never_selected() -> None:
     olt = _olt(olt_id="")
-    device_cli_host.set_read_settings_override(
-        device_cli_host.DeviceCliReadSettings(
+    gate.set_read_settings_override(
+        gate.DeviceCliReadSettings(
             enabled=True, olts=frozenset({""}), ops=frozenset({"list_onts"})
         )
     )
-    assert device_cli_host.plan_read(olt, "list_onts", fsps=["0/2/1"]) is None
-
-
-def test_unresolved_profile_stays_legacy_with_a_metric(events) -> None:
-    olt = _olt(firmware="V800R015C00")
-    _enable(olt)
-    assert device_cli_host.plan_read(olt, "list_onts", fsps=["0/2/1"]) is None
-    assert events == [("profile_unresolved", "OLT-A", "list_onts")]
-
-
-def test_ma5800_stays_legacy_with_a_mismatch_metric(events) -> None:
-    olt = _olt(model="MA5800-X2", firmware="V100R019C10")
-    _enable(olt)
-    assert device_cli_host.plan_read(olt, "list_onts", fsps=["0/2/1"]) is None
-    assert events == [("profile_mismatch", "OLT-A", "list_onts")]
+    assert gate.selected(olt, "list_onts") is False
 
 
 def test_an_active_scope_keeps_the_read_on_legacy(events, monkeypatch) -> None:
     olt = _olt()
     _enable(olt)
     monkeypatch.setattr(olt_ssh_limiter, "active_scope", lambda _olt: object())
-    assert device_cli_host.plan_read(olt, "list_onts", fsps=["0/2/1"]) is None
+    assert gate.selected(olt, "list_onts") is False
     assert events == [("scope_active_legacy", "OLT-A", "list_onts")]
+
+
+def test_a_gate_exception_means_legacy(monkeypatch) -> None:
+    olt = _olt()
+    _enable(olt)
+    monkeypatch.setattr(
+        olt_ssh_limiter,
+        "active_scope",
+        lambda _olt: (_ for _ in ()).throw(RuntimeError("boom")),
+    )
+    assert gate.selected(olt, "list_onts") is False
+
+
+def test_unresolved_profile_stays_legacy_with_a_metric(events) -> None:
+    olt = _olt(firmware="V800R015C00")
+    assert device_cli_host.plan_read(olt, "list_onts", fsps=["0/2/1"]) is None
+    assert events == [("profile_unresolved", "OLT-A", "list_onts")]
+
+
+def test_an_unverified_profile_is_refused_on_the_package_path(events) -> None:
+    olt = _olt(model="MA5800-X2", firmware="V100R019C10")
+    assert PROFILE_58.verification.status == "unverified"
+    assert device_cli_host.plan_read(olt, "list_onts", fsps=["0/2/1"]) is None
+    assert events == [("profile_unverified", "OLT-A", "list_onts")]
+
+
+def test_ma5608t_plans_cleanly() -> None:
+    plan = device_cli_host.plan_read(_olt(), "list_onts", fsps=["0/2/1", "0/1/12"])
+    assert plan is not None and plan.profile.id == "huawei-ma5608t-v800r013"
+
+
+def test_paging_disagreement_is_refused(events, monkeypatch) -> None:
+    from dataclasses import replace
+
+    real = olt_ssh.resolve_policy
+    monkeypatch.setattr(
+        olt_ssh,
+        "resolve_policy",
+        lambda olt: replace(real(olt), paging_off_command="screen-length 0 temporary"),
+    )
+    assert device_cli_host.plan_read(_olt(), "list_onts", fsps=["0/2/1"]) is None
+    assert events == [("profile_mismatch", "OLT-A", "list_onts")]
 
 
 def test_a_planning_exception_falls_back_before_anything_is_sent(
     events, monkeypatch
 ) -> None:
-    olt = _olt()
-    _enable(olt)
-
     def boom(_olt: Any) -> Any:
         raise RuntimeError("registry exploded")
 
     monkeypatch.setattr(device_cli_host, "resolve_profile", boom)
-    assert device_cli_host.plan_read(olt, "list_onts", fsps=["0/2/1"]) is None
-    assert events == [("adapter_error", "OLT-A", "list_onts")]
+    assert device_cli_host.plan_read(_olt(), "list_onts", fsps=["0/2/1"]) is None
+    assert events == [("plan_error", "OLT-A", "list_onts")]
 
 
 # ── legacy-result mapping ────────────────────────────────────────────────────
@@ -804,7 +858,7 @@ class _Rig:
                 (olt, op, result, reason)
             ),
         )
-        monkeypatch.setattr(olt_ssh_metrics, "record_device_cli_event", lambda *a: None)
+        monkeypatch.setattr(olt_ssh_metrics, "_incr", lambda *a, **k: None)
 
     @property
     def quits(self) -> int:
@@ -831,26 +885,63 @@ def rig_factory(monkeypatch):
     return make
 
 
-def test_flag_off_never_touches_the_package_path(monkeypatch, rig_factory) -> None:
-    rig = rig_factory({})
-    olt = _olt()
-    called: list[str] = []
-    monkeypatch.setattr(
-        device_cli_host,
-        "read_registered_onts",
-        lambda *a, **k: called.append("package") or None,
+def _forget_host(monkeypatch) -> None:
+    """Make the next ``import device_cli_host`` re-execute the module."""
+    import app.services.network as network_pkg
+
+    monkeypatch.delitem(
+        sys.modules, "app.services.network.device_cli_host", raising=False
     )
+    monkeypatch.delattr(network_pkg, "device_cli_host", raising=False)
+
+
+def _legacy_reader(monkeypatch) -> None:
     monkeypatch.setattr(olt_ssh, "_prepare_huawei_read_shell", lambda *a, **k: "#")
     monkeypatch.setattr(
         olt_ssh, "_run_huawei_paged_cmd", lambda *a, **k: "No ONT is configured\nx#"
     )
-    device_cli_host.set_read_settings_override(device_cli_host.DeviceCliReadSettings())
+
+
+def test_flag_off_runs_legacy_and_never_imports_the_host(
+    monkeypatch, rig_factory
+) -> None:
+    rig = rig_factory({})
+    olt = _olt()
+    _legacy_reader(monkeypatch)
+    # Poison the package AND the host: flag-off must not even look at them.
+    monkeypatch.setitem(sys.modules, "dotmac_device_cli", None)
+    _forget_host(monkeypatch)
+    gate.set_read_settings_override(gate.DeviceCliReadSettings())
     ok, message, entries = get_registered_ont_serials(olt, ["0/2/1"])
-    # Legacy ran: one login, legacy dialogue, the legacy close (quit) path.
+    assert (ok, entries) == (True, [])
+    assert message == "Found 0 registered ONTs on 1 ports"
+    assert rig.opens == 1  # one legacy login
+    assert "app.services.network.device_cli_host" not in sys.modules
+
+
+def test_a_missing_package_means_legacy_plus_a_metric(
+    monkeypatch, rig_factory, events
+) -> None:
+    """Enabled and selected, but the package cannot import: legacy runs."""
+    rig = rig_factory({})
+    olt = _olt()
+    _enable(olt)
+    _legacy_reader(monkeypatch)
+    monkeypatch.setitem(sys.modules, "dotmac_device_cli", None)
+    _forget_host(monkeypatch)
+    ok, message, entries = get_registered_ont_serials(olt, ["0/2/1"])
     assert (ok, entries) == (True, [])
     assert message == "Found 0 registered ONTs on 1 ports"
     assert rig.opens == 1
-    assert called == ["package"]  # only the single early-return probe was made
+    assert events == [("import_failed", "OLT-A", "list_onts")]
+
+
+def test_the_gate_itself_never_imports_the_package(monkeypatch) -> None:
+    monkeypatch.setitem(sys.modules, "dotmac_device_cli", None)
+    olt = _olt()
+    _enable(olt)
+    importlib.reload(gate)  # would raise ImportError if it named the package
+    assert gate.selected(olt, "list_onts") is False  # reload reset the override
 
 
 def test_list_onts_over_the_package_path_maps_to_legacy_entries(rig_factory) -> None:
@@ -975,66 +1066,123 @@ def test_invalid_ports_are_rejected_before_the_package_is_consulted(
     assert ok is False and entries == [] and called == []
 
 
-def test_version_over_the_package_path_feeds_the_existing_parser(
-    rig_factory,
-) -> None:
-    rig = rig_factory({"display version\n": VERSION_REPLY})
-    olt = _olt()
-    _enable(olt)
-    ok, message, info = olt_ssh.get_firmware_info(olt)
-    assert ok is True
-    assert message == "Running: MA5608V800R013C00"
-    assert info.current_version == "MA5608V800R013C00"
-    assert rig.opens == 1 and rig.quits == 1
+def test_logout_on_close_false_types_nothing_on_the_package_path(rig_factory) -> None:
+    rig = rig_factory({"display ont info 0 2 1 all\n": INVENTORY_REPLY})
+    set_config_override(LimiterConfig(logout_on_close=False))
+    try:
+        olt = _olt()
+        _enable(olt)
+        ok, _message, entries = get_registered_ont_serials(olt, ["0/2/1"])
+    finally:
+        set_config_override(None)
+    assert ok is True and len(entries) == 2
+    assert rig.quits == 0 and "y\n" not in rig.channel.sent
+    assert rig.logouts == ["skipped_dirty"]
     rig.assert_closed_exactly_once()
-    assert rig.reads[-1][1:3] == ("version", "ok")
 
 
-def test_version_detect_mismatch_is_reported_never_acted_on(
+def test_a_value_error_after_the_open_is_an_adapter_error_not_connectivity(
     monkeypatch, rig_factory
 ) -> None:
-    rig = rig_factory(
-        {
-            "display version\n": (
-                "display version\r\n  VERSION : MA5800V100R019C10\r\n"
-                "  PRODUCT : MA5800-X2\r\n\r\nlab-olt#"
-            )
-        }
-    )
-    seen: list[tuple[str, str, str]] = []
-    monkeypatch.setattr(
-        olt_ssh_metrics,
-        "record_device_cli_event",
-        lambda k, o, p: seen.append((k, o, p)),
-    )
-    olt = _olt()  # CONFIGURED as MA5608T V800R013; the device says otherwise
-    _enable(olt)
-    ok, _message, _info = olt_ssh.get_firmware_info(olt)
-    assert ok is True  # the profile is never re-selected
-    assert ("detect_mismatch", "OLT-A", "version") in seen
-    rig.assert_closed_exactly_once()
-
-
-def test_version_unreadable_returns_failure_without_relogin(rig_factory) -> None:
-    rig = rig_factory(
-        {"display version\n": "display version\r\n  % Unknown command\r\n\r\nlab-olt#"}
-    )
+    rig = rig_factory({"display ont info 0 2 1 all\n": INVENTORY_REPLY})
     olt = _olt()
     _enable(olt)
-    ok, message, info = olt_ssh.get_firmware_info(olt)
-    assert ok is False and info.current_version is None
-    assert message.startswith("OLT rejected: ")
-    assert rig.opens == 1
+
+    def bad(*_a: Any, **_k: Any) -> Any:
+        raise ValueError("adapter bug")
+
+    monkeypatch.setattr(device_cli_host, "list_onts", bad)
+    ok, message, _entries = get_registered_ont_serials(olt, ["0/2/1"])
+    assert ok is False and "adapter failure" in message
+    assert rig.reads[-1][2] == "adapter_error"
     rig.assert_closed_exactly_once()
 
 
-def test_version_flag_off_runs_the_legacy_reader(monkeypatch, rig_factory) -> None:
-    rig = rig_factory({})
-    monkeypatch.setattr(olt_ssh, "_prepare_huawei_read_shell", lambda *a, **k: "#")
-    monkeypatch.setattr(
-        olt_ssh, "_run_huawei_paged_cmd", lambda *a, **k: "Software Version: V1\nx#"
+def test_an_oserror_after_the_open_is_connectivity(monkeypatch, rig_factory) -> None:
+    rig = rig_factory({"display ont info 0 2 1 all\n": INVENTORY_REPLY})
+    olt = _olt()
+    _enable(olt)
+
+    def drop(*_a: Any, **_k: Any) -> Any:
+        raise OSError("connection reset")
+
+    monkeypatch.setattr(device_cli_host, "list_onts", drop)
+    ok, message, _entries = get_registered_ont_serials(olt, ["0/2/1"])
+    assert ok is False and message == "Error: connection reset"
+    assert rig.reads[-1][2:] == ("unreadable", "connection_failed")
+    rig.assert_closed_exactly_once()
+
+
+def test_each_port_is_bounded_by_a_deadline_the_channel_enforces() -> None:
+    import time as _time
+
+    raw = _RawChannel([b"never read"])
+    channel = device_cli_host.ParamikoShellChannel(raw)
+    channel.deadline = _time.monotonic() - 1  # already past
+    assert channel.recv(4096) == b""  # EOF: the session ends CLOSED, nothing typed
+    assert raw.chunks == [b"never read"]
+    channel.deadline = _time.monotonic() + 60
+    assert channel.recv(4096) == b"never read"
+
+
+def test_the_per_port_deadline_is_min_30_and_the_remaining_budget(
+    monkeypatch, rig_factory
+) -> None:
+    rig = rig_factory({"display ont info 0 2 1 all\n": INVENTORY_REPLY})
+    olt = _olt()
+    _enable(olt)
+    seen: list[float] = []
+    real_recv = device_cli_host.ParamikoShellChannel.recv
+
+    def spy(self, n):
+        if self.deadline is not None:
+            seen.append(self.deadline - _real_monotonic())
+        return real_recv(self, n)
+
+    import time as _t
+
+    _real_monotonic = _t.monotonic
+    monkeypatch.setattr(device_cli_host.ParamikoShellChannel, "recv", spy)
+    get_registered_ont_serials(olt, ["0/2/1"], timeout_sec=5)
+    assert seen and max(seen) <= 5.0 + 0.5  # capped by the remaining budget
+    rig.assert_closed_exactly_once()
+
+
+def test_write_priority_takes_the_reserved_slot_and_background_cannot(server) -> None:
+    """The reserved slot (index limit-1) is for WRITE, in both engines."""
+    olt = _olt()
+    factory = lambda: device_cli_host.PgAdvisoryLockStore(server.connect())  # noqa: E731
+    package_write = device_cli_host.acquire_device_slot(
+        olt, PROFILE_56, priority=OltSshPriority.WRITE, store_factory=factory
     )
-    device_cli_host.set_read_settings_override(device_cli_host.DeviceCliReadSettings())
-    ok, message, info = olt_ssh.get_firmware_info(_olt())
-    assert ok is True and message == "Running: V1"
-    assert rig.opens == 1
+    assert package_write.slot_index == 1  # reserved slot first
+    # legacy BACKGROUND uses only slot 0 and is unaffected
+    bg = olt_ssh_limiter.acquire_slot(
+        olt_key=str(olt.id),
+        limit=2,
+        reserved=1,
+        priority=OltSshPriority.BACKGROUND,
+        wait_seconds=0,
+    )
+    assert bg.slot_index == 0
+    # both slots are now held: a legacy WRITE is busy, and so is a package WRITE
+    with pytest.raises(OltSessionBusy):
+        olt_ssh_limiter.acquire_slot(
+            olt_key=str(olt.id),
+            limit=2,
+            reserved=1,
+            priority=OltSshPriority.WRITE,
+            wait_seconds=0,
+        )
+    with pytest.raises(DeviceBusy):
+        device_cli_host.acquire_device_slot(
+            olt, PROFILE_56, priority=OltSshPriority.WRITE, store_factory=factory
+        )
+    bg.release()
+    # a package WRITE now finds slot 0 free, a legacy WRITE finds nothing
+    second = device_cli_host.acquire_device_slot(
+        olt, PROFILE_56, priority=OltSshPriority.WRITE, store_factory=factory
+    )
+    assert second.slot_index == 0
+    package_write.release()
+    second.release()

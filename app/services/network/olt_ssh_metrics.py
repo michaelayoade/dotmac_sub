@@ -105,8 +105,8 @@ def record_device_cli_read(olt: str, op: str, result: str, reason: str = "") -> 
 
 def record_device_cli_event(kind: str, olt: str, op: str) -> None:
     """Counter for package-path planning outcomes that fall back to legacy
-    (``profile_unresolved``, ``profile_mismatch``, ``unsupported``,
-    ``scope_active_legacy``, ``adapter_error``) and ``detect_mismatch``."""
+    (``profile_unresolved``, ``profile_unverified``, ``profile_mismatch``,
+    ``unsupported``, ``scope_active_legacy``, ``plan_error``, ``import_failed``)."""
     _incr(f"device_cli_event|{kind}|{olt}|{op}")
 
 

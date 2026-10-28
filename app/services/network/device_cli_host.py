@@ -11,27 +11,19 @@ never sees a credential. Everything that touches the world stays Sub's:
   profile from the OLT row's configured vendor/model/firmware, and maps typed
   package results back onto Sub's legacy ``(bool, message, payload)`` tuples.
 
-S1 wires exactly two reads, both default OFF and both falling back to the legacy
-path only BEFORE anything is sent:
+S1 wires exactly ONE read, default OFF, falling back to the legacy path only
+BEFORE anything is sent: ``list_onts`` -> ``olt_ssh_ont.status.
+get_registered_ont_serials``. (``version`` is not wired: its production callers
+are the firmware upgrade pre-check and post-verify.)
 
-* ``version``    -> ``olt_ssh.get_firmware_info``
-* ``list_onts``  -> ``olt_ssh_ont.status.get_registered_ont_serials``
-
-Decision rules (MAP s6):
-
-* A read takes the package path iff ``olt_device_cli_reads_enabled`` AND the OLT
-  is active AND its id is in ``olt_device_cli_reads_olts`` AND the operation is
-  in ``olt_device_cli_reads_ops`` AND no ``olt_ssh_scope`` is active (scope
-  reuse is not proven under the engine) AND the configured vendor/model/firmware
-  resolve to a profile that claims the operation AND the profile agrees with
-  Sub's legacy SSH policy and, for ``list_onts``, renders the same command Sub
-  sends today. Any "no" falls back to legacy with nothing sent.
-* Once the package path has started, ``Unreadable`` (and any adapter error) is
-  returned as a failure. There is NEVER a legacy re-login in the same call: it
-  would double logins on shelves that drop concurrent sessions and would mask
-  the fail-closed signal. The caller's next cycle is the retry.
-* The kill switch off is the only new branch on the legacy path: it is one
-  settings read and an early ``None``.
+The kill switch and selection live in ``device_cli_gate``, which does not import
+the package: callers import THIS module lazily, only after the gate passes, and
+treat an ``ImportError`` as "legacy". This module then only does the profile
+checks (resolved profile claims the op, is not ``unverified``, agrees with Sub's
+SSH policy, paging and legacy command). Once the package path has started,
+``Unreadable`` and adapter errors are returned as failures. There is NEVER a
+legacy re-login in the same call: it would double logins on shelves that drop
+concurrent sessions and would mask the fail-closed signal.
 
 Logout ownership (the sharp edge): when the package owns the dialogue it also
 owns ``logout()``. Sub's transport close must then type nothing a second time,
@@ -45,7 +37,6 @@ from __future__ import annotations
 
 import functools
 import logging
-import threading
 import time
 from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass
@@ -54,7 +45,6 @@ from typing import TYPE_CHECKING, Any, Protocol
 from dotmac_device_cli import (
     CliSession,
     Clock,
-    DetectOutcome,
     LockStore,
     MonotonicClock,
     NoProfile,
@@ -69,7 +59,6 @@ from dotmac_device_cli import (
     Unsupported,
     builtin_registry,
     list_onts,
-    version,
 )
 from dotmac_device_cli.core.dialect import dialect_for
 from dotmac_device_cli.core.limiter import (
@@ -86,6 +75,7 @@ from paramiko.channel import Channel
 from paramiko.ssh_exception import SSHException
 
 from app.models.network import OLTDevice
+from app.services.network import device_cli_gate as gate
 from app.services.network.olt_ssh_limiter import OltSshPriority
 from app.services.network.olt_ssh_ont._common import RegisteredOntEntry
 from app.services.network.olt_vendor_adapters import OltSshPolicy
@@ -100,89 +90,17 @@ class _ClosableTransport(Protocol):
     def close(self) -> None: ...
 
 
-#: The only operations this module wires in S1.
-OP_VERSION = "version"
-OP_LIST_ONTS = "list_onts"
-WIRED_OPERATIONS = frozenset({OP_VERSION, OP_LIST_ONTS})
+#: Re-exported from the gate (the gate holds the flags and never imports the package).
+OP_LIST_ONTS = gate.OP_LIST_ONTS
 
-SETTING_ENABLED = "olt_device_cli_reads_enabled"
-SETTING_OLTS = "olt_device_cli_reads_olts"
-SETTING_OPS = "olt_device_cli_reads_ops"
-_SETTINGS_TTL_SECONDS = 60.0
+# Connection-class failures the legacy reader already catches around the open.
+_OPEN_ERRORS = (SSHException, EOFError, OSError, TimeoutError, ValueError)
+# Failures of the session itself after a successful open. ValueError and
+# RuntimeError there are programming errors (adapter_error), not connectivity.
+_SESSION_CONNECTION_ERRORS = (SSHException, EOFError, OSError, TimeoutError)
 
-# Connection-class failures the legacy readers already catch.
-_CONNECTION_ERRORS = (SSHException, EOFError, OSError, TimeoutError, ValueError)
-
-
-# ── settings (flags) ─────────────────────────────────────────────────────────
-
-
-@dataclass(frozen=True, slots=True)
-class DeviceCliReadSettings:
-    """Package-read policy. The default is OFF; unreadable settings are OFF."""
-
-    enabled: bool = False
-    olts: frozenset[str] = frozenset()
-    ops: frozenset[str] = frozenset()
-
-
-def parse_csv(value: object) -> frozenset[str]:
-    """Comma-separated ids/ops, lower-cased, blanks dropped."""
-    if value is None:
-        return frozenset()
-    return frozenset(
-        part.strip().lower() for part in str(value).split(",") if part.strip()
-    )
-
-
-_settings_lock = threading.Lock()
-_settings_cache: tuple[float, DeviceCliReadSettings] | None = None
-_settings_override: DeviceCliReadSettings | None = None
-
-
-def set_read_settings_override(settings: DeviceCliReadSettings | None) -> None:
-    """Pin the settings (tests); ``None`` restores database resolution."""
-    global _settings_override, _settings_cache
-    with _settings_lock:
-        _settings_override = settings
-        _settings_cache = None
-
-
-def _load_read_settings() -> DeviceCliReadSettings:
-    from app.models.domain_settings import SettingDomain
-    from app.services.db_session_adapter import db_session_adapter
-    from app.services.settings_spec import resolve_values_atomic
-
-    keys = [SETTING_ENABLED, SETTING_OLTS, SETTING_OPS]
-    with db_session_adapter.read_session() as db:
-        values = resolve_values_atomic(db, SettingDomain.network, keys)
-    enabled = values.get(SETTING_ENABLED)
-    return DeviceCliReadSettings(
-        # Only a real boolean True turns the package on; anything else is off.
-        enabled=enabled is True,
-        olts=parse_csv(values.get(SETTING_OLTS)),
-        ops=parse_csv(values.get(SETTING_OPS)),
-    )
-
-
-def get_read_settings() -> DeviceCliReadSettings:
-    """Settings with a 60 s in-process cache. Unreadable settings are OFF."""
-    global _settings_cache
-    if _settings_override is not None:
-        return _settings_override
-    now = time.monotonic()
-    cached = _settings_cache
-    if cached is not None and now - cached[0] < _SETTINGS_TTL_SECONDS:
-        return cached[1]
-    try:
-        loaded = _load_read_settings()
-    except Exception:
-        logger.debug("device_cli_read_settings_unreadable", exc_info=True)
-        loaded = DeviceCliReadSettings()
-    with _settings_lock:
-        _settings_cache = (now, loaded)
-    return loaded
-
+# Per-port cap, as legacy (``_run_huawei_paged_cmd(timeout_sec=min(30, ...))``).
+_PER_PORT_SECONDS = 30
 
 # ── channel adapter ──────────────────────────────────────────────────────────
 
@@ -201,12 +119,18 @@ class ParamikoShellChannel:
 
     def __init__(self, channel: Channel) -> None:
         self._channel = channel
+        #: Monotonic instant after which reads report EOF. The package ops take no
+        #: per-call deadline, so the host bounds each port here (an overrun ends
+        #: the session as CLOSED: the read fails and nothing more is typed).
+        self.deadline: float | None = None
 
     def send(self, data: str) -> int:
         sent = self._channel.send(data)
         return sent if isinstance(sent, int) else len(data)
 
     def recv(self, nbytes: int) -> bytes:
+        if self.deadline is not None and time.monotonic() >= self.deadline:
+            return b""
         chunk = self._channel.recv(nbytes)
         if isinstance(chunk, str):
             return chunk.encode("utf-8")
@@ -422,37 +346,26 @@ def _label(olt: OLTDevice) -> str:
     return str(getattr(olt, "name", "") or getattr(olt, "id", "") or "")
 
 
+def paging_mismatch(profile: Profile, policy: OltSshPolicy) -> str | None:
+    """Legacy turns paging off only with ``paging_off_command``; the profile only
+    with a supported ``off_command``. Disagreement keeps the read on legacy."""
+    if (policy.paging_off_command is not None) != profile.paging.off_supported:
+        return "paging-off handling differs"
+    return None
+
+
 def plan_read(
     olt: OLTDevice, operation: str, *, fsps: Iterable[str] = ()
 ) -> ReadPlan | None:
-    """Decide ONCE per public call. ``None`` means: use the legacy path.
+    """Profile checks for a call the gate already selected. ``None`` = legacy.
 
     Every refusal here happens before any login, so falling back is safe (no
-    double login). The kill switch off returns after a single settings read.
+    double login). Flags, OLT, priority and scope are the gate's job.
     """
-    if operation not in WIRED_OPERATIONS:
-        return None
-    settings = get_read_settings()
-    if not settings.enabled:
-        return None
-    olt_id = str(getattr(olt, "id", "") or "").lower()
-    # Inactive OLTs are always skipped (an OLT that is down must never be
-    # logged into by a canary), whatever the allowlist says.
-    if not olt_id or getattr(olt, "is_active", None) is not True:
-        return None
-    if olt_id not in settings.olts or operation not in settings.ops:
-        return None
-
-    from app.services.network import olt_ssh_limiter, olt_ssh_metrics
+    from app.services.network import olt_ssh_metrics
 
     label = _label(olt)
     try:
-        if olt_ssh_limiter.active_scope(olt) is not None:
-            # Scope reuse is not proven under the engine (MAP 3.1): stay legacy.
-            olt_ssh_metrics.record_device_cli_event(
-                "scope_active_legacy", label, operation
-            )
-            return None
         profile = resolve_profile(olt)
         if isinstance(profile, NoProfile):
             olt_ssh_metrics.record_device_cli_event(
@@ -462,9 +375,17 @@ def plan_read(
         if not profile.claims(operation):
             olt_ssh_metrics.record_device_cli_event("unsupported", label, operation)
             return None
+        if profile.verification.status == "unverified":
+            olt_ssh_metrics.record_device_cli_event(
+                "profile_unverified", label, operation
+            )
+            return None
         from app.services.network import olt_ssh as core
 
-        mismatch = ssh_policy_mismatch(profile, core.resolve_policy(olt))
+        policy = core.resolve_policy(olt)
+        mismatch = ssh_policy_mismatch(profile, policy) or paging_mismatch(
+            profile, policy
+        )
         if mismatch is None and operation == OP_LIST_ONTS:
             for fsp in fsps:
                 if package_inventory_command(profile, fsp) != legacy_inventory_command(
@@ -487,7 +408,7 @@ def plan_read(
     except Exception:
         # Planning happens before anything is sent, so legacy is safe here.
         logger.exception("device_cli_plan_failed olt=%s op=%s", label, operation)
-        olt_ssh_metrics.record_device_cli_event("adapter_error", label, operation)
+        olt_ssh_metrics.record_device_cli_event("plan_error", label, operation)
         return None
     return ReadPlan(operation=operation, profile=profile, olt_label=label)
 
@@ -567,6 +488,16 @@ def _event_sink(label: str) -> Callable[[str, Mapping[str, str | int]], None]:
     return sink
 
 
+def _logout_on_close() -> bool:
+    """Honour ``olt_ssh_logout_on_close`` exactly as the legacy close does."""
+    from app.services.network import olt_ssh_limiter
+
+    try:
+        return bool(olt_ssh_limiter.get_config().logout_on_close)
+    except Exception:
+        return True  # unreadable settings keep the safe default (log out)
+
+
 def _close_package_owned(
     transport: _ClosableTransport, session: CliSession | None
 ) -> str:
@@ -575,12 +506,14 @@ def _close_package_owned(
     ``CliSession.logout`` types nothing into a session that is not provably idle
     at a prompt. Sub's managed ``transport.close`` would run its own ``quit``
     sequence, so the holder is marked closed first and ``close_real`` (plain
-    close + slot release with the model grace) does the closing.
+    close + slot release with the model grace) does the closing. With
+    ``olt_ssh_logout_on_close`` false nothing is typed and ``skipped_dirty`` is
+    recorded, as on the legacy path.
     """
     from app.services.network import olt_ssh_metrics
 
     outcome = "skipped_dirty"
-    if session is not None:
+    if session is not None and _logout_on_close():
         try:
             outcome = session.logout().value
         except Exception:
@@ -629,6 +562,15 @@ def _adapter_failure(label: str, operation: str, exc: BaseException) -> str:
     return f"Error: device-cli adapter failure ({type(exc).__name__})"
 
 
+def _open_session(olt: OLTDevice) -> tuple[_ClosableTransport, Channel]:
+    """The ONE place the host opens a shell: Sub's own ``_open_shell`` keeps every
+    guard (effect gate, slot, credentials, host key, instrumentation)."""
+    from app.services.network import olt_ssh as core
+
+    transport, channel, _policy = core._open_shell(olt)
+    return transport, channel
+
+
 # ── R2: registered-ONT inventory ─────────────────────────────────────────────
 
 
@@ -637,26 +579,27 @@ def read_registered_onts(
 ) -> tuple[bool, str, list[RegisteredOntEntry]] | None:
     """Package path for ``get_registered_ont_serials``; ``None`` = use legacy.
 
-    ``normalized_fsps`` is already validated, de-duplicated and non-empty.
+    Call only after ``device_cli_gate.selected`` said yes. ``normalized_fsps`` is
+    already validated, de-duplicated and non-empty. The whole call, including the
+    session priming, is bounded by ``timeout_sec`` and each port by 30 s, as on
+    the legacy path.
     """
     plan = plan_read(olt, OP_LIST_ONTS, fsps=normalized_fsps)
     if plan is None:
         return None
-    from app.services.network import olt_ssh as core
 
     label = plan.olt_label
     started = time.monotonic()
     try:
-        transport, channel, _policy = core._open_shell(olt)
-    except _CONNECTION_ERRORS as exc:
+        transport, channel = _open_session(olt)
+    except _OPEN_ERRORS as exc:
         _record(label, OP_LIST_ONTS, "unreadable", Reason.CONNECTION_FAILED.value)
         return False, f"Connection failed: {exc}", []
 
     session: CliSession | None = None
     try:
-        session = CliSession.attach(
-            ParamikoShellChannel(channel), plan.profile, events=_event_sink(label)
-        )
+        shell = ParamikoShellChannel(channel)
+        session = CliSession.attach(shell, plan.profile, events=_event_sink(label))
         prepared = session.prepare()
         if isinstance(prepared, Unreadable):
             _evidence_log(label, OP_LIST_ONTS, prepared)
@@ -679,6 +622,11 @@ def read_registered_onts(
                     f"Error: Huawei inventory exceeded {timeout_sec}s before port {fsp}",
                     [],
                 )
+            # Same bound as legacy: min(30, remaining), so the total stays within
+            # timeout_sec. An overrun reads as EOF and fails the call.
+            shell.deadline = time.monotonic() + max(
+                1, min(_PER_PORT_SECONDS, int(remaining))
+            )
             result = list_onts(session, dialect.parse_ref(fsp))
             if isinstance(result, Unsupported):
                 _record(label, OP_LIST_ONTS, "unsupported")
@@ -705,115 +653,32 @@ def read_registered_onts(
             entries,
         )
     except Exception as exc:
-        if isinstance(exc, _CONNECTION_ERRORS + (RuntimeError,)):
+        if isinstance(exc, _SESSION_CONNECTION_ERRORS):
             _record(label, OP_LIST_ONTS, "unreadable", Reason.CONNECTION_FAILED.value)
             logger.error(
                 "Error getting registered ONT serials from OLT %s: %s", label, exc
             )
             return False, f"Error: {exc}", []
+        # RuntimeError / ValueError after the open are adapter bugs, not
+        # connectivity: counted as adapter_error.
         return False, _adapter_failure(label, OP_LIST_ONTS, exc), []
     finally:
         _close_package_owned(transport, session)
 
 
-# ── R1: version ──────────────────────────────────────────────────────────────
-
-
-def read_version(olt: OLTDevice) -> tuple[bool, str] | None:
-    """Package path for ``get_firmware_info``; ``None`` = use legacy.
-
-    Returns ``(True, device_text)`` for the caller's existing firmware parser
-    (the parser stays in Sub), or ``(False, failure_message)``.
-    """
-    plan = plan_read(olt, OP_VERSION)
-    if plan is None:
-        return None
-    from app.services.network import olt_ssh as core
-
-    label = plan.olt_label
-    try:
-        transport, channel, _policy = core._open_shell(olt)
-    except _CONNECTION_ERRORS as exc:
-        _record(label, OP_VERSION, "unreadable", Reason.CONNECTION_FAILED.value)
-        return False, f"Connection failed: {exc}"
-
-    session: CliSession | None = None
-    try:
-        session = CliSession.attach(
-            ParamikoShellChannel(channel), plan.profile, events=_event_sink(label)
-        )
-        prepared = session.prepare()
-        if isinstance(prepared, Unreadable):
-            _evidence_log(label, OP_VERSION, prepared)
-            _record(label, OP_VERSION, "unreadable", prepared.reason.value)
-            return False, unreadable_message(
-                prepared.reason, fsp=None, detail=prepared.detail
-            )
-        result = version(session)
-        if isinstance(result, Unsupported):
-            _record(label, OP_VERSION, "unsupported")
-            return (
-                False,
-                f"Error: device read unsupported on profile {result.profile_id}",
-            )
-        if isinstance(result, Unreadable):
-            _evidence_log(label, OP_VERSION, result)
-            _record(label, OP_VERSION, "unreadable", result.reason.value)
-            return False, unreadable_message(
-                result.reason, fsp=None, detail=result.detail
-            )
-        assert isinstance(result, Ok) and isinstance(result.value, str)
-        _evidence_log(label, OP_VERSION, result)
-        _record(label, OP_VERSION, "ok")
-        _check_detect(label, plan.profile, result.value)
-        return True, result.value
-    except Exception as exc:
-        if isinstance(exc, _CONNECTION_ERRORS + (RuntimeError,)):
-            _record(label, OP_VERSION, "unreadable", Reason.CONNECTION_FAILED.value)
-            logger.error("Error getting firmware info from OLT %s: %s", label, exc)
-            return False, f"Error: {exc}"
-        return False, _adapter_failure(label, OP_VERSION, exc)
-    finally:
-        _close_package_owned(transport, session)
-
-
-def _check_detect(label: str, profile: Profile, version_text: str) -> None:
-    """Report (never act on) a disagreement between configured and detected."""
-    from app.services.network import olt_ssh_metrics
-
-    try:
-        detection = _registry().detect(profile, version_text)
-    except Exception:
-        logger.debug("device_cli_detect_failed", exc_info=True)
-        return
-    if detection.outcome is DetectOutcome.MISMATCH:
-        logger.warning(
-            "device_cli_detect_mismatch olt=%s profile=%s detail=%s",
-            label,
-            profile.id,
-            detection.detail,
-        )
-        olt_ssh_metrics.record_device_cli_event("detect_mismatch", label, OP_VERSION)
-
-
 __all__ = [
     "OP_LIST_ONTS",
-    "OP_VERSION",
-    "DeviceCliReadSettings",
     "ParamikoShellChannel",
     "PgAdvisoryLockStore",
     "ReadPlan",
     "acquire_device_slot",
     "device_key_for",
-    "get_read_settings",
     "map_inventory",
-    "parse_csv",
+    "paging_mismatch",
     "pg_store_factory",
     "plan_read",
     "read_registered_onts",
-    "read_version",
     "resolve_profile",
-    "set_read_settings_override",
     "ssh_policy_mismatch",
     "unreadable_message",
 ]
