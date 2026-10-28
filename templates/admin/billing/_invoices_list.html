@@ -107,10 +107,10 @@
     {% endif %}
 </div>
 
+{# HTMX settles inline styles after a swap; use hidden so an empty error stays concealed. #}
 <div id="invoice-list-error"
-     x-show="invoiceListError"
-     x-cloak
-     x-transition.opacity
+     hidden
+     :hidden="!invoiceListError"
      role="alert"
      class="status-panel status-panel-negative status-foreground status-tone-negative flex flex-col gap-3 rounded-lg border px-4 py-3 text-sm sm:flex-row sm:items-center sm:justify-between">
     <span x-text="invoiceListError"></span>
