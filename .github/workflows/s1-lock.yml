@@ -1,0 +1,125 @@
+# One-shot artifact producer for PR #3817. Close this helper PR after the
+# verified lock is applied; this workflow does not need to merge to main.
+name: S1 lock regeneration
+
+on:
+  pull_request:
+    branches: [main]
+    types: [opened, synchronize, reopened]
+    paths: [.github/workflows/s1-lock.yml]
+
+permissions:
+  contents: read
+  pull-requests: read
+
+concurrency:
+  group: s1-lock-regeneration-${{ github.event.pull_request.number }}
+  cancel-in-progress: false
+
+jobs:
+  lock:
+    if: >-
+      github.repository == 'michaelayoade/dotmac_sub' &&
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      github.head_ref == 'chore/s1-lock-ci-20261028'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      SOURCE_SHA: fd793f13c7deb9c1ea9f5a9fe1afa5524a5362f6
+      POETRY_VERSION: '2.4.1'
+      PYTHON_VERSION: '3.12.13'
+    steps:
+      - name: Refuse a moved or closed S1 source
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(gh api repos/michaelayoade/dotmac_sub/pulls/3817 --jq '.state')" = open
+          test "$(gh api repos/michaelayoade/dotmac_sub/pulls/3817 --jq '.head.sha')" = "$SOURCE_SHA"
+
+      - name: Check out exact S1 source without persisted credentials
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          ref: ${{ env.SOURCE_SHA }}
+          persist-credentials: false
+
+      - name: Install exact Python
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Install exact Poetry
+        run: python -m pip install --disable-pip-version-check "poetry==$POETRY_VERSION"
+
+      - name: Regenerate lock using CI read credential
+        env:
+          POETRY_HTTP_BASIC_FORGEJO_USERNAME: ci-reader
+          POETRY_HTTP_BASIC_FORGEJO_PASSWORD: ${{ secrets.FORGEJO_READ_TOKEN }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          set +x
+          test -n "$POETRY_HTTP_BASIC_FORGEJO_PASSWORD"
+          test "$(git rev-parse HEAD)" = "$SOURCE_SHA"
+          cp poetry.lock "$RUNNER_TEMP/s1-original.lock"
+          poetry lock --no-interaction
+          poetry check --lock
+
+      - name: Verify only the intended package was added and collect evidence
+        shell: bash
+        run: |
+          set -euo pipefail
+          git diff --exit-code -- pyproject.toml
+          python - <<'PY'
+          import hashlib
+          import json
+          import os
+          from pathlib import Path
+          import tomllib
+
+          before = tomllib.loads((Path(os.environ["RUNNER_TEMP"]) / "s1-original.lock").read_text())
+          after = tomllib.loads(Path("poetry.lock").read_text())
+          added = [p for p in after["package"] if p["name"] == "dotmac-device-cli"]
+          assert len(added) == 1, "Expected exactly one device-cli package"
+          package = added[0]
+          assert package["version"] == "0.1.0a1", "Unexpected device-cli version"
+          assert package["source"]["url"] == "https://registry.dotmac.io/api/packages/dotmac/pypi/simple/"
+          assert package["files"] and all(f["hash"].startswith("sha256:") and len(f["hash"]) == 71 for f in package["files"])
+          retained = [p for p in after["package"] if p["name"] != "dotmac-device-cli"]
+          assert retained == before["package"], "Unrelated locked package entries changed; review required"
+          output = Path(os.environ["RUNNER_TEMP"]) / "s1-lock-artifact"
+          output.mkdir()
+          lock = Path("poetry.lock").read_bytes()
+          (output / "poetry.lock").write_bytes(lock)
+          receipt = {
+              "source_sha": os.environ["SOURCE_SHA"],
+              "pyproject_sha256": hashlib.sha256(Path("pyproject.toml").read_bytes()).hexdigest(),
+              "original_lock_sha256": hashlib.sha256((Path(os.environ["RUNNER_TEMP"]) / "s1-original.lock").read_bytes()).hexdigest(),
+              "lock_sha256": hashlib.sha256(lock).hexdigest(),
+              "poetry_version": os.environ["POETRY_VERSION"],
+              "python_version": os.environ["PYTHON_VERSION"],
+              "run_id": os.environ["GITHUB_RUN_ID"],
+              "run_attempt": os.environ["GITHUB_RUN_ATTEMPT"],
+              "added_package": package,
+          }
+          (output / "receipt.json").write_text(json.dumps(receipt, indent=2) + "\n")
+          PY
+          git diff -- poetry.lock > "$RUNNER_TEMP/s1-lock-artifact/poetry.lock.diff"
+
+      - name: Refuse an S1 source moved during resolution
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(gh api repos/michaelayoade/dotmac_sub/pulls/3817 --jq '.state')" = open
+          test "$(gh api repos/michaelayoade/dotmac_sub/pulls/3817 --jq '.head.sha')" = "$SOURCE_SHA"
+
+      - name: Upload lock and provenance only
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: s1-lock-${{ env.SOURCE_SHA }}
+          path: ${{ runner.temp }}/s1-lock-artifact/
+          if-no-files-found: error
+          retention-days: 3
