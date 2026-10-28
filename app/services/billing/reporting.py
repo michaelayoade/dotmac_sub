@@ -28,7 +28,7 @@ from sqlalchemy import (
     select,
     tuple_,
 )
-from sqlalchemy.orm import Session, aliased, joinedload
+from sqlalchemy.orm import Session, aliased, joinedload, selectinload
 from sqlalchemy.sql import Select
 
 from app.models.billing import (
@@ -53,6 +53,91 @@ logger = logging.getLogger(__name__)
 
 DEFAULT_AR_AGING_BUCKET_DAYS = (30, 60, 90)
 DEFAULT_UPCOMING_CHARGE_BANDS = "50000-100000,100000-500000,500000-"
+
+
+@dataclass(frozen=True, slots=True)
+class RevenuePaymentExportQuery:
+    """Bounded filters for the admin revenue-payment export."""
+
+    paid_since: datetime | None = None
+    limit: int = 5000
+
+    def __post_init__(self) -> None:
+        if self.paid_since is not None and self.paid_since.tzinfo is None:
+            raise ValueError("Revenue export cutoff must be timezone-aware")
+        if not 1 <= self.limit <= 5000:
+            raise ValueError("Revenue export limit must be between 1 and 5000")
+
+
+@dataclass(frozen=True, slots=True)
+class RevenuePaymentExportRow:
+    """Stable payment fields serialized by the web CSV adapter."""
+
+    paid_at: datetime | None
+    account_name: str
+    account_id: UUID | None
+    invoice_id: UUID | None
+    amount: Decimal
+    currency: str
+    status: PaymentStatus
+    payment_method: str
+    provider: str
+
+
+def _revenue_export_account_name(account: Subscriber | None) -> str:
+    if account is None:
+        return ""
+    if account.organization is not None and account.organization.name:
+        return str(account.organization.name)
+    name = f"{account.first_name or ''} {account.last_name or ''}".strip()
+    return name or account.display_name or account.account_number or str(account.id)
+
+
+def get_revenue_payment_export_rows(
+    db: Session, *, query: RevenuePaymentExportQuery
+) -> tuple[RevenuePaymentExportRow, ...]:
+    """Return a bounded, eagerly loaded payment projection for CSV export."""
+
+    stmt = (
+        select(Payment)
+        .options(
+            selectinload(Payment.account).selectinload(Subscriber.organization),
+            selectinload(Payment.allocations),
+            selectinload(Payment.payment_method),
+            selectinload(Payment.provider),
+        )
+        .where(Payment.is_active.is_(True))
+        .order_by(Payment.paid_at.desc().nulls_last(), Payment.id.asc())
+        .limit(query.limit)
+    )
+    if query.paid_since is not None:
+        stmt = stmt.where(Payment.paid_at >= query.paid_since)
+
+    rows: list[RevenuePaymentExportRow] = []
+    for payment in db.scalars(stmt).all():
+        allocation = min(
+            payment.allocations,
+            key=lambda item: item.created_at or datetime.min.replace(tzinfo=UTC),
+            default=None,
+        )
+        method = payment.payment_method
+        method_name = ""
+        if method is not None:
+            method_name = method.label or method.method_type.value
+        rows.append(
+            RevenuePaymentExportRow(
+                paid_at=payment.paid_at,
+                account_name=_revenue_export_account_name(payment.account),
+                account_id=payment.account_id,
+                invoice_id=allocation.invoice_id if allocation is not None else None,
+                amount=payment.amount,
+                currency=payment.currency or "",
+                status=payment.status,
+                payment_method=method_name,
+                provider=payment.provider.name if payment.provider is not None else "",
+            )
+        )
+    return tuple(rows)
 
 
 class UpcomingChargeMode(StrEnum):
