@@ -1,0 +1,26 @@
+{% extends "layouts/admin.html" %}
+{% from "components/forms/action_form.html" import action_form with context %}
+{% from "components/ui/macros.html" import page_header, icon_archive %}
+{% block title %}{{ action.title }} - Admin{% endblock %}
+{% block content %}
+<div class="max-w-4xl space-y-6">
+{% call page_header(action.title, subtitle="Review the policy, effective date and publication evidence", icon=icon_archive(), breadcrumbs=[{"href":"/admin/billing/tax-policy", "label":"Tax policy"}, {"href":"", "label":action.title}]) %}{% endcall %}
+<p class="text-sm text-slate-600 dark:text-slate-300">Use catalog identities and predecessor/version evidence from <a href="/admin/billing/tax-policy">the policy workbench</a>. A stale predecessor or conflicting version is refused. Refresh the history, review changed inputs, and submit a new source revision. Exact publication retries may return the existing policy and record a new audit attempt.</p>
+{{ action_form(action) }}
+{% if preview %}
+<section class="rounded-lg border border-slate-200 p-4 dark:border-slate-700" aria-labelledby="preview-title">
+<h2 id="preview-title" class="font-semibold">Current persisted-policy preview</h2>
+{% if preview.commercial_source %}<p class="text-sm">Verified original commercial source: {{ preview.commercial_source.source_ref }} / {{ preview.commercial_source.source_version }}.</p><details class="mt-2"><summary>Verified sealed prior evidence</summary><ul>{% for reference in preview.prior_references %}<li>Result {{ reference.determination_set_id }} · source {{ reference.source_ref }} / {{ reference.source_version }}<br>Source fingerprint {{ reference.source_fingerprint }}<br>Result seal {{ reference.result_fingerprint }}</li>{% endfor %}</ul></details>{% endif %}
+<p class="text-sm">This read does not create a durable determination, invoice evidence or an unpublished-draft simulation.</p>
+<dl class="mt-3 grid gap-3 text-sm sm:grid-cols-2">
+{% for label, amount in [("Source", preview.result.source_amount), ("Net", preview.result.net_amount), ("Tax", preview.result.tax_amount), ("Gross", preview.result.gross_amount)] %}<div><dt>{{ label }}</dt><dd>{{ amount.currency.code }} {{ amount.amount }}</dd></div>{% endfor %}
+</dl>
+<p class="mt-3 text-sm">Policy date {{ preview.result.occurred_on | app_datetime('%Y-%m-%d', 'Unknown', include_tz=False) }} · jurisdiction {{ preview.result.jurisdiction_id }}</p>
+{% for component in preview.result.components %}<details class="mt-3"><summary>Component {{ component.component_sequence }} · {{ component.treatment_code }} · {{ component.tax_amount.currency.code }} {{ component.tax_amount.amount }}</summary>
+<dl class="mt-2 text-sm"><dt>Published rule</dt><dd>{{ component.rule_id }} version {{ component.rule_version }}</dd><dt>Tax code</dt><dd>{{ component.tax_code_id }}</dd><dt>Base</dt><dd>{{ component.calculation_base_code }} · {{ component.base_amount.amount }}</dd><dt>Inclusive</dt><dd>{{ component.inclusive }}</dd><dt>Recoverable / non-recoverable</dt><dd>{{ component.recoverable_amount.amount }} / {{ component.non_recoverable_amount.amount }}</dd></dl>
+{% if component.selected_dependency_policy is defined and component.selected_dependency_policy %}<p class="mt-2 text-sm">Tax selected dependency {{ component.selected_dependency_policy.selection }} from prior signature {{ component.selected_dependency_policy.prior_signature.fact_kind }} / {{ component.selected_dependency_policy.prior_signature.recognition_basis_code }} / {{ component.selected_dependency_policy.prior_signature.transaction_side }} in {{ component.selected_dependency_policy.prior_signature.jurisdiction_id }}.</p><ul>{% for dependency in component.dependency_components %}<li>Sealed result {{ dependency.determination_set_id }} · code {{ dependency.tax_code_id }} · rule {{ dependency.rule_id }} version {{ dependency.rule_version }} · Tax amount {{ dependency.tax_amount.currency.code }} {{ dependency.tax_amount.amount }}</li>{% endfor %}</ul>{% endif %}
+</details>{% endfor %}
+</section>
+{% endif %}
+</div>
+{% endblock %}

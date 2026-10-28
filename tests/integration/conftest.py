@@ -208,10 +208,11 @@ def starter_native_tax_policy(db_session: Session, monkeypatch):
     from decimal import Decimal
     from uuid import uuid4
 
-    from dotmac_kernel.money import Currency
+    from dotmac_kernel.money import Currency, Money
     from dotmac_tax import (
         TaxAuthorityInput,
         TaxJurisdictionInput,
+        TaxRuleBandInput,
         TaxRuleInput,
         ensure_tax_authority,
         ensure_tax_code,
@@ -223,7 +224,10 @@ def starter_native_tax_policy(db_session: Session, monkeypatch):
     from app.services.operator_tenant import OPERATOR_TENANT_ID
 
     def publish(
-        rate: Decimal = Decimal("0.075"), *, withholding_rate: Decimal = Decimal("0")
+        rate: Decimal = Decimal("0.075"),
+        *,
+        withholding_rate: Decimal = Decimal("0"),
+        withholding_methods: tuple[str, ...] = ("percentage",),
     ) -> dict[str, dict[str, str]]:
         code = f"native-fixture-{uuid4().hex[:12]}"
         authority = ensure_tax_authority(
@@ -245,16 +249,20 @@ def starter_native_tax_policy(db_session: Session, monkeypatch):
             ),
         )
         binding: dict[str, dict[str, str]] = {}
-        for purpose, side, amount in (
-            ("invoice_tax", "output", rate),
-            ("expected_withholding", "withholding", withholding_rate),
+        for sequence, (purpose, side, amount, method) in enumerate(
+            (("invoice_tax", "output", rate, "percentage"),)
+            + tuple(
+                ("expected_withholding", "withholding", withholding_rate, method)
+                for method in withholding_methods
+            ),
+            start=1,
         ):
             fact_kind = f"{code}:{purpose}"
             tax_code = ensure_tax_code(
                 db_session,
                 tenant_id=OPERATOR_TENANT_ID,
                 jurisdiction_id=jurisdiction.jurisdiction_id,
-                code=purpose,
+                code=f"{purpose}:{sequence}",
                 name=purpose,
                 tax_kind_code=purpose,
             )
@@ -270,9 +278,28 @@ def starter_native_tax_policy(db_session: Session, monkeypatch):
                     fact_kind=fact_kind,
                     recognition_basis_code="invoice_expectation",
                     transaction_side=side,
-                    calculation_method="percentage",
-                    rate=amount,
-                    fixed_amount=None,
+                    calculation_method=method,
+                    rate=amount if method == "percentage" else None,
+                    fixed_amount=Money(Decimal("3.00"), Currency("NGN", 2))
+                    if method == "fixed"
+                    else None,
+                    bands=(
+                        TaxRuleBandInput(
+                            sequence=1,
+                            lower_bound=Decimal("0"),
+                            upper_bound=Decimal("50"),
+                            rate=Decimal("0.02"),
+                        ),
+                        TaxRuleBandInput(
+                            sequence=2,
+                            lower_bound=Decimal("50"),
+                            upper_bound=None,
+                            rate=Decimal("0.04"),
+                        ),
+                    )
+                    if method == "progressive"
+                    else (),
+                    calculation_sequence=sequence * 100,
                     inclusive=False,
                     recoverable_rate=Decimal("0"),
                     treatment_code="exempt" if amount == 0 else "standard_rated",

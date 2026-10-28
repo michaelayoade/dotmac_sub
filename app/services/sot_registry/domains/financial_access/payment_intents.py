@@ -131,7 +131,8 @@ SERVICES: tuple[SOTService, ...] = (
             "The participant derives direct-transfer availability from canonical "
             "active collection-account destinations and customer "
             "instructions. It is the canonical invoice-intent, proof-link, "
-            "reviewed-proof resolution, completed-payment, gateway-observation, "
+            "reviewed-proof resolution (including typed native cash/discharge identities "
+            "without a legacy Payment foreign key), completed-payment, gateway-observation, "
             "gateway-reconciliation attempt progress, effective-expiry, and "
             "blocker/retry projection writer. Cash remains "
             "authoritative in the payment owner; "
@@ -453,6 +454,11 @@ SERVICES: tuple[SOTService, ...] = (
                     "financial.topup_intents.invalid_transition",
                     "financial.topup_intents.proof_link_conflict",
                     "financial.topup_intents.proof_resolution_link_mismatch",
+                    "financial.topup_intents.native_completion_binding_invalid",
+                    "financial.topup_intents.native_completion_cash_invalid",
+                    "financial.topup_intents.native_completion_allocation_invalid",
+                    "financial.topup_intents.native_completion_discharge_invalid",
+                    "financial.topup_intents.native_completion_claim_invalid",
                     "financial.topup_intents.proof_resolution_conflict",
                     "financial.topup_intents.proof_resolution_payment_required",
                     "financial.topup_intents.proof_resolution_payment_forbidden",

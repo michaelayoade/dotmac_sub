@@ -21,6 +21,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import datetime
 from decimal import Decimal
+from typing import Protocol
 from uuid import UUID
 
 from dotmac_billing import (
@@ -90,6 +91,23 @@ class StarterSettlementResult:
     settlement_id: UUID
     allocated: Decimal
     collectible_after: Decimal
+    allocation_posting_group_id: UUID | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class StarterCashSettlement:
+    """Actual cash already accepted and allocated; never an expected deduction."""
+
+    confirmation_id: UUID
+    settlement_id: UUID
+    amount: Money
+    allocation_posting_group_id: UUID
+
+
+class StarterSettlementParticipant(Protocol):
+    """Required flush-only consequence before the canonical mirror/access signal."""
+
+    def stage(self, db: Session, *, cash: StarterCashSettlement) -> None: ...
 
 
 def _funding_lane(policies: StarterSettlementPolicies) -> SettlementFundingLane:
@@ -137,6 +155,8 @@ def settle_starter_invoice_payment(
     occurred_at: datetime,
     observed_at: datetime,
     confirmation_source: ConfirmationSource = ConfirmationSource.PROVIDER_CALLBACK,
+    participant: StarterSettlementParticipant | None = None,
+    allocation_source_ref: str | None = None,
 ) -> StarterSettlementResult:
     """Discharge one Starter-issued invoice from confirmed provider cash.
 
@@ -146,6 +166,11 @@ def settle_starter_invoice_payment(
     confirmation is recorded.
     """
 
+    if allocation_source_ref is not None and not allocation_source_ref.strip():
+        raise _error(
+            "allocation_source_required",
+            "An explicit allocation source reference must be nonblank",
+        )
     policies = resolve_starter_settlement_policies(db)
     currency = Currency(invoice.currency.upper(), 2)
     try:
@@ -217,7 +242,7 @@ def settle_starter_invoice_payment(
             ),
             accepted_confirmation_evidence=policies.accepted_confirmation_evidence,
         )
-        allocate_settlement(
+        allocation = allocate_settlement(
             db,
             scope=_SCOPE,
             command=AllocationCommand(
@@ -225,9 +250,23 @@ def settle_starter_invoice_payment(
                 document_id=link.document_id,
                 amount=confirmed,
                 occurred_at=occurred_at,
-                source_ref=policies.settlement_source_ref(confirmation.id),
+                source_ref=(
+                    allocation_source_ref
+                    if allocation_source_ref is not None
+                    else policies.settlement_source_ref(confirmation.id)
+                ),
             ),
         )
+        if participant is not None:
+            participant.stage(
+                db,
+                cash=StarterCashSettlement(
+                    confirmation_id=confirmation.id,
+                    settlement_id=settlement.id,
+                    amount=confirmed,
+                    allocation_posting_group_id=allocation.id,
+                ),
+            )
         current = get_current_receivable_position(
             db,
             scope=_SCOPE,
@@ -303,4 +342,5 @@ def settle_starter_invoice_payment(
         settlement_id=settlement.id,
         allocated=confirmed.amount,
         collectible_after=collectible,
+        allocation_posting_group_id=allocation.id,
     )

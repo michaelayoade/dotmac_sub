@@ -34,6 +34,7 @@ from app.web.admin.billing_reporting import router as billing_reporting_router
 from app.web.admin.billing_subledger_openings import (
     router as billing_subledger_openings_router,
 )
+from app.web.admin.billing_tax_policy import router as billing_tax_policy_router
 from app.web.admin.catalog import router as catalog_router
 from app.web.admin.catalog_settings import legacy_add_ons_router
 from app.web.admin.catalog_settings import router as catalog_settings_router
@@ -325,6 +326,10 @@ router.include_router(
 )
 router.include_router(
     billing_reporting_router,
+    dependencies=[Depends(module_manager_service.require_module_enabled("billing"))],
+)
+router.include_router(
+    billing_tax_policy_router,
     dependencies=[Depends(module_manager_service.require_module_enabled("billing"))],
 )
 router.include_router(inbox_router)

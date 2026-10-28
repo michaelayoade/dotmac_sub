@@ -17,6 +17,9 @@ PYPROJECT = ROOT / "pyproject.toml"
 
 
 _SHADOW_IMPORTS = {
+    "app/services/payment_proofs.py": {
+        ("dotmac_payments", "ConfirmationSource"),
+    },
     "app/services/payment_intent_module_shadow.py": {
         ("dotmac_payments", "GetPaymentIntentV1"),
         ("dotmac_payments", "PaymentPurpose"),
@@ -35,19 +38,19 @@ _SHADOW_IMPORTS = {
     # issued by dotmac-billing as sole ledger writer; numbering imports are
     # outside this gate's prefixes.
     "app/services/billing/starter_issuance.py": {
-        ("dotmac_billing", "AcceptRatedObligationV2"),
-        ("dotmac_billing", "InvoiceTaxEvidenceV1"),
+        ("dotmac_billing", "AcceptRatedObligationV3"),
+        ("dotmac_billing", "InvoiceTaxEvidenceV2"),
         ("dotmac_billing", "AppliedFxSnapshotV1"),
         ("dotmac_billing", "DueDateBasisV1"),
         ("dotmac_billing", "GetInvoiceDocumentFactV1"),
-        ("dotmac_billing", "IssueRatedInvoiceV2"),
+        ("dotmac_billing", "IssueRatedInvoiceV3"),
         ("dotmac_billing", "PartyDocumentSnapshotV1"),
         ("dotmac_billing", "PaymentInstructionsSnapshotV1"),
         ("dotmac_billing", "PostalAddressSnapshotV1"),
         ("dotmac_billing", "PresentationAssetReferenceV1"),
         ("dotmac_billing", "ServicePeriodEvidenceV1"),
         ("dotmac_billing.service", "create_billing_account"),
-        ("dotmac_billing", "get_invoice_document_fact_v2"),
+        ("dotmac_billing", "get_invoice_document_fact_v3"),
         ("dotmac_billing", "issue_rated_invoice"),
         ("dotmac_billing.contracts", "DueDateBasisStatus"),
         ("dotmac_billing.contracts", "ServicePeriodStatus"),
@@ -61,10 +64,15 @@ _SHADOW_IMPORTS = {
         ("dotmac_billing.service", "issue_document"),
     },
     "app/services/billing/starter_tax_evidence.py": {
-        ("dotmac_billing", "InvoiceTaxEvidenceV1"),
-        ("dotmac_billing", "TaxDeterminationComponentEvidenceV1"),
+        ("dotmac_billing", "InvoiceTaxEvidenceV2"),
+        ("dotmac_billing", "TaxDeterminationComponentEvidenceV2"),
         ("dotmac_billing", "TaxDeterminationLineEvidenceV1"),
-        ("dotmac_billing", "TaxDeterminationSetEvidenceV1"),
+        ("dotmac_billing", "TaxCommercialSourceEvidenceV1"),
+        ("dotmac_billing", "TaxPriorResultReferenceEvidenceV1"),
+        ("dotmac_billing", "TaxBaseDependencyPolicyEvidenceV1"),
+        ("dotmac_billing", "TaxFactSignatureEvidenceV1"),
+        ("dotmac_billing", "TaxDependencyComponentEvidenceV1"),
+        ("dotmac_billing", "TaxDeterminationSetEvidenceV2"),
     },
     # Step 5 opening rehearsal assembly (ADR 0020/0031): pure census-to-
     # observation translation onto the pinned rehearsal contracts; it
@@ -82,6 +90,38 @@ _SHADOW_IMPORTS = {
     # Thin-client settlement back-half (ADR 0031): provider evidence is
     # confirmed in dotmac-payments and discharged in dotmac-billing for
     # Starter-issued invoices; Sub mirrors from the Starter position.
+    # Explicit proof adapter imports; historical reads remain owner-owned.
+    "app/services/topup_intents.py": {
+        ("dotmac_billing", "GetCurrentSettlementAllocationV1"),
+        ("dotmac_billing", "get_current_settlement_allocation"),
+        ("dotmac_billing.queries", "get_withholding_discharge"),
+        ("dotmac_payments", "GetConfirmedCashV1"),
+        ("dotmac_payments", "GetPaymentIntentV1"),
+        ("dotmac_payments", "get_confirmed_cash_v1"),
+        ("dotmac_payments", "get_payment_intent_v1"),
+    },
+    "app/services/billing/starter_withholding_proofs.py": {
+        ("dotmac_billing", "GetCurrentReceivablePositionV1"),
+        ("dotmac_billing", "InvoiceDocumentFactV2"),
+        ("dotmac_billing", "get_current_receivable_position"),
+        ("dotmac_billing.commands", "AcceptWithholdingDischarge"),
+        ("dotmac_billing.contracts", "WithholdingTaxEvidenceV1"),
+        ("dotmac_billing.contracts", "WithholdingTaxLineV1"),
+        ("dotmac_billing.errors", "BillingError"),
+        ("dotmac_billing.queries", "get_allocation_accounting_fact_v1"),
+        ("dotmac_billing.queries", "get_withholding_discharge"),
+        ("dotmac_billing.service", "accept_withholding_discharge"),
+        ("dotmac_payments", "GetConfirmedCashV1"),
+        ("dotmac_payments", "GetPaymentIntentV1"),
+        ("dotmac_payments", "OpenPaymentIntent"),
+        ("dotmac_payments", "PaymentError"),
+        ("dotmac_payments", "PaymentPurpose"),
+        ("dotmac_payments", "get_confirmed_cash_v1"),
+        ("dotmac_payments", "get_payment_intent_v1"),
+        ("dotmac_payments", "open_payment_intent"),
+        ("dotmac_billing", "InvoiceDocumentFactV3"),
+        ("dotmac_billing.contracts", "WithholdingTaxEvidenceV2"),
+    },
     "app/services/billing/starter_settlement.py": {
         ("dotmac_billing", "AcceptSettlementV1"),
         ("dotmac_billing", "GetCurrentReceivablePositionV1"),
@@ -180,7 +220,9 @@ _SHADOW_IMPORTS = {
         ("dotmac_billing", "GetInvoiceDocumentFactV1"),
         ("dotmac_billing", "InvoiceDocumentFactV1"),
         ("dotmac_billing", "InvoiceDocumentFactV2"),
+        ("dotmac_billing", "InvoiceDocumentFactV3"),
         ("dotmac_billing", "get_invoice_document_fact_v2"),
+        ("dotmac_billing", "get_invoice_document_fact_v3"),
         ("dotmac_billing", "get_current_receivable_position"),
         ("dotmac_billing", "get_invoice_document_fact"),
         ("dotmac_billing.errors", "BillingError"),

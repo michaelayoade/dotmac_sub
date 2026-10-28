@@ -18,6 +18,11 @@ per-payment ``external_id`` idempotency in the completion paths.
 
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from app.services.billing.starter_withholding_proofs import NativeWithholdingReview
+
 import logging
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
@@ -1980,4 +1985,205 @@ def stage_direct_transfer_proof_submission(
         intent_id=intent.id,
         proof_id=proof_id,
         status=TopupIntentStatus.submitted,
+    )
+
+
+@dataclass(frozen=True, slots=True)
+class ResolveNativeWithholdingProofCommand:
+    """Native cash/discharge identities, never a legacy Payment foreign key."""
+
+    intent_id: UUID
+    proof_id: UUID
+    confirmation_id: UUID
+    settlement_id: UUID
+    allocation_posting_group_id: UUID
+    discharge_ids: tuple[UUID, ...]
+    actual_amount: Decimal
+    occurred_at: datetime
+    review: NativeWithholdingReview
+    actor_ref: str
+
+
+def stage_native_withholding_proof_resolution(
+    db: Session,
+    *,
+    command: ResolveNativeWithholdingProofCommand,
+    context: CommandContext,
+) -> DirectTransferProofResolutionResult:
+    """Flush-only native completion under the existing proof root transaction."""
+    from dotmac_billing import (
+        GetCurrentSettlementAllocationV1,
+        get_current_settlement_allocation,
+    )
+    from dotmac_billing.queries import get_withholding_discharge
+    from dotmac_kernel.cache import TenantScope
+    from dotmac_payments import (
+        GetConfirmedCashV1,
+        GetPaymentIntentV1,
+        get_confirmed_cash_v1,
+        get_payment_intent_v1,
+    )
+
+    from app.services.billing.starter_withholding_proofs import read_native_snapshot
+    from app.services.operator_tenant import OPERATOR_TENANT_ID
+
+    intent = lock_topup_intent_scope(db, command.intent_id)
+    metadata = dict(intent.metadata_ or {})
+    snapshot = metadata.get("withholding_tax")
+    if (
+        not isinstance(snapshot, dict)
+        or snapshot.get("schema_version") != 2
+        or intent.provider_type != DIRECT_TRANSFER_PROVIDER
+        or metadata.get("payment_proof_id") != str(command.proof_id)
+        or intent.completed_payment_id is not None
+    ):
+        raise _error(
+            "native_completion_binding_invalid",
+            "Native proof does not bind this exact direct-transfer intent",
+        )
+    frozen = read_native_snapshot(snapshot)
+    resolution = {
+        "schema_version": 2,
+        "payment_proof_id": str(command.proof_id),
+        "outcome": "verified",
+        "confirmation_id": str(command.confirmation_id),
+        "settlement_id": str(command.settlement_id),
+        "allocation_posting_group_id": str(command.allocation_posting_group_id),
+        "discharge_ids": [str(item) for item in command.discharge_ids],
+        "actual_amount": str(command.actual_amount),
+        "actor_ref": command.actor_ref,
+        "review": command.review.serialized(),
+        "fact_fingerprint": frozen.fact_fingerprint,
+    }
+    existing = metadata.get("payment_proof_resolution")
+    if existing is not None:
+        if existing != resolution:
+            raise _error(
+                "proof_resolution_conflict",
+                "Intent already records different native proof evidence",
+            )
+        return DirectTransferProofResolutionResult(
+            intent_id=intent.id,
+            proof_id=command.proof_id,
+            status=TopupIntentStatus.completed,
+            payment_id=None,
+            changed=False,
+        )
+    scope = TenantScope(OPERATOR_TENANT_ID)
+    payment_intent = get_payment_intent_v1(
+        db, scope=scope, query=GetPaymentIntentV1(reference=intent.reference)
+    )
+    cash = get_confirmed_cash_v1(
+        db, scope=scope, query=GetConfirmedCashV1(command.confirmation_id)
+    )
+    if (
+        payment_intent is None
+        or cash.intent_id != payment_intent.intent_id
+        or payment_intent.payer_reference != str(intent.account_id)
+        or payment_intent.target_reference != str(frozen.source_invoice_id)
+        or cash.external_reference != f"proof:{command.proof_id}"
+        or cash.confirmed.amount != command.actual_amount
+        or cash.confirmed.currency.code != intent.currency
+        or command.actual_amount != intent.requested_amount
+    ):
+        raise _error(
+            "native_completion_cash_invalid",
+            "Confirmed native cash must bind the proof, account, invoice and issued amount",
+        )
+    allocation = get_current_settlement_allocation(
+        db,
+        scope=scope,
+        request=GetCurrentSettlementAllocationV1(
+            scope=scope,
+            billing_account_id=frozen.billing_account_id,
+            posting_group_id=command.allocation_posting_group_id,
+            settlement_id=command.settlement_id,
+            document_id=frozen.document_id,
+            amount=cash.confirmed,
+        ),
+    )
+    if allocation.state != "current" or allocation.remaining_amount != cash.confirmed:
+        raise _error(
+            "native_completion_allocation_invalid",
+            "Exact original actual-cash allocation must be active",
+        )
+    if len(command.discharge_ids) != len(frozen.components) or len(
+        set(command.discharge_ids)
+    ) != len(command.discharge_ids):
+        raise _error(
+            "native_completion_discharge_invalid",
+            "Every frozen component needs one distinct native discharge",
+        )
+    expected = {str(item.component_id): item for item in frozen.components}
+    claims = {str(item.component_id): item for item in command.review.claims}
+    if set(claims) != set(expected):
+        raise _error(
+            "native_completion_claim_invalid",
+            "Explicit claims must match every frozen component",
+        )
+    seen: set[str] = set()
+    for discharge_id in command.discharge_ids:
+        effect = get_withholding_discharge(db, scope=scope, discharge_id=discharge_id)
+        component = expected.get(effect.tax_evidence.component_ref)
+        if (
+            component is None
+            or claims[effect.tax_evidence.component_ref].claimed_amount
+            != effect.claimed_amount.amount
+            or claims[effect.tax_evidence.component_ref].accepted_amount
+            != effect.accepted_delta.amount
+            or effect.tax_evidence.component_ref in seen
+            or effect.document_id != frozen.document_id
+            or effect.tax_evidence.billing_account_id != frozen.billing_account_id
+            or effect.settlement_id != command.settlement_id
+            or effect.claim_ref
+            != f"proof:{command.proof_id}:claim:{effect.tax_evidence.component_ref}"
+            or effect.accepted_delta.amount != component.amount
+            or effect.claimed_amount != effect.accepted_delta
+            or effect.authorization_actor_ref != command.actor_ref
+            or effect.authorization_evidence_ref
+            != command.review.acceptance_evidence_ref
+            or effect.tax_evidence.result_fingerprint != component.result_fingerprint
+            or effect.reverses_discharge_id is not None
+        ):
+            raise _error(
+                "native_completion_discharge_invalid",
+                "Native discharge evidence does not match the accepted proof component",
+            )
+        seen.add(effect.tax_evidence.component_ref)
+    previous_status = intent.status
+    metadata["payment_proof_resolution"] = resolution
+    intent.metadata_ = metadata
+    intent.actual_amount = command.actual_amount
+    intent.completed_at = command.occurred_at
+    intent.external_id = f"proof:{command.proof_id}"
+    intent.gateway_next_reconcile_at = None
+    set_topup_intent_status(
+        intent, TopupIntentStatus.completed, source="payment_proof_review"
+    )
+    emit_event(
+        db,
+        EventType.topup_intent_completed,
+        {
+            "schema_version": 2,
+            "topup_intent_id": str(intent.id),
+            "payment_proof_id": str(command.proof_id),
+            "starter_confirmation_id": str(command.confirmation_id),
+            "starter_settlement_id": str(command.settlement_id),
+            "actual_amount": str(command.actual_amount),
+            "currency": intent.currency,
+            "previous_status": previous_status,
+            "status": intent.status,
+            "command_id": str(context.command_id),
+        },
+        actor=context.actor,
+        subscriber_id=intent.account_id,
+        account_id=intent.account_id,
+    )
+    db.flush()
+    return DirectTransferProofResolutionResult(
+        intent_id=intent.id,
+        proof_id=command.proof_id,
+        status=TopupIntentStatus.completed,
+        payment_id=None,
+        changed=True,
     )

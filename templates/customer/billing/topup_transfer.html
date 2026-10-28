@@ -74,6 +74,7 @@
                     <dt class="text-sm font-medium text-stone-500 dark:text-stone-400">Invoice total</dt>
                     <dd class="text-sm font-semibold text-stone-900 dark:text-white">{{ wht.currency }} {{ "{:,.2f}".format(wht.gross_amount|float) }}</dd>
                 </div>
+                {% if wht.schema_version != 2 %}
                 <div class="grid gap-1 px-5 py-4 sm:grid-cols-[11rem,1fr]">
                     <dt class="text-sm font-medium text-stone-500 dark:text-stone-400">VAT-exclusive basis</dt>
                     <dd class="text-sm font-semibold text-stone-900 dark:text-white">{{ wht.currency }} {{ "{:,.2f}".format(wht.vat_exclusive_amount|float) }}</dd>
@@ -86,12 +87,13 @@
                     <dt class="text-sm font-medium text-stone-500 dark:text-stone-400">WHT rate</dt>
                     <dd class="text-sm font-semibold text-stone-900 dark:text-white">{{ wht.withholding_tax_rate_percent }}%</dd>
                 </div>
+                {% endif %}
                 <div class="grid gap-1 px-5 py-4 sm:grid-cols-[11rem,1fr]">
-                    <dt class="text-sm font-medium text-stone-500 dark:text-stone-400">WHT deduction</dt>
+                    <dt class="text-sm font-medium text-stone-500 dark:text-stone-400">Expected withholding</dt>
                     <dd class="text-sm font-semibold text-stone-900 dark:text-white">{{ wht.currency }} {{ "{:,.2f}".format(wht.withholding_tax_amount|float) }}</dd>
                 </div>
                 <div class="grid gap-1 px-5 py-4 sm:grid-cols-[11rem,1fr]">
-                    <dt class="text-sm font-medium text-stone-500 dark:text-stone-400">Gross credit after verification</dt>
+                    <dt class="text-sm font-medium text-stone-500 dark:text-stone-400">{{ "Invoice discharge after cash and WHT acceptance" if wht.schema_version == 2 else "Gross credit after verification" }}</dt>
                     <dd class="text-sm font-semibold text-stone-900 dark:text-white">{{ wht.currency }} {{ "{:,.2f}".format(wht.gross_amount|float) }}</dd>
                 </div>
                 <div class="grid gap-1 px-5 py-4 sm:grid-cols-[11rem,1fr]">

@@ -151,14 +151,11 @@ def _invoice_withholding_tax_snapshot(
                 "Frozen expected net payment must be positive",
                 invoice_id=str(invoice.id),
             )
-        # The existing proof owner assumes one percentage and manufactures a
-        # gross payment from net cash. It has no native evidence DTO yet.
-        # Do not pass an expectation through that legacy discharge protocol.
-        raise _error(
-            "native_withholding_proof_contract_pending",
-            "Native withholding transfer requires an accepted-proof evidence contract",
-            invoice_id=str(invoice.id),
-        )
+        from app.services.billing.starter_withholding_proofs import native_snapshot
+
+        link = starter_positions.starter_invoice_link(db, invoice.id)
+        assert link is not None
+        return native_snapshot(db, invoice=invoice, link=link).serialized()
 
     policy = customer_tax_policies.get_customer_withholding_tax_policy(
         db,
@@ -350,6 +347,12 @@ def _create_direct_transfer_intent(
             context=context,
         )
         intent = staged.intent
+        if withholding_tax is not None and withholding_tax.get("schema_version") == 2:
+            from app.services.billing.starter_withholding_proofs import (
+                open_native_proof_intent,
+            )
+
+            open_native_proof_intent(db, intent=intent)
         preview_fingerprint = None
         replayed = staged.replayed
         replaced_intent_ids = staged.replaced_intent_ids

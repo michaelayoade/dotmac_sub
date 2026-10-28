@@ -169,7 +169,7 @@ def payment_proofs_file(
     "/payment-proofs/{proof_id}/verify",
     response_class=HTMLResponse,
 )
-def payment_proofs_verify(
+async def payment_proofs_verify(
     request: Request,
     proof_id: UUID,
     amount: str = Form(""),
@@ -177,9 +177,54 @@ def payment_proofs_verify(
     db: Session = Depends(get_db),
     auth: dict = Depends(require_permission("billing:proof:verify")),
 ):
+    native_values: dict[str, str] = {}
     try:
-        from app.services import payment_proofs
+        from decimal import Decimal, InvalidOperation
 
+        from app.services import payment_proofs
+        from app.services.billing.starter_withholding_proofs import (
+            NativeWithholdingClaim,
+            NativeWithholdingReview,
+        )
+
+        form = await request.form()
+        native_values = {
+            key: str(value)
+            for key, value in form.items()
+            if key.startswith("native_claim_")
+            or key.startswith("native_accept_")
+            or key == "native_acceptance_evidence"
+        }
+
+        native_review = None
+        claim_keys = tuple(key for key in form if key.startswith("native_claim_"))
+        if claim_keys or form.get("native_acceptance_evidence"):
+            try:
+                native_review = NativeWithholdingReview(
+                    claims=tuple(
+                        NativeWithholdingClaim(
+                            component_id=UUID(key.removeprefix("native_claim_")),
+                            claimed_amount=Decimal(str(form.get(key) or "")),
+                            accepted_amount=Decimal(
+                                str(
+                                    form.get(
+                                        f"native_accept_{key.removeprefix('native_claim_')}"
+                                    )
+                                    or ""
+                                )
+                            ),
+                        )
+                        for key in claim_keys
+                    ),
+                    acceptance_evidence_ref=str(
+                        form.get("native_acceptance_evidence") or ""
+                    ),
+                )
+            except (ValueError, InvalidOperation) as exc:
+                raise payment_proofs.PaymentProofError(
+                    code="financial.payment_proofs.invalid_native_claim",
+                    message="Enter every claimed and accepted withholding amount and its acceptance evidence",
+                ) from exc
         db_session_adapter.release_read_transaction(db)
         web_payment_proofs_service.verify_proof(
             db,
@@ -192,6 +237,7 @@ def payment_proofs_verify(
             proof_id=str(proof_id),
             verified_by=str(auth.get("principal_id")),
             amount=amount,
+            native_withholding_review=native_review,
             review_notes=review_notes,
         )
     except DomainError as exc:
@@ -200,6 +246,7 @@ def payment_proofs_verify(
             values={
                 "amount": amount,
                 "review_notes": review_notes,
+                **native_values,
             },
             error=exc,
         )

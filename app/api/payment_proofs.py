@@ -20,6 +20,10 @@ from sqlalchemy.orm import Session
 from app.api.payment_proof_errors import payment_proof_http_error
 from app.db import get_db
 from app.services.auth_dependencies import require_permission, require_user_auth
+from app.services.billing.starter_withholding_proofs import (
+    NativeWithholdingClaim,
+    NativeWithholdingReview,
+)
 from app.services.db_session_adapter import db_session_adapter
 from app.services.domain_errors import DomainError
 from app.services.owner_commands import CommandContext
@@ -51,7 +55,32 @@ def _command_context(
     )
 
 
+class NativeWithholdingClaimInput(BaseModel):
+    component_id: UUID
+    claimed_amount: Decimal = Field(gt=0)
+    accepted_amount: Decimal = Field(gt=0)
+
+
+class NativeWithholdingReviewInput(BaseModel):
+    claims: list[NativeWithholdingClaimInput] = Field(min_length=1)
+    acceptance_evidence_ref: str = Field(min_length=1, max_length=255)
+
+    def command(self) -> NativeWithholdingReview:
+        return NativeWithholdingReview(
+            claims=tuple(
+                NativeWithholdingClaim(
+                    component_id=item.component_id,
+                    claimed_amount=item.claimed_amount,
+                    accepted_amount=item.accepted_amount,
+                )
+                for item in self.claims
+            ),
+            acceptance_evidence_ref=self.acceptance_evidence_ref,
+        )
+
+
 class ProofReview(BaseModel):
+    native_withholding_review: NativeWithholdingReviewInput | None = None
     review_notes: str | None = Field(default=None, max_length=2000)
     # Reviewer-confirmed amount (from the bank statement). Defaults to the
     # customer-claimed amount when omitted.
@@ -361,6 +390,9 @@ def verify_payment_proof(
             ),
             verified_by=str(principal.get("principal_id")),
             amount=payload.amount,
+            native_withholding_review=payload.native_withholding_review.command()
+            if payload.native_withholding_review is not None
+            else None,
             review_notes=payload.review_notes,
         ).to_dict()
     except DomainError as exc:

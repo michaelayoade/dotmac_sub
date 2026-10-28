@@ -1,0 +1,59 @@
+{% extends "layouts/admin.html" %}
+{% from "components/ui/macros.html" import page_header, icon_archive %}
+{% block title %}Tax policy workbench - Admin{% endblock %}
+{% block content %}
+<div class="space-y-6">
+{% call page_header("Tax policy workbench", subtitle="Browse published policy and author effective versions through the Tax owner", icon=icon_archive(), breadcrumbs=[{"href":"/admin/billing", "label":"Billing"}, {"href":"", "label":"Tax policy"}]) %}
+{% if workbench.can_author %}<a class="btn btn-primary" href="/admin/billing/tax-policy/author/initial-rule">Publish initial rule</a>{% endif %}
+{% endcall %}
+<p class="text-sm text-slate-600 dark:text-slate-300">Catalog observed {{ workbench.observed_at | app_datetime('%b %d, %Y at %H:%M', 'Unknown') }}. Preview uses current persisted policy. Publication changes future determinations; existing invoice evidence stays immutable.</p>
+<nav aria-label="Policy tasks" class="flex flex-wrap gap-4 text-sm">
+<a href="/admin/billing/tax-policy/preview">Preview persisted policy</a>
+{% if workbench.can_author %}<a href="/admin/billing/tax-policy/author/authority">Add authority</a>
+<a href="/admin/billing/tax-policy/author/jurisdiction">Add jurisdiction</a>
+<a href="/admin/billing/tax-policy/author/code">Add tax code</a>
+<a href="/admin/billing/tax-policy/author/supersede">Supersede a rule</a>
+{% else %}<span>Policy publication requires billing:tax:write.</span>{% endif %}
+<a href="/admin/settings?category=billing">Audited native policy binding settings</a>
+</nav>
+<section class="rounded-lg border border-slate-200 p-4 dark:border-slate-700" aria-labelledby="catalog-title">
+{% if workbench.query.dependency_target %}<p class="text-sm">Configuring a dependency for {{ workbench.query.dependency_target.tax_code }}. Selected prior codes: {{ workbench.query.dependency_selected_codes | length }}. Select only codes for one complete prior signature.</p>
+{% if workbench.query.dependency_author_url() %}<a href="{{ workbench.query.dependency_author_url() }}">Use selected prior codes</a> · <a href="{{ workbench.query.dependency_author_url(all_prior=True) }}">Use all prior components in this jurisdiction instead</a>{% endif %}{% endif %}
+<h2 id="catalog-title" class="font-semibold">Catalog picker: {{ workbench.query.catalog }}</h2>
+<nav aria-label="Catalogs" class="my-3 flex gap-4 text-sm">
+<a href="/admin/billing/tax-policy?catalog=authorities">Authorities</a>
+<a href="/admin/billing/tax-policy?catalog=jurisdictions">Jurisdictions</a>
+<a href="/admin/billing/tax-policy?catalog=codes">Codes</a>
+</nav>
+<p class="text-sm text-slate-600 dark:text-slate-300">Up to {{ workbench.query.page_size }} choices per request. Total count is unavailable. Follow a choice to narrow the next picker or investigate its rules.</p>
+<div class="overflow-x-auto"><table class="w-full text-left text-sm">
+<thead><tr><th scope="col">Code / name</th><th scope="col">State</th><th scope="col">Context</th><th scope="col">Next step</th></tr></thead>
+<tbody>{% for item in workbench.choices %}<tr class="border-t border-slate-200 dark:border-slate-700">
+<td class="py-3">{{ item.code }} · {{ item.name }}<details><summary>Identity</summary><code>{{ item.identifier }}</code></details></td>
+<td>{{ item.status }}</td><td>{{ item.context }}</td><td><a href="{{ item.next_url }}">Inspect {{ item.code }}</a>{% if item.dependency_url %}<br><a href="{{ item.dependency_url }}">Add {{ item.code }} to prior-code selection</a>{% endif %}</td>
+</tr>{% else %}<tr><td colspan="4" class="py-4">No catalog entries in this bounded selection.</td></tr>{% endfor %}</tbody>
+</table></div>
+{% if workbench.next_url %}<a class="inline-block mt-4" href="{{ workbench.next_url }}">Next catalog choices</a>{% endif %}
+</section>
+{% if workbench.history %}
+<section class="space-y-4" aria-labelledby="history-title">
+{% if workbench.can_author %}<a href="{{ workbench.query.author_url() }}">Prepare initial policy for this code</a>{% endif %}
+{% if workbench.can_author and workbench.query.dependency_picker_url() %}<a href="{{ workbench.query.dependency_picker_url() }}">Choose prior codes for a dependent policy</a>{% endif %}
+<h2 id="history-title" class="font-semibold">Published rule history · {{ workbench.query.tax_code_id }}</h2>
+<p class="text-sm">History is append-only. Original dates remain publication evidence; the supersession edge determines the replacement date. Refresh this history before authoring a replacement.</p>
+{% for entry in workbench.history.items %}
+<details class="rounded-lg border border-slate-200 p-4 dark:border-slate-700"><summary>Version {{ entry.rule.version }} · {{ entry.rule.effective_from | app_datetime('%Y-%m-%d', 'Unknown', include_tz=False) }} · {{ entry.rule.calculation_method }} · {{ entry.rule.transaction_side }}</summary>
+{% if workbench.can_author %}<a class="inline-block mt-3" href="{{ workbench.query.author_url(predecessor_version=entry.rule.version) }}">Prepare replacement of version {{ entry.rule.version }}</a>{% if workbench.query.dependency_picker_url(predecessor_version=entry.rule.version) %} · <a href="{{ workbench.query.dependency_picker_url(predecessor_version=entry.rule.version) }}">Choose prior codes for this replacement</a>{% endif %}{% endif %}
+<dl class="mt-3 grid gap-2 text-sm sm:grid-cols-2">
+{% for key, value in [("Rule", entry.rule.rule_id), ("Published", entry.rule.published_at | app_datetime('%b %d, %Y at %H:%M', 'Unknown')), ("Effective to", entry.rule.effective_to | app_datetime('%Y-%m-%d', 'Not specified', include_tz=False)), ("Recognition", entry.rule.recognition_basis_code), ("Fact kind", entry.rule.fact_kind), ("Rate (proportion)", entry.rule.rate), ("Fixed amount", entry.rule.fixed_amount), ("Calculation base", entry.rule.calculation_base_code), ("Sequence", entry.rule.calculation_sequence), ("Treatment", entry.rule.treatment_code), ("Inclusive", entry.rule.inclusive), ("Priority", entry.rule.priority), ("Recoverable proportion", entry.rule.recoverable_rate), ("Party category", entry.rule.party_category), ("Supply category", entry.rule.supply_category), ("Place code", entry.rule.place_code)] %}<div><dt class="font-medium">{{ key }}</dt><dd class="break-all">{{ value if value is not none else "Not specified" }}</dd></div>{% endfor %}
+</dl>
+{% if entry.rule.dependency_policy %}<h3 class="mt-4 font-medium">Cross-purpose base dependency</h3><p>Base {{ entry.rule.calculation_base_code }} · selection {{ entry.rule.dependency_policy.selection }}</p><p>Prior signature: jurisdiction {{ entry.rule.dependency_policy.prior_signature.jurisdiction_id }} · {{ entry.rule.dependency_policy.prior_signature.fact_kind }} · {{ entry.rule.dependency_policy.prior_signature.recognition_basis_code }} · {{ entry.rule.dependency_policy.prior_signature.transaction_side }}</p><ul>{% for identifier in entry.rule.dependency_policy.tax_code_ids %}<li>Selected prior tax code {{ identifier }}</li>{% endfor %}</ul>{% else %}<p>No cross-purpose dependency in this published rule.</p>{% endif %}
+{% if entry.rule.bands %}<h3 class="mt-4 font-medium">Progressive bands</h3><ul>{% for band in entry.rule.bands %}<li>{{ band.sequence }}: {{ band.lower_bound }} to {{ band.upper_bound if band.upper_bound is not none else "unbounded" }} · rate {{ band.rate }}</li>{% endfor %}</ul>{% endif %}
+{% if entry.supersession %}<h3 class="mt-4 font-medium">Supersession evidence</h3><p>Replaces {{ entry.supersession.predecessor_rule_id }} version {{ entry.supersession.predecessor_version }} with {{ entry.supersession.replacement_rule_id }} version {{ entry.supersession.replacement_version }}, effective {{ entry.supersession.effective_from | app_datetime('%Y-%m-%d', 'Unknown', include_tz=False) }}.</p><p>Reason: {{ entry.supersession.reason }} · evidence {{ entry.supersession.evidence_ref }} · source {{ entry.supersession.source_ref }} / {{ entry.supersession.source_version }} · publisher {{ entry.supersession.published_by_ref }}</p>{% endif %}
+</details>
+{% else %}<p>No published rules in this history selection.</p>{% endfor %}
+{% if workbench.history_next_url %}<a href="{{ workbench.history_next_url }}">Next history entries</a>{% endif %}
+</section>
+{% endif %}
+</div>
+{% endblock %}

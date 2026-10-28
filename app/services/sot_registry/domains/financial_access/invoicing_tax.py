@@ -2149,9 +2149,11 @@ SERVICES: tuple[SOTService, ...] = (
     SOTService(
         name="financial.payment_proofs",
         module="app.services.payment_proofs",
+        implementation_modules=("app.services.billing.starter_withholding_proofs",),
         owns=(
             "payment-proof review lifecycle",
             "proof-backed payment request",
+            "native withholding acceptance and immutable replay",
             "duplicate payment-proof correction lifecycle",
             "payment-proof reviewer notification request lifecycle",
         ),
@@ -2163,6 +2165,8 @@ SERVICES: tuple[SOTService, ...] = (
             "financial.consolidated_payments",
             "financial.payments",
             "financial.tax_accounting",
+            "financial.starter_issuance",
+            "financial.starter_settlement",
             "financial.topup_intents",
             "communications.intents",
             "communications.notification_service",
@@ -2211,6 +2215,17 @@ SERVICES: tuple[SOTService, ...] = (
                     canonical_writer="financial.payment_proofs",
                 ),
                 ConcernContract(
+                    name="native withholding acceptance and immutable replay",
+                    role=OwnerRole.APPLICATION_COORDINATOR,
+                    input_names=(
+                        "payment-proof command context",
+                        "canonical payment-proof record",
+                        "canonical direct-transfer top-up intent protocol",
+                        "original native invoice and allocation evidence",
+                        "confirmed native cash evidence",
+                    ),
+                ),
+                ConcernContract(
                     name="duplicate payment-proof correction lifecycle",
                     role=OwnerRole.COMMAND_WRITER,
                     input_names=(
@@ -2232,6 +2247,24 @@ SERVICES: tuple[SOTService, ...] = (
                 ),
             ),
             authoritative_inputs=(
+                AuthorityInput(
+                    name="confirmed native cash evidence",
+                    owner="external:dotmac_payments",
+                    kind=AuthorityKind.EXTERNAL_OBSERVATION,
+                    source="Public immutable Payments intent and confirmed cash getters bind the exact proof, account, invoice, currency and actual cash; finance review remains explicit proof-owner admission",
+                ),
+                AuthorityInput(
+                    name="original native invoice and allocation evidence",
+                    owner="external:dotmac_billing",
+                    kind=AuthorityKind.EXTERNAL_OBSERVATION,
+                    source=(
+                        "Original immutable invoice Tax evidence, historical allocation "
+                        "accounting fact and withholding discharges through public Billing "
+                        "getters. "
+                        "validate_native_withholding_replay compares full frozen identity "
+                        "without current balance or mutable policy."
+                    ),
+                ),
                 AuthorityInput(
                     name="payment-proof command context",
                     owner="financial.payment_proofs",
@@ -2399,12 +2432,19 @@ SERVICES: tuple[SOTService, ...] = (
                 ),
                 retries=(
                     "Adapters may retry only after a transient transaction failure. "
-                    "A completed proof returns already_reviewed, while duplicate "
+                    "Native completed proofs replay only their full immutable receipt; "
+                    "other completed proofs return already_reviewed, while duplicate "
                     "transfer evidence and invalid decisions fail closed."
                 ),
             ),
             errors=ErrorContract(
                 domain_codes=(
+                    "financial.payment_proofs.native_withholding_refused",
+                    "financial.payment_proofs.native_intent_required",
+                    "financial.payment_proofs.native_claim_not_supported",
+                    "financial.payment_proofs.native_invoice_mismatch",
+                    "financial.payment_proofs.native_invoice_required",
+                    "financial.payment_proofs.native_replay_conflict",
                     "financial.payment_proofs.unsupported_file_type",
                     "financial.payment_proofs.file_too_large",
                     "financial.payment_proofs.empty_file",
@@ -2522,9 +2562,11 @@ SERVICES: tuple[SOTService, ...] = (
                 "docs/SOT_RELATIONSHIP_MAP.md",
                 "docs/designs/SOT_CODING_STANDARDS_REFACTOR.md",
                 "docs/designs/PAYMENT_PROOF_DUPLICATE_CORRECTION.md",
+                "docs/designs/STARTER_TAX_OWNED_INVOICE_EVIDENCE.md",
             ),
             test_refs=(
                 "tests/test_payment_proofs.py",
+                "tests/integration/test_native_withholding_proofs_pg.py",
                 "tests/test_payment_proofs_reseller_wht.py",
                 "tests/test_payment_proof_reviewer_notifications.py",
                 "tests/test_reseller_proof_double_credit.py",
@@ -3617,7 +3659,7 @@ SERVICES: tuple[SOTService, ...] = (
             "financial.invoices",
         ),
         notes=(
-            "Pending Tax-evidence successor (Billing a9 unreleased): native invoice_expectation Tax policies required after eligibility; no activation claimed. Slice 6a thin-client lane (ADR 0031): eligible admin drafts are "
+            "Pending Tax dependency successor (Billing a10 and Tax a7 unreleased): native invoice_expectation Tax policies required after eligibility; no activation claimed. Slice 6a thin-client lane (ADR 0031): eligible admin drafts are "
             "issued by pinned dotmac-billing as sole ledger writer. Sub "
             "retains only the invoice-row mirror (number, status, issued_at), "
             "the structural StarterInvoiceLink, the audit row, and the "
@@ -3692,7 +3734,7 @@ SERVICES: tuple[SOTService, ...] = (
                     name="published native invoice Tax determinations",
                     owner="external:dotmac_tax",
                     kind=AuthorityKind.EXTERNAL_OBSERVATION,
-                    source="Tax determine_tax_set owns published rule selection, classifications, rates and calculation bases. Typed starter_invoice_tax_policy binds invoice_expectation source facts to invoice_tax and explicit expected_withholding policies, including zero. Full public determination set/component/line evidence and fingerprints pass losslessly to pending Billing a9; no native rate reads from Sub tax snapshots or customer toggles.",
+                    source="Tax determine_tax_set_v2 owns published rule selection, classifications, rates, calculation bases and explicit sealed cross-purpose dependencies. Typed starter_invoice_tax_policy binds invoice_expectation source facts to invoice_tax and explicit expected_withholding policies, including zero. Full public determination set/component/line evidence and fingerprints and original line commercial identities pass losslessly to pending Billing a10 V3; no native rate reads from Sub tax snapshots or customer toggles.",
                 ),
                 AuthorityInput(
                     name="eligible admin draft invoice",
@@ -3838,7 +3880,7 @@ SERVICES: tuple[SOTService, ...] = (
                 ),
                 cutover_gate=(
                     "ADR 0031 composable policies resolve from settings "
-                    "and pending Billing a9 is published, pinned and migration-qualified; published Tax source policies exist; the numbering series is seeded past the legacy "
+                    "and pending Billing a10 and Tax a7 are published, pinned and migration-qualified; published Tax source policies exist; the numbering series is seeded past the legacy "
                     "maximum before production enablement."
                 ),
                 fallback_retirement=(
@@ -3867,7 +3909,7 @@ SERVICES: tuple[SOTService, ...] = (
         name="financial.starter_settlement",
         module="app.services.billing.starter_settlement",
         owns=(
-            "Starter invoice settlement from confirmed provider cash",
+            "Starter invoice settlement from confirmed cash",
             "Starter-settled invoice balance and status mirror",
         ),
         depends_on=(
@@ -3877,14 +3919,15 @@ SERVICES: tuple[SOTService, ...] = (
             "financial.starter_issuance",
         ),
         notes=(
-            "Settlement back-half (ADR 0031, pay-then-record): the webhook "
-            "coordinator hands authenticated provider evidence for a "
+            "Settlement back-half (ADR 0031, pay-then-record): webhook or proof "
+            "coordinators hand authenticated cash evidence for a "
             "Starter-linked invoice to this lane instead of the legacy "
             "provider-event money staging. dotmac-payments records the "
             "confirmation, dotmac-billing accepts and allocates the cash, "
-            "and Sub mirrors balance/status from the Starter collectible "
-            "position. No legacy Payment is created and the legacy "
-            "TopupIntent projection is left to expire. The invoice.paid "
+            "and Sub mirrors balance/status after the typed withholding participant "
+            "from the Starter collectible position. No legacy Payment is created. "
+            "Reviewed native proofs complete TopupIntent through its typed owner; "
+            "webhook intent projection retains its existing lifecycle. The invoice.paid "
             "email consequence stays legacy-coupled until its consumer "
             "repoint; payment.received is emitted without a legacy "
             "payment identity."
@@ -3892,10 +3935,10 @@ SERVICES: tuple[SOTService, ...] = (
         contract=ServiceContract(
             concerns=(
                 ConcernContract(
-                    name="Starter invoice settlement from confirmed provider cash",
+                    name="Starter invoice settlement from confirmed cash",
                     role=OwnerRole.COMMAND_WRITER,
                     input_names=(
-                        "verified provider settlement evidence",
+                        "verified cash settlement evidence",
                         "canonical Starter payments intent binding",
                         "canonical Starter settlement policies",
                         "Starter-issued invoice and structural link",
@@ -3914,14 +3957,14 @@ SERVICES: tuple[SOTService, ...] = (
             ),
             authoritative_inputs=(
                 AuthorityInput(
-                    name="verified provider settlement evidence",
-                    owner="external:payment_provider",
+                    name="verified cash settlement evidence",
+                    owner="external:dotmac_payments",
                     kind=AuthorityKind.EXTERNAL_OBSERVATION,
                     source=(
-                        "signature-verified webhook settlement normalized "
-                        "by the webhook coordinator: succeeded status, "
-                        "gross amount, currency, provider transaction "
-                        "identity, and paid instant"
+                        "Released Payments confirmation and confirmed-cash getters bind "
+                        "actual amount, currency, source, checkout and external reference. "
+                        "The caller admits signature-verified provider evidence or explicit "
+                        "finance-reviewed transfer proof in its owner transaction."
                     ),
                 ),
                 AuthorityInput(
@@ -3960,7 +4003,7 @@ SERVICES: tuple[SOTService, ...] = (
                     owner="external:dotmac_billing",
                     kind=AuthorityKind.EXTERNAL_OBSERVATION,
                     source=(
-                        "current receivable position read after allocation; "
+                        "current receivable position read after allocation and any accepted withholding discharge; "
                         "its collectible amount is the only balance the "
                         "Sub mirror may show"
                     ),
@@ -3969,9 +4012,9 @@ SERVICES: tuple[SOTService, ...] = (
             transaction=TransactionContract(
                 mode=TransactionMode.PARTICIPANT,
                 boundary=(
-                    "The webhook owner command owns the transaction: "
+                    "The webhook or proof owner command owns the transaction: "
                     "payments confirmation, billing acceptance and "
-                    "allocation, Sub mirror, payment.received event, "
+                    "allocation, typed post-cash withholding participant, Sub mirror, payment.received event, "
                     "audit row, and inbox consequence commit or roll "
                     "back together."
                 ),
@@ -4001,7 +4044,7 @@ SERVICES: tuple[SOTService, ...] = (
                     "financial.starter_settlement.intent_missing",
                     "financial.starter_settlement.starter_refused",
                 ),
-                mapping_owner="payment webhook coordinator",
+                mapping_owner="payment webhook or proof coordinator",
                 retryable_codes=(),
                 fail_closed_on=(
                     "missing or mismatched Starter payments intent binding",
@@ -4056,6 +4099,7 @@ SERVICES: tuple[SOTService, ...] = (
             ),
             test_refs=(
                 "tests/integration/test_starter_settlement_pg.py",
+                "tests/integration/test_native_withholding_proofs_pg.py",
                 "tests/architecture/test_sot_manifest_contracts.py",
             ),
         ),
@@ -4321,9 +4365,9 @@ SERVICES: tuple[SOTService, ...] = (
                     owner="external:dotmac_billing",
                     kind=AuthorityKind.EXTERNAL_OBSERVATION,
                     source=(
-                        "exact frozen InvoiceDocumentFactV1 or V2 read by "
+                        "exact frozen InvoiceDocumentFactV1, V2 or V3 read by "
                         "document identity and issued fact version; "
-                        "no implicit latest-version selection; V2 full Tax evidence renders expected withholding and original expected net independently of payment-adjusted mirror balance. V1 never manufactures missing expectation from mutable settings"
+                        "no implicit latest-version selection; V2/V3 full Tax evidence renders expected withholding and original expected net independently of payment-adjusted mirror balance. V1 never manufactures missing expectation from mutable settings"
                     ),
                 ),
             ),
