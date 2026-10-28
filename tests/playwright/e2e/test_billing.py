@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import re
 
-from playwright.sync_api import Page, expect
+from playwright.sync_api import Page, Route, expect
 
 from tests.playwright.pages.admin.billing import (
     BillingOverviewPage,
@@ -81,6 +81,7 @@ class TestInvoicesList:
         page.expect_loaded()
         status_filter = admin_page.locator("select[name='status']")
         invoice_page = admin_page.locator("#invoices-table [data-invoice-page]")
+        error_banner = admin_page.locator("#invoice-list-error")
 
         page.filter_by_status("unpaid")
         expect(invoice_page).to_have_attribute(
@@ -102,6 +103,39 @@ class TestInvoicesList:
         )
         expect(admin_page).to_have_url(re.compile(r"[?&]status=paid(?:&|$)"))
         expect(status_filter).to_have_value("paid")
+        expect(error_banner).to_be_hidden()
+
+    def test_status_filter_error_banner_shows_message_and_retries(
+        self, admin_page: Page, settings
+    ) -> None:
+        """A failed filter request keeps the table and offers a readable retry."""
+        page = InvoicesPage(admin_page, settings.base_url)
+        page.goto()
+        page.expect_loaded()
+        error_banner = admin_page.locator("#invoice-list-error")
+        invoice_page = admin_page.locator("#invoices-table [data-invoice-page]")
+        original_url = invoice_page.get_attribute("data-list-url")
+        assert original_url is not None
+
+        def fail_filter(route: Route) -> None:
+            route.fulfill(status=500, body="Temporary test failure")
+
+        route_pattern = "**/admin/billing/invoices?*"
+        admin_page.route(route_pattern, fail_filter)
+        page.filter_by_status("paid")
+
+        expect(error_banner).to_be_visible()
+        expect(error_banner).to_contain_text(
+            "Invoice results could not be loaded. The previous results are still shown."
+        )
+        expect(invoice_page).to_have_attribute("data-list-url", original_url)
+
+        admin_page.unroute(route_pattern, fail_filter)
+        error_banner.get_by_role("button", name="Try again").click()
+        expect(invoice_page).to_have_attribute(
+            "data-list-url", re.compile(r"[?&]status=paid(?:&|$)")
+        )
+        expect(error_banner).to_be_hidden()
 
     def test_proforma_filter_can_be_applied_and_reset(self, admin_page: Page, settings):
         """The checkbox refreshes results and Clear filters restores defaults."""
