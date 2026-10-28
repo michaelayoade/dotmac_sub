@@ -444,7 +444,7 @@ def _load_adapter(raw: bytes, sha: str) -> types.ModuleType:
     code = compile(raw, f"<pinned-adapter:{sha}>", "exec", dont_inherit=True)
     sys.modules[name] = module
     try:
-        exec(code, module.__dict__)  # noqa: S102 - bytes are code-pinned above
+        exec(code, module.__dict__)  # noqa: S102  # nosec B102
         return module
     finally:
         sys.modules.pop(name, None)
