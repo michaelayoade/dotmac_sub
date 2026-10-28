@@ -35,19 +35,19 @@ _SHADOW_IMPORTS = {
     # issued by dotmac-billing as sole ledger writer; numbering imports are
     # outside this gate's prefixes.
     "app/services/billing/starter_issuance.py": {
-        ("dotmac_billing", "AcceptRatedObligationV1"),
+        ("dotmac_billing", "AcceptRatedObligationV2"),
+        ("dotmac_billing", "InvoiceTaxEvidenceV1"),
         ("dotmac_billing", "AppliedFxSnapshotV1"),
-        ("dotmac_billing", "AppliedTaxSnapshotV1"),
         ("dotmac_billing", "DueDateBasisV1"),
         ("dotmac_billing", "GetInvoiceDocumentFactV1"),
-        ("dotmac_billing", "IssueRatedInvoiceV1"),
+        ("dotmac_billing", "IssueRatedInvoiceV2"),
         ("dotmac_billing", "PartyDocumentSnapshotV1"),
         ("dotmac_billing", "PaymentInstructionsSnapshotV1"),
         ("dotmac_billing", "PostalAddressSnapshotV1"),
         ("dotmac_billing", "PresentationAssetReferenceV1"),
         ("dotmac_billing", "ServicePeriodEvidenceV1"),
         ("dotmac_billing.service", "create_billing_account"),
-        ("dotmac_billing", "get_invoice_document_fact"),
+        ("dotmac_billing", "get_invoice_document_fact_v2"),
         ("dotmac_billing", "issue_rated_invoice"),
         ("dotmac_billing.contracts", "DueDateBasisStatus"),
         ("dotmac_billing.contracts", "ServicePeriodStatus"),
@@ -59,6 +59,12 @@ _SHADOW_IMPORTS = {
         ("dotmac_billing.service", "accept_rated_obligation"),
         ("dotmac_billing.service", "create_multi_line_draft_document"),
         ("dotmac_billing.service", "issue_document"),
+    },
+    "app/services/billing/starter_tax_evidence.py": {
+        ("dotmac_billing", "InvoiceTaxEvidenceV1"),
+        ("dotmac_billing", "TaxDeterminationComponentEvidenceV1"),
+        ("dotmac_billing", "TaxDeterminationLineEvidenceV1"),
+        ("dotmac_billing", "TaxDeterminationSetEvidenceV1"),
     },
     # Step 5 opening rehearsal assembly (ADR 0020/0031): pure census-to-
     # observation translation onto the pinned rehearsal contracts; it
@@ -173,6 +179,8 @@ _SHADOW_IMPORTS = {
         ("dotmac_billing", "GetCurrentReceivablePositionV1"),
         ("dotmac_billing", "GetInvoiceDocumentFactV1"),
         ("dotmac_billing", "InvoiceDocumentFactV1"),
+        ("dotmac_billing", "InvoiceDocumentFactV2"),
+        ("dotmac_billing", "get_invoice_document_fact_v2"),
         ("dotmac_billing", "get_current_receivable_position"),
         ("dotmac_billing", "get_invoice_document_fact"),
         ("dotmac_billing.errors", "BillingError"),

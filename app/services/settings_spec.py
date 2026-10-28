@@ -18,6 +18,7 @@ from app.schemas.walled_garden import (
     walled_garden_allowed_resources_error,
 )
 from app.services import domain_settings as settings_service
+from app.services.billing.starter_tax_evidence import tax_policy_value_error
 from app.services.brand_theme import (
     DEFAULT_HEX,
     DEFAULT_SECONDARY_HEX,
@@ -6320,6 +6321,19 @@ SETTINGS_SPECS.append(
     )
 )
 
+SETTINGS_SPECS.append(
+    SettingSpec(
+        domain=SettingDomain.billing,
+        key="starter_invoice_tax_policy",
+        env_var=None,
+        value_type=SettingValueType.json,
+        default=None,
+        label="Native invoice Tax source bindings (invoice tax and expected withholding)",
+        inherits=False,
+        owner_command_only=True,
+    )
+)
+
 SETTINGS_SPECS.extend(
     [
         SettingSpec(
@@ -6875,6 +6889,7 @@ del _spec
 TYPED_JSON_SETTING_VALIDATORS: dict[
     tuple[SettingDomain, str], Callable[[object], str | None]
 ] = {
+    (SettingDomain.billing, "starter_invoice_tax_policy"): tax_policy_value_error,
     (
         SettingDomain.radius,
         "walled_garden_allowed_resources",

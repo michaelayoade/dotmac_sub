@@ -567,6 +567,7 @@ def _render_invoice_html(invoice: Invoice, db: Session) -> str:
             {f'<tr><td>Discount</td><td class="num">-{NAIRA_SIGN}{_money(invoice.discount_amount)}</td></tr>' if invoice.discount_amount else ""}
             <tr><td>{tax_label}</td><td class=\"num\">{NAIRA_SIGN}{_money(invoice.tax_total)}</td></tr>
             <tr class=\"grand-total\"><td>Total</td><td class=\"num\">{NAIRA_SIGN}{_money(invoice.total)}</td></tr>
+            {"".join(f'<tr><td>{html.escape(label)}</td><td class="num">{NAIRA_SIGN}{value}</td></tr>' for label, value in _frozen_tax_rows(invoice))}
           </table>
         </div>
       </div>
@@ -686,6 +687,7 @@ def _render_invoice_text_lines(
             ),
             f"Tax: NGN {_money(invoice.tax_total)}",
             f"Total: NGN {_money(invoice.total)}",
+            *(f"{label}: NGN {value}" for label, value in _frozen_tax_rows(invoice)),
             f"Balance Due: NGN {_money(invoice.balance_due)}",
         ]
     )
@@ -960,7 +962,12 @@ def _build_branded_fallback_pdf(db: Session, invoice: Invoice) -> bytes:
     totals_left = width - 430
     totals_top = 1180
     draw.rounded_rectangle(
-        (totals_left, totals_top, width - margin_x, totals_top + 172),
+        (
+            totals_left,
+            totals_top,
+            width - margin_x,
+            totals_top + 172 + len(_frozen_tax_summary_rows(invoice)) * 44,
+        ),
         radius=20,
         fill="#ffffff",
         outline=slate_200,
@@ -974,6 +981,10 @@ def _build_branded_fallback_pdf(db: Session, invoice: Invoice) -> bytes:
         ),
         ("Tax", f"{naira}{_money(invoice.tax_total)}"),
         ("Total", f"{naira}{_money(invoice.total)}"),
+        *(
+            (label, f"{naira}{value}")
+            for label, value in _frozen_tax_summary_rows(invoice)
+        ),
     ]
     for index, (label, value) in enumerate(totals):
         ty = totals_top + 22 + (index * 44)
@@ -1039,7 +1050,7 @@ def _build_branded_fallback_pdf(db: Session, invoice: Invoice) -> bytes:
                     fill=slate_700,
                 )
 
-    memo_top = 1388
+    memo_top = 1388 + len(_frozen_tax_summary_rows(invoice)) * 44
     draw.rounded_rectangle(
         (margin_x, memo_top, width - margin_x, memo_top + 150),
         radius=18,
@@ -1055,7 +1066,7 @@ def _build_branded_fallback_pdf(db: Session, invoice: Invoice) -> bytes:
         fill=slate_900,
     )
 
-    footer_y = 1612
+    footer_y = 1612 + len(_frozen_tax_summary_rows(invoice)) * 44
     draw.text(
         (margin_x, footer_y),
         f"Prepared by {company_name}",
@@ -1495,6 +1506,45 @@ def _invoice_owner_subscriber_id(invoice: Invoice):
         if getattr(account, "category", None) == SubscriberCategory.business
         else None
     )
+
+
+def _frozen_tax_summary_rows(invoice: Invoice) -> tuple[tuple[str, str], ...]:
+    presentation = getattr(invoice, "tax_presentation", None)
+    if presentation is None:
+        return ()
+    return (
+        ("Expected WHT", _money(presentation.expected_withholding)),
+        ("Expected net", _money(presentation.original_expected_net)),
+    )
+
+
+def _frozen_tax_rows(invoice: Invoice) -> tuple[tuple[str, str], ...]:
+    """Document-only frozen Tax detail, separate from the current balance."""
+    presentation = getattr(invoice, "tax_presentation", None)
+    if presentation is None:
+        return ()
+    rows = []
+    for component in presentation.components:
+        label = (
+            "Expected withholding"
+            if component.purpose == "expected_withholding"
+            else "Invoice tax"
+        )
+        rate = (
+            f" ({component.rate_percent}%)"
+            if component.rate_percent is not None
+            else ""
+        )
+        rows.append(
+            (
+                f"{label}{rate}; basis {_money(component.base_amount)}",
+                _money(component.tax_amount),
+            )
+        )
+    rows.append(
+        ("Original expected net payment", _money(presentation.original_expected_net))
+    )
+    return tuple(rows)
 
 
 def _build_pdf_bytes(db: Session, invoice: Invoice) -> bytes:

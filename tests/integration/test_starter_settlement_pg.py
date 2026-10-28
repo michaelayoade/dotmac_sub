@@ -43,7 +43,10 @@ from app.services.billing.starter_settlement import (
 from app.services.brand_profiles import upsert_brand_profile
 from app.services.operator_tenant import OPERATOR_TENANT_ID
 
-pytestmark = pytest.mark.integration
+pytestmark = [
+    pytest.mark.integration,
+    pytest.mark.usefixtures("starter_native_vat_tax_policy"),
+]
 
 _SERIES = f"invset-{uuid4().hex[:8]}"
 _SCOPE = TenantScope(OPERATOR_TENANT_ID)

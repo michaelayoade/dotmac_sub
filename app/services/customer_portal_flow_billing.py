@@ -601,6 +601,11 @@ def get_invoice_detail(
     ):
         return None
 
+    from app.services.billing import starter_positions
+
+    fact = starter_positions.starter_invoice_fact(db, invoice)
+    if fact is not None:
+        invoice = starter_positions.apply_fact_overlay(invoice, fact)
     billing_contact = get_invoice_billing_contact(db, invoice, customer)
 
     return {

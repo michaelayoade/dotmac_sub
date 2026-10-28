@@ -37,7 +37,10 @@ from app.services.billing import starter_policies
 from app.services.brand_profiles import upsert_brand_profile
 from app.services.operator_tenant import OPERATOR_TENANT_ID
 
-pytestmark = pytest.mark.integration
+pytestmark = [
+    pytest.mark.integration,
+    pytest.mark.usefixtures("starter_native_vat_tax_policy"),
+]
 
 _SERIES = f"inv6a-{uuid4().hex[:8]}"
 

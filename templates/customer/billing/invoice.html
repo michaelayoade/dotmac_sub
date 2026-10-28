@@ -85,6 +85,18 @@
                             <span>Tax</span>
                             <span class="font-semibold text-stone-900 dark:text-white">{{ invoice_currency }} {{ "{:,.2f}".format(invoice.tax_total or 0) }}</span>
                         </div>
+                        {% if invoice.tax_presentation is defined and invoice.tax_presentation %}
+                        {% for component in invoice.tax_presentation.components %}
+                        <div class="flex items-center justify-between text-sm text-stone-600 dark:text-stone-300">
+                            <span>{{ 'Expected withholding' if component.purpose == 'expected_withholding' else 'Invoice tax' }} — {{ component.treatment_code | replace('_', ' ') }}{% if component.rate_percent is not none %} ({{ component.rate_percent }}%){% endif %}; basis {{ invoice_currency }} {{ "{:,.2f}".format(component.base_amount) }}</span>
+                            <span>{{ invoice_currency }} {{ "{:,.2f}".format(component.tax_amount) }}</span>
+                        </div>
+                        {% endfor %}
+                        <div class="flex items-center justify-between text-sm text-stone-600 dark:text-stone-300">
+                            <span>Original expected net payment</span>
+                            <span>{{ invoice_currency }} {{ "{:,.2f}".format(invoice.tax_presentation.original_expected_net) }}</span>
+                        </div>
+                        {% endif %}
                         <div class="border-t border-stone-200 pt-3 dark:border-stone-700">
                             <div class="flex items-center justify-between">
                                 <span class="text-base font-bold text-stone-900 dark:text-white" style="font-family: var(--font-display);">Total</span>

@@ -128,6 +128,38 @@ def _invoice_withholding_tax_snapshot(
     account_id: UUID,
     invoice: Invoice,
 ) -> dict[str, object] | None:
+    from app.services.billing import starter_positions
+
+    if starter_positions.starter_invoice_link(db, invoice.id) is not None:
+        fact = starter_positions.starter_invoice_fact(db, invoice)
+        if fact is None:
+            return None
+        presentation = starter_positions.frozen_tax_presentation(fact)
+        # Linked V1 documents predate expectation evidence. No mutable setting
+        # can retroactively author that missing historical fact.
+        if presentation is None or presentation.expected_withholding == 0:
+            return None
+        if round_money(invoice.balance_due) != fact.grand_total.amount:
+            raise _error(
+                "invoice_withholding_tax_basis_unavailable",
+                "Invoice cannot use automatic withholding tax after partial settlement or adjustments",
+                invoice_id=str(invoice.id),
+            )
+        if presentation.original_expected_net <= 0:
+            raise _error(
+                "invoice_withholding_tax_basis_unavailable",
+                "Frozen expected net payment must be positive",
+                invoice_id=str(invoice.id),
+            )
+        # The existing proof owner assumes one percentage and manufactures a
+        # gross payment from net cash. It has no native evidence DTO yet.
+        # Do not pass an expectation through that legacy discharge protocol.
+        raise _error(
+            "native_withholding_proof_contract_pending",
+            "Native withholding transfer requires an accepted-proof evidence contract",
+            invoice_id=str(invoice.id),
+        )
+
     policy = customer_tax_policies.get_customer_withholding_tax_policy(
         db,
         account_id=account_id,
