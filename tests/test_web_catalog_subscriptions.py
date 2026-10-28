@@ -2264,11 +2264,14 @@ def test_public_ip_addon_sync_reuses_unique_subscriber_addon(
     catalog_offer,
 ):
     add_on = _public_ip_addon(db_session)
+    # Legacy add-ons can remain attached to a historical subscription.
     source_subscription = catalog_service.subscriptions.create(
         db_session,
         SubscriptionCreate(
             account_id=subscriber.id,
             offer_id=catalog_offer.id,
+            status=SubscriptionStatus.canceled,
+            canceled_at=datetime.now(UTC),
         ),
     )
     edited_subscription = catalog_service.subscriptions.create(
@@ -3144,6 +3147,8 @@ def test_edit_form_data_prefers_current_subscription_public_ip_addon(
         SubscriptionCreate(
             account_id=subscriber.id,
             offer_id=catalog_offer.id,
+            status=SubscriptionStatus.canceled,
+            canceled_at=datetime.now(UTC),
         ),
     )
     db_session.add_all(
@@ -3184,11 +3189,14 @@ def test_edit_form_data_uses_unique_route_compatible_subscriber_addon(
     catalog_offer,
 ):
     add_on = _public_ip_addon(db_session, ip_prefix_length=29)
+    # Keep only the edited service nonterminal while retaining legacy add-ons.
     source_subscription = catalog_service.subscriptions.create(
         db_session,
         SubscriptionCreate(
             account_id=subscriber.id,
             offer_id=catalog_offer.id,
+            status=SubscriptionStatus.canceled,
+            canceled_at=datetime.now(UTC),
         ),
     )
     edited_subscription = catalog_service.subscriptions.create(
@@ -3245,6 +3253,8 @@ def test_edit_form_data_rejects_ambiguous_route_compatible_subscriber_addons(
         SubscriptionCreate(
             account_id=subscriber.id,
             offer_id=catalog_offer.id,
+            status=SubscriptionStatus.canceled,
+            canceled_at=datetime.now(UTC),
         ),
     )
     second_source = catalog_service.subscriptions.create(
@@ -3252,6 +3262,8 @@ def test_edit_form_data_rejects_ambiguous_route_compatible_subscriber_addons(
         SubscriptionCreate(
             account_id=subscriber.id,
             offer_id=catalog_offer.id,
+            status=SubscriptionStatus.canceled,
+            canceled_at=datetime.now(UTC),
         ),
     )
     edited_subscription = catalog_service.subscriptions.create(
