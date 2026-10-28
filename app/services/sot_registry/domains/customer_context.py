@@ -3453,8 +3453,10 @@ DOMAIN = DomainSOT(
                 "not replace server totals with loaded-session pages or "
                 "retention-limited chart series. Operator-selected custom "
                 "date ranges are inclusive calendar-day windows; the Stats "
-                "Records CSV uses the same typed window and exports the full "
-                "filtered result rather than the visible page."
+                "Records total, download, upload, and daily average use the "
+                "complete filtered daily record set before pagination. The "
+                "CSV uses the same typed window and exports the full filtered "
+                "result rather than the visible page."
             ),
         ),
         SOTService(
