@@ -78,6 +78,42 @@ collision inventory re-verified at each rebase rather than assumed to hold:
 The recon is re-run on every pin and Sub model change because a stale inventory
 would silently under-report the very risk the S7 ADR gate exists to hold.
 
+**2026-10-28 — `dotmac-device-cli==0.1.0a1` adopted for `version` and
+`list_onts`, default OFF.** Sub exact-pins the stdlib-only, no-I/O OLT CLI
+dialogue package (starter ADR-0077; annotated tag `dotmac-device-cli-v0.1.0a1`
+at Starter `97737053`) from the private Forgejo index. This is adoption of two
+reads, not of the OLT CLI: every writer, every other reader, the limiter and
+the logout/grace/metrics machinery stay Sub's. `app/services/network/
+device_cli_host.py` is the ONLY importer
+(`tests/architecture/test_device_cli_import_boundary.py`); it supplies the
+channel adapter, a Postgres advisory `LockStore`, profile resolution from the
+OLT row's configured vendor/model/firmware, and the mapping back onto the legacy
+`(bool, message, payload)` tuples. Two public functions consult it first and
+fall back to the unchanged legacy code when it declines:
+`olt_ssh.get_firmware_info` (`version`) and
+`olt_ssh_ont.status.get_registered_ont_serials` (`list_onts`).
+
+Flags (domain `network`, all safe defaults): `olt_device_cli_reads_enabled`
+(false, the kill switch), `olt_device_cli_reads_olts` (CSV of OLT ids, empty)
+and `olt_device_cli_reads_ops` (CSV of operations, empty). The package path runs
+only when enabled, the OLT is active and allowlisted, the operation is
+allowlisted, no `olt_ssh_scope` is active, the configured model/firmware resolve
+to a profile that claims the operation, the profile `[ssh]` data equals Sub's
+`OltSshPolicy`, and (for `list_onts`) the package renders the byte-identical
+command Sub sends today. Every refusal happens before any login, so falling back
+cannot double-login; once the package path has started, an unreadable result or
+adapter error is returned as a failure and there is never a legacy re-login in
+the same call. Rollback is the kill switch (next call is legacy; no migration,
+no data) or reverting this change.
+
+Not claimed: MA5800 stays on legacy (Sub polls it with `display ont info
+summary`, the package renders the `all` form, so the command cross-check
+refuses it); no pooled or scope-reused session is attached; the package slot
+acquisition wrapper exists and is proven against the legacy limiter's lock keys
+(vectors pinned in `tests/test_device_cli_host.py`) but is not yet on any
+production path. Sequencing: reads before IPAM W1, never in the W1 release or
+freeze; Starter and Sub merges and deploys are separate, explicit go decisions.
+
 **2026-10-13 — proposed `dotmac-numbering==0.1.0a2` inert tenant
 composition; validation pending.** The exact released dependency adds its
 installed `dotmac_numbering.migrations:versions` lineage and an explicit TENANT

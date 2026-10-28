@@ -1424,6 +1424,27 @@ def _parse_firmware_info(output: str) -> FirmwareInfo:
     return parse_firmware_info(output)
 
 
+def _firmware_info_result(
+    olt: OLTDevice, output: str
+) -> tuple[bool, str, FirmwareInfo]:
+    """Parse ``display version`` output into the legacy result tuple."""
+    info = _parse_firmware_info(output)
+
+    if not info.current_version:
+        return False, "Could not parse firmware version from output", info
+
+    message = f"Running: {info.current_version}"
+    if info.standby_version:
+        message += f", Standby: {info.standby_version}"
+
+    logger.info(
+        "Retrieved firmware info from OLT %s: %s",
+        olt.name,
+        message,
+    )
+    return True, message, info
+
+
 def get_firmware_info(olt: OLTDevice) -> tuple[bool, str, FirmwareInfo]:
     """Get current and standby firmware versions from OLT via 'display version'.
 
@@ -1433,6 +1454,18 @@ def get_firmware_info(olt: OLTDevice) -> tuple[bool, str, FirmwareInfo]:
     Returns:
         Tuple of (success, message, FirmwareInfo).
     """
+    # Default-off dotmac-device-cli ``version`` read (S1). ``None`` = legacy path.
+    # The firmware parser stays here; a package read that starts never falls
+    # back to a second login.
+    from app.services.network import device_cli_host
+
+    packaged = device_cli_host.read_version(olt)
+    if packaged is not None:
+        packaged_ok, payload = packaged
+        if not packaged_ok:
+            return False, payload, FirmwareInfo()
+        return _firmware_info_result(olt, payload)
+
     try:
         transport, channel, policy = _open_shell(olt)
     except (SSHException, OSError, TimeoutError, ValueError) as exc:
@@ -1452,21 +1485,7 @@ def get_firmware_info(olt: OLTDevice) -> tuple[bool, str, FirmwareInfo]:
             timeout_sec=30,
         )
 
-        info = _parse_firmware_info(output)
-
-        if not info.current_version:
-            return False, "Could not parse firmware version from output", info
-
-        message = f"Running: {info.current_version}"
-        if info.standby_version:
-            message += f", Standby: {info.standby_version}"
-
-        logger.info(
-            "Retrieved firmware info from OLT %s: %s",
-            olt.name,
-            message,
-        )
-        return True, message, info
+        return _firmware_info_result(olt, output)
     except (*_SSH_CONNECTION_ERRORS, RuntimeError) as exc:
         logger.error(
             "Error getting firmware info from OLT %s: %s", olt.name, exc, exc_info=True

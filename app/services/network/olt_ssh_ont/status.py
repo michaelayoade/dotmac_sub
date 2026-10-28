@@ -381,6 +381,17 @@ def get_registered_ont_serials(
     if not normalized_fsps:
         return True, "No Huawei PON ports requested", []
 
+    # Default-off dotmac-device-cli read (S1). ``None`` means the kill switch is
+    # off or the OLT/op/profile is not selected: the legacy path below runs
+    # unchanged. A package read that starts never falls back to a second login.
+    from app.services.network import device_cli_host
+
+    packaged = device_cli_host.read_registered_onts(
+        olt, normalized_fsps, timeout_sec=timeout_sec
+    )
+    if packaged is not None:
+        return packaged
+
     started = time.monotonic()
     try:
         transport, channel, policy = core._open_shell(olt)
