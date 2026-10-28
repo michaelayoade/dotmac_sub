@@ -3475,8 +3475,10 @@ network summary composition.
    fails closed on missing or ambiguous replacement chronology; lifecycle
    repair remains owned by `access.subscription_lifecycle`.
 8. `customer.usage_summary` owns customer usage windows, headline totals, and
-   total provenance. An authoritative zero is a valid value, not a missing-data
-   sentinel.
+   total provenance. Customer 360 Stats Records shows total, download, upload,
+   and calendar-day average from the complete filtered daily set before
+   pagination. An authoritative zero is a valid value, not a missing-data
+   sentinel; unavailable observations do not become numeric zero.
 9. `customer.reseller_status_actions` (`app/services/reseller_portal.py`) owns
    the reseller-scoped impact preview for deactivate, restore, and disable. It
    evaluates current subscription state, active enforcement locks, duplicate-

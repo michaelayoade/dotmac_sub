@@ -42,9 +42,9 @@
     </div>
 
     {# ── Charts ── #}
-    <div class="grid gap-6 lg:grid-cols-2">
+    <div class="grid items-start gap-6 lg:grid-cols-2">
         {% call card("Payment Trend", icon='<svg class="h-4 w-4 text-primary-600 dark:text-primary-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 7h8m0 0v8m0-8l-8 8-4-4-6 6"/></svg>', color="primary") %}
-            <div class="chart-container" style="min-height: 260px;">
+            <div class="chart-container" style="height: 224px;">
                 <canvas id="payment-trend-chart"></canvas>
             </div>
             {% set payment_trend = payment_trend|default({'labels': ['Week 1', 'Week 2', 'Week 3', 'Week 4'], 'amounts': [0,0,0,0]}) %}
@@ -72,7 +72,7 @@
         {% endcall %}
 
         {% call card("Payment Methods", icon='<svg class="h-4 w-4 text-violet-600 dark:text-violet-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11 3.055A9.001 9.001 0 1020.945 13H11V3.055z"/><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M20.488 9H15V3.512A9.025 9.025 0 0120.488 9z"/></svg>', color="violet") %}
-            <div class="chart-container" style="min-height: 260px;">
+            <div class="chart-container" style="height: 224px; max-width: 420px;">
                 <canvas id="payment-methods-chart"></canvas>
             </div>
             {% set payment_methods = payment_methods|default({'labels': ['Bank Transfer', 'Card', 'Cash', 'Mobile'], 'values': [0,0,0,0]}) %}
@@ -91,7 +91,7 @@
                         theme.getPropertyValue('--color-accent-400').trim()
                     ]
                 };
-                const chart = DotmacCharts.createDoughnutChart(ctx, chartData, { legendPosition: 'right' });
+                const chart = DotmacCharts.createDoughnutChart(ctx, chartData, { legendPosition: 'right', layout: { padding: 0 } });
                 DotmacCharts.registerChart('payment-methods-chart', chart);
             });
             </script>

@@ -24,9 +24,11 @@ octets so the headline is never a misleading zero.
 from __future__ import annotations
 
 import logging
+from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import UTC, date, datetime, time, timedelta
 from enum import StrEnum
+from typing import Protocol
 from zoneinfo import ZoneInfo
 
 from sqlalchemy import BigInteger, cast, func, select
@@ -86,6 +88,45 @@ class UsageDateRange:
     @property
     def end_at(self) -> datetime:
         return datetime.combine(self.end_date, time.max, tzinfo=UTC)
+
+
+class DailyUsageVolume(Protocol):
+    """Volume fields supplied by the complete filtered daily record set."""
+
+    @property
+    def amount(self) -> float: ...
+
+    @property
+    def download_amount(self) -> float: ...
+
+    @property
+    def upload_amount(self) -> float: ...
+
+
+@dataclass(frozen=True, slots=True)
+class FilteredUsageTotals:
+    """Usage volumes and calendar-day average for one inclusive filter window."""
+
+    total_gb: float
+    download_gb: float
+    upload_gb: float
+    daily_average_gb: float
+    days: int
+
+
+def summarize_filtered_daily_usage(
+    records: Sequence[DailyUsageVolume], *, start_at: datetime, end_at: datetime
+) -> FilteredUsageTotals:
+    """Summarize all matching days, including those outside the visible page."""
+    days = max(1, (end_at.date() - start_at.date()).days + 1)
+    total_gb = sum(record.amount for record in records)
+    return FilteredUsageTotals(
+        total_gb=total_gb,
+        download_gb=sum(record.download_amount for record in records),
+        upload_gb=sum(record.upload_amount for record in records),
+        daily_average_gb=total_gb / days,
+        days=days,
+    )
 
 
 # A gap between consecutive points beyond this multiple of the series' typical

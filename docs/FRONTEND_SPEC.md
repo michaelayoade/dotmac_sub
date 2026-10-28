@@ -2088,6 +2088,15 @@ Template listens:
 
 ## Form Patterns
 
+### Admin sign-in labels
+
+The username and password labels on `/auth/login` sit inside empty, unfocused
+fields and move above filled or focused fields. Browser autofill and values
+restored from page history count as filled on first display. Clearing a field
+returns its label inside only after focus leaves. This is presentation state;
+the browser keeps credential values in the inputs and does not copy them into
+application logs or other UI state.
+
 ### Server-owned action forms
 
 High-impact action contracts may carry owner-produced hidden values such as a
