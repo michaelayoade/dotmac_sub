@@ -3022,6 +3022,7 @@ class UnboundIPv4ReleaseDecision(StrEnum):
     linkable_sibling_exists = "linkable_sibling_exists"
     ambiguous_sibling_column_match = "ambiguous_sibling_column_match"
     service_without_exact_assignment = "service_without_exact_assignment"
+    address_is_network_or_broadcast = "address_is_network_or_broadcast"
     no_non_terminal_service = "no_non_terminal_service"
 
 
@@ -3052,6 +3053,8 @@ class UnboundIPv4ReleasePreview:
     address_in_routed_block: bool
     decision: UnboundIPv4ReleaseDecision
     fingerprint: str
+    #: The exact fingerprinted payload; stored on the item audit row.
+    evidence: dict[str, object] = field(default_factory=dict, compare=False)
 
     @property
     def applicable(self) -> bool:
@@ -3091,12 +3094,21 @@ def _address_is_network_or_broadcast(address: str, pool: IpPool | None) -> bool:
 def _address_stays_protected(address: IPv4Address) -> bool:
     """True when the allocator keeps refusing this row after a release.
 
-    The allocator excludes only ``is_reserved`` and ONT-linked rows, so a
-    management/device address without either flag would become assignable to a
-    customer once its stale assignment is released.
+    The allocator (``provisioning_helpers._find_available_address``) filters
+    only ``is_reserved``; an ONT link, management type, device host or
+    infrastructure pool does NOT keep an unreserved address from being handed
+    to a customer. B1 never sets ``is_reserved`` itself.
     """
 
-    return bool(address.is_reserved) or address.ont_unit_id is not None
+    return bool(address.is_reserved)
+
+
+def _pool_allows_network_broadcast_marker(pool: IpPool | None) -> bool:
+    notes = str(getattr(pool, "notes", "") or "")
+    return any(
+        line.strip().lower() == "[allow_network_broadcast:true]"
+        for line in notes.splitlines()
+    )
 
 
 def preview_unbound_ip_assignment_release(
@@ -3152,7 +3164,9 @@ def preview_unbound_ip_assignment_release(
         address = _normalized_ip(address_row.address).removesuffix("/32")
         candidates = _address_candidates({address})
         pool = db.get(IpPool, address_row.pool_id) if address_row.pool_id else None
-        network_or_broadcast = _address_is_network_or_broadcast(address, pool)
+        network_or_broadcast = _address_is_network_or_broadcast(
+            address, pool
+        ) and not _pool_allows_network_broadcast_marker(pool)
         protected = _address_stays_protected(address_row)
         device_host = _target_address_is_device_host(db, address)
         routed = _address_is_in_active_routed_block(db, address)
@@ -3193,40 +3207,43 @@ def preview_unbound_ip_assignment_release(
         holders = live.sibling_subscription_ids
         own_matches = [s for s in services if s.column_matches_address]
 
+        customer_class = (
+            eligibility_class is not UnboundIPv4ReleaseClass.address_not_serviceable
+        )
+        served_elsewhere = (
+            eligibility_class is UnboundIPv4ReleaseClass.served_elsewhere_no_sibling
+        )
         if live_session:
             decision = UnboundIPv4ReleaseDecision.address_in_live_use
-        elif eligibility_class is UnboundIPv4ReleaseClass.served_elsewhere_no_sibling:
-            if not services:
-                decision = UnboundIPv4ReleaseDecision.no_non_terminal_service
-            elif len(own_matches) == 1:
-                decision = UnboundIPv4ReleaseDecision.linkable_sibling_exists
-            elif len(own_matches) > 1:
-                decision = UnboundIPv4ReleaseDecision.ambiguous_sibling_column_match
-            elif holders:
-                decision = UnboundIPv4ReleaseDecision.address_in_live_use
-            elif not all(s.has_exact_active_ipv4 for s in services):
-                decision = UnboundIPv4ReleaseDecision.service_without_exact_assignment
-            elif device_host:
-                decision = UnboundIPv4ReleaseDecision.address_is_device_host
-            elif routed:
-                decision = UnboundIPv4ReleaseDecision.address_in_routed_block
-            elif not _target_address_is_serviceable(address_row, pool):
-                decision = UnboundIPv4ReleaseDecision.address_not_releasable
+        elif served_elsewhere and len(own_matches) == 1:
+            decision = UnboundIPv4ReleaseDecision.linkable_sibling_exists
+        elif served_elsewhere and len(own_matches) > 1:
+            decision = UnboundIPv4ReleaseDecision.ambiguous_sibling_column_match
         elif holders:
             decision = UnboundIPv4ReleaseDecision.address_in_live_use
-        elif eligibility_class is UnboundIPv4ReleaseClass.terminal_only_subscriber:
-            if services:
-                decision = (
-                    UnboundIPv4ReleaseDecision.subscriber_has_non_terminal_service
-                )
-            elif not _target_address_is_serviceable(address_row, pool):
-                decision = UnboundIPv4ReleaseDecision.address_not_releasable
-            elif network_or_broadcast:
-                decision = UnboundIPv4ReleaseDecision.address_not_releasable
+        elif (
+            eligibility_class is UnboundIPv4ReleaseClass.served_elsewhere_no_sibling
+            and not services
+        ):
+            decision = UnboundIPv4ReleaseDecision.no_non_terminal_service
+        elif (
+            eligibility_class is UnboundIPv4ReleaseClass.terminal_only_subscriber
+            and services
+        ):
+            decision = UnboundIPv4ReleaseDecision.subscriber_has_non_terminal_service
+        elif services and not all(s.has_exact_active_ipv4 for s in services):
+            # Every class: radius_population falls back to the unbound row for
+            # Framed-IP when a service has no exact assignment of its own.
+            decision = UnboundIPv4ReleaseDecision.service_without_exact_assignment
+        elif customer_class:
+            if network_or_broadcast:
+                decision = UnboundIPv4ReleaseDecision.address_is_network_or_broadcast
             elif device_host:
                 decision = UnboundIPv4ReleaseDecision.address_is_device_host
             elif routed:
                 decision = UnboundIPv4ReleaseDecision.address_in_routed_block
+            elif not _target_address_is_serviceable(address_row, pool):
+                decision = UnboundIPv4ReleaseDecision.address_not_releasable
         else:  # address_not_serviceable
             unserviceable = (
                 network_or_broadcast
@@ -3236,7 +3253,7 @@ def preview_unbound_ip_assignment_release(
             )
             if not unserviceable:
                 decision = UnboundIPv4ReleaseDecision.address_is_serviceable
-            elif not (protected or network_or_broadcast):
+            elif not protected:
                 decision = (
                     UnboundIPv4ReleaseDecision.release_would_free_unprotected_address
                 )
@@ -3247,6 +3264,11 @@ def preview_unbound_ip_assignment_release(
         "subscriber_id": str(subscriber_id) if subscriber_id is not None else None,
         "address_id": (str(address_row.id) if address_row is not None else None),
         "address": address,
+        "pool_id": (
+            str(address_row.pool_id)
+            if address_row is not None and address_row.pool_id is not None
+            else None
+        ),
         "is_active": bool(assignment.is_active) if assignment is not None else False,
         "is_primary": bool(assignment.is_primary) if assignment is not None else False,
         "current_subscription_id": (
@@ -3291,6 +3313,7 @@ def preview_unbound_ip_assignment_release(
         address_in_routed_block=routed,
         decision=decision,
         fingerprint=_repair_fingerprint(payload),
+        evidence=payload,
     )
 
 
@@ -3338,6 +3361,20 @@ def _release_unbound_ip_assignment(
     if prior is not None:
         return prior
 
+    # Lock order matches repair_service_ipv4_assignment: Subscriber, then the
+    # assignment, then the address, then the inventory. The subscriber id is
+    # read unlocked first, then re-checked once the assignment is locked.
+    unlocked_subscriber_id = db.scalar(
+        select(IPAssignment.subscriber_id).where(
+            IPAssignment.id == command.assignment_id
+        )
+    )
+    if unlocked_subscriber_id is not None:
+        db.scalar(
+            select(Subscriber)
+            .where(Subscriber.id == unlocked_subscriber_id)
+            .with_for_update()
+        )
     assignment = db.scalar(
         select(IPAssignment)
         .where(IPAssignment.id == command.assignment_id)
@@ -3345,13 +3382,10 @@ def _release_unbound_ip_assignment(
     )
     if assignment is None:
         _error("assignment_not_found", "The reviewed IP assignment no longer exists.")
-    # Same lock order as repair_service_ipv4_assignment (subscriber, address,
-    # inventory) so a concurrent link or allocation waits instead of racing.
-    if assignment.subscriber_id is not None:
-        db.scalar(
-            select(Subscriber)
-            .where(Subscriber.id == assignment.subscriber_id)
-            .with_for_update()
+    if assignment.subscriber_id != unlocked_subscriber_id:
+        _error(
+            "stale_preview",
+            "The assignment changed subscriber while locking; preview again.",
         )
     if assignment.ipv4_address_id is not None:
         db.scalar(
@@ -3396,13 +3430,10 @@ def _release_unbound_ip_assignment(
         actor=AuditActor.service(command.context.actor),
         metadata={
             "eligibility_class": current.eligibility_class.value,
-            "subscriber_id": (
-                str(current.subscriber_id) if current.subscriber_id else None
-            ),
-            "ipv4_address_id": (
-                str(current.address_id) if current.address_id else None
-            ),
             "preview_fingerprint": current.fingerprint,
+            # Full evidence the release was decided on (address, pool,
+            # services, holders, flags): the only record of what was freed.
+            "evidence": current.evidence,
             "reason": command.context.reason,
         },
     )

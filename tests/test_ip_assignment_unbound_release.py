@@ -232,8 +232,19 @@ def test_terminal_only_refuses_network_address(db_session) -> None:
     assignment = _assignment(db_session, subscriber, address)
     assert (
         _preview(db_session, assignment.id, TERMINAL_ONLY).decision
-        is D.address_not_releasable
+        is D.address_is_network_or_broadcast
     )
+
+
+def test_pool_allowing_network_broadcast_treats_it_as_a_host(db_session) -> None:
+    subscriber = _subscriber(db_session)
+    pool = _pool(db_session)
+    pool.notes = "[allow_network_broadcast:true]"
+    address = _address(db_session, pool, "198.51.100.0")
+    assignment = _assignment(db_session, subscriber, address)
+    preview = _preview(db_session, assignment.id, TERMINAL_ONLY)
+    assert preview.address_is_network_or_broadcast is False
+    assert preview.decision is D.ready_release
 
 
 def test_terminal_only_refuses_device_host(world) -> None:
@@ -286,41 +297,113 @@ def test_terminal_only_refuses_other_subscribers_column_holder(world) -> None:
 # --- address_not_serviceable --------------------------------------------------
 
 
-def test_not_serviceable_network_address_is_ready(db_session) -> None:
+def test_not_serviceable_unreserved_network_address_is_refused(db_session) -> None:
+    """Reactivation does not refuse network/broadcast, so an unreserved one
+    would be re-allocatable; B1 never reserves it itself."""
     subscriber = _subscriber(db_session)
     pool = _pool(db_session)
     address = _address(db_session, pool, "198.51.100.0")
     assignment = _assignment(db_session, subscriber, address)
     preview = _preview(db_session, assignment.id, NOT_SERVICEABLE)
-    assert preview.decision is D.ready_release
     assert preview.address_is_network_or_broadcast is True
+    assert preview.decision is D.release_would_free_unprotected_address
 
 
-def test_not_serviceable_broadcast_address_is_ready(db_session) -> None:
+def test_not_serviceable_unreserved_broadcast_address_is_refused(db_session) -> None:
     subscriber = _subscriber(db_session)
     pool = _pool(db_session)
     address = _address(db_session, pool, "198.51.100.255")
+    assignment = _assignment(db_session, subscriber, address)
+    assert (
+        _preview(db_session, assignment.id, NOT_SERVICEABLE).decision
+        is D.release_would_free_unprotected_address
+    )
+
+
+def test_not_serviceable_reserved_network_address_is_ready(db_session) -> None:
+    subscriber = _subscriber(db_session)
+    pool = _pool(db_session)
+    address = _address(db_session, pool, "198.51.100.0", reserved=True)
     assignment = _assignment(db_session, subscriber, address)
     assert (
         _preview(db_session, assignment.id, NOT_SERVICEABLE).decision is D.ready_release
     )
 
 
-def test_not_serviceable_applies_even_with_a_retaining_service(
+def test_not_serviceable_unreserved_infrastructure_pool_is_refused(db_session) -> None:
+    subscriber = _subscriber(db_session)
+    pool = _pool(db_session)
+    pool.name = "OLT Management Pool"
+    address = _address(db_session, pool, "198.51.100.20")
+    assignment = _assignment(db_session, subscriber, address)
+    assert (
+        _preview(db_session, assignment.id, NOT_SERVICEABLE).decision
+        is D.release_would_free_unprotected_address
+    )
+
+
+def test_not_serviceable_refuses_service_without_exact_assignment(
     db_session, catalog_offer
 ) -> None:
+    """Every class: radius_population falls back to the unbound row for
+    Framed-IP when a service has no exact assignment of its own."""
     subscriber = _subscriber(db_session)
     _subscription(
         db_session, subscriber, catalog_offer, status=SubscriptionStatus.active
     )
     pool = _pool(db_session)
-    address = _address(db_session, pool, "198.51.100.0")
+    address = _address(db_session, pool, "198.51.100.0", reserved=True)
+    assignment = _assignment(db_session, subscriber, address)
+    assert (
+        _preview(db_session, assignment.id, NOT_SERVICEABLE).decision
+        is D.service_without_exact_assignment
+    )
+
+
+def test_not_serviceable_applies_with_a_service_holding_an_exact_assignment(
+    db_session, catalog_offer
+) -> None:
+    subscriber = _subscriber(db_session)
+    sub = _subscription(
+        db_session,
+        subscriber,
+        catalog_offer,
+        status=SubscriptionStatus.active,
+        served_ip="198.51.100.30",
+    )
+    pool = _pool(db_session)
+    _assignment(
+        db_session,
+        subscriber,
+        _address(db_session, pool, "198.51.100.30"),
+        subscription=sub,
+    )
+    address = _address(db_session, pool, "198.51.100.0", reserved=True)
     assignment = _assignment(db_session, subscriber, address)
     preview = _preview(db_session, assignment.id, NOT_SERVICEABLE)
     assert preview.decision is D.ready_release
     _release(db_session, _command(assignment.id, NOT_SERVICEABLE, preview.fingerprint))
     db_session.refresh(assignment)
     assert assignment.is_active is False
+    audit = db_session.scalars(
+        select(AuditEvent).where(AuditEvent.entity_id == str(assignment.id))
+    ).one()
+    evidence = audit.metadata_["evidence"]
+    assert evidence["address"] == "198.51.100.0"
+    assert evidence["pool_id"] == str(pool.id)
+    assert evidence["services"][0]["has_exact_active_ipv4"] is True
+
+
+def test_served_elsewhere_refuses_network_address(db_session, catalog_offer) -> None:
+    subscriber = _subscriber(db_session)
+    pool = _pool(db_session)
+    address = _address(db_session, pool, "198.51.100.0")
+    assignment = _assignment(db_session, subscriber, address)
+    _served_elsewhere(db_session, catalog_offer, subscriber, pool)
+    assert (
+        _preview(db_session, assignment.id, ELSEWHERE).decision
+        is D.address_is_network_or_broadcast
+    )
 
 
 def test_not_serviceable_reserved_device_host_is_ready(world) -> None:
