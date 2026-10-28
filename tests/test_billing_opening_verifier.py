@@ -870,3 +870,29 @@ def test_production_resolver_is_not_a_public_parameter():
 
     names = {f.name for f in dataclasses.fields(ov.OpeningTrustProfile)}
     assert "resolver" not in names and "_resolver" in names
+
+
+def test_x2_refuses_lane_for_account_outside_the_assembly(tmp_path):
+    def mutate(doc):
+        doc["lanes"].append(s.lane(s.SRC3, "0.00"))
+
+    with pytest.raises(ov.OpeningVerifierConstructionError) as info:
+        s.World(tmp_path, mutate_census=mutate)
+    assert info.value.code == "x2_unmapped_population"
+
+
+def test_x2_refuses_blocking_exception_for_account_outside_the_assembly(tmp_path):
+    def mutate(doc):
+        doc["blocking_exceptions"].append(
+            {
+                "code": "synthetic",
+                "account_id": s.SRC3,
+                "currency": "NGN",
+                "source_id": s.INV4,
+                "detail": "x",
+            }
+        )
+
+    with pytest.raises(ov.OpeningVerifierConstructionError) as info:
+        s.World(tmp_path, mutate_census=mutate)
+    assert info.value.code == "x2_unmapped_population"
