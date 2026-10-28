@@ -147,7 +147,11 @@ def _grant_migrator(factory: sessionmaker[Session]) -> list[tuple[str, str]]:
     """
     granted: list[tuple[str, str]] = []
     with factory() as db:
-        db.execute(sa.text("GRANT USAGE ON SCHEMA mod_billing TO app_admin"))
+        if not db.scalar(
+            sa.text("SELECT has_schema_privilege('app_admin', 'mod_billing', 'USAGE')")
+        ):
+            db.execute(sa.text("GRANT USAGE ON SCHEMA mod_billing TO app_admin"))
+            granted.append(("SCHEMA mod_billing", "USAGE"))
         for table, privilege in ADMIN_NEEDS:
             has = db.scalar(
                 sa.text("SELECT has_table_privilege('app_admin', :t, :p)"),
@@ -352,10 +356,11 @@ def test_writer_movement_after_provision_refuses_the_seal(env: Env) -> None:
         command = _seal_command(env, session, window)
         # The legacy writer moves: the census re-render no longer equals the pinned bytes.
         env.observer.wire = env.world.census_bytes.replace(b"100.00", b"101.00", 1)
-        with pytest.raises(BillingRuleViolation):
+        with pytest.raises(BillingRuleViolation) as refused:
             billing.seal_opening_window(
                 session, scope=env.scope, command=command, verifier=env.verifiers.seal
             )
+        assert refused.value.code == "billing.opening_authority_binding"
         session.rollback()
         assert get_opening_window_seal(session, scope=env.scope) is None
 
