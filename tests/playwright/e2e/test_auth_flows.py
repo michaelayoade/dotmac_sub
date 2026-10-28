@@ -15,6 +15,39 @@ from tests.playwright.pages.auth import (
 class TestLoginPage:
     """Tests for the login page."""
 
+    def test_restored_values_float_labels_before_focus(
+        self, anon_page: Page, settings
+    ) -> None:
+        """Saved values and history restoration keep both labels above the text."""
+        anon_page.add_init_script(
+            """document.addEventListener('DOMContentLoaded', () => {
+                document.querySelector('#username').value = 'saved-user';
+                document.querySelector('#password').value = 'saved-password';
+            }, { once: true });"""
+        )
+        LoginPage(anon_page, settings.base_url).goto()
+
+        for field in ("username", "password"):
+            expect(anon_page.locator(f"#{field}").locator("..")).to_have_attribute(
+                "data-has-value", "true"
+            )
+            expect(anon_page.locator(f'label[for="{field}"]')).to_have_css("top", "0px")
+
+        username = anon_page.locator("#username")
+        username.fill("")
+        username.blur()
+        expect(username.locator("..")).to_have_attribute("data-has-value", "false")
+        expect(anon_page.locator('label[for="username"]')).not_to_have_css("top", "0px")
+
+        anon_page.evaluate(
+            """() => {
+                document.querySelector('#username').value = 'restored-user';
+                window.dispatchEvent(new Event('pageshow'));
+            }"""
+        )
+        expect(username.locator("..")).to_have_attribute("data-has-value", "true")
+        expect(anon_page.locator('label[for="username"]')).to_have_css("top", "0px")
+
     def test_login_page_loads(self, anon_page: Page, settings):
         """Login page should load and display sign in form."""
         login = LoginPage(anon_page, settings.base_url)
