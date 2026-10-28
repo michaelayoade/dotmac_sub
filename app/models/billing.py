@@ -725,6 +725,15 @@ class Invoice(Base):
             Decimal(self.subtotal or 0) - Decimal(self.discount_amount or 0),
         )
 
+    @property
+    def tax_rate_percent_snapshots(self) -> tuple[Decimal, ...]:
+        """Expose the active document lines' frozen tax rates for presentation."""
+        return tuple(
+            line.tax_rate_percent_snapshot
+            for line in self.lines
+            if line.is_active and line.tax_rate_percent_snapshot is not None
+        )
+
 
 class InvoiceDiscountHistory(Base):
     """Append-only evidence for every Invoice-level discount revision."""

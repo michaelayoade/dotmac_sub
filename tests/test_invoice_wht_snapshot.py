@@ -3,7 +3,7 @@ from __future__ import annotations
 from decimal import Decimal
 
 from app.models.billing import Invoice, InvoiceLine
-from app.services import customer_tax_policies
+from app.services import customer_tax_policies, settings_spec
 from app.services.billing.invoices import (
     invoice_tax_presentation,
     snapshot_invoice_withholding_tax_for_issuance,
@@ -25,7 +25,8 @@ def test_issuance_snapshot_uses_customer_policy_and_configured_rate(
         ),
     )
     monkeypatch.setattr(
-        "app.services.billing.invoices.settings_spec.resolve_value",
+        settings_spec,
+        "resolve_value",
         lambda *_args, **_kwargs: "5.00",
     )
     invoice = Invoice(

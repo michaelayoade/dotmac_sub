@@ -141,6 +141,9 @@ class _FactInvoiceView:
         self.total = fact.grand_total.amount
         self.issued_at = fact.issued_at
         self.due_at = fact.due_at
+        self.tax_rate_percent_snapshots = tuple(
+            tax.rate * Decimal("100") for tax in fact.tax_snapshots
+        )
         self.lines = [
             SimpleNamespace(
                 description=line.description,

@@ -21,6 +21,13 @@ Its unchanged pyproject and lock file pin Kernel `0.1.0a105`.
 The locked wheel digest is
 `f8937e5525c3efd27e2030bf69ed0c37e137c345e376668a79e00ebf349b6ffa`.
 
+The historical checkpoint above is retained as source evidence. Current
+complete-chain disposable fixtures include the additive invoice WHT snapshot
+migration and must contain Sub head `702_invoice_withholding_tax_snapshot`.
+The participant still refuses missing or stale Sub histories before entry;
+this fixture pin does not approve an operational migration or change the
+released Kernel artifact.
+
 Kernel's annotated a105 tag `bd5f252b936efb3ee61aeb871b915f2e41bab754`
 peels to `2f5abe9101c9aef48f23977cad81a3e499672287`. The released versions
 directory contains 28 revision files and ends at `0028_machine_attribution`.

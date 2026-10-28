@@ -25,6 +25,11 @@ current checkbox cannot prove the policy applicable at their issue time.
 
 Customer invoice HTML, canonical PDF, text-PDF fallback, and image-PDF fallback
 render `VAT (<rate>%)`. Mixed-rate invoices list every active positive rate.
+The shared `Invoice.tax_rate_percent_snapshots` read contract exposes active
+legacy line snapshots. For an exact Starter document fact, the transient render
+overlay supplies its frozen document-level tax snapshots through that same
+contract, converting rate fractions to percentages. It never derives a rate
+from rounded tax amounts or consults stale mirror lines or current settings.
 When an invoice has a WHT snapshot they also render `WHT (<rate>%)` as a
 deduction and `Net amount payable`. The ordinary `Total` and `balance_due`
 remain gross accounting facts.

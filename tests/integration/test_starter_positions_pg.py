@@ -157,11 +157,14 @@ def test_starter_invoice_renders_from_frozen_fact(
 
     # A stale in-memory mirror must not leak into the rendered document.
     issued.total = Decimal("999.99")
+    issued.lines[0].tax_rate_percent_snapshot = Decimal("99.0000")
     overlaid = starter_positions.apply_fact_overlay(issued, fact)
     html = billing_invoice_pdf._render_invoice_html(overlaid, db_session)
     assert fact.document_number in html
     assert "107.50" in html
     assert "999.99" not in html
+    assert "VAT (7.5%)" in html
+    assert "VAT (99%)" not in html
     db_session.rollback()
 
 

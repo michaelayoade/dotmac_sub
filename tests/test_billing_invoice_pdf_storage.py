@@ -15,7 +15,7 @@ from app.models.billing import (
 from app.models.domain_settings import DomainSetting, SettingDomain
 from app.models.stored_file import StoredFile
 from app.models.subscription_engine import SettingValueType
-from app.schemas.billing import InvoiceCreate
+from app.schemas.billing import InvoiceCreate, TaxRateCreate
 from app.services import billing as billing_service
 from app.services import billing_invoice_pdf as pdf_service
 from app.services import web_billing_invoices as web_billing_invoices_service
@@ -279,6 +279,10 @@ def test_render_invoice_html_includes_branding_and_company_info(
 def test_invoice_pdf_renders_vat_rate_wht_and_net_payable(
     db_session, subscriber_account
 ):
+    tax_rate = billing_service.tax_rates.create(
+        db_session,
+        TaxRateCreate(name="VAT", code="VAT75", rate=Decimal("7.5000")),
+    )
     invoice = _invoice(db_session, subscriber_account)
     invoice.subtotal = Decimal("100000.00")
     invoice.tax_total = Decimal("7500.00")
@@ -295,6 +299,7 @@ def test_invoice_pdf_renders_vat_rate_wht_and_net_payable(
             quantity=Decimal("1.000"),
             unit_price=Decimal("100000.00"),
             amount=Decimal("100000.00"),
+            tax_rate_id=tax_rate.id,
             tax_rate_snapshot_version=1,
             tax_rate_code_snapshot="VAT75",
             tax_rate_percent_snapshot=Decimal("7.5000"),

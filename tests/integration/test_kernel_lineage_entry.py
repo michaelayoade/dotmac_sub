@@ -183,6 +183,7 @@ def test_complete_installed_chain_enters_without_consuming_sub_history(
     with engine.connect() as connection:
         root = connection.begin()
         plan = entry.observe_fixture_plan(connection)
+        assert "702_invoice_withholding_tax_snapshot" in plan.catalog.sub_heads
         before = _rows(connection, "public")
         assert all(row.count > 0 for row in before)
         incoming_oid = connection.scalar(
@@ -257,6 +258,30 @@ def test_complete_installed_chain_enters_without_consuming_sub_history(
         with connection.begin():
             assert entry.observe_fixture_plan(connection) == plan
             assert _rows(connection, "public") == before
+
+
+@pytest.mark.parametrize("stale_head", [None, "701_olt_ssh_host_key_record"])
+def test_entry_refuses_missing_or_stale_sub_history(
+    engine: Engine, stale_head: str | None
+) -> None:
+    with engine.connect() as connection:
+        root = connection.begin()
+        try:
+            # Deliberately corrupt only this disposable fixture's history;
+            # no schema or history change survives the caller's rollback.
+            connection.execute(
+                text("DELETE FROM public.alembic_version WHERE version_num=:head"),
+                {"head": "702_invoice_withholding_tax_snapshot"},
+            )
+            if stale_head is not None:
+                connection.execute(
+                    text("INSERT INTO public.alembic_version VALUES (:head)"),
+                    {"head": stale_head},
+                )
+            with pytest.raises(entry.KernelEntryRefused, match="Sub source head"):
+                entry.observe_fixture_plan(connection)
+        finally:
+            root.rollback()
 
 
 @pytest.mark.parametrize(

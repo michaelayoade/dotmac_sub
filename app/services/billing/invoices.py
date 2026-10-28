@@ -125,13 +125,7 @@ def invoice_tax_presentation(invoice: Invoice) -> InvoiceTaxPresentation:
     """Project invoice-owned tax snapshots without consulting mutable settings."""
 
     vat_rates = sorted(
-        {
-            Decimal(line.tax_rate_percent_snapshot)
-            for line in (invoice.lines or ())
-            if getattr(line, "is_active", True)
-            and line.tax_rate_percent_snapshot is not None
-            and Decimal(line.tax_rate_percent_snapshot) > 0
-        }
+        {rate for rate in invoice.tax_rate_percent_snapshots if rate > 0}
     )
     vat_label = (
         f"VAT ({', '.join(f'{_percentage_text(rate)}%' for rate in vat_rates)})"
