@@ -77,7 +77,7 @@
         collections_v.value if collections_v.is_present else collections_v.placeholder,
         dashboard_kpis.collections.cohort_url,
         "emerald",
-        "Payments received this month" if collections_v.is_present else "Billing data unavailable"
+        "Settled on paid and partially paid invoices created this month" if collections_v.is_present else "Billing data unavailable"
     ) }}
     {{ kpi_tile(
         dashboard_kpis.overdue.label,

@@ -1,0 +1,19 @@
+# Shrink-only: calls to _open_shell( outside olt_ssh.py and device_cli_host.py.
+# Lower a count (or delete the line) when a caller moves; never raise or add one.
+app/services/network/olt_config_pack_live_audit.py 1
+app/services/network/olt_profile_resolution.py 2
+app/services/network/olt_ssh_config.py 1
+app/services/network/olt_ssh_diagnostics.py 1
+app/services/network/olt_ssh_ont/_common.py 1
+app/services/network/olt_ssh_ont/diagnostics.py 2
+app/services/network/olt_ssh_ont/iphost.py 2
+app/services/network/olt_ssh_ont/lifecycle.py 4
+app/services/network/olt_ssh_ont/omci_config.py 2
+app/services/network/olt_ssh_ont/policy_route.py 1
+app/services/network/olt_ssh_ont/status.py 4
+app/services/network/olt_ssh_ont/tr069.py 2
+app/services/network/olt_ssh_pool.py 2
+app/services/network/olt_ssh_profiles.py 8
+app/services/network/olt_ssh_service_ports.py 3
+app/services/network/olt_ssh_session.py 1
+app/services/network/olt_state_import.py 1

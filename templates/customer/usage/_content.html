@@ -173,6 +173,7 @@
         </div>
     </div>
 
+    {% if usage_theme != 'admin' %}
     <div class="grid gap-4 sm:grid-cols-1">
         <div class="{{ usage_card_class }}">
             <div class="absolute inset-0 bg-gradient-to-br from-brand-500/5 to-transparent opacity-0 transition-opacity duration-300 group-hover:opacity-100"></div>
@@ -189,6 +190,7 @@
             </div>
         </div>
     </div>
+    {% endif %}
 
     {% if show_fup_panel and fup_status and fup_status.allowance_gb %}
     <div class="{{ usage_card_class }}">
@@ -231,6 +233,7 @@
     </div>
     {% endif %}
 
+    {% if usage_theme != 'admin' %}
     <div class="{{ usage_card_class }}">
         <div class="absolute inset-0 bg-gradient-to-br from-cyan-500/5 to-transparent opacity-0 transition-opacity duration-300 group-hover:opacity-100"></div>
         <div class="relative">
@@ -263,6 +266,7 @@
             </div>
         </div>
     </div>
+    {% endif %}
 
     {% if usage_history and usage_history.has_history %}
     <div class="{{ usage_panel_class }}"
@@ -380,6 +384,36 @@
             </div>
             <p class="mt-2 text-xs text-slate-500 dark:text-slate-400">Dates are inclusive. Export uses the same range and includes all matching records.</p>
         </form>
+        {% endif %}
+        {% if usage_theme == 'admin' %}
+        <div class="border-b border-slate-200/60 px-4 py-4 dark:border-slate-700/60 sm:px-6">
+            {% if filtered_totals %}
+            <div class="mb-3 flex flex-wrap items-center justify-between gap-1 text-xs text-slate-500 dark:text-slate-400">
+                <span>{% if usage_start_date and usage_end_date %}{{ usage_start_date }} to {{ usage_end_date }}{% elif period == 'last' %}Last period{% else %}Current period{% endif %} · All matching records</span>
+                <span>Daily average across {{ filtered_totals.days }} {{ 'day' if filtered_totals.days == 1 else 'days' }}</span>
+            </div>
+            <div class="grid gap-3 sm:grid-cols-2 xl:grid-cols-4" aria-label="Filtered data usage summary">
+                <div class="rounded-xl border border-slate-200 bg-white px-4 py-3 dark:border-slate-700 dark:bg-slate-800">
+                    <p class="text-xs font-semibold text-slate-500 dark:text-slate-400">Total data used</p>
+                    <p class="mt-1 text-xl font-bold text-slate-900 dark:text-white">{{ "{:.2f}".format(filtered_totals.total_gb) }} <span class="text-sm font-medium text-slate-500 dark:text-slate-400">GB</span></p>
+                </div>
+                <div class="rounded-xl border border-slate-200 bg-white px-4 py-3 dark:border-slate-700 dark:bg-slate-800">
+                    <p class="text-xs font-semibold text-slate-500 dark:text-slate-400">Download</p>
+                    <p class="mt-1 text-xl font-bold text-slate-900 dark:text-white">{{ "{:.2f}".format(filtered_totals.download_gb) }} <span class="text-sm font-medium text-slate-500 dark:text-slate-400">GB</span></p>
+                </div>
+                <div class="rounded-xl border border-slate-200 bg-white px-4 py-3 dark:border-slate-700 dark:bg-slate-800">
+                    <p class="text-xs font-semibold text-slate-500 dark:text-slate-400">Upload</p>
+                    <p class="mt-1 text-xl font-bold text-slate-900 dark:text-white">{{ "{:.2f}".format(filtered_totals.upload_gb) }} <span class="text-sm font-medium text-slate-500 dark:text-slate-400">GB</span></p>
+                </div>
+                <div class="rounded-xl border border-slate-200 bg-white px-4 py-3 dark:border-slate-700 dark:bg-slate-800">
+                    <p class="text-xs font-semibold text-slate-500 dark:text-slate-400">Daily average</p>
+                    <p class="mt-1 text-xl font-bold text-slate-900 dark:text-white">{{ "{:.2f}".format(filtered_totals.daily_average_gb) }} <span class="text-sm font-medium text-slate-500 dark:text-slate-400">GB/day</span></p>
+                </div>
+            </div>
+            {% else %}
+            <p class="text-sm text-slate-600 dark:text-slate-300">{% if has_subscription %}Usage summary is unavailable for this customer.{% else %}No subscription usage to summarize.{% endif %}</p>
+            {% endif %}
+        </div>
         {% endif %}
         {% if usage_enable_records_chart %}
         <div x-show="recordsView === 'chart'" class="p-6" x-cloak>

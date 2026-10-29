@@ -2198,7 +2198,13 @@ projection, and events retain the existing lifecycle transaction boundary.
    canonical bases decided 2026-07-16 — figures labelled "Revenue" use the
    invoice settled-value basis, the payments basis is labelled Collections,
    and recurring revenue uses the MRR-countable basis. Report/web layers
-   compose these reads and own presentation only. The same owner now defines
+   compose these reads and own presentation only. The admin overview card
+   named "Collections This Month" is a scoped exception: it sums settled
+   value only on collectible paid and partially-paid invoices created in the
+   current UTC month, not receipts dated in that month. The separate
+   `invoice_collectibility` owner supplies the Overdue card from outstanding
+   balances on invoices currently marked overdue across all creation months.
+   The billing reporting owner also defines
    the Upcoming Charges reminder cohort: collectible postpaid invoice due
    facts and exact prepaid entitlement endings are selected as bounded,
    indexed pages; visible prepaid candidates compose the canonical
@@ -3470,8 +3476,10 @@ network summary composition.
    fails closed on missing or ambiguous replacement chronology; lifecycle
    repair remains owned by `access.subscription_lifecycle`.
 8. `customer.usage_summary` owns customer usage windows, headline totals, and
-   total provenance. An authoritative zero is a valid value, not a missing-data
-   sentinel.
+   total provenance. Customer 360 Stats Records shows total, download, upload,
+   and calendar-day average from the complete filtered daily set before
+   pagination. An authoritative zero is a valid value, not a missing-data
+   sentinel; unavailable observations do not become numeric zero.
 9. `customer.reseller_status_actions` (`app/services/reseller_portal.py`) owns
    the reseller-scoped impact preview for deactivate, restore, and disable. It
    evaluates current subscription state, active enforcement locks, duplicate-

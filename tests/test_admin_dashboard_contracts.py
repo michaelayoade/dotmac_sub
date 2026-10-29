@@ -50,14 +50,15 @@ def test_headline_tiles_are_kpis_that_drill_into_their_cohort():
     assert kpis["network_devices"].cohort_url == "/admin/network/monitoring"
     assert kpis["alarms"].cohort_url == "/admin/network/alarms"
 
-    # Collections is the billing-overview collected figure (invoice settled
-    # value over the calendar month). No itemized list sums to exactly that
-    # aggregate, so it drills into /admin/billing, which displays the identical
-    # number — parity by same-number, not by a mismatched payments list.
-    assert kpis["collections"].cohort_url == "/admin/billing"
+    # Both money cards open their exact invoice-status cohorts.
+    assert kpis["collections"].cohort_url == (
+        "/admin/billing/invoices?status=dashboard_collections"
+    )
 
     # Overdue drills into the invoices list filtered to exactly the overdue cohort.
-    assert kpis["overdue"].cohort_url == "/admin/billing/invoices?status=overdue"
+    assert kpis["overdue"].cohort_url == (
+        "/admin/billing/invoices?status=dashboard_overdue"
+    )
 
 
 def test_present_tiles_carry_their_computed_value():
