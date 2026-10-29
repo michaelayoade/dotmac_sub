@@ -5,6 +5,7 @@ from __future__ import annotations
 import inspect
 from collections.abc import Iterator
 from contextlib import contextmanager
+from dataclasses import replace
 from typing import cast
 from uuid import UUID
 
@@ -42,7 +43,9 @@ def _unexpected_session() -> None:
 def test_disarmed_fetch_opens_no_command_session(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setattr(port.settings, "network_provision_enabled", False)
+    monkeypatch.setattr(
+        port, "settings", replace(port.settings, network_provision_enabled=False)
+    )
     monkeypatch.setattr(
         port.db_session_adapter, "owner_command_session", _unexpected_session
     )
@@ -63,7 +66,9 @@ def test_disarmed_fetch_opens_no_command_session(
 def test_only_authenticated_machine_identity_reaches_the_owner(
     monkeypatch: pytest.MonkeyPatch, auth: dict[str, object]
 ) -> None:
-    monkeypatch.setattr(port.settings, "network_provision_enabled", True)
+    monkeypatch.setattr(
+        port, "settings", replace(port.settings, network_provision_enabled=True)
+    )
     monkeypatch.setattr(
         port.db_session_adapter, "owner_command_session", _unexpected_session
     )
@@ -99,7 +104,9 @@ def test_adapter_supplies_typed_context_on_a_separate_command_session(
         lifecycle.append("committed-owner-result")
         return owner.ProjectionSecretRedeemed(secret=SECRET)
 
-    monkeypatch.setattr(port.settings, "network_provision_enabled", True)
+    monkeypatch.setattr(
+        port, "settings", replace(port.settings, network_provision_enabled=True)
+    )
     monkeypatch.setattr(
         port.db_session_adapter, "owner_command_session", command_session
     )
@@ -139,7 +146,9 @@ def test_owner_failures_have_bounded_transport_responses(
     ) -> owner.ProjectionSecretRedeemed:
         raise failure
 
-    monkeypatch.setattr(port.settings, "network_provision_enabled", True)
+    monkeypatch.setattr(
+        port, "settings", replace(port.settings, network_provision_enabled=True)
+    )
     monkeypatch.setattr(
         port.db_session_adapter, "owner_command_session", command_session
     )

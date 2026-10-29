@@ -23,7 +23,7 @@ from sqlalchemy.orm import Session
 from app.models.catalog import AccessCredential
 from app.models.event_store import EventStatus, EventStore
 from app.models.projection_secret_request import ProjectionSecretRequest
-from app.models.subscriber import Subscriber
+from app.models.subscriber import Reseller, Subscriber
 from app.services.credential_crypto import encrypt_credential
 from app.services.events.types import EventType
 from app.services.integrations import projection_secret_fetch as owner
@@ -53,12 +53,19 @@ def command(
 ) -> owner.RedeemProjectionSecretCommand:
     monkeypatch.setenv("CREDENTIAL_ENCRYPTION_KEY", Fernet.generate_key().decode())
     with Session(engine) as db:
+        suffix = uuid4().hex
+        reseller = Reseller(
+            name=f"Projection Secret {suffix}",
+            code=f"projection-secret-{suffix}",
+            is_active=True,
+        )
         subscriber = Subscriber(
             first_name="Dummy",
             last_name="Projection",
-            email=f"projection-{uuid4().hex}@example.invalid",
+            email=f"projection-{suffix}@example.invalid",
+            reseller=reseller,
         )
-        db.add(subscriber)
+        db.add_all([reseller, subscriber])
         db.flush()
         credential = AccessCredential(
             subscriber_id=subscriber.id,
