@@ -379,6 +379,37 @@ def test_create_draft_omits_vat_for_exempt_customer(
     assert invoice.tax_total == Decimal("0.00")
 
 
+def test_create_draft_applies_configured_account_vat_once(
+    db_session,
+    subscriber,
+) -> None:
+    account_tax = TaxRate(name="Account VAT", rate=Decimal("7.5"), is_active=True)
+    manual_tax = TaxRate(name="Manual VAT", rate=Decimal("5"), is_active=True)
+    db_session.add_all([account_tax, manual_tax])
+    db_session.flush()
+    subscriber.tax_rate_id = account_tax.id
+    command = replace(
+        _create_command(subscriber),
+        lines=(replace(_line(), tax_rate_id=manual_tax.id),),
+    )
+    db_session.commit()
+
+    created = invoice_draft_authoring.create_invoice_draft(
+        db_session,
+        command,
+        context=_context("invoice-draft-account-vat"),
+    )
+
+    line = db_session.scalar(
+        select(InvoiceLine).where(InvoiceLine.invoice_id == created.invoice_id)
+    )
+    invoice = db_session.get(Invoice, created.invoice_id)
+    assert line is not None
+    assert line.tax_rate_id == account_tax.id
+    assert invoice is not None
+    assert invoice.tax_total == Decimal("7.50")
+
+
 def test_create_draft_rolls_back_header_lines_and_evidence_on_failure(
     db_session, subscriber, monkeypatch
 ) -> None:

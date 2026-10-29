@@ -20,6 +20,12 @@ notifications itself.
 - Administrative authoring always produces or edits `draft`; issue, announce,
   void, write-off, settlement, and reconciliation use separate named commands.
 - A draft contains at least one valid line.
+- When the customer account has an active configured VAT rate, that rate is
+  applied once to every administrative draft line and replaces any manual line
+  tax selection. The form disables manual tax selection and identifies the
+  account rate. Accounts without configured VAT retain manual tax selection.
+- Customer VAT exemption remains authoritative and suppresses a configured
+  account VAT rate.
 - The account is locked before the invoice and its lines.
 - Header, lines, totals, audit evidence, idempotency evidence, and event staging
   commit once or roll back together.
