@@ -198,7 +198,7 @@ class SameRunReplayTests(unittest.TestCase):
     def test_plan_binds_both_fixture_predecessors_to_forward_target_in_both_phases(
         self,
     ):
-        for phase in ("initial", "next_morning"):
+        for phase in ("initial", "repeatability"):
             with (
                 self.subTest(phase=phase),
                 tempfile.TemporaryDirectory() as directory,
