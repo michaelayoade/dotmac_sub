@@ -87,7 +87,7 @@ def translate_work_item(
             continue
         if attribute == "Framed-Route":
             tokens = str(value).split()
-            if op != "+=" or len(tokens) != 3 or tokens[1:] != ["0.0.0.0", "1"]:  # noqa: S104 - RADIUS gateway, not a socket bind
+            if op != "+=" or len(tokens) != 3 or tokens[1:] != ["0.0.0.0", "1"]:  # noqa: S104 # nosec B104 -- RADIUS gateway, not a socket bind
                 raise UntranslatableWorkItem(
                     f"{item.username}: Framed-Route has no v1 expression"
                 )
