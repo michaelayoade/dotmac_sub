@@ -95,7 +95,7 @@ def test_a_trailing_comma_document_is_refused_by_this_validator() -> None:
 def test_the_ci_strict_json_step_is_not_gated_on_docs_only() -> None:
     """Sensitivity proof for the third complementarity reason recorded in the
     module docstring: the `lint` job's "Strict-JSON evidence documents parse
-    after formatting" step, and the `actions/checkout@v4` step immediately
+    after formatting" step, and the `actions/checkout` step immediately
     above it in the same job, must carry no `docs-only` condition — a PR
     that changes only docs/kernel-runtime-composition.json sets
     `docs-only=true`, and every OTHER step in that job IS correctly guarded
@@ -122,9 +122,11 @@ def test_the_ci_strict_json_step_is_not_gated_on_docs_only() -> None:
         "change only the record it validates"
     )
 
-    checkout_step = steps_by_name["actions/checkout@v4"]
+    checkout_step = steps_by_name[
+        "actions/checkout@11d5960a326750d5838078e36cf38b85af677262"
+    ]
     assert "if" not in checkout_step, (
-        "actions/checkout@v4 in the lint job must run unconditionally — "
+        "actions/checkout in the lint job must run unconditionally — "
         "the strict-JSON step depends on the checked-out working tree, and "
         "a docs-only guard on checkout would leave it with no files to open"
     )

@@ -71,6 +71,7 @@ from app.services.credential_crypto import decrypt_credential
 from app.services.domain_errors import DomainError
 from app.services.event_store import create_event_record
 from app.services.events.types import Event, EventType
+from app.services.outbound_effects import Effect, require
 from app.services.owner_commands import OwnerCommandDefinition, execute_owner_command
 from app.services.topology.lldp_contracts import (
     LldpDevice,
@@ -368,6 +369,7 @@ def _read_neighbors_via_binary_api(
     the fleet accrues an 8728 leak. This follows the bandwidth poller's
     ``_release_pool`` contract. ``pool_factory`` is injectable for tests.
     """
+    require(Effect.router_api)
     pool_factory = pool_factory or routeros_api.RouterOsApiPool
     username = decrypt_credential(router.rest_api_username) or router.rest_api_username
     password = decrypt_credential(router.rest_api_password) or router.rest_api_password
@@ -439,6 +441,7 @@ def _read_neighbors_via_rest(router: LldpRouter) -> list[NeighborRow]:
     SAME dict shape :func:`_read_neighbors_via_binary_api` yields — so downstream
     matching/edge-building is unchanged.
     """
+    require(Effect.router_api)
     # Imported lazily: the REST connection layer pulls in its transport and is
     # only needed on the rare REST-only-core fallback path.
     from app.services.router_management.connection import RouterConnectionService

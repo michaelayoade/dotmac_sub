@@ -26,7 +26,6 @@ from app.models.catalog import (
     AccessCredential,
     NasDevice,
     NasVendor,
-    OfferRadiusProfile,
     RadiusProfile,
     Subscription,
     SubscriptionStatus,
@@ -51,6 +50,7 @@ from app.services.enforcement_evidence import (
     record_enforcement_application as _record_enforcement_application,
 )
 from app.services.nas import DeviceProvisioner
+from app.services.outbound_effects import Effect, require
 from app.services.radius_address_lists import suspended_address_list
 from app.services.router_health import coa_evidence as _coa_evidence
 from app.services.router_health.contracts import CoaKind
@@ -294,64 +294,25 @@ def _resolve_effective_profile(
     subscription: Subscription,
     credential: AccessCredential | None = None,
 ) -> RadiusProfile | None:
-    """Resolve the effective RADIUS profile for a subscription.
+    """The profile that shapes this service right now, as the rate owner derives.
 
-    Resolution priority:
-    1. Credential-level override (if credential provided)
-    2. Subscription-level override
-    3. Offer's default profile (via OfferRadiusProfile)
-
-    Args:
-        db: Database session
-        subscription: The subscription to resolve profile for
-        credential: Optional credential to check for override
-
-    Returns:
-        RadiusProfile or None if no profile is configured
-
-    With ``radius.rate_owner_enabled`` the single rate owner answers instead
-    (throttle > staged plan change > package profile).
+    Throttle (FUP or collections, the more restrictive wins), then a staged
+    plan change, then the package's profile. Nothing else decides a rate.
     """
-    if access_rate_profile.rate_owner_enabled(db):
-        return access_rate_profile.resolve_effective_rate(
-            db, subscription, credential
-        ).profile
-
-    # 1. Check credential-level override first
-    if credential and credential.radius_profile_id:
-        profile = db.get(RadiusProfile, credential.radius_profile_id)
-        if profile:
-            return profile
-
-    # 2. Check subscription-level override
-    if subscription.radius_profile_id:
-        profile = db.get(RadiusProfile, subscription.radius_profile_id)
-        if profile:
-            return profile
-
-    # 3. Fall back to offer's default profile
-    offer_profile = (
-        db.query(OfferRadiusProfile)
-        .filter(OfferRadiusProfile.offer_id == subscription.offer_id)
-        .first()
-    )
-    if offer_profile:
-        return db.get(RadiusProfile, offer_profile.profile_id)
-    return None
+    return access_rate_profile.resolve_effective_rate(
+        db, subscription, credential
+    ).profile
 
 
 def _resolve_plan_profile(
     db: Session, subscription: Subscription
 ) -> RadiusProfile | None:
-    """The profile for the subscription's PLAN (no throttle, no override).
+    """The profile for the subscription's PLAN (no throttle, no staged change).
 
     FUP full speed, the FUP restore target and NAS provisioning want the plan,
-    not whatever throttle is currently applied. With the single rate owner off
-    this is the previous subscription-level resolution.
+    not whatever throttle is currently applied.
     """
-    if access_rate_profile.rate_owner_enabled(db):
-        return access_rate_profile.resolve_plan_profile(db, subscription)
-    return _resolve_effective_profile(db, subscription)
+    return access_rate_profile.resolve_plan_profile(db, subscription)
 
 
 def _resolve_nas_device(
@@ -497,6 +458,7 @@ def _exchange_coa_disconnect(
     and evidence recording on top; the router-health canary calls this directly
     so a synthetic probe can never poison real enforcement.
     """
+    require(Effect.radius_coa)
     client = Client(
         server=host,
         secret=secret,
@@ -693,6 +655,7 @@ def _attempt_coa_update(
     attributes, allowing mid-session speed changes without disconnecting
     the subscriber.
     """
+    require(Effect.radius_coa)
     if not _coa_enabled(db):
         return False, CoADisconnectDisposition.disabled.value
     if _coa_disabled_for_nas(nas_device.id):
@@ -830,29 +793,17 @@ def update_subscription_sessions(
     count = 0
     for session in sessions:
         credential = db.get(AccessCredential, session.access_credential_id)
-        owner_rate = None
-        if access_rate_profile.rate_owner_enabled(db):
-            # One deterministic derivation shared with the radreply sweep, so
-            # the live session and the next reauthentication carry the same rate.
-            owner_rate = access_rate_profile.resolve_effective_rate(
-                db, subscription, credential
+        # One deterministic derivation shared with the radreply sweep, so the
+        # live session and the next reauthentication carry the same rate.
+        owner_rate = access_rate_profile.resolve_effective_rate(
+            db, subscription, credential
+        )
+        profile = owner_rate.profile
+        if profile is None and not owner_rate.rate_limit:
+            logger.warning(
+                "No rate found for session %s, skipping CoA update.", session.id
             )
-            profile = owner_rate.profile
-            if profile is None and not owner_rate.rate_limit:
-                logger.warning(
-                    "No rate found for session %s, skipping CoA update.",
-                    session.id,
-                )
-                continue
-        else:
-            # Resolve profile with credential-level override support
-            profile = _resolve_effective_profile(db, subscription, credential)
-            if not profile:
-                logger.warning(
-                    "No profile found for session %s, skipping CoA update.",
-                    session.id,
-                )
-                continue
+            continue
 
         nas_device = _resolve_nas_device(db, session)
         username = credential.username if credential else None
@@ -866,7 +817,7 @@ def update_subscription_sessions(
                 framed_ip,
                 session_id,
                 profile,
-                owner_rate.rate_limit if owner_rate is not None else None,
+                owner_rate.rate_limit,
             ):
                 count += 1
             else:
@@ -1695,18 +1646,13 @@ def disconnect_subscription_sessions_confirmed(
 
 
 def _signature_profile_id(db: Session, subscription: Subscription) -> str:
-    """The profile id the BNG would be served for this subscription.
+    """The profile id the BNG would be served, as the rate owner derives it.
 
-    The stored subscription profile before the single rate owner is enabled;
-    afterwards the derived profile, so a plan change that no longer rewrites
-    the stored field is still seen as an effective change.
+    Derived, so a plan change that no longer rewrites a stored field is still
+    seen as an effective change.
     """
-    if access_rate_profile.rate_owner_enabled(db):
-        profile_id = access_rate_profile.resolve_effective_rate(
-            db, subscription
-        ).profile_id
-        return str(profile_id or "")
-    return str(subscription.radius_profile_id or "")
+    profile_id = access_rate_profile.resolve_effective_rate(db, subscription).profile_id
+    return str(profile_id or "")
 
 
 def network_identity_signature(db: Session, subscription: Subscription) -> tuple:
@@ -1865,34 +1811,22 @@ class SubscriptionCredentialScopeError(DomainError):
 
 
 @dataclass(frozen=True, slots=True)
-class RadiusProfileApplication:
-    """Outcome of binding one subscription's credentials to a profile.
+class SubscriptionCredentialScope:
+    """The credentials one subscription's enforcement acts on.
 
-    ``matched`` and ``updated`` are deliberately separate. A re-assertion after
-    a cooldown legitimately changes nothing on the wire, but the state row that
-    records the decision still has to be written — collapsing the two made
-    "already throttled" indistinguishable from "no credentials at all", and
-    both silently skipped state, event, and customer notification.
+    FUP no longer writes a rate into a credential: the ``fup_states`` row is the
+    throttle and the rate owner derives the rate from it. This scope only names
+    which logins to project, and refuses when they cannot be told apart.
     """
 
     matched: int
-    updated: int
     usernames: frozenset[str]
 
 
-def apply_radius_profile_to_subscription(
-    db: Session, subscription_id: str, profile_id: str
-) -> RadiusProfileApplication:
-    """Move one subscription's credentials onto ``profile_id``.
-
-    Deliberately does NOT commit or project to external RADIUS. Both are the
-    caller's to sequence: the local credential change and whatever state row
-    records *why* it happened must land in the same transaction, and the
-    external projection must follow that state — never precede it. The previous
-    account-scoped version committed here, which released the handler's
-    savepoint and left a throttled credential durable even when the FUP state
-    row that justified it failed to persist.
-    """
+def subscription_credential_scope(
+    db: Session, subscription_id: str
+) -> SubscriptionCredentialScope:
+    """Resolve one subscription's credentials without changing any of them."""
     subscription = db.get(Subscription, coerce_uuid(subscription_id))
     if subscription is None:
         raise HTTPException(status_code=404, detail="Subscription not found")
@@ -1925,18 +1859,8 @@ def apply_radius_profile_to_subscription(
             message="This subscription has no active access credential to act on.",
             details={"subscription_id": str(subscription.id)},
         )
-    profile = db.get(RadiusProfile, coerce_uuid(profile_id))
-    if not profile or not profile.is_active:
-        raise HTTPException(status_code=404, detail="RADIUS profile not found")
-    updated = 0
-    for cred in credentials:
-        if cred.radius_profile_id != profile.id:
-            cred.radius_profile_id = profile.id
-            updated += 1
-    db.flush()
-    return RadiusProfileApplication(
+    return SubscriptionCredentialScope(
         matched=len(credentials),
-        updated=updated,
         usernames=frozenset(credential.username for credential in credentials),
     )
 
@@ -2125,24 +2049,24 @@ def lift_fup_enforcement(
 
     prior = state.action_status
     actions: list[str] = []
+    to_project: frozenset[str] = frozenset()
     subscription = db.get(Subscription, coerce_uuid(subscription_id))
 
     if prior == FupActionStatus.throttled:
-        target = str(state.original_profile_id) if state.original_profile_id else None
-        if not target and subscription is not None:
-            prof = _resolve_plan_profile(db, subscription)
-            target = str(prof.id) if prof else None
-        if target and subscription is not None:
+        if subscription is not None:
             try:
-                # Restore only the service that was throttled. Restoring by
-                # account would push this subscription's profile onto every
-                # sibling service the customer owns.
-                application = apply_radius_profile_to_subscription(
-                    db, str(subscription.id), target
+                # The throttle is the ``fup_states`` row, cleared below; the rate
+                # owner derives the plan rate again once it is gone. The only
+                # credential write is the owner's clear of a throttle profile an
+                # older version left in the slot -- an active collections
+                # throttle is never touched.
+                scope = subscription_credential_scope(db, str(subscription.id))
+                access_rate_profile.clear_legacy_fup_slot(
+                    db,
+                    subscription_credentials(db, subscription),
+                    state.throttle_profile_id,
                 )
-                if application.updated:
-                    project_credentials_to_radius(db, application.usernames)
-                actions.append("restore_profile")
+                to_project = scope.usernames
             except SubscriptionCredentialScopeError as exc:
                 # A lift that cannot find the credential it throttled leaves the
                 # subscriber slow with the state cleared below — name it.
@@ -2198,6 +2122,16 @@ def lift_fup_enforcement(
         ),
     )
     db.flush()
+    if to_project:
+        # The throttle is gone from the authoritative state; only now does the
+        # projection derive the plan rate again.
+        try:
+            project_credentials_to_radius(db, to_project)
+            actions.append("restore_profile")
+        except Exception as exc:
+            logger.warning(
+                "FUP lift: profile restore failed for %s: %s", subscription_id, exc
+            )
     return {"lifted": True, "prior": prior.value, "actions": actions}
 
 

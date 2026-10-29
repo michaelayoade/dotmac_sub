@@ -31,6 +31,7 @@ from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 from typing import cast
 
+from paramiko.ssh_exception import AuthenticationException, SSHException
 from sqlalchemy import delete, select
 from sqlalchemy.orm import Session
 
@@ -44,6 +45,15 @@ from app.models.network import (
 )
 from app.services.network._common import normalize_mac_address
 from app.services.network.olt_ssh_diagnostics import _run_readonly_command
+from app.services.network.olt_ssh_limiter import (
+    OltLoginFailed,
+    OltSessionBusy,
+    OltSshPriority,
+    is_auth_rejected_message,
+    is_login_failed_message,
+    is_login_refusal_message,
+    olt_ssh_scope,
+)
 from app.services.network.serial_utils import parse_ont_id_on_olt
 from app.services.radio_registration import _compact_mac_sql, compact_mac
 
@@ -349,6 +359,8 @@ def _new_counters() -> dict[str, int]:
         "observations": 0,
         "macs_seen": 0,
         "olt_errors": 0,
+        "olt_login_refused": 0,
+        "olt_auth_failed": 0,
         "pruned": 0,
         "drift_detected": 0,
         "linkable_no_assignment": 0,
@@ -418,24 +430,56 @@ def _harvest_olt_mac_tables(
     for olt_id, snapshot in ssh_snapshots.items():
         walked: list[tuple[str, str]] = []
         try:
-            for fsp in contexts[olt_id]:
-                # The snapshot mirrors every attribute the SSH path reads
-                # (mgmt_ip/hostname/ssh_*/vendor/model/name/id) as plain data;
-                # a live OLTDevice here would reopen a transaction post-commit.
-                ok, status, output = _run_readonly_command(
-                    cast("OLTDevice", snapshot), f"display mac-address port {fsp}"
-                )
-                counters["ports_walked"] += 1
-                if not ok:
-                    logger.warning(
-                        "olt_mac_harvest_port_read_failed "
-                        "olt_device_id=%s fsp=%s status=%s",
-                        olt_id,
-                        fsp,
-                        status,
+            # Background work: one SSH login for the whole port walk, using
+            # only the unreserved session slots. A busy OLT skips this cycle.
+            with olt_ssh_scope(snapshot, OltSshPriority.BACKGROUND):
+                for fsp in contexts[olt_id]:
+                    # The snapshot mirrors every attribute the SSH path reads
+                    # (mgmt_ip/hostname/ssh_*/vendor/model/name/id) as plain
+                    # data; a live OLTDevice here would reopen a transaction
+                    # post-commit.
+                    ok, status, output = _run_readonly_command(
+                        cast("OLTDevice", snapshot),
+                        f"display mac-address port {fsp}",
                     )
-                    continue
-                walked.append((fsp, output))
+                    counters["ports_walked"] += 1
+                    if not ok and is_auth_rejected_message(status):
+                        raise AuthenticationException(status)
+                    if not ok and (
+                        is_login_refusal_message(status)
+                        or is_login_failed_message(status)
+                    ):
+                        # Login refused: stop the walk; no further logins.
+                        raise OltLoginFailed(status)
+                    if not ok:
+                        logger.warning(
+                            "olt_mac_harvest_port_read_failed "
+                            "olt_device_id=%s fsp=%s status=%s",
+                            olt_id,
+                            fsp,
+                            status,
+                        )
+                        continue
+                    walked.append((fsp, output))
+        except OltSessionBusy:
+            logger.info("olt_mac_harvest_skipped_busy olt_device_id=%s", olt_id)
+            continue
+        except AuthenticationException:
+            # Wrong credentials are a real fault, not a transient refusal:
+            # surface loudly and do not retry (lockout risk).
+            counters["olt_auth_failed"] += 1
+            logger.error("olt_mac_harvest_auth_rejected olt_device_id=%s", olt_id)
+            continue
+        except (OltLoginFailed, EOFError, SSHException, OSError) as exc:
+            # Login refusal is not a harvest error: retrying would add logins
+            # to an OLT that is refusing them. Wait for the next scheduled run.
+            counters["olt_login_refused"] += 1
+            logger.warning(
+                "olt_mac_harvest_login_refused olt_device_id=%s error=%s",
+                olt_id,
+                type(exc).__name__,
+            )
+            continue
         except Exception:  # noqa: BLE001 - isolate per-OLT failure, keep going
             counters["olt_errors"] += 1
             logger.exception("olt_mac_harvest_olt_failed olt_device_id=%s", olt_id)

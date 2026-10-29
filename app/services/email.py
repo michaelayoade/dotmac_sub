@@ -33,6 +33,7 @@ from app.services.notification import (
     mark_credential_send_terminal,
 )
 from app.services.notification import notifications as notification_records
+from app.services.outbound_effects import Effect, require
 from app.services.settings_spec import resolve_value
 from app.services.validation_api import validate_email_format
 
@@ -1007,6 +1008,7 @@ def _format_expiry_duration(minutes: object) -> str:
 def _create_smtp_client(
     host: str, port: int, use_ssl: bool, timeout: int | None = None
 ):
+    require(Effect.email)
     if use_ssl:
         if timeout is None:
             return smtplib.SMTP_SSL(host, port)

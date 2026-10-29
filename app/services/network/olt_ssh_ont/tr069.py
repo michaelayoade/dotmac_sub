@@ -114,9 +114,11 @@ def _read_tr069_binding_from_current_config(
     """Fallback readback via global config grep for TR-069 binding lines."""
     # Leave interface and config mode; MA5800-X2 rejects this command from
     # config mode, so run it from enable mode.
-    config_output = core._run_huawei_cmd(channel, "quit", prompt=prompt)
-    config_prompt = _exact_prompt(core, config_output, r"#\s*$")
-    enable_output = core._run_huawei_cmd(channel, "quit", prompt=config_prompt)
+    # The prompt changes with each quit (interface -> config -> enable), so the
+    # exact previous prompt never matches; accept any config/enable prompt.
+    any_prompt = r"[#)]\s*$"
+    core._run_huawei_cmd(channel, "quit", prompt=any_prompt)
+    enable_output = core._run_huawei_cmd(channel, "quit", prompt=any_prompt)
     enable_prompt = _exact_prompt(core, enable_output, r"#\s*$")
     command = "display current-configuration | include tr069-server-config"
     run_paged = getattr(core, "_run_huawei_paged_cmd", core._run_huawei_cmd)
@@ -155,8 +157,7 @@ def get_tr069_server_profile_binding(
         enable_prompt = getattr(policy, "prompt_regex", r"#\s*$")
         channel.send("enable\n")
         core._read_until_prompt(channel, enable_prompt, timeout_sec=5)
-        channel.send("screen-length 0 temporary\n")
-        core._read_until_prompt(channel, enable_prompt, timeout_sec=5)
+        core._apply_paging_off(channel, policy, enable_prompt)
 
         generic_config_prompt = r"[#)]\s*$"
         config_output = core._run_huawei_cmd(
@@ -277,6 +278,8 @@ def bind_tr069_server_profile(
         cmd = f"ont tr069-server-config {port_num} {ont_id} profile-id {profile_id}"
         output = core._run_huawei_cmd(channel, cmd, prompt=config_prompt)
         if core.is_error_output(output) and is_huawei_cli_unsupported(output):
+            # TODO(D6): not approved yet, needs a lab check; see
+            # .cutover-private/device-cli-20261025/DESIGN.md section 9, D6.
             # Some Huawei builds expect only the ONT ID after entering
             # `interface gpon F/S`; the port is already implied by context.
             fallback_cmd = f"ont tr069-server-config {ont_id} profile-id {profile_id}"

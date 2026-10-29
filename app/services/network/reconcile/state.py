@@ -276,6 +276,9 @@ class OntDesiredState:
     wifi_enabled: bool | None = None
     wifi_channel: int | None = None
     wifi_security_mode: str | None = None
+    #: Policy gate (setting ``ont_wifi_security_floor_enforced``, default off):
+    #: when on, an unset/default/open mode is raised to the WPA2-PSK floor.
+    wifi_security_floor_enforced: bool = False
     wifi_paths: Tr069WifiParameterPaths | None = None
     wan_remote_access_enabled: bool = False
     wan_remote_access_expires_at: datetime | None = None
@@ -537,6 +540,10 @@ class ReconcileFailureReason:
 
     # Preflight / reachability — no writes attempted
     OLT_UNREACHABLE = "olt_unreachable"
+    # Every SSH session slot for the OLT is in use (G4 limiter). Raised before
+    # any OLT read, so nothing was written and the DB is unchanged; the
+    # configuration lifecycle defers and retries instead of failing the job.
+    OLT_BUSY = "olt_busy"
     ACS_UNREACHABLE = "acs_unreachable"
     # The OLT replied, but the reply could not be trusted as an observation
     # (rejected command, parameter error, unparseable body). Distinct from

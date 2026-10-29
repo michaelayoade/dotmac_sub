@@ -225,3 +225,105 @@ def test_worker_closes_database_read_before_huawei_device_io(db_session, monkeyp
 
     assert result["olt_id"] == str(olt.id)
     assert result["observed"] == 0
+
+
+def _poll_with(db_session, monkeypatch, fake_registered):
+    olt = _olt(
+        db_session,
+        name="G4 Poll",
+        vendor="Huawei",
+        mgmt_ip="10.0.0.1",
+        ssh_username="poller",
+        ssh_password="encrypted",
+    )
+    db_session.add(
+        OntUnit(
+            serial_number="HWTCG4POLL01",
+            olt_device_id=olt.id,
+            board="0/1",
+            port="0",
+        )
+    )
+    db_session.commit()
+
+    @contextmanager
+    def session():
+        try:
+            yield db_session
+        finally:
+            db_session.rollback()
+
+    @contextmanager
+    def acquired(_lock_key: int):
+        yield True
+
+    monkeypatch.setattr(
+        ont_runtime_status_tasks.db_session_adapter, "read_session", session
+    )
+    monkeypatch.setattr(ont_runtime_status_tasks.db_session_adapter, "session", session)
+    monkeypatch.setattr(
+        ont_runtime_status_tasks, "postgres_session_advisory_lock", acquired
+    )
+    monkeypatch.setattr(
+        "app.services.network.olt_ssh_ont.status.get_registered_ont_serials",
+        fake_registered,
+    )
+    return olt, ont_runtime_status_tasks.refresh_huawei_olt_status.run(str(olt.id))
+
+
+def test_status_poll_is_background_and_skips_quietly_when_the_olt_is_busy(
+    db_session, monkeypatch
+):
+    from app.services.network import olt_ssh_limiter
+
+    seen = []
+
+    def fake_registered(_olt, fsps, **_kwargs):
+        seen.append(olt_ssh_limiter.current_priority())
+        return (
+            False,
+            "Connection failed: olt_busy: all 2 SSH session slot(s) in use",
+            [],
+        )
+
+    olt, result = _poll_with(db_session, monkeypatch, fake_registered)
+
+    assert result == {"olt_id": str(olt.id), "skipped": "olt_busy"}
+    assert seen == [olt_ssh_limiter.OltSshPriority.BACKGROUND]
+
+
+def test_status_poll_does_not_retry_when_the_login_is_refused(db_session, monkeypatch):
+    def fake_registered(_olt, fsps, **_kwargs):
+        return False, "Connection failed: Error reading SSH protocol banner", []
+
+    olt, result = _poll_with(db_session, monkeypatch, fake_registered)
+
+    # Returned, not raised: Celery's autoretry (3x) never sees an exception, so
+    # the poller no longer re-logs-in exactly when the OLT is refusing logins.
+    assert result == {"olt_id": str(olt.id), "skipped": "olt_login_failed"}
+
+
+def test_status_poll_still_raises_for_other_failures(db_session, monkeypatch):
+    import pytest
+
+    def fake_registered(_olt, fsps, **_kwargs):
+        return False, "Huawei inventory response for 0/1/0 was not recognized", []
+
+    with pytest.raises(RuntimeError, match="not recognized"):
+        _poll_with(db_session, monkeypatch, fake_registered)
+
+
+def test_status_poll_auth_failure_is_logged_and_not_a_refusal_skip(
+    db_session, monkeypatch, caplog
+):
+    def fake_registered(_olt, fsps, **_kwargs):
+        return False, "Connection failed: Authentication failed.", []
+
+    with caplog.at_level("ERROR"):
+        olt, result = _poll_with(db_session, monkeypatch, fake_registered)
+
+    assert result == {"olt_id": str(olt.id), "skipped": "olt_auth_failed"}
+    assert result["skipped"] != "olt_login_failed"
+    assert any(
+        "olt_status_poll_auth_rejected" in r.getMessage() for r in caplog.records
+    )

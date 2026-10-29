@@ -20,6 +20,7 @@ from app.services.integrations.runtime import (
     OperationStatus,
     ValidationResult,
 )
+from app.services.outbound_effects import Effect, require
 
 NEXTCLOUD_TALK_CAPABILITY = "collaboration.message.send.v1"
 _CONVERSATION_API = "/ocs/v2.php/apps/spreed/api/v4"
@@ -167,6 +168,7 @@ def _request(
     send_json: bool = False,
     ambiguous_on_timeout: bool = False,
 ) -> tuple[Any, int]:
+    require(Effect.webhook_out)
     base_url = normalize_base_url(config.get("url"))
     username = str(config.get("notifier_username") or "").strip()
     password = str(secret_material.get("app_password") or "")

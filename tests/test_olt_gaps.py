@@ -72,6 +72,10 @@ class TestOltCliValidation:
     def test_dangerous_command_after_allowed_prefix_is_rejected(self) -> None:
         assert validate_cli_command("display version reboot") is not None
 
+    def test_dir_more_pwd_are_not_allowed(self) -> None:
+        for command in ("dir flash:", "more flash:/x", "pwd"):
+            assert validate_cli_command(command) is not None
+
 
 def test_restore_from_backup_persists_startup_config(monkeypatch) -> None:
     sent: list[str] = []
@@ -124,7 +128,7 @@ def test_restore_from_backup_persists_startup_config(monkeypatch) -> None:
         "save",
     ]
     assert "enable\n" in sent
-    assert "screen-length 0 temporary\n" in sent
+    assert not any(c.startswith("screen-length") for c in sent)
     assert "y\n" in sent
 
 

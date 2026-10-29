@@ -121,6 +121,7 @@ compose() {
   fi
   printf '%s: ready\n' "$6"
 }
+verify_rate_owner_enabled() { echo rate_owner >> "$TEST_CALLS"; }
 run_database_prerequisite_bootstrap() { echo bootstrap >> "$TEST_CALLS"; }
 verify_database_prerequisites() { echo prerequisites >> "$TEST_CALLS"; }
 """
@@ -151,7 +152,7 @@ def test_failed_probe_stops_before_any_database_bootstrap(
 ) -> None:
     result, calls = _run_preflight(tmp_path, fail=failure)
     assert result.returncode != 0
-    assert "bootstrap" not in calls and "prerequisites" not in calls
+    assert not {"rate_owner", "bootstrap", "prerequisites"} & set(calls)
     assert SECRET not in result.stdout + result.stderr
 
 
@@ -172,6 +173,7 @@ def test_declared_boot_components_pass_before_bootstrap_without_activating_beat(
         "app:scripts.setup.verify_openbao_boot_secrets",
         "celery-worker:scripts.setup.verify_openbao_boot_secrets",
         "app:scripts.setup.verify_deployment_secret_requirements",
+        "rate_owner",
         "bootstrap",
         "prerequisites",
     ]
@@ -182,7 +184,7 @@ def test_active_beat_uses_its_own_runtime_configuration(tmp_path: Path) -> None:
     result, calls = _run_preflight(tmp_path, beat=True)
     assert result.returncode == 0, result.stderr
     assert "celery-beat:scripts.setup.verify_openbao_boot_secrets" in calls
-    assert calls[-2:] == ["bootstrap", "prerequisites"]
+    assert calls[-3:] == ["rate_owner", "bootstrap", "prerequisites"]
 
 
 @pytest.mark.parametrize(

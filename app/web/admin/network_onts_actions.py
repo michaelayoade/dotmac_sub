@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import uuid
 from urllib.parse import quote_plus
 
 from fastapi import APIRouter, Depends, Form, Query, Request
@@ -17,12 +18,17 @@ from app.services import web_network_ont_actions as web_network_ont_actions_serv
 from app.services import web_network_ont_charts as web_network_ont_charts_service
 from app.services import web_network_ont_topology as web_network_ont_topology_service
 from app.services import web_network_ont_tr069 as web_network_ont_tr069_service
-from app.services.auth_dependencies import require_permission
+from app.services.auth_dependencies import require_permission, require_role
 from app.services.network.action_logging import log_network_action_result
+from app.services.network.break_glass import BREAK_GLASS_ROLE, authorize_break_glass
 from app.services.network.ont_scope import can_manage_ont_from_request
 from app.services.pppoe_password_reveal import UNUSABLE_MESSAGE, CredentialUnusable
 from app.services.service_intent_ui_adapter import service_intent_ui_adapter
+from app.services.web_network_ont_actions.lifecycle_admission import (
+    submit_wifi_change,
+)
 from app.web.request_parsing import parse_form_data_sync
+from app.web.retired_ont_writer import retired_writer_response
 from app.web.templates import templates
 
 router = APIRouter(prefix="/network", tags=["web-admin-network-ont-actions"])
@@ -34,7 +40,9 @@ def _form_str(form: FormData, key: str, default: str = "") -> str:
 
 
 def _base_context(request: Request, db: Session, active_page: str) -> dict:
+    auth = getattr(request.state, "auth", None) or {}
     return {
+        "can_break_glass": "admin" in {str(r) for r in (auth.get("roles") or [])},
         "request": request,
         "active_page": active_page,
         "active_menu": "network",
@@ -316,6 +324,17 @@ def _hosts_partial_response(
     return response
 
 
+def _acs_reboot_already_queued(db: Session, ont_id: str) -> bool:
+    from app.models.network import OntUnit
+    from app.services.network.ont_turnup_gaps import acs_pending_reboot_task
+
+    try:
+        ont = db.get(OntUnit, uuid.UUID(str(ont_id)))
+        return ont is not None and acs_pending_reboot_task(db, ont) is True
+    except Exception:  # noqa: BLE001 - unknown means fall back as before
+        return False
+
+
 @router.post(
     "/onts/{ont_id}/reboot",
     dependencies=[Depends(require_permission("network:ont:write"))],
@@ -353,6 +372,17 @@ def ont_reboot(
         and not result.success
         and not getattr(result, "waiting", False)
     ):
+        if _acs_reboot_already_queued(db, ont_id):
+            # A reboot task is already queued in GenieACS; an OMCI reboot now
+            # would race it. Report it instead of rebooting twice.
+            return _action_json_response(
+                success=True,
+                message="Reboot queued in ACS, will run on next inform.",
+                action="Reboot ONT",
+                request=request,
+                ont_id=ont_id,
+                waiting=True,
+            )
         ok, msg = web_network_ont_actions_service.execute_omci_reboot(
             db,
             ont_id,
@@ -622,16 +652,14 @@ def ont_set_wifi_ssid(
     ssid: str = Form(""),
     timeout_sec: int | None = Form(None),
 ) -> JSONResponse:
-    """Set WiFi SSID on ONT via GenieACS TR-069."""
+    """Queue a WiFi SSID change through the ONT configuration lifecycle."""
     denied = _ensure_ont_write_scope(request, db, ont_id)
     if denied is not None:
         return denied
     # Also accept ssid from query params (used by TR-069 tab Alpine.js modal)
     if not ssid:
         ssid = request.query_params.get("ssid", "")
-    result = web_network_ont_actions_service.set_wifi_ssid(
-        db, ont_id, ssid, timeout_sec=timeout_sec, request=request
-    )
+    result = submit_wifi_change(db, request, ont_id, ssid=ssid)
     return _action_result_response(
         result=result,
         request=request,
@@ -651,21 +679,16 @@ def ont_set_wifi_password(
     password: str = Form(""),
     timeout_sec: int | None = Form(None),
 ) -> JSONResponse:
-    """Set WiFi password on ONT via the reconciler (sync mode).
+    """Queue a WiFi password change through the ONT configuration lifecycle.
 
-    Updates ``OntDesiredState.wifi_password_ref`` durably; the actual push
-    to the device happens on the next BOOTSTRAP event (e.g. after a factory
-    reset). Use ``/wifi-password/push`` to force an immediate push.
-
-    ``timeout_sec``: optional operator override of the reconciler's outer
-    deadline (default 60s), for slow OLT shelves.
+    The lifecycle saves the encrypted password in the next configuration
+    revision and delivers it; ``timeout_sec`` is accepted for old clients and
+    ignored because the lifecycle owns delivery timing.
     """
     denied = _ensure_ont_write_scope(request, db, ont_id)
     if denied is not None:
         return denied
-    result = web_network_ont_actions_service.set_wifi_password(
-        db, ont_id, password, timeout_sec=timeout_sec, request=request
-    )
+    result = submit_wifi_change(db, request, ont_id, password=password)
     return _action_result_response(
         result=result,
         request=request,
@@ -685,22 +708,15 @@ def ont_force_push_wifi_password(
     password: str = Form(""),
     timeout_sec: int | None = Form(None),
 ) -> JSONResponse:
-    """Force an immediate WiFi password push to the device.
+    """Submit a WiFi password through the lifecycle (no direct device push).
 
-    Uses ``reconcile_ont(mode=bootstrap)`` so the planner emits the
-    ``AcsSetWifiPassword`` action regardless of whether the device is
-    currently present and observed. Restores legacy "push every time"
-    semantics for operators who need them.
-
-    ``timeout_sec``: optional operator override of the reconciler's outer
-    deadline (default 60s), for slow OLT shelves.
+    Kept as a route for old clients; it behaves exactly like
+    ``/wifi-password`` because delivery is owned by the lifecycle.
     """
     denied = _ensure_ont_write_scope(request, db, ont_id)
     if denied is not None:
         return denied
-    result = web_network_ont_actions_service.force_push_wifi_password(
-        db, ont_id, password, timeout_sec=timeout_sec, request=request
-    )
+    result = submit_wifi_change(db, request, ont_id, password=password)
     return _action_result_response(
         result=result,
         request=request,
@@ -910,12 +926,19 @@ def ont_set_wan_remote_access(
 
 @router.post(
     "/onts/{ont_id}/bind-internet-wan",
-    dependencies=[Depends(require_permission("network:ont:write"))],
+    dependencies=[
+        Depends(require_permission("network:ont:write")),
+        Depends(require_role(BREAK_GLASS_ROLE)),
+    ],
 )
 def ont_bind_internet_wan(
     request: Request, ont_id: str, db: Session = Depends(get_db)
 ) -> JSONResponse:
-    """Bind active PPP internet WAN to customer-facing LAN/WiFi interfaces."""
+    """Break-glass: bind the PPP internet WAN straight through GenieACS/OLT.
+
+    Admin only, needs a written ``break_glass_reason`` and writes an audit
+    event. Normal WAN changes belong to the Configure tab's lifecycle.
+    """
     denied = _ensure_ont_write_scope(request, db, ont_id)
     if denied is not None:
         return denied
@@ -924,6 +947,24 @@ def ont_bind_internet_wan(
     def enabled(key: str, default: bool = False) -> bool:
         raw = _form_str(form, key, "true" if default else "").strip().lower()
         return raw in {"true", "1", "yes", "on", "enabled"}
+
+    decision = authorize_break_glass(
+        db,
+        request,
+        action="bind_internet_wan",
+        resource_type="ont",
+        resource_id=ont_id,
+        reason=_form_str(form, "break_glass_reason"),
+    )
+    if not decision.allowed:
+        return _action_json_response(
+            success=False,
+            message=decision.message,
+            action="Bind Internet WAN (break-glass)",
+            request=request,
+            ont_id=ont_id,
+            status_code=403 if "admin" in decision.message else 400,
+        )
 
     result = web_network_ont_actions_service.bind_internet_wan(
         db,
@@ -1471,34 +1512,11 @@ def ont_omci_reboot(
     "/onts/{ont_id}/actions/configure-mgmt-ip",
     dependencies=[Depends(require_permission("network:ont:write"))],
 )
-def ont_configure_mgmt_ip(
-    request: Request,
-    ont_id: str,
-    ip_mode: str = Form(default="dhcp"),
-    ip_address: str = Form(default=""),
-    subnet: str = Form(default=""),
-    gateway: str = Form(default=""),
-    db: Session = Depends(get_db),
-) -> JSONResponse:
-    """Configure ONT management IP via OLT IPHOST command."""
-    denied = _ensure_ont_write_scope(request, db, ont_id)
-    if denied is not None:
-        return denied
-    ok, msg = web_network_ont_actions_service.configure_management_ip(
-        db,
-        ont_id,
-        ip_mode,
-        ip_address=ip_address or None,
-        subnet=subnet or None,
-        gateway=gateway or None,
-    )
-    return _action_json_response(
-        success=ok,
-        message=msg,
-        action="Configure Management IP",
-        request=request,
-        ont_id=ont_id,
-        status_code=200 if ok else 400,
+def ont_configure_mgmt_ip(ont_id: str) -> JSONResponse:
+    """Retired: wrote the IPHOST straight to the OLT, bypassing the lifecycle."""
+    return retired_writer_response(
+        "Configure Management IP",
+        "Use the Configure tab's Management section.",
     )
 
 

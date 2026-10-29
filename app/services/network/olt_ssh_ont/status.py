@@ -43,9 +43,54 @@ _ONT_INVENTORY_RECOGNITION_RE = re.compile(
 )
 
 
+_ONT_INVENTORY_EMPTY_RE = re.compile(
+    r"No\s+ONT|the total of ONTs are:\s*0\b",
+    re.IGNORECASE,
+)
+
+
+def _ont_inventory_response_explicitly_empty(clean_output: str) -> bool:
+    """Whether the device affirmatively said the port holds no ONTs.
+
+    A table header with no rows is NOT an empty port: it is what a cut-off read
+    looks like (output ended after the header), and must fail closed.
+    """
+    return bool(_ONT_INVENTORY_EMPTY_RE.search(clean_output))
+
+
 def _ont_inventory_response_recognized(clean_output: str) -> bool:
     """Whether the device returned a known inventory response (possibly empty)."""
     return bool(_ONT_INVENTORY_RECOGNITION_RE.search(clean_output))
+
+
+_PAGER_MARKER_RE = re.compile(r"-{2,}\s*More\s*(?:\([^)]*\))?\s*-{2,}[ \t]*")
+_SPACED_FSP_RE = re.compile(r"(?<![\d/])(\d+)/\s*(\d+)/\s*(\d+)(?=\s+\d+\s+\S)")
+# A data row of the `display ont info <f> <s> <p> all` table (spaced F/S/P ok).
+_ONT_ROW_HINT_RE = re.compile(
+    r"^\s*\d+/\s*\d+/\s*\d+\s+\d+\s+[0-9A-Za-z-]{8,}\s+\S+\s+(?:online|offline)\b",
+    re.IGNORECASE | re.MULTILINE,
+)
+_ONT_ROW_FALLBACK_RE = re.compile(
+    r"^\s*(\d+)/\s*(\d+)/\s*(\d+)\s+(\d+)\s+([0-9A-Za-z-]{8,})\s+\S+\s+"
+    r"(online|offline)\b",
+    re.IGNORECASE | re.MULTILINE,
+)
+
+
+def normalize_inventory_output(output: str) -> str:
+    """Strip ANSI redraws and pager markers; compact ``0/ 2/1`` to ``0/2/1``.
+
+    The pager erases its marker with cursor-back sequences, so a row can follow
+    the marker on the same line; removing both lets the table parse as if
+    paging were off.
+    """
+    text = _ANSI_ESCAPE_RE.sub("", output).replace("\r", "")
+    text = _PAGER_MARKER_RE.sub("\n", text)
+    return _SPACED_FSP_RE.sub(lambda m: f"{m.group(1)}/{m.group(2)}/{m.group(3)}", text)
+
+
+def inventory_has_data_rows(output: str) -> bool:
+    return bool(_ONT_ROW_HINT_RE.search(normalize_inventory_output(output)))
 
 
 def parse_registered_ont_inventory(
@@ -55,7 +100,7 @@ def parse_registered_ont_inventory(
     """Parse Huawei per-port inventory across MA5800 and MA5608 formats."""
     from app.services.network.parsers.loader import parse_ont_info
 
-    clean_output = _ANSI_ESCAPE_RE.sub("", output)
+    clean_output = normalize_inventory_output(output)
     states: dict[int, str] = {}
     serials: dict[int, str] = {}
     section: str | None = None
@@ -91,7 +136,7 @@ def parse_registered_ont_inventory(
         ]
 
     parsed = parse_ont_info(clean_output)
-    return [
+    entries = [
         RegisteredOntEntry(
             fsp=entry.fsp or fsp,
             onu_id=entry.ont_id,
@@ -100,6 +145,18 @@ def parse_registered_ont_inventory(
         )
         for entry in parsed.data
         if entry.serial_number
+    ]
+    if entries:
+        return entries
+    # Template missed (column drift): fall back to the row shape itself.
+    return [
+        RegisteredOntEntry(
+            fsp=f"{m.group(1)}/{m.group(2)}/{m.group(3)}",
+            onu_id=int(m.group(4)),
+            real_serial=m.group(5),
+            run_state=m.group(6).lower(),
+        )
+        for m in _ONT_ROW_FALLBACK_RE.finditer(clean_output)
     ]
 
 
@@ -208,11 +265,15 @@ def get_ont_info_detail(
 
     try:
         transport, channel, policy = core._open_shell(olt)
-    except (SSHException, OSError, TimeoutError, ValueError) as exc:
+    except (SSHException, EOFError, OSError, TimeoutError, ValueError) as exc:
         return False, f"Connection failed: {exc}", None
 
     try:
-        prompt = core._prepare_huawei_read_shell(channel, policy.prompt_regex)
+        prompt = core._prepare_huawei_read_shell(
+            channel,
+            policy.prompt_regex,
+            paging_off_command=getattr(policy, "paging_off_command", None),
+        )
 
         from app.services.network.huawei_command_profiles import (
             get_huawei_command_profile,
@@ -253,7 +314,11 @@ def get_ont_status(
         return False, f"Connection failed: {exc}", None
 
     try:
-        prompt = core._prepare_huawei_read_shell(channel, policy.prompt_regex)
+        prompt = core._prepare_huawei_read_shell(
+            channel,
+            policy.prompt_regex,
+            paging_off_command=getattr(policy, "paging_off_command", None),
+        )
 
         from app.services.network.huawei_command_profiles import (
             get_huawei_command_profile,
@@ -316,14 +381,40 @@ def get_registered_ont_serials(
     if not normalized_fsps:
         return True, "No Huawei PON ports requested", []
 
+    # Default-off dotmac-device-cli read (S1). The gate does not import the
+    # package; the host is imported only after it passes, and an import failure
+    # means legacy. A package read that starts never falls back to a second login.
+    from app.services.network import device_cli_gate
+
+    if device_cli_gate.selected(olt, device_cli_gate.OP_LIST_ONTS):
+        try:
+            from app.services.network import device_cli_host
+        except Exception:  # ImportError, or the package failing while importing
+            logger.exception("device_cli_host_import_failed olt=%s", olt.name)
+            from app.services.network import olt_ssh_metrics
+
+            olt_ssh_metrics.record_device_cli_event(
+                "import_failed", str(olt.name or olt.id), device_cli_gate.OP_LIST_ONTS
+            )
+        else:
+            packaged = device_cli_host.read_registered_onts(
+                olt, normalized_fsps, timeout_sec=timeout_sec
+            )
+            if packaged is not None:
+                return packaged
+
     started = time.monotonic()
     try:
         transport, channel, policy = core._open_shell(olt)
-    except (SSHException, OSError, TimeoutError, ValueError) as exc:
+    except (SSHException, EOFError, OSError, TimeoutError, ValueError) as exc:
         return False, f"Connection failed: {exc}", []
 
     try:
-        prompt = core._prepare_huawei_read_shell(channel, policy.prompt_regex)
+        prompt = core._prepare_huawei_read_shell(
+            channel,
+            policy.prompt_regex,
+            paging_off_command=getattr(policy, "paging_off_command", None),
+        )
         from app.services.network.huawei_command_profiles import (
             get_huawei_command_profile,
         )
@@ -352,9 +443,25 @@ def get_registered_ont_serials(
             # ONTs. Check recognition before the shared error scan so a customer
             # description containing words like "error" or "invalid" in a data
             # row cannot be misread as a device rejection.
-            clean_output = _ANSI_ESCAPE_RE.sub("", output)
-            if _ont_inventory_response_recognized(clean_output):
+            clean_output = normalize_inventory_output(output)
+            if inventory_has_data_rows(output):
+                # Rows are present but none parsed: never report an empty port.
+                return (
+                    False,
+                    f"Huawei inventory for {fsp} had ONT rows that could not be parsed",
+                    [],
+                )
+            if _ont_inventory_response_explicitly_empty(clean_output):
                 continue
+            if _ont_inventory_response_recognized(clean_output):
+                # Header but no parsable rows and no explicit empty marker:
+                # a truncated/cut-off read, not evidence of an empty port.
+                return (
+                    False,
+                    f"Huawei inventory response for {fsp} had a table header "
+                    "but no ONT rows (truncated read)",
+                    [],
+                )
             if core.is_error_output(output):
                 return (
                     False,
@@ -411,7 +518,11 @@ def find_ont_by_serial(
         return False, f"Connection failed: {exc}", None
 
     try:
-        prompt = core._prepare_huawei_read_shell(channel, policy.prompt_regex)
+        prompt = core._prepare_huawei_read_shell(
+            channel,
+            policy.prompt_regex,
+            paging_off_command=getattr(policy, "paging_off_command", None),
+        )
 
         # Use direct serial lookup - much more reliable than parsing all ONTs
         output = core._run_huawei_cmd(

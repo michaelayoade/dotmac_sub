@@ -12,6 +12,15 @@ from sqlalchemy import select
 from app.celery_app import celery_app
 from app.services.db_session_adapter import db_session_adapter
 from app.services.network.olt_protocol_adapters import OltConnectionConfig
+from app.services.network.olt_ssh_limiter import (
+    OltSshPriority,
+    is_auth_eof_message,
+    is_auth_rejected_message,
+    is_busy_message,
+    is_login_failed_message,
+    is_login_refusal_message,
+    olt_ssh_priority,
+)
 from app.services.network_operation_dispatch import managed_network_operation_dispatch
 from app.tasks._postgres_lock import postgres_session_advisory_lock
 
@@ -138,10 +147,17 @@ def refresh_huawei_olt_status(olt_id: str) -> dict[str, int | str]:
 
         entries: tuple[RegisteredOntEntry, ...] = ()
         if target.fsps:
-            ok, message, observed = get_registered_ont_serials(
-                cast(OLTDevice, target.connection),
-                target.fsps,
-            )
+            # Background work: uses only the unreserved slots and never waits.
+            with olt_ssh_priority(OltSshPriority.BACKGROUND):
+                ok, message, observed = get_registered_ont_serials(
+                    cast(OLTDevice, target.connection),
+                    target.fsps,
+                )
+            if not ok and is_busy_message(message):
+                # Every unreserved slot is taken (or a writer is queued): skip
+                # this cycle quietly. Retrying would only add load to a busy OLT.
+                logger.info("olt_status_poll_skipped_busy olt=%s", olt_id)
+                return {"olt_id": olt_id, "skipped": "olt_busy"}
             if not ok:
                 error = RuntimeError(message)
                 with db_session_adapter.session() as db:
@@ -149,6 +165,20 @@ def refresh_huawei_olt_status(olt_id: str) -> dict[str, int | str]:
                     if olt is not None and huawei_olt_status_pollable(olt):
                         record_olt_poll_failure(olt, error)
                         db.commit()
+                if is_auth_rejected_message(message):
+                    # Wrong credentials: alert (error log + recorded poll
+                    # failure above) and never retry.
+                    logger.error("olt_status_poll_auth_rejected olt=%s", olt_id)
+                    return {"olt_id": olt_id, "skipped": "olt_auth_failed"}
+                if (
+                    is_auth_eof_message(message)
+                    or is_login_refusal_message(message)
+                    or is_login_failed_message(message)
+                ):
+                    # The OLT is refusing logins. Retrying 3x re-logs-in
+                    # exactly when it is refusing; the next cycle tries again.
+                    logger.warning("olt_status_poll_login_eof olt=%s", olt_id)
+                    return {"olt_id": olt_id, "skipped": "olt_login_failed"}
                 raise error
             entries = tuple(observed)
         elif not target.has_inventory:

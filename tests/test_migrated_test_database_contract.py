@@ -115,7 +115,7 @@ def test_repository_heads_match_alembics_effective_dependency_heads() -> None:
     # effective branch heads in its version table.
     assert repository_heads() == frozenset(
         {
-            "699_dispatch_reconciliation_resolution",
+            "701_olt_ssh_host_key_record",
             "bi_0011_settlement_earmarks",
             "cl_0001_collections",
             "ib_0001_conversations",

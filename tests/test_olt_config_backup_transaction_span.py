@@ -206,3 +206,60 @@ def test_empty_backup_population_is_an_explicit_noop(monkeypatch, _no_persistenc
     result = task_module.backup_all_olts()
     assert result["status"] == "skipped"
     assert result["total_targets"] == result["backed_up"] == result["errors"] == 0
+
+
+def test_busy_olt_is_skipped_not_failed_and_runs_as_background(
+    monkeypatch: pytest.MonkeyPatch, _no_persistence: list[str], tmp_path
+) -> None:
+    """G4: a backup never waits for an SSH slot and never alerts on a busy OLT."""
+    from app.services.network import olt_ssh_limiter
+
+    monkeypatch.setattr(task_module, "BACKUP_DIR", tmp_path)
+    monkeypatch.setattr(
+        task_module, "_load_backup_targets", lambda: [_target("busy"), _target("ok")]
+    )
+    priorities: list[olt_ssh_limiter.OltSshPriority] = []
+
+    def fake_fetch(target: task_module._BackupTarget) -> str:
+        priorities.append(olt_ssh_limiter.current_priority())
+        if target.name == "busy":
+            raise task_module._ConfigFetchError(
+                "olt_busy: all 2 SSH session slot(s) for this OLT are in use"
+            )
+        return "config\n"
+
+    monkeypatch.setattr(task_module, "_fetch_running_config_via_ssh", fake_fetch)
+
+    result = task_module.backup_all_olts()
+
+    assert priorities == [olt_ssh_limiter.OltSshPriority.BACKGROUND] * 2
+    assert result["errors"] == 0
+    assert result["skipped"] == 1
+    assert result["backed_up"] == 1
+    task_module.backup_alerts.queue_backup_failure_notification.assert_not_called()
+
+
+def test_backup_task_reads_config_under_the_300s_cap(monkeypatch) -> None:
+    """A paged backup read must not be killed by the 60 s interactive cap."""
+    from types import SimpleNamespace
+
+    from app.services.network import olt_protocol_adapters, olt_ssh
+
+    seen: list[int] = []
+
+    class _Adapter:
+        def fetch_running_config(self):
+            seen.append(olt_ssh._config_read_cap.get())
+            return SimpleNamespace(
+                success=True, message="ok", data={"config_text": "sysname x"}
+            )
+
+    monkeypatch.setattr(
+        olt_protocol_adapters,
+        "get_protocol_adapter_from_config",
+        lambda _c: _Adapter(),
+    )
+    text = task_module._fetch_running_config_via_ssh(_target("OLT-CAP"))
+    assert "sysname x" in text
+    assert seen == [300]
+    assert olt_ssh._config_read_cap.get() == 60  # restored afterwards

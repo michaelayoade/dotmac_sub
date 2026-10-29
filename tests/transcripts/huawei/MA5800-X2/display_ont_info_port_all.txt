@@ -1,0 +1,51 @@
+display ont info 0 2 1 all 
+{ <cr>||<K> }: 
+
+  Command:
+          display ont info 0 2 1 all
+  -----------------------------------------------------------------------------
+  F/S/P   ONT         SN         Control     Run      Config   Match    Protect
+          ID                     flag        state    state    state    side 
+  -----------------------------------------------------------------------------
+  0/ 2/1    0  48575443FAA65084  active      online   normal   mismatch no 
+  0/ 2/1    1  485754437D4733C3  active      offline  initial  initial  no 
+  0/ 2/1    2  485754437D4546C3  active      offline  initial  initial  no 
+  0/ 2/1    3  485754437D4538C3  active      offline  initial  initial  no 
+  0/ 2/1    4  485754437D4549C3  active      online   normal   mismatch no 
+  0/ 2/1    5  485754432B526E9A  active      offline  initial  initial  no 
+  0/ 2/1    6  485754437D4806C3  active      online   normal   mismatch no 
+  0/ 2/1    7  48575443D7AC5310  active      offline  initial  initial  no 
+  0/ 2/1    8  48575443963D0FA3  active      offline  initial  initial  no 
+  0/ 2/1    9  485754437D4676C3  active      offline  initial  initial  no 
+  0/ 2/1   10  4857544393A47984  active      online   normal   mismatch no 
+  0/ 2/1   11  485754430ED2599D  active      offline  initial  initial  no 
+  0/ 2/1   12  48575443600AC29C  active      offline  initial  initial  no 
+  0/ 2/1   13  485754431D86B5D1  active      offline  initial  initial  no 
+  0/ 2/1   14  485754437D4600C3  active      offline  initial  initial  no 
+  0/ 2/1   15  485754431DA6B7D1  active      offline  initial  initial  no 
+  -----------------------------------------------------------------------------
+  F/S/P   ONT-ID   Description
+  -----------------------------------------------------------------------------
+---- More ( Press 'Q' to break ) ----[37D                                     [37D  0/ 2/1       0   CUSTOMER_00_zone_Zone_1_authd_20240101
+  0/ 2/1       1   CUSTOMER_01_zone_Zone_1_authd_20240101
+  0/ 2/1       2   CUSTOMER_02_zone_Zone_1_authd_20240101
+  0/ 2/1       3   CUSTOMER_03_zone_Zone_1_authd_20240101
+  0/ 2/1       4   CUSTOMER_04_zone_Zone_1_authd_20240101
+  0/ 2/1       5   CUSTOMER_05_zone_Zone_1_authd_20240101
+  0/ 2/1       6   CUSTOMER_06_zone_Zone_1_authd_20240101
+                   _redacted-address-line_,              
+                   _authd_20240403
+  0/ 2/1       7   CUSTOMER_07_zone_Zone_1_authd_20240101
+  0/ 2/1       8   CUSTOMER_08_zone_Zone_1_authd_20240101
+  0/ 2/1       9   CUSTOMER_09_zone_Zone_1_authd_20240101
+  0/ 2/1      10   CUSTOMER_10_zone_Zone_1_authd_20240101
+  0/ 2/1      11   CUSTOMER_11_zone_Zone_1_authd_20240101
+  0/ 2/1      12   CUSTOMER_12_zone_Zone_1_authd_20240101
+  0/ 2/1      13   CUSTOMER_13_zone_Zone_1_authd_20240101
+  0/ 2/1      14   CUSTOMER_14_zone_Zone_1_authd_20240101
+  0/ 2/1      15   CUSTOMER_15_zone_Zone_1_authd_20240101
+  -----------------------------------------------------------------------------
+  In port 0/ 2/1 , the total of ONTs are: 16, online: 4
+  -----------------------------------------------------------------------------
+
+MA5800-X2#

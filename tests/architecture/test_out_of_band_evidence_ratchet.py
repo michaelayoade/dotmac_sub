@@ -28,6 +28,7 @@ ROOT = Path(__file__).resolve().parents[2]
 APPROVED_OUT_OF_BAND_EVIDENCE: Mapping[str, str] = {
     "access.enforcement_evidence": "docs/adr/0017-enforcement-application-evidence.md",
     "network.coa_outcome_evidence": "docs/adr/0018-coa-outcome-evidence.md",
+    "network.olt_ssh_host_key_evidence": "docs/adr/0033-olt-ssh-host-key-evidence.md",
 }
 
 #: Older out-of-band writers that predate the mode and are NOT migrated to it

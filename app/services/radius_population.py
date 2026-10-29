@@ -98,6 +98,8 @@ class RadiusProjectionWorkItem:
     test_check_attrs: tuple[RadiusAttribute, ...] = ()
     test_reply_attrs: tuple[RadiusAttribute, ...] = ()
     test_profile_group: str | None = None
+    # Canonical login owner chosen by the planner (``_prefer_login_candidate``).
+    subscription_id: str | None = None
 
 
 def _result_count(result: Mapping[str, object], key: str) -> int:
@@ -113,7 +115,7 @@ def _increment_result_count(
 
 
 def _captive_reject_work_item(
-    login: str, status: SubscriptionStatus
+    login: str, status: SubscriptionStatus, subscription_id: str | None = None
 ) -> RadiusProjectionWorkItem:
     """Build the reject fallback for a captive login with no usable credential.
 
@@ -136,6 +138,7 @@ def _captive_reject_work_item(
         status=status,
         mode="reject",
         profile_group=None,
+        subscription_id=subscription_id,
     )
 
 
@@ -143,29 +146,6 @@ def _captive_reject_work_item(
 # names stay here because the sweep and its tests address them on this module.
 _committed_mbps = access_rate_profile.committed_mbps
 _rate_limit = access_rate_profile.legacy_rate_limit
-
-
-def _effective_profile(
-    cred: AccessCredential | None,
-    subscription_profile: RadiusProfile | None,
-    profiles_by_id: dict,
-) -> RadiusProfile | None:
-    """Resolve the RADIUS profile that should shape a credential's radreply.
-
-    A dunning/FUP throttle is applied by setting ``AccessCredential.
-    radius_profile_id``; that credential-level override must win over the
-    subscription profile, otherwise the authoritative populate() sweep rebuilds
-    radreply from the offer/subscription speed and silently reverts the throttle
-    (SP-2). Mirrors the credential>subscription precedence in
-    ``enforcement.resolve_radius_profile``. Falls back to the subscription
-    profile when the credential carries no override (the normal, non-throttled
-    case — behaviour unchanged), or when the referenced profile can't be found.
-    """
-    if cred is not None and cred.radius_profile_id:
-        override = profiles_by_id.get(cred.radius_profile_id)
-        if override is not None:
-            return override
-    return subscription_profile
 
 
 def simultaneous_use_enforcement_enabled(db) -> bool:
@@ -249,7 +229,7 @@ def _radreply_attrs(
     After cutover, `_radcheck_policy_attrs` owns the attribute and this reply
     builder omits it.
 
-    `owner_rate`: the single rate owner's decision (``radius.rate_owner_enabled``).
+    `owner_rate`: the single rate owner's decision.
     When given, its rate string is emitted; otherwise the rate is derived from
     ``offer``/``profile`` exactly as before.
     """
@@ -719,6 +699,10 @@ def populate(
     db = source_db or SessionLocal()
     owns_db = source_db is None
     try:
+        if not dry_run:
+            # The one writer refuses to project rates the governed switch has not
+            # verified, whichever process (web, worker, script) calls it.
+            access_rate_profile.enforce_switch_guard(db)
         projection_targets = active_external_radius_targets(db, capability="users")
         if not projection_targets:
             raise RuntimeError("No DB-configured external RADIUS user target")
@@ -776,7 +760,6 @@ def populate(
             select(Subscription)
             .options(
                 joinedload(Subscription.offer),
-                joinedload(Subscription.radius_profile),
                 joinedload(Subscription.subscriber).joinedload(Subscriber.reseller),
             )
             .where(
@@ -833,36 +816,11 @@ def populate(
             c.username: c for c in db.scalars(credential_statement).all()
         }
 
-        # Pre-fetch RadiusProfiles by id so a credential-level profile override
-        # (a dunning/FUP throttle sets AccessCredential.radius_profile_id) can be
-        # resolved in memory. Without this, populate() rebuilds radreply purely
-        # from the subscription/offer profile and silently reverts every throttle
-        # within one sweep — the throttle never reaches the router (SP-2). This
-        # mirrors the credential>subscription precedence in
-        # enforcement.resolve_radius_profile; the offer-derived fallback below is
-        # unchanged, so a non-throttled customer's speed is untouched.
-        credential_profile_ids = {
-            credential.radius_profile_id
-            for credential in creds_by_username.values()
-            if credential.radius_profile_id is not None
-        }
-        profile_statement = select(RadiusProfile)
-        if scoped:
-            profile_statement = profile_statement.where(
-                RadiusProfile.id.in_(credential_profile_ids)
-            )
-        radius_profiles_by_id: dict = {
-            p.id: p for p in db.scalars(profile_statement).all()
-        }
-
-        # Single rate owner (``radius.rate_owner_enabled``). Off: the legacy
-        # credential > subscription precedence below is untouched.
-        rate_owner_ctx = (
-            access_rate_profile.RateContext.load(
-                db, cohort_subscription_ids if scoped else None
-            )
-            if access_rate_profile.rate_owner_enabled(db)
-            else None
+        # The single rate owner decides every login's rate (throttle, staged
+        # plan change, package). The credential slot is read only to recognise a
+        # collections throttle; it is never plan or override truth.
+        rate_owner_ctx = access_rate_profile.RateContext.load(
+            db, cohort_subscription_ids if scoped else None
         )
 
         # Pre-fetch additional routed IP blocks,
@@ -1051,6 +1009,7 @@ def populate(
                     status=sub.status,
                     mode=projection.mode,
                     profile_group=None,
+                    subscription_id=selected_projection.subscription_id,
                 )
                 continue
 
@@ -1065,7 +1024,9 @@ def populate(
                         "no_credential",
                     )
                     _increment_result_count(stats, "captive_downgraded_to_reject")
-                    by_login[login] = _captive_reject_work_item(login, sub.status)
+                    by_login[login] = _captive_reject_work_item(
+                        login, sub.status, selected_projection.subscription_id
+                    )
                 else:
                     preserve_usernames.add(login)
                 continue
@@ -1079,7 +1040,9 @@ def populate(
                         "no_secret_hash",
                     )
                     _increment_result_count(stats, "captive_downgraded_to_reject")
-                    by_login[login] = _captive_reject_work_item(login, sub.status)
+                    by_login[login] = _captive_reject_work_item(
+                        login, sub.status, selected_projection.subscription_id
+                    )
                 else:
                     preserve_usernames.add(login)
                 continue
@@ -1098,7 +1061,9 @@ def populate(
                         "decrypt_failed",
                     )
                     _increment_result_count(stats, "captive_downgraded_to_reject")
-                    by_login[login] = _captive_reject_work_item(login, sub.status)
+                    by_login[login] = _captive_reject_work_item(
+                        login, sub.status, selected_projection.subscription_id
+                    )
                 else:
                     preserve_usernames.add(login)
                 continue
@@ -1112,7 +1077,9 @@ def populate(
                         "empty_password",
                     )
                     _increment_result_count(stats, "captive_downgraded_to_reject")
-                    by_login[login] = _captive_reject_work_item(login, sub.status)
+                    by_login[login] = _captive_reject_work_item(
+                        login, sub.status, selected_projection.subscription_id
+                    )
                 else:
                     preserve_usernames.add(login)
                 continue
@@ -1158,7 +1125,9 @@ def populate(
                             ", ".join(ambiguous_addresses),
                         )
                         _increment_result_count(stats, "captive_downgraded_to_reject")
-                        by_login[login] = _captive_reject_work_item(login, sub.status)
+                        by_login[login] = _captive_reject_work_item(
+                            login, sub.status, selected_projection.subscription_id
+                        )
                     else:
                         logger.error(
                             "ambiguous active IPv4 ledger for login %s "
@@ -1186,20 +1155,12 @@ def populate(
             # Credential-level profile (throttle/FUP) takes precedence over the
             # subscription profile, so an applied throttle actually shapes the
             # radreply instead of being reverted to full offer speed each sweep.
-            owner_rate = None
-            plan_owner_rate = None
-            if rate_owner_ctx is not None:
-                owner_rate = access_rate_profile.derive(rate_owner_ctx, sub, cred)
-                plan_owner_rate = access_rate_profile.derive(
-                    rate_owner_ctx, sub, cred, include_enforcement=False
-                )
-                effective_profile = owner_rate.profile
-                plan_profile = plan_owner_rate.profile
-            else:
-                effective_profile = _effective_profile(
-                    cred, sub.radius_profile, radius_profiles_by_id
-                )
-                plan_profile = sub.radius_profile
+            owner_rate = access_rate_profile.derive(rate_owner_ctx, sub, cred)
+            plan_owner_rate = access_rate_profile.derive(
+                rate_owner_ctx, sub, cred, include_enforcement=False
+            )
+            effective_profile = owner_rate.profile
+            plan_profile = plan_owner_rate.profile
             attrs = _radreply_attrs(
                 sub,
                 sub.offer,
@@ -1265,6 +1226,7 @@ def populate(
                 test_reply_attrs=tuple(test_attrs),
                 test_check_attrs=tuple(test_checks),
                 test_profile_group=plan_profile.name if plan_profile else None,
+                subscription_id=selected_projection.subscription_id,
             )
 
         active_usernames = {sub.login for sub in rows if sub.login}
@@ -1282,13 +1244,16 @@ def populate(
         stats["scoped_targets"] = len(only_usernames)
         unbuildable_usernames.intersection_update(only_usernames)
     if include_projection_plan:
-        stats["rate_owner_enabled"] = rate_owner_ctx is not None
+        # Every projection is derived by the rate owner; the key stays so the
+        # switch evidence (and its callers) keep one shape.
+        stats["rate_owner_enabled"] = True
         stats["projection_plan"] = {
             item.username: {
                 "mode": item.mode,
                 "rate": _reply_rate(item.reply_attrs),
                 "test_access": item.test_access is not None,
                 "test_rate": _reply_rate(item.test_reply_attrs),
+                "subscription_id": item.subscription_id,
             }
             for item in work
         }

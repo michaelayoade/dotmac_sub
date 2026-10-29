@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import re
 import sys
 import tomllib
 from pathlib import Path
@@ -193,7 +194,13 @@ def test_ci_uses_one_named_application_cache_after_publisher_cutover() -> None:
     e2e_workflow = (ROOT / ".github/workflows/e2e.yml").read_text(encoding="utf-8")
     ghcr_workflow = (ROOT / ".github/workflows/ghcr.yml").read_text(encoding="utf-8")
 
-    assert workflow.count("uses: docker/build-push-action@v6") == 1
+    assert (
+        workflow.count(
+            "uses: docker/build-push-action@"
+            "10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6.19.2"
+        )
+        == 1
+    )
     assert "scope=dotmac-sub-application" in workflow
     assert "github.event_name != 'push'" in workflow
     assert "docker push" not in workflow
@@ -202,7 +209,13 @@ def test_ci_uses_one_named_application_cache_after_publisher_cutover() -> None:
     # ghcr.yml is now isolated to the pinned GenieACS runtime. Application
     # bytes are built once by the explicit candidate workflow and later
     # receive production aliases without another build.
-    assert ghcr_workflow.count("uses: docker/build-push-action@v6") == 1
+    assert (
+        ghcr_workflow.count(
+            "uses: docker/build-push-action@"
+            "10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6.19.2"
+        )
+        == 1
+    )
     assert "branches: [main]" in ghcr_workflow
     assert "context: .\n" not in ghcr_workflow
     assert "scope=genieacs" in ghcr_workflow
@@ -212,7 +225,13 @@ def test_ci_uses_one_named_application_cache_after_publisher_cutover() -> None:
     candidate_workflow = (ROOT / ".github/workflows/release-candidate.yml").read_text(
         encoding="utf-8"
     )
-    assert candidate_workflow.count("uses: docker/build-push-action@v6") == 1
+    assert (
+        candidate_workflow.count(
+            "uses: docker/build-push-action@"
+            "10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6.19.2"
+        )
+        == 1
+    )
     assert "on:\n  workflow_dispatch:" in candidate_workflow
     assert "on:\n  push:" not in candidate_workflow
     assert "scope=dotmac-sub-application" in candidate_workflow
@@ -304,8 +323,8 @@ def test_ci_persists_unit_test_duration_history() -> None:
     workflow = CI_WORKFLOW.read_text(encoding="utf-8")
     makefile = (ROOT / "Makefile").read_text(encoding="utf-8")
 
-    assert "actions/cache/restore@v4" in workflow
-    assert "actions/cache/save@v4" in workflow
+    assert "actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830" in workflow
+    assert "actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830" in workflow
     assert "unit-test-durations-v1-" in workflow
     assert "scripts/ci/merge_test_durations.py" in workflow
     assert "make test-ci-shard" in workflow
@@ -583,3 +602,19 @@ def test_fresh_test_databases_bootstrap_database_prereqs_before_alembic() -> Non
         ):
             production_recipe = makefile[makefile.index(start) : makefile.index(end)]
             assert bootstrap not in production_recipe
+
+
+def test_all_workflow_and_composite_actions_are_sha_pinned() -> None:
+    """No mutable tag/branch refs beside OIDC minting or anywhere else (#3768)."""
+    sources = sorted((ROOT / ".github/workflows").glob("*.yml"))
+    sources += sorted((ROOT / ".github/actions").glob("*/action.yml"))
+    assert sources
+    offenders: list[str] = []
+    for path in sources:
+        for ref in re.findall(r"uses:\s*([^\s#]+)", path.read_text(encoding="utf-8")):
+            if ref.startswith("./") or ref.startswith("docker://"):
+                continue
+            _, _, pin = ref.rpartition("@")
+            if not re.fullmatch(r"[0-9a-f]{40}", pin):
+                offenders.append(f"{path.relative_to(ROOT)}: {ref}")
+    assert offenders == []

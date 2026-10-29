@@ -43,7 +43,6 @@ _CLI_ALLOWED_PREFIXES: list[str] = [
     "show ",
     "ping ",
     "traceroute ",
-    "dir ",
     "list ",
 ]
 

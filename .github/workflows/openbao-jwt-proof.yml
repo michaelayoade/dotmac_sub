@@ -30,7 +30,7 @@ jobs:
       contents: read
       id-token: write
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
       - env:
           OPENBAO_ADDR: ${{ secrets.OPENBAO_ADDR }}
           EXPECTED_CANARY_SHA256: ${{ vars.GATE0_CANARY_SHA256 }}
@@ -50,7 +50,7 @@ jobs:
       contents: read
       id-token: write
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
       - env:
           OPENBAO_ADDR: ${{ secrets.OPENBAO_ADDR }}
           PROOF_MODE: negative
@@ -68,7 +68,7 @@ jobs:
       contents: read
       id-token: write
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
       - env:
           OPENBAO_ADDR: ${{ secrets.OPENBAO_ADDR }}
           PROOF_MODE: negative
@@ -88,7 +88,7 @@ jobs:
       contents: read
       id-token: write
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
       - env:
           OPENBAO_ADDR: ${{ secrets.OPENBAO_ADDR }}
           PROOF_MODE: negative
@@ -107,7 +107,7 @@ jobs:
       contents: read
       id-token: write
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
       - env:
           OPENBAO_ADDR: ${{ secrets.OPENBAO_ADDR }}
           PROOF_MODE: negative
@@ -127,7 +127,7 @@ jobs:
       contents: read
       id-token: write
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
       - env:
           OPENBAO_ADDR: ${{ secrets.OPENBAO_ADDR }}
           PROOF_MODE: negative
@@ -147,7 +147,7 @@ jobs:
       contents: read
       id-token: write
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
       - env:
           OPENBAO_ADDR: ${{ secrets.OPENBAO_ADDR }}
           PROOF_MODE: negative
@@ -174,8 +174,11 @@ jobs:
           ok=$(echo "$RESULTS" | jq '[to_entries[] | select(.key != "row4-wrong-ref") | .value.result == "success"] | all')
           row4=$(echo "$RESULTS" | jq -r '.["row4-wrong-ref"].result')
           if [ "$ok" = "true" ] && { [ "$row4" = "success" ] || [ "$row4" = "skipped" ]; }; then
-            [ "$row4" = "skipped" ] && echo "row 4 not exercised on a main dispatch; dispatch from a feature branch to exercise it"
-            echo "GATE0 PROOF 1: PASS"
+            if [ "$row4" = "skipped" ]; then
+              echo "GATE0 PROOF 1: PASS (row 4 unexercised — dispatch from a feature branch)"
+            else
+              echo "GATE0 PROOF 1: PASS"
+            fi
           else
             echo "GATE0 PROOF 1: FAIL" >&2
             exit 1

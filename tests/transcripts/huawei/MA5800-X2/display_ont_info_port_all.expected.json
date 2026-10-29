@@ -1,0 +1,98 @@
+[
+  {
+    "fsp": "0/2/1",
+    "onu_id": 0,
+    "real_serial": "48575443FAA65084",
+    "run_state": "online"
+  },
+  {
+    "fsp": "0/2/1",
+    "onu_id": 1,
+    "real_serial": "485754437D4733C3",
+    "run_state": "offline"
+  },
+  {
+    "fsp": "0/2/1",
+    "onu_id": 2,
+    "real_serial": "485754437D4546C3",
+    "run_state": "offline"
+  },
+  {
+    "fsp": "0/2/1",
+    "onu_id": 3,
+    "real_serial": "485754437D4538C3",
+    "run_state": "offline"
+  },
+  {
+    "fsp": "0/2/1",
+    "onu_id": 4,
+    "real_serial": "485754437D4549C3",
+    "run_state": "online"
+  },
+  {
+    "fsp": "0/2/1",
+    "onu_id": 5,
+    "real_serial": "485754432B526E9A",
+    "run_state": "offline"
+  },
+  {
+    "fsp": "0/2/1",
+    "onu_id": 6,
+    "real_serial": "485754437D4806C3",
+    "run_state": "online"
+  },
+  {
+    "fsp": "0/2/1",
+    "onu_id": 7,
+    "real_serial": "48575443D7AC5310",
+    "run_state": "offline"
+  },
+  {
+    "fsp": "0/2/1",
+    "onu_id": 8,
+    "real_serial": "48575443963D0FA3",
+    "run_state": "offline"
+  },
+  {
+    "fsp": "0/2/1",
+    "onu_id": 9,
+    "real_serial": "485754437D4676C3",
+    "run_state": "offline"
+  },
+  {
+    "fsp": "0/2/1",
+    "onu_id": 10,
+    "real_serial": "4857544393A47984",
+    "run_state": "online"
+  },
+  {
+    "fsp": "0/2/1",
+    "onu_id": 11,
+    "real_serial": "485754430ED2599D",
+    "run_state": "offline"
+  },
+  {
+    "fsp": "0/2/1",
+    "onu_id": 12,
+    "real_serial": "48575443600AC29C",
+    "run_state": "offline"
+  },
+  {
+    "fsp": "0/2/1",
+    "onu_id": 13,
+    "real_serial": "485754431D86B5D1",
+    "run_state": "offline"
+  },
+  {
+    "fsp": "0/2/1",
+    "onu_id": 14,
+    "real_serial": "485754437D4600C3",
+    "run_state": "offline"
+  },
+  {
+    "fsp": "0/2/1",
+    "onu_id": 15,
+    "real_serial": "485754431DA6B7D1",
+    "run_state": "offline"
+  }
+]

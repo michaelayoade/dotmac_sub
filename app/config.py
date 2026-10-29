@@ -26,6 +26,15 @@ def _env_bool(name: str, default: bool) -> bool:
 @dataclass(frozen=True)
 class Settings:
     app_env: str = os.getenv("APP_ENV", os.getenv("ENVIRONMENT", "development")).lower()
+    # Deploy-config allowlist of outbound effects permitted outside production
+    # (comma separated Effect names). Environment only; never a database row.
+    outbound_effects_allow: str = os.getenv("OUTBOUND_EFFECTS_ALLOW", "")
+    #: The environment exactly as declared, EMPTY when neither APP_ENV nor
+    #: ENVIRONMENT is set. ``app_env`` above defaults to "development", which
+    #: would hide an omission from a fail-closed deploy guard.
+    app_env_declared: str = (
+        (os.getenv("APP_ENV") or os.getenv("ENVIRONMENT") or "").strip().lower()
+    )
     # Bootstrap-only local IPC override, shared by listener and probe processes.
     # None leaves the private per-UID default and path admission to syslog.health.
     syslog_health_socket: str | None = os.getenv("SYSLOG_HEALTH_SOCKET")
@@ -84,7 +93,7 @@ class Settings:
     # Per-process Postgres application_name (pg_stat_activity attribution).
     db_application_name: str = os.getenv("DB_APPLICATION_NAME", "")
     db_lock_timeout_ms: int = int(os.getenv("DB_LOCK_TIMEOUT_MS", "10000"))
-    # Prompt timeout for OLT SSH session-setup reads (enable/screen-length);
+    # Prompt timeout for OLT SSH session-setup reads (enable/paging-off);
     # floor 5s — see app/services/network/olt_ssh.py:_setup_prompt_timeout.
     olt_ssh_prompt_timeout_seconds: float = max(
         5.0, float(os.getenv("OLT_SSH_PROMPT_TIMEOUT_SECONDS", "15"))

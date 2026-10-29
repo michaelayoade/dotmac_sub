@@ -15,6 +15,7 @@ from typing import Any, cast
 from app.logging import sanitize_exception
 from app.models.catalog import NasDevice
 from app.services.nas._mikrotik import _mikrotik_routeros_auth
+from app.services.outbound_effects import Effect, require
 
 logger = logging.getLogger(__name__)
 
@@ -36,6 +37,7 @@ def _get_api(device: NasDevice) -> Any:
 
     Returns the API object. Caller must disconnect the pool.
     """
+    require(Effect.router_api)
     from routeros_api import RouterOsApiPool
 
     host, port, username, password = _mikrotik_routeros_auth(device)

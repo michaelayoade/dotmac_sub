@@ -362,6 +362,7 @@ def parse_ont_optical_info(output: str, *, fsp: str, ont_id: int) -> OpticalInfo
 
 def _run_readonly_command(olt: OLTDevice, command: str) -> tuple[bool, str, str]:
     from app.services.network.olt_ssh import (
+        _apply_paging_off,
         _open_shell,
         _read_until_prompt,
         _run_huawei_cmd,
@@ -369,15 +370,17 @@ def _run_readonly_command(olt: OLTDevice, command: str) -> tuple[bool, str, str]
     )
 
     try:
-        transport, channel, _policy = _open_shell(olt)
-    except (SSHException, OSError, TimeoutError, ValueError) as exc:
+        transport, channel, policy = _open_shell(olt)
+    except (SSHException, EOFError, OSError, TimeoutError, ValueError) as exc:
+        # EOFError is what paramiko raises when the OLT drops the login.
         return False, f"Connection failed: {exc}", ""
 
     try:
         channel.send("enable\n")
         _read_until_prompt(channel, r"#\s*$", timeout_sec=_setup_prompt_timeout())
-        channel.send("screen-length 0 temporary\n")
-        _read_until_prompt(channel, r"#\s*$", timeout_sec=_setup_prompt_timeout())
+        _apply_paging_off(
+            channel, policy, r"#\s*$", timeout_sec=_setup_prompt_timeout()
+        )
         return True, "ok", _run_huawei_cmd(channel, command)
     except (*_SSH_CONNECTION_ERRORS, RuntimeError) as exc:
         logger.error(

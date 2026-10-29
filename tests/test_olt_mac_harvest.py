@@ -482,3 +482,160 @@ def test_no_transaction_held_during_ssh_walk(db_session, monkeypatch):
     mod.harvest_olt_mac_tables(db_session)
     assert tx_states, "SSH walk never ran"
     assert not any(tx_states), "a DB transaction was open during the SSH walk"
+
+
+# --------------------------------------------------------------------------- #
+# G4: background priority, one login per OLT, busy skips the cycle
+# --------------------------------------------------------------------------- #
+def test_harvest_walks_ports_inside_one_background_scope(db_session, monkeypatch):
+    from app.services.network import olt_ssh_limiter
+
+    olt = _huawei_olt(db_session)
+    _online_ont(db_session, olt, board="0/1", port="7", ont_id=5, serial="HWTC00000007")
+    _online_ont(
+        db_session, olt, board="0/1", port="14", ont_id=1, serial="HWTC00000014"
+    )
+    db_session.commit()
+    scopes: list[olt_ssh_limiter.OltSshPriority] = []
+
+    @contextmanager
+    def fake_scope(snapshot, priority, **_kw):
+        scopes.append(priority)
+        yield None
+
+    monkeypatch.setattr(olt_mac_harvest, "olt_ssh_scope", fake_scope)
+    monkeypatch.setattr(
+        olt_mac_harvest,
+        "_run_readonly_command",
+        _fake_runner({"0/1/7": _PORT_7, "0/1/14": _PORT_14}),
+    )
+
+    counters = harvest_olt_mac_tables(db_session)
+
+    assert counters["ports_walked"] == 2
+    assert scopes == [olt_ssh_limiter.OltSshPriority.BACKGROUND]  # not one per port
+
+
+def test_harvest_skips_a_busy_olt_without_counting_an_error(db_session, monkeypatch):
+    from app.services.network.olt_ssh_limiter import OltSessionBusy
+
+    olt = _huawei_olt(db_session)
+    _online_ont(db_session, olt, board="0/1", port="7", ont_id=5, serial="HWTC00000007")
+    db_session.commit()
+
+    @contextmanager
+    def busy_scope(snapshot, priority, **_kw):
+        raise OltSessionBusy(
+            "olt_busy: all 2 SSH session slot(s) for this OLT are in use"
+        )
+        yield None  # pragma: no cover
+
+    def _never(olt, command):
+        raise AssertionError("no SSH may be attempted while the OLT is busy")
+
+    monkeypatch.setattr(olt_mac_harvest, "olt_ssh_scope", busy_scope)
+    monkeypatch.setattr(olt_mac_harvest, "_run_readonly_command", _never)
+
+    counters = harvest_olt_mac_tables(db_session)
+
+    assert counters["olt_errors"] == 0
+    assert counters["observations"] == 0
+
+
+def test_harvest_login_refusal_is_not_an_error_and_stops_the_walk(
+    db_session, monkeypatch
+):
+    olt = _huawei_olt(db_session)
+    _online_ont(db_session, olt, board="0/1", port="7", ont_id=5, serial="HWTC00000007")
+    _online_ont(db_session, olt, board="0/1", port="8", ont_id=6, serial="HWTC00000008")
+    db_session.commit()
+    calls: list[str] = []
+
+    def _run(olt, command):
+        calls.append(command)
+        return False, "Connection failed: olt_login_failed: EOFError: ", ""
+
+    monkeypatch.setattr(olt_mac_harvest, "_run_readonly_command", _run)
+    counters = harvest_olt_mac_tables(db_session)
+
+    assert len(calls) == 1
+    assert counters["olt_login_refused"] == 1
+    assert counters["olt_errors"] == 0
+
+
+def test_single_olt_task_does_not_retry_on_login_refusal(monkeypatch):
+    import uuid
+    from contextlib import contextmanager
+
+    from app.tasks import olt_mac_harvest as task_mod
+
+    @contextmanager
+    def _lock(_key):
+        yield True
+
+    @contextmanager
+    def _session():
+        yield object()
+
+    monkeypatch.setattr(task_mod, "postgres_session_advisory_lock", _lock)
+    monkeypatch.setattr(task_mod.db_session_adapter, "session", _session)
+    monkeypatch.setattr(
+        olt_mac_harvest,
+        "harvest_olt_mac_table",
+        lambda db, olt_id: {"olts_polled": 1, "olt_errors": 0, "olt_login_refused": 1},
+    )
+    olt_id = str(uuid.uuid4())
+    # Returns (no RuntimeError), so Celery autoretry is never triggered.
+    assert task_mod.run_single_olt_mac_harvest(olt_id) == {
+        "olt_id": olt_id,
+        "skipped": "olt_login_failed",
+    }
+
+
+def test_harvest_auth_failure_is_logged_and_not_counted_as_refusal(
+    db_session, monkeypatch, caplog
+):
+    olt = _huawei_olt(db_session)
+    _online_ont(db_session, olt, board="0/1", port="7", ont_id=5, serial="HWTC00000007")
+    db_session.commit()
+    monkeypatch.setattr(
+        olt_mac_harvest,
+        "_run_readonly_command",
+        lambda o, c: (False, "Connection failed: Authentication failed.", ""),
+    )
+    with caplog.at_level("ERROR"):
+        counters = harvest_olt_mac_tables(db_session)
+
+    assert counters["olt_auth_failed"] == 1
+    assert counters["olt_login_refused"] == 0
+    assert any(
+        "olt_mac_harvest_auth_rejected" in r.getMessage() for r in caplog.records
+    )
+
+
+def test_single_olt_task_reports_auth_failure_without_retry(monkeypatch, caplog):
+    import uuid
+    from contextlib import contextmanager
+
+    from app.tasks import olt_mac_harvest as task_mod
+
+    @contextmanager
+    def _lock(_key):
+        yield True
+
+    @contextmanager
+    def _session():
+        yield object()
+
+    monkeypatch.setattr(task_mod, "postgres_session_advisory_lock", _lock)
+    monkeypatch.setattr(task_mod.db_session_adapter, "session", _session)
+    monkeypatch.setattr(
+        olt_mac_harvest,
+        "harvest_olt_mac_table",
+        lambda db, olt_id: {"olts_polled": 1, "olt_errors": 0, "olt_auth_failed": 1},
+    )
+    olt_id = str(uuid.uuid4())
+    with caplog.at_level("ERROR"):
+        result = task_mod.run_single_olt_mac_harvest(olt_id)
+    assert result == {"olt_id": olt_id, "skipped": "olt_auth_failed"}
+    assert any("auth_rejected" in r.getMessage() for r in caplog.records)

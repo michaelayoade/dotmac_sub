@@ -1691,6 +1691,75 @@ SERVICES: tuple[SOTService, ...] = (
         ),
     ),
     SOTService(
+        name="network.olt_ssh_host_key_evidence",
+        module="app.services.network.olt_ssh_hostkey",
+        owns=("OLT SSH host-key observation",),
+        depends_on=("runtime.db_sessions", "observability.recording"),
+        notes=(
+            "Records the public SSH host-key fingerprint each OLT login saw, "
+            "written out of band after the login so the evidence of a "
+            "contradicted or refused key survives. Never replaces a pinned key; "
+            "pinning a new key is the explicit admin trust command."
+        ),
+        contract=ServiceContract(
+            concerns=(
+                ConcernContract(
+                    name="OLT SSH host-key observation",
+                    role=OwnerRole.OBSERVATION_COLLECTOR,
+                    input_names=("negotiated SSH server host key",),
+                    canonical_writer="network.olt_ssh_host_key_evidence",
+                ),
+            ),
+            authoritative_inputs=(
+                AuthorityInput(
+                    name="negotiated SSH server host key",
+                    owner="external:olt_ssh",
+                    kind=AuthorityKind.EXTERNAL_OBSERVATION,
+                    source=(
+                        "paramiko Transport.get_remote_server_key() after key "
+                        "exchange in app/services/network/olt_ssh.py"
+                    ),
+                ),
+            ),
+            transaction=TransactionContract(
+                mode=TransactionMode.OUT_OF_BAND_EVIDENCE,
+                boundary=(
+                    "one db_session_adapter.create_session() unit of work per "
+                    "record, independent of the SSH caller (ADR 0033)"
+                ),
+                locking=(
+                    "SET LOCAL lock_timeout 200ms and statement_timeout 500ms; "
+                    "single-row conditional UPDATEs, never waits on caller locks"
+                ),
+                idempotency=(
+                    "first sight is UPDATE ... WHERE sha IS NULL; a repeat of "
+                    "the same fingerprint only refreshes last_seen"
+                ),
+                retries=(
+                    "none; a failed write is logged WARNING and dropped, the "
+                    "SSH login is never failed by evidence loss"
+                ),
+            ),
+            errors=ErrorContract(
+                domain_codes=(),
+                mapping_owner="network.olt_ssh_host_key_evidence",
+            ),
+            migration=MigrationContract(
+                state=AuthorityMigrationState.NATIVE,
+                new_owner="network.olt_ssh_host_key_evidence",
+            ),
+            steward="network operations",
+            design_refs=(
+                "docs/adr/0033-olt-ssh-host-key-evidence.md",
+                "docs/SOT_RELATIONSHIP_MAP.md",
+            ),
+            test_refs=(
+                "tests/test_olt_ssh_hostkey.py",
+                "tests/architecture/test_out_of_band_evidence_ratchet.py",
+            ),
+        ),
+    ),
+    SOTService(
         name="network.router_control",
         module="app.services.router_control.report",
         implementation_modules=(

@@ -10,6 +10,7 @@ from fastapi import HTTPException
 from sqlalchemy.orm import Session
 
 from app.services.nas import local_secret_policy
+from app.services.outbound_effects import Effect, require
 
 
 class _SshSession:
@@ -410,6 +411,7 @@ class DeviceProvisioner:
         Paramiko connect is the dominant cost (~300-1000ms); chaining
         commands inside one session amortises it.
         """
+        require(Effect.device_ssh)
         import paramiko
 
         if not device.management_ip and not device.ip_address:

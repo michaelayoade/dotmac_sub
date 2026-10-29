@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import contextlib
 import hashlib
 import json
 from uuid import uuid4
@@ -10,11 +11,13 @@ import pytest
 from sqlalchemy import select
 
 from app.models.audit import AuditEvent
+from app.models.catalog import BillingMode, Subscription, SubscriptionStatus
 from app.services import access_rate_profile as owner
 from app.services import access_rate_switch as switch
 from app.services import radius_population
 from app.services.domain_errors import DomainError
 from app.services.owner_commands import CommandContext
+from app.services.radius_projection_planner import plan_login_radius_projections
 from tests.test_access_rate_profile import _offer, _profile, _service
 
 TARGET = {"target_name": "t", "target_fingerprint": "f", "db_url": "x"}
@@ -48,6 +51,13 @@ class World:
         self.fail_on: set[int] = set()  # populate call numbers that raise
         self.calls = 0
         monkeypatch.setattr(switch, "_take_lock", self._lock)
+        self.populate_lock_free = True
+        self.populate_lock_keys: list[int] = []
+        self.populate_lock_events: list[str] = []
+        monkeypatch.setattr(
+            "app.tasks._postgres_lock.postgres_session_advisory_lock",
+            self._populate_lock,
+        )
         monkeypatch.setattr(
             switch,
             "active_external_radius_targets",
@@ -62,6 +72,15 @@ class World:
             switch, "_sleep", lambda s: clock.__setitem__("t", clock["t"] + s)
         )
 
+    @contextlib.contextmanager
+    def _populate_lock(self, key, **kwargs):
+        self.populate_lock_keys.append(key)
+        self.populate_lock_events.append("acquire")
+        try:
+            yield self.populate_lock_free
+        finally:
+            self.populate_lock_events.append("release")
+
     def _lock(self, db):
         self.locks += 1
 
@@ -69,10 +88,25 @@ class World:
         self.invalidations += 1
         return True
 
+    def canonical(self):
+        """login -> (canonical owner subscription id, its derived rate)."""
+        subscriptions, credentials, ctx = owner._provisioned_state(self.db)
+        by_id = {str(s.id): s for s in subscriptions}
+        chosen = plan_login_radius_projections(self.db)
+        return {
+            login: (
+                projection.subscription_id,
+                owner.derive(
+                    ctx, by_id[projection.subscription_id], credentials.get(login)
+                ).rate_limit,
+            )
+            for login, projection in chosen.items()
+            if projection.subscription_id in by_id
+        }
+
     def plan(self, only=None):
-        rates = owner.derived_rates(self.db)
         plan = {}
-        for login, rate in rates.items():
+        for login, (sub_id, rate) in self.canonical().items():
             if only is not None and login not in only:
                 continue
             mode = self.modes.get(login, "active")
@@ -81,6 +115,7 @@ class World:
                 "rate": rate,
                 "test_access": login in self.test_logins,
                 "test_rate": rate if login in self.test_logins else None,
+                "subscription_id": sub_id,
             }
         return plan
 
@@ -110,7 +145,7 @@ class World:
         }
 
     def _observe(self, target, usernames):
-        expected = owner.derived_rates(self.db)
+        expected = {login: rate for login, (_, rate) in self.canonical().items()}
         rates, test_rates = {}, {}
         for login, rate in expected.items():
             if login in self.wrong:
@@ -204,23 +239,23 @@ def test_switching_on_twice_is_refused(db_session, world):
     assert refused.value.code == "access.rate_profile_switch.already_enabled"
 
 
-def test_switch_off_flips_audits_and_reprojects(db_session, world):
+def test_switch_off_is_refused_in_this_release(db_session, world):
+    """No legacy precedence remains: turning the flag off would only stop a
+    production process from starting. Rolling back is a redeploy."""
     _clean_service(db_session)
     _on(db_session, world)
-    world.full = 0
 
-    dry = switch.switch_off(db_session, context=_context(), populate=world.populate)
-    assert dry.applied is False and dry.enabled is True
+    for apply in (False, True):
+        with pytest.raises(DomainError) as refused:
+            switch.switch_off(
+                db_session,
+                context=_context("rollback"),
+                apply=apply,
+                populate=world.populate,
+            )
+        assert refused.value.code == "access.rate_profile_switch.switch_off_unavailable"
     assert owner.rate_owner_enabled(db_session) is True
-
-    outcome = switch.switch_off(
-        db_session, context=_context("rollback"), apply=True, populate=world.populate
-    )
-
-    assert outcome.applied and outcome.enabled is False
-    assert owner.rate_owner_enabled(db_session) is False
-    assert world.full == 1
-    assert "access.rate_profile_switch.off" in _actions(db_session)
+    assert "access.rate_profile_switch.off" not in _actions(db_session)
 
 
 def test_the_switch_is_still_closed_to_everything_else(db_session):
@@ -281,7 +316,7 @@ def test_b1_test_access_is_compared_against_the_plan_rate(db_session, world):
         _on(db_session, world)
 
     assert failed.value.code == "access.rate_profile_switch.read_back_mismatch"
-    assert owner.rate_owner_enabled(db_session) is False
+    assert failed.value.details["flag"] is True  # reported, never switched off
 
 
 def test_b1_baseline_must_be_clean_before_apply(db_session, world):
@@ -333,7 +368,7 @@ def test_b2_retries_once_when_the_projection_ran_in_legacy_mode(db_session, worl
     assert world.invalidations == 2
 
 
-def test_b2_gives_up_and_switches_off_when_the_owner_never_runs(db_session, world):
+def test_b2_gives_up_and_reports_when_the_owner_never_runs(db_session, world):
     _clean_service(db_session)
     world.owner_flag = [False, False, False]
 
@@ -341,23 +376,15 @@ def test_b2_gives_up_and_switches_off_when_the_owner_never_runs(db_session, worl
         _on(db_session, world)
 
     assert failed.value.code == "access.rate_profile_switch.owner_not_active"
-    assert failed.value.details["auto_switched_off"] is True
-    assert owner.rate_owner_enabled(db_session) is False
+    assert failed.value.details["flag"] is True
+    assert "auto_switched_off" not in failed.value.details
 
 
-def test_b2_a_flag_that_never_becomes_visible_switches_off(
+def test_b2_a_flag_that_never_becomes_visible_is_reported(
     db_session, world, monkeypatch
 ):
     _clean_service(db_session)
-    real = owner.rate_owner_enabled
-    seen = {"on": False}
-
-    def stale(db):
-        # The row is written, but this reader keeps seeing the old value until
-        # the off command runs.
-        return False if not seen["on"] else real(db)
-
-    monkeypatch.setattr(owner, "rate_owner_enabled", stale)
+    monkeypatch.setattr(owner, "rate_owner_enabled", lambda db: False)  # stale
     start = world.invalidations
 
     with pytest.raises(DomainError) as failed:
@@ -365,7 +392,7 @@ def test_b2_a_flag_that_never_becomes_visible_switches_off(
 
     assert failed.value.code == "access.rate_profile_switch.owner_not_active"
     assert world.invalidations > start
-    assert world.full == 1  # only the automatic switch-off re-projection
+    assert world.full == 0  # nothing was projected on a flag it could not see
 
 
 # ------------------------------------------------ B3: robust failure paths
@@ -392,13 +419,13 @@ def test_b3_a_mismatch_is_reprojected_once_before_giving_up(db_session, world):
     assert world.scoped == [{sub.login}]
 
 
-def test_b3_a_persistent_mismatch_switches_off_after_one_retry(db_session, world):
+def test_b3_a_persistent_mismatch_is_reported_after_one_retry(db_session, world):
     _, _, sub, _ = _clean_service(db_session)
     original = world.populate
 
     def drift(dry_run=True, only_usernames=None, **kwargs):
         result = original(dry_run=dry_run, only_usernames=only_usernames, **kwargs)
-        if not dry_run and owner.rate_owner_enabled(world.db):
+        if not dry_run:
             world.wrong = {sub.login}
         return result
 
@@ -408,16 +435,16 @@ def test_b3_a_persistent_mismatch_switches_off_after_one_retry(db_session, world
         _on(db_session, world)
 
     assert failed.value.code == "access.rate_profile_switch.read_back_mismatch"
-    assert failed.value.details["auto_switched_off"] is True
     assert failed.value.details["mismatches"] == 1
-    assert owner.rate_owner_enabled(db_session) is False
+    assert failed.value.details["flag"] is True
     assert len(world.scoped) == 1
-    actions = _actions(db_session)
-    assert "access.rate_profile_switch.on" in actions
-    assert "access.rate_profile_switch.off" in actions
+    # Nothing is switched off automatically: there is no legacy path to return to.
+    assert "access.rate_profile_switch.off" not in _actions(db_session)
 
 
-def test_b3_an_incomplete_projection_switches_the_owner_off_again(db_session, world):
+def test_b3_an_incomplete_projection_is_reported_with_the_final_state(
+    db_session, world
+):
     _clean_service(db_session)
     world.fail_on = {2}  # baseline is call 1; the first real projection is call 2
 
@@ -425,24 +452,7 @@ def test_b3_an_incomplete_projection_switches_the_owner_off_again(db_session, wo
         _on(db_session, world)
 
     assert failed.value.code == "access.rate_profile_switch.projection_failed"
-    assert failed.value.details["auto_switched_off"] is True
-    assert owner.rate_owner_enabled(db_session) is False
-
-
-def test_b3_a_failing_automatic_switch_off_is_reported_not_raised_bare(
-    db_session, world
-):
-    _clean_service(db_session)
-    world.fail_on = {2, 3}  # the projection fails, then the off re-projection too
-
-    with pytest.raises(DomainError) as failed:
-        _on(db_session, world)
-
-    assert failed.value.code == "access.rate_profile_switch.projection_failed"
-    assert failed.value.details["switch_off_error"] == "RadiusProjectionIncomplete"
-    # The flag itself did flip back, which the final state reports from the row.
-    assert failed.value.details["flag"] is False
-    assert switch.flag_from_row(db_session) is False
+    assert failed.value.details["flag"] is True
 
 
 def test_b3_the_cli_prints_a_structured_final_state_on_any_exception(
@@ -732,63 +742,6 @@ def test_a_moved_service_that_still_diverges_is_refused(db_session, world, tmp_p
     assert refused.value.details["unexpected"] == 1
 
 
-# ------------------------------------------- S1: rollback proves owner off
-
-
-def test_s1_switch_off_waits_for_the_flag_and_checks_the_projection(db_session, world):
-    _clean_service(db_session)
-    _on(db_session, world)
-    world.full = 0
-    world.owner_flag = [True, False]  # first rollback projection saw a stale true
-
-    outcome = switch.switch_off(
-        db_session, context=_context(), apply=True, populate=world.populate
-    )
-
-    assert outcome.applied and outcome.enabled is False
-    assert world.full == 2  # one retry
-    assert world.invalidations >= 3  # on, off, retry
-
-
-def test_s1_a_rollback_that_keeps_running_the_owner_is_reported(db_session, world):
-    _clean_service(db_session)
-    _on(db_session, world)
-    world.owner_flag = [True, True]
-
-    with pytest.raises(DomainError) as failed:
-        switch.switch_off(
-            db_session, context=_context(), apply=True, populate=world.populate
-        )
-
-    assert failed.value.code == "access.rate_profile_switch.owner_still_active"
-    assert failed.value.details["flag"] is False
-
-
-def test_s1_the_flag_poll_is_bounded(db_session, world, monkeypatch):
-    _clean_service(db_session)
-    _on(db_session, world)
-    monkeypatch.setattr(owner, "rate_owner_enabled", lambda _db: True)  # stale
-
-    assert switch._await_flag(db_session, expected=False) is False
-
-
-def test_s1_the_automatic_switch_off_gets_the_same_check(db_session, world):
-    _clean_service(db_session)
-    # baseline dry run, then the owner never runs -> automatic switch-off whose
-    # projections keep reporting the owner in force.
-    world.owner_flag = [False, False, False, True, True]
-
-    with pytest.raises(DomainError) as failed:
-        _on(db_session, world)
-
-    assert failed.value.code == "access.rate_profile_switch.owner_not_active"
-    assert (
-        failed.value.details["switch_off_error"]
-        == "access.rate_profile_switch.owner_still_active"
-    )
-    assert failed.value.details["flag"] is False
-
-
 def test_a_live_divergence_missing_from_the_record_refuses(db_session, world, tmp_path):
     _divergent(db_session)
     path, digest = _record(tmp_path, [])
@@ -870,7 +823,7 @@ from tests.test_access_rate_profile import _radius_env  # noqa: E402,F401
 
 @pytest.mark.usefixtures("_radius_env")
 def test_populate_reports_its_plan_and_whether_the_owner_ran(db_session, monkeypatch):
-    _clean_service(db_session)
+    _, _, sub, _ = _clean_service(db_session)
     monkeypatch.setattr(owner, "rate_owner_enabled", lambda _db: True)
 
     result = radius_population.populate(dry_run=True, include_projection_plan=True)
@@ -882,6 +835,7 @@ def test_populate_reports_its_plan_and_whether_the_owner_ran(db_session, monkeyp
         "rate": "10M/10M",
         "test_access": False,
         "test_rate": None,
+        "subscription_id": str(sub.id),
     }
     plain = radius_population.populate(dry_run=True)
     assert "projection_plan" not in plain and "rate_owner_enabled" not in plain
@@ -931,3 +885,496 @@ def test_observed_rates_are_read_with_selects_only(tmp_path, monkeypatch):
 
     assert rates == {"a": ["10M/10M"]}
     assert test_rates == {"a": ["20M/20M"]}
+
+
+# ------------------------------------------------------------ S2 nits
+
+
+def test_s2_a_move_must_end_on_the_current_offer(db_session, world, tmp_path):
+    """The applied change must be to the offer the service is on now."""
+    from datetime import date, datetime
+
+    from app.models.subscription_change import (
+        SubscriptionChangeRequest,
+        SubscriptionChangeStatus,
+    )
+
+    sub, old_offer, new_offer = _moved_service(db_session, applied=False)
+    elsewhere = _offer(db_session, "Elsewhere")
+    db_session.add(
+        SubscriptionChangeRequest(
+            subscription_id=sub.id,
+            current_offer_id=old_offer.id,
+            requested_offer_id=elsewhere.id,  # not the offer it is on
+            effective_date=date(2026, 10, 1),
+            status=SubscriptionChangeStatus.applied,
+            applied_at=datetime.fromisoformat("2026-10-22T09:00:00+00:00"),
+        )
+    )
+    db_session.commit()
+    path, digest = _record(tmp_path, [_moved_entry(sub, old_offer)])
+    approved = switch.load_approved(path, digest)
+
+    assert switch.unverified_moves(db_session, approved) == [str(sub.id)]
+    with pytest.raises(DomainError) as refused:
+        _on(db_session, world, approved=approved)
+    assert refused.value.code == "access.rate_profile_switch.moved_offer_unverified"
+    assert new_offer.id == sub.offer_id
+
+
+def test_s2_a_moved_offer_entry_needs_the_pre_move_offer_id(tmp_path):
+    for blank in ("", None, "   "):
+        path, digest = _record(
+            tmp_path,
+            [_entry(str(uuid4()), decision="moved_offer", offer_id=blank)],
+            name=f"{uuid4().hex}.json",
+        )
+        with pytest.raises(DomainError) as invalid:
+            switch.load_approved(path, digest)
+        assert invalid.value.code == "access.rate_profile_switch.approved_list_invalid"
+
+
+# ------------------------------------------------ no-target mode (PR-1c)
+
+
+def _declare_env(monkeypatch, env: str) -> None:
+    import dataclasses
+
+    monkeypatch.setattr(
+        switch, "settings", dataclasses.replace(switch.settings, app_env_declared=env)
+    )
+
+
+def _no_targets(monkeypatch, env: str = "staging") -> None:
+    monkeypatch.setattr(
+        switch, "active_external_radius_targets", lambda db, capability=None: []
+    )
+    _declare_env(monkeypatch, env)
+
+
+def _no_target_on(db, world, ack, **kwargs):
+    return switch.switch_on(
+        db,
+        context=_context(),
+        apply=True,
+        populate=world.populate,
+        no_radius_target=True,
+        acknowledge_divergence_sha256=ack,
+        **kwargs,
+    )
+
+
+def _dry_digest(db, world, tmp_path):
+    record = tmp_path / "live.json"
+    dry = switch.switch_on(
+        db,
+        context=_context(),
+        populate=world.populate,
+        emit_approval_list_to=record,
+        no_radius_target=True,
+    )
+    return dry, record
+
+
+def test_no_target_refuses_while_a_user_target_exists_even_with_the_flag(
+    db_session, world, monkeypatch
+):
+    _clean_service(db_session)
+    _declare_env(monkeypatch, "staging")  # the world fixture still has a target
+
+    with pytest.raises(DomainError) as refused:
+        _no_target_on(db_session, world, "0" * 64)
+
+    assert refused.value.code == "access.rate_profile_switch.no_target_mode_refused"
+    assert refused.value.details["reason"] == "targets_present"
+    assert owner.rate_owner_enabled(db_session) is False
+    assert world.locks == 0 and world.calls == 0
+
+
+@pytest.mark.parametrize("env", ["prod", "production"])
+def test_no_target_refuses_in_production_even_with_zero_targets(
+    db_session, world, monkeypatch, env
+):
+    _clean_service(db_session)
+    _no_targets(monkeypatch, env)
+
+    with pytest.raises(DomainError) as refused:
+        _no_target_on(db_session, world, "0" * 64)
+
+    assert refused.value.code == "access.rate_profile_switch.no_target_mode_refused"
+    assert refused.value.details["reason"] == "production"
+    assert owner.rate_owner_enabled(db_session) is False
+
+
+def test_zero_targets_without_the_flag_is_the_usual_no_target_refusal(
+    db_session, world, monkeypatch
+):
+    _clean_service(db_session)
+    _no_targets(monkeypatch)
+
+    with pytest.raises(DomainError) as refused:
+        _on(db_session, world)
+
+    assert refused.value.code == "access.rate_profile_switch.no_target"
+    assert "--no-radius-target" in refused.value.message
+    assert owner.rate_owner_enabled(db_session) is False
+
+
+def test_the_dry_run_reports_eligibility_and_the_digest(
+    db_session, world, monkeypatch, tmp_path
+):
+    _divergent(db_session)
+    _no_targets(monkeypatch)
+
+    dry, record = _dry_digest(db_session, world, tmp_path)
+
+    assert dry.no_target_eligible is True and dry.no_target_refusal is None
+    assert dry.projection_target == "none"
+    assert dry.baseline is None and world.calls == 0  # nothing to project
+    assert dry.divergences == 1
+    # The acknowledged digest IS the emitted record's digest.
+    assert dry.divergence_set_sha256 == dry.emitted_list_sha256
+    assert dry.divergence_set_sha256 == hashlib.sha256(record.read_bytes()).hexdigest()
+
+    # With a user target the same dry run says the mode is not available.
+    monkeypatch.setattr(
+        switch, "active_external_radius_targets", lambda db, capability=None: [TARGET]
+    )
+    again = switch.switch_on(
+        db_session,
+        context=_context(),
+        populate=world.populate,
+        no_radius_target=True,
+    )
+    assert again.no_target_eligible is False
+    assert again.no_target_refusal == "targets_present"
+
+
+def test_a_changed_divergence_set_refuses_the_acknowledgement(
+    db_session, world, monkeypatch, tmp_path
+):
+    _divergent(db_session)
+    _no_targets(monkeypatch)
+    dry, _record = _dry_digest(db_session, world, tmp_path)
+
+    for ack in (None, "", "0" * 64):
+        with pytest.raises(DomainError) as refused:
+            _no_target_on(db_session, world, ack)
+        assert (
+            refused.value.code == "access.rate_profile_switch.divergence_ack_mismatch"
+        )
+        assert owner.rate_owner_enabled(db_session) is False
+
+    # The set changes after the acknowledgement was taken.
+    twelve = _profile(db_session, "Twelve", rate="12M/12M", code="twelve")
+    other_offer = _offer(db_session, "B", profile=twelve)
+    stale_profile = _profile(db_session, "Stale", rate="7M/7M", code="stale")
+    _service(db_session, other_offer, sub_profile=twelve, slot=stale_profile)
+    db_session.commit()
+    with pytest.raises(DomainError) as stale:
+        _no_target_on(db_session, world, dry.divergence_set_sha256)
+    assert stale.value.code == "access.rate_profile_switch.divergence_ack_mismatch"
+    assert owner.rate_owner_enabled(db_session) is False
+
+
+def test_no_target_happy_path_flips_audits_and_projects_nothing(
+    db_session, world, monkeypatch, tmp_path
+):
+    key = _divergent(db_session)
+    _no_targets(monkeypatch)
+    dry, _record = _dry_digest(db_session, world, tmp_path)
+
+    outcome = _no_target_on(db_session, world, dry.divergence_set_sha256)
+
+    assert outcome.applied and outcome.enabled
+    assert outcome.projection == "skipped_no_target"
+    assert outcome.projection_target == "none"
+    assert outcome.divergence_set_sha256 == dry.divergence_set_sha256
+    assert owner.rate_owner_enabled(db_session) is True
+    assert switch.flag_from_row(db_session) is True
+    assert world.calls == 0 and world.full == 0 and world.dry == 0  # no populate
+    event = db_session.scalars(
+        select(AuditEvent).where(AuditEvent.action == "access.rate_profile_switch.on")
+    ).one()
+    meta = event.metadata_
+    assert meta["projection_target"] == "none"
+    assert meta["app_env_declared"] == "staging"
+    assert meta["divergences"] == 1
+    assert meta["by_class"] == {key[1]: 1}
+    assert meta["divergence_set_sha256"] == dry.divergence_set_sha256
+
+
+def test_no_target_still_validates_a_supplied_approved_list(
+    db_session, world, monkeypatch, tmp_path
+):
+    """The list is optional here, but if given it is fully verified."""
+    sub, old_offer, new_offer = _moved_service(db_session, applied=False)
+    _no_targets(monkeypatch)
+    dry, _live = _dry_digest(db_session, world, tmp_path)
+    path, digest = _record(tmp_path, [_moved_entry(sub, old_offer)])
+    approved = switch.load_approved(path, digest)
+
+    with pytest.raises(DomainError) as refused:
+        _no_target_on(db_session, world, dry.divergence_set_sha256, approved=approved)
+
+    assert refused.value.code == "access.rate_profile_switch.moved_offer_unverified"
+    assert owner.rate_owner_enabled(db_session) is False
+    assert new_offer.id == sub.offer_id
+
+
+def test_the_eligibility_is_rechecked_under_the_lock(
+    db_session, world, monkeypatch, tmp_path
+):
+    _clean_service(db_session)
+    _no_targets(monkeypatch)
+    dry, _record = _dry_digest(db_session, world, tmp_path)
+    answers = iter(
+        [None, "targets_present"]
+    )  # the pre-check passes, then a target appears
+    monkeypatch.setattr(switch, "no_target_refusal", lambda db: next(answers))
+
+    with pytest.raises(DomainError) as refused:
+        _no_target_on(db_session, world, dry.divergence_set_sha256)
+
+    assert refused.value.code == "access.rate_profile_switch.no_target_mode_refused"
+    assert world.locks == 1
+    assert owner.rate_owner_enabled(db_session) is False
+
+
+def test_a_flag_that_is_not_visible_after_commit_is_reported(
+    db_session, world, monkeypatch, tmp_path
+):
+    _clean_service(db_session)
+    _no_targets(monkeypatch)
+    dry, _record = _dry_digest(db_session, world, tmp_path)
+    monkeypatch.setattr(switch, "_await_flag", lambda db, expected=True: False)
+
+    with pytest.raises(DomainError) as failed:
+        _no_target_on(db_session, world, dry.divergence_set_sha256)
+
+    assert failed.value.code == "access.rate_profile_switch.owner_not_active"
+    assert failed.value.details["flag"] is True  # committed, but not yet visible
+
+
+def test_the_ordinary_path_is_unchanged_with_a_target(db_session, world):
+    _clean_service(db_session)
+
+    outcome = _on(db_session, world)
+
+    assert outcome.enabled and outcome.read_back.mismatches == 0
+    assert outcome.projection is None  # projected for real
+    assert world.full == 1
+
+
+def test_cli_no_target_flags(db_session, world, monkeypatch, capsys, tmp_path):
+    _divergent(db_session)
+    _no_targets(monkeypatch)
+    record = tmp_path / "live.json"
+    monkeypatch.setattr("app.db.SessionLocal", lambda: db_session)
+    monkeypatch.setattr(db_session, "close", lambda: None)
+    monkeypatch.setattr(radius_population, "populate", world.populate)
+
+    assert (
+        switch.main(
+            [
+                "on",
+                "--reason",
+                "check",
+                "--no-radius-target",
+                "--emit-approval-list",
+                str(record),
+            ]
+        )
+        == 0
+    )
+    dry = json.loads(capsys.readouterr().out)
+    assert dry["no_target_eligible"] is True and dry["projection_target"] == "none"
+
+    assert (
+        switch.main(
+            [
+                "on",
+                "--reason",
+                "check",
+                "--apply",
+                "--no-radius-target",
+                "--acknowledge-divergence-sha256",
+                dry["divergence_set_sha256"],
+            ]
+        )
+        == 0
+    )
+    applied = json.loads(capsys.readouterr().out)
+    assert applied["projection"] == "skipped_no_target"
+
+    # The acknowledgement only makes sense for 'on --no-radius-target'.
+    for argv in (
+        ["on", "--reason", "x", "--acknowledge-divergence-sha256", "ab"],
+        [
+            "off",
+            "--reason",
+            "x",
+            "--no-radius-target",
+            "--acknowledge-divergence-sha256",
+            "ab",
+        ],
+    ):
+        with pytest.raises(SystemExit):
+            switch.main(argv)
+
+
+def test_cli_rejects_off_no_radius_target_alone(capsys):
+    """Switch-off is refused in this release; the no-target flag does not revive it."""
+    with pytest.raises(SystemExit) as exit_info:
+        switch.main(["off", "--reason", "x", "--no-radius-target"])
+    assert exit_info.value.code != 0
+
+
+# ------------------------------------------------ canonical owner and lock
+
+
+def _shared_login_service(db):
+    """An active canonical owner and a disabled sibling on one login, other offer."""
+    ten = _profile(db, "Ten", rate="10M/10M")
+    twenty = _profile(db, "Twenty", rate="20M/20M")
+    owner_sub, credential = _service(db, _offer(db, "A", profile=ten), sub_profile=ten)
+    sibling = Subscription(
+        subscriber_id=owner_sub.subscriber_id,
+        offer_id=_offer(db, "B", down=20, up=20, profile=twenty).id,
+        status=SubscriptionStatus.disabled,
+        billing_mode=BillingMode.prepaid,
+        login=owner_sub.login,
+        radius_profile_id=twenty.id,
+    )
+    db.add(sibling)
+    db.commit()
+    return owner_sub, sibling
+
+
+def _sibling_scanned_last(monkeypatch, sibling_id):
+    real = owner._provisioned_state
+
+    def reordered(db):
+        subscriptions, credentials, ctx = real(db)
+        subscriptions.sort(key=lambda s: s.id == sibling_id)
+        return subscriptions, credentials, ctx
+
+    monkeypatch.setattr(owner, "_provisioned_state", reordered)
+
+
+def test_shared_login_read_back_checks_the_canonical_owner(
+    db_session, world, monkeypatch
+):
+    owner_sub, sibling = _shared_login_service(db_session)
+    _sibling_scanned_last(monkeypatch, sibling.id)
+
+    plan = world.plan()
+    assert plan[owner_sub.login]["subscription_id"] == str(owner_sub.id)
+    report = switch.read_back(db_session, plan, against="derived")
+
+    assert report.mismatches == 0
+    assert report.compared == 1
+
+    # A real change to the written rate is still caught.
+    world.wrong = {owner_sub.login}
+    assert switch.read_back(db_session, plan, against="derived").mismatches == 1
+
+
+def test_shared_login_switch_on_applies_cleanly(db_session, world, monkeypatch):
+    owner_sub, sibling = _shared_login_service(db_session)
+    _sibling_scanned_last(monkeypatch, sibling.id)
+
+    outcome = _on(db_session, world)
+
+    assert outcome.read_back.mismatches == 0
+    assert owner.rate_owner_enabled(db_session) is True
+
+
+def test_read_back_resolved_against_the_sibling_would_mismatch(
+    db_session, world, monkeypatch
+):
+    """Guard for the regression: the sibling's derived rate differs."""
+    owner_sub, sibling = _shared_login_service(db_session)
+    _sibling_scanned_last(monkeypatch, sibling.id)
+    plan = world.plan()
+    plan[owner_sub.login]["subscription_id"] = str(sibling.id)
+
+    assert switch.read_back(db_session, plan, against="derived").mismatches == 1
+
+
+def test_a_plan_entry_without_a_subscription_is_a_mismatch(db_session, world):
+    _, _, sub, _ = _clean_service(db_session)
+    plan = world.plan()
+    del plan[sub.login]["subscription_id"]
+
+    report = switch.read_back(db_session, plan, against="derived")
+
+    assert report.mismatches == 1
+    assert report.compared == 1
+    assert report.mismatched_logins == (sub.login,)
+
+
+def test_an_unknown_subscription_is_a_mismatch(db_session, world):
+    _, _, sub, _ = _clean_service(db_session)
+    plan = world.plan()
+    plan[sub.login]["subscription_id"] = str(uuid4())
+
+    assert switch.read_back(db_session, plan, against="plan").mismatches == 1
+
+
+def test_a_subscription_of_another_login_is_a_mismatch(db_session, world):
+    _, offer, sub, _ = _clean_service(db_session)
+    other, _ = _service(db_session, offer)
+    plan = world.plan()
+    plan[sub.login]["subscription_id"] = str(other.id)
+
+    assert switch.read_back(db_session, plan, against="derived").mismatches == 1
+
+
+def test_switch_on_holds_the_populate_lock_across_everything(db_session, world):
+    _clean_service(db_session)
+    _on(db_session, world)
+
+    assert world.populate_lock_keys == [778_001]
+    assert world.populate_lock_events == ["acquire", "release"]
+
+
+def test_switch_on_dry_run_does_not_take_the_populate_lock(db_session, world):
+    _clean_service(db_session)
+    switch.switch_on(db_session, context=_context(), populate=world.populate)
+
+    assert world.populate_lock_keys == []
+
+
+def test_switch_on_refuses_when_populate_is_busy(db_session, world):
+    _clean_service(db_session)
+    world.populate_lock_free = False
+
+    with pytest.raises(DomainError) as refused:
+        _on(db_session, world)
+
+    assert refused.value.code == "access.rate_profile_switch.populate_busy"
+    assert world.calls == 0 and world.locks == 0
+    assert owner.rate_owner_enabled(db_session) is False
+    assert _actions(db_session) == []
+
+
+def test_a_failed_apply_reports_and_releases_the_lock_once(db_session, world):
+    _, _, sub, _ = _clean_service(db_session)
+    original = world.populate
+
+    def drift(dry_run=True, only_usernames=None, **kwargs):
+        result = original(dry_run=dry_run, only_usernames=only_usernames, **kwargs)
+        if not dry_run and owner.rate_owner_enabled(world.db):
+            world.wrong = {sub.login}
+        return result
+
+    world.populate = drift
+
+    with pytest.raises(DomainError) as failed:
+        _on(db_session, world)
+
+    assert failed.value.code == "access.rate_profile_switch.read_back_mismatch"
+    # no switch-off: the flag stays on and the failure is reported
+    assert "auto_switched_off" not in failed.value.details
+    assert world.populate_lock_events == ["acquire", "release"]

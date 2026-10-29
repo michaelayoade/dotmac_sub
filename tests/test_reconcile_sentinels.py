@@ -371,6 +371,7 @@ def test_inadmissible_entries_are_the_customer_visible_ones():
         "cr_username",
         "wifi_ssid",
         "wifi_password_ref",
+        "wifi_security_mode",
         "line_profile_id",
         "service_profile_id",
         "tr069_profile_id",

@@ -35,6 +35,8 @@ from paramiko.channel import Channel
 from paramiko.ssh_exception import SSHException
 from paramiko.transport import Transport
 
+from app.services.outbound_effects import Effect, require
+
 if TYPE_CHECKING:
     from app.models.network import OLTDevice
     from app.services.network.olt_vendor_adapters import OltSshPolicy
@@ -175,6 +177,7 @@ class OltSshPool:
         idle_timeout_seconds: int = DEFAULT_IDLE_TIMEOUT_SECONDS,
         max_reuses: int = DEFAULT_MAX_REUSES,
         acquire_timeout_seconds: float = 30.0,
+        retire_on_release: bool = True,
     ):
         self._pools: dict[str, list[PooledConnection]] = {}
         self._lock = threading.RLock()
@@ -186,6 +189,7 @@ class OltSshPool:
         self._idle_timeout = timedelta(seconds=idle_timeout_seconds)
         self._max_reuses = max_reuses
         self._acquire_timeout_seconds = acquire_timeout_seconds
+        self.retire_on_release = retire_on_release
         self._stats = {
             "hits": 0,
             "misses": 0,
@@ -303,7 +307,16 @@ class OltSshPool:
         with self._condition:
             conn.in_use = False
 
-            if close or not conn.is_valid(self._ttl, self._max_reuses):
+            # A pooled channel pins a limiter slot for as long as it idles, so
+            # it is retired on release; idle sessions are never kept open.
+            # (Reuse still applies to callers that hold the connection across
+            # several operations.) ``retire_on_release`` is off only for tests
+            # that exercise pool mechanics in isolation.
+            if (
+                close
+                or self.retire_on_release
+                or not conn.is_valid(self._ttl, self._max_reuses)
+            ):
                 # Remove from pool and close
                 if conn.olt_id in self._pools:
                     try:
@@ -479,6 +492,23 @@ def pooled_ssh_connection(olt: OLTDevice):
     Yields:
         Tuple of (Channel, OltSshPolicy) for the connection.
     """
+    require(Effect.device_ssh)
+    from app.services.network import olt_ssh_limiter
+
+    if olt_ssh_limiter.active_scope(olt) is not None:
+        # Inside an olt_ssh_scope the scope owns the single session: join it
+        # rather than pooling a second one. The 10 ops/min rate limit still
+        # applies to these call sites.
+        from app.services.network.olt_ssh import _open_shell
+
+        ssh_pool._check_rate_limit(olt)
+        transport, channel, policy = _open_shell(olt)
+        try:
+            yield channel, policy
+        finally:
+            transport.close()
+        return
+
     conn = ssh_pool.acquire(olt)
     close_on_exit = False
     try:

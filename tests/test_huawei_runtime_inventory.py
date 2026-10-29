@@ -76,7 +76,7 @@ def test_registered_inventory_uses_explicit_profile_scoped_ports(monkeypatch) ->
     )
     monkeypatch.setattr(
         "app.services.network.olt_ssh._prepare_huawei_read_shell",
-        lambda _channel, prompt: prompt,
+        lambda _channel, prompt, **_k: prompt,
     )
 
     def _read(_channel, command, *, prompt, timeout_sec):
@@ -115,7 +115,7 @@ def test_registered_inventory_rejects_cli_errors(monkeypatch) -> None:
     )
     monkeypatch.setattr(
         "app.services.network.olt_ssh._prepare_huawei_read_shell",
-        lambda _channel, prompt: prompt,
+        lambda _channel, prompt, **_k: prompt,
     )
     monkeypatch.setattr(
         "app.services.network.olt_ssh._run_huawei_paged_cmd",
@@ -155,7 +155,7 @@ def _huawei_reader(monkeypatch, output):
     )
     monkeypatch.setattr(
         "app.services.network.olt_ssh._prepare_huawei_read_shell",
-        lambda _channel, prompt: prompt,
+        lambda _channel, prompt, **_k: prompt,
     )
     monkeypatch.setattr(
         "app.services.network.olt_ssh._run_huawei_paged_cmd",
@@ -246,3 +246,155 @@ def test_paged_reader_accepts_prompt_after_inline_continuation_marker(
 
     assert output.endswith("MA5800-X2#")
     assert sent == []
+
+
+def test_header_only_inventory_is_a_truncated_read_not_an_empty_port(
+    monkeypatch,
+) -> None:
+    """A table header with no rows (cut-off read) must fail closed, never
+    report an authoritative empty port."""
+    _huawei_reader(
+        monkeypatch,
+        "  F/S/P   ONT         SN         Type\n  -----------------\nMA5800-X2#",
+    )
+    ok, message, entries = get_registered_ont_serials(
+        OLTDevice(name="Garki", vendor="Huawei", model="MA5800-X2"),
+        ["0/2/1"],
+    )
+    assert ok is False
+    assert "truncated" in message
+    assert entries == []
+
+
+GARKI_RAW = (
+    "display ont info 0 2 1 all \n{ <cr>||<K> }: \n\n  Command:\n"
+    "          display ont info 0 2 1 all\n"
+    "  -----------------------------------------------------------------------------\n"
+    "  F/S/P   ONT         SN         Control     Run      Config   Match    Protect\n"
+    "          ID                     flag        state    state    state    side\n"
+    "  -----------------------------------------------------------------------------\n"
+    "  0/ 2/1    0  48575443FAA65084  active      online   normal   mismatch no \n"
+    "  0/ 2/1    1  48575443FAA65085  active      offline  normal   match    no \n"
+    "  ---- More ( Press 'Q' to break ) ----\x1b[37D                    \x1b[37D"
+    "  0/ 2/1    2  48575443FAA65086  active      online   normal   match    no \n"
+    "  -----------------------------------------------------------------------------\n"
+    "  In port 0/2/1, the total of ONTs are: 3, online: 2\n"
+    "MA5800-X2#"
+)
+
+OLD_FORMAT = (
+    "  F/S/P   ONT         SN         Control     Run      Config   Match\n"
+    "          ID                     flag        state    state    state\n"
+    "  -------------------------------------------------------------------\n"
+    "  0/2/1   0   48575443FAA65084   active      online   normal   mismatch\n"
+    "  0/2/1   1   48575443FAA65085   active      offline  normal   match\n"
+    "  0/2/1   2   48575443FAA65086   active      online   normal   match\n"
+    "MA5800-X2#"
+)
+
+
+def test_garki_raw_transcript_parses_all_rows() -> None:
+    from app.services.network.olt_ssh_ont.status import parse_registered_ont_inventory
+
+    entries = parse_registered_ont_inventory(GARKI_RAW, "0/2/1")
+    assert [(e.onu_id, e.real_serial, e.run_state) for e in entries] == [
+        (0, "48575443FAA65084", "online"),
+        (1, "48575443FAA65085", "offline"),
+        (2, "48575443FAA65086", "online"),
+    ]
+
+
+def test_old_and_new_format_parse_identically() -> None:
+    from app.services.network.olt_ssh_ont.status import parse_registered_ont_inventory
+
+    assert parse_registered_ont_inventory(
+        GARKI_RAW, "0/2/1"
+    ) == parse_registered_ont_inventory(OLD_FORMAT, "0/2/1")
+
+
+def test_garki_raw_through_get_registered_serials_is_not_zero(monkeypatch) -> None:
+    _huawei_reader(monkeypatch, GARKI_RAW)
+    ok, _message, entries = get_registered_ont_serials(
+        OLTDevice(name="Garki", vendor="Huawei", model="MA5800-X2"), ["0/2/1"]
+    )
+    assert ok is True
+    assert len(entries) == 3
+
+
+def test_rows_present_but_unparseable_never_returns_ok_with_zero(monkeypatch) -> None:
+    from app.services.network.olt_ssh_ont import status as status_mod
+
+    _huawei_reader(monkeypatch, GARKI_RAW)
+    monkeypatch.setattr(status_mod, "parse_registered_ont_inventory", lambda *_a: [])
+    ok, message, entries = get_registered_ont_serials(
+        OLTDevice(name="Garki", vendor="Huawei", model="MA5800-X2"), ["0/2/1"]
+    )
+    assert ok is False
+    assert "could not be parsed" in message
+    assert entries == []
+
+
+def test_real_garki_capture_parses_exactly_16_with_4_online() -> None:
+    from pathlib import Path
+
+    raw = (
+        Path(__file__).parent
+        / "transcripts/huawei/MA5800-X2/display_ont_info_port_all.txt"
+    ).read_text()
+    entries = parse_registered_ont_inventory(raw, "0/2/1")
+    assert len(entries) == 16
+    assert [e.onu_id for e in entries] == list(range(16))
+    assert entries[0].real_serial == "48575443FAA65084"
+    assert entries[15].real_serial == "485754431DA6B7D1"
+    assert {e.onu_id for e in entries if e.run_state == "online"} == {0, 4, 6, 10}
+    assert sum(e.run_state == "online" for e in entries) == 4
+    assert all(e.fsp == "0/2/1" for e in entries)
+
+
+def test_real_garki_capture_through_get_registered_serials(monkeypatch) -> None:
+    from pathlib import Path
+
+    raw = (
+        Path(__file__).parent
+        / "transcripts/huawei/MA5800-X2/display_ont_info_port_all.txt"
+    ).read_text()
+    _huawei_reader(monkeypatch, raw)
+    ok, message, entries = get_registered_ont_serials(
+        OLTDevice(name="Garki", vendor="Huawei", model="MA5800-X2"), ["0/2/1"]
+    )
+    assert ok is True and len(entries) == 16, message
+
+
+_SUMMARY_PAGED = (
+    "display ont info summary 0/ 2/1\\n"
+    "  In port 0/ 2/1 , the total of ONTs are: 2, online: 1\\n"
+    "  ONT  Run     Last                Last                Last\\n"
+    "  ID   State   UpTime              DownTime            DownCause\\n"
+    "  0    online  2026-07-15 07:30:17 2026-07-15 07:29:44 dying-gasp\\n"
+    "  1    offline -                   -                   -\\n"
+    "  ONT        SN        Type          Distance Rx/Tx power  Description\\n"
+    "  ID                                    (m)      (dBm)\\n"
+    "---- More ( Press 'Q' to break ) ----\\x1b[37D                     \\x1b[37D"
+    "  0   48575443FAA65084 EG8145V5         206   -17.30/2.34  CUSTOMER_00\\n"
+    "  1   485754437D4733C3 -                -     -/-          CUSTOMER_01\\n"
+    "MA5800-X2#"
+)
+
+
+def test_ma5800_summary_paged_ansi_parses_with_states() -> None:
+    entries = parse_registered_ont_inventory(
+        _SUMMARY_PAGED.encode().decode("unicode_escape"), "0/2/1"
+    )
+    assert [(e.onu_id, e.real_serial, e.run_state) for e in entries] == [
+        (0, "48575443FAA65084", "online"),
+        (1, "485754437D4733C3", "offline"),
+    ]
+
+
+def test_ma5800_summary_cut_off_after_state_table_fails_closed(monkeypatch) -> None:
+    cut = _SUMMARY_PAGED.encode().decode("unicode_escape").split("  ONT        SN")[0]
+    _huawei_reader(monkeypatch, cut + "MA5800-X2#")
+    ok, message, entries = get_registered_ont_serials(
+        OLTDevice(name="Garki", vendor="Huawei", model="MA5800-X2"), ["0/2/1"]
+    )
+    assert ok is False and entries == []

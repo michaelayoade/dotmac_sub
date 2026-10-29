@@ -420,13 +420,11 @@ def _provision_template_context() -> dict[str, object]:
     }
 
 
-def test_provision_page_blocks_when_authorization_is_ready_but_provisioning_is_not() -> (
-    None
-):
+def test_provision_page_has_no_direct_provision_action_and_links_to_configure() -> None:
     context = _provision_template_context()
     context["provision_preflight"] = SimpleNamespace(
         ready_to_authorize=True,
-        ready_to_provision=False,
+        ready_to_provision=True,
         checks=[],
     )
 
@@ -434,9 +432,10 @@ def test_provision_page_blocks_when_authorization_is_ready_but_provisioning_is_n
         **context
     )
 
-    assert "Blocked" in html
-    assert '<button type="submit"\n                        disabled' in html
-    assert "bg-slate-400 cursor-not-allowed" in html
+    assert "data-provision-retired" in html
+    assert 'method="POST" action="/admin/network/onts/' not in html
+    assert "Provision ONT" not in html
+    assert "?tab=configuration" in html
 
 
 def test_provision_page_shows_the_queued_operation_progress() -> None:

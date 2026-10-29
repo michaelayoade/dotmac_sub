@@ -1,6 +1,9 @@
 """Architecture guards for lifecycle-safe ONT Configure delivery."""
 
+import re
 from pathlib import Path
+
+from tests.architecture import ont_direct_writer_scan
 
 ROOT = Path(__file__).resolve().parents[2]
 
@@ -134,3 +137,197 @@ def test_legacy_synchronous_configuration_writer_is_retired():
 
     assert "update_ont_config" not in package_source
     assert "def update_ont_config" not in legacy_source
+
+
+# -- Single-writer ratchet (2026-10-19 decision) ------------------------------
+
+_BASELINE = ROOT / "tests/architecture/ont_direct_writer_baseline.txt"
+
+
+def _load_direct_writer_baseline() -> dict[tuple[str, str], int]:
+    entries: dict[tuple[str, str], int] = {}
+    for line in _BASELINE.read_text(encoding="utf-8").splitlines():
+        if not line.strip():
+            continue
+        path, name, count = line.split()
+        entries[(path, name)] = int(count)
+    return entries
+
+
+def test_web_and_api_modules_gain_no_direct_ont_olt_acs_writers():
+    """The lifecycle is the only writer: the baseline may only shrink."""
+    baseline = _load_direct_writer_baseline()
+    current = ont_direct_writer_scan.scan()
+
+    grown = sorted(
+        f"{path}: {name} {baseline.get((path, name), 0)} -> {count}"
+        for (path, name), count in current.items()
+        if count > baseline.get((path, name), 0)
+    )
+    assert not grown, (
+        "New direct ONT/OLT/ACS writer in a web/api module. Route it through "
+        "configure_ont_service (the lifecycle) or make it break-glass:\n"
+        + "\n".join(grown)
+    )
+
+    stale = sorted(
+        f"{path}: {name} baseline {count} > actual {current.get((path, name), 0)}"
+        for (path, name), count in baseline.items()
+        if current.get((path, name), 0) < count
+    )
+    assert not stale, (
+        "Direct-writer baseline is stale; lower it in "
+        "tests/architecture/ont_direct_writer_baseline.txt:\n" + "\n".join(stale)
+    )
+
+
+def test_retired_direct_writers_stay_retired():
+    current = ont_direct_writer_scan.scan()
+    categories = {}
+    for (path, name), count in current.items():
+        categories.setdefault(path, {})[name] = count
+    assert "reconcile_ont" not in categories.get(
+        "app/web/admin/network_onts_actions.py", {}
+    )
+    assert "reconcile_ont" not in categories.get("app/api/network_ont_ops.py", {})
+    for path in (
+        "app/web/admin/network_onts.py",
+        "app/web/admin/network_onts_inventory.py",
+        "app/web/admin/network_tr069.py",
+    ):
+        assert path not in categories, path
+    # The API keeps only the feature toggles that have no lifecycle section.
+    assert set(categories["app/api/network_ont_ops.py"]) <= {
+        "ont_features",
+        "ont_write",
+    }
+    api = _source("app/api/network_ont_ops.py")
+    assert not re.search(
+        r"ont_write\.(update_management_ip|update_service_port|move_ont)", api
+    )
+    assert "ont_features.set_wifi_config" not in api
+    bulk = _source("app/tasks/ont_bulk.py")
+    assert "set_wifi_config" not in bulk
+    assert "submit_wifi_change_for_bulk(" in bulk
+    assert not (ROOT / "app/web/admin/network_ont_service_ports.py").exists()
+
+
+def test_scanner_resolves_aliases_and_ignores_strings():
+    scan_source = ont_direct_writer_scan.scan_source
+    hits = scan_source(
+        "app/web/admin/x.py",
+        "from app.services.network import ont_provision_steps as steps\n"
+        "from app.services.network.ont_features import ont_features as feats\n"
+        "from app.services.network.reconcile import reconcile_ont as r\n"
+        "import app.services.network.ont_write as ow\n"
+        "def f(db):\n"
+        '    """steps.deprovision(reconcile_ont) in a docstring"""\n'
+        '    s = "ont_features.set_wifi_config("\n'
+        "    steps.deprovision(db)\n"
+        "    feats.toggle_voip(db)\n"
+        "    r(db)\n"
+        "    ow.ont_write.update_management_ip(db)\n"
+        "    adapter.create_service_port()\n",
+    )
+    assert dict(hits) == {
+        ("app/web/admin/x.py", "provision_steps"): 1,
+        ("app/web/admin/x.py", "ont_features"): 1,
+        ("app/web/admin/x.py", "reconcile_ont"): 1,
+        ("app/web/admin/x.py", "ont_write"): 1,
+        ("app/web/admin/x.py", "olt_write"): 1,
+    }
+
+
+def test_owner_allowlist_is_explicit_and_small():
+    assert "app/services/network/ont_service_configuration.py" in (
+        ont_direct_writer_scan.OWNER_ALLOWLIST
+    )
+    # Bulk provisioning, the provisioning task and the ACS direct writer in the
+    # TR-069 task are named debt in the baseline, never silently exempt.
+    baseline = _load_direct_writer_baseline()
+    for path in (
+        "app/services/network/bulk_provisioning.py",
+        "app/tasks/ont_provisioning.py",
+        "app/tasks/tr069.py",
+    ):
+        assert any(key[0] == path for key in baseline), path
+        assert not ont_direct_writer_scan._is_owner(path), path
+
+
+def test_break_glass_routes_are_admin_only_reasoned_and_audited():
+    actions = _source("app/web/admin/network_onts_actions.py")
+    bind_slice = actions.split("def ont_bind_internet_wan(", 1)[0].rsplit(
+        "@router.post(", 1
+    )[1]
+    assert "require_role(BREAK_GLASS_ROLE)" in bind_slice
+    bind_body = actions.split("def ont_bind_internet_wan(", 1)[1].split(
+        "@router.post(", 1
+    )[0]
+    assert bind_body.index("authorize_break_glass(") < bind_body.index(
+        "bind_internet_wan("
+    )
+
+    tr069 = _source("app/web/admin/network_tr069.py")
+    for route, call in (
+        ("/tr069/devices/{device_id}/action", "queue_device_job("),
+        ("/tr069/devices/{device_id}/config", "create_config_push_job("),
+    ):
+        decorator = tr069.split(f'"{route}"', 1)[1].split("def ", 1)[0]
+        assert "require_role(BREAK_GLASS_ROLE)" in decorator, route
+        body = tr069.split(f'"{route}"', 1)[1].split("@router.post", 1)[0]
+        assert body.index("_break_glass_refusal(") < body.index(call), route
+
+
+def test_wifi_and_management_controls_use_the_lifecycle_admission():
+    actions = _source("app/web/admin/network_onts_actions.py")
+    for name in ("ont_set_wifi_ssid", "ont_set_wifi_password"):
+        body = actions.split(f"def {name}(", 1)[1].split("@router.post(", 1)[0]
+        assert "submit_wifi_change(" in body
+        assert "reconcile_ont" not in body
+    forms = _source("app/services/network/ont_web_forms.py")
+    mgmt = forms.split("def update_mgmt_ip_from_form(", 1)[1].split(
+        "def mgmt_ip_modal_context(", 1
+    )[0]
+    assert "submit_management_change(" in mgmt
+    assert "set_desired_config_values(" not in mgmt
+    admission = _source("app/services/web_network_ont_actions/lifecycle_admission.py")
+    assert "configure_ont_service(" in admission
+    assert "reconcile_ont(" not in admission
+
+
+def test_tr069_break_glass_controls_are_hidden_from_non_admins():
+    template = _source("templates/admin/network/tr069/index.html")
+    lines = template.splitlines()
+    guarded = 0
+    for number, line in enumerate(lines):
+        if "openConfigModal('" in line and "onclick=" in line:
+            assert "{% if can_break_glass %}" in lines[number - 1], number
+            guarded += 1
+        if "job_actions.items()" in line:
+            assert "{% if can_break_glass %}" in lines[number - 1], number
+            guarded += 1
+    assert guarded >= 4
+    assert "can_break_glass" in _source("app/web/admin/network_tr069.py")
+
+
+def test_allowlist_is_exact_files_so_new_olt_modules_are_not_exempt():
+    for entry in ont_direct_writer_scan.OWNER_ALLOWLIST:
+        assert entry.endswith("/") or entry.endswith(".py"), entry
+        assert not entry.endswith("_"), entry
+    assert not ont_direct_writer_scan._is_owner("app/services/network/olt_foo.py")
+    assert not ont_direct_writer_scan._is_owner("app/services/genieacs_foo.py")
+    assert not ont_direct_writer_scan._is_owner(
+        "app/services/network/olt_api_operations.py"
+    )
+    assert ont_direct_writer_scan._is_owner(
+        "app/services/network/olt_protocol_adapters.py"
+    )
+    hits = ont_direct_writer_scan.scan_source(
+        "app/services/network/olt_foo.py",
+        "def f(adapter):\n    adapter.create_service_port()\n",
+    )
+    assert dict(hits) == {("app/services/network/olt_foo.py", "olt_write"): 1}
+    # Scanning the tree applies the allowlist: olt_api_operations is counted.
+    assert ("app/services/network/olt_api_operations.py", "olt_write") in (
+        ont_direct_writer_scan.scan()
+    )

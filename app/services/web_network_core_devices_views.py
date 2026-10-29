@@ -2112,7 +2112,13 @@ def ont_detail_page_data(db: Session, ont_id: str) -> dict[str, object] | None:
         or signal_updated_at
     )
 
+    from app.services.network.reconcile.observation_refresh import olt_observation_age
+
+    olt_observed_at, olt_observation_age_hours = olt_observation_age(db, ont.id)
+
     signal_info = {
+        "olt_observed_at": olt_observed_at,
+        "olt_observation_age_hours": olt_observation_age_hours,
         "olt_rx_dbm": olt_rx,
         "onu_rx_dbm": onu_rx,
         "olt_quality": olt_quality,

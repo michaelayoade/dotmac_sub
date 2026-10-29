@@ -806,8 +806,33 @@ def _execute(action: Action, ctx: ApplyContext) -> AppliedAction:
                 wifi_params[action.paths.channel] = action.channel
                 changed.append("wifi_channel")
             if action.security_mode is not None:
+                if action.security_mode.strip().lower() in {
+                    "none",
+                    "open",
+                    "default",
+                    "basic",
+                    "wep",
+                }:
+                    # Never write an open or WEP network, whatever the planner
+                    # asked.
+                    raise ApplyError(
+                        action,
+                        ReconcileFailureReason.INVALID_CHANGE,
+                        "refusing to write an open or WEP Wi-Fi security mode",
+                    )
                 wifi_params[action.paths.security_mode] = action.security_mode
                 changed.append("wifi_security_mode")
+                if (
+                    action.security_mode == "11i"
+                    and action.paths.security_mode.endswith(".BeaconType")
+                ):
+                    # WPA2-PSK floor on TR-098: pin AES + PSK alongside the
+                    # beacon type so the network is never left on TKIP/open.
+                    wlan = action.paths.security_mode.rsplit(".", 1)[0]
+                    wifi_params[f"{wlan}.IEEE11iEncryptionModes"] = "AESEncryption"
+                    wifi_params[f"{wlan}.IEEE11iAuthenticationMode"] = (
+                        "PSKAuthentication"
+                    )
             if action.password_ref is not None:
                 password = _resolve_or_fail(
                     ctx, action, action.password_ref, refuse_reference=True

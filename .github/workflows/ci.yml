@@ -47,7 +47,7 @@ jobs:
       docs-only: ${{ steps.classify.outputs.docs-only }}
       postgresql-required: ${{ steps.classify.outputs.postgresql-required }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           fetch-depth: 2
 
@@ -134,24 +134,24 @@ jobs:
     if: needs.changes.outputs.docs-only != 'true'
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
 
       - name: Install Python
         id: python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
         with:
           python-version: ${{ env.PYTHON_VERSION }}
 
       - name: Restore Poetry installation
         id: poetry-cache
-        uses: actions/cache@v4
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
         with:
           path: ~/.local
           key: poetry-v1-${{ runner.os }}-${{ steps.python.outputs.python-version }}-${{ env.POETRY_VERSION }}
 
       - name: Install Poetry
         if: steps.poetry-cache.outputs.cache-hit != 'true'
-        uses: snok/install-poetry@v1
+        uses: snok/install-poetry@a783c322200f0519c7926aa6faa857c4e23e9263 # v1.4.2
         with:
           version: ${{ env.POETRY_VERSION }}
           virtualenvs-create: true
@@ -171,7 +171,7 @@ jobs:
 
       - name: Restore Python environment
         id: python-cache
-        uses: actions/cache@v4
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
         with:
           path: .venv
           key: python-venv-v3-${{ runner.os }}-${{ steps.python.outputs.python-version }}-${{ env.POETRY_VERSION }}-${{ hashFiles('poetry.lock', 'pyproject.toml') }}
@@ -188,7 +188,7 @@ jobs:
             -C "$HOME" .local
 
       - name: Share Python environment
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: python-environment
           path: ${{ runner.temp }}/python-environment/
@@ -210,7 +210,7 @@ jobs:
       # run on EVERY invocation of this job, including a docs-only one — see
       # that step's comment for why. Skipping checkout on docs-only would
       # leave that step with no files to open at all.
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
 
       - name: Verify Kernel composition observations
         uses: michaelayoade/dotmac_starter_mt/.github/actions/verify-composition-observations@8b4b6d4b42e650c47fe4c04a679a5ccb51c4b2cd
@@ -295,7 +295,7 @@ jobs:
         if: needs.changes.outputs.docs-only == 'true'
         run: echo "Type checking is not needed for documentation-only changes."
 
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         if: needs.changes.outputs.docs-only != 'true'
 
       - uses: ./.github/actions/setup-ci-python
@@ -317,7 +317,7 @@ jobs:
         if: needs.changes.outputs.docs-only == 'true'
         run: echo "Import-boundary checks are not needed for documentation-only changes."
 
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         if: needs.changes.outputs.docs-only != 'true'
 
       - uses: ./.github/actions/setup-ci-python
@@ -344,7 +344,7 @@ jobs:
         if: needs.changes.outputs.docs-only == 'true'
         run: echo "Unit-test shard ${{ matrix.shard }} is not needed for documentation-only changes."
 
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         if: needs.changes.outputs.docs-only != 'true'
 
       - uses: ./.github/actions/setup-ci-python
@@ -354,7 +354,7 @@ jobs:
 
       - name: Restore historical unit-test durations
         if: needs.changes.outputs.docs-only != 'true'
-        uses: actions/cache/restore@v4
+        uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
         with:
           path: .ci-cache/test-durations.json
           key: unit-test-durations-v1-${{ github.head_ref || github.ref_name }}-${{ github.run_id }}-${{ github.run_attempt }}
@@ -375,7 +375,7 @@ jobs:
 
       - name: Upload coverage data
         if: needs.changes.outputs.docs-only != 'true'
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: unit-coverage-${{ matrix.shard }}
           path: .coverage.${{ matrix.shard }}
@@ -384,7 +384,7 @@ jobs:
 
       - name: Upload unit-test duration data
         if: needs.changes.outputs.docs-only != 'true'
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: unit-durations-${{ matrix.shard }}
           path: .ci-cache/current-${{ matrix.shard }}.json
@@ -398,7 +398,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           fetch-depth: 0
 
@@ -441,7 +441,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
 
       - uses: ./.github/actions/setup-ci-python
         with:
@@ -456,7 +456,7 @@ jobs:
     if: needs.changes.outputs.docs-only != 'true'
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           fetch-depth: 0
 
@@ -499,7 +499,7 @@ jobs:
           --health-timeout 5s
           --health-retries 5
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
 
       - uses: ./.github/actions/setup-ci-python
         with:
@@ -541,19 +541,19 @@ jobs:
     if: needs.changes.outputs.docs-only != 'true' && needs.unit-shards.result == 'success'
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
 
       - uses: ./.github/actions/setup-ci-python
         with:
           python-version: ${{ env.PYTHON_VERSION }}
 
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
           pattern: unit-coverage-*
           merge-multiple: true
 
       - name: Download unit-test duration data
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
           pattern: unit-durations-*
           path: ${{ runner.temp }}/unit-durations
@@ -571,14 +571,14 @@ jobs:
           --output .ci-cache/test-durations.json
 
       - name: Save unit-test duration history
-        uses: actions/cache/save@v4
+        uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
         with:
           path: .ci-cache/test-durations.json
           key: unit-test-durations-v1-${{ github.head_ref || github.ref_name }}-${{ github.run_id }}-${{ github.run_attempt }}
 
       - name: Upload coverage report
         if: github.event_name == 'pull_request'
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: coverage-report
           path: coverage.xml
@@ -593,7 +593,7 @@ jobs:
         if: needs.changes.outputs.docs-only == 'true'
         run: echo "Application security scans are not needed for documentation-only changes."
 
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         if: needs.changes.outputs.docs-only != 'true'
 
       - uses: ./.github/actions/setup-ci-python
@@ -615,12 +615,12 @@ jobs:
     if: needs.changes.outputs.docs-only != 'true'
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
         with:
           python-version: ${{ env.PYTHON_VERSION }}
           cache: pip
-      - uses: pre-commit/action@v3.0.1
+      - uses: pre-commit/action@2c7b3805fd2a0fd8c1884dcaebf91fc102a13ecd # v3.0.1
 
   # Deliberately NOT part of the pre-commit job above.
   #
@@ -638,7 +638,7 @@ jobs:
     name: Private Key Scan
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
 
       - name: Scan tracked files for private key material
         run: bash scripts/ci/scan_private_keys.sh
@@ -671,7 +671,7 @@ jobs:
       DATABASE_URL: "postgresql+psycopg://postgres:postgres@localhost:5432/dotmac_sub_test"
       TEST_DATABASE_URL: "postgresql+psycopg://postgres:postgres@localhost:5432/dotmac_sub_test"
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           # The canary archives a pinned old source, independent of squash ancestry.
           fetch-depth: 0
@@ -693,7 +693,7 @@ jobs:
       # conservative per-file estimate and still partitions every file exactly
       # once -- balance degrades, coverage does not.
       - name: Restore integration-test durations from main
-        uses: actions/cache/restore@v4
+        uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
         with:
           path: .ci-cache/integration-test-durations.json
           key: integration-test-durations-v2-main-${{ github.run_id }}
@@ -715,7 +715,7 @@ jobs:
 
       - name: Upload integration-test duration data
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: integration-durations-${{ matrix.shard }}
           path: .ci-cache/integration-current-${{ matrix.shard }}.json
@@ -749,7 +749,7 @@ jobs:
           && needs.integration-shards.result == 'success'
           && github.event_name == 'push'
           && github.ref == 'refs/heads/main'
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
 
       - name: Download integration-test duration data
         if: >-
@@ -757,7 +757,7 @@ jobs:
           && needs.integration-shards.result == 'success'
           && github.event_name == 'push'
           && github.ref == 'refs/heads/main'
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
           pattern: integration-durations-*
           path: ${{ runner.temp }}/integration-durations
@@ -780,7 +780,7 @@ jobs:
           && needs.integration-shards.result == 'success'
           && github.event_name == 'push'
           && github.ref == 'refs/heads/main'
-        uses: actions/cache/save@v4
+        uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
         with:
           path: .ci-cache/integration-test-durations.json
           key: integration-test-durations-v2-main-${{ github.run_id }}
@@ -826,16 +826,16 @@ jobs:
         if: needs.changes.outputs.docs-only == 'true' || github.event_name == 'push'
         run: echo "Docker validation runs before merge; branch pushes defer publication to the explicit candidate workflow."
 
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         if: needs.changes.outputs.docs-only != 'true' && github.event_name != 'push'
 
       - name: Set up Docker Buildx
         if: needs.changes.outputs.docs-only != 'true' && github.event_name != 'push'
-        uses: docker/setup-buildx-action@v3
+        uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3.12.0
 
       - name: Build Docker image once
         if: needs.changes.outputs.docs-only != 'true' && github.event_name != 'push'
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6.19.2
         with:
           context: .
           load: true
@@ -888,6 +888,7 @@ jobs:
           common_args="--network ci-net \
             -e DATABASE_URL=postgresql+psycopg://postgres:postgres@ci-db:5432/dotmac_sub_ci \
             -e SECRET_KEY=ci-test-secret-key-not-for-production \
+            -e APP_ENV=ci \
             -e REDIS_URL=redis://ci-redis:6379/0"
           docker run --rm $common_args dotmac-sub:ci sh -c \
             'BOOTSTRAP_DATABASE_URL="$DATABASE_URL" python scripts/bootstrap_commercial_module_prereqs.py'

@@ -1239,7 +1239,6 @@ def _upsert_access_credential(
     subscriber_id: UUID,
     username: str,
     plain_password: str | None = None,
-    radius_profile_id: str | None = None,
     subscription_id: UUID | None = None,
 ) -> None:
     reject_reserved_service_password(plain_password)
@@ -1292,31 +1291,12 @@ def _upsert_access_credential(
         if plain_password
         else None
     )
-    radius_profile_uuid: UUID | None = None
-    if radius_profile_id:
-        try:
-            radius_profile_uuid = UUID(str(radius_profile_id))
-        except ValueError:
-            radius_profile_uuid = None
-    if radius_profile_uuid:
-        # D1: refuse an unrecorded per-service speed override once the single
-        # rate owner is enabled. The admin form shows the profile read-only.
-        owning_subscription = (
-            db.get(Subscription, subscription_id) if subscription_id else None
-        )
-        access_rate_profile.refuse_unrecorded_override(
-            db,
-            offer_id=owning_subscription.offer_id if owning_subscription else None,
-            profile_id=radius_profile_uuid,
-        )
     if credential:
         credential.username = normalized_username
         if secret_hash:
             credential.secret_hash = secret_hash
         credential.is_active = True
         credential.deactivation_reason = None
-        if radius_profile_uuid:
-            credential.radius_profile_id = radius_profile_uuid
         try:
             db.commit()
         except IntegrityError as exc:
@@ -1335,7 +1315,6 @@ def _upsert_access_credential(
             username=normalized_username,
             secret_hash=secret_hash,
             is_active=True,
-            radius_profile_id=radius_profile_uuid,
         )
     )
     try:
@@ -3373,22 +3352,53 @@ def _route_range_options_for_blocks(blocks: list[IpBlock]) -> list[dict[str, obj
 def _subscription_public_ip_addon_form_row(
     db: Session,
     *,
-    subscription_id,
+    subscription_obj: Subscription,
 ) -> tuple[str, str]:
-    if not subscription_id:
+    if not subscription_obj.id or not subscription_obj.subscriber_id:
         return "", "1"
-    row = (
-        db.query(SubscriptionAddOn, AddOn)
+
+    rows = (
+        db.query(SubscriptionAddOn, AddOn, SubscriberAdditionalRoute.id)
         .join(AddOn, AddOn.id == SubscriptionAddOn.add_on_id)
-        .filter(SubscriptionAddOn.subscription_id == subscription_id)
+        .join(Subscription, Subscription.id == SubscriptionAddOn.subscription_id)
+        .outerjoin(
+            SubscriberAdditionalRoute,
+            and_(
+                SubscriberAdditionalRoute.subscriber_id
+                == subscription_obj.subscriber_id,
+                SubscriberAdditionalRoute.prefix_length == AddOn.ip_prefix_length,
+                SubscriberAdditionalRoute.is_active.is_(True),
+            ),
+        )
+        .filter(Subscription.subscriber_id == subscription_obj.subscriber_id)
         .filter(AddOn.ip_is_public.is_(True))
         .filter(SubscriptionAddOn.end_at.is_(None))
         .order_by(SubscriptionAddOn.start_at.desc().nullslast())
-        .first()
+        .all()
+    )
+    if not rows:
+        return "", "1"
+
+    # Additional routes are subscriber-scoped. Prefer the add-on attached to
+    # this subscription, then fall back only when the subscriber has one
+    # unambiguous active public-IP add-on. This keeps legacy/migrated routes
+    # visible without guessing when several commercial add-ons are active.
+    row = next(
+        (
+            candidate
+            for candidate in rows
+            if candidate[0].subscription_id == subscription_obj.id
+        ),
+        None,
     )
     if row is None:
-        return "", "1"
-    sub_addon, _add_on = row
+        compatible_rows = {
+            candidate[0].id: candidate for candidate in rows if candidate[2] is not None
+        }
+        if len(compatible_rows) != 1:
+            return "", "1"
+        row = next(iter(compatible_rows.values()))
+    sub_addon, _add_on, _route_id = row
     return str(sub_addon.add_on_id), str(sub_addon.quantity or 1)
 
 
@@ -3409,17 +3419,29 @@ def sync_public_ip_addon_for_subscription(
         raise ValueError("Additional IP add-on quantity must be 1 or higher.")
 
     now = datetime.now(UTC)
-    active_rows = (
+    active_rows_query = (
         db.query(SubscriptionAddOn, AddOn)
         .join(AddOn, AddOn.id == SubscriptionAddOn.add_on_id)
-        .filter(SubscriptionAddOn.subscription_id == subscription_obj.id)
-        .filter(AddOn.ip_is_public.is_(True))
         .filter(SubscriptionAddOn.end_at.is_(None))
-        .all()
     )
+    if subscription_obj.subscriber_id:
+        active_rows_query = active_rows_query.join(
+            Subscription,
+            Subscription.id == SubscriptionAddOn.subscription_id,
+        ).filter(Subscription.subscriber_id == subscription_obj.subscriber_id)
+    else:
+        active_rows_query = active_rows_query.filter(
+            SubscriptionAddOn.subscription_id == subscription_obj.id
+        )
+    active_rows = active_rows_query.all()
 
     if not selected:
-        for sub_addon, _add_on in active_rows:
+        for sub_addon, candidate_add_on in active_rows:
+            if (
+                sub_addon.subscription_id != subscription_obj.id
+                or not candidate_add_on.ip_is_public
+            ):
+                continue
             sub_addon.end_at = now
         db.commit()
         return None
@@ -3442,12 +3464,30 @@ def sync_public_ip_addon_for_subscription(
         raise ValueError("Selected additional IP add-on is not available.")
 
     matched = None
-    for sub_addon, _add_on in active_rows:
-        if str(sub_addon.add_on_id) == selected:
+    for sub_addon, candidate_add_on in active_rows:
+        if (
+            sub_addon.subscription_id != subscription_obj.id
+            or not candidate_add_on.ip_is_public
+        ):
+            continue
+        if sub_addon.add_on_id == selected_uuid:
             matched = sub_addon
             sub_addon.quantity = qty
         else:
             sub_addon.end_at = now
+
+    # Routed blocks belong to the subscriber rather than one subscription.
+    # Reuse one matching legacy/migrated add-on already active for the same
+    # subscriber so a repeat save cannot create duplicate billing coverage.
+    if matched is None and subscription_obj.subscriber_id:
+        subscriber_matches = [
+            sub_addon
+            for sub_addon, _candidate_add_on in active_rows
+            if sub_addon.add_on_id == selected_uuid
+        ]
+        if len(subscriber_matches) == 1:
+            matched = subscriber_matches[0]
+            matched.quantity = qty
     if matched is None:
         db.add(
             SubscriptionAddOn(
@@ -3644,7 +3684,7 @@ def edit_form_data(db: Session, subscription_obj: Subscription) -> dict[str, obj
     )
     ip_addon_id, ip_addon_quantity = _subscription_public_ip_addon_form_row(
         db,
-        subscription_id=subscription_obj.id,
+        subscription_obj=subscription_obj,
     )
     return {
         "id": str(subscription_obj.id),
@@ -4230,10 +4270,13 @@ def subscription_detail_context(
     )
     password_sync = _password_sync_evidence(credential)
     commercial_policy = _subscription_commercial_policy(db, subscription)
+    effective_rate = access_rate_profile.resolve_effective_rate(
+        db, subscription, credential
+    )
     reply_attributes = build_radius_reply_attributes(
         db,
         subscription,
-        profile=subscription.radius_profile,
+        profile=effective_rate.profile,
         nas_device=subscription.provisioning_nas_device,
     )
     connection_status = _subscription_connection_status(db, subscription, credential)
@@ -4272,6 +4315,8 @@ def subscription_detail_context(
     vacation_hold = _subscription_vacation_hold(db, subscription)
     administrative_pause = _subscription_administrative_pause(db, subscription)
     return {
+        "effective_rate_profile": effective_rate.profile,
+        "effective_rate_layer": effective_rate.layer.value,
         "access_credential": credential,
         "password_sync": password_sync,
         "radius_reply_attributes": reply_attributes,
@@ -4506,7 +4551,6 @@ def subscription_form_context(
         "ip_addon_options": ip_addon_options,
         "ip_addon_options_json": ip_addon_options_json,
         "radius_profiles": radius_profiles,
-        "rate_profile_read_only": access_rate_profile.rate_owner_enabled(db),
         "subscription_statuses": [item.value for item in SubscriptionStatus],
         "billing_modes": [item.value for item in BillingMode],
         "contract_terms": [item.value for item in ContractTerm],
@@ -4973,9 +5017,6 @@ def create_subscription_with_audit(
                 subscriber_id=created.subscriber_id,
                 username=selected_login,
                 plain_password=selected_password,
-                radius_profile_id=str(created.radius_profile_id)
-                if created.radius_profile_id
-                else None,
                 subscription_id=created.id,
             )
         except ValueError:
@@ -5017,7 +5058,6 @@ def create_subscription_with_audit(
             subscription_id=created.id,
             username=selected_login,
             plain_password=typed_password or None,
-            radius_profile_id=created.radius_profile_id,
         )
         commit_credential(db, selected_login)
         if additional_routes:
@@ -5212,7 +5252,6 @@ def update_subscription_with_audit(
                 subscription_id=after.id,
                 username=new_username,
                 plain_password=entered_password or None,
-                radius_profile_id=after.radius_profile_id,
             )
             commit_credential(db, new_username)
         elif credential_change and bound_credential is not None:
@@ -5221,16 +5260,7 @@ def update_subscription_with_audit(
                 bound_credential.secret_hash = auth_flow_service.hash_service_secret(
                     entered_password
                 )
-            if after.radius_profile_id:
-                bound_credential.radius_profile_id = after.radius_profile_id
             commit_credential(db, new_username)
-        elif (
-            bound_credential is not None
-            and after.radius_profile_id
-            and bound_credential.radius_profile_id != after.radius_profile_id
-        ):
-            bound_credential.radius_profile_id = after.radius_profile_id
-            commit_credential(db, current_username)
     except ValueError:
         db.rollback()
         raise

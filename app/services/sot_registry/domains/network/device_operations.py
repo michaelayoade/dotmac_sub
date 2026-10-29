@@ -63,8 +63,9 @@ SERVICES: tuple[SOTService, ...] = (
             "broker publication attempts and acknowledgement state",
             "single-admission worker execution claims",
             "unknown-delivery and interrupted-execution classification",
+            "reviewed reconciliation_needed dispatch resolution",
         ),
-        depends_on=("network.operation_ledger",),
+        depends_on=("network.operation_ledger", "events.dispatcher"),
         notes=(
             "Stages the exact registered command in the same transaction "
             "as its operation. A scheduled publisher is the only broker "
@@ -72,6 +73,169 @@ SERVICES: tuple[SOTService, ...] = (
             "dispatch row before entering device code. Operation status "
             "remains the device/business outcome; transport uncertainty is "
             "preserved separately and fails closed for reviewed recovery."
+            " The reviewed resolution of a reconciliation_needed dispatch is"
+            " the owner command resolve_reconciliation_needed_dispatch: it"
+            " records only an owner verdict, evidence and actor against the"
+            " dispatch row and never contacts a device or changes the"
+            " operation outcome."
+        ),
+        contract=ServiceContract(
+            concerns=(
+                ConcernContract(
+                    name="transactional network command outbox",
+                    role=OwnerRole.APPLICATION_COORDINATOR,
+                    input_names=(
+                        "canonical network operation lifecycle",
+                        "typed network command registry",
+                    ),
+                ),
+                ConcernContract(
+                    name="typed operation-to-task command registry",
+                    role=OwnerRole.POLICY,
+                    input_names=("typed network command registry",),
+                ),
+                ConcernContract(
+                    name="broker publication attempts and acknowledgement state",
+                    role=OwnerRole.APPLICATION_COORDINATOR,
+                    input_names=(
+                        "canonical network operation lifecycle",
+                        "typed network command registry",
+                    ),
+                ),
+                ConcernContract(
+                    name="single-admission worker execution claims",
+                    role=OwnerRole.APPLICATION_COORDINATOR,
+                    input_names=(
+                        "canonical network operation lifecycle",
+                        "typed network command registry",
+                    ),
+                ),
+                ConcernContract(
+                    name="unknown-delivery and interrupted-execution classification",
+                    role=OwnerRole.APPLICATION_COORDINATOR,
+                    input_names=("canonical network operation lifecycle",),
+                ),
+                ConcernContract(
+                    name="reviewed reconciliation_needed dispatch resolution",
+                    role=OwnerRole.APPLICATION_COORDINATOR,
+                    input_names=(
+                        "canonical network operation lifecycle",
+                        "authenticated dispatch resolution evidence",
+                    ),
+                ),
+            ),
+            authoritative_inputs=(
+                AuthorityInput(
+                    name="canonical network operation lifecycle",
+                    owner="network.operation_ledger",
+                    kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                    source=(
+                        "NetworkOperation identity and guarded lifecycle status; "
+                        "a dispatch is resolved only when its operation is terminal"
+                    ),
+                ),
+                AuthorityInput(
+                    name="typed network command registry",
+                    owner="network.operation_dispatch",
+                    kind=AuthorityKind.CONTROL_INPUT,
+                    source=(
+                        "NetworkOperationCommand enum and its registered "
+                        "operation type, task and payload contract"
+                    ),
+                ),
+                AuthorityInput(
+                    name="authenticated dispatch resolution evidence",
+                    owner="auth.permission_gate",
+                    kind=AuthorityKind.CONTROL_INPUT,
+                    source=(
+                        "network:ont:write admission plus the resolving actor, "
+                        "a DispatchResolution verdict and written evidence"
+                    ),
+                ),
+            ),
+            transaction=TransactionContract(
+                mode=TransactionMode.COORDINATOR_MANAGED,
+                boundary=(
+                    "Dispatch admission (stage_dispatch) participates in the "
+                    "caller's operation transaction. Publication, claim, "
+                    "completion and sweep functions run on their own sessions. "
+                    "resolve_reconciliation_needed_dispatch enters "
+                    "execute_owner_command once on a transaction-free session; "
+                    "the verdict and its audit event commit atomically."
+                ),
+                locking=(
+                    "Resolution row-locks the dispatch (FOR UPDATE) and refuses "
+                    "unless it is still reconciliation_needed with a terminal "
+                    "operation. Claims lock the dispatch row."
+                ),
+                idempotency=(
+                    "A dispatch resolves at most once: the terminal resolved "
+                    "status refuses a second verdict with dispatch_status_conflict."
+                ),
+                retries=(
+                    "Resolution is never retried automatically; a refusal "
+                    "changes nothing. Publication retries are bounded by the "
+                    "attempt budget."
+                ),
+            ),
+            errors=ErrorContract(
+                domain_codes=(
+                    "network.operation_dispatch.actor_required",
+                    "network.operation_dispatch.dispatch_not_found",
+                    "network.operation_dispatch.dispatch_status_conflict",
+                    "network.operation_dispatch.invalid_evidence",
+                    "network.operation_dispatch.invalid_expected_status",
+                    "network.operation_dispatch.invalid_resolution",
+                    "network.operation_dispatch.operation_still_active",
+                    *owner_command_boundary_error_codes("network.operation_dispatch"),
+                ),
+                mapping_owner="app.web.admin.network_operations adapter",
+                retryable_codes=(),
+                fail_closed_on=(
+                    "dispatch no longer reconciliation_needed",
+                    "operation still active",
+                    "missing actor or evidence",
+                    "active caller transaction",
+                    "manifest mismatch",
+                ),
+            ),
+            events=EventContract(
+                event_types=("network_operation_dispatch.resolve",),
+                schema_version=1,
+                delivery_owner="events.dispatcher",
+                compatibility=(
+                    "Staged as an audit record in the owning transaction; "
+                    "additive metadata only. It carries the verdict, evidence "
+                    "and operation id, never a device credential."
+                ),
+                replay=(
+                    "The audit record is committed with the verdict and is "
+                    "never re-emitted; a refused resolution stages nothing."
+                ),
+            ),
+            migration=MigrationContract(
+                state=AuthorityMigrationState.COMPLETE,
+                new_owner="network.operation_dispatch",
+                old_owner=(
+                    "operators editing network_operation_dispatches by hand "
+                    "for reconciliation_needed rows"
+                ),
+                verification=(
+                    "tests/test_dispatch_reconciliation_resolution.py proves "
+                    "the verdict, refusals and that the operation is untouched."
+                ),
+                cutover_gate=(
+                    "Migration 699 adds the resolved status and resolution "
+                    "columns before the admin Close dispatch action is enabled."
+                ),
+                fallback_retirement=(
+                    "No manual row edits; the admin Close dispatch action is "
+                    "the only resolution path."
+                ),
+            ),
+            steward="network operations",
+            design_refs=("docs/SOT_RELATIONSHIP_MAP.md",),
+            test_refs=("tests/test_dispatch_reconciliation_resolution.py",),
         ),
     ),
     SOTService(

@@ -8,11 +8,12 @@ from fastapi import APIRouter, Depends, Form, HTTPException, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
 from sqlalchemy.orm import Session
 
-from app.db import get_db
+from app.db import finish_read_transaction, get_db
 from app.models.network_operation import NetworkOperationTargetType
 from app.services import web_admin as web_admin_service
 from app.services.audit_helpers import log_audit_event
 from app.services.auth_dependencies import require_permission
+from app.services.domain_errors import DomainError
 from app.services.network_operation_dispatch import (
     DispatchResolution,
     NetworkOperationDispatchError,
@@ -192,6 +193,7 @@ def resolve_network_dispatch(
     actor_id = web_admin_service.get_actor_id(request)
     if not actor_id:
         raise HTTPException(status_code=403, detail="Forbidden")
+    finish_read_transaction(db)
     try:
         resolve_reconciliation_needed_dispatch(
             db,
@@ -203,6 +205,8 @@ def resolve_network_dispatch(
                 expected_status=expected_status,
             ),
         )
+    except DomainError as exc:
+        return _resolve_redirect(return_ont_id, status="error", message=exc.message)
     except ValueError as exc:
         # NetworkOperationDispatchError and an unknown resolution value are
         # both ValueErrors; neither changed anything (the owner rolled back).

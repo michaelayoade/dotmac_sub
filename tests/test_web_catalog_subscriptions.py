@@ -222,7 +222,6 @@ def test_upsert_access_credential_does_not_clear_password_when_blank_on_edit(
         subscriber_id=subscriber.id,
         username="10004167",
         plain_password="InitialPass123",
-        radius_profile_id=None,
         subscription_id=subscription.id,
     )
 
@@ -335,7 +334,6 @@ def test_upsert_access_credential_prefers_active_matching_username(
         subscriber_id=subscriber.id,
         username="100015322",
         plain_password="NewPass123",
-        radius_profile_id=None,
     )
 
     db_session.refresh(active_credential)
@@ -372,7 +370,6 @@ def test_upsert_access_credential_rejects_username_owned_by_other_subscriber(
             subscriber_id=subscriber.id,
             username="100015322",
             plain_password="NewPass123",
-            radius_profile_id=None,
         )
 
     assert str(exc.value) == (
@@ -390,7 +387,6 @@ def test_upsert_access_credential_stores_service_password_in_reversible_format(
         subscriber_id=subscriber.id,
         username="10004167",
         plain_password="InitialPass123",
-        radius_profile_id=None,
     )
 
     credential = (
@@ -415,7 +411,6 @@ def test_subscription_form_context_never_exposes_current_service_password(
         subscriber_id=subscriber.id,
         username="10004167",
         plain_password="VisiblePass123",
-        radius_profile_id=None,
         subscription_id=subscription.id,
     )
 
@@ -965,7 +960,6 @@ def test_subscription_detail_context_exposes_events_notifications_and_radius_syn
         subscriber_id=subscriber.id,
         username="105000111",
         plain_password="VisiblePass123",
-        radius_profile_id=None,
         subscription_id=subscription.id,
     )
     credential = (
@@ -1128,7 +1122,6 @@ def test_subscription_detail_context_reads_live_external_radius_rows(
         subscriber_id=subscriber.id,
         username="105000222",
         plain_password="SecretPass123",
-        radius_profile_id=None,
         subscription_id=subscription.id,
     )
 
@@ -1229,7 +1222,6 @@ def test_send_subscription_credentials_uses_email_and_sms_targets(
         subscriber_id=subscriber.id,
         username="10004167",
         plain_password="SendablePass123",
-        radius_profile_id=None,
     )
 
     sent_emails = []
@@ -1418,8 +1410,7 @@ def test_pending_subscription_create_does_not_mutate_live_service_credential(
     catalog_offer,
 ):
     live_profile = RadiusProfile(name="Live profile", is_active=True)
-    pending_profile = RadiusProfile(name="Pending profile", is_active=True)
-    db_session.add_all([live_profile, pending_profile])
+    db_session.add(live_profile)
     db_session.flush()
     # Model the legacy subscriber-level credential that exposed the regression.
     # A second pending subscription cannot coexist with an active subscription,
@@ -1444,7 +1435,6 @@ def test_pending_subscription_create_does_not_mutate_live_service_credential(
             "account_id": subscriber.id,
             "offer_id": catalog_offer.id,
             "status": SubscriptionStatus.pending,
-            "radius_profile_id": pending_profile.id,
         },
         FormData([]),
         None,
@@ -2268,6 +2258,57 @@ def test_update_subscription_with_audit_syncs_public_ip_addon(
     assert sub_addon.end_at is None
 
 
+def test_public_ip_addon_sync_reuses_unique_subscriber_addon(
+    db_session,
+    subscriber,
+    catalog_offer,
+):
+    add_on = _public_ip_addon(db_session)
+    # Legacy add-ons can remain attached to a historical subscription.
+    source_subscription = catalog_service.subscriptions.create(
+        db_session,
+        SubscriptionCreate(
+            account_id=subscriber.id,
+            offer_id=catalog_offer.id,
+            status=SubscriptionStatus.canceled,
+            canceled_at=datetime.now(UTC),
+        ),
+    )
+    edited_subscription = catalog_service.subscriptions.create(
+        db_session,
+        SubscriptionCreate(
+            account_id=subscriber.id,
+            offer_id=catalog_offer.id,
+        ),
+    )
+    existing = SubscriptionAddOn(
+        subscription_id=source_subscription.id,
+        add_on_id=add_on.id,
+        quantity=1,
+    )
+    db_session.add(existing)
+    db_session.commit()
+
+    web_catalog_subscriptions_service.sync_public_ip_addon_for_subscription(
+        db_session,
+        subscription_obj=edited_subscription,
+        add_on_id=str(add_on.id),
+        quantity="4",
+    )
+
+    active_rows = (
+        db_session.query(SubscriptionAddOn)
+        .join(Subscription, Subscription.id == SubscriptionAddOn.subscription_id)
+        .filter(Subscription.subscriber_id == subscriber.id)
+        .filter(SubscriptionAddOn.add_on_id == add_on.id)
+        .filter(SubscriptionAddOn.end_at.is_(None))
+        .all()
+    )
+    assert active_rows == [existing]
+    assert existing.subscription_id == source_subscription.id
+    assert existing.quantity == 4
+
+
 def test_update_subscription_rejects_additional_route_assigned_to_other_subscriber(
     db_session,
     subscriber,
@@ -3077,6 +3118,191 @@ def test_edit_form_data_includes_active_public_ip_addon(
 
     assert form_data["ip_addon_id"] == str(add_on.id)
     assert form_data["ip_addon_quantity"] == "4"
+
+
+def test_edit_form_data_prefers_current_subscription_public_ip_addon(
+    db_session,
+    subscriber,
+    catalog_offer,
+):
+    current_add_on = _public_ip_addon(
+        db_session,
+        name="Current /29 IP",
+        ip_prefix_length=29,
+    )
+    sibling_add_on = _public_ip_addon(
+        db_session,
+        name="Sibling /30 IP",
+        ip_prefix_length=30,
+    )
+    current_subscription = catalog_service.subscriptions.create(
+        db_session,
+        SubscriptionCreate(
+            account_id=subscriber.id,
+            offer_id=catalog_offer.id,
+        ),
+    )
+    sibling_subscription = catalog_service.subscriptions.create(
+        db_session,
+        SubscriptionCreate(
+            account_id=subscriber.id,
+            offer_id=catalog_offer.id,
+            status=SubscriptionStatus.canceled,
+            canceled_at=datetime.now(UTC),
+        ),
+    )
+    db_session.add_all(
+        [
+            SubscriptionAddOn(
+                subscription_id=current_subscription.id,
+                add_on_id=current_add_on.id,
+                quantity=2,
+            ),
+            SubscriptionAddOn(
+                subscription_id=sibling_subscription.id,
+                add_on_id=sibling_add_on.id,
+                quantity=5,
+            ),
+            SubscriberAdditionalRoute(
+                subscriber_id=subscriber.id,
+                cidr="203.0.113.8/30",
+                prefix_length=30,
+                metric=1,
+                is_active=True,
+                source="test",
+            ),
+        ]
+    )
+    db_session.commit()
+
+    form_data = web_catalog_subscriptions_service.edit_form_data(
+        db_session, current_subscription
+    )
+
+    assert form_data["ip_addon_id"] == str(current_add_on.id)
+    assert form_data["ip_addon_quantity"] == "2"
+
+
+def test_edit_form_data_uses_unique_route_compatible_subscriber_addon(
+    db_session,
+    subscriber,
+    catalog_offer,
+):
+    add_on = _public_ip_addon(db_session, ip_prefix_length=29)
+    # Keep only the edited service nonterminal while retaining legacy add-ons.
+    source_subscription = catalog_service.subscriptions.create(
+        db_session,
+        SubscriptionCreate(
+            account_id=subscriber.id,
+            offer_id=catalog_offer.id,
+            status=SubscriptionStatus.canceled,
+            canceled_at=datetime.now(UTC),
+        ),
+    )
+    edited_subscription = catalog_service.subscriptions.create(
+        db_session,
+        SubscriptionCreate(
+            account_id=subscriber.id,
+            offer_id=catalog_offer.id,
+        ),
+    )
+    db_session.add_all(
+        [
+            SubscriptionAddOn(
+                subscription_id=source_subscription.id,
+                add_on_id=add_on.id,
+                quantity=3,
+            ),
+            SubscriberAdditionalRoute(
+                subscriber_id=subscriber.id,
+                cidr="203.0.113.8/29",
+                prefix_length=29,
+                metric=1,
+                is_active=True,
+                source="test",
+            ),
+        ]
+    )
+    db_session.commit()
+
+    form_data = web_catalog_subscriptions_service.edit_form_data(
+        db_session, edited_subscription
+    )
+
+    assert form_data["ip_addon_id"] == str(add_on.id)
+    assert form_data["ip_addon_quantity"] == "3"
+
+
+def test_edit_form_data_rejects_ambiguous_route_compatible_subscriber_addons(
+    db_session,
+    subscriber,
+    catalog_offer,
+):
+    first_add_on = _public_ip_addon(
+        db_session,
+        name="First /29 IP",
+        ip_prefix_length=29,
+    )
+    second_add_on = _public_ip_addon(
+        db_session,
+        name="Second /29 IP",
+        ip_prefix_length=29,
+    )
+    first_source = catalog_service.subscriptions.create(
+        db_session,
+        SubscriptionCreate(
+            account_id=subscriber.id,
+            offer_id=catalog_offer.id,
+            status=SubscriptionStatus.canceled,
+            canceled_at=datetime.now(UTC),
+        ),
+    )
+    second_source = catalog_service.subscriptions.create(
+        db_session,
+        SubscriptionCreate(
+            account_id=subscriber.id,
+            offer_id=catalog_offer.id,
+            status=SubscriptionStatus.canceled,
+            canceled_at=datetime.now(UTC),
+        ),
+    )
+    edited_subscription = catalog_service.subscriptions.create(
+        db_session,
+        SubscriptionCreate(
+            account_id=subscriber.id,
+            offer_id=catalog_offer.id,
+        ),
+    )
+    db_session.add_all(
+        [
+            SubscriptionAddOn(
+                subscription_id=first_source.id,
+                add_on_id=first_add_on.id,
+                quantity=1,
+            ),
+            SubscriptionAddOn(
+                subscription_id=second_source.id,
+                add_on_id=second_add_on.id,
+                quantity=1,
+            ),
+            SubscriberAdditionalRoute(
+                subscriber_id=subscriber.id,
+                cidr="203.0.113.16/29",
+                prefix_length=29,
+                metric=1,
+                is_active=True,
+                source="test",
+            ),
+        ]
+    )
+    db_session.commit()
+
+    form_data = web_catalog_subscriptions_service.edit_form_data(
+        db_session, edited_subscription
+    )
+
+    assert form_data["ip_addon_id"] == ""
+    assert form_data["ip_addon_quantity"] == "1"
 
 
 def test_generic_update_cannot_deallocate_ipv4_assignments(

@@ -21,7 +21,6 @@ from sqlalchemy import select
 from app.models.catalog import (
     AccessCredential,
     ConnectionType,
-    RadiusProfile,
     Subscription,
     SubscriptionStatus,
 )
@@ -67,7 +66,6 @@ class EnsurePppoeCredentialCommand:
 
     subscriber_id: UUID
     subscription_id: UUID | None = None
-    radius_profile_id: UUID | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -109,9 +107,6 @@ def _stage_credential_event(
             "subscriber_id": str(command.subscriber_id),
             "subscription_id": str(command.subscription_id)
             if command.subscription_id
-            else None,
-            "radius_profile_id": str(command.radius_profile_id)
-            if command.radius_profile_id
             else None,
             "disposition": outcome.disposition.value,
         },
@@ -346,7 +341,6 @@ def stage_pending_credential(
     subscription_id: UUID,
     username: str,
     plain_password: str | None,
-    radius_profile_id: UUID | None,
 ) -> None:
     """Stage typed login/password on an inactive credential bound to this service.
 
@@ -379,15 +373,12 @@ def stage_pending_credential(
                 username=username,
                 secret_hash=secret_hash,
                 is_active=False,
-                radius_profile_id=radius_profile_id,
             )
         )
     else:
         staged.username = username
         if secret_hash:
             staged.secret_hash = secret_hash
-        if radius_profile_id:
-            staged.radius_profile_id = radius_profile_id
     db.flush()
 
 
@@ -442,13 +433,6 @@ def ensure_pppoe_credential(
             )
 
     inherit_declined_reason: str | None = None
-    if command.radius_profile_id is not None:
-        profile = db.get(RadiusProfile, command.radius_profile_id)
-        if profile is None or not profile.is_active:
-            raise _error(
-                "radius_profile_unavailable",
-                "The target RADIUS profile is unavailable.",
-            )
 
     existing_query = db.query(AccessCredential).filter(
         AccessCredential.subscriber_id == command.subscriber_id,
@@ -496,7 +480,6 @@ def ensure_pppoe_credential(
                 staged.is_active = True
                 staged.deactivation_reason = None
                 staged.connection_type = ConnectionType.pppoe
-                staged.radius_profile_id = command.radius_profile_id
                 if subscription is not None:
                     subscription.login = staged.username
                 db.flush()
@@ -536,7 +519,6 @@ def ensure_pppoe_credential(
             if len(legacy) == 1:
                 existing = legacy[0]
                 existing.subscription_id = command.subscription_id
-                existing.radius_profile_id = command.radius_profile_id
                 existing.connection_type = ConnectionType.pppoe
                 if subscription is not None:
                     subscription.login = existing.username
@@ -565,7 +547,6 @@ def ensure_pppoe_credential(
             if len(active_credentials) == 1 and len(replacement) == 1:
                 existing = replacement[0]
                 existing.subscription_id = command.subscription_id
-                existing.radius_profile_id = command.radius_profile_id
                 existing.connection_type = ConnectionType.pppoe
                 if subscription is not None:
                     subscription.login = existing.username
@@ -615,7 +596,6 @@ def ensure_pppoe_credential(
                                 UNUSABLE_STORED_SECRET_MESSAGE,
                             )
                         inherited.subscription_id = command.subscription_id
-                        inherited.radius_profile_id = command.radius_profile_id
                         inherited.connection_type = ConnectionType.pppoe
                         inherited.is_active = True
                         inherited.deactivation_reason = None
@@ -649,15 +629,9 @@ def ensure_pppoe_credential(
     if existing:
         changed = existing.connection_type != ConnectionType.pppoe
         changed = changed or (
-            command.radius_profile_id is not None
-            and existing.radius_profile_id != command.radius_profile_id
-        )
-        changed = changed or (
             subscription is not None and subscription.login != existing.username
         )
         existing.connection_type = ConnectionType.pppoe
-        if command.radius_profile_id is not None:
-            existing.radius_profile_id = command.radius_profile_id
         if subscription is not None:
             subscription.login = existing.username
         db.flush()
@@ -739,7 +713,6 @@ def ensure_pppoe_credential(
     credential.is_active = True
     credential.deactivation_reason = None
     credential.connection_type = ConnectionType.pppoe
-    credential.radius_profile_id = command.radius_profile_id
     if subscription is not None:
         subscription.login = username
 

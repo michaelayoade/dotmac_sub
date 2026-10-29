@@ -192,6 +192,23 @@ RULES: tuple[SentinelRule, ...] = (
         ),
     ),
     SentinelRule(
+        field="wifi_security_mode",
+        layer="planner",
+        source_key="wifi_security_mode",
+        sentinel="default",
+        trigger="falsy",
+        authority=_INADMISSIBLE,
+        adjudication=_REFUSED,
+        writes="AcsSetWifiConfig.security_mode",
+        impact=(
+            "An unset/default mode is never delivered as a literal. The WPA2-PSK "
+            "floor is a separate policy (setting "
+            "ont_wifi_security_floor_enforced, default off) that is previewed "
+            "before it is enabled; with it off nothing is written. Open and WEP "
+            "are refused by the applier on every path."
+        ),
+    ),
+    SentinelRule(
         field="wifi_password_ref",
         layer="adapter",
         source_key="wifi_password",

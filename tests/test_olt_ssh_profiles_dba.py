@@ -52,9 +52,8 @@ def test_get_dba_profiles_runs_display_command(monkeypatch) -> None:
 
     assert ok is True
     assert message == "Found 1 DBA profile(s)"
-    assert sent[:3] == [
+    assert sent[:2] == [
         "enable\n",
-        "screen-length 0 temporary\n",
         "display dba-profile all",
     ]
     assert sent[-1] == "close"
@@ -103,9 +102,8 @@ def test_get_traffic_tables_uses_bounded_from_index_command(monkeypatch) -> None
 
     assert ok is True
     assert message == "Found 1 traffic table(s)"
-    assert sent[:3] == [
+    assert sent[:2] == [
         "enable\n",
-        "screen-length 0 temporary\n",
         "display traffic table ip from-index 0",
     ]
     assert sent[-1] == "close"
@@ -159,9 +157,8 @@ def test_get_traffic_tables_uses_from_index_for_ma5800(monkeypatch) -> None:
 
     assert ok is True
     assert message == "Found 2 traffic table(s)"
-    assert sent[:3] == [
+    assert sent[:2] == [
         "enable\n",
-        "screen-length 0 temporary\n",
         "display traffic table ip from-index 0",
     ]
     assert sent[-1] == "close"
@@ -210,9 +207,8 @@ def test_get_traffic_tables_uses_bounded_command_for_older_huawei(monkeypatch) -
 
     assert ok is True
     assert message == "Found 2 traffic table(s)"
-    assert sent[:3] == [
+    assert sent[:2] == [
         "enable\n",
-        "screen-length 0 temporary\n",
         "display traffic table ip from-index 0",
     ]
     assert sent[-1] == "close"
@@ -260,9 +256,8 @@ def test_get_wan_profiles_runs_display_command(monkeypatch) -> None:
 
     assert ok is True
     assert message == "Found 1 WAN profile(s)"
-    assert sent[:3] == [
+    assert sent[:2] == [
         "enable\n",
-        "screen-length 0 temporary\n",
         "display ont wan-profile all",
     ]
     assert sent[-1] == "close"

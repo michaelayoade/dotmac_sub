@@ -33,9 +33,12 @@ SERVICE = SOTService(
         "expected changes (the live set must equal the list exactly), flips the setting with an audit "
         "record, then runs a full projection through access.radius_projection "
         "and reads every target's radreply rate back against the derived rate. "
-        "Any projection failure or mismatch switches the owner off again and "
-        "re-projects. The matching switch-off command is the rollback. Both "
-        "are dry-run unless applied explicitly."
+        "Any projection failure or mismatch is reported with the final state; this "
+        "release has no legacy precedence, so switching off is refused and a "
+        "rollback is a redeploy of the previous release. An environment with no "
+        "active user target at all (never production) may use a no-target mode "
+        "that skips the projection and read-back and replaces the per-entry match "
+        "with a digest acknowledgement of the live divergence set."
     ),
     contract=ServiceContract(
         concerns=(
@@ -104,7 +107,9 @@ SERVICE = SOTService(
                 f"{SWITCH}.projection_failed",
                 f"{SWITCH}.no_target",
                 f"{SWITCH}.baseline_not_clean",
-                f"{SWITCH}.owner_still_active",
+                f"{SWITCH}.switch_off_unavailable",
+                f"{SWITCH}.no_target_mode_refused",
+                f"{SWITCH}.divergence_ack_mismatch",
                 f"{SWITCH}.moved_offer_unverified",
                 f"{SWITCH}.owner_not_active",
                 f"{SWITCH}.approved_list_digest_mismatch",

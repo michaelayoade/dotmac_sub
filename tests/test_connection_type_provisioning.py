@@ -42,6 +42,24 @@ def mock_subscription():
     return sub
 
 
+@pytest.fixture(autouse=True)
+def _plan_profile_from_the_stored_link(monkeypatch):
+    """These tests stub the session, so give the plan lookup the stub's answer.
+
+    The plan lookup itself (the rate owner) is covered in
+    ``tests/test_access_rate_profile.py``; here only the connection-type and
+    attribute logic is under test.
+    """
+    from app.services import connection_type_provisioning as module
+
+    def lookup(db, subscription):
+        if subscription.radius_profile_id:
+            return db.get(RadiusProfile, subscription.radius_profile_id)
+        return None
+
+    monkeypatch.setattr(module, "_subscription_plan_profile", lookup)
+
+
 @pytest.fixture
 def mock_profile():
     profile = MagicMock(spec=RadiusProfile)
@@ -309,9 +327,13 @@ class TestFramedIpParity:
 
         db = MagicMock()
         db.get.return_value = SimpleNamespace(
-            speed_download_mbps=50, speed_upload_mbps=25
+            speed_download_mbps=50,
+            speed_upload_mbps=25,
+            guaranteed_speed=None,
+            guaranteed_speed_limit_at=None,
         )
-        assert _offer_rate_limit_fallback(db, mock_subscription) == "50M/25M"
+        # rx/tx is NAS-perspective: the subscriber's upload first, download second.
+        assert _offer_rate_limit_fallback(db, mock_subscription) == "25M/50M"
 
         db.get.return_value = None
         assert _offer_rate_limit_fallback(db, mock_subscription) is None

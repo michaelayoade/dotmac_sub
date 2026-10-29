@@ -78,6 +78,8 @@ APPROVED: frozenset[str] = frozenset(
         # ADR 0018: hourly CoA outcome counters, plus its bounded retention prune.
         "app/services/router_health/coa_evidence.py::record_coa_outcome",
         "app/services/router_health/coa_evidence.py::prune_coa_outcome_buckets",
+        # ADR 0033: OLT SSH host-key observation, written after the login.
+        "app/services/network/olt_ssh_hostkey.py::record_observation",
     }
 )
 
@@ -286,6 +288,7 @@ BASELINE: dict[str, str] = {
     "app/tasks/ont_reconcile.py::_close_expired_remote_access": "adapter-owned session lifecycle (task/runner)",
     "app/tasks/ont_reconcile.py::_reconcile_dialer_credentials": "adapter-owned session lifecycle (task/runner)",
     "app/tasks/ont_reconcile.py::alert_overdue_reconcile_holds": "adapter-owned session lifecycle (task/runner)",
+    "app/tasks/ont_reconcile.py::refresh_stale_olt_observations": "adapter-owned session lifecycle (task/runner)",
     "app/tasks/ont_reconcile.py::reconcile_huawei_ont": "adapter-owned session lifecycle (task/runner)",
     "app/tasks/ont_reconcile.py::run_ont_reconcile_sweep": "adapter-owned session lifecycle (task/runner)",
     "app/tasks/ont_runtime_status.py::dispatch_huawei_ont_status": "adapter-owned session lifecycle (task/runner)",
