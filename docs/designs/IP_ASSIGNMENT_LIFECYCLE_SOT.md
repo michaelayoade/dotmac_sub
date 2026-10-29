@@ -384,6 +384,21 @@ and reason. A fresh production backup, named target, reviewed cohort, and
 post-state verification are operational gates; historical previews are not
 authorization.
 
+Unbound release (W0 N9 named exception) uses
+`python -m scripts.one_off.release_unbound_ip_assignment`. N9 is
+link-don't-release, so the command refuses anything outside three named
+eligibility classes, and the operator must name the class:
+`terminal_only_subscriber` (no non-terminal service; ordinary customer address),
+`address_not_serviceable` (network/broadcast, or device/infrastructure/reserved
+address that stays protected after release) and `served_elsewhere_no_sibling`
+(every non-terminal service already holds an exact assignment and none carries
+this address in its served column). A uniquely matching sibling is refused as
+`linkable_sibling_exists`; ambiguity is refused. Every class refuses a live
+session or any other non-terminal service's served column. It deactivates the
+one `IPAssignment` row only; the address, pool, served columns and RADIUS are
+untouched. It is dry-run by default and has no automatic inverse (re-allocate
+from the audit record).
+
 Served projection repair uses
 `python -m scripts.one_off.repair_service_ipv4_projection` with the exact
 subscription and assignment identifiers. It is also dry-run by default and

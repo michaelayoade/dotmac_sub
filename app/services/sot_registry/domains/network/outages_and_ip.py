@@ -460,6 +460,7 @@ SERVICES: tuple[SOTService, ...] = (
                     "ip_assignment.service_ownership_reconciled",
                     "ip_assignment.service_ownership_unlinked",
                     "ip_assignment.lifecycle_repaired",
+                    "ip_assignment.unbound_released",
                     "ip_assignment.served_projection_repaired",
                 ),
                 schema_version=1,

@@ -1144,6 +1144,23 @@ url = "https://registry.dotmac.io/api/packages/dotmac/pypi/simple"
 reference = "forgejo"
 
 [[package]]
+name = "dotmac-device-cli"
+version = "0.1.0a1"
+description = "Stateless device CLI knowledge and dialogue logic (capability profiles, prompt/pager/confirmation state machine, response classification, parsers, limiter policy). No transport, credentials or I/O."
+optional = false
+python-versions = ">=3.11,<3.14"
+groups = ["main"]
+files = [
+    {file = "dotmac_device_cli-0.1.0a1-py3-none-any.whl", hash = "sha256:fb32bbf79d1f219d2cbc980b76cde08d6e0c226e77d36cfa05c89a6b6c701ad3"},
+    {file = "dotmac_device_cli-0.1.0a1.tar.gz", hash = "sha256:7f5a50fc14ddcb81fe2b1197093d6e1246c90f636fc867d1940698815e227cf1"},
+]
+
+[package.source]
+type = "legacy"
+url = "https://registry.dotmac.io/api/packages/dotmac/pypi/simple"
+reference = "forgejo"
+
+[[package]]
 name = "dotmac-inbox"
 version = "0.1.0a1"
 description = "Dotmac Inbox — tenant-scoped conversation, message, lifecycle, threading, and read-state ownership"
@@ -6266,4 +6283,4 @@ cffi = ["cffi (>=1.17,<2.0) ; platform_python_implementation != \"PyPy\" and pyt
 [metadata]
 lock-version = "2.1"
 python-versions = ">=3.11,<3.13"
-content-hash = "f3577fc8c7ed0cdbe6b85a17ed5618cfb5c888bed5b98ee1d9da9d96a750b350"
+content-hash = "b67951bbd4cb41b202874798535e8a7cd175e7d49cfb4f17fef3bb67399d51e1"

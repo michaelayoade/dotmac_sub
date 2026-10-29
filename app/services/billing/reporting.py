@@ -30,6 +30,7 @@ from sqlalchemy import (
 )
 from sqlalchemy.orm import Session, aliased, joinedload, selectinload
 from sqlalchemy.sql import Select
+from sqlalchemy.sql.elements import ColumnElement
 
 from app.models.billing import (
     CreditNote,
@@ -53,6 +54,44 @@ logger = logging.getLogger(__name__)
 
 DEFAULT_AR_AGING_BUCKET_DAYS = (30, 60, 90)
 DEFAULT_UPCOMING_CHARGE_BANDS = "50000-100000,100000-500000,500000-"
+DASHBOARD_COLLECTION_STATUSES = (InvoiceStatus.paid, InvoiceStatus.partially_paid)
+
+
+@dataclass(frozen=True, slots=True)
+class DashboardCollectionsPeriod:
+    start: datetime
+    end: datetime
+
+    def __post_init__(self) -> None:
+        if (
+            self.start.tzinfo is None
+            or self.end.tzinfo is None
+            or self.start >= self.end
+        ):
+            raise ValueError("Dashboard collections period requires an aware range")
+
+    @classmethod
+    def current_utc_month(cls, now: datetime) -> DashboardCollectionsPeriod:
+        if now.tzinfo is None:
+            raise ValueError("Dashboard collections month requires an aware time")
+        start = now.astimezone(UTC).replace(
+            day=1, hour=0, minute=0, second=0, microsecond=0
+        )
+        return cls(start=start, end=(start + timedelta(days=32)).replace(day=1))
+
+
+def dashboard_collections_invoice_filters(
+    period: DashboardCollectionsPeriod,
+) -> tuple[ColumnElement[bool], ...]:
+    """The shared current-month invoice cohort for the card and its drill-down."""
+    return (
+        Invoice.is_active.is_(True),
+        collectible_ar_invoice_filter(),
+        Invoice.status.in_(DASHBOARD_COLLECTION_STATUSES),
+        Invoice.total > Invoice.balance_due,
+        Invoice.created_at >= period.start,
+        Invoice.created_at < period.end,
+    )
 
 
 @dataclass(frozen=True, slots=True)
@@ -959,6 +998,26 @@ def _ar_aging_bucket_days(db: Session) -> tuple[int, int, int]:
 
 class BillingReporting:
     """Service for billing reports and statistics."""
+
+    @staticmethod
+    def get_admin_dashboard_collections(
+        db: Session, *, period: DashboardCollectionsPeriod
+    ) -> Decimal:
+        """Settled value of paid or partially paid invoices created in the period.
+
+        This dashboard-specific cohort must not change the broader billing
+        overview's revenue definition. The window is half-open in UTC.
+        """
+        settled_value = case(
+            (Invoice.total > Invoice.balance_due, Invoice.total - Invoice.balance_due),
+            else_=Decimal("0"),
+        )
+        amount = db.scalar(
+            select(func.coalesce(func.sum(settled_value), Decimal("0"))).where(
+                *dashboard_collections_invoice_filters(period)
+            )
+        )
+        return Decimal(str(amount or "0"))
 
     @staticmethod
     def get_overview_stats(
