@@ -438,7 +438,7 @@ def observe_fixture_plan(connection: Connection) -> KernelEntryFixturePlan:
             text("SELECT version_num FROM public.alembic_version ORDER BY version_num")
         )
     )
-    if "701_olt_ssh_host_key_record" not in heads:
+    if "702_projection_secret_requests" not in heads:
         raise KernelEntryRefused("Fixture lacks the reviewed actual Sub source head")
     return KernelEntryFixturePlan(
         FixtureCatalog(
