@@ -2197,7 +2197,13 @@ projection, and events retain the existing lifecycle transaction boundary.
    canonical bases decided 2026-07-16 — figures labelled "Revenue" use the
    invoice settled-value basis, the payments basis is labelled Collections,
    and recurring revenue uses the MRR-countable basis. Report/web layers
-   compose these reads and own presentation only. The same owner now defines
+   compose these reads and own presentation only. The admin overview card
+   named "Collections This Month" is a scoped exception: it sums settled
+   value only on collectible paid and partially-paid invoices created in the
+   current UTC month, not receipts dated in that month. The separate
+   `invoice_collectibility` owner supplies the Overdue card from outstanding
+   balances on invoices currently marked overdue across all creation months.
+   The billing reporting owner also defines
    the Upcoming Charges reminder cohort: collectible postpaid invoice due
    facts and exact prepaid entitlement endings are selected as bounded,
    indexed pages; visible prepaid candidates compose the canonical

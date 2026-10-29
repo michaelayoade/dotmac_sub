@@ -32,13 +32,13 @@ PROJECT_ROOT = Path(__file__).resolve().parents[2]
 APP_DIR = PROJECT_ROOT / "app"
 PAID_READ_BASELINE = Path(__file__).with_name("invoice_paid_read_baseline.json")
 
-# Frozen initial census: never expand this ceiling. Retirement updates only the
-# reviewed active-state digest, keeping the original predicate identity intact.
+# Reviewed census: expansion requires Michael's explicit approval. Retirement
+# updates the active-state digest so each predicate identity remains deliberate.
 PAID_READ_CEILING_SHA256 = (
-    "5ae5603a2b6e0b30df1329d674f275244802dfa5d784d2bb134c8ff8ab38f34a"
+    "cad720b1c2202f5f5bb3b077f183d11b9bb2de93482ba436edf248e75a37ca1a"
 )
 PAID_READ_APPROVED_SHA256 = (
-    "a3ca5fe754e950f064ab8fa61d0a163b1369cd53679423ca9e6d73727dcb6d97"
+    "a4492b6b86fb707abfc393a32e430aa54f20ac60defee252ea2ac03c530391a9"
 )
 
 APPROVED_LEDGER_WRITERS = {

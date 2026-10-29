@@ -172,6 +172,11 @@ def invoice_balance_sum(db: Session, filters: Iterable) -> Decimal:
     return Decimal(str(total or "0.00"))
 
 
+def dashboard_overdue_status_balance(db: Session) -> Decimal:
+    """Outstanding balance of invoices currently marked overdue, across all time."""
+    return invoice_balance_sum(db, overdue_status_filters())
+
+
 def invoice_balance_sum_by_currency(
     db: Session, filters: Iterable
 ) -> list[tuple[str | None, Decimal]]:

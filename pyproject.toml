@@ -54,6 +54,7 @@ dependencies = [
     "dotmac-kernel==0.1.0a105",
     "dotmac-billing==0.1.0a8",
     "dotmac-collections==0.1.0a1",
+    "dotmac-device-cli==0.1.0a1",
     "dotmac-inbox==0.1.0a1",
     "dotmac-numbering==0.1.0a3",
     "dotmac-payments==0.1.0a3",
@@ -87,6 +88,10 @@ dotmac-kernel = { version = "0.1.0a105", source = "forgejo" }
 # preparation. Sub's incumbent money and collections writers remain active.
 dotmac-billing = { version = "0.1.0a8", source = "forgejo" }
 dotmac-collections = { version = "0.1.0a1", source = "forgejo" }
+# Stateless OLT CLI dialogue/profile logic (ADR-0077). Stdlib only, no I/O. Only
+# app/services/network/device_cli_host.py may import it; reads are behind the
+# default-off `olt_device_cli_reads_*` settings.
+dotmac-device-cli = { version = "0.1.0a1", source = "forgejo" }
 # Released numbering storage only: no product caller or series activation.
 dotmac-numbering = { version = "0.1.0a3", source = "forgejo" }
 # Tenant-only migration/shadow composition. Sub's incumbent payment writers
