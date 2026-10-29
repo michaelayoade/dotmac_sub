@@ -307,7 +307,11 @@ BASELINE = Path("tests/architecture/session_construction_baseline.txt")
 #: +10 test-only constructions for the migrated PostgreSQL projection-secret
 #: concurrency canaries: one clone engine and nine independent Sessions.
 #: The production construction baseline is unchanged.
-TEST_FIXTURE_BASELINE_TOTAL = 804
+#: +2 from tests/integration/test_historic_served_ipv4_restore_concurrency.py:
+#: one disposable migrated-clone engine and one sessionmaker permit independent
+#: restore, allocation and inventory transactions to prove address serialization.
+#: These are test-only fixture sites; production allowances remain unchanged.
+TEST_FIXTURE_BASELINE_TOTAL = 806
 
 
 def _baseline() -> dict[str, int]:
