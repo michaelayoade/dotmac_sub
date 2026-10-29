@@ -377,6 +377,7 @@ DOMAIN = DomainSOT(
             depends_on=(
                 "operations.field_completion",
                 "network.outage_completion_evidence",
+                "network.infrastructure_catalogue",
                 "operations.work_order_commands",
                 "support.ticket_configuration",
                 "support.ticket_vocabulary",
@@ -440,6 +441,11 @@ DOMAIN = DomainSOT(
                                 "portal team-routing resolution",
                                 "customer identity evidence",
                                 "assignment policy proposal",
+                                *(
+                                    ("native ticket location resolution",)
+                                    if name == "ticket creation and identity"
+                                    else ()
+                                ),
                                 *(
                                     (
                                         "active assigned staff contact identity",
@@ -511,6 +517,12 @@ DOMAIN = DomainSOT(
                 ),
                 authoritative_inputs=(
                     AuthorityInput(
+                        name="native ticket location resolution",
+                        owner="network.infrastructure_catalogue",
+                        kind=AuthorityKind.DERIVED_PROJECTION,
+                        source="Fresh exact base-station or wireless/fiber access-point reference resolution against active native inventory; selected label and typed source/UUID are saved as ticket metadata by the lifecycle owner.",
+                    ),
+                    AuthorityInput(
                         name="reviewed shared outage completion scope",
                         owner="network.outage_completion_evidence",
                         kind=AuthorityKind.AUTHORITATIVE_RECORD,
@@ -534,6 +546,7 @@ DOMAIN = DomainSOT(
                         kind=AuthorityKind.CONTROL_INPUT,
                         source=(
                             "typed TicketCreate, TicketUpdate, TicketMentionTarget, "
+                            "typed AdminTicketCreate exact location reference, "
                             "typed per-form TicketCommentCreate idempotency UUID, "
                             "AssignTicketServiceTeamFromAutomationCommand, "
                             "comment, merge, link, resolution, typed "

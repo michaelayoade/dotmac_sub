@@ -19,12 +19,20 @@ SERVICES: tuple[SOTService, ...] = (
     SOTService(
         name="network.infrastructure_catalogue",
         module="app.services.infrastructure_catalogue",
-        owns=("native infrastructure selection and exact-reference resolution",),
+        owns=(
+            "native infrastructure selection and exact-reference resolution",
+            "ticket location suggestions",
+        ),
         depends_on=("network.identity",),
         contract=ServiceContract(
             concerns=(
                 ConcernContract(
                     name="native infrastructure selection and exact-reference resolution",
+                    role=OwnerRole.RESOLVER,
+                    input_names=("native inventory identities",),
+                ),
+                ConcernContract(
+                    name="ticket location suggestions",
                     role=OwnerRole.RESOLVER,
                     input_names=("native inventory identities",),
                 ),
@@ -34,13 +42,13 @@ SERVICES: tuple[SOTService, ...] = (
                     name="native inventory identities",
                     owner="network.identity",
                     kind=AuthorityKind.AUTHORITATIVE_RECORD,
-                    source="Native NAS, POP, AP, OLT, PON and FDH records; role and active flags qualify new selections. PON parent OLT is a native identity-bearing eligibility dependency returned in typed LockedInfrastructureScope, never inferred from display context.",
+                    source="Native NAS, POP, wireless AP, fiber AP, OLT, PON and FDH records; role and active flags qualify new selections. PON parent OLT is a native identity-bearing eligibility dependency returned in typed LockedInfrastructureScope, never inferred from display context.",
                 ),
             ),
             transaction=TransactionContract(
                 mode=TransactionMode.READ_ONLY,
                 boundary="Bounded typed search, exact-reference query and lock_reference participant in the caller's read or owner transaction; no inventory writes or transaction completion",
-                locking="lock_reference acquires native target and reviewed related POP location locks in stable table/UUID order; PON also locks its parent OLT and rechecks parent identity after acquisition. Caller holds locks through its owner command.",
+                locking="lock_reference acquires native target and reviewed related POP location locks in stable table/UUID order; PON also locks its parent OLT and rechecks parent identity after acquisition. Ticket creation holds a shared lock on its exact selected native location before rechecking role and active state. Caller holds locks through its owner command.",
                 idempotency="Identical queries over identical inventory return identical ordered results",
                 retries="Caller retries its whole owner command on transient database concurrency failure or changed parent during lock acquisition; no internal transaction retry.",
             ),
@@ -67,6 +75,16 @@ SERVICES: tuple[SOTService, ...] = (
                     rebuild_operation="Repeat the typed catalogue query",
                     repair_owner="network.infrastructure_catalogue",
                 ),
+                ProjectionContract(
+                    name="ticket location suggestions",
+                    input_names=("native inventory identities",),
+                    writer="network.infrastructure_catalogue",
+                    freshness="Direct database read, no cached inventory",
+                    stale_behavior="Only active BTS-linked POP sites and active wireless or fiber access points are suggested; the Ticket owner rejects an exact reference that is no longer eligible at creation",
+                    drift_signal="A suggestion no longer matches its native source role or active status",
+                    rebuild_operation="Repeat the typed ticket location suggestion query",
+                    repair_owner="network.infrastructure_catalogue",
+                ),
             ),
             migration=MigrationContract(
                 state=AuthorityMigrationState.COMPLETE,
@@ -80,10 +98,12 @@ SERVICES: tuple[SOTService, ...] = (
             design_refs=(
                 "docs/designs/PROJECT_INFRASTRUCTURE_SCOPE.md",
                 "docs/designs/PROJECT_ENGINEERING_PLANS.md",
+                "docs/designs/SUPPORT_TICKET_LIFECYCLE_SOT.md",
             ),
             test_refs=(
                 "tests/test_project_infrastructure.py",
                 "tests/test_project_engineering_plans.py",
+                "tests/test_support_ticket_typeahead.py",
                 "tests/architecture/test_project_infrastructure_boundary.py",
             ),
         ),

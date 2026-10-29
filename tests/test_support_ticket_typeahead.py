@@ -4,15 +4,97 @@ from pathlib import Path
 from types import SimpleNamespace
 from uuid import uuid4
 
+from app.models.network import FiberAccessPoint
+from app.models.network_monitoring import DeviceType, NetworkDevice, PopSite
 from app.models.subscriber import Subscriber
 from app.models.system_user import SystemUser
+from app.schemas.infrastructure import (
+    TicketLocationReference,
+    TicketLocationSource,
+    TicketLocationSuggestionQuery,
+)
+from app.services import (
+    infrastructure_catalogue,
+    support_ticket_settings,
+    web_support_tickets,
+)
 from app.services import support as support_service
-from app.services import support_ticket_settings, web_support_tickets
 from app.services import typeahead as typeahead_service
 from app.web.admin import support_tickets as admin_support_tickets
 from tests.staff_identity_fixtures import add_bound_staff_user
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
+
+
+def test_ticket_location_suggestions_group_active_base_stations_and_both_ap_sources(
+    db_session,
+) -> None:
+    station = PopSite(
+        id=uuid4(), name="Jabi BTS", zabbix_group_id="jabi-bts", is_active=True
+    )
+    plain_site = PopSite(name="Jabi Site", is_active=True)
+    inactive_station = PopSite(
+        name="Jabi Retired BTS", zabbix_group_id="jabi-retired", is_active=False
+    )
+    wireless = NetworkDevice(
+        name="Radio AP",
+        device_type=DeviceType.access_point,
+        pop_site_id=station.id,
+        is_active=True,
+    )
+    fiber = FiberAccessPoint(name="Jabi Fiber AP", is_active=True)
+    other_device = NetworkDevice(
+        name="Jabi Router", device_type=DeviceType.router, is_active=True
+    )
+    inactive_ap = FiberAccessPoint(name="Jabi Retired Fiber AP", is_active=False)
+    db_session.add_all(
+        [
+            station,
+            plain_site,
+            inactive_station,
+            wireless,
+            fiber,
+            other_device,
+            inactive_ap,
+        ]
+    )
+    db_session.commit()
+
+    result = infrastructure_catalogue.ticket_location_suggestions(
+        db_session, query=TicketLocationSuggestionQuery(query="Jabi")
+    )
+
+    assert [(item.id, item.source) for item in result.base_stations] == [
+        (station.id, TicketLocationSource.base_station)
+    ]
+    assert {(item.id, item.source) for item in result.access_points} == {
+        (wireless.id, TicketLocationSource.wireless_access_point),
+        (fiber.id, TicketLocationSource.fiber_access_point),
+    }
+    assert (
+        infrastructure_catalogue.resolve_ticket_location(
+            db_session,
+            reference=TicketLocationReference(
+                source=TicketLocationSource.fiber_access_point, id=fiber.id
+            ),
+        ).label
+        == "Jabi Fiber AP"
+    )
+    assert (
+        infrastructure_catalogue.resolve_ticket_location(
+            db_session,
+            reference=TicketLocationReference(
+                source=TicketLocationSource.wireless_access_point, id=fiber.id
+            ),
+        )
+        is None
+    )
+    assert (
+        infrastructure_catalogue.ticket_location_suggestions(
+            db_session, query=TicketLocationSuggestionQuery(query="J")
+        ).access_points
+        == ()
+    )
 
 
 def _system_user(**overrides) -> SystemUser:
@@ -209,6 +291,14 @@ def test_ticket_form_context_includes_authoritative_region_manager_preview(
     assert 'x-model="selectedManager"' in html
     assert 'x-model="selectedRegion"' in html
     assert 'name="base_station_details"' in html
+    assert 'name="location_source"' in html
+    assert 'name="location_id"' in html
+    assert "Base Stations" in html
+    assert "Access Points" in html
+    assert "location-suggestions" in html
+    assert "fiber_access_point" in html
+    assert "site, or sector" not in html
+    assert "Choose a base station or access point from the list" in html
     assert 'x-model="selectedTicketType"' in html
     assert '"access point outage"' in html
     assert ':required="requiresBaseStation"' in html

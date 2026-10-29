@@ -28,6 +28,12 @@ from sqlalchemy.orm import Session
 
 from app.db import get_db
 from app.models.stored_file import StoredFile
+from app.schemas.infrastructure import (
+    TicketLocationSuggestionQuery,
+    TicketLocationSuggestions,
+)
+from app.schemas.support import AdminTicketCreateForm
+from app.services import infrastructure_catalogue
 from app.services import support as support_service
 from app.services import web_custom_fields as web_custom_fields_service
 from app.services import web_support_ticket_bulk as support_ticket_bulk_service
@@ -307,6 +313,22 @@ def tickets_bulk_update(
 
 
 @router.get(
+    "/location-suggestions",
+    response_model=TicketLocationSuggestions,
+    dependencies=[Depends(require_permission("support:ticket:create"))],
+)
+def ticket_location_suggestions(
+    q: str = Query(default="", max_length=120),
+    limit: int = Query(default=12, ge=1, le=20),
+    db: Session = Depends(get_db),
+) -> TicketLocationSuggestions:
+    return infrastructure_catalogue.ticket_location_suggestions(
+        db,
+        query=TicketLocationSuggestionQuery(query=q, limit_per_source=limit),
+    )
+
+
+@router.get(
     "/new",
     response_class=HTMLResponse,
     dependencies=[Depends(require_permission("support:ticket:create"))],
@@ -371,6 +393,8 @@ async def ticket_create(
     service_team_id: str | None = Form(default=None),
     ticket_type: str | None = Form(default=None),
     base_station_details: str | None = Form(default=None),
+    location_source: str | None = Form(default=None),
+    location_id: str | None = Form(default=None),
     priority: str = Form("normal"),
     channel: str = Form("web"),
     status: str = Form("open"),
@@ -391,32 +415,38 @@ async def ticket_create(
         "on",
     }
     try:
+        form = AdminTicketCreateForm.model_validate(
+            {
+                "title": title,
+                "description": description,
+                "publish_description": publish_description,
+                "subscriber_id": subscriber_id or None,
+                "customer_account_id": customer_account_id or None,
+                "customer_person_id": customer_person_id or None,
+                "region": region,
+                "technician_person_id": technician_person_id or None,
+                "ticket_manager_person_id": ticket_manager_person_id or None,
+                "service_team_id": service_team_id or None,
+                "ticket_type": ticket_type,
+                "base_station_details": base_station_details,
+                "location_source": location_source or None,
+                "location_id": location_id or None,
+                "priority": priority,
+                "channel": channel,
+                "status": status,
+                "due_at": due_at,
+                "tags": tags,
+                "related_outage_ticket_id": related_outage_ticket_id,
+                "assignee_person_ids": tuple(assignee_person_ids),
+            }
+        )
         ticket = support_web_service.create_ticket_from_form(
             db,
             request=request,
             actor_id=actor_id,
             attachments=attachments,
             duplicate_override=duplicate_confirmed,
-            title=title,
-            description=description,
-            publish_description=publish_description,
-            subscriber_id=subscriber_id,
-            customer_account_id=customer_account_id,
-            customer_person_id=customer_person_id,
-            region=region,
-            technician_person_id=technician_person_id,
-            ticket_manager_person_id=ticket_manager_person_id,
-            site_coordinator_person_id=None,
-            service_team_id=service_team_id,
-            ticket_type=ticket_type,
-            base_station_details=base_station_details,
-            priority=priority,
-            channel=channel,
-            status=status,
-            due_at=due_at,
-            tags=tags,
-            related_outage_ticket_id=related_outage_ticket_id,
-            assignee_person_ids=assignee_person_ids,
+            form=form,
         )
         auth = getattr(getattr(request, "state", None), "auth", None) or {}
         web_custom_fields_service.apply_creation_values(
@@ -449,6 +479,8 @@ async def ticket_create(
                     "service_team_id": service_team_id or "",
                     "ticket_type": ticket_type or "",
                     "base_station_details": base_station_details or "",
+                    "location_source": location_source or "",
+                    "location_id": location_id or "",
                     "priority": priority,
                     "channel": channel,
                     "status": status,
@@ -508,6 +540,8 @@ async def ticket_create(
                     "service_team_id": service_team_id or "",
                     "ticket_type": ticket_type or "",
                     "base_station_details": base_station_details or "",
+                    "location_source": location_source or "",
+                    "location_id": location_id or "",
                     "priority": priority,
                     "channel": channel,
                     "status": status,

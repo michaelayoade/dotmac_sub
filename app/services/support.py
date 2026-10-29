@@ -3089,8 +3089,19 @@ class Tickets:
                 "invalid_ticket_creation_mode",
                 "Silent internal tickets cannot request customer acknowledgement.",
             )
-        ticket_validation.validate_ticket_creation(db, payload)
-        data = payload.model_dump()
+        selected_location = ticket_validation.validate_ticket_creation(
+            db, payload, lock_location=True
+        )
+        data = payload.model_dump(exclude={"location_reference"})
+        metadata = dict(data.get("metadata_") or {})
+        metadata.pop("base_station_reference", None)
+        if selected_location is not None:
+            metadata["base_station_details"] = selected_location.label
+            metadata["base_station_reference"] = {
+                "source": selected_location.source.value,
+                "id": str(selected_location.id),
+            }
+        data["metadata_"] = metadata or None
         data["status"] = parse_ticket_status(
             data.get("status") or support_ticket_settings_service.default_status(db)
         ).value

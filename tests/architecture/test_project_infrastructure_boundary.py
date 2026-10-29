@@ -9,6 +9,7 @@ def test_infrastructure_lookup_is_shared_and_read_only():
     owner = service_relationship("network.infrastructure_catalogue")
     assert owner.contract is not None
     assert owner.module == "app.services.infrastructure_catalogue"
+    assert "ticket location suggestions" in owner.owns
     assert not (ROOT / "app/services/network/infrastructure_catalogue.py").exists()
     source = (ROOT / "app/services/infrastructure_catalogue.py").read_text(
         encoding="utf-8"
@@ -18,6 +19,13 @@ def test_infrastructure_lookup_is_shared_and_read_only():
         assert "infrastructure_catalogue.search(" in (ROOT / path).read_text(
             encoding="utf-8"
         )
+    ticket_adapter = (ROOT / "app/web/admin/support_tickets.py").read_text(
+        encoding="utf-8"
+    )
+    assert "infrastructure_catalogue.ticket_location_suggestions(" in ticket_adapter
+    assert "from app.models.network" not in ticket_adapter
+    ticket_owner = service_relationship("support.ticket_lifecycle")
+    assert "network.infrastructure_catalogue" in ticket_owner.depends_on
 
 
 def test_project_relationships_have_one_writer():
