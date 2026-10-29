@@ -20,7 +20,13 @@ from zoneinfo import ZoneInfo
 from sqlalchemy import select
 from sqlalchemy.orm import Session, selectinload
 
-from app.models.billing import ServiceEntitlement, ServiceEntitlementStatus
+from app.models.billing import (
+    Invoice,
+    InvoiceDueDateBasis,
+    InvoiceStatus,
+    ServiceEntitlement,
+    ServiceEntitlementStatus,
+)
 from app.models.catalog import BillingMode, Subscription, SubscriptionStatus
 from app.models.subscriber import Subscriber
 from app.models.subscription_change import (
@@ -54,8 +60,10 @@ from app.services.service_status import (
 from app.services.status_presentation import (
     access_session_status_presentation,
     account_status_presentation,
+    invoice_status_presentation,
     service_access_status_presentation,
     subscription_status_presentation,
+    ticket_status_presentation,
 )
 from app.services.subscription_lifecycle import classify_service_change_delivery
 from app.services.topology.connection_status import assess
@@ -244,12 +252,40 @@ class CustomerDashboardUsage:
 
 
 @dataclass(frozen=True, slots=True)
+class CustomerDashboardSupport:
+    open_count: int
+    latest_ticket_number: str | None
+    latest_status_label: str | None
+    latest_updated_at: datetime | None
+
+
+class CustomerDashboardActivityKind(StrEnum):
+    invoice = "invoice"
+    connection = "connection"
+
+
+@dataclass(frozen=True, slots=True)
+class CustomerDashboardActivity:
+    kind: CustomerDashboardActivityKind
+    title: str
+    detail: str
+    observed_at: datetime
+    action_label: str
+    action_url: str
+    amount_due: MoneyAmount | None = None
+    due_at: datetime | None = None
+
+
+@dataclass(frozen=True, slots=True)
 class CustomerDashboardHighlights:
     greeting_name: str
     greeting_period: str
     observed_at: datetime
     account_credit: StateValue
     services: tuple[CustomerDashboardService, ...]
+    support: StateValue
+    activity: StateValue
+    activity_partial: bool
 
 
 _CUSTOMER_ACTION_URLS = {
@@ -641,11 +677,151 @@ def build_portal_account_health(
     )
 
 
+def _dashboard_support(db: Session, account_id: UUID) -> StateValue:
+    """Project the exact account's active, non-terminal support requests."""
+    try:
+        from app.services.support import Tickets, TicketStatusScope
+
+        status_scope = TicketStatusScope.not_closed()
+        open_count = Tickets.count(
+            db,
+            subscriber_id=str(account_id),
+            is_active=True,
+            status_scope=status_scope,
+        )
+        latest_rows = Tickets.list(
+            db,
+            subscriber_id=str(account_id),
+            is_active=True,
+            status_scope=status_scope,
+            order_by="updated_at",
+            order_dir="desc",
+            limit=1,
+        )
+        latest = latest_rows[0] if latest_rows else None
+        return StateValue.present(
+            CustomerDashboardSupport(
+                open_count=open_count,
+                latest_ticket_number=latest.number if latest is not None else None,
+                latest_status_label=(
+                    ticket_status_presentation(latest.status).label
+                    if latest is not None
+                    else None
+                ),
+                latest_updated_at=latest.updated_at if latest is not None else None,
+            ),
+            as_of=datetime.now(UTC),
+        )
+    except Exception as exc:
+        logger.warning(
+            "customer_dashboard_support_unavailable",
+            extra={"account_id": str(account_id), "error_type": type(exc).__name__},
+        )
+        return StateValue.unavailable()
+
+
+def _dashboard_activity(
+    db: Session, health: PortalAccountHealth
+) -> tuple[StateValue, bool]:
+    """Compose customer-safe invoice and connection updates from their owners."""
+    items: list[CustomerDashboardActivity] = []
+    partial = any(
+        service.connection.kind.value in {"unknown", "unavailable"}
+        for service in health.services
+    )
+    try:
+        invoice = db.scalar(
+            select(Invoice)
+            .where(Invoice.account_id == health.account_id)
+            .where(Invoice.is_active.is_(True))
+            .where(Invoice.is_proforma.is_not(True))
+            .where(
+                Invoice.status.in_(
+                    (
+                        InvoiceStatus.issued,
+                        InvoiceStatus.partially_paid,
+                        InvoiceStatus.overdue,
+                    )
+                )
+            )
+            .where(Invoice.balance_due > Decimal("0"))
+            .order_by(Invoice.issued_at.desc(), Invoice.created_at.desc())
+            .limit(1)
+        )
+        if invoice is not None:
+            number = invoice.invoice_number or str(invoice.id)[:8]
+            title = (
+                f"Invoice {number} is ready"
+                if invoice.status == InvoiceStatus.issued
+                else f"Invoice {number} · {invoice_status_presentation(invoice.status).label}"
+            )
+            observed_at = invoice.issued_at or invoice.created_at
+            items.append(
+                CustomerDashboardActivity(
+                    kind=CustomerDashboardActivityKind.invoice,
+                    title=title,
+                    detail="Review your latest open invoice.",
+                    observed_at=(
+                        observed_at.replace(tzinfo=UTC)
+                        if observed_at.tzinfo is None
+                        else observed_at
+                    ),
+                    action_label="Review",
+                    action_url=f"/portal/billing/invoices/{invoice.id}",
+                    amount_due=MoneyAmount(
+                        amount=invoice.balance_due, currency=invoice.currency
+                    ),
+                    due_at=(
+                        invoice.due_at
+                        if invoice.due_date_basis
+                        not in (None, InvoiceDueDateBasis.unknown_unverified)
+                        else None
+                    ),
+                )
+            )
+    except Exception as exc:
+        logger.warning(
+            "customer_dashboard_invoice_activity_unavailable",
+            extra={
+                "account_id": str(health.account_id),
+                "error_type": type(exc).__name__,
+            },
+        )
+        partial = True
+
+    connected_services = [
+        service for service in health.services if service.connection.is_present
+    ]
+    if connected_services:
+        service = max(
+            connected_services,
+            key=lambda candidate: candidate.connection.value.checked_at,
+        )
+        diagnosis = service.connection.value
+        items.append(
+            CustomerDashboardActivity(
+                kind=CustomerDashboardActivityKind.connection,
+                title=(
+                    "Connection status may be out of date"
+                    if service.connection.is_stale
+                    else diagnosis.headline
+                ),
+                detail=diagnosis.message,
+                observed_at=diagnosis.checked_at,
+                action_label="Connection details",
+                action_url=f"/portal/services/{service.subscription_id}",
+            )
+        )
+    if partial and not items:
+        return StateValue.unavailable(), True
+    return StateValue.present(tuple(items), as_of=datetime.now(UTC)), partial
+
+
 def get_customer_dashboard_highlights(
     db: Session,
     query: CustomerDashboardHighlightsQuery,
 ) -> CustomerDashboardHighlights:
-    """Read dashboard-only identity, credit, and plan facts without new decisions."""
+    """Read scoped dashboard facts without introducing a second decision owner."""
     health = query.account_health
     account = db.get(Subscriber, health.account_id)
     greeting_name = (
@@ -867,10 +1043,14 @@ def get_customer_dashboard_highlights(
         )
         for service in health.services
     )
+    activity, activity_partial = _dashboard_activity(db, health)
     return CustomerDashboardHighlights(
         greeting_name=greeting_name or "Customer",
         greeting_period=greeting_period,
         observed_at=health.as_of,
         account_credit=credit,
         services=services,
+        support=_dashboard_support(db, health.account_id),
+        activity=activity,
+        activity_partial=activity_partial,
     )

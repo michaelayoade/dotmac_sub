@@ -114,7 +114,13 @@ entitlement when one exists. A companion card shows recorded usage for one
 current capped quota bucket matching that service's offer allowance, with the
 allowance window and recording time. Missing, ambiguous, or uncapped evidence
 has its own plain-language state; the template does not invent a period, total,
-or zero. Support and activity remain for the next dashboard slice.
+or zero. The support card uses the canonical ticket scope and distinguishes
+confirmed zero requests from an unavailable read. The update rows use an open
+customer invoice and the existing connection diagnosis; a failed invoice read
+marks the feed partial without hiding confirmed connection evidence. Review,
+service details, support, and notifications link to existing customer pages.
+The chat button opens the shared chat widget only when chat is enabled and the
+customer session permits changes.
 Service detail and reseller Jinja surfaces share
 `templates/components/portal/account_health.html`; mobile
 uses `GET /api/v1/me/account-health`. Neither client derives those semantics or

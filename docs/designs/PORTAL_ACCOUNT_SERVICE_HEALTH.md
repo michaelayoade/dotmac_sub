@@ -74,9 +74,9 @@ OLT, ONT, NAS, or RADIUS polling.
   per operationally-current subscription. A missing credit or speed read shows
   an explicit unavailable message. A missing action is described as no payment
   action only when Account Health is complete. The topbar remains owned by the
-  shared customer layout. Stage 2A adds exact funded prepaid service-period
-  progress and rated capped-allowance usage per service. Stage 2B adds support
-  and recent activity.
+  shared customer layout. The dashboard also shows exact funded prepaid
+  service-period progress, rated capped-allowance usage per service, customer
+  support requests, and customer-safe invoice and connection updates.
 - Customer service detail narrows the same account projection to the requested
   subscription after the existing ownership check. If an owned subscription is
   missing from that projection, the detail service returns no result so the
@@ -101,14 +101,19 @@ OLT, ONT, NAS, or RADIUS polling.
 - Read owner: `ui.portal_account_health_projection`; dashboard highlights use
   its typed `CustomerDashboardHighlightsQuery` and result. Source records are
   the account, currency-scoped unallocated-credit ledger, scoped offers, funded
-  service entitlements, and rated quota buckets.
+  service entitlements, rated quota buckets, canonical support-ticket queries,
+  issued invoice records, and the shared connection projection.
 - First viewport: local greeting, account lifecycle, canonical primary action,
   account credit, and per-service lifecycle, access, session, connection,
   plan speed, next charge date, connection evidence time, funded service period,
-  and rated capped-allowance usage.
+  rated capped-allowance usage, open support requests, and relevant invoice and
+  connection updates.
 - Actions: the primary action uses the service-status owner's label and URL;
-  billing history and service details are read-only drill-downs. View-only
-  sessions do not show a payment action. No destructive or bulk action exists.
+  billing history, service details, support requests, invoice review, and
+  notifications are read-only drill-downs. Chat opens the existing portal chat
+  widget only when enabled for a writable customer session; otherwise the
+  existing support page is the destination. View-only sessions do not show a
+  payment or chat action. No destructive or bulk action exists.
 - Availability: absent account health shows a page warning; unavailable credit,
   speed, charge date, or connection shows an explicit message. Confirmed zero
   credit remains zero. Multiple currencies do not collapse into one credit
@@ -116,13 +121,20 @@ OLT, ONT, NAS, or RADIUS polling.
   entitlement. Usage appears only for one current quota bucket matching the
   service's offer allowance; an uncapped bucket is identified separately.
   Missing or ambiguous evidence shows an unavailable message. No operational
-  service yields a dedicated empty state.
+  service yields a dedicated empty state. A confirmed zero open-ticket count is
+  shown as zero; a failed support read says unavailable. Invoice activity uses
+  only active, non-proforma, issued or partially paid or overdue invoices with
+  a positive balance. Its due date appears only with verified due-date basis.
+  A failed invoice read or missing connection diagnosis cannot erase a confirmed
+  update from the other owner and is marked as a partial feed. No invoice or
+  connection update has a distinct empty message.
 - Freshness and provenance: Account Health and connection observations carry
   their own timestamps. The dashboard does not poll equipment or cache a second
   status decision. Dates display in Lagos time. Sensitive financial amounts
   remain inside the authenticated customer session.
 - Layout: the same facts stack on mobile. The shared customer layout owns the
-  topbar. Stage 2B adds only owner-backed support and activity sections.
+  topbar. The support card sits beside the first service and usage cards on
+  wide screens; the update rows follow below.
 
 Templates and mobile clients may choose navigation and native layout. They do
 not derive billing position, access eligibility, session freshness, outage
@@ -164,6 +176,12 @@ unlimited bucket's zero as measured usage. Quota usage carries the bucket's
 recorded time and may lag live traffic. Missing or conflicting source evidence
 does not produce a percentage or fabricated data amount. The new entitlement
 and quota reads are each batched across the already-scoped service IDs.
+
+The dashboard support card uses the support owner's canonical customer scope
+and non-closed status scope. The previous dashboard-context open-count query,
+which turned a failed read into zero, is retired. Invoice activity reads one
+customer-scoped open invoice. Connection activity reuses the Account Health
+diagnosis already loaded for each current service and adds no network poll.
 
 The one-active-service fixture currently uses 26 SQL statements and is guarded
 at a maximum of 28. Any increase must identify the new authoritative input and

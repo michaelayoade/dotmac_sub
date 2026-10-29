@@ -24,15 +24,18 @@ from app.models.catalog import (
     SubscriptionStatus,
     UsageAllowance,
 )
+from app.models.subscriber import Subscriber
 from app.models.subscription_change import (
     SubscriptionChangeRequest,
     SubscriptionChangeStatus,
 )
+from app.models.support import Ticket
 from app.models.usage import QuotaBucket
 from app.schemas.portal_account_health import PortalAccountHealthRead
 from app.services import catalog as catalog_service
 from app.services import portal_account_health
 from app.services.portal_account_health import build_portal_account_health
+from app.services.ui_contracts import StateValue
 from app.web.customer.branding import get_customer_templates
 
 
@@ -249,6 +252,9 @@ def test_portal_templates_share_owner_projection_and_remove_generic_balance():
     assert "account_health" in customer
     assert "account_health" in reseller
     assert "dashboard_highlights" in customer
+    assert "dashboard_highlights.support" in customer
+    assert "dashboard_highlights.activity" in customer
+    assert "tickets.open_count" not in customer
     assert (
         "status_presentation_badge(service.connection.value.status_presentation"
         in customer
@@ -364,6 +370,108 @@ def test_customer_dashboard_period_and_usage_require_current_scoped_evidence(
     ).services[0]
     assert row.service_period.kind.value == "unknown"
     assert row.data_usage.kind.value == "unknown"
+
+
+def test_customer_dashboard_support_and_invoice_activity_are_account_scoped(
+    db_session, subscriber_account, subscription
+):
+    subscriber_account.billing_mode = BillingMode.postpaid
+    subscription.billing_mode = BillingMode.postpaid
+    subscription.status = SubscriptionStatus.active
+    open_ticket = Ticket(
+        subscriber_id=subscriber_account.id,
+        number="SUP-1048",
+        title="Connection help",
+        status="open",
+        is_active=True,
+    )
+    closed_ticket = Ticket(
+        subscriber_id=subscriber_account.id,
+        number="SUP-OLD",
+        title="Previous request",
+        status="closed",
+        is_active=True,
+    )
+    other_account = Subscriber(
+        first_name="Another",
+        last_name="Customer",
+        email=f"other-{uuid.uuid4().hex}@example.com",
+        reseller_id=subscriber_account.reseller_id,
+    )
+    db_session.add(other_account)
+    db_session.flush()
+    other_ticket = Ticket(
+        subscriber_id=other_account.id,
+        number="SUP-OTHER",
+        title="Another account's request",
+        status="open",
+        is_active=True,
+    )
+    db_session.add_all([open_ticket, closed_ticket, other_ticket])
+    db_session.commit()
+    invoice = _invoice(
+        db_session, subscriber_account.id, currency="NGN", balance="28500.00"
+    )
+    _invoice(db_session, other_account.id, currency="NGN", balance="99000.00")
+    health = build_portal_account_health(db_session, subscriber_account.id)
+
+    highlights = portal_account_health.get_customer_dashboard_highlights(
+        db_session,
+        portal_account_health.CustomerDashboardHighlightsQuery(account_health=health),
+    )
+
+    assert highlights.support.value.open_count == 1
+    assert highlights.support.value.latest_ticket_number == "SUP-1048"
+    invoice_update = next(
+        item for item in highlights.activity.value if item.kind.value == "invoice"
+    )
+    assert invoice.invoice_number in invoice_update.title
+    assert invoice_update.amount_due.amount == Decimal("28500.00")
+    assert invoice_update.action_url == f"/portal/billing/invoices/{invoice.id}"
+
+
+def test_customer_dashboard_support_failure_is_not_reported_as_zero(
+    db_session, subscriber_account, monkeypatch
+):
+    from app.services.support import Tickets
+
+    subscriber_account.billing_mode = BillingMode.postpaid
+    db_session.commit()
+    health = build_portal_account_health(db_session, subscriber_account.id)
+
+    def unavailable(*_args, **_kwargs):
+        raise RuntimeError("support read unavailable")
+
+    monkeypatch.setattr(Tickets, "count", unavailable)
+    highlights = portal_account_health.get_customer_dashboard_highlights(
+        db_session,
+        portal_account_health.CustomerDashboardHighlightsQuery(account_health=health),
+    )
+
+    assert highlights.support.kind.value == "unavailable"
+
+
+def test_customer_dashboard_activity_reports_missing_connection_evidence(
+    db_session, subscriber_account, subscription, monkeypatch
+):
+    subscriber_account.billing_mode = BillingMode.postpaid
+    subscription.billing_mode = BillingMode.postpaid
+    subscription.status = SubscriptionStatus.active
+    db_session.commit()
+    monkeypatch.setattr(
+        portal_account_health,
+        "_connection_diagnosis",
+        lambda _db, _subscription: StateValue.unavailable(),
+    )
+    health = build_portal_account_health(db_session, subscriber_account.id)
+
+    highlights = portal_account_health.get_customer_dashboard_highlights(
+        db_session,
+        portal_account_health.CustomerDashboardHighlightsQuery(account_health=health),
+    )
+
+    assert highlights.activity.kind.value == "unavailable"
+    assert highlights.activity_partial is True
 
 
 def test_portal_account_health_templates_compile():

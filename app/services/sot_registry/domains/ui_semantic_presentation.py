@@ -695,7 +695,7 @@ DOMAIN = DomainSOT(
             module="app.services.portal_account_health",
             owns=(
                 "customer and reseller account-health first-viewport projection",
-                "customer dashboard identity, credit, plan, period, and usage highlights",
+                "customer dashboard identity, credit, plan, period, usage, support, and activity highlights",
                 "subscription-scoped service-health row projection",
                 "portal financial-position currency-lane projection",
                 "mobile account-health transport projection",
@@ -708,12 +708,14 @@ DOMAIN = DomainSOT(
                 "customer.service_status",
                 "financial.account_credit_applications",
                 "financial.billing_profile",
+                "financial.invoices",
                 "financial.prepaid_service_renewals",
                 "financial.prepaid_funding_reconstruction",
                 "network.connection_health",
                 "network.outage_lifecycle",
                 "network.radius_sessions",
                 "service_intent.subscription_lifecycle",
+                "support.ticket_lifecycle",
                 "ui.projection_contracts",
                 "ui.status_presentation",
                 "usage.quota_cycle_policy",
@@ -741,7 +743,7 @@ DOMAIN = DomainSOT(
                         ),
                     ),
                     ConcernContract(
-                        name="customer dashboard identity, credit, plan, period, and usage highlights",
+                        name="customer dashboard identity, credit, plan, period, usage, support, and activity highlights",
                         role=OwnerRole.RESOLVER,
                         input_names=(
                             "canonical account-health projection",
@@ -750,6 +752,8 @@ DOMAIN = DomainSOT(
                             "canonical current subscriptions",
                             "funded prepaid service period evidence",
                             "rated quota period and usage evidence",
+                            "canonical customer invoice updates",
+                            "canonical customer support request scope",
                         ),
                     ),
                     ConcernContract(
@@ -823,6 +827,18 @@ DOMAIN = DomainSOT(
                         owner="usage.quota_cycle_policy",
                         kind=AuthorityKind.AUTHORITATIVE_RECORD,
                         source="current exact-subscription QuotaBucket with matching offer allowance",
+                    ),
+                    AuthorityInput(
+                        name="canonical customer invoice updates",
+                        owner="financial.invoices",
+                        kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                        source="customer-scoped issued, partially paid, or overdue active invoice",
+                    ),
+                    AuthorityInput(
+                        name="canonical customer support request scope",
+                        owner="support.ticket_lifecycle",
+                        kind=AuthorityKind.DERIVED_PROJECTION,
+                        source="canonical Tickets count and latest row under TicketStatusScope.not_closed",
                     ),
                     AuthorityInput(
                         name="canonical billing profile",
