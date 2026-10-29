@@ -53,3 +53,17 @@ def test_prepaid_proforma_conversion_guard_lives_in_owner() -> None:
 
     assert "_requires_prepaid_reconciliation(db, invoice)" in conversion_owner
     assert '"prepaid_reconciliation_required"' in conversion_owner
+
+
+def test_account_vat_selection_is_shared_by_draft_and_form() -> None:
+    owner = Path("app/services/invoice_draft_authoring.py").read_text()
+    route = Path("app/web/admin/billing_invoices.py").read_text()
+    template = Path("templates/admin/billing/invoice_form.html").read_text()
+    calculator = Path("static/js/invoice-calculator.js").read_text()
+
+    assert "def resolve_account_vat_selection(" in owner
+    assert "account_vat = resolve_account_vat_selection(" in owner
+    assert "resolve_account_vat_selection(db, account=account)" in route
+    assert ':disabled="accountVatLocked"' in template
+    assert "already has VAT configured" in template
+    assert "previousAccountVatRateId" in calculator

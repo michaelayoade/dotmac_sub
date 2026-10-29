@@ -91,11 +91,39 @@ class InvoiceDraftAuthoringError(DomainError, ValueError):
         DomainError.__init__(self, code=code, message=message, details=details)
 
 
+@dataclass(frozen=True, slots=True)
+class AccountVatSelection:
+    account_id: UUID
+    tax_rate_id: UUID | None
+    tax_rate_name: str | None
+    tax_rate_percent: Decimal | None
+    selection_locked: bool
+    vat_exempt: bool
+
+
 def _error(suffix: str, message: str, **details: object) -> InvoiceDraftAuthoringError:
     return InvoiceDraftAuthoringError(
         code=f"{OWNER}.{suffix}",
         message=message,
         details=details,
+    )
+
+
+def resolve_account_vat_selection(
+    db: Session, *, account: Subscriber
+) -> AccountVatSelection:
+    """Resolve account VAT once for both the draft command and its form."""
+
+    policy = get_customer_vat_exemption_policy(db, account_id=account.id)
+    rate = db.get(TaxRate, account.tax_rate_id) if account.tax_rate_id else None
+    active_rate = None if policy.vat_exempt or not rate or not rate.is_active else rate
+    return AccountVatSelection(
+        account_id=account.id,
+        tax_rate_id=active_rate.id if active_rate else None,
+        tax_rate_name=active_rate.name if active_rate else None,
+        tax_rate_percent=Decimal(str(active_rate.rate)) if active_rate else None,
+        selection_locked=active_rate is not None,
+        vat_exempt=policy.vat_exempt,
     )
 
 
@@ -448,10 +476,14 @@ def _stage_lines(
     lines: tuple[DraftLineCommand, ...],
 ) -> None:
     validated = _validated_lines(db, account_id=invoice.account_id, lines=lines)
-    vat_policy = get_customer_vat_exemption_policy(
-        db,
-        account_id=invoice.account_id,
-    )
+    account = db.get(Subscriber, invoice.account_id)
+    if account is None:
+        raise _error(
+            "account_not_found",
+            "Customer account was not found.",
+            account_id=str(invoice.account_id),
+        )
+    account_vat = resolve_account_vat_selection(db, account=account)
     replacements = tuple(
         DraftInvoiceLineReplacement(
             line_id=command.line_id,
@@ -461,7 +493,11 @@ def _stage_lines(
                 quantity=command.quantity,
                 unit_price=command.unit_price,
                 amount=amount,
-                tax_rate_id=None if vat_policy.vat_exempt else command.tax_rate_id,
+                tax_rate_id=(
+                    None
+                    if account_vat.vat_exempt
+                    else account_vat.tax_rate_id or command.tax_rate_id
+                ),
                 tax_application=tax_application,
                 subscription_id=command.subscription_id,
                 is_active=True,

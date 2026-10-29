@@ -351,6 +351,23 @@ def test_payment_guidance_explains_funded_prepaid_renewal() -> None:
     assert "billing date is not moved" in content
 
 
+def test_invoice_guidance_explains_configured_account_vat_lock() -> None:
+    guide = guidance_for_path("/admin/billing/invoices/new")
+
+    assert guide is not None
+    assert guide.id == "invoice"
+    content = " ".join((*guide.steps, *guide.notes)).lower()
+    assert "active configured vat rate" in content
+    assert "locks manual tax selection" in content
+    assert "applies the account vat exactly once" in content
+    assert "without configured vat keep manual tax selection" in content
+    assert "vat-exempt customer is not charged" in content
+
+    actions = {action.id: action for action in help_actions_for(guide)}
+    create_content = " ".join(actions["create-review-invoice"].steps).lower()
+    assert "locks manual tax selection" in create_content
+
+
 def test_admin_guidance_uses_one_accessible_centered_modal() -> None:
     layout = Path("templates/layouts/admin.html").read_text(encoding="utf-8")
     control = Path("templates/components/ui/workflow_help.html").read_text(

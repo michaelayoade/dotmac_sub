@@ -32,6 +32,10 @@ function createInvoiceCalculator(config = {}) {
 
         // Tax rates from backend
         taxRates: config.taxRates || [],
+        accountVatLocked: Boolean(config.accountVatLocked),
+        accountVatRateId: config.accountVatRateId || '',
+        accountVatName: config.accountVatName || '',
+        accountVatPercent: config.accountVatPercent ?? null,
 
         // Form state
         submitting: false,
@@ -95,6 +99,7 @@ function createInvoiceCalculator(config = {}) {
             });
 
             this.bindAccountField();
+            this.applyAccountVat();
         },
 
         bindAccountField() {
@@ -102,6 +107,19 @@ function createInvoiceCalculator(config = {}) {
                 const accountField = this.$el.querySelector("[name='account_id']");
                 if (accountField) {
                     this.accountId = accountField.value || "";
+                    const source = accountField.selectedOptions
+                        ? accountField.selectedOptions[0]
+                        : accountField;
+                    if (source && source.dataset.vatLocked) {
+                        this.setAccountVat({
+                            selection_locked: source.dataset.vatLocked === 'true',
+                            tax_rate_id: source.dataset.vatRateId || null,
+                            tax_rate_name: source.dataset.vatName || null,
+                            tax_rate_percent: source.dataset.vatPercent || null
+                        });
+                    } else {
+                        this.setAccountVat(null);
+                    }
                 }
             };
 
@@ -117,6 +135,31 @@ function createInvoiceCalculator(config = {}) {
             this.$el.addEventListener("htmx:afterSwap", sync);
         },
 
+        setAccountVat(selection) {
+            const previousAccountVatRateId = this.accountVatLocked ? this.accountVatRateId : '';
+            this.accountVatLocked = Boolean(selection && selection.selection_locked);
+            this.accountVatRateId = selection && selection.tax_rate_id || '';
+            this.accountVatName = selection && selection.tax_rate_name || '';
+            this.accountVatPercent = selection ? selection.tax_rate_percent : null;
+            if (!this.accountVatLocked && previousAccountVatRateId) {
+                this.lineItems.forEach(item => {
+                    if (item.taxRateId === previousAccountVatRateId) {
+                        item.taxRateId = '';
+                        item.taxRate = 0;
+                    }
+                });
+            }
+            this.applyAccountVat();
+        },
+
+        applyAccountVat() {
+            if (!this.accountVatLocked) return;
+            this.lineItems.forEach(item => {
+                item.taxRateId = this.accountVatRateId;
+                item.taxRate = parseFloat(this.accountVatPercent) || 0;
+            });
+        },
+
         // Line item management
         addLineItem() {
             if (this.lineItems.length >= this.maxItems) {
@@ -130,8 +173,8 @@ function createInvoiceCalculator(config = {}) {
                 description: '',
                 quantity: 1,
                 unitPrice: 0,
-                taxRateId: '',
-                taxRate: 0
+                taxRateId: this.accountVatLocked ? this.accountVatRateId : '',
+                taxRate: this.accountVatLocked ? (parseFloat(this.accountVatPercent) || 0) : 0
             });
 
             // Focus the new description field
@@ -351,6 +394,7 @@ function createInvoiceCalculator(config = {}) {
         },
 
         applyTaxToAll(taxRateId) {
+            if (this.accountVatLocked) return;
             const taxRate = this.getTaxRateValue(taxRateId);
             this.lineItems.forEach(item => {
                 item.taxRateId = taxRateId;
