@@ -125,10 +125,23 @@ separate live authorization and readiness gates are satisfied.
 Artifacts are exclusive root-protected files beneath
 `/var/lib/dotmac-gate0/runs/RUN_UUID`. Replacing a run's evidence is refused.
 Use a new authorized run for retries that perform new actions. Initial campaign
-requires proofs1–5; next-morning context independently requires proofs2–4 with
+requires proofs1–5; same-session repeatability context independently requires proofs2–4 with
 its protected prior-run relationship. A genuine rerun needs a distinct eligible
 forward candidate/source; no no-op commit, same-SHA rebuild or second apply is
 created to manufacture it.
+
+The phase is `initial` or `repeatability`; future requests using the retired
+`next_morning` value are refused. Historical artifacts remain unchanged.
+Repeatability may run in the same session after the initial published PASS;
+there is no calendar wait. It repeats proofs2–4 with a new source revision,
+source tree, desired nonce and target digest, continuing from the accepted image.
+Nonce, outbox or ledger resets, key rotation, reinstall and leftover test
+hooks are forbidden between runs. Existing protected enrollment hashes bind the installed
+configuration, keys and unit; refusal cleanup checks restore the exact checkout
+and original configuration and remove only byte-matching owned test files.
+Each controlled stop/start must produce a different validated InvocationID;
+normal polling must emit a fresh journal refusal under its current InvocationID.
+The consumed nonce and original applied report remain byte-preserved.
 
 ## Cleanup and network acceptance
 
@@ -178,7 +191,7 @@ The complete source requires independent review, exact component accounting,
 a separate decision for any shipping-cap excess and prescribed hosted CI.
 All human custody, public fingerprint verification, actual host enrollment,
 source-preparation packet, resolver/binary format acceptance, live proofs,
-Michael signoff, next-morning rerun and same-digest production authorization
+Michael signoff, same-session repeatability rerun and same-digest production authorization
 remain open. Offline crypto/mocked-process tests are not Docker/kernel/live
 acceptance. Do not use a local Docker daemon for validation.
 
