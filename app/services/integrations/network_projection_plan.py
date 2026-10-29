@@ -20,6 +20,10 @@ are the known v1 member of that set.
 
 from __future__ import annotations
 
+import hashlib
+import json
+from ipaddress import ip_network
+
 from sqlalchemy.orm import Session
 
 from app.models.catalog import AccessCredential
@@ -27,7 +31,6 @@ from app.services.integrations.network_capability_contracts import (
     projection_fingerprint,
 )
 from app.services.integrations.projection_secret_fetch import (
-    current_secret_version,
     open_projection_request,
 )
 from app.services.radius_population import RadiusProjectionWorkItem
@@ -83,7 +86,20 @@ def translate_work_item(
             attributes.append({"key": "simultaneous_use", "value": str(value)})
             continue
         if attribute == "Framed-Route":
-            cidr = str(value).split(" ")[0]
+            tokens = str(value).split()
+            if op != "+=" or len(tokens) != 3 or tokens[1:] != ["0.0.0.0", "1"]:  # noqa: S104 - RADIUS gateway, not a socket bind
+                raise UntranslatableWorkItem(
+                    f"{item.username}: Framed-Route has no v1 expression"
+                )
+            cidr = tokens[0]
+            try:
+                if "/" not in cidr:
+                    raise ValueError("missing prefix")
+                ip_network(cidr, strict=False)
+            except ValueError:
+                raise UntranslatableWorkItem(
+                    f"{item.username}: Framed-Route has no v1 expression"
+                ) from None
             attributes.append({"key": "framed_route", "value": cidr})
             continue
         key = _REPLY_KEY_BY_ATTRIBUTE.get(attribute)
@@ -151,38 +167,49 @@ def open_and_translate(
     Authenticating logins (active/captive) get a fresh
     `ProjectionSecretRequest`; its ref and the credential's current secret
     version ride in the step input. Reject/disabled plans open nothing.
-    The request opens in the caller's transaction, so a plan that is never
-    submitted leaves no live authorization behind.
+    Unsupported plans open no authorization. A supported plan's request
+    joins the caller's transaction and rolls back with aborted plan work.
     """
-    credential_id: str | None = None
-    secret_version: int | None = None
-    request_ref: str | None = None
-    if item.mode in {"active", "captive"}:
-        if credential is None:
-            raise UntranslatableWorkItem(
-                f"{item.username}: authenticating login without a credential"
-            )
-        request = open_projection_request(db, credential=credential)
-        credential_id = str(credential.id)
-        secret_version = current_secret_version(credential)
-        request_ref = request.request_ref
-    return translate_work_item(
+    authenticates = item.mode in {"active", "captive"}
+    if authenticates and credential is None:
+        raise UntranslatableWorkItem(
+            f"{item.username}: authenticating login without a credential"
+        )
+    credential_id = str(credential.id) if authenticates and credential else None
+    # Validate every attribute before authoring any authorization. A caller
+    # may catch an unsupported login and still commit its other plan work.
+    step = translate_work_item(
         item,
         subject_ref=subject_ref,
         credential_id=credential_id,
-        secret_version=secret_version,
-        projection_request_ref=request_ref,
+        secret_version=None,
+        projection_request_ref=None,
         policy_version=policy_version,
         previous_username=previous_username,
     )
+    if authenticates and credential is not None:
+        request = open_projection_request(db, credential=credential)
+        # Build the final fingerprint from the version captured by the actual
+        # authorization, keeping its binding and the submitted step identical.
+        step = translate_work_item(
+            item,
+            subject_ref=subject_ref,
+            credential_id=credential_id,
+            secret_version=request.secret_version,
+            projection_request_ref=request.request_ref,
+            policy_version=policy_version,
+            previous_username=previous_username,
+        )
+    return step
 
 
 def command_id_for(step_input: dict[str, object]) -> str:
-    """Deterministic per desired state: replanning the same state replays."""
-    return (
-        f"radius-projection:{step_input['username']}:"
-        f"{step_input['expected_fingerprint']}"
+    """Replay the exact same plan; any changed step material gets a new id."""
+    canonical = json.dumps(
+        step_input, sort_keys=True, separators=(",", ":"), allow_nan=False
     )
+    digest = hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+    return f"radius-projection:{step_input['username']}:{digest}"
 
 
 __all__ = [

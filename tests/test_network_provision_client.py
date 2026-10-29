@@ -39,7 +39,7 @@ def test_submit_request_shape_matches_the_provision_port() -> None:
         capability_binding_id="binding-7", step_input=STEP
     )
     assert document["schema_version"] == "dotmac.io/integration-provision-request/v1"
-    assert document["command_id"] == f"radius-projection:jane@radius:{'0' * 64}"
+    assert document["command_id"] == client.command_id_for(STEP)
     assert document["steps"] == [
         {
             "step_key": "projection",
@@ -109,3 +109,36 @@ def test_armed_client_refuses_a_payload_that_would_carry_material() -> None:
             forbidden_material="Sup3rSecretPw",
             transport=lambda *a, **k: _Answer(),
         )
+
+
+@pytest.mark.parametrize(
+    "material", ['dummy"quoted', "dummy\\slash", "dummy\nline", "dummy\u00e9"]
+)
+@pytest.mark.parametrize("location", ["value", "key", "correlation"])
+def test_escaped_material_is_refused_before_transport(
+    material: str, location: str, caplog: pytest.LogCaptureFixture
+) -> None:
+    poisoned = dict(STEP)
+    correlation_id = None
+    if location == "value":
+        poisoned["attributes"] = [
+            {"key": "rate_limit", "value": f"prefix{material}suffix"}
+        ]
+    elif location == "key":
+        poisoned["attributes"] = [{f"prefix{material}suffix": "dummy"}]
+    else:
+        correlation_id = f"prefix{material}suffix"
+
+    def unexpected_transport(*args: object, **kwargs: object) -> _Answer:
+        pytest.fail("credential material must be refused before transport")
+
+    with _armed(), pytest.raises(client.NetworkProvisionRefused) as refusal:
+        client.submit_projection(
+            capability_binding_id="binding-7",
+            step_input=poisoned,
+            forbidden_material=material,
+            correlation_id=correlation_id,
+            transport=unexpected_transport,
+        )
+    assert str(refusal.value) == "provision payload would carry credential material"
+    assert material not in caplog.text

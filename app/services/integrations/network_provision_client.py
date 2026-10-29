@@ -9,7 +9,7 @@ policy was decided upstream (access policy -> planner -> translator).
 
 The payload can never carry a secret: the step input names the credential
 by id and secret version only (ADR-0076 section 7), and the submit builder
-re-checks the serialized body for the work item's password before any
+re-checks the document's strings for the work item's password before any
 transport call.
 """
 
@@ -41,6 +41,19 @@ class ProvisionReceipt:
     status: str
     operation_id: str | None
     operation_state: str | None
+
+
+def _contains_material(value: object, material: str) -> bool:
+    if isinstance(value, str):
+        return material in value
+    if isinstance(value, dict):
+        return any(
+            _contains_material(key, material) or _contains_material(item, material)
+            for key, item in value.items()
+        )
+    if isinstance(value, list | tuple):
+        return any(_contains_material(item, material) for item in value)
+    return False
 
 
 def build_submit_request(
@@ -86,11 +99,11 @@ def submit_projection(
         step_input=step_input,
         correlation_id=correlation_id,
     )
-    body = json.dumps(document)
-    if forbidden_material and forbidden_material in body:
+    if forbidden_material and _contains_material(document, forbidden_material):
         raise NetworkProvisionRefused(
             "provision payload would carry credential material"
         )
+    body = json.dumps(document)
     url = f"{settings.integrator_provision_base_url.rstrip('/')}/product/v1/provisions"
     headers = {
         "X-Api-Key": settings.integrator_provision_api_key,
