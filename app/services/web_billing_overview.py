@@ -23,9 +23,14 @@ from app.models.subscriber import Reseller, Subscriber, UserType
 from app.schemas.status_presentation import StatusPresentation
 from app.services import display_format
 from app.services import web_billing_customers as web_billing_customers_service
+from app.services.billing.reporting import (
+    DashboardCollectionsPeriod,
+    dashboard_collections_invoice_filters,
+)
 from app.services.common import validate_enum
 from app.services.inclusive_date_range import InclusiveDateRange
 from app.services.invoice_classification import collectible_ar_invoice_filter
+from app.services.invoice_collectibility import overdue_status_filters
 from app.services.list_query import (
     ListDefinition,
     ListFieldDefinition,
@@ -145,7 +150,8 @@ _UNPAID_INVOICE_STATUSES = (
     InvoiceStatus.overdue,
 )
 _INVOICE_STATUS_FILTERS = frozenset(
-    {status.value for status in InvoiceStatus} | {"unpaid"}
+    {status.value for status in InvoiceStatus}
+    | {"unpaid", "dashboard_collections", "dashboard_overdue"}
 )
 INVOICE_LIST_DEFINITION = ListDefinition(
     key="billing_invoices",
@@ -493,6 +499,14 @@ def _apply_invoice_list_filters(
                 Invoice.balance_due > Decimal("0"),
                 collectible_ar_invoice_filter(),
             )
+        elif status == "dashboard_collections":
+            scoped = scoped.filter(
+                *dashboard_collections_invoice_filters(
+                    DashboardCollectionsPeriod.current_utc_month(datetime.now(UTC))
+                )
+            )
+        elif status == "dashboard_overdue":
+            scoped = scoped.filter(*overdue_status_filters())
         else:
             scoped = scoped.filter(
                 Invoice.status == validate_enum(status, InvoiceStatus, "status")

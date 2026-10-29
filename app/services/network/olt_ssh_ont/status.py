@@ -381,6 +381,28 @@ def get_registered_ont_serials(
     if not normalized_fsps:
         return True, "No Huawei PON ports requested", []
 
+    # Default-off dotmac-device-cli read (S1). The gate does not import the
+    # package; the host is imported only after it passes, and an import failure
+    # means legacy. A package read that starts never falls back to a second login.
+    from app.services.network import device_cli_gate
+
+    if device_cli_gate.selected(olt, device_cli_gate.OP_LIST_ONTS):
+        try:
+            from app.services.network import device_cli_host
+        except Exception:  # ImportError, or the package failing while importing
+            logger.exception("device_cli_host_import_failed olt=%s", olt.name)
+            from app.services.network import olt_ssh_metrics
+
+            olt_ssh_metrics.record_device_cli_event(
+                "import_failed", str(olt.name or olt.id), device_cli_gate.OP_LIST_ONTS
+            )
+        else:
+            packaged = device_cli_host.read_registered_onts(
+                olt, normalized_fsps, timeout_sec=timeout_sec
+            )
+            if packaged is not None:
+                return packaged
+
     started = time.monotonic()
     try:
         transport, channel, policy = core._open_shell(olt)

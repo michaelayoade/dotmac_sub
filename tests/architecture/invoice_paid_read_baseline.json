@@ -433,6 +433,18 @@
   },
   {
     "path": "app/services/billing/reporting.py",
+    "function": "dashboard_collections_invoice_filters",
+    "kind": "sql_filter",
+    "predicate": "Invoice.status.in_((InvoiceStatus.paid, InvoiceStatus.partially_paid))",
+    "count": 1,
+    "classification": "report_projection",
+    "owner": "financial.billing_reporting",
+    "reason": "Admin dashboard collections cohort aggregation only; no entitlement, funding, access, or settlement permission.",
+    "remaining_count": 1,
+    "state": "active"
+  },
+  {
+    "path": "app/services/billing/reporting.py",
     "function": "BillingReporting.get_overview_stats",
     "kind": "sql_filter",
     "predicate": "Invoice.status.in_((InvoiceStatus.issued, InvoiceStatus.partially_paid, InvoiceStatus.overdue, InvoiceStatus.paid))",
