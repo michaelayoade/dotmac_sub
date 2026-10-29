@@ -2,7 +2,7 @@
 
 The request names a credential, the secret version the plan was authored
 against, and the open projection request ref. The response is the secret
-and nothing else. Every refusal is one opaque 409: the endpoint must not
+and nothing else. Credential-state refusals are one opaque 409: the endpoint must not
 distinguish unknown ref, stale version, spent request, or dead credential.
 """
 
@@ -24,4 +24,4 @@ class ProjectionSecretFetchRequest(BaseModel):
 class ProjectionSecretFetchResponse(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    secret: str = Field(min_length=1)
+    secret: str = Field(min_length=1, repr=False)

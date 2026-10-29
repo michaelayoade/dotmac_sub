@@ -1727,13 +1727,18 @@ DOMAIN = DomainSOT(
                     mode=TransactionMode.OWNER_MANAGED,
                     boundary=(
                         "Opening joins the plan author's transaction (flush "
-                        "only); redeem owns its transaction and commits the "
-                        "burn before decryption, so a spent authorization "
-                        "cannot be replayed even when decryption fails."
+                        "only); redeem enters the typed owner-command boundary "
+                        "on a transaction-free session. Decryption stays in "
+                        "memory; burn and pending reveal event commit together "
+                        "before cleartext is returned. Pre-commit failures "
+                        "roll back both; an uncertain commit may already have "
+                        "spent the authorization without returning cleartext."
                     ),
                     locking=(
-                        "The request row's redeemed_at transition is the "
-                        "single-use claim; a second redeem observes the burn."
+                        "Lock and refresh the credential, then the request, "
+                        "through owner completion. Check version, active state "
+                        "and expiry after lock waits; a concurrent redeem "
+                        "observes the committed redeemed_at burn."
                     ),
                     idempotency=(
                         "One redeem per request ref, ever. Refusals are one "
@@ -1768,23 +1773,32 @@ DOMAIN = DomainSOT(
                         "request ref only; the secret and username are omitted."
                     ),
                     replay=(
-                        "One event per successful reveal; the burn and the "
-                        "event commit atomically, so replay cannot duplicate "
-                        "a reveal."
+                        "One pending event per committed reveal and burn, "
+                        "delivered by the durable dispatcher. It is not a "
+                        "connector receipt; replay cannot release the secret "
+                        "again after the burn."
                     ),
                 ),
                 migration=MigrationContract(
                     state=AuthorityMigrationState.NATIVE,
                     new_owner="access.projection_secret_fetch",
                     verification=(
-                        "Open/redeem exactly-once, rotation-refusal and "
-                        "expiry tests; replaced at the suite cutover by the "
+                        "Migrated PostgreSQL concurrent redeem, rotation, "
+                        "post-lock expiry and rollback canaries; replaced by the "
                         "access-credentials module"
                     ),
                 ),
                 steward="network access operations",
-                design_refs=("docs/SOT_RELATIONSHIP_MAP.md",),
-                test_refs=("tests/test_projection_secret_fetch.py",),
+                design_refs=(
+                    "docs/SOT_RELATIONSHIP_MAP.md",
+                    "docs/designs/PROJECTION_SECRET_FETCH_ATOMICITY.md",
+                ),
+                test_refs=(
+                    "tests/test_projection_secret_fetch.py",
+                    "tests/test_projection_secret_fetch_api.py",
+                    "tests/integration/test_projection_secret_fetch_concurrency_pg.py",
+                    "tests/architecture/test_projection_secret_fetch_boundary.py",
+                ),
             ),
         ),
         SOTService(

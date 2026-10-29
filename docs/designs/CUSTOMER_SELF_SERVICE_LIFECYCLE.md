@@ -221,6 +221,13 @@ Completed in this slice:
   pagination links, and CSV export preserve that exact window. CSV serialization
   remains an admin adapter concern, exports all matching rows rather than only the
   current page, and neutralizes spreadsheet-formula prefixes in textual cells.
+  The admin summary directly below the date filter shows total data used,
+  download, upload, and daily average in GB (GB/day for the average). These
+  values use every daily record in the selected window before pagination;
+  daily average divides total by its inclusive calendar-day count. A query with
+  no usage is an authoritative zero; an unavailable source shows no numeric
+  summary. The admin view removes its duplicate Total Usage and sampled
+  Subscription Averages cards; the customer portal keeps those existing cards.
 
 The lifecycle migration is complete. Further changes extend this contract and
 must preserve these owners rather than introduce compatibility writers.

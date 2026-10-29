@@ -304,7 +304,10 @@ BASELINE = Path("tests/architecture/session_construction_baseline.txt")
 #: +2 in-memory constructions (one engine, one sessionmaker) for the
 #: projection secret-fetch tests in tests/test_projection_secret_fetch.py,
 #: which exercise the owner command against only its two tables.
-TEST_FIXTURE_BASELINE_TOTAL = 794
+#: +10 test-only constructions for the migrated PostgreSQL projection-secret
+#: concurrency canaries: one clone engine and nine independent Sessions.
+#: The production construction baseline is unchanged.
+TEST_FIXTURE_BASELINE_TOTAL = 804
 
 
 def _baseline() -> dict[str, int]:

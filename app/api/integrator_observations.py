@@ -49,7 +49,7 @@ event are two receipts and one observation.
 
 from __future__ import annotations
 
-from uuid import UUID
+from uuid import UUID, uuid4
 
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
@@ -104,7 +104,7 @@ from app.services.integrations.runtime_execution import (
     RuntimeExecutionError,
     build_execution_context,
 )
-from app.services.owner_commands import CommandContext
+from app.services.owner_commands import CommandContext, OwnerCommandError
 
 router = APIRouter(prefix="/integration/observations", tags=["integrator-observations"])
 
@@ -125,14 +125,15 @@ _require_descriptor_auth = require_any_permission(
 #: The one scope that may redeem a projection secret. Narrower than every
 #: other Integrator scope: it can fetch a secret the owner already opened a
 #: request for, once, and can do nothing else on this port.
-PROJECTION_SECRET_FETCH_SCOPE = "integration:projection-secret:reveal"
+PROJECTION_SECRET_FETCH_SCOPE = projection_secret_fetch.PROJECTION_SECRET_FETCH_SCOPE
 
 
 @router.post("/projection-secret", response_model=ProjectionSecretFetchResponse)
 def fetch_projection_secret(
     body: ProjectionSecretFetchRequest,
-    db: Session = Depends(get_db),
-    _auth: dict = Depends(require_permission(PROJECTION_SECRET_FETCH_SCOPE)),
+    _auth: dict[str, object] = Depends(
+        require_permission(PROJECTION_SECRET_FETCH_SCOPE)
+    ),
 ) -> ProjectionSecretFetchResponse:
     """Redeem one open projection request for its credential's secret.
 
@@ -143,18 +144,43 @@ def fetch_projection_secret(
     """
     if not settings.network_provision_enabled:
         raise HTTPException(status_code=409, detail="projection secret refused")
+    if _auth.get("principal_type") != "api_key":
+        raise HTTPException(status_code=403, detail="Machine principal required")
     try:
-        secret = projection_secret_fetch.redeem_projection_secret(
-            db,
-            request_ref=body.projection_request_ref,
-            credential_id=body.credential_id,
-            secret_version=body.secret_version,
-        )
-    except projection_secret_fetch.SecretFetchRefused as exc:
+        principal_id = UUID(str(_auth["principal_id"]))
+    except (KeyError, TypeError, ValueError):
+        raise HTTPException(
+            status_code=403, detail="Machine principal required"
+        ) from None
+    command_id = uuid4()
+    command = projection_secret_fetch.RedeemProjectionSecretCommand(
+        context=CommandContext(
+            command_id=command_id,
+            correlation_id=command_id,
+            actor=f"api_key:{principal_id}",
+            scope=PROJECTION_SECRET_FETCH_SCOPE,
+            reason="Redeem a projection secret authorization",
+        ),
+        request_ref=body.projection_request_ref,
+        credential_id=body.credential_id,
+        secret_version=body.secret_version,
+    )
+    try:
+        # Authentication may have used another read session. The command owner
+        # receives a fresh session and owns the complete business transaction.
+        with db_session_adapter.owner_command_session() as command_db:
+            outcome = projection_secret_fetch.redeem_projection_secret(
+                command_db, command=command
+            )
+    except projection_secret_fetch.SecretFetchRefused:
         raise HTTPException(
             status_code=409, detail="projection secret refused"
-        ) from exc
-    return ProjectionSecretFetchResponse(secret=secret)
+        ) from None
+    except OwnerCommandError:
+        raise HTTPException(
+            status_code=503, detail="projection secret unavailable"
+        ) from None
+    return ProjectionSecretFetchResponse(secret=outcome.secret)
 
 
 @router.get("/network-capability-registry")

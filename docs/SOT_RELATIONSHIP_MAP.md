@@ -1484,7 +1484,7 @@ Edit the owning domain shard and regenerate; do not hand-edit these rows.
 | `access.captive_access_policy_change` | captive access policy change and lock re-evaluation | `application_coordinator` | attributable policy change command ← `access.captive_access_policy_change`<br>captive policy records ← `access.captive_access_policy`<br>canonical enforcement locks ← `access.subscription_lifecycle`<br>effective captive restriction ← `access.walled_garden_policy`<br>staff permission grants ← `auth.permission_gate` | `coordinator_managed` | `native` | network access | `docs/FINANCIAL_ACCESS_ENFORCEMENT.md`<br>`docs/SOT_RELATIONSHIP_MAP.md`<br>`tests/test_captive_access_policy_change.py`<br>`tests/architecture/test_captive_access_policy_boundary.py` |
 | `access.captive_access_policy_change` | captive access policy change preview | `resolver` | captive policy records ← `access.captive_access_policy`<br>canonical enforcement locks ← `access.subscription_lifecycle`<br>effective captive restriction ← `access.walled_garden_policy` | `coordinator_managed` | `native` | network access | `docs/FINANCIAL_ACCESS_ENFORCEMENT.md`<br>`docs/SOT_RELATIONSHIP_MAP.md`<br>`tests/test_captive_access_policy_change.py`<br>`tests/architecture/test_captive_access_policy_boundary.py` |
 | `access.rate_profile_switch` | rate owner switch | `application_coordinator` | attributable switch command ← `access.rate_profile_switch`<br>rate divergence preflight ← `access.radius_projection`<br>full RADIUS projection ← `access.radius_projection`<br>observed radreply rates ← `external:freeradius` | `coordinator_managed` | `native` | network access | `docs/SOT_RELATIONSHIP_MAP.md`<br>`tests/test_access_rate_switch.py` |
-| `access.projection_secret_fetch` | single-use projection secret fetch authorizations | `authoritative_record` | owner-authored projection plan ← `access.radius_projection`<br>single-use redeem request ← `access.projection_secret_fetch` | `owner_managed` | `native` | network access operations | `docs/SOT_RELATIONSHIP_MAP.md`<br>`tests/test_projection_secret_fetch.py` |
+| `access.projection_secret_fetch` | single-use projection secret fetch authorizations | `authoritative_record` | owner-authored projection plan ← `access.radius_projection`<br>single-use redeem request ← `access.projection_secret_fetch` | `owner_managed` | `native` | network access operations | `docs/SOT_RELATIONSHIP_MAP.md`<br>`docs/designs/PROJECTION_SECRET_FETCH_ATOMICITY.md`<br>`tests/test_projection_secret_fetch.py`<br>`tests/test_projection_secret_fetch_api.py`<br>`tests/integration/test_projection_secret_fetch_concurrency_pg.py`<br>`tests/architecture/test_projection_secret_fetch_boundary.py` |
 | `access.session_enforcement` | typed access-state CoA/disconnect execution | `transport` | subscription service identity ← `access.subscription_lifecycle`<br>open RADIUS accounting sessions ← `external:freeradius`<br>NAS device inventory ← `network.nas_inventory`<br>NAS response to the enforcement command ← `external:routeros` | `read_only` | `native` | network operations | `docs/adr/0017-enforcement-application-evidence.md`<br>`docs/FINANCIAL_ACCESS_ENFORCEMENT.md`<br>`tests/test_ip_assignment_projection_handler.py`<br>`tests/test_enforcement_gaps.py`<br>`tests/integration/test_enforcement_application_evidence_durability.py` |
 | `access.enforcement_evidence` | enforcement application evidence observation | `observation_collector` | final per-NAS enforcement attempt outcome ← `access.session_enforcement`<br>NAS device response to the enforcement command ← `external:routeros` | `out_of_band_evidence` | `native` | network access | `docs/adr/0017-enforcement-application-evidence.md`<br>`docs/SOT_RELATIONSHIP_MAP.md`<br>`tests/test_enforcement_application_writer.py`<br>`tests/test_enforcement_application_outcomes.py`<br>`tests/test_enforcement_failure_classifier.py`<br>`tests/architecture/test_enforcement_application_single_writer.py`<br>`tests/integration/test_enforcement_application_evidence_durability.py` |
 | `access.fup_rule_engine` | FUP policy and rule definitions (CRUD) | `command_writer` | authenticated FUP policy command context ← `auth.permission_gate`<br>canonical catalog offer ← `service_intent.catalog_policy`<br>FUP policy mutation protocol ← `access.fup_rule_engine` | `owner_managed` | `complete` | network access | `docs/designs/FUP_CONSUMPTION_WINDOWS.md`<br>`docs/SOT_RELATIONSHIP_MAP.md`<br>`docs/adr/0002-owner-command-transaction-boundary.md`<br>`tests/test_fup_ui_gaps.py`<br>`tests/test_fup_period_aware_evaluation.py`<br>`tests/test_fup_submonthly_safeguards.py`<br>`tests/architecture/test_fup_rule_engine_boundary.py` |
@@ -2198,7 +2198,13 @@ projection, and events retain the existing lifecycle transaction boundary.
    canonical bases decided 2026-07-16 — figures labelled "Revenue" use the
    invoice settled-value basis, the payments basis is labelled Collections,
    and recurring revenue uses the MRR-countable basis. Report/web layers
-   compose these reads and own presentation only. The same owner now defines
+   compose these reads and own presentation only. The admin overview card
+   named "Collections This Month" is a scoped exception: it sums settled
+   value only on collectible paid and partially-paid invoices created in the
+   current UTC month, not receipts dated in that month. The separate
+   `invoice_collectibility` owner supplies the Overdue card from outstanding
+   balances on invoices currently marked overdue across all creation months.
+   The billing reporting owner also defines
    the Upcoming Charges reminder cohort: collectible postpaid invoice due
    facts and exact prepaid entitlement endings are selected as bounded,
    indexed pages; visible prepaid candidates compose the canonical
@@ -3470,8 +3476,10 @@ network summary composition.
    fails closed on missing or ambiguous replacement chronology; lifecycle
    repair remains owned by `access.subscription_lifecycle`.
 8. `customer.usage_summary` owns customer usage windows, headline totals, and
-   total provenance. An authoritative zero is a valid value, not a missing-data
-   sentinel.
+   total provenance. Customer 360 Stats Records shows total, download, upload,
+   and calendar-day average from the complete filtered daily set before
+   pagination. An authoritative zero is a valid value, not a missing-data
+   sentinel; unavailable observations do not become numeric zero.
 9. `customer.reseller_status_actions` (`app/services/reseller_portal.py`) owns
    the reseller-scoped impact preview for deactivate, restore, and disable. It
    evaluates current subscription state, active enforcement locks, duplicate-
