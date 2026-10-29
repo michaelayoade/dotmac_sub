@@ -1003,6 +1003,7 @@ SERVICES: tuple[SOTService, ...] = (
         owns=(
             "billing statistics and dashboard report read models",
             "admin revenue report figure definitions",
+            "admin revenue payment export read model",
             "admin overview paid and partially-paid invoice collections cohort",
             "payments-basis revenue definitions",
             "subscription movement and per-offer report counts",

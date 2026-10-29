@@ -568,31 +568,6 @@ def _invoice_amount_due(invoice: object) -> Decimal | int | float:
     return 0
 
 
-def _account_display_name(account: object | None) -> str:
-    if not account:
-        return ""
-    organization = getattr(account, "organization", None)
-    if organization is not None:
-        return str(getattr(organization, "name", "") or "")
-    name = f"{getattr(account, 'first_name', '')} {getattr(account, 'last_name', '')}".strip()
-    if name:
-        return name
-    display_name = getattr(account, "display_name", None)
-    if display_name:
-        return str(display_name)
-    return getattr(account, "account_number", "") or str(getattr(account, "id", ""))
-
-
-def _payment_primary_invoice_id(payment) -> str | None:
-    if not payment or not payment.allocations:
-        return None
-    allocation = min(
-        payment.allocations,
-        key=lambda entry: entry.created_at or datetime.min.replace(tzinfo=UTC),
-    )
-    return str(allocation.invoice_id)
-
-
 def _percent_change(
     current: Decimal | int | float,
     previous: Decimal | int | float,
@@ -1125,20 +1100,16 @@ def _subscriber_growth_percent(db: Session) -> float | None:
 
 
 def build_revenue_export_csv(db: Session, days: int | None = None) -> str:
-    payments = billing_service.payments.list(
-        db=db,
-        account_id=None,
-        invoice_id=None,
-        status=None,
-        is_active=None,
-        order_by="paid_at",
-        order_dir="desc",
-        limit=5000,
-        offset=0,
+    from app.services.billing.reporting import (
+        RevenuePaymentExportQuery,
+        get_revenue_payment_export_rows,
     )
-    if days:
-        cutoff = datetime.now(UTC) - timedelta(days=days)
-        payments = [p for p in payments if p.paid_at and p.paid_at >= cutoff]
+
+    paid_since = datetime.now(UTC) - timedelta(days=days) if days else None
+    payments = get_revenue_payment_export_rows(
+        db,
+        query=RevenuePaymentExportQuery(paid_since=paid_since),
+    )
     output = io.StringIO()
     writer = csv.writer(output)
     writer.writerow(
@@ -1158,14 +1129,14 @@ def build_revenue_export_csv(db: Session, days: int | None = None) -> str:
         writer.writerow(
             [
                 payment.paid_at.isoformat() if payment.paid_at else "",
-                _account_display_name(payment.account),
+                payment.account_name,
                 str(payment.account_id) if payment.account_id else "",
-                _payment_primary_invoice_id(payment) or "",
-                str(payment.amount or ""),
-                payment.currency or "",
-                payment.status.value if payment.status else "",
-                payment.payment_method.name if payment.payment_method else "",
-                payment.provider.name if payment.provider else "",
+                str(payment.invoice_id) if payment.invoice_id else "",
+                str(payment.amount),
+                payment.currency,
+                payment.status.value,
+                payment.payment_method,
+                payment.provider,
             ]
         )
     content = output.getvalue()
