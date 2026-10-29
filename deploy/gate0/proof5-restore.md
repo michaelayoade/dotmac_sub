@@ -163,4 +163,4 @@ cleanup requirements, PostgreSQL canonical true/false role decoding, protected
 provenance mismatches, and sanitized output/DEFLATE failures. Existing cleanup and metadata comparison regressions stay
 in the focused set. These tests establish adapter behavior, not PostgreSQL lock,
 restore or migrated-schema acceptance. Full prescribed CI, independent source
-review, live proof1–5, signoff and next-morning proof2–4 remain separate gates.
+review, live proof1–5, signoff and same-session repeatability proof2–4 remain separate gates.

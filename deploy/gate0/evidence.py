@@ -133,7 +133,7 @@ class ProofOutcome(TypedDict):
 
 class GateContext(TypedDict):
     run_id: UUIDText
-    phase: Literal["initial", "next_morning"]
+    phase: Literal["initial", "repeatability"]
     prior_run_id: UUIDText | None
     source_revision: c.Revision
     source_tree: c.Revision
