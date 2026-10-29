@@ -139,6 +139,12 @@ _WRITE_TIER_VERBS = frozenset(
 # a URL/access log. These routes change nothing durable, so a read permission is
 # the CORRECT guard for them, not a tolerated one. Each entry says why.
 _POST_SHAPED_READS: dict[str, str] = {
+    "POST /admin/billing/tax-policy/preview": (
+        "Staff-only persisted-policy preview through Tax's read-only public "
+        "preview_tax_policy API under no_autoflush. It neither publishes a "
+        "rule nor persists a determination or audit effect. Source facts stay "
+        "in the request body and the form remains CSRF protected."
+    ),
     # -- network device diagnostics: talk to the device, persist nothing ------
     "POST /api/v1/olt-devices/{olt_id}/ont-status-by-serial": (
         "Looks up one ONT's live status by serial on the OLT. Serial is in the "

@@ -199,6 +199,9 @@ def _review_actions(
     *,
     can_review: bool,
     submission: ActionFormSubmission | None,
+    native_claims: tuple[
+        payment_proofs_service.NativeWithholdingClaimExpectation, ...
+    ] = (),
 ) -> tuple[ActionForm, ...]:
     if not can_review or proof.status != PaymentProofStatus.submitted:
         return ()
@@ -229,6 +232,33 @@ def _review_actions(
             help_text=amount_help,
         )
     ]
+    if native_claims:
+        for claim in native_claims:
+            for prefix, label in (
+                ("native_claim_", "Claimed withholding"),
+                ("native_accept_", "Accepted withholding"),
+            ):
+                verify_fields.append(
+                    ActionField(
+                        key=f"{prefix}{claim.component_id.hex}",
+                        label=f"{label}: component {claim.component_id} ({proof.currency})",
+                        kind=ActionFieldKind.decimal,
+                        required=True,
+                        min_value="0.01",
+                        step="0.01",
+                        help_text=f"Original Tax expectation: {claim.amount:.2f}. Enter the amount evidenced and explicitly accepted by finance.",
+                    )
+                )
+        verify_fields.append(
+            ActionField(
+                key="native_acceptance_evidence",
+                label="Finance acceptance evidence",
+                kind=ActionFieldKind.text,
+                required=True,
+                max_length=255,
+                help_text="Reference the reviewed withholding claim and finance authorization evidence.",
+            )
+        )
     verify_fields.append(
         ActionField(
             key="review_notes",
@@ -255,6 +285,9 @@ def _review_actions(
         else "Record a succeeded payment for the confirmed amount and apply the "
         "selected allocation policy?"
     )
+    if native_claims:
+        verify_impact = "Only confirmed net cash is recorded as cash. Each explicitly accepted withholding component separately discharges the invoice receivable."
+        verify_confirmation = "Record the actual cash and explicitly accept every reviewed withholding component in full?"
     # `allowed`/`disabled_reason` are derived from the readiness transport
     # shape rather than set as literals, but the underlying decision is still
     # `payment_proofs_service.review_eligibility` above — `.gated_by(...)`
@@ -476,6 +509,9 @@ def detail_data(
         duplicates,
         can_review=can_review,
         submission=submission,
+        native_claims=payment_proofs_service.native_withholding_claim_expectations(
+            db, proof=proof
+        ),
     )
     reviewer = _reviewer_identity(db, actor_id=proof.verified_by)
     correction = payment_proofs_service.get_duplicate_correction(db, proof.id)
@@ -519,6 +555,8 @@ def verify_proof(
     verified_by: str,
     amount: str | None,
     review_notes: str | None,
+    native_withholding_review: payment_proofs_service.NativeWithholdingReview
+    | None = None,
 ) -> dict[str, object | None]:
     return payment_proofs_service.verify_proof(
         db,
@@ -527,6 +565,7 @@ def verify_proof(
         verified_by=verified_by,
         amount=(amount or "").strip() or None,
         review_notes=review_notes,
+        native_withholding_review=native_withholding_review,
     ).to_dict()
 
 

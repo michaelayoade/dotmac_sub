@@ -22,7 +22,7 @@ from decimal import Decimal
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from dotmac_billing import InvoiceDocumentFactV2
+    from dotmac_billing import InvoiceDocumentFactV2, InvoiceDocumentFactV3
 from types import SimpleNamespace
 from typing import Any, cast
 from uuid import UUID
@@ -75,7 +75,7 @@ def starter_invoice_link(db: Session, invoice_id: UUID) -> StarterInvoiceLink | 
 
 def starter_invoice_fact(
     db: Session, invoice: Invoice
-) -> InvoiceDocumentFactV1 | InvoiceDocumentFactV2 | None:
+) -> InvoiceDocumentFactV1 | InvoiceDocumentFactV2 | InvoiceDocumentFactV3 | None:
     """Exact frozen document fact for a Starter-linked invoice, if readable.
 
     Returns ``None`` when the invoice is not Starter-linked or its
@@ -90,13 +90,17 @@ def starter_invoice_fact(
         fact_version=link.issued_fact_version,
     )
     try:
-        # a9 successor reads both original V1 and full-evidence V2 contracts.
-        # Until release, the pinned a8 reader reads its own V1 facts only.
+        # a10 successor reads the original V1, V2 and dependency-evidence V3 facts.
+        # Earlier package installations retain their matching historical reader.
         try:
-            from dotmac_billing import get_invoice_document_fact_v2
+            from dotmac_billing import get_invoice_document_fact_v3
         except ImportError:
-            return get_invoice_document_fact(db, scope=_SCOPE, request=request).fact
-        return get_invoice_document_fact_v2(db, scope=_SCOPE, request=request).fact
+            try:
+                from dotmac_billing import get_invoice_document_fact_v2
+            except ImportError:
+                return get_invoice_document_fact(db, scope=_SCOPE, request=request).fact
+            return get_invoice_document_fact_v2(db, scope=_SCOPE, request=request).fact
+        return get_invoice_document_fact_v3(db, scope=_SCOPE, request=request).fact
     except BillingError as exc:
         raise _error(
             "fact_unavailable",
@@ -157,8 +161,14 @@ def frozen_tax_presentation(
         from dotmac_billing import InvoiceDocumentFactV2
     except ImportError:
         return None
-    if not isinstance(fact, InvoiceDocumentFactV2):
-        return None
+    try:
+        from dotmac_billing import InvoiceDocumentFactV3
+    except ImportError:
+        if not isinstance(fact, InvoiceDocumentFactV2):
+            return None
+    else:
+        if not isinstance(fact, (InvoiceDocumentFactV2, InvoiceDocumentFactV3)):
+            return None
     components = tuple(
         FrozenTaxComponent(
             purpose=entry.purpose,

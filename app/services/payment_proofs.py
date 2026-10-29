@@ -42,6 +42,12 @@ from app.models.payment_proof import (
 )
 from app.schemas.audit import AuditEventCreate
 from app.services.billing.consolidated_payments import consolidated_settlement_key
+from app.services.billing.starter_withholding_proofs import (
+    NativeWithholdingReceipt,
+    NativeWithholdingReview,
+    read_native_snapshot,
+    validate_native_withholding_replay,
+)
 from app.services.common import apply_pagination, coerce_uuid, round_money, to_decimal
 from app.services.domain_errors import DomainError
 from app.services.events import EventType, emit_event
@@ -170,6 +176,7 @@ class PaymentProofResult:
     created_at: datetime
     duplicate_reference: bool = False
     withholding_tax_record_id: UUID | None = None
+    native_settlement: NativeWithholdingReceipt | None = None
 
     @classmethod
     def from_model(
@@ -178,6 +185,7 @@ class PaymentProofResult:
         *,
         duplicate_reference: bool = False,
         withholding_tax_record_id: UUID | None = None,
+        native_settlement: NativeWithholdingReceipt | None = None,
     ) -> PaymentProofResult:
         return cls(
             id=proof.id,
@@ -198,6 +206,7 @@ class PaymentProofResult:
             created_at=proof.created_at,
             duplicate_reference=duplicate_reference,
             withholding_tax_record_id=withholding_tax_record_id,
+            native_settlement=native_settlement,
         )
 
     def to_dict(self) -> dict[str, object | None]:
@@ -221,6 +230,9 @@ class PaymentProofResult:
             "payment_id": str(self.payment_id) if self.payment_id else None,
             "created_at": self.created_at,
             "duplicate_reference": self.duplicate_reference,
+            "native_settlement": self.native_settlement.serialized()
+            if self.native_settlement is not None
+            else None,
             "withholding_tax_record_id": (
                 str(self.withholding_tax_record_id)
                 if self.withholding_tax_record_id
@@ -954,6 +966,9 @@ def _submit_direct_transfer_proof(
         intent_id=command.intent_id,
         account_id=command.account_id,
     )
+    native = ((intent.metadata_ or {}).get("withholding_tax") or {}).get(
+        "schema_version"
+    ) == 2
     result = _submit_proof(
         db,
         str(command.account_id),
@@ -965,7 +980,9 @@ def _submit_direct_transfer_proof(
         reference=intent.reference,
         paid_at=command.paid_at,
         file_path=command.file_path,
-        gross_amount=((intent.metadata_ or {}).get("withholding_tax") or {}).get(
+        gross_amount=None
+        if native
+        else ((intent.metadata_ or {}).get("withholding_tax") or {}).get(
             "gross_amount"
         ),
         wht_rate=((intent.metadata_ or {}).get("withholding_tax") or {}).get(
@@ -1190,6 +1207,7 @@ def verify_proof(
     verified_by: str,
     amount: MoneyInput = None,
     review_notes: str | None = None,
+    native_withholding_review: NativeWithholdingReview | None = None,
 ) -> PaymentProofResult:
     return execute_owner_command(
         db,
@@ -1202,6 +1220,7 @@ def verify_proof(
             verified_by=verified_by,
             amount=amount,
             review_notes=review_notes,
+            native_withholding_review=native_withholding_review,
         ),
     )
 
@@ -1214,6 +1233,7 @@ def _verify_proof(
     verified_by: str,
     amount: MoneyInput = None,
     review_notes: str | None = None,
+    native_withholding_review: NativeWithholdingReview | None = None,
 ) -> PaymentProofResult:
     """Confirm the transfer and create the real Payment.
 
@@ -1229,6 +1249,50 @@ def _verify_proof(
     )
     if proof is None:
         raise _error("not_found", "Payment proof not found", proof_id=proof_id)
+    if (
+        proof.status == PaymentProofStatus.verified
+        and native_withholding_review is not None
+    ):
+        from app.services.billing._common import lock_account
+
+        if proof.account_id is not None:
+            lock_account(db, str(proof.account_id))
+        replay_intent = _exact_linked_direct_transfer_intent(db, proof)
+        replay = (
+            (replay_intent.metadata_ or {}).get("payment_proof_resolution")
+            if replay_intent is not None
+            else None
+        )
+        if isinstance(replay, dict) and replay.get("schema_version") == 2:
+            replay_cash = round_money(
+                to_decimal(amount if amount is not None else proof.amount)
+            )
+            if (
+                replay.get("review") != native_withholding_review.serialized()
+                or replay.get("actor_ref") != verified_by
+                or replay_cash != proof.verified_amount
+                or (review_notes or "").strip() != (proof.review_notes or "")
+            ):
+                raise _error(
+                    "native_replay_conflict",
+                    "Native proof replay differs from the original accepted evidence",
+                )
+            assert replay_intent is not None
+            try:
+                receipt = validate_native_withholding_replay(
+                    db,
+                    proof=proof,
+                    intent=replay_intent,
+                    review=native_withholding_review,
+                    actor_ref=verified_by,
+                    receipt_value=replay,
+                )
+            except (DomainError, ValueError) as exc:
+                raise _error(
+                    "native_replay_conflict",
+                    "Native proof replay differs from the original frozen invoice evidence",
+                ) from exc
+            return PaymentProofResult.from_model(proof, native_settlement=receipt)
     if proof.status != PaymentProofStatus.submitted:
         raise _error(
             "already_reviewed",
@@ -1343,6 +1407,55 @@ def _verify_proof(
     withholding_tax_snapshot = dict(
         direct_transfer_metadata.get("withholding_tax") or {}
     )
+    if invoice_id_raw and withholding_tax_snapshot.get("schema_version") != 2:
+        from app.models.billing import Invoice
+        from app.services.billing.starter_positions import (
+            frozen_tax_presentation,
+            starter_invoice_fact,
+            starter_invoice_link,
+        )
+
+        native_invoice = db.get(Invoice, coerce_uuid(invoice_id_raw))
+        if (
+            native_invoice is not None
+            and starter_invoice_link(db, native_invoice.id) is not None
+        ):
+            original_fact = starter_invoice_fact(db, native_invoice)
+            expected = (
+                frozen_tax_presentation(original_fact)
+                if original_fact is not None
+                else None
+            )
+            if expected is not None and expected.expected_withholding > 0:
+                raise _error(
+                    "native_intent_required",
+                    "Positive native withholding requires its complete original proof intent evidence",
+                )
+    if withholding_tax_snapshot.get("schema_version") == 2:
+        if (
+            direct_transfer_intent is None
+            or exact_linked_intent is None
+            or direct_transfer_intent.id != exact_linked_intent.id
+        ):
+            raise _error(
+                "native_intent_required",
+                "Native withholding requires the exact submitted transfer intent",
+            )
+        return _verify_native_withholding_proof(
+            db,
+            proof=proof,
+            intent=exact_linked_intent,
+            context=context,
+            verified_by=verified_by,
+            actual_cash=value,
+            review_notes=review_notes,
+            review=native_withholding_review,
+        )
+    if native_withholding_review is not None:
+        raise _error(
+            "native_claim_not_supported",
+            "Native component claims require a native withholding invoice intent",
+        )
     wht_record_id: UUID | None = None
     auto_allocate = True
     if deposit_intent is not None:
@@ -1995,3 +2108,145 @@ def _notify(db: Session, proof: PaymentProof, *, approved: bool) -> None:
                     + ("verified" if approved else "rejected"),
                 ),
             )
+
+
+def _verify_native_withholding_proof(
+    db: Session,
+    *,
+    proof: PaymentProof,
+    intent: TopupIntent,
+    context: CommandContext,
+    verified_by: str,
+    actual_cash: Decimal,
+    review_notes: str | None,
+    review: NativeWithholdingReview | None,
+) -> PaymentProofResult:
+    from dotmac_payments import ConfirmationSource
+
+    from app.models.billing import Invoice
+    from app.services import topup_intents
+    from app.services.billing.starter_positions import starter_invoice_link
+    from app.services.billing.starter_settlement import settle_starter_invoice_payment
+    from app.services.billing.starter_withholding_proofs import (
+        prepare_native_withholding,
+    )
+
+    snapshot = (intent.metadata_ or {}).get("withholding_tax") or {}
+    invoice = db.scalar(
+        select(Invoice)
+        .where(Invoice.id == UUID(str(snapshot["source_invoice_id"])))
+        .with_for_update()
+    )
+    if (
+        invoice is None
+        or invoice.account_id != proof.account_id
+        or invoice.currency != proof.currency
+    ):
+        raise _error(
+            "native_invoice_mismatch",
+            "Native proof invoice/account/currency binding is invalid",
+        )
+    link = starter_invoice_link(db, invoice.id)
+    if link is None:
+        raise _error(
+            "native_invoice_required",
+            "Native proof requires its original Starter invoice link",
+        )
+    occurred_at = proof.paid_at or proof.created_at
+    participant = prepare_native_withholding(
+        db,
+        invoice=invoice,
+        link=link,
+        proof_id=proof.id,
+        intent=intent,
+        review=review,
+        actor_ref=verified_by,
+        occurred_at=occurred_at,
+        actual_cash=actual_cash,
+    )
+    settlement = settle_starter_invoice_payment(
+        db,
+        invoice=invoice,
+        link=link,
+        intent_reference=intent.reference,
+        external_reference=f"proof:{proof.id}",
+        confirmed_amount=actual_cash,
+        occurred_at=occurred_at,
+        observed_at=occurred_at,
+        confirmation_source=ConfirmationSource.TRANSFER_PROOF,
+        participant=participant,
+        allocation_source_ref=participant.allocation_source_ref,
+    )
+    assert review is not None and settlement.allocation_posting_group_id is not None
+    topup_intents.stage_native_withholding_proof_resolution(
+        db,
+        command=topup_intents.ResolveNativeWithholdingProofCommand(
+            intent_id=intent.id,
+            proof_id=proof.id,
+            confirmation_id=settlement.confirmation_id,
+            settlement_id=settlement.settlement_id,
+            allocation_posting_group_id=settlement.allocation_posting_group_id,
+            discharge_ids=participant.discharge_ids,
+            actual_amount=actual_cash,
+            occurred_at=occurred_at,
+            review=review,
+            actor_ref=verified_by,
+        ),
+        context=context,
+    )
+    proof.status = PaymentProofStatus.verified
+    proof.verified_amount = actual_cash
+    proof.verified_by = verified_by
+    proof.review_notes = (review_notes or "").strip() or None
+    _resolve_reviewer_confirmation(db, proof)
+    _audit(
+        db,
+        context,
+        action="verify",
+        proof=proof,
+        actor_id=verified_by,
+        metadata={
+            "claimed_amount": str(proof.amount),
+            "verified_amount": str(actual_cash),
+            "starter_confirmation_id": str(settlement.confirmation_id),
+            "starter_settlement_id": str(settlement.settlement_id),
+            "starter_withholding_discharge_ids": [
+                str(item) for item in participant.discharge_ids
+            ],
+        },
+    )
+    _notify(db, proof, approved=True)
+    _emit_transition(
+        db, context=context, proof=proof, event_type=EventType.payment_proof_verified
+    )
+    return PaymentProofResult.from_model(
+        proof,
+        native_settlement=NativeWithholdingReceipt.model_validate(
+            (intent.metadata_ or {})["payment_proof_resolution"]
+        ),
+    )
+
+
+@dataclass(frozen=True, slots=True)
+class NativeWithholdingClaimExpectation:
+    component_id: UUID
+    amount: Decimal
+
+
+def native_withholding_claim_expectations(
+    db: Session, *, proof: PaymentProof
+) -> tuple[NativeWithholdingClaimExpectation, ...]:
+    """Original checkout component references for an explicit staff review form."""
+    intent = _exact_linked_direct_transfer_intent(db, proof)
+    snapshot = (
+        (intent.metadata_ or {}).get("withholding_tax") if intent is not None else None
+    )
+    if not isinstance(snapshot, dict) or snapshot.get("schema_version") != 2:
+        return ()
+    frozen = read_native_snapshot(snapshot)
+    return tuple(
+        NativeWithholdingClaimExpectation(
+            component_id=item.component_id, amount=item.amount
+        )
+        for item in frozen.components
+    )

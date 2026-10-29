@@ -43,6 +43,9 @@ from app.services.sot_registry.domains.financial_access.provider_payments import
 from app.services.sot_registry.domains.financial_access.sales_funding import (
     SERVICES as SALES_FUNDING_SERVICES,
 )
+from app.services.sot_registry.domains.financial_access.tax_policy_authoring import (
+    SERVICES as TAX_POLICY_AUTHORING_SERVICES,
+)
 from app.services.sot_registry.domains.financial_access.test_connections import (
     SERVICES as TEST_CONNECTION_SERVICES,
 )
@@ -68,6 +71,7 @@ DOMAIN = DomainSOT(
         *COLLECTION_OPERATIONS_SERVICES,
         *PROVIDER_PAYMENTS_SERVICES,
         *TEST_CONNECTION_SERVICES,
+        *TAX_POLICY_AUTHORING_SERVICES,
     ),
     entrypoints=(
         "app.services.billing_automation",

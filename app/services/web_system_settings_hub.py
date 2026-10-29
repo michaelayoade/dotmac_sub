@@ -159,6 +159,11 @@ SETTINGS_CATEGORIES: list[dict] = [
                 "description": "Operational tax rate records used by billing",
             },
             {
+                "name": "Tax Policies",
+                "url": "/admin/billing/tax-policy",
+                "description": "Versioned Tax policy publication and current-policy preview",
+            },
+            {
                 "name": "Tax Accounting",
                 "url": "/admin/billing/tax-accounting",
                 "description": "Tax source register and WHT evidence lifecycle",

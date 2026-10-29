@@ -23,7 +23,7 @@ from uuid import UUID
 from zoneinfo import ZoneInfo
 
 if TYPE_CHECKING:
-    from dotmac_billing import AcceptRatedObligationV2, InvoiceTaxEvidenceV1
+    from dotmac_billing import AcceptRatedObligationV3, InvoiceTaxEvidenceV2
 
 from dotmac_billing import (
     AppliedFxSnapshotV1,
@@ -348,9 +348,9 @@ def _obligation_for_line(
     contract_version: str,
     price_version: str,
     fx_observation_id: str,
-    tax_evidence: tuple[InvoiceTaxEvidenceV1, ...],
-) -> AcceptRatedObligationV2:
-    from dotmac_billing import AcceptRatedObligationV2
+    tax_evidence: tuple[InvoiceTaxEvidenceV2, ...],
+) -> AcceptRatedObligationV3:
+    from dotmac_billing import AcceptRatedObligationV3
 
     tax_amount = sum(
         (
@@ -360,7 +360,7 @@ def _obligation_for_line(
         ),
         Decimal("0"),
     )
-    return AcceptRatedObligationV2(
+    return AcceptRatedObligationV3(
         scope=_SCOPE,
         billing_account_id=account_id,
         contract_line_ref=contract_line_ref,
@@ -385,6 +385,7 @@ def _obligation_for_line(
         price_version_id=price_version,
         tax_snapshots=(),
         tax_evidence=tax_evidence,
+        commercial_sources=(tax_evidence[0].determination.commercial_source,),
         fx_snapshot=AppliedFxSnapshotV1(
             observation_id=fx_observation_id,
             observation_version=policies.fx_observation_version,
@@ -479,7 +480,7 @@ def _issue_via_starter(
     # Resolve policy and successor contract before any write. Tax refusals after
     # eligibility propagate to the command owner; never retry the legacy lane.
     try:
-        from dotmac_billing import IssueRatedInvoiceV2, get_invoice_document_fact_v2
+        from dotmac_billing import IssueRatedInvoiceV3, get_invoice_document_fact_v3
     except ImportError as exc:
         raise _error(
             "tax_contract_pending",
@@ -543,7 +544,7 @@ def _issue_via_starter(
             issued = issue_rated_invoice(
                 db,
                 scope=_SCOPE,
-                command=IssueRatedInvoiceV2(
+                command=IssueRatedInvoiceV3(
                     obligation=_obligation_for_line(
                         policies,
                         account_id=account.id,
@@ -582,7 +583,7 @@ def _issue_via_starter(
                 obligation_sources=_ObligationSources(policies, flavor.source_kind),
                 numbering=_Numbering(policies),
             )
-            fact = get_invoice_document_fact_v2(
+            fact = get_invoice_document_fact_v3(
                 db,
                 scope=_SCOPE,
                 request=GetInvoiceDocumentFactV1(
@@ -680,7 +681,7 @@ def _issue_via_starter(
             issued_fact_version = 1
             # Freeze the exact public fact; refuse unavailable evidence rather than
             # falling back to mutable mirrors for multi-line native documents.
-            stored = get_invoice_document_fact_v2(
+            stored = get_invoice_document_fact_v3(
                 db,
                 scope=_SCOPE,
                 request=GetInvoiceDocumentFactV1(
