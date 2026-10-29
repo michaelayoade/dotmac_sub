@@ -15,7 +15,7 @@
     <header class="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
         <div>
             <p class="text-xs font-bold uppercase tracking-wider text-[var(--color-brand-700)] dark:text-[var(--color-brand-300)]">{{ dashboard_highlights.observed_at | portal_datetime('%A, %d %B %Y', include_tz=False) }}</p>
-            <h1 class="mt-2 font-display text-3xl font-bold tracking-tight text-stone-950 dark:text-white">Good {{ dashboard_highlights.greeting_period }}, {{ dashboard_highlights.greeting_name }}.</h1>
+            <h1 class="mt-2 break-words font-display text-3xl font-bold tracking-tight text-stone-950 dark:text-white">Good {{ dashboard_highlights.greeting_period }}, {{ dashboard_highlights.greeting_name }}.</h1>
         </div>
         <div class="flex flex-wrap items-center gap-2">
             {{ status_presentation_badge(account_health.lifecycle, size="sm") }}
@@ -27,10 +27,10 @@
 
     <section class="grid gap-4 lg:grid-cols-3" aria-label="Account overview">
         <div class="flex min-h-52 flex-col justify-between rounded-3xl bg-[var(--color-brand-900)] p-6 text-white lg:col-span-2">
-            <div>
+            <div class="min-w-0">
                 {% if account_health.primary_action and account_health.customer_primary_action_url %}
                 <span class="inline-flex rounded-full bg-lime-200 px-3 py-1 text-xs font-bold text-stone-950">Action needed</span>
-                <h2 class="mt-4 max-w-2xl font-display text-2xl font-bold leading-tight sm:text-3xl">{{ account_health.primary_action.message }}</h2>
+                <h2 class="mt-4 max-w-2xl break-words font-display text-2xl font-bold leading-tight sm:text-3xl">{{ account_health.primary_action.message }}</h2>
                 {% elif account_health.has_partial_data %}
                 <span class="inline-flex rounded-full bg-amber-100 px-3 py-1 text-xs font-bold text-amber-950">Status unavailable</span>
                 <h2 class="mt-4 font-display text-2xl font-bold">We can't confirm your next action right now.</h2>
