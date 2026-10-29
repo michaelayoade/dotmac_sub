@@ -1003,6 +1003,7 @@ SERVICES: tuple[SOTService, ...] = (
         owns=(
             "billing statistics and dashboard report read models",
             "admin revenue report figure definitions",
+            "admin overview paid and partially-paid invoice collections cohort",
             "payments-basis revenue definitions",
             "subscription movement and per-offer report counts",
             "upcoming charge reminder candidate selection and read model",
@@ -1016,7 +1017,9 @@ SERVICES: tuple[SOTService, ...] = (
         ),
         notes=(
             "Read owner only: aggregates invoice/payment/subscription "
-            "facts for dashboards and the admin reports. Upcoming Charges "
+            "facts for dashboards and the admin reports. The admin overview "
+            "Collections This Month card sums settled value only for paid or "
+            "partially-paid invoices created in the UTC month. Upcoming Charges "
             "selects bounded candidates before composing exact prepaid charge "
             "and funding owners for one page. Optional UTC calendar periods "
             "filter verified due or coverage-end facts. It decides no financial "

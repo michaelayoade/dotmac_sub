@@ -137,6 +137,20 @@ def test_lifecycle_operator_adapter_is_dry_run_first_and_fingerprint_gated() -> 
     assert ".commit(" not in source
 
 
+def test_unbound_release_adapter_is_dry_run_first_and_names_its_class() -> None:
+    source = (ROOT / "scripts/one_off/release_unbound_ip_assignment.py").read_text(
+        encoding="utf-8"
+    )
+
+    assert '"--apply"' in source
+    assert '"--fingerprint"' in source
+    assert '"--idempotency-key"' in source
+    assert '"--eligibility-class"' in source
+    assert "preview_unbound_ip_assignment_release(" in source
+    assert "release_unbound_ip_assignment(" in source
+    assert ".commit(" not in source
+
+
 def test_projection_operator_adapter_is_dry_run_first_and_fingerprint_gated() -> None:
     source = PROJECTION_SCRIPT.read_text(encoding="utf-8")
 

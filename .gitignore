@@ -126,3 +126,7 @@ remediation_*.json
 
 # Sub Thin Shadow host-generated credentials (mode 0600, never committed)
 deploy/shadow/.env
+
+# Local overrides for development/testing (never committed)
+*.local
+.agents/

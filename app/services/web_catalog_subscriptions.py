@@ -3352,22 +3352,53 @@ def _route_range_options_for_blocks(blocks: list[IpBlock]) -> list[dict[str, obj
 def _subscription_public_ip_addon_form_row(
     db: Session,
     *,
-    subscription_id,
+    subscription_obj: Subscription,
 ) -> tuple[str, str]:
-    if not subscription_id:
+    if not subscription_obj.id or not subscription_obj.subscriber_id:
         return "", "1"
-    row = (
-        db.query(SubscriptionAddOn, AddOn)
+
+    rows = (
+        db.query(SubscriptionAddOn, AddOn, SubscriberAdditionalRoute.id)
         .join(AddOn, AddOn.id == SubscriptionAddOn.add_on_id)
-        .filter(SubscriptionAddOn.subscription_id == subscription_id)
+        .join(Subscription, Subscription.id == SubscriptionAddOn.subscription_id)
+        .outerjoin(
+            SubscriberAdditionalRoute,
+            and_(
+                SubscriberAdditionalRoute.subscriber_id
+                == subscription_obj.subscriber_id,
+                SubscriberAdditionalRoute.prefix_length == AddOn.ip_prefix_length,
+                SubscriberAdditionalRoute.is_active.is_(True),
+            ),
+        )
+        .filter(Subscription.subscriber_id == subscription_obj.subscriber_id)
         .filter(AddOn.ip_is_public.is_(True))
         .filter(SubscriptionAddOn.end_at.is_(None))
         .order_by(SubscriptionAddOn.start_at.desc().nullslast())
-        .first()
+        .all()
+    )
+    if not rows:
+        return "", "1"
+
+    # Additional routes are subscriber-scoped. Prefer the add-on attached to
+    # this subscription, then fall back only when the subscriber has one
+    # unambiguous active public-IP add-on. This keeps legacy/migrated routes
+    # visible without guessing when several commercial add-ons are active.
+    row = next(
+        (
+            candidate
+            for candidate in rows
+            if candidate[0].subscription_id == subscription_obj.id
+        ),
+        None,
     )
     if row is None:
-        return "", "1"
-    sub_addon, _add_on = row
+        compatible_rows = {
+            candidate[0].id: candidate for candidate in rows if candidate[2] is not None
+        }
+        if len(compatible_rows) != 1:
+            return "", "1"
+        row = next(iter(compatible_rows.values()))
+    sub_addon, _add_on, _route_id = row
     return str(sub_addon.add_on_id), str(sub_addon.quantity or 1)
 
 
@@ -3388,17 +3419,29 @@ def sync_public_ip_addon_for_subscription(
         raise ValueError("Additional IP add-on quantity must be 1 or higher.")
 
     now = datetime.now(UTC)
-    active_rows = (
+    active_rows_query = (
         db.query(SubscriptionAddOn, AddOn)
         .join(AddOn, AddOn.id == SubscriptionAddOn.add_on_id)
-        .filter(SubscriptionAddOn.subscription_id == subscription_obj.id)
-        .filter(AddOn.ip_is_public.is_(True))
         .filter(SubscriptionAddOn.end_at.is_(None))
-        .all()
     )
+    if subscription_obj.subscriber_id:
+        active_rows_query = active_rows_query.join(
+            Subscription,
+            Subscription.id == SubscriptionAddOn.subscription_id,
+        ).filter(Subscription.subscriber_id == subscription_obj.subscriber_id)
+    else:
+        active_rows_query = active_rows_query.filter(
+            SubscriptionAddOn.subscription_id == subscription_obj.id
+        )
+    active_rows = active_rows_query.all()
 
     if not selected:
-        for sub_addon, _add_on in active_rows:
+        for sub_addon, candidate_add_on in active_rows:
+            if (
+                sub_addon.subscription_id != subscription_obj.id
+                or not candidate_add_on.ip_is_public
+            ):
+                continue
             sub_addon.end_at = now
         db.commit()
         return None
@@ -3421,12 +3464,30 @@ def sync_public_ip_addon_for_subscription(
         raise ValueError("Selected additional IP add-on is not available.")
 
     matched = None
-    for sub_addon, _add_on in active_rows:
-        if str(sub_addon.add_on_id) == selected:
+    for sub_addon, candidate_add_on in active_rows:
+        if (
+            sub_addon.subscription_id != subscription_obj.id
+            or not candidate_add_on.ip_is_public
+        ):
+            continue
+        if sub_addon.add_on_id == selected_uuid:
             matched = sub_addon
             sub_addon.quantity = qty
         else:
             sub_addon.end_at = now
+
+    # Routed blocks belong to the subscriber rather than one subscription.
+    # Reuse one matching legacy/migrated add-on already active for the same
+    # subscriber so a repeat save cannot create duplicate billing coverage.
+    if matched is None and subscription_obj.subscriber_id:
+        subscriber_matches = [
+            sub_addon
+            for sub_addon, _candidate_add_on in active_rows
+            if sub_addon.add_on_id == selected_uuid
+        ]
+        if len(subscriber_matches) == 1:
+            matched = subscriber_matches[0]
+            matched.quantity = qty
     if matched is None:
         db.add(
             SubscriptionAddOn(
@@ -3623,7 +3684,7 @@ def edit_form_data(db: Session, subscription_obj: Subscription) -> dict[str, obj
     )
     ip_addon_id, ip_addon_quantity = _subscription_public_ip_addon_form_row(
         db,
-        subscription_id=subscription_obj.id,
+        subscription_obj=subscription_obj,
     )
     return {
         "id": str(subscription_obj.id),

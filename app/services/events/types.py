@@ -224,7 +224,11 @@ class EventType(enum.Enum):
     ip_assignment_service_ownership_reconciled = (
         "ip_assignment.service_ownership_reconciled"
     )
+    ip_assignment_service_ownership_unlinked = (
+        "ip_assignment.service_ownership_unlinked"
+    )
     ip_assignment_lifecycle_repaired = "ip_assignment.lifecycle_repaired"
+    ip_assignment_unbound_released = "ip_assignment.unbound_released"
     ip_assignment_served_projection_repaired = (
         "ip_assignment.served_projection_repaired"
     )

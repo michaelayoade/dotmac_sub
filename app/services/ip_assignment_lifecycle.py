@@ -40,6 +40,7 @@ from app.models.network import (
     IPAssignment,
     IpPool,
     IPv4Address,
+    IPv6Address,
     IPVersion,
     OLTDevice,
     SubscriberAdditionalRoute,
@@ -85,11 +86,26 @@ _REPLACE_COMMAND = OwnerCommandDefinition(
     concern=_LIFECYCLE_CONCERN,
     name="replace_service_ipv4",
 )
+# Like `replace_service_ipv4`, these reuse a declared concern instead of
+# widening the manifest in the same diff.
+_IPV6_LINK_COMMAND = OwnerCommandDefinition(
+    owner=_OWNER,
+    concern=_LIFECYCLE_CONCERN,
+    name="link_service_ipv6_assignment",
+)
+_UNLINK_COMMAND = OwnerCommandDefinition(
+    owner=_OWNER,
+    concern=_CONCERN,
+    name="unlink_ip_assignment_service_ownership",
+)
 _ITEM_AUDIT_ACTION = "network.ip_assignment.service_ownership_linked"
 _BATCH_AUDIT_ACTION = "network.ip_assignment.service_ownership_reconciled"
 _LIFECYCLE_ITEM_AUDIT_ACTION = "network.ip_assignment.lifecycle_item_changed"
 _LIFECYCLE_BATCH_AUDIT_ACTION = "network.ip_assignment.lifecycle_repaired"
 _PROJECTION_BATCH_AUDIT_ACTION = "network.ip_assignment.served_projection_repaired"
+_IPV6_LIFECYCLE_BATCH_AUDIT_ACTION = "network.ip_assignment.ipv6_lifecycle_repaired"
+_UNLINK_ITEM_AUDIT_ACTION = "network.ip_assignment.service_ownership_unlinked"
+_UNLINK_BATCH_AUDIT_ACTION = "network.ip_assignment.service_ownership_unlinked_batch"
 _RETAINING_STATUSES = frozenset(
     {
         SubscriptionStatus.active,
@@ -232,6 +248,113 @@ class ServiceIPv4AssignmentRepairOutcome:
     linked_count: int
     created_count: int
     deactivated_count: int
+    preview_fingerprint: str
+    replayed: bool
+
+
+class IPv6AssignmentLinkDecision(StrEnum):
+    ready_link = "ready_link"
+    noop = "noop"
+    subscription_not_found = "subscription_not_found"
+    subscriber_not_found = "subscriber_not_found"
+    subscription_not_serviceable = "subscription_not_serviceable"
+    target_address_not_found = "target_address_not_found"
+    target_address_not_serviceable = "target_address_not_serviceable"
+    target_assignment_not_found = "target_assignment_not_found"
+    target_owned_by_other_service = "target_owned_by_other_service"
+    service_already_has_ipv6_assignment = "service_already_has_ipv6_assignment"
+
+
+@dataclass(frozen=True, slots=True)
+class ActiveIPv6AssignmentEvidence:
+    assignment_id: UUID
+    subscriber_id: UUID | None
+    subscription_id: UUID | None
+    address_id: UUID
+    address: str
+
+
+@dataclass(frozen=True, slots=True)
+class ServiceIPv6AssignmentLinkPreview:
+    subscription_id: UUID
+    subscriber_id: UUID | None
+    desired_address_id: UUID
+    desired_address: str | None
+    active_assignments: tuple[ActiveIPv6AssignmentEvidence, ...]
+    decision: IPv6AssignmentLinkDecision
+    fingerprint: str
+
+    @property
+    def applicable(self) -> bool:
+        return self.decision is IPv6AssignmentLinkDecision.ready_link
+
+
+@dataclass(frozen=True, slots=True)
+class LinkServiceIPv6AssignmentCommand:
+    context: CommandContext
+    subscription_id: UUID
+    desired_address_id: UUID
+    preview_fingerprint: str
+
+
+@dataclass(frozen=True, slots=True)
+class ServiceIPv6AssignmentLinkOutcome:
+    subscription_id: UUID
+    desired_assignment_id: UUID | None
+    linked_count: int
+    preview_fingerprint: str
+    replayed: bool
+
+
+class IPAssignmentServiceUnlinkDecision(StrEnum):
+    ready_unlink = "ready_unlink"
+    assignment_not_found = "assignment_not_found"
+    assignment_not_active = "assignment_not_active"
+    assignment_not_linked = "assignment_not_linked"
+    subscription_not_found = "subscription_not_found"
+    subscription_mismatch = "subscription_mismatch"
+    subscriber_mismatch = "subscriber_mismatch"
+
+
+@dataclass(frozen=True, slots=True)
+class ServiceIPAssignmentUnlinkPreview:
+    assignment_id: UUID
+    subscriber_id: UUID | None
+    current_subscription_id: UUID | None
+    expected_subscription_id: UUID
+    subscription_status: str | None
+    subscription_service_address_id: UUID | None
+    ip_version: str | None
+    address_id: UUID | None
+    address: str | None
+    served_address: str | None
+    served_address_matches_assignment: bool
+    # IPv4 only: find_ipv4_live_use has no IPv6 equivalent, so IPv6 previews
+    # leave this unchecked/None instead of inventing session semantics.
+    live_session_checked: bool
+    live_session_present: bool | None
+    is_primary: bool
+    service_address_id: UUID | None
+    decision: IPAssignmentServiceUnlinkDecision
+    fingerprint: str
+
+    @property
+    def applicable(self) -> bool:
+        return self.decision is IPAssignmentServiceUnlinkDecision.ready_unlink
+
+
+@dataclass(frozen=True, slots=True)
+class UnlinkIPAssignmentServiceOwnershipCommand:
+    context: CommandContext
+    assignment_id: UUID
+    expected_subscription_id: UUID
+    preview_fingerprint: str
+
+
+@dataclass(frozen=True, slots=True)
+class IPAssignmentServiceUnlinkOutcome:
+    assignment_id: UUID
+    previous_subscription_id: UUID | None
     preview_fingerprint: str
     replayed: bool
 
@@ -1041,6 +1164,304 @@ def preview_service_ipv4_assignment_repair(
     )
 
 
+def _active_ipv6_assignment_evidence(
+    db: Session,
+    *,
+    subscriber_id: UUID,
+    desired_address_id: UUID,
+) -> tuple[ActiveIPv6AssignmentEvidence, ...]:
+    ownership_filter = or_(
+        IPAssignment.subscriber_id == subscriber_id,
+        IPAssignment.ipv6_address_id == desired_address_id,
+    )
+    rows = db.execute(
+        select(IPAssignment, IPv6Address.address)
+        .join(IPv6Address, IPAssignment.ipv6_address_id == IPv6Address.id)
+        .where(
+            IPAssignment.is_active.is_(True),
+            IPAssignment.ip_version == IPVersion.ipv6,
+            ownership_filter,
+        )
+        .order_by(IPAssignment.id)
+    ).all()
+    return tuple(
+        ActiveIPv6AssignmentEvidence(
+            assignment_id=assignment.id,
+            subscriber_id=assignment.subscriber_id,
+            subscription_id=assignment.subscription_id,
+            address_id=assignment.ipv6_address_id,
+            address=_normalized_ip(address),
+        )
+        for assignment, address in rows
+        if assignment.ipv6_address_id is not None
+    )
+
+
+def _target_ipv6_address_is_serviceable(
+    address: IPv6Address,
+    pool: IpPool | None,
+) -> bool:
+    # IPv6Address has no ONT binding or allocation type, unlike IPv4Address.
+    if address.is_reserved:
+        return False
+    if pool is None or not pool.is_active or pool.ip_version != IPVersion.ipv6:
+        return False
+    return not _pool_is_infrastructure(pool)
+
+
+def preview_service_ipv6_assignment_link(
+    db: Session,
+    *,
+    subscription_id: UUID,
+    desired_address_id: UUID,
+) -> ServiceIPv6AssignmentLinkPreview:
+    """Read-only, exact-service plan for one reviewed IPv6 assignment link.
+
+    Link-only twin of the IPv4 ``ready_link`` repair branch: an existing
+    active IPv6 assignment for the same subscriber is linked to the target
+    service. Nothing is created, released, or deactivated, the served IPv6
+    column is never consulted or written, and ``is_primary`` is never set
+    (the primary marker and its partial-unique index are IPv4-only).
+    """
+
+    subscription = db.get(Subscription, subscription_id)
+    subscriber_id = subscription.subscriber_id if subscription is not None else None
+    desired_address: str | None = None
+    active_assignments: tuple[ActiveIPv6AssignmentEvidence, ...] = ()
+    decision = IPv6AssignmentLinkDecision.subscription_not_found
+
+    if subscription is not None and subscriber_id is None:
+        decision = IPv6AssignmentLinkDecision.subscriber_not_found
+    elif (
+        subscription is not None
+        and subscriber_id is not None
+        and db.get(Subscriber, subscriber_id) is None
+    ):
+        decision = IPv6AssignmentLinkDecision.subscriber_not_found
+    elif subscription is not None and subscriber_id is not None:
+        active_assignments = _active_ipv6_assignment_evidence(
+            db,
+            subscriber_id=subscriber_id,
+            desired_address_id=desired_address_id,
+        )
+        target = db.get(IPv6Address, desired_address_id)
+        if subscription.status not in _RETAINING_STATUSES:
+            decision = IPv6AssignmentLinkDecision.subscription_not_serviceable
+        elif target is None:
+            decision = IPv6AssignmentLinkDecision.target_address_not_found
+        else:
+            desired_address = _normalized_ip(target.address)
+            pool = db.get(IpPool, target.pool_id) if target.pool_id else None
+            target_assignment = next(
+                (
+                    item
+                    for item in active_assignments
+                    if item.address_id == desired_address_id
+                ),
+                None,
+            )
+            remaining_exact = [
+                item
+                for item in active_assignments
+                if item.subscription_id == subscription.id
+                and item.address_id != desired_address_id
+            ]
+            if not _target_ipv6_address_is_serviceable(target, pool):
+                decision = IPv6AssignmentLinkDecision.target_address_not_serviceable
+            elif target_assignment is None:
+                decision = IPv6AssignmentLinkDecision.target_assignment_not_found
+            elif (
+                target_assignment.subscriber_id != subscriber_id
+                or target_assignment.subscription_id not in {None, subscription.id}
+            ):
+                decision = IPv6AssignmentLinkDecision.target_owned_by_other_service
+            elif remaining_exact:
+                decision = (
+                    IPv6AssignmentLinkDecision.service_already_has_ipv6_assignment
+                )
+            elif target_assignment.subscription_id is None:
+                decision = IPv6AssignmentLinkDecision.ready_link
+            else:
+                decision = IPv6AssignmentLinkDecision.noop
+
+    payload: dict[str, object] = {
+        "subscription_id": str(subscription_id),
+        "subscriber_id": str(subscriber_id) if subscriber_id is not None else None,
+        "desired_address_id": str(desired_address_id),
+        "desired_address": desired_address,
+        "active_assignments": [
+            {
+                "assignment_id": str(item.assignment_id),
+                "subscriber_id": (
+                    str(item.subscriber_id) if item.subscriber_id is not None else None
+                ),
+                "subscription_id": (
+                    str(item.subscription_id)
+                    if item.subscription_id is not None
+                    else None
+                ),
+                "address_id": str(item.address_id),
+                "address": item.address,
+            }
+            for item in active_assignments
+        ],
+        "decision": decision.value,
+    }
+    return ServiceIPv6AssignmentLinkPreview(
+        subscription_id=subscription_id,
+        subscriber_id=subscriber_id,
+        desired_address_id=desired_address_id,
+        desired_address=desired_address,
+        active_assignments=active_assignments,
+        decision=decision,
+        fingerprint=_repair_fingerprint(payload),
+    )
+
+
+def preview_ip_assignment_service_unlink(
+    db: Session,
+    *,
+    assignment_id: UUID,
+    expected_subscription_id: UUID,
+) -> ServiceIPAssignmentUnlinkPreview:
+    """Read-only plan to undo one exact service link (IPv4 or IPv6).
+
+    Fingerprints the full linked state, so apply refuses if anything the
+    rollback depends on moved after preview. The served column and (IPv4)
+    live-session evidence are fingerprint-bound the same way, but for
+    evidence only: a live session or a matching served address never makes
+    the preview inapplicable, so rollback stays possible. There is no IPv6
+    equivalent of ``find_ipv4_live_use``, so IPv6 previews report the live
+    session as unchecked instead of inventing session semantics.
+    """
+
+    assignment = db.get(IPAssignment, assignment_id)
+    subscriber_id = assignment.subscriber_id if assignment is not None else None
+    current_subscription_id = (
+        assignment.subscription_id if assignment is not None else None
+    )
+    ip_version = assignment.ip_version.value if assignment is not None else None
+    address_id: UUID | None = None
+    address: str | None = None
+    is_primary = bool(assignment.is_primary) if assignment is not None else False
+    service_address_id = (
+        assignment.service_address_id if assignment is not None else None
+    )
+    subscription = (
+        db.get(Subscription, current_subscription_id)
+        if current_subscription_id is not None
+        else None
+    )
+    subscription_status = (
+        subscription.status.value if subscription is not None else None
+    )
+    subscription_service_address_id = (
+        subscription.service_address_id if subscription is not None else None
+    )
+    decision = IPAssignmentServiceUnlinkDecision.assignment_not_found
+
+    if assignment is not None:
+        address_row: IPv4Address | IPv6Address | None
+        if assignment.ip_version == IPVersion.ipv6:
+            address_id = assignment.ipv6_address_id
+            address_row = (
+                db.get(IPv6Address, address_id) if address_id is not None else None
+            )
+        else:
+            address_id = assignment.ipv4_address_id
+            address_row = (
+                db.get(IPv4Address, address_id) if address_id is not None else None
+            )
+        address = _normalized_ip(address_row.address) if address_row else None
+        if not assignment.is_active:
+            decision = IPAssignmentServiceUnlinkDecision.assignment_not_active
+        elif current_subscription_id is None:
+            decision = IPAssignmentServiceUnlinkDecision.assignment_not_linked
+        elif current_subscription_id != expected_subscription_id:
+            decision = IPAssignmentServiceUnlinkDecision.subscription_mismatch
+        elif subscription is None:
+            decision = IPAssignmentServiceUnlinkDecision.subscription_not_found
+        elif subscription.subscriber_id != subscriber_id:
+            decision = IPAssignmentServiceUnlinkDecision.subscriber_mismatch
+        else:
+            decision = IPAssignmentServiceUnlinkDecision.ready_unlink
+
+    served_address: str | None = None
+    if assignment is not None and subscription is not None:
+        served_value = (
+            subscription.ipv6_address
+            if assignment.ip_version == IPVersion.ipv6
+            else subscription.ipv4_address
+        )
+        served_address = _normalized_ip(served_value) or None
+    served_address_matches_assignment = (
+        served_address is not None and served_address == address
+    )
+    live_session_checked = False
+    live_session_present: bool | None = None
+    if (
+        assignment is not None
+        and assignment.ip_version == IPVersion.ipv4
+        and current_subscription_id is not None
+        and address
+    ):
+        live_session_checked = True
+        live_session_present = find_ipv4_live_use(
+            db,
+            subscription_id=current_subscription_id,
+            addresses={address},
+            exclude_own_sessions=False,
+        ).live_session
+
+    payload: dict[str, object] = {
+        "assignment_id": str(assignment_id),
+        "subscriber_id": str(subscriber_id) if subscriber_id is not None else None,
+        "current_subscription_id": (
+            str(current_subscription_id)
+            if current_subscription_id is not None
+            else None
+        ),
+        "expected_subscription_id": str(expected_subscription_id),
+        "subscription_status": subscription_status,
+        "subscription_service_address_id": (
+            str(subscription_service_address_id)
+            if subscription_service_address_id is not None
+            else None
+        ),
+        "ip_version": ip_version,
+        "address_id": str(address_id) if address_id is not None else None,
+        "address": address,
+        "served_address": served_address,
+        "served_address_matches_assignment": served_address_matches_assignment,
+        "live_session_checked": live_session_checked,
+        "live_session_present": live_session_present,
+        "is_primary": is_primary,
+        "service_address_id": (
+            str(service_address_id) if service_address_id is not None else None
+        ),
+        "decision": decision.value,
+    }
+    return ServiceIPAssignmentUnlinkPreview(
+        assignment_id=assignment_id,
+        subscriber_id=subscriber_id,
+        current_subscription_id=current_subscription_id,
+        expected_subscription_id=expected_subscription_id,
+        subscription_status=subscription_status,
+        subscription_service_address_id=subscription_service_address_id,
+        ip_version=ip_version,
+        address_id=address_id,
+        address=address,
+        served_address=served_address,
+        served_address_matches_assignment=served_address_matches_assignment,
+        live_session_checked=live_session_checked,
+        live_session_present=live_session_present,
+        is_primary=is_primary,
+        service_address_id=service_address_id,
+        decision=decision,
+        fingerprint=_repair_fingerprint(payload),
+    )
+
+
 def _projection_preview_payload(
     *,
     subscription_id: UUID,
@@ -1803,6 +2224,383 @@ def _repair_service_ipv4_assignment(
     )
 
 
+def _prior_ipv6_link_outcome(
+    db: Session,
+    *,
+    subscription_id: UUID,
+    idempotency_key: str,
+    preview_fingerprint: str,
+) -> ServiceIPv6AssignmentLinkOutcome | None:
+    prior = db.scalar(
+        select(AuditEvent).where(
+            AuditEvent.action == _IPV6_LIFECYCLE_BATCH_AUDIT_ACTION,
+            AuditEvent.entity_type == "ip_assignment_ipv6_lifecycle",
+            AuditEvent.entity_id == idempotency_key,
+        )
+    )
+    if prior is None:
+        return None
+    metadata = prior.metadata_ if isinstance(prior.metadata_, dict) else {}
+    prior_fingerprint = str(metadata.get("preview_fingerprint") or "")
+    if not secrets.compare_digest(prior_fingerprint, preview_fingerprint):
+        _lifecycle_error(
+            "idempotency_conflict",
+            "The idempotency key was already used for different IPAM evidence.",
+        )
+    desired_assignment_id = metadata.get("desired_assignment_id")
+    # The preview fingerprint binds subscription_id (it is in the preview
+    # payload), so a fingerprint match ties this prior batch to the caller's
+    # subscription. Take it from the command, not audit metadata: metadata
+    # is provenance only (ADR 0007 invariant 4), never identity authority.
+    return ServiceIPv6AssignmentLinkOutcome(
+        subscription_id=subscription_id,
+        desired_assignment_id=(
+            UUID(str(desired_assignment_id)) if desired_assignment_id else None
+        ),
+        linked_count=int(metadata.get("linked_count") or 0),
+        preview_fingerprint=prior_fingerprint,
+        replayed=True,
+    )
+
+
+def _link_service_ipv6_assignment(
+    db: Session,
+    command: LinkServiceIPv6AssignmentCommand,
+) -> ServiceIPv6AssignmentLinkOutcome:
+    idempotency_key = (command.context.idempotency_key or "").strip()
+    if not idempotency_key:
+        _lifecycle_error("missing_idempotency_key", "An idempotency key is required.")
+
+    prior = _prior_ipv6_link_outcome(
+        db,
+        subscription_id=command.subscription_id,
+        idempotency_key=idempotency_key,
+        preview_fingerprint=command.preview_fingerprint,
+    )
+    if prior is not None:
+        return prior
+
+    subscription = db.scalar(
+        select(Subscription)
+        .where(Subscription.id == command.subscription_id)
+        .with_for_update()
+    )
+    if subscription is None:
+        _lifecycle_error(
+            "subscription_not_found",
+            "The reviewed subscription no longer exists.",
+        )
+    subscriber = db.scalar(
+        select(Subscriber)
+        .where(Subscriber.id == subscription.subscriber_id)
+        .with_for_update()
+    )
+    if subscriber is None:
+        _lifecycle_error(
+            "subscriber_not_found",
+            "The reviewed subscription no longer has a subscriber.",
+        )
+    desired_address = db.scalar(
+        select(IPv6Address)
+        .where(IPv6Address.id == command.desired_address_id)
+        .with_for_update()
+    )
+    if desired_address is not None and desired_address.pool_id is not None:
+        db.scalar(
+            select(IpPool).where(IpPool.id == desired_address.pool_id).with_for_update()
+        )
+    locked_assignments = list(
+        db.scalars(
+            select(IPAssignment)
+            .where(
+                or_(
+                    IPAssignment.subscriber_id == subscriber.id,
+                    IPAssignment.ipv6_address_id == command.desired_address_id,
+                )
+            )
+            .order_by(IPAssignment.id)
+            .with_for_update()
+        ).all()
+    )
+
+    prior = _prior_ipv6_link_outcome(
+        db,
+        subscription_id=command.subscription_id,
+        idempotency_key=idempotency_key,
+        preview_fingerprint=command.preview_fingerprint,
+    )
+    if prior is not None:
+        return prior
+
+    current = preview_service_ipv6_assignment_link(
+        db,
+        subscription_id=command.subscription_id,
+        desired_address_id=command.desired_address_id,
+    )
+    if not secrets.compare_digest(current.fingerprint, command.preview_fingerprint):
+        _lifecycle_error(
+            "stale_preview",
+            "IPAM lifecycle evidence changed after preview; preview again.",
+            current_fingerprint=current.fingerprint,
+        )
+    if not current.applicable:
+        _lifecycle_error(
+            "unsafe_repair",
+            "The reviewed IPAM lifecycle repair is no longer safe to apply.",
+            decision=current.decision.value,
+        )
+
+    desired_assignment = next(
+        (
+            assignment
+            for assignment in locked_assignments
+            if assignment.is_active
+            and assignment.ip_version == IPVersion.ipv6
+            and assignment.ipv6_address_id == command.desired_address_id
+        ),
+        None,
+    )
+    if desired_assignment is None:
+        _lifecycle_error(
+            "assignment_not_found",
+            "The reviewed IP assignment no longer exists.",
+        )
+    # Mirror the IPv4 link branch minus the primary marker, which IPv6
+    # assignments do not carry.
+    desired_assignment.subscription_id = subscription.id
+    desired_assignment.service_address_id = subscription.service_address_id
+    db.flush()
+    stage_audit_event(
+        db,
+        action=_LIFECYCLE_ITEM_AUDIT_ACTION,
+        entity_type="ip_assignment",
+        entity_id=str(desired_assignment.id),
+        actor=AuditActor.service(command.context.actor),
+        metadata={
+            "action": "linked",
+            "subscription_id": str(command.subscription_id),
+            "ipv6_address_id": str(command.desired_address_id),
+            "preview_fingerprint": current.fingerprint,
+            "reason": command.context.reason,
+        },
+    )
+    stage_audit_event(
+        db,
+        action=_IPV6_LIFECYCLE_BATCH_AUDIT_ACTION,
+        entity_type="ip_assignment_ipv6_lifecycle",
+        entity_id=idempotency_key,
+        actor=AuditActor.service(command.context.actor),
+        metadata={
+            "subscription_id": str(subscription.id),
+            "desired_assignment_id": str(desired_assignment.id),
+            "desired_address_id": str(command.desired_address_id),
+            "deactivate_assignment_ids": [],
+            "decision": current.decision.value,
+            "preview_fingerprint": current.fingerprint,
+            "linked_count": 1,
+            "created_count": 0,
+            "deactivated_count": 0,
+            "reason": command.context.reason,
+        },
+    )
+    emit_event(
+        db,
+        EventType.ip_assignment_lifecycle_repaired,
+        {
+            "schema_version": 1,
+            "subscription_id": str(subscription.id),
+            "desired_assignment_id": str(desired_assignment.id),
+            "deactivated_assignment_ids": [],
+            "preview_fingerprint": current.fingerprint,
+        },
+        actor=command.context.actor,
+    )
+    db.flush()
+    return ServiceIPv6AssignmentLinkOutcome(
+        subscription_id=subscription.id,
+        desired_assignment_id=desired_assignment.id,
+        linked_count=1,
+        preview_fingerprint=current.fingerprint,
+        replayed=False,
+    )
+
+
+def _prior_unlink_outcome(
+    db: Session,
+    *,
+    idempotency_key: str,
+    preview_fingerprint: str,
+) -> IPAssignmentServiceUnlinkOutcome | None:
+    prior = db.scalar(
+        select(AuditEvent).where(
+            AuditEvent.action == _UNLINK_BATCH_AUDIT_ACTION,
+            AuditEvent.entity_type == "ip_assignment_service_ownership_unlink",
+            AuditEvent.entity_id == idempotency_key,
+        )
+    )
+    if prior is None:
+        return None
+    metadata = prior.metadata_ if isinstance(prior.metadata_, dict) else {}
+    prior_fingerprint = str(metadata.get("preview_fingerprint") or "")
+    if not secrets.compare_digest(prior_fingerprint, preview_fingerprint):
+        _error(
+            "idempotency_conflict",
+            "The idempotency key was already used for different IPAM evidence.",
+        )
+    previous_subscription_id = metadata.get("previous_subscription_id")
+    return IPAssignmentServiceUnlinkOutcome(
+        assignment_id=UUID(str(metadata["assignment_id"])),
+        previous_subscription_id=(
+            UUID(str(previous_subscription_id)) if previous_subscription_id else None
+        ),
+        preview_fingerprint=prior_fingerprint,
+        replayed=True,
+    )
+
+
+def _unlink_ip_assignment_service_ownership(
+    db: Session,
+    command: UnlinkIPAssignmentServiceOwnershipCommand,
+) -> IPAssignmentServiceUnlinkOutcome:
+    idempotency_key = (command.context.idempotency_key or "").strip()
+    if not idempotency_key:
+        _error("missing_idempotency_key", "An idempotency key is required.")
+
+    prior = _prior_unlink_outcome(
+        db,
+        idempotency_key=idempotency_key,
+        preview_fingerprint=command.preview_fingerprint,
+    )
+    if prior is not None:
+        return prior
+
+    subscription = db.scalar(
+        select(Subscription)
+        .where(Subscription.id == command.expected_subscription_id)
+        .with_for_update()
+    )
+    if subscription is None:
+        _error(
+            "subscription_not_found",
+            "The reviewed subscription no longer exists.",
+        )
+    assignment = db.scalar(
+        select(IPAssignment)
+        .where(IPAssignment.id == command.assignment_id)
+        .with_for_update()
+    )
+    if assignment is None:
+        _error("assignment_not_found", "A reviewed IP assignment no longer exists.")
+    if assignment.ipv6_address_id is not None:
+        db.scalar(
+            select(IPv6Address)
+            .where(IPv6Address.id == assignment.ipv6_address_id)
+            .with_for_update()
+        )
+    elif assignment.ipv4_address_id is not None:
+        db.scalar(
+            select(IPv4Address)
+            .where(IPv4Address.id == assignment.ipv4_address_id)
+            .with_for_update()
+        )
+
+    prior = _prior_unlink_outcome(
+        db,
+        idempotency_key=idempotency_key,
+        preview_fingerprint=command.preview_fingerprint,
+    )
+    if prior is not None:
+        return prior
+    current = preview_ip_assignment_service_unlink(
+        db,
+        assignment_id=command.assignment_id,
+        expected_subscription_id=command.expected_subscription_id,
+    )
+    if not secrets.compare_digest(current.fingerprint, command.preview_fingerprint):
+        _error(
+            "stale_preview",
+            "IPAM ownership evidence changed after preview; preview again.",
+            current_fingerprint=current.fingerprint,
+        )
+    if not current.applicable:
+        _error(
+            "unsafe_cohort",
+            "The reviewed assignment is no longer safe to unlink.",
+            decision=current.decision.value,
+        )
+
+    previous_subscription_id = assignment.subscription_id
+    # Rollback only: clear the service link and the IPv4 primary marker the
+    # link set. Never deactivate or release the address, never re-promote a
+    # sibling (its pre-link primary state is unknowable; consumers fall back
+    # to a sole assignment), and never touch a served column.
+    assignment.subscription_id = None
+    if assignment.is_primary:
+        assignment.is_primary = False
+    if (
+        assignment.service_address_id is not None
+        and assignment.service_address_id == subscription.service_address_id
+    ):
+        assignment.service_address_id = None
+    stage_audit_event(
+        db,
+        action=_UNLINK_ITEM_AUDIT_ACTION,
+        entity_type="ip_assignment",
+        entity_id=str(assignment.id),
+        actor=AuditActor.service(command.context.actor),
+        metadata={
+            "previous_subscription_id": (
+                str(previous_subscription_id)
+                if previous_subscription_id is not None
+                else None
+            ),
+            "preview_fingerprint": current.fingerprint,
+            "reason": command.context.reason,
+        },
+    )
+    stage_audit_event(
+        db,
+        action=_UNLINK_BATCH_AUDIT_ACTION,
+        entity_type="ip_assignment_service_ownership_unlink",
+        entity_id=idempotency_key,
+        actor=AuditActor.service(command.context.actor),
+        metadata={
+            "assignment_id": str(assignment.id),
+            "previous_subscription_id": (
+                str(previous_subscription_id)
+                if previous_subscription_id is not None
+                else None
+            ),
+            "preview_fingerprint": current.fingerprint,
+            "unlinked_count": 1,
+            "reason": command.context.reason,
+        },
+    )
+    emit_event(
+        db,
+        EventType.ip_assignment_service_ownership_unlinked,
+        {
+            "schema_version": 1,
+            "assignment_id": str(assignment.id),
+            "previous_subscription_id": (
+                str(previous_subscription_id)
+                if previous_subscription_id is not None
+                else None
+            ),
+            "ip_version": current.ip_version,
+            "preview_fingerprint": current.fingerprint,
+        },
+        actor=command.context.actor,
+    )
+    db.flush()
+    return IPAssignmentServiceUnlinkOutcome(
+        assignment_id=assignment.id,
+        previous_subscription_id=previous_subscription_id,
+        preview_fingerprint=current.fingerprint,
+        replayed=False,
+    )
+
+
 def _project_served_ipv4(subscription: Subscription, value: str | None) -> None:
     """THE one write of the served-IPv4 column (projection and retention release)."""
 
@@ -1973,6 +2771,34 @@ def repair_service_ipv4_assignment(
     )
 
 
+def link_service_ipv6_assignment(
+    db: Session,
+    command: LinkServiceIPv6AssignmentCommand,
+) -> ServiceIPv6AssignmentLinkOutcome:
+    """Apply one exact, fingerprint-bound service IPv6 assignment link."""
+
+    return execute_owner_command(
+        db,
+        definition=_IPV6_LINK_COMMAND,
+        context=command.context,
+        operation=lambda: _link_service_ipv6_assignment(db, command),
+    )
+
+
+def unlink_ip_assignment_service_ownership(
+    db: Session,
+    command: UnlinkIPAssignmentServiceOwnershipCommand,
+) -> IPAssignmentServiceUnlinkOutcome:
+    """Undo one exact, fingerprint-bound assignment service link."""
+
+    return execute_owner_command(
+        db,
+        definition=_UNLINK_COMMAND,
+        context=command.context,
+        operation=lambda: _unlink_ip_assignment_service_ownership(db, command),
+    )
+
+
 def apply_service_ipv4_assignment_participant(
     db: Session,
     command: RepairServiceIPv4AssignmentCommand,
@@ -2140,6 +2966,526 @@ def stage_subscriber_ip_assignment_release(
     return SubscriberIPAssignmentReleaseOutcome(tuple(released))
 
 
+# ---------------------------------------------------------------------------
+# Reviewed release of one unbound IPv4 assignment (W0 N9 named exception)
+# ---------------------------------------------------------------------------
+#
+# N9 is LINK-DON'T-RELEASE: an active assignment that no service owns is linked
+# to its service, never freed. This command is the narrow, named exception for
+# rows that cannot be linked. The caller must NAME the eligibility class it
+# invokes, and the preview refuses unless the evidence proves that class. There
+# is no class for "ambiguous" or "no column match on a retaining service": those
+# stay held until Michael rules per item.
+
+_UNBOUND_RELEASE_COMMAND = OwnerCommandDefinition(
+    owner=_OWNER,
+    concern=_LIFECYCLE_CONCERN,
+    name="release_unbound_ip_assignment",
+)
+_UNBOUND_RELEASE_ITEM_AUDIT_ACTION = "network.ip_assignment.unbound_released"
+_UNBOUND_RELEASE_BATCH_AUDIT_ACTION = "network.ip_assignment.unbound_released_batch"
+
+
+class UnboundIPv4ReleaseClass(StrEnum):
+    #: R6 / C8: the owning subscriber has no non-terminal service at all (every
+    #: service canceled/expired, or none), and the address is an ordinary
+    #: customer address.
+    terminal_only_subscriber = "terminal_only_subscriber"
+    #: R6 / C10: the address cannot be served to a customer (network or
+    #: broadcast address, or a device/infrastructure/reserved address) AND stays
+    #: protected from re-allocation after the release.
+    address_not_serviceable = "address_not_serviceable"
+    #: R3 / C4: the subscriber keeps a served IP elsewhere; no non-terminal
+    #: service of the subscriber carries this address in its served column.
+    served_elsewhere_no_sibling = "served_elsewhere_no_sibling"
+
+
+class UnboundIPv4ReleaseDecision(StrEnum):
+    ready_release = "ready_release"
+    assignment_not_found = "assignment_not_found"
+    assignment_not_active = "assignment_not_active"
+    assignment_not_ipv4 = "assignment_not_ipv4"
+    assignment_already_bound = "assignment_already_bound"
+    assignment_is_primary = "assignment_is_primary"
+    subscriber_not_found = "subscriber_not_found"
+    address_not_found = "address_not_found"
+    address_in_live_use = "address_in_live_use"
+    # terminal_only_subscriber refusals
+    subscriber_has_non_terminal_service = "subscriber_has_non_terminal_service"
+    address_not_releasable = "address_not_releasable"
+    address_in_routed_block = "address_in_routed_block"
+    address_is_device_host = "address_is_device_host"
+    # address_not_serviceable refusals
+    address_is_serviceable = "address_is_serviceable"
+    release_would_free_unprotected_address = "release_would_free_unprotected_address"
+    # served_elsewhere_no_sibling refusals
+    linkable_sibling_exists = "linkable_sibling_exists"
+    ambiguous_sibling_column_match = "ambiguous_sibling_column_match"
+    service_without_exact_assignment = "service_without_exact_assignment"
+    address_is_network_or_broadcast = "address_is_network_or_broadcast"
+    no_non_terminal_service = "no_non_terminal_service"
+
+
+@dataclass(frozen=True, slots=True)
+class UnboundIPv4ServiceEvidence:
+    subscription_id: UUID
+    status: str
+    column_matches_address: bool
+    has_exact_active_ipv4: bool
+
+
+@dataclass(frozen=True, slots=True)
+class UnboundIPv4ReleasePreview:
+    assignment_id: UUID
+    eligibility_class: UnboundIPv4ReleaseClass
+    subscriber_id: UUID | None
+    address_id: UUID | None
+    address: str | None
+    is_active: bool
+    is_primary: bool
+    current_subscription_id: UUID | None
+    services: tuple[UnboundIPv4ServiceEvidence, ...]
+    live_session: bool
+    column_holder_subscription_ids: tuple[UUID, ...]
+    address_is_network_or_broadcast: bool
+    address_is_protected: bool
+    address_is_device_host: bool
+    address_in_routed_block: bool
+    decision: UnboundIPv4ReleaseDecision
+    fingerprint: str
+    #: The exact fingerprinted payload; stored on the item audit row.
+    evidence: dict[str, object] = field(default_factory=dict, compare=False)
+
+    @property
+    def applicable(self) -> bool:
+        return self.decision is UnboundIPv4ReleaseDecision.ready_release
+
+
+@dataclass(frozen=True, slots=True)
+class ReleaseUnboundIPAssignmentCommand:
+    context: CommandContext
+    assignment_id: UUID
+    eligibility_class: UnboundIPv4ReleaseClass
+    preview_fingerprint: str
+
+
+@dataclass(frozen=True, slots=True)
+class UnboundIPAssignmentReleaseOutcome:
+    assignment_id: UUID
+    eligibility_class: UnboundIPv4ReleaseClass
+    released_count: int
+    preview_fingerprint: str
+    replayed: bool
+
+
+def _address_is_network_or_broadcast(address: str, pool: IpPool | None) -> bool:
+    if pool is None:
+        return False
+    try:
+        network = ipaddress.ip_network(str(pool.cidr), strict=False)
+        parsed = ipaddress.IPv4Address(address)
+    except ValueError:
+        return False
+    if not isinstance(network, ipaddress.IPv4Network) or network.prefixlen >= 31:
+        return False
+    return parsed in {network.network_address, network.broadcast_address}
+
+
+def _address_stays_protected(address: IPv4Address) -> bool:
+    """True when the allocator keeps refusing this row after a release.
+
+    The allocator (``provisioning_helpers._find_available_address``) filters
+    only ``is_reserved``; an ONT link, management type, device host or
+    infrastructure pool does NOT keep an unreserved address from being handed
+    to a customer. B1 never sets ``is_reserved`` itself.
+    """
+
+    return bool(address.is_reserved)
+
+
+def _pool_allows_network_broadcast_marker(pool: IpPool | None) -> bool:
+    notes = str(getattr(pool, "notes", "") or "")
+    return any(
+        line.strip().lower() == "[allow_network_broadcast:true]"
+        for line in notes.splitlines()
+    )
+
+
+def preview_unbound_ip_assignment_release(
+    db: Session,
+    *,
+    assignment_id: UUID,
+    eligibility_class: UnboundIPv4ReleaseClass,
+) -> UnboundIPv4ReleasePreview:
+    """Read-only plan to release ONE active IPv4 assignment no service owns.
+
+    Refuses unless the evidence proves the named ``eligibility_class``. The
+    fingerprint binds the class, the subscriber's service set, the live-use
+    evidence and the address class, so apply refuses on any drift.
+    """
+
+    assignment = db.get(IPAssignment, assignment_id)
+    subscriber_id = assignment.subscriber_id if assignment is not None else None
+    address_row: IPv4Address | None = None
+    pool: IpPool | None = None
+    address: str | None = None
+    services: list[UnboundIPv4ServiceEvidence] = []
+    live_session = False
+    holders: tuple[UUID, ...] = ()
+    network_or_broadcast = False
+    protected = False
+    device_host = False
+    routed = False
+    decision = UnboundIPv4ReleaseDecision.ready_release
+
+    if assignment is None:
+        decision = UnboundIPv4ReleaseDecision.assignment_not_found
+    elif not assignment.is_active:
+        decision = UnboundIPv4ReleaseDecision.assignment_not_active
+    elif assignment.ip_version != IPVersion.ipv4 or assignment.ipv4_address_id is None:
+        decision = UnboundIPv4ReleaseDecision.assignment_not_ipv4
+    elif assignment.subscription_id is not None:
+        decision = UnboundIPv4ReleaseDecision.assignment_already_bound
+    elif assignment.is_primary:
+        decision = UnboundIPv4ReleaseDecision.assignment_is_primary
+    elif subscriber_id is None or db.get(Subscriber, subscriber_id) is None:
+        decision = UnboundIPv4ReleaseDecision.subscriber_not_found
+    else:
+        address_row = db.get(IPv4Address, assignment.ipv4_address_id)
+        if address_row is None:
+            decision = UnboundIPv4ReleaseDecision.address_not_found
+
+    if (
+        assignment is not None
+        and address_row is not None
+        and decision is UnboundIPv4ReleaseDecision.ready_release
+        and subscriber_id is not None
+    ):
+        address = _normalized_ip(address_row.address).removesuffix("/32")
+        candidates = _address_candidates({address})
+        pool = db.get(IpPool, address_row.pool_id) if address_row.pool_id else None
+        network_or_broadcast = _address_is_network_or_broadcast(
+            address, pool
+        ) and not _pool_allows_network_broadcast_marker(pool)
+        protected = _address_stays_protected(address_row)
+        device_host = _target_address_is_device_host(db, address)
+        routed = _address_is_in_active_routed_block(db, address)
+
+        subscriptions = db.scalars(
+            select(Subscription)
+            .where(Subscription.subscriber_id == subscriber_id)
+            .order_by(Subscription.id)
+        ).all()
+        exact_service_ids = {
+            value
+            for value in db.scalars(
+                select(IPAssignment.subscription_id).where(
+                    IPAssignment.is_active.is_(True),
+                    IPAssignment.ip_version == IPVersion.ipv4,
+                    IPAssignment.subscription_id.in_([s.id for s in subscriptions]),
+                )
+            )
+            if value is not None
+        }
+        for subscription in subscriptions:
+            if subscription.status in _TERMINAL_STATUSES:
+                continue
+            services.append(
+                UnboundIPv4ServiceEvidence(
+                    subscription_id=subscription.id,
+                    status=subscription.status.value,
+                    column_matches_address=(
+                        str(subscription.ipv4_address or "").strip() in candidates
+                    ),
+                    has_exact_active_ipv4=subscription.id in exact_service_ids,
+                )
+            )
+        # Nil subscription id: this assignment has no service, so every
+        # non-terminal column holder is a "sibling".
+        live = find_ipv4_live_use(db, subscription_id=UUID(int=0), addresses={address})
+        live_session = live.live_session
+        holders = live.sibling_subscription_ids
+        own_matches = [s for s in services if s.column_matches_address]
+
+        customer_class = (
+            eligibility_class is not UnboundIPv4ReleaseClass.address_not_serviceable
+        )
+        served_elsewhere = (
+            eligibility_class is UnboundIPv4ReleaseClass.served_elsewhere_no_sibling
+        )
+        if live_session:
+            decision = UnboundIPv4ReleaseDecision.address_in_live_use
+        elif served_elsewhere and len(own_matches) == 1:
+            decision = UnboundIPv4ReleaseDecision.linkable_sibling_exists
+        elif served_elsewhere and len(own_matches) > 1:
+            decision = UnboundIPv4ReleaseDecision.ambiguous_sibling_column_match
+        elif holders:
+            decision = UnboundIPv4ReleaseDecision.address_in_live_use
+        elif (
+            eligibility_class is UnboundIPv4ReleaseClass.served_elsewhere_no_sibling
+            and not services
+        ):
+            decision = UnboundIPv4ReleaseDecision.no_non_terminal_service
+        elif (
+            eligibility_class is UnboundIPv4ReleaseClass.terminal_only_subscriber
+            and services
+        ):
+            decision = UnboundIPv4ReleaseDecision.subscriber_has_non_terminal_service
+        elif services and not all(s.has_exact_active_ipv4 for s in services):
+            # Every class: radius_population falls back to the unbound row for
+            # Framed-IP when a service has no exact assignment of its own.
+            decision = UnboundIPv4ReleaseDecision.service_without_exact_assignment
+        elif customer_class:
+            if network_or_broadcast:
+                decision = UnboundIPv4ReleaseDecision.address_is_network_or_broadcast
+            elif device_host:
+                decision = UnboundIPv4ReleaseDecision.address_is_device_host
+            elif routed:
+                decision = UnboundIPv4ReleaseDecision.address_in_routed_block
+            elif not _target_address_is_serviceable(address_row, pool):
+                decision = UnboundIPv4ReleaseDecision.address_not_releasable
+        else:  # address_not_serviceable
+            unserviceable = (
+                network_or_broadcast
+                or device_host
+                or routed
+                or not _target_address_is_serviceable(address_row, pool)
+            )
+            if not unserviceable:
+                decision = UnboundIPv4ReleaseDecision.address_is_serviceable
+            elif not protected:
+                decision = (
+                    UnboundIPv4ReleaseDecision.release_would_free_unprotected_address
+                )
+
+    payload: dict[str, object] = {
+        "assignment_id": str(assignment_id),
+        "eligibility_class": eligibility_class.value,
+        "subscriber_id": str(subscriber_id) if subscriber_id is not None else None,
+        "address_id": (str(address_row.id) if address_row is not None else None),
+        "address": address,
+        "pool_id": (
+            str(address_row.pool_id)
+            if address_row is not None and address_row.pool_id is not None
+            else None
+        ),
+        "is_active": bool(assignment.is_active) if assignment is not None else False,
+        "is_primary": bool(assignment.is_primary) if assignment is not None else False,
+        "current_subscription_id": (
+            str(assignment.subscription_id)
+            if assignment is not None and assignment.subscription_id is not None
+            else None
+        ),
+        "services": [
+            {
+                "subscription_id": str(item.subscription_id),
+                "status": item.status,
+                "column_matches_address": item.column_matches_address,
+                "has_exact_active_ipv4": item.has_exact_active_ipv4,
+            }
+            for item in services
+        ],
+        "live_session": live_session,
+        "column_holder_subscription_ids": [str(value) for value in holders],
+        "address_is_network_or_broadcast": network_or_broadcast,
+        "address_is_protected": protected,
+        "address_is_device_host": device_host,
+        "address_in_routed_block": routed,
+        "decision": decision.value,
+    }
+    return UnboundIPv4ReleasePreview(
+        assignment_id=assignment_id,
+        eligibility_class=eligibility_class,
+        subscriber_id=subscriber_id,
+        address_id=address_row.id if address_row is not None else None,
+        address=address,
+        is_active=bool(assignment.is_active) if assignment is not None else False,
+        is_primary=bool(assignment.is_primary) if assignment is not None else False,
+        current_subscription_id=(
+            assignment.subscription_id if assignment is not None else None
+        ),
+        services=tuple(services),
+        live_session=live_session,
+        column_holder_subscription_ids=holders,
+        address_is_network_or_broadcast=network_or_broadcast,
+        address_is_protected=protected,
+        address_is_device_host=device_host,
+        address_in_routed_block=routed,
+        decision=decision,
+        fingerprint=_repair_fingerprint(payload),
+        evidence=payload,
+    )
+
+
+def _prior_unbound_release_outcome(
+    db: Session,
+    *,
+    command: ReleaseUnboundIPAssignmentCommand,
+    idempotency_key: str,
+) -> UnboundIPAssignmentReleaseOutcome | None:
+    prior = db.scalar(
+        select(AuditEvent).where(
+            AuditEvent.action == _UNBOUND_RELEASE_BATCH_AUDIT_ACTION,
+            AuditEvent.entity_type == "ip_assignment_unbound_release",
+            AuditEvent.entity_id == idempotency_key,
+        )
+    )
+    if prior is None:
+        return None
+    metadata = prior.metadata_ if isinstance(prior.metadata_, dict) else {}
+    prior_fingerprint = str(metadata.get("preview_fingerprint") or "")
+    if not secrets.compare_digest(prior_fingerprint, command.preview_fingerprint):
+        _error(
+            "idempotency_conflict",
+            "The idempotency key was already used for different IPAM evidence.",
+        )
+    return UnboundIPAssignmentReleaseOutcome(
+        assignment_id=command.assignment_id,
+        eligibility_class=command.eligibility_class,
+        released_count=0,
+        preview_fingerprint=prior_fingerprint,
+        replayed=True,
+    )
+
+
+def _release_unbound_ip_assignment(
+    db: Session,
+    command: ReleaseUnboundIPAssignmentCommand,
+) -> UnboundIPAssignmentReleaseOutcome:
+    idempotency_key = (command.context.idempotency_key or "").strip()
+    if not idempotency_key:
+        _error("missing_idempotency_key", "An idempotency key is required.")
+    prior = _prior_unbound_release_outcome(
+        db, command=command, idempotency_key=idempotency_key
+    )
+    if prior is not None:
+        return prior
+
+    # Lock order matches repair_service_ipv4_assignment: Subscriber, then the
+    # assignment, then the address, then the inventory. The subscriber id is
+    # read unlocked first, then re-checked once the assignment is locked.
+    unlocked_subscriber_id = db.scalar(
+        select(IPAssignment.subscriber_id).where(
+            IPAssignment.id == command.assignment_id
+        )
+    )
+    if unlocked_subscriber_id is not None:
+        db.scalar(
+            select(Subscriber)
+            .where(Subscriber.id == unlocked_subscriber_id)
+            .with_for_update()
+        )
+    assignment = db.scalar(
+        select(IPAssignment)
+        .where(IPAssignment.id == command.assignment_id)
+        .with_for_update()
+    )
+    if assignment is None:
+        _error("assignment_not_found", "The reviewed IP assignment no longer exists.")
+    if assignment.subscriber_id != unlocked_subscriber_id:
+        _error(
+            "stale_preview",
+            "The assignment changed subscriber while locking; preview again.",
+        )
+    if assignment.ipv4_address_id is not None:
+        db.scalar(
+            select(IPv4Address)
+            .where(IPv4Address.id == assignment.ipv4_address_id)
+            .with_for_update()
+        )
+    _lock_eligibility_inventory(db)
+    prior = _prior_unbound_release_outcome(
+        db, command=command, idempotency_key=idempotency_key
+    )
+    if prior is not None:
+        return prior
+
+    current = preview_unbound_ip_assignment_release(
+        db,
+        assignment_id=command.assignment_id,
+        eligibility_class=command.eligibility_class,
+    )
+    if not secrets.compare_digest(current.fingerprint, command.preview_fingerprint):
+        _error(
+            "stale_preview",
+            "IPAM evidence changed after preview; preview again.",
+            current_fingerprint=current.fingerprint,
+        )
+    if not current.applicable:
+        _error(
+            "unsafe_cohort",
+            "The reviewed assignment is no longer safe to release.",
+            decision=current.decision.value,
+        )
+
+    # The only write: retire the assignment. The address row, the pool, every
+    # served column and RADIUS are untouched.
+    assignment.is_active = False
+    db.flush()
+    stage_audit_event(
+        db,
+        action=_UNBOUND_RELEASE_ITEM_AUDIT_ACTION,
+        entity_type="ip_assignment",
+        entity_id=str(assignment.id),
+        actor=AuditActor.service(command.context.actor),
+        metadata={
+            "eligibility_class": current.eligibility_class.value,
+            "preview_fingerprint": current.fingerprint,
+            # Full evidence the release was decided on (address, pool,
+            # services, holders, flags): the only record of what was freed.
+            "evidence": current.evidence,
+            "reason": command.context.reason,
+        },
+    )
+    stage_audit_event(
+        db,
+        action=_UNBOUND_RELEASE_BATCH_AUDIT_ACTION,
+        entity_type="ip_assignment_unbound_release",
+        entity_id=idempotency_key,
+        actor=AuditActor.service(command.context.actor),
+        metadata={
+            "assignment_id": str(assignment.id),
+            "eligibility_class": current.eligibility_class.value,
+            "preview_fingerprint": current.fingerprint,
+            "released_count": 1,
+            "reason": command.context.reason,
+        },
+    )
+    emit_event(
+        db,
+        EventType.ip_assignment_unbound_released,
+        {
+            "schema_version": 1,
+            "assignment_id": str(assignment.id),
+            "eligibility_class": current.eligibility_class.value,
+            "preview_fingerprint": current.fingerprint,
+        },
+        actor=command.context.actor,
+    )
+    db.flush()
+    return UnboundIPAssignmentReleaseOutcome(
+        assignment_id=assignment.id,
+        eligibility_class=current.eligibility_class,
+        released_count=1,
+        preview_fingerprint=current.fingerprint,
+        replayed=False,
+    )
+
+
+def release_unbound_ip_assignment(
+    db: Session,
+    command: ReleaseUnboundIPAssignmentCommand,
+) -> UnboundIPAssignmentReleaseOutcome:
+    """Release one unbound IPv4 assignment under a named N9 exception class."""
+
+    return execute_owner_command(
+        db,
+        definition=_UNBOUND_RELEASE_COMMAND,
+        context=command.context,
+        operation=lambda: _release_unbound_ip_assignment(db, command),
+    )
+
+
 __all__ = [
     "IPv4LiveUseEvidence",
     "find_ipv4_live_use",
@@ -2170,4 +3516,25 @@ __all__ = [
     "reconcile_ip_assignment_service_ownership",
     "repair_service_ipv4_assignment",
     "repair_service_ipv4_projection",
+    "ActiveIPv6AssignmentEvidence",
+    "IPAssignmentServiceUnlinkDecision",
+    "IPAssignmentServiceUnlinkOutcome",
+    "IPv6AssignmentLinkDecision",
+    "LinkServiceIPv6AssignmentCommand",
+    "ServiceIPAssignmentUnlinkPreview",
+    "ServiceIPv6AssignmentLinkOutcome",
+    "ServiceIPv6AssignmentLinkPreview",
+    "UnlinkIPAssignmentServiceOwnershipCommand",
+    "link_service_ipv6_assignment",
+    "preview_ip_assignment_service_unlink",
+    "preview_service_ipv6_assignment_link",
+    "unlink_ip_assignment_service_ownership",
+    "ReleaseUnboundIPAssignmentCommand",
+    "UnboundIPAssignmentReleaseOutcome",
+    "UnboundIPv4ReleaseClass",
+    "UnboundIPv4ReleaseDecision",
+    "UnboundIPv4ReleasePreview",
+    "UnboundIPv4ServiceEvidence",
+    "preview_unbound_ip_assignment_release",
+    "release_unbound_ip_assignment",
 ]

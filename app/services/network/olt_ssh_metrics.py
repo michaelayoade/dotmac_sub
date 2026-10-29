@@ -94,6 +94,22 @@ def record_logout(outcome: str) -> None:
     _incr(f"logout|{outcome}")
 
 
+def record_device_cli_read(olt: str, op: str, result: str, reason: str = "") -> None:
+    """Counter ``device_cli_read`` by OLT, operation and result.
+
+    ``result`` is ok|unreadable|unsupported|adapter_error; ``reason`` is a closed
+    ``dotmac_device_cli`` ``Reason`` value. Never raw output or serials.
+    """
+    _incr(f"device_cli_read|{olt}|{op}|{result}|{reason}")
+
+
+def record_device_cli_event(kind: str, olt: str, op: str) -> None:
+    """Counter for package-path planning outcomes that fall back to legacy
+    (``profile_unresolved``, ``profile_unverified``, ``profile_mismatch``,
+    ``unsupported``, ``scope_active_legacy``, ``plan_error``, ``import_failed``)."""
+    _incr(f"device_cli_event|{kind}|{olt}|{op}")
+
+
 def record_host_key_mismatch(olt: str) -> None:
     """Counter ``olt_ssh_host_key_mismatch`` (published in the olt_ssh snapshot)."""
     _incr(f"host_key_mismatch|{olt}")
@@ -316,6 +332,8 @@ __all__ = [
     "load_counters",
     "model_key_for",
     "publish_olt_ssh_snapshot",
+    "record_device_cli_event",
+    "record_device_cli_read",
     "record_logout",
     "record_open",
     "record_wait",
