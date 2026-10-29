@@ -285,7 +285,7 @@ class EvidenceTests(unittest.TestCase):
             elif change == "expired":
                 bad["deadline"] = stamp(-1)
             else:
-                bad["phase"] = "next_morning"
+                bad["phase"] = "repeatability"
             with self.subTest(change=change), self.assertRaises(c.ContractError):
                 e.validate(bad, at=datetime.now(UTC))
 
@@ -406,6 +406,12 @@ class EvidenceTests(unittest.TestCase):
         ):
             client.publish(request)
 
+    def test_retired_phase_refused(self):
+        request = complete_request()
+        request["phase"] = "next_morning"
+        with self.assertRaises(c.ContractError):
+            e.validate(request)
+
     def test_stale_daemon_invocation_cannot_satisfy_refusal(self):
         proof = object.__new__(DaemonProof)
         stale = json.dumps(
@@ -472,10 +478,38 @@ class CleanupTests(unittest.TestCase):
     def test_override_restores_normal_poll_even_after_body_error(self):
         self.check_cleanup(False)
 
+    def test_override_refuses_unchanged_invocation(self):
+        for reused_invocation in ("fixture", "normal"):
+            with self.subTest(reused_invocation=reused_invocation):
+                self.check_cleanup(False, reused_invocation=reused_invocation)
+
+    def test_crashed_fixture_still_stops_and_cleans_owned_hooks(self):
+        for state in ("failed", "activating"):
+            with self.subTest(state=state):
+                self.check_cleanup(False, crashed_state=state)
+
+    def test_unknown_unit_state_refuses_regular_stop(self):
+        proof = object.__new__(DaemonProof)
+        proof.result = Mock(
+            return_value=SimpleNamespace(returncode=3, stdout="unknown")
+        )
+        proof.run = Mock()
+        with self.assertRaises(c.ContractError):
+            proof.control("stop")
+        with self.assertRaises(c.ContractError):
+            proof.control("start", capture_invocation=False)
+        proof.run.assert_not_called()
+
     def test_foreign_override_mutation_is_preserved_and_blocks_restart(self):
         self.check_cleanup(True)
 
-    def check_cleanup(self, foreign: bool):
+    def check_cleanup(
+        self,
+        foreign: bool,
+        *,
+        reused_invocation: str | None = None,
+        crashed_state: str | None = None,
+    ):
         raw, public = desired()
         doc = c.read_json(c.unb64(cast(str, c.read_json(raw)["payload_b64"])))
         with tempfile.TemporaryDirectory() as directory:
@@ -493,11 +527,33 @@ class CleanupTests(unittest.TestCase):
             proof.config = SimpleNamespace(state_dir=state)
             proof.enrollment = {"cp_public_b64": c.b64(public)}
             proof.host = SimpleNamespace(fetch=lambda: raw)
-            proof.control = Mock()
+            proof.last_invocation = "a" * 32
+            active, invocation, starts = True, "a" * 32, 0
+            unit_state = None
+            proof.result = lambda argv: SimpleNamespace(
+                returncode=0 if active else 3,
+                stdout=unit_state or ("active" if active else "inactive"),
+            )
+            proof.control = Mock(wraps=proof.control)
             proof.cursor = Mock(return_value="normal-start")
             proof.wait_refusal = Mock(return_value="normal-end")
 
             def command(argv, **kwargs):
+                nonlocal active, invocation, starts, unit_state
+                if argv[0] == "systemctl":
+                    if argv[1] == "stop":
+                        active, invocation, unit_state = False, "", None
+                    elif argv[1] == "start":
+                        active, starts, unit_state = True, starts + 1, None
+                        invocation = (
+                            "a"
+                            if starts == 1 and reused_invocation == "fixture"
+                            else "b"
+                            if starts == 1 or reused_invocation == "normal"
+                            else "c"
+                        ) * 32
+                    elif "--property=InvocationID" in argv:
+                        return invocation
                 if argv[1:] == ["rev-parse", "HEAD"]:
                     return R
                 if "--abbrev-ref" in argv:
@@ -509,6 +565,7 @@ class CleanupTests(unittest.TestCase):
                 return "launcher.sh"
 
             proof.run = command
+            proof.control("stop")  # Runner pre-stops; inactive units lose InvocationID.
             with (
                 patch.multiple(
                     p2,
@@ -519,11 +576,19 @@ class CleanupTests(unittest.TestCase):
                 ),
                 patch.object(p2, "protected_path"),
             ):
-                with self.assertRaises(c.ContractError if foreign else RuntimeError):
+                with self.assertRaises(
+                    c.ContractError if foreign or reused_invocation else RuntimeError
+                ):
                     with proof.override(raw):
                         if foreign:
                             input_file.write_bytes(b"foreign")
                         else:
+                            if crashed_state:
+                                active, invocation, unit_state = (
+                                    False,
+                                    "",
+                                    crashed_state,
+                                )
                             raise RuntimeError("body failed")
             self.assertFalse(dropin.exists())
             self.assertFalse(temp_config.exists())
@@ -531,6 +596,9 @@ class CleanupTests(unittest.TestCase):
             if foreign:
                 self.assertEqual(input_file.read_bytes(), b"foreign")
                 self.assertEqual(proof.control.call_args.args, ("daemon-reload",))
+            elif reused_invocation == "normal":
+                self.assertFalse(input_file.exists())
+                proof.wait_refusal.assert_not_called()
             else:
                 self.assertFalse(input_file.exists())
                 proof.wait_refusal.assert_called_once_with(
