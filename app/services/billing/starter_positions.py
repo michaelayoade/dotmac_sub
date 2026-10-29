@@ -17,7 +17,12 @@ read from Starter.
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from decimal import Decimal
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from dotmac_billing import InvoiceDocumentFactV2
 from types import SimpleNamespace
 from typing import Any, cast
 from uuid import UUID
@@ -68,7 +73,9 @@ def starter_invoice_link(db: Session, invoice_id: UUID) -> StarterInvoiceLink | 
     ).scalar_one_or_none()
 
 
-def starter_invoice_fact(db: Session, invoice: Invoice) -> InvoiceDocumentFactV1 | None:
+def starter_invoice_fact(
+    db: Session, invoice: Invoice
+) -> InvoiceDocumentFactV1 | InvoiceDocumentFactV2 | None:
     """Exact frozen document fact for a Starter-linked invoice, if readable.
 
     Returns ``None`` when the invoice is not Starter-linked or its
@@ -77,23 +84,25 @@ def starter_invoice_fact(db: Session, invoice: Invoice) -> InvoiceDocumentFactV1
     link = starter_invoice_link(db, invoice.id)
     if link is None or link.issued_fact_version is None:
         return None
+    request = GetInvoiceDocumentFactV1(
+        scope=_SCOPE,
+        invoice_id=link.document_id,
+        fact_version=link.issued_fact_version,
+    )
     try:
-        stored = get_invoice_document_fact(
-            db,
-            scope=_SCOPE,
-            request=GetInvoiceDocumentFactV1(
-                scope=_SCOPE,
-                invoice_id=link.document_id,
-                fact_version=link.issued_fact_version,
-            ),
-        )
+        # a9 successor reads both original V1 and full-evidence V2 contracts.
+        # Until release, the pinned a8 reader reads its own V1 facts only.
+        try:
+            from dotmac_billing import get_invoice_document_fact_v2
+        except ImportError:
+            return get_invoice_document_fact(db, scope=_SCOPE, request=request).fact
+        return get_invoice_document_fact_v2(db, scope=_SCOPE, request=request).fact
     except BillingError as exc:
         raise _error(
             "fact_unavailable",
             "Starter billing refused the document fact read",
             invoice_id=str(invoice.id),
         ) from exc
-    return stored.fact
 
 
 def starter_account_collectible(
@@ -123,6 +132,55 @@ def starter_account_collectible(
     return current.position.collectible_receivable.amount
 
 
+@dataclass(frozen=True, slots=True)
+class FrozenTaxComponent:
+    purpose: str
+    treatment_code: str
+    calculation_base_code: str
+    base_amount: Decimal
+    tax_amount: Decimal
+    rate_percent: Decimal | None
+
+
+@dataclass(frozen=True, slots=True)
+class FrozenTaxPresentation:
+    components: tuple[FrozenTaxComponent, ...]
+    expected_withholding: Decimal
+    original_expected_net: Decimal
+
+
+def frozen_tax_presentation(
+    fact: InvoiceDocumentFactV1,
+) -> FrozenTaxPresentation | None:
+    """V1 has no withholding expectation; never manufacture one from settings."""
+    try:
+        from dotmac_billing import InvoiceDocumentFactV2
+    except ImportError:
+        return None
+    if not isinstance(fact, InvoiceDocumentFactV2):
+        return None
+    components = tuple(
+        FrozenTaxComponent(
+            purpose=entry.purpose,
+            treatment_code=component.treatment_code,
+            calculation_base_code=component.calculation_base_code,
+            base_amount=component.base_amount.amount,
+            tax_amount=component.tax_amount.amount,
+            rate_percent=(
+                component.lines[0].rate * Decimal("100")
+                if len(component.lines) == 1 and component.lines[0].rate is not None
+                else None
+            ),
+        )
+        for entry in fact.tax_evidence
+        for component in entry.determination.components
+    )
+    withholding = fact.expected_withholding.amount
+    return FrozenTaxPresentation(
+        components, withholding, fact.grand_total.amount - withholding
+    )
+
+
 class _FactInvoiceView:
     """Read-only invoice view: fact fields win, everything else delegates.
 
@@ -141,6 +199,7 @@ class _FactInvoiceView:
         self.total = fact.grand_total.amount
         self.issued_at = fact.issued_at
         self.due_at = fact.due_at
+        self.tax_presentation = frozen_tax_presentation(fact)
         self.lines = [
             SimpleNamespace(
                 description=line.description,

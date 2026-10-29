@@ -199,3 +199,115 @@ def cloned_database(
         for clone in clones:
             assert clone.database
             template_database.drop_database(template_base_url, clone.database)
+
+
+@pytest.fixture
+def starter_native_tax_policy(db_session: Session, monkeypatch):
+    """Publish synthetic Tax policies through public APIs on migrated PG."""
+    from datetime import date
+    from decimal import Decimal
+    from uuid import uuid4
+
+    from dotmac_kernel.money import Currency
+    from dotmac_tax import (
+        TaxAuthorityInput,
+        TaxJurisdictionInput,
+        TaxRuleInput,
+        ensure_tax_authority,
+        ensure_tax_code,
+        ensure_tax_jurisdiction,
+        ensure_tax_rule,
+    )
+
+    from app.services.billing import starter_issuance
+    from app.services.operator_tenant import OPERATOR_TENANT_ID
+
+    def publish(
+        rate: Decimal = Decimal("0.075"), *, withholding_rate: Decimal = Decimal("0")
+    ) -> dict[str, dict[str, str]]:
+        code = f"native-fixture-{uuid4().hex[:12]}"
+        authority = ensure_tax_authority(
+            db_session,
+            tenant_id=OPERATOR_TENANT_ID,
+            command=TaxAuthorityInput(
+                code=code, name="Synthetic native invoice authority"
+            ),
+        )
+        jurisdiction = ensure_tax_jurisdiction(
+            db_session,
+            tenant_id=OPERATOR_TENANT_ID,
+            command=TaxJurisdictionInput(
+                authority_id=authority.authority_id,
+                code=code,
+                name="Synthetic native invoice jurisdiction",
+                country_code="NG",
+                currency=Currency("NGN", 2),
+            ),
+        )
+        binding: dict[str, dict[str, str]] = {}
+        for purpose, side, amount in (
+            ("invoice_tax", "output", rate),
+            ("expected_withholding", "withholding", withholding_rate),
+        ):
+            fact_kind = f"{code}:{purpose}"
+            tax_code = ensure_tax_code(
+                db_session,
+                tenant_id=OPERATOR_TENANT_ID,
+                jurisdiction_id=jurisdiction.jurisdiction_id,
+                code=purpose,
+                name=purpose,
+                tax_kind_code=purpose,
+            )
+            ensure_tax_rule(
+                db_session,
+                tenant_id=OPERATOR_TENANT_ID,
+                command=TaxRuleInput(
+                    tax_code_id=tax_code.tax_code_id,
+                    version=1,
+                    effective_from=date(2000, 1, 1),
+                    effective_to=None,
+                    priority=1,
+                    fact_kind=fact_kind,
+                    recognition_basis_code="invoice_expectation",
+                    transaction_side=side,
+                    calculation_method="percentage",
+                    rate=amount,
+                    fixed_amount=None,
+                    inclusive=False,
+                    recoverable_rate=Decimal("0"),
+                    treatment_code="exempt" if amount == 0 else "standard_rated",
+                ),
+            )
+            binding[purpose] = {
+                "jurisdiction_id": str(jurisdiction.jurisdiction_id),
+                "fact_kind": fact_kind,
+                "recognition_basis_code": "invoice_expectation",
+                "transaction_side": side,
+                "place_ref": "fixture:place",
+            }
+        real_resolve = starter_issuance.resolve_value
+        monkeypatch.setattr(
+            starter_issuance,
+            "resolve_value",
+            lambda db, domain, key: (
+                binding
+                if key == "starter_invoice_tax_policy"
+                else real_resolve(db, domain, key)
+            ),
+        )
+        db_session.flush()
+        return binding
+
+    return publish
+
+
+@pytest.fixture
+def starter_native_vat_tax_policy(starter_native_tax_policy):
+    return starter_native_tax_policy()
+
+
+@pytest.fixture
+def starter_native_zero_tax_policy(starter_native_tax_policy):
+    from decimal import Decimal
+
+    return starter_native_tax_policy(Decimal("0"))

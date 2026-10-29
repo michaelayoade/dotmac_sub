@@ -3597,7 +3597,10 @@ SERVICES: tuple[SOTService, ...] = (
     SOTService(
         name="financial.starter_issuance",
         module="app.services.billing.starter_issuance",
-        implementation_modules=("app.services.web_billing_invoices",),
+        implementation_modules=(
+            "app.services.web_billing_invoices",
+            "app.services.billing.starter_tax_evidence",
+        ),
         owns=(
             "Starter-issued admin invoice mirror and structural link",
             "Starter issuance eligibility decision for admin drafts",
@@ -3614,7 +3617,7 @@ SERVICES: tuple[SOTService, ...] = (
             "financial.invoices",
         ),
         notes=(
-            "Slice 6a thin-client lane (ADR 0031): eligible admin drafts are "
+            "Pending Tax-evidence successor (Billing a9 unreleased): native invoice_expectation Tax policies required after eligibility; no activation claimed. Slice 6a thin-client lane (ADR 0031): eligible admin drafts are "
             "issued by pinned dotmac-billing as sole ledger writer. Sub "
             "retains only the invoice-row mirror (number, status, issued_at), "
             "the structural StarterInvoiceLink, the audit row, and the "
@@ -3638,6 +3641,7 @@ SERVICES: tuple[SOTService, ...] = (
                     input_names=(
                         "eligible admin draft invoice",
                         "canonical Starter billing policies",
+                        "published native invoice Tax determinations",
                         "canonical seller legal identity",
                         "canonical subscriber billing identity",
                         "canonical collection bank account",
@@ -3661,6 +3665,7 @@ SERVICES: tuple[SOTService, ...] = (
                     input_names=(
                         "eligible admin draft invoice",
                         "canonical Starter billing policies",
+                        "published native invoice Tax determinations",
                         "canonical seller legal identity",
                         "canonical subscriber billing identity",
                         "canonical collection bank account",
@@ -3674,6 +3679,7 @@ SERVICES: tuple[SOTService, ...] = (
                         "eligible scheduled-cycle draft invoice",
                         "canonical account-credit funding preview",
                         "canonical Starter billing policies",
+                        "published native invoice Tax determinations",
                         "canonical seller legal identity",
                         "canonical subscriber billing identity",
                         "canonical collection bank account",
@@ -3683,13 +3689,18 @@ SERVICES: tuple[SOTService, ...] = (
             ),
             authoritative_inputs=(
                 AuthorityInput(
+                    name="published native invoice Tax determinations",
+                    owner="external:dotmac_tax",
+                    kind=AuthorityKind.EXTERNAL_OBSERVATION,
+                    source="Tax determine_tax_set owns published rule selection, classifications, rates and calculation bases. Typed starter_invoice_tax_policy binds invoice_expectation source facts to invoice_tax and explicit expected_withholding policies, including zero. Full public determination set/component/line evidence and fingerprints pass losslessly to pending Billing a9; no native rate reads from Sub tax snapshots or customer toggles.",
+                ),
+                AuthorityInput(
                     name="eligible admin draft invoice",
                     owner="financial.invoices",
                     kind=AuthorityKind.AUTHORITATIVE_RECORD,
                     source=(
                         "draft invoice with reconciled homogeneous lines "
-                        "(one service exposure, per-line frozen tax "
-                        "snapshots whose derived taxes reconcile), due "
+                        "(one service exposure, commercial amounts reconcile), due "
                         "date, and postpaid subscriber billing mode"
                     ),
                 ),
@@ -3699,8 +3710,8 @@ SERVICES: tuple[SOTService, ...] = (
                     kind=AuthorityKind.AUTHORITATIVE_RECORD,
                     source=(
                         "cycle-staged draft with complete reconciled "
-                        "single-subscription homogeneous lines, frozen tax "
-                        "snapshots, verified due evidence, and a postpaid "
+                        "single-subscription homogeneous commercial lines, "
+                        "verified due evidence, and a postpaid "
                         "subscription and subscriber billing mode"
                     ),
                 ),
@@ -3721,7 +3732,7 @@ SERVICES: tuple[SOTService, ...] = (
                     source=(
                         "starter_* settings resolved through "
                         "starter_policies (ADR 0031): account-ref template, "
-                        "series, tax policy, document profile, due terms"
+                        "series, document profile, due terms; typed starter_invoice_tax_policy binding"
                     ),
                 ),
                 AuthorityInput(
@@ -3785,12 +3796,18 @@ SERVICES: tuple[SOTService, ...] = (
                     "financial.starter_issuance.ineligible",
                     "financial.starter_issuance.source_kind_undeclared",
                     "financial.starter_issuance.starter_refused",
+                    "financial.starter_issuance.tax_contract_pending",
+                    "financial.starter_issuance.tax_policy_missing",
+                    "financial.starter_issuance.tax_policy_unsupported",
+                    "financial.starter_issuance.tax_refused",
+                    "financial.starter_issuance.tax_reconciliation",
                 ),
                 mapping_owner="admin billing invoice adapters",
                 retryable_codes=(),
                 fail_closed_on=(
                     "incomplete seller, customer, or bank document evidence",
-                    "unreconciled totals or missing frozen tax snapshot",
+                    "unreconciled totals or missing native published Tax policy",
+                    "unsupported cross-purpose withholding compounding or inclusive source normalization",
                     "Starter billing refusal after eligibility was granted",
                     "undeclared obligation source kind",
                 ),
@@ -3821,7 +3838,7 @@ SERVICES: tuple[SOTService, ...] = (
                 ),
                 cutover_gate=(
                     "ADR 0031 composable policies resolve from settings "
-                    "and the numbering series is seeded past the legacy "
+                    "and pending Billing a9 is published, pinned and migration-qualified; published Tax source policies exist; the numbering series is seeded past the legacy "
                     "maximum before production enablement."
                 ),
                 fallback_retirement=(
@@ -3833,10 +3850,13 @@ SERVICES: tuple[SOTService, ...] = (
             steward="billing operations",
             design_refs=(
                 "docs/adr/0031-composable-starter-billing-policies.md",
+                "docs/designs/STARTER_TAX_OWNED_INVOICE_EVIDENCE.md",
                 "docs/SOT_RELATIONSHIP_MAP.md",
             ),
             test_refs=(
                 "tests/test_starter_issuance_eligibility.py",
+                "tests/test_starter_tax_evidence.py",
+                "tests/integration/test_starter_tax_invoice_pg.py",
                 "tests/integration/test_starter_issuance_switch_pg.py",
                 "tests/integration/test_starter_recurring_issuance_pg.py",
                 "tests/architecture/test_sot_manifest_contracts.py",
@@ -4251,8 +4271,7 @@ SERVICES: tuple[SOTService, ...] = (
             "truth (PDF renders from a transient overlay; the mirror "
             "row is untouched) and the Starter receivable position is "
             "the account balance truth. Legacy invoices and Starter "
-            "documents without an exact fact version (multi-line "
-            "receipts) render from mirror rows written at issuance. "
+            "historical documents without an exact fact version render from mirror rows written at issuance. New native multi-line issues retain an exact fact version. "
             "Aggregate reporting keeps reading mirror balances "
             "maintained by the settlement and credit owners. Reads "
             "are not gated by the D1 issuance switch."
@@ -4302,9 +4321,9 @@ SERVICES: tuple[SOTService, ...] = (
                     owner="external:dotmac_billing",
                     kind=AuthorityKind.EXTERNAL_OBSERVATION,
                     source=(
-                        "exact frozen InvoiceDocumentFactV1 read by "
+                        "exact frozen InvoiceDocumentFactV1 or V2 read by "
                         "document identity and issued fact version; "
-                        "no implicit latest-version selection"
+                        "no implicit latest-version selection; V2 full Tax evidence renders expected withholding and original expected net independently of payment-adjusted mirror balance. V1 never manufactures missing expectation from mutable settings"
                     ),
                 ),
             ),
@@ -4360,6 +4379,7 @@ SERVICES: tuple[SOTService, ...] = (
             steward="billing operations",
             design_refs=(
                 "docs/adr/0031-composable-starter-billing-policies.md",
+                "docs/designs/STARTER_TAX_OWNED_INVOICE_EVIDENCE.md",
                 "docs/SOT_RELATIONSHIP_MAP.md",
             ),
             test_refs=(

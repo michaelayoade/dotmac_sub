@@ -30,7 +30,10 @@ from app.services import web_billing_invoices as web_invoices
 from app.services.billing import starter_policies, starter_positions
 from app.services.brand_profiles import upsert_brand_profile
 
-pytestmark = pytest.mark.integration
+pytestmark = [
+    pytest.mark.integration,
+    pytest.mark.usefixtures("starter_native_vat_tax_policy"),
+]
 
 _SERIES = f"invread-{uuid4().hex[:8]}"
 

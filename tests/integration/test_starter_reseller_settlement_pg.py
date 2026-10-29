@@ -39,7 +39,10 @@ from app.services.billing.starter_reseller_settlement import (
 from app.services.brand_profiles import upsert_brand_profile
 from app.services.events.types import EventType
 
-pytestmark = pytest.mark.integration
+pytestmark = [
+    pytest.mark.integration,
+    pytest.mark.usefixtures("starter_native_vat_tax_policy"),
+]
 
 _SERIES = f"invres-{uuid4().hex[:8]}"
 

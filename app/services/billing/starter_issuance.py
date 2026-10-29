@@ -18,21 +18,22 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, date, datetime
 from decimal import ROUND_HALF_UP, Decimal
+from typing import TYPE_CHECKING
 from uuid import UUID
+from zoneinfo import ZoneInfo
+
+if TYPE_CHECKING:
+    from dotmac_billing import AcceptRatedObligationV2, InvoiceTaxEvidenceV1
 
 from dotmac_billing import (
-    AcceptRatedObligationV1,
     AppliedFxSnapshotV1,
-    AppliedTaxSnapshotV1,
     DueDateBasisV1,
     GetInvoiceDocumentFactV1,
-    IssueRatedInvoiceV1,
     PartyDocumentSnapshotV1,
     PaymentInstructionsSnapshotV1,
     PostalAddressSnapshotV1,
     PresentationAssetReferenceV1,
     ServicePeriodEvidenceV1,
-    get_invoice_document_fact,
     issue_rated_invoice,
 )
 from dotmac_billing.commands import (
@@ -61,6 +62,7 @@ from app.models.billing import (
     StarterInvoiceLineLink,
     StarterInvoiceLink,
 )
+from app.models.domain_settings import SettingDomain
 from app.models.subscriber import Subscriber
 from app.schemas.audit import AuditEventCreate
 from app.services.audit import AuditEvents
@@ -69,9 +71,13 @@ from app.services.billing.starter_policies import (
     StarterBillingPolicyError,
     collection_timing_for_billing_mode,
     due_terms_code,
-    percent_to_fraction,
     resolve_starter_billing_policies,
     starter_ledger_live_enabled,
+)
+from app.services.billing.starter_tax_evidence import (
+    SETTING_KEY,
+    StarterInvoiceTaxPolicy,
+    determine_invoice_line_tax,
 )
 from app.services.brand_profiles import resolve_brand
 from app.services.domain_errors import DomainError
@@ -79,6 +85,7 @@ from app.services.events import emit_event
 from app.services.events.types import EventType
 from app.services.invoice_bank_details import get_invoice_bank_details
 from app.services.operator_tenant import OPERATOR_TENANT_ID
+from app.services.settings_spec import resolve_value
 
 __all__ = [
     "StarterIssuanceError",
@@ -182,23 +189,6 @@ def _active_lines(invoice: Invoice) -> list[InvoiceLine]:
 
 def _quantize(amount: Decimal, minor_units: int) -> Decimal:
     return amount.quantize(Decimal(1).scaleb(-minor_units), rounding=ROUND_HALF_UP)
-
-
-def _line_tax_amount(line: InvoiceLine, minor_units: int) -> Decimal | None:
-    """Derive one line's tax from its frozen snapshot, else ``None``.
-
-    A line with no snapshot percent and no snapshot code is untaxed; a
-    half-present snapshot is incomplete evidence and keeps the draft on
-    the legacy lane.
-    """
-
-    percent = line.tax_rate_percent_snapshot
-    code = _clean(line.tax_rate_code_snapshot)
-    if percent is None:
-        return Decimal("0.00") if not code else None
-    if not code:
-        return None
-    return _quantize(line.amount * percent / Decimal("100"), minor_units)
 
 
 def _clean(value: object) -> str:
@@ -311,15 +301,6 @@ def eligibility_reason(
         return "invoice totals do not reconcile for Starter issuance"
     if invoice.tax_total < 0 or invoice.total <= 0:
         return "non-positive totals stay on the legacy lane"
-    line_taxes = [
-        _line_tax_amount(line, policies.default_minor_units) for line in lines
-    ]
-    if any(tax is None for tax in line_taxes):
-        return "taxed lines need a frozen tax rate snapshot"
-    if sum((tax for tax in line_taxes if tax is not None), Decimal("0.00")) != (
-        invoice.tax_total
-    ):
-        return "line taxes do not reconcile for Starter issuance"
     if len({line.subscription_id for line in lines}) != 1:
         return "lines spanning multiple services stay on the legacy lane"
     subscriber = db.get(Subscriber, invoice.account_id)
@@ -352,32 +333,6 @@ def _service_period(invoice: Invoice) -> ServicePeriodEvidenceV1:
     return ServicePeriodEvidenceV1(status=ServicePeriodStatus.UNKNOWN_UNVERIFIED)
 
 
-def _tax_snapshots_for_line(
-    policies: StarterBillingPolicies,
-    line: InvoiceLine,
-    currency: Currency,
-) -> tuple[AppliedTaxSnapshotV1, ...]:
-    if line.tax_rate_percent_snapshot is None:
-        return ()
-    tax_amount = _line_tax_amount(line, policies.default_minor_units)
-    assert tax_amount is not None  # eligibility proved a complete snapshot
-    return (
-        AppliedTaxSnapshotV1(
-            treatment_code=_clean(line.tax_rate_code_snapshot),
-            jurisdiction_code=policies.tax_jurisdiction,
-            policy_id=policies.tax_policy_id,
-            policy_version=(
-                str(line.tax_rate_snapshot_version)
-                if line.tax_rate_snapshot_version is not None
-                else policies.tax_policy_version
-            ),
-            rate=percent_to_fraction(line.tax_rate_percent_snapshot),
-            taxable_basis=_money(line.amount, currency),
-            tax_amount=_money(tax_amount, currency),
-        ),
-    )
-
-
 def _obligation_for_line(
     policies: StarterBillingPolicies,
     *,
@@ -393,10 +348,19 @@ def _obligation_for_line(
     contract_version: str,
     price_version: str,
     fx_observation_id: str,
-) -> AcceptRatedObligationV1:
-    tax_amount = _line_tax_amount(line, policies.default_minor_units)
-    assert tax_amount is not None  # eligibility proved reconciliation
-    return AcceptRatedObligationV1(
+    tax_evidence: tuple[InvoiceTaxEvidenceV1, ...],
+) -> AcceptRatedObligationV2:
+    from dotmac_billing import AcceptRatedObligationV2
+
+    tax_amount = sum(
+        (
+            entry.determination.tax_amount.amount
+            for entry in tax_evidence
+            if entry.purpose == "invoice_tax"
+        ),
+        Decimal("0"),
+    )
+    return AcceptRatedObligationV2(
         scope=_SCOPE,
         billing_account_id=account_id,
         contract_line_ref=contract_line_ref,
@@ -419,7 +383,8 @@ def _obligation_for_line(
         total_amount=_money(line.amount + tax_amount, currency),
         rated_at=issued_at,
         price_version_id=price_version,
-        tax_snapshots=_tax_snapshots_for_line(policies, line, currency),
+        tax_snapshots=(),
+        tax_evidence=tax_evidence,
         fx_snapshot=AppliedFxSnapshotV1(
             observation_id=fx_observation_id,
             observation_version=policies.fx_observation_version,
@@ -511,6 +476,60 @@ def _issue_via_starter(
     assert seller is not None and customer is not None and bank is not None
     assert invoice.due_at is not None  # eligibility proved presence
     currency = Currency(invoice.currency.upper(), policies.default_minor_units)
+    # Resolve policy and successor contract before any write. Tax refusals after
+    # eligibility propagate to the command owner; never retry the legacy lane.
+    try:
+        from dotmac_billing import IssueRatedInvoiceV2, get_invoice_document_fact_v2
+    except ImportError as exc:
+        raise _error(
+            "tax_contract_pending",
+            "Native Tax issuance requires the unreleased Billing evidence contract",
+        ) from exc
+    try:
+        tax_policy = StarterInvoiceTaxPolicy.parse(
+            resolve_value(db, SettingDomain.billing, SETTING_KEY)
+        )
+    except (ValueError, TypeError) as exc:
+        raise _error(
+            "tax_policy_missing", "Native Tax invoice policy is missing or invalid"
+        ) from exc
+    line_evidence = {
+        line.id: determine_invoice_line_tax(
+            db,
+            policy=tax_policy,
+            amount=_money(line.amount, currency),
+            source_ref=line_source_fact_id(line),
+            source_version=policies.source_fact_version,
+            counterparty_ref=policies.subject_ref(
+                party_id=subscriber.party_id, subscriber_id=subscriber.id
+            ),
+            supply_ref=policies.service_ref(
+                subscription_id=line.subscription_id, subscriber_id=subscriber.id
+            ),
+            issued_at=issued_at,
+            occurred_on=issued_at.astimezone(
+                ZoneInfo(policies.default_timezone)
+            ).date(),
+        )
+        for line in lines
+    }
+    determined_tax = sum(
+        (
+            entry.determination.tax_amount.amount
+            for evidence in line_evidence.values()
+            for entry in evidence
+            if entry.purpose == "invoice_tax"
+        ),
+        Decimal("0"),
+    )
+    if (
+        determined_tax != invoice.tax_total
+        or invoice.total != invoice.subtotal + determined_tax
+    ):
+        raise _error(
+            "tax_reconciliation",
+            "Published Tax determinations do not reconcile with the draft; issuance refused",
+        )
     try:
         account = create_billing_account(
             db,
@@ -524,7 +543,7 @@ def _issue_via_starter(
             issued = issue_rated_invoice(
                 db,
                 scope=_SCOPE,
-                command=IssueRatedInvoiceV1(
+                command=IssueRatedInvoiceV2(
                     obligation=_obligation_for_line(
                         policies,
                         account_id=account.id,
@@ -539,6 +558,7 @@ def _issue_via_starter(
                         contract_version=flavor.contract_version,
                         price_version=flavor.price_version,
                         fx_observation_id=fx_observation_id,
+                        tax_evidence=line_evidence[line.id],
                     ),
                     description=line.description,
                     unit_code=policies.default_unit_code,
@@ -562,7 +582,7 @@ def _issue_via_starter(
                 obligation_sources=_ObligationSources(policies, flavor.source_kind),
                 numbering=_Numbering(policies),
             )
-            fact = get_invoice_document_fact(
+            fact = get_invoice_document_fact_v2(
                 db,
                 scope=_SCOPE,
                 request=GetInvoiceDocumentFactV1(
@@ -597,6 +617,7 @@ def _issue_via_starter(
                         contract_version=flavor.contract_version,
                         price_version=flavor.price_version,
                         fx_observation_id=fx_observation_id,
+                        tax_evidence=line_evidence[line.id],
                     ),
                     accepted_source_kinds=frozenset({flavor.source_kind}),
                 )
@@ -656,7 +677,19 @@ def _issue_via_starter(
                 )
             document_number = number
             document_id = issued_document.id
-            issued_fact_version = None
+            issued_fact_version = 1
+            # Freeze the exact public fact; refuse unavailable evidence rather than
+            # falling back to mutable mirrors for multi-line native documents.
+            stored = get_invoice_document_fact_v2(
+                db,
+                scope=_SCOPE,
+                request=GetInvoiceDocumentFactV1(
+                    scope=_SCOPE,
+                    invoice_id=document_id,
+                    fact_version=issued_fact_version,
+                ),
+            )
+            issued_fact_version = stored.fact.fact_version
             link_obligation_id = None
             line_obligations = [
                 (line, row.id) for line, row in zip(lines, accepted, strict=True)

@@ -1,4 +1,4 @@
-"""Released tax storage is composed without activating a product writer."""
+"""Tax storage composition and the exact gated native invoice adapter surface."""
 
 from __future__ import annotations
 
@@ -29,8 +29,20 @@ ARTIFACT_HASHES = {
 }
 
 
+_NATIVE_TAX_IMPORTS = {
+    "app/services/billing/starter_tax_evidence.py": {
+        ("dotmac_tax", "TaxConflict"),
+        ("dotmac_tax", "TaxFact"),
+        ("dotmac_tax", "TaxNotFound"),
+        ("dotmac_tax", "TaxRuleViolation"),
+        ("dotmac_tax", "determine_tax_set"),
+        ("dotmac_tax.contracts", "TaxDeterminationSetV1"),
+    }
+}
+
+
 def _activation_errors(root: Path) -> tuple[str, ...]:
-    """No production import, dynamic import, or SQL writer may activate tax."""
+    """Only the named public source-fact adapter may import Tax; no SQL/internal owner."""
     errors: list[str] = []
     paths = [
         path
@@ -75,6 +87,13 @@ def _activation_errors(root: Path) -> tuple[str, ...]:
                 ):
                     names = ("dotmac_tax",)
             if any(name.split(".")[0] == "dotmac_tax" for name in names):
+                if isinstance(node, ast.ImportFrom):
+                    imports = {(node.module or "", alias.name) for alias in node.names}
+                    allowed = _NATIVE_TAX_IMPORTS.get(
+                        path.relative_to(root).as_posix(), set()
+                    )
+                    if imports <= allowed:
+                        continue
                 errors.append(f"{path.relative_to(root)}:{node.lineno}")
     return tuple(errors)
 
@@ -123,7 +142,7 @@ def test_tax_installed_lineage_has_one_supported_tenant_selection() -> None:
         assert bindings[prerequisite].provider_owner == "sub"
 
 
-def test_tax_composition_has_no_production_activation() -> None:
+def test_tax_composition_only_admits_the_native_invoice_adapter() -> None:
     from app.composition import DEDICATED_ISP_PROFILE
 
     assert _activation_errors(ROOT) == ()
@@ -148,6 +167,67 @@ def test_activation_guard_rejects_planted_defects(tmp_path: Path, defect: str) -
     app.mkdir()
     (app / "accidental_writer.py").write_text(defect)
     assert _activation_errors(tmp_path)
+
+
+@pytest.mark.parametrize(
+    "defect",
+    (
+        "from dotmac_tax.service import determine_tax_set as determine\n",
+        "from dotmac_tax.models import TaxRule\n",
+        "from dotmac_tax import ensure_tax_rule as publish\n",
+        "import dotmac_tax as tax\n",
+        'sql = "UPDATE mod_tax.tax_rules SET status=1"\n',
+    ),
+)
+def test_native_adapter_path_is_not_a_blanket_tax_import_exception(
+    tmp_path: Path, defect: str
+) -> None:
+    adapter = tmp_path / "app/services/billing/starter_tax_evidence.py"
+    adapter.parent.mkdir(parents=True)
+    adapter.write_text(defect)
+    assert _activation_errors(tmp_path)
+
+
+def test_native_issuance_retains_gate_before_each_runtime_family() -> None:
+    tree = ast.parse((ROOT / "app/services/billing/starter_issuance.py").read_text())
+    functions = {
+        node.name: node for node in tree.body if isinstance(node, ast.FunctionDef)
+    }
+    for name, eligibility in (
+        ("issue_admin_invoice_via_starter", "eligibility_reason"),
+        ("issue_recurring_invoice_via_starter", "recurring_eligibility_reason"),
+        ("issue_prepaid_invoice_via_starter", "prepaid_eligibility_reason"),
+    ):
+        calls = [
+            node.func.id
+            for node in ast.walk(functions[name])
+            if isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
+        ]
+        assert eligibility in calls and "_issue_via_starter" in calls
+        ordered_calls = {
+            node.func.id: node.lineno
+            for node in ast.walk(functions[name])
+            if isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Name)
+            and node.func.id in {eligibility, "_issue_via_starter"}
+        }
+        assert ordered_calls[eligibility] < ordered_calls["_issue_via_starter"]
+    gate_calls = [
+        node.func.id
+        for node in ast.walk(functions["eligibility_reason"])
+        if isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
+    ]
+    assert "starter_ledger_live_enabled" in gate_calls
+    # No migrated native issuance path may re-adopt legacy numeric tax inputs.
+    forbidden = {
+        "tax_rate_percent_snapshot",
+        "tax_rate_code_snapshot",
+        "withholding_tax_enabled",
+    }
+    assert not any(
+        isinstance(node, ast.Attribute) and node.attr in forbidden
+        for node in ast.walk(tree)
+    )
 
 
 def test_installed_tax_public_api_really_requires_the_binding_kernel_floor() -> None:
