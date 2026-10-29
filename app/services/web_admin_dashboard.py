@@ -2,10 +2,9 @@
 
 import logging
 from collections.abc import Sequence
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime
 from threading import Lock, Thread
 from time import monotonic
-from urllib.parse import urlencode
 
 from fastapi import Request
 from fastapi.templating import Jinja2Templates
@@ -138,32 +137,31 @@ def _build_health_thresholds(db: Session) -> dict:
 def _build_dashboard_billing_summary(db: Session) -> dict[str, float] | None:
     """Return the small billing aggregate needed by the admin overview.
 
-    Revenue this month comes from the billing reporting read owner
-    (BillingReporting.get_overview_stats); this service no longer sums payments
-    itself. Pending/overdue receivables stay on the invoice_collectibility owner
-    so the value matches the Overdue KPI exactly. Returns ``None`` when the read
+    Collections this month comes from the billing reporting read owner using
+    paid and partially paid invoices created in the UTC month. Overdue receivables
+    use invoices currently marked overdue. Returns ``None`` when the read
     owner is unavailable so the KPI renders "Unknown" rather than a lying ₦0.
     """
-    from app.services.billing.reporting import BillingReporting
+    from app.services.billing.reporting import (
+        BillingReporting,
+        DashboardCollectionsPeriod,
+    )
     from app.services.invoice_collectibility import (
+        dashboard_overdue_status_balance,
         invoice_balance_sum,
         open_invoice_filters,
-        overdue_debt_filters,
     )
 
     try:
         now = datetime.now(UTC)
-        month_start = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
-        month_end = (month_start + timedelta(days=32)).replace(day=1)
-        overview = BillingReporting.get_overview_stats(
-            db, period_start=month_start, period_end=month_end
+        period = DashboardCollectionsPeriod.current_utc_month(now)
+        collections = BillingReporting.get_admin_dashboard_collections(
+            db, period=period
         )
         return {
-            "payments_this_month": float(overview["total_revenue"]),
+            "payments_this_month": float(collections),
             "pending_amount": float(invoice_balance_sum(db, open_invoice_filters())),
-            "overdue_amount": float(
-                invoice_balance_sum(db, overdue_debt_filters(now=now))
-            ),
+            "overdue_amount": float(dashboard_overdue_status_balance(db)),
         }
     except Exception:
         logger.debug("Failed to load dashboard billing summary", exc_info=True)
@@ -275,20 +273,14 @@ def build_dashboard_kpis(
         "collections": Kpi(
             label="Collections This Month",
             value=money(payments_this_month),
-            # This is the billing-overview collected figure (invoice settled
-            # value over the calendar month) — the same number /admin/billing
-            # displays. No itemized list sums to exactly that invoice-settled,
-            # calendar-month aggregate (the payments list is a different entity
-            # on a rolling window), so the drill-down is the overview that shows
-            # the identical figure — KPI-parity by same-number, not a mismatched
-            # list.
-            cohort_url="/admin/billing",
+            # The filtered invoice list uses the same current-month status cohort.
+            cohort_url="/admin/billing/invoices?status=dashboard_collections",
             tone=StatusTone.positive,
         ),
         "overdue": Kpi(
             label="Overdue",
             value=money(overdue_amount),
-            cohort_url="/admin/billing/invoices?" + urlencode({"status": "overdue"}),
+            cohort_url="/admin/billing/invoices?status=dashboard_overdue",
             tone=StatusTone.warning,
         ),
         "alarms": Kpi(
