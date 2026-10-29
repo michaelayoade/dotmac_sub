@@ -20,24 +20,20 @@ class CustomerDashboardPage(BasePage):
     def expect_loaded(self) -> None:
         """Assert the dashboard is loaded."""
         expect(
-            self.page.get_by_role("heading", name="Welcome back", exact=False)
-            .or_(self.page.get_by_text("Current Balance", exact=False))
-            .first
+            self.page.get_by_role("heading", name="Good", exact=False)
         ).to_be_visible()
 
     def expect_account_summary_visible(self) -> None:
         """Assert account summary section is visible."""
-        expect(self.page.locator("[data-testid='billing-summary']")).to_be_visible()
-        expect(
-            self.page.get_by_role("heading", name="Financial position")
-        ).to_be_visible()
+        expect(self.page.get_by_role("region", name="Account overview")).to_be_visible()
+        expect(self.page.get_by_text("Account credit", exact=True)).to_be_visible()
 
     def expect_service_status_visible(self) -> None:
         """Assert service status section is visible."""
         expect(
-            self.page.locator("[data-testid='service-status']")
-            .or_(self.page.get_by_text("Service", exact=False))
-            .first
+            self.page.locator(
+                "section[aria-labelledby='dashboard-services-heading'] article"
+            ).first
         ).to_be_visible()
 
     def expect_billing_summary_visible(self) -> None:
