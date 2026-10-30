@@ -490,7 +490,9 @@ def runtime_ddl_denied(
         table = admin.execute(
             "SELECT c.oid::regclass::text FROM pg_class c "
             "JOIN pg_namespace n ON n.oid = c.relnamespace "
-            f"WHERE {_APP_SCHEMAS} AND c.relkind = 'r' "
+            # public only: dotmac_app owns the mod_* schemas (bootstrap) and a
+            # schema owner may DROP tables in its schema, owner or not.
+            "WHERE n.nspname = 'public' AND c.relkind = 'r' "
             "AND c.relowner = %s::regrole ORDER BY c.relname LIMIT 1",
             (MIGRATOR,),
         ).fetchone()
