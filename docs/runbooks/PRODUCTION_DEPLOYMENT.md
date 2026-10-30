@@ -509,6 +509,44 @@ Do not apply these manually as hidden deploy state. They belong to
 `scripts/bootstrap_outbox_dispatcher_roles.py --repair`, and the deploy
 preflight verifies them before backup.
 
+## Migration object ownership and runtime grants
+
+Migrations run as `app_admin` (BYPASSRLS, not superuser), the same owner+grant
+model Starter and ERP use. `app_admin` **owns every new object**; `dotmac_app`
+(the runtime role) is **granted** access and never owns anything new:
+
+| New object | Runtime grant (same transaction) |
+| --- | --- |
+| table, partition, view | `SELECT, INSERT, UPDATE, DELETE` |
+| sequence (standalone or column-owned) | `USAGE, SELECT, UPDATE` |
+| enum/domain/range type, ordinary function | none (PUBLIC `USAGE`/`EXECUTE`) |
+| `alembic_version` (first bootstrap only) | `SELECT` |
+
+`dotmac_app` holds `USAGE` but **not** `CREATE` on `public`, so it cannot create
+objects or run DDL (`ALTER`, `DROP`, `CREATE INDEX`, `TRUNCATE`) on anything the
+migrator owns. `alembic/env.py` refuses, and rolls the whole run back on:
+`SECURITY DEFINER` functions outside `alembic/definer_owner_allowlist.txt`,
+materialized views, views without `security_invoker=true` (an `app_admin`-owned
+view would read RLS tables with the owner's BYPASSRLS), new schemas and any
+unknown object kind. It then proves the grants from the catalog before commit.
+
+`scripts/deploy.sh` passes the runtime role as `MIGRATION_RUNTIME_ROLE=dotmac_app`
+(fixed, not configurable). The previous name `MIGRATION_OBJECT_OWNER` is still
+read by the migration code as an alias and means the same thing (grant, not
+ownership transfer). Preflight check, read-only:
+
+```sql
+SELECT has_schema_privilege('dotmac_app', 'public', 'CREATE');  -- expect false
+SELECT has_schema_privilege('app_admin', 'public', 'CREATE');   -- expect true
+```
+
+Do not grant `CREATE` on `public` to `dotmac_app` to make a migration pass: a
+failure at the grant step means the migration created something the contract
+refuses, or `app_admin` lacks `CREATE`. Mixed ownership is expected: objects
+`dotmac_app` already owned stay with it (no `REASSIGN OWNED`), and `app_admin`
+reaches them through its inherited membership. Operator scripts that run DDL on
+a table created after this change must run as `app_admin`, not `dotmac_app`.
+
 ## Post-migration resume
 
 For interrupted regional-report index builds, see

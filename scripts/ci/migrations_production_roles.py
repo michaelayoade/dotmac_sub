@@ -4,17 +4,21 @@
 Every other CI migration runs as a superuser, which cannot fail the way a
 production deploy can. This lane reproduces the production role shape:
 
-* ``dotmac_app``: LOGIN, NOBYPASSRLS, not superuser; owns the database and every
-  Sub object (the runtime owner, bound by FORCE row-level security);
+* ``dotmac_app``: LOGIN, NOBYPASSRLS, not superuser; the runtime role. It owns
+  the objects that predate the grant model, holds USAGE but NOT CREATE on
+  ``public``, and is bound by row-level security;
 * ``app_admin``: LOGIN, BYPASSRLS, not superuser; the migrator
   (``module_database_roles.v1``), a member of ``dotmac_app`` with INHERIT and SET
   and no ADMIN. ``dotmac_app`` is NOT a member of ``app_admin``.
 
 It runs ``alembic upgrade heads`` as ``app_admin`` with
-``MIGRATION_OBJECT_OWNER=dotmac_app`` and asserts that nothing new is owned by
-the migrator, every module table is FORCE row-level security and the owner sees
-nothing without a tenant. It then proves the lane is sensitive: without the
-edge, with the old direction, and as the runtime owner, the same setup fails.
+``MIGRATION_RUNTIME_ROLE=dotmac_app`` and asserts the Starter/ERP model: the
+migrator owns every new object, the runtime role holds the DML (sequence)
+grants on all of them, the runtime role cannot create in ``public`` or run DDL
+on what the migrator owns, every module table is FORCE row-level security and
+the runtime role sees nothing without a tenant. It then proves the lane is
+sensitive: without the edge, with the old direction, and as the runtime role,
+the same setup fails.
 
 Role passwords are generated per run for this disposable cluster and are never
 printed. Connection details are never printed.
@@ -104,18 +108,29 @@ def edge_violations(
 
 
 def migrator_owned_violations(owned: Iterable[tuple[str, str]]) -> tuple[str, ...]:
-    """``(catalog, name)`` rows owned by the migrator after a migration."""
+    """``(catalog, name)`` rows owned by the migrator after a migration.
 
-    unexpected = sorted(
-        f"{catalog} {name}"
-        for catalog, name in owned
-        if not (catalog == "pg_proc" and name in RELAY_DEFINERS)
-    )
-    missing = sorted(
+    The migrator owns every new object in the grant model, so ownership of a
+    table or sequence is not a finding. What must hold is that the four relay
+    SECURITY DEFINER functions are among them.
+    """
+
+    return tuple(
         f"relay definer {name} is not owned by {MIGRATOR}"
-        for name in RELAY_DEFINERS - {n for c, n in owned if c == "pg_proc"}
+        for name in sorted(RELAY_DEFINERS - {n for c, n in owned if c == "pg_proc"})
     )
-    return (*(f"migrator owns {item}" for item in unexpected), *missing)
+
+
+def grant_gap_findings(
+    rows: Iterable[tuple[str, str, Sequence[str]]],
+) -> tuple[str, ...]:
+    """``(kind, name, missing privileges)`` rows for migrator-owned relations."""
+
+    return tuple(
+        f"{kind} {name}: {OWNER} lacks {', '.join(missing)}"
+        for kind, name, missing in rows
+        if missing
+    )
 
 
 # --------------------------------------------------------------------------
@@ -196,8 +211,9 @@ class Lane:
                     )
                 )
         # Production shape: postgres owns the database (and so `public`); the
-        # runtime owner and the migrator hold explicit USAGE+CREATE on `public`,
-        # and only the schema-bootstrap role holds CREATE on the database.
+        # migrator holds USAGE+CREATE on `public`, the runtime role only USAGE
+        # (it never creates), and only the schema-bootstrap role holds CREATE
+        # on the database.
         with self.superuser(name) as admin:
             admin.execute(
                 "DO $$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = "
@@ -212,9 +228,8 @@ class Lane:
                 ).format(sql.Identifier(name))
             )
             admin.execute("REVOKE CREATE ON SCHEMA public FROM PUBLIC")
-            admin.execute(
-                "GRANT USAGE, CREATE ON SCHEMA public TO dotmac_app, app_admin"
-            )
+            admin.execute("GRANT USAGE ON SCHEMA public TO dotmac_app")
+            admin.execute("GRANT USAGE, CREATE ON SCHEMA public TO app_admin")
         return name
 
     def drop_database(self, name: str) -> None:
@@ -237,11 +252,17 @@ class Lane:
         owner_env: str | None,
         target: str = "heads",
         as_superuser: bool = False,
+        env_var: str = "MIGRATION_RUNTIME_ROLE",
     ) -> tuple[int, str]:
         env = {
             key: value
             for key, value in os.environ.items()
-            if key not in {"MIGRATION_OBJECT_OWNER", "MIGRATION_DATABASE_URL"}
+            if key
+            not in {
+                "MIGRATION_RUNTIME_ROLE",
+                "MIGRATION_OBJECT_OWNER",
+                "MIGRATION_DATABASE_URL",
+            }
         }
         env["DATABASE_URL"] = _sqlalchemy_url(self.as_role(OWNER, database))
         migrator_url = (
@@ -251,7 +272,7 @@ class Lane:
         )
         env["MIGRATION_DATABASE_URL"] = _sqlalchemy_url(migrator_url)
         if owner_env is not None:
-            env["MIGRATION_OBJECT_OWNER"] = owner_env
+            env[env_var] = owner_env
         result = subprocess.run(  # nosec B603 - fixed argv, this repo's alembic
             [sys.executable, "-m", "alembic", "upgrade", target],
             cwd=REPO_ROOT,
@@ -303,6 +324,37 @@ class Lane:
             ).fetchall()
         ]
 
+    def grant_gaps(self, conn: psycopg.Connection) -> list[tuple[str, str, list[str]]]:
+        """Migrator-owned relations on which the runtime role lacks a privilege."""
+
+        rows: list[tuple[str, str, list[str]]] = []
+        relations = conn.execute(
+            "SELECT c.oid, c.oid::regclass::text, c.relkind::text FROM pg_class c "
+            "JOIN pg_namespace n ON n.oid = c.relnamespace "
+            f"WHERE {_APP_SCHEMAS} AND c.relkind IN ('r','p','v','S') "
+            "AND c.relowner = %s::regrole AND "
+            + _NOT_EXTENSION.format(catalog="pg_class", alias="c"),
+            (MIGRATOR,),
+        ).fetchall()
+        for oid, name, kind in relations:
+            if kind == "S":
+                func, privs = "has_sequence_privilege", ("USAGE", "SELECT", "UPDATE")
+            else:
+                func = "has_table_privilege"
+                privs = ("SELECT", "INSERT", "UPDATE", "DELETE")
+                if name == "alembic_version":
+                    privs = ("SELECT",)
+            missing = [
+                priv
+                for priv in privs
+                if not conn.execute(
+                    f"SELECT {func}(%s, %s::oid, %s)",  # nosec B608 - fixed names
+                    (OWNER, oid, priv),
+                ).fetchone()[0]
+            ]
+            rows.append(("sequence" if kind == "S" else "relation", name, missing))
+        return rows
+
 
 # --------------------------------------------------------------------------
 # Scenarios
@@ -346,16 +398,31 @@ def positive_run(lane: Lane) -> None:
             return
         with lane.superuser(database) as conn:
             lane.check(
-                "nothing new is owned by the migrator",
+                "new objects are migrator-owned; relay definers stay with it",
                 migrator_owned_violations(lane.migrator_owned(conn)),
             )
-            lane.check("application objects belong to the owner", foreign_owned(conn))
+            lane.check(
+                "no application object belongs to a third role", foreign_owned(conn)
+            )
+            lane.check(
+                "runtime role holds DML and sequence grants on every new object",
+                grant_gap_findings(lane.grant_gaps(conn)),
+            )
             lane.check(
                 "every module table is FORCE row-level security", force_rls(conn)
             )
+            lane.check("runtime role has no CREATE on public", no_runtime_create(conn))
+        lane.check(
+            "runtime role cannot create or alter in public",
+            runtime_ddl_denied(lane, database),
+        )
         lane.check("owner is bound by row-level security", owner_bound(lane, database))
+        # The pre-grant-model variable name must keep working.
         again, output = lane.alembic_upgrade(
-            database, migrator=MIGRATOR, owner_env=OWNER
+            database,
+            migrator=MIGRATOR,
+            owner_env=OWNER,
+            env_var="MIGRATION_OBJECT_OWNER",
         )
         lane.check(
             "second run is a clean no-op",
@@ -371,33 +438,80 @@ def foreign_owned(conn: psycopg.Connection) -> list[str]:
             "SELECT c.oid::regclass::text FROM pg_class c "
             "JOIN pg_namespace n ON n.oid = c.relnamespace "
             f"WHERE {_APP_SCHEMAS} AND c.relkind IN ('r','p','v','m','S','f') "
-            "AND c.relowner <> %s::regrole AND "
+            "AND c.relowner <> %s::regrole AND c.relowner <> %s::regrole AND "
             + _NOT_EXTENSION.format(catalog="pg_class", alias="c")
         ),
         "type": (
             "SELECT t.oid::regtype::text FROM pg_type t "
             "JOIN pg_namespace n ON n.oid = t.typnamespace "
             f"WHERE {_APP_SCHEMAS} AND t.typtype IN ('e','d','r') "
-            "AND t.typowner <> %s::regrole AND "
+            "AND t.typowner <> %s::regrole AND t.typowner <> %s::regrole AND "
             + _NOT_EXTENSION.format(catalog="pg_type", alias="t")
         ),
         "function": (
             "SELECT p.oid::regprocedure::text FROM pg_proc p "
             "JOIN pg_namespace n ON n.oid = p.pronamespace "
             f"WHERE {_APP_SCHEMAS} AND p.proowner <> %s::regrole "
-            "AND NOT (p.proname = ANY(%s)) AND "
+            "AND p.proowner <> %s::regrole AND "
             + _NOT_EXTENSION.format(catalog="pg_proc", alias="p")
         ),
     }
     problems: list[str] = []
     for kind, query in queries.items():
-        params: tuple[object, ...] = (OWNER,)
-        if kind == "function":
-            params = (OWNER, sorted(RELAY_DEFINERS))
+        params: tuple[object, ...] = (OWNER, MIGRATOR)
         problems.extend(
-            f"{kind} {row[0]} is not owned by {OWNER}"
+            f"{kind} {row[0]} is owned by neither {OWNER} nor {MIGRATOR}"
             for row in conn.execute(query, params).fetchall()
         )
+    return problems
+
+
+def no_runtime_create(conn: psycopg.Connection) -> list[str]:
+    row = conn.execute(
+        "SELECT has_schema_privilege(%s, 'public', 'CREATE'), "
+        "has_schema_privilege(%s, 'public', 'CREATE')",
+        (OWNER, MIGRATOR),
+    ).fetchone()
+    problems = []
+    if row[0]:
+        problems.append(f"{OWNER} holds CREATE on public")
+    if not row[1]:
+        problems.append(f"{MIGRATOR} lacks CREATE on public")
+    return problems
+
+
+def runtime_ddl_denied(lane: Lane, database: str) -> list[str]:
+    """As the runtime role: no CREATE in public, no DDL on a migrator-owned table."""
+
+    problems: list[str] = []
+    with lane.superuser(database) as admin:
+        table = admin.execute(
+            "SELECT c.oid::regclass::text FROM pg_class c "
+            "JOIN pg_namespace n ON n.oid = c.relnamespace "
+            "WHERE n.nspname = 'public' AND c.relkind = 'r' "
+            "AND c.relowner = %s::regrole ORDER BY c.relname LIMIT 1",
+            (MIGRATOR,),
+        ).fetchone()
+    if table is None:
+        return [f"no {MIGRATOR}-owned table to probe"]
+    attempts = {
+        "CREATE TABLE": "CREATE TABLE public.ci_runtime_probe (id int)",
+        "ALTER TABLE": f"ALTER TABLE {table[0]} ADD COLUMN ci_runtime_probe int",
+        "DROP TABLE": f"DROP TABLE {table[0]}",
+        "ALTER OWNER": f"ALTER TABLE {table[0]} OWNER TO {OWNER}",
+    }
+    with psycopg.connect(
+        _psycopg_url(lane.as_role(OWNER, database)), autocommit=True
+    ) as conn:
+        for label, statement in attempts.items():
+            try:
+                conn.execute(statement)
+            except psycopg.errors.InsufficientPrivilege:
+                continue
+            except psycopg.Error as exc:
+                problems.append(f"{label}: unexpected {str(exc).splitlines()[0]}")
+                continue
+            problems.append(f"{OWNER} could run {label} on {table[0]}")
     return problems
 
 
@@ -495,10 +609,30 @@ SELECT format('ALTER ROUTINE %s OWNER TO dotmac_app', p.oid::regprocedure)
 """
 
 
+def prepare_owner_owned_database(lane: Lane, database: str) -> list[str]:
+    """Reproduce production's pre-grant-model state: the earlier revision applied
+    as a superuser, every object then assigned to the runtime owner. Returns the
+    problems, empty when ready."""
+
+    code, output = lane.alembic_upgrade(
+        database,
+        migrator=MIGRATOR,
+        owner_env=None,
+        target=EARLIER_REVISION,
+        as_superuser=True,
+    )
+    if code != 0:
+        return [f"exit {code}\n{lane.tail(output)}"]
+    with lane.superuser(database) as admin:
+        for statement in [r[0] for r in admin.execute(_HAND_TO_OWNER_SQL).fetchall()]:
+            admin.execute(statement)
+    return []
+
+
 def existing_database_run(lane: Lane) -> None:
     """The production path: objects already belong to dotmac_app, then app_admin
     upgrades them through inherited membership (ALTER on owner tables, including
-    alembic_version) and hands new objects back."""
+    alembic_version) and owns whatever is new, granting the runtime role DML."""
 
     database = lane.create_database()
     try:
@@ -519,8 +653,8 @@ def existing_database_run(lane: Lane) -> None:
             for statement in statements:
                 admin.execute(statement)
             lane.check(
-                "existing database: objects handed to the owner as in production",
-                [] if statements else ["no objects were handed to the owner"],
+                "existing database: pre-grant-model objects belong to the owner",
+                [] if statements else ["no objects were assigned to the owner"],
             )
             lane.check("existing database: pre-state ownership", foreign_owned(admin))
             version_owner = admin.execute(
@@ -542,12 +676,26 @@ def existing_database_run(lane: Lane) -> None:
             return
         with lane.superuser(database) as admin:
             lane.check(
-                "existing database: nothing new is owned by the migrator",
+                "existing database: relay definers stay with the migrator",
                 migrator_owned_violations(lane.migrator_owned(admin)),
             )
             lane.check(
-                "existing database: objects belong to the owner", foreign_owned(admin)
+                "existing database: mixed ownership is only owner and migrator",
+                foreign_owned(admin),
             )
+            lane.check(
+                "existing database: runtime role holds grants on new objects",
+                grant_gap_findings(lane.grant_gaps(admin)),
+            )
+            lane.check(
+                "existing database: runtime role has no CREATE on public",
+                no_runtime_create(admin),
+            )
+        lane.check(
+            "existing database: runtime role cannot create or alter",
+            runtime_ddl_denied(lane, database),
+        )
+        with lane.superuser(database) as admin:
             lane.check("existing database: module tables FORCE RLS", force_rls(admin))
     finally:
         lane.drop_database(database)
@@ -558,6 +706,12 @@ def sensitivity(lane: Lane) -> None:
 
     database = lane.create_database()
     try:
+        # The edge only matters for objects the runtime role still owns, so the
+        # baseline is the production pre-state, then migrated to heads.
+        problems = prepare_owner_owned_database(lane, database)
+        if problems:
+            lane.check("sensitivity baseline prepares", problems)
+            return
         code, output = lane.alembic_upgrade(
             database, migrator=MIGRATOR, owner_env=OWNER
         )
@@ -602,7 +756,7 @@ def sensitivity(lane: Lane) -> None:
             lane.check(
                 "unset owner variable: BYPASSRLS migrator is refused",
                 []
-                if code != 0 and "MIGRATION_OBJECT_OWNER" in output
+                if code != 0 and "MIGRATION_RUNTIME_ROLE" in output
                 else [f"exit {code}\n{lane.tail(output)}"],
             )
             admin.execute(f'REVOKE "{OWNER}" FROM "{MIGRATOR}"')

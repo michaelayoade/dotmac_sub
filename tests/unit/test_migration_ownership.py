@@ -1,7 +1,8 @@
-"""Migration ownership hand-back, planned without a database.
+"""Migration runtime grants, planned without a database.
 
-The migrator (app_admin, BYPASSRLS) creates what a migration creates; the
-runtime owner (dotmac_app) must own it before the transaction commits.
+The migrator (app_admin, BYPASSRLS) owns what a migration creates; the runtime
+role (dotmac_app) is granted DML on it before the transaction commits. It never
+owns new objects.
 """
 
 from __future__ import annotations
@@ -12,14 +13,16 @@ from typing import Any
 import pytest
 
 from app.migration_ownership import (
+    LEGACY_OWNER_ENV_VAR,
+    RUNTIME_ROLE_ENV_VAR,
     MigrationOwnershipError,
     MigratorPosture,
     OwnedObject,
-    hand_back_new_objects,
-    leftovers,
+    grant_runtime_privileges,
     load_definer_allowlist,
     migrator_violations,
-    plan_hand_back,
+    plan_runtime_grants,
+    runtime_role_from_environ,
     unowned_bypass_violation,
 )
 
@@ -53,61 +56,79 @@ def func(
 
 
 def plan(*objects: OwnedObject, allowlist: frozenset[str] = frozenset()):
-    return plan_hand_back(objects, owner="dotmac_app", definer_allowlist=allowlist)
+    return plan_runtime_grants(objects, definer_allowlist=allowlist)
 
 
-def test_new_table_is_handed_back_and_its_index_follows() -> None:
+def stmts(result) -> tuple[str, ...]:
+    return result.statements("dotmac_app")
+
+
+DML = "SELECT, INSERT, UPDATE, DELETE"
+SEQ = "USAGE, SELECT, UPDATE"
+
+
+def test_new_table_gets_dml_and_its_index_follows() -> None:
     result = plan(table("invoices", 1), index("ix_invoices", 2))
     assert result.refusals == ()
-    assert result.statements == ('ALTER TABLE public.invoices OWNER TO "dotmac_app"',)
+    assert stmts(result) == (f'GRANT {DML} ON TABLE public.invoices TO "dotmac_app"',)
 
 
-def test_view_matview_foreign_table_and_partitioned_table_use_their_own_kind() -> None:
+def test_no_plan_ever_transfers_ownership() -> None:
+    result = plan(table("t", 1), table("s", 2, "S"), func("f", 3))
+    assert all("OWNER TO" not in s for s in stmts(result))
+
+
+def test_partitioned_table_and_partitions_are_each_granted() -> None:
+    result = plan(table("events", 4, "p"), table("events_2026", 5))
+    assert stmts(result) == (
+        f'GRANT {DML} ON TABLE public.events TO "dotmac_app"',
+        f'GRANT {DML} ON TABLE public.events_2026 TO "dotmac_app"',
+    )
+
+
+def test_security_invoker_view_gets_dml_like_a_table() -> None:
+    view = OwnedObject(
+        "pg_class", 7, "v", "public.v_open", "public.v_open", security_invoker=True
+    )
+    assert stmts(plan(view)) == (f'GRANT {DML} ON TABLE public.v_open TO "dotmac_app"',)
+
+
+def test_view_without_security_invoker_is_refused() -> None:
+    """An app_admin-owned view would read FORCE-RLS tables with owner bypass."""
+    result = plan(table("v_tenant_totals", 7, "v"))
+    assert result.items == ()
+    assert len(result.refusals) == 1
+    assert "security_invoker=true" in result.refusals[0]
+    assert "public.v_tenant_totals" in result.refusals[0]
+
+
+def test_materialized_view_foreign_table_and_composite_are_refused() -> None:
     result = plan(
-        table("v_open", 1, "v"),
         table("mv_totals", 2, "m"),
         table("ft_ext", 3, "f"),
-        table("events", 4, "p"),
+        table("rowtype", 5, "c"),
     )
-    assert result.statements == (
-        'ALTER TABLE public.events OWNER TO "dotmac_app"',
-        'ALTER FOREIGN TABLE public.ft_ext OWNER TO "dotmac_app"',
-        'ALTER MATERIALIZED VIEW public.mv_totals OWNER TO "dotmac_app"',
-        'ALTER VIEW public.v_open OWNER TO "dotmac_app"',
-    )
+    assert result.items == ()
+    assert len(result.refusals) == 3
+    assert any("materialized view public.mv_totals" in r for r in result.refusals)
 
 
-def test_view_over_force_rls_tables_must_not_stay_with_the_bypass_role() -> None:
-    """A view runs with its owner's privileges and RLS posture."""
-    result = plan(table("v_tenant_totals", 7, "v"))
-    assert result.statements == (
-        'ALTER VIEW public.v_tenant_totals OWNER TO "dotmac_app"',
-    )
-
-
-def test_owned_and_identity_sequences_are_skipped_standalone_is_handed_back() -> None:
+def test_standalone_and_column_owned_sequences_are_both_granted() -> None:
     owned_by_column = OwnedObject(
-        "pg_class",
-        10,
-        "S",
-        "public.t_id_seq",
-        "public.t_id_seq",
-        follows_parent=True,
+        "pg_class", 10, "S", "public.t_id_seq", "public.t_id_seq", follows_parent=True
     )
     standalone = table("invoice_number_seq", 11, "S")
     result = plan(owned_by_column, standalone)
-    assert result.statements == (
-        'ALTER SEQUENCE public.invoice_number_seq OWNER TO "dotmac_app"',
+    assert stmts(result) == (
+        f'GRANT {SEQ} ON SEQUENCE public.invoice_number_seq TO "dotmac_app"',
+        f'GRANT {SEQ} ON SEQUENCE public.t_id_seq TO "dotmac_app"',
     )
 
 
-def test_enum_domain_range_types_are_handed_back_but_array_and_row_types_follow() -> (
-    None
-):
-    kinds = {"e": "TYPE", "r": "TYPE", "d": "DOMAIN"}
+def test_enum_domain_range_types_need_no_grant_array_and_row_types_follow() -> None:
     objs = [
         OwnedObject("pg_type", i, kind, f"public.t_{kind}", f"public.t_{kind}")
-        for i, kind in enumerate(kinds, 1)
+        for i, kind in enumerate("erd", 1)
     ]
     objs.append(
         OwnedObject(
@@ -115,32 +136,31 @@ def test_enum_domain_range_types_are_handed_back_but_array_and_row_types_follow(
         )
     )
     result = plan(*objs)
-    assert result.refusals == ()
-    assert set(result.statements) == {
-        'ALTER DOMAIN public.t_d OWNER TO "dotmac_app"',
-        'ALTER TYPE public.t_e OWNER TO "dotmac_app"',
-        'ALTER TYPE public.t_r OWNER TO "dotmac_app"',
-    }
+    assert result.refusals == () and result.items == ()
 
 
-def test_plain_function_is_handed_back() -> None:
-    assert plan(func("helper", 5)).statements == (
-        'ALTER ROUTINE public.helper() OWNER TO "dotmac_app"',
-    )
+def test_base_and_pseudo_types_are_refused() -> None:
+    base = OwnedObject("pg_type", 1, "b", "public.mytype", "public.mytype")
+    assert len(plan(base).refusals) == 1
+
+
+def test_plain_function_needs_no_grant() -> None:
+    result = plan(func("helper", 5))
+    assert result.items == () and result.refusals == ()
 
 
 def test_unlisted_security_definer_is_refused() -> None:
     result = plan(func("sneaky", 6, secdef=True))
-    assert result.statements == ()
+    assert result.items == ()
     assert result.refusals == (
         "SECURITY DEFINER function public.sneaky() is not in the definer allowlist",
     )
 
 
-def test_listed_security_definer_stays_with_the_migrator() -> None:
+def test_listed_security_definer_is_accepted_and_stays_with_the_migrator() -> None:
     claim = func("claim_outbox_batch", 8, secdef=True, signature=RELAY_CLAIM)
     result = plan(claim, allowlist=ALLOWED)
-    assert result.statements == () and result.refusals == ()
+    assert result.items == () and result.refusals == ()
 
 
 def test_aggregates_and_unknown_catalogs_are_refused_not_skipped() -> None:
@@ -148,7 +168,7 @@ def test_aggregates_and_unknown_catalogs_are_refused_not_skipped() -> None:
     schema = OwnedObject("pg_namespace", 4, "", "pg_namespace:4", "pg_namespace:4")
     composite = OwnedObject("pg_class", 5, "c", "public.rowtype", "public.rowtype")
     result = plan(aggregate, schema, composite)
-    assert result.statements == ()
+    assert result.items == ()
     assert len(result.refusals) == 3
 
 
@@ -160,24 +180,21 @@ def test_extension_members_and_temp_objects_are_ignored() -> None:
     assert plan(ext, temp) == plan()
 
 
-def test_identifiers_are_quoted_in_the_owner_name() -> None:
-    result = plan_hand_back(
-        [table("a", 1)], owner='odd"owner', definer_allowlist=frozenset()
+def test_table_privileges_can_be_narrowed_for_the_version_table() -> None:
+    result = plan_runtime_grants(
+        [table("alembic_version", 1)],
+        definer_allowlist=frozenset(),
+        table_privileges=("SELECT",),
     )
-    assert result.statements == ('ALTER TABLE public.a OWNER TO "odd""owner"',)
+    assert stmts(result) == (
+        'GRANT SELECT ON TABLE public.alembic_version TO "dotmac_app"',
+    )
 
 
-def test_leftovers_name_only_new_non_allowlisted_objects() -> None:
-    before = [func("claim_outbox_batch", 8, secdef=True, signature=RELAY_CLAIM)]
-    after = [
-        *before,
-        table("late", 20),
-        func("claim_outbox_batch2", 21, secdef=True, signature="public.x()"),
-        func("claim_outbox_batch", 22, secdef=True, signature=RELAY_CLAIM),
-    ]
-    assert leftovers(before, after, definer_allowlist=ALLOWED) == (
-        "pg_class public.late",
-        "pg_proc public.claim_outbox_batch2()",
+def test_identifiers_are_quoted_in_the_role_name() -> None:
+    result = plan(table("a", 1))
+    assert result.statements('odd"role') == (
+        f'GRANT {DML} ON TABLE public.a TO "odd""role"',
     )
 
 
@@ -203,16 +220,19 @@ class _Rows:
 
 
 class FakeConnection:
-    """Replays two snapshots and records the ALTERs that run in between."""
+    """Replays one snapshot, records GRANTs, answers the privilege proof."""
 
     def __init__(
-        self, snapshots: list[list[OwnedObject]], *, remaining: list[OwnedObject] | None
-    ) -> None:
-        self.snapshots = snapshots
+        self, snapshot: list[OwnedObject], *, missing: list[str] | None = None
+    ):
+        self.snapshot = snapshot
+        self.missing = missing or []
         self.executed: list[str] = []
 
-    def execute(self, _statement: object, _params: object = None) -> _Rows:
-        snap = self.snapshots.pop(0)
+    def execute(self, statement: object, params: object = None) -> _Rows:
+        sql = str(statement)
+        if "has_table_privilege" in sql or "has_sequence_privilege" in sql:
+            return _Rows([(p,) for p in self.missing])
         return _Rows(
             [
                 (
@@ -225,8 +245,9 @@ class FakeConnection:
                     o.follows_parent,
                     o.extension_member,
                     o.temporary,
+                    o.security_invoker,
                 )
-                for o in snap
+                for o in self.snapshot
             ]
         )
 
@@ -234,32 +255,61 @@ class FakeConnection:
         self.executed.append(statement)
 
 
-def test_hand_back_issues_the_plan_and_proves_nothing_is_left() -> None:
-    before = [table("old", 1)]
-    created = [table("new", 2), index("ix_new", 3)]
-    conn = FakeConnection([[*before, *created], before], remaining=None)
-    count = hand_back_new_objects(
-        conn, owner="dotmac_app", before=before, definer_allowlist=frozenset()
+def grant(conn: FakeConnection, *, before=(), **kw: Any) -> int:
+    return grant_runtime_privileges(
+        conn,
+        runtime_role="dotmac_app",
+        before=before,
+        definer_allowlist=frozenset(),
+        **kw,
     )
-    assert count == 1
-    assert conn.executed == ['ALTER TABLE public.new OWNER TO "dotmac_app"']
 
 
-def test_hand_back_raises_on_unlisted_definer_before_any_alter() -> None:
-    conn = FakeConnection([[func("evil", 4, secdef=True)]], remaining=None)
-    with pytest.raises(MigrationOwnershipError, match="cannot be handed back"):
-        hand_back_new_objects(
-            conn, owner="dotmac_app", before=[], definer_allowlist=frozenset()
-        )
+def test_grant_step_grants_only_new_objects_and_proves_them() -> None:
+    before = [table("old", 1)]
+    conn = FakeConnection([*before, table("new", 2), index("ix_new", 3)])
+    assert grant(conn, before=before) == 1
+    assert conn.executed == [f'GRANT {DML} ON TABLE public.new TO "dotmac_app"']
+
+
+def test_grant_step_can_be_read_only() -> None:
+    conn = FakeConnection([table("alembic_version", 2)])
+    grant(conn, read_only=True)
+    assert conn.executed == [
+        'GRANT SELECT ON TABLE public.alembic_version TO "dotmac_app"'
+    ]
+
+
+def test_refusal_aborts_before_any_grant() -> None:
+    conn = FakeConnection([table("ok", 1), func("evil", 4, secdef=True)])
+    with pytest.raises(MigrationOwnershipError, match="cannot be granted"):
+        grant(conn)
     assert conn.executed == []
 
 
-def test_hand_back_raises_when_something_is_still_migrator_owned() -> None:
-    new = table("stuck", 2)
-    conn = FakeConnection([[new], [new]], remaining=None)
-    with pytest.raises(MigrationOwnershipError, match="still owned by the migrator"):
-        hand_back_new_objects(
-            conn, owner="dotmac_app", before=[], definer_allowlist=frozenset()
+def test_grant_step_raises_when_a_privilege_is_not_held_afterwards() -> None:
+    conn = FakeConnection([table("stuck", 2)], missing=["DELETE"])
+    with pytest.raises(MigrationOwnershipError, match="lacks planned privileges"):
+        grant(conn)
+
+
+def test_runtime_role_prefers_the_new_name_and_accepts_the_legacy_one() -> None:
+    assert runtime_role_from_environ({}) == ""
+    assert (
+        runtime_role_from_environ({RUNTIME_ROLE_ENV_VAR: "dotmac_app"}) == "dotmac_app"
+    )
+    assert (
+        runtime_role_from_environ({LEGACY_OWNER_ENV_VAR: " dotmac_app "})
+        == "dotmac_app"
+    )
+    both = {RUNTIME_ROLE_ENV_VAR: "dotmac_app", LEGACY_OWNER_ENV_VAR: "dotmac_app"}
+    assert runtime_role_from_environ(both) == "dotmac_app"
+
+
+def test_conflicting_runtime_role_settings_are_refused() -> None:
+    with pytest.raises(MigrationOwnershipError, match="conflicts"):
+        runtime_role_from_environ(
+            {RUNTIME_ROLE_ENV_VAR: "a", LEGACY_OWNER_ENV_VAR: "b"}
         )
 
 
@@ -319,21 +369,21 @@ def test_env_alters_alembic_version_only_when_the_width_differs() -> None:
     assert ensure.index("atttypmod") < ensure.index("ALTER TABLE alembic_version")
 
 
-def test_env_hands_back_inside_the_migration_transaction_and_before_commit() -> None:
+def test_env_grants_inside_the_migration_transaction_and_before_commit() -> None:
     body = ENV[ENV.index("def run_migrations_online") :]
-    # Bootstrap table: handed back before the intermediate commit.
-    assert body.index("hand_back_new_objects(") < body.index("connection.commit()")
-    # Migrations: snapshot, run, hand back, all inside begin_transaction.
+    # Bootstrap table: granted before the intermediate commit.
+    assert body.index("grant_runtime_privileges(") < body.index("connection.commit()")
+    # Migrations: snapshot, run, grant, all inside begin_transaction.
     inside = body[body.index("with context.begin_transaction():") :]
     assert (
         inside.index("snapshot_owned_objects(connection)")
         < inside.index("context.run_migrations()")
-        < inside.index("hand_back_new_objects(")
+        < inside.index("grant_runtime_privileges(")
     )
 
 
-def test_env_hand_back_is_opt_in_through_the_owner_variable() -> None:
-    assert "OWNER_ENV_VAR" in ENV
+def test_env_grant_is_opt_in_through_the_runtime_role_variable() -> None:
+    assert "runtime_role_from_environ" in ENV
     assert "if owner is not None" in ENV
 
 
@@ -342,7 +392,7 @@ def test_bypassrls_non_superuser_without_owner_variable_is_refused() -> None:
         current_user="app_admin", bypassrls=True, superuser=False
     )
     assert message is not None
-    assert "MIGRATION_OBJECT_OWNER" in message and "module_database_roles.v1" in message
+    assert "MIGRATION_RUNTIME_ROLE" in message and "module_database_roles.v1" in message
 
 
 def test_superuser_and_plain_roles_may_migrate_without_the_variable() -> None:
