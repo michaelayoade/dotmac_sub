@@ -480,7 +480,9 @@ def no_runtime_create(conn: psycopg.Connection) -> list[str]:
     return problems
 
 
-def runtime_ddl_denied(lane: Lane, database: str) -> list[str]:
+def runtime_ddl_denied(
+    lane: Lane, database: str, *, require_table: bool = True
+) -> list[str]:
     """As the runtime role: no CREATE in public, no DDL on a migrator-owned table."""
 
     problems: list[str] = []
@@ -488,18 +490,19 @@ def runtime_ddl_denied(lane: Lane, database: str) -> list[str]:
         table = admin.execute(
             "SELECT c.oid::regclass::text FROM pg_class c "
             "JOIN pg_namespace n ON n.oid = c.relnamespace "
-            "WHERE n.nspname = 'public' AND c.relkind = 'r' "
+            f"WHERE {_APP_SCHEMAS} AND c.relkind = 'r' "
             "AND c.relowner = %s::regrole ORDER BY c.relname LIMIT 1",
             (MIGRATOR,),
         ).fetchone()
-    if table is None:
+    attempts = {"CREATE TABLE": "CREATE TABLE public.ci_runtime_probe (id int)"}
+    if table is not None:
+        attempts |= {
+            "ALTER TABLE": f"ALTER TABLE {table[0]} ADD COLUMN ci_runtime_probe int",
+            "DROP TABLE": f"DROP TABLE {table[0]}",
+            "ALTER OWNER": f"ALTER TABLE {table[0]} OWNER TO {OWNER}",
+        }
+    elif require_table:
         return [f"no {MIGRATOR}-owned table to probe"]
-    attempts = {
-        "CREATE TABLE": "CREATE TABLE public.ci_runtime_probe (id int)",
-        "ALTER TABLE": f"ALTER TABLE {table[0]} ADD COLUMN ci_runtime_probe int",
-        "DROP TABLE": f"DROP TABLE {table[0]}",
-        "ALTER OWNER": f"ALTER TABLE {table[0]} OWNER TO {OWNER}",
-    }
     with psycopg.connect(
         _psycopg_url(lane.as_role(OWNER, database)), autocommit=True
     ) as conn:
@@ -511,7 +514,7 @@ def runtime_ddl_denied(lane: Lane, database: str) -> list[str]:
             except psycopg.Error as exc:
                 problems.append(f"{label}: unexpected {str(exc).splitlines()[0]}")
                 continue
-            problems.append(f"{OWNER} could run {label} on {table[0]}")
+            problems.append(f"{OWNER} could run {label}")
     return problems
 
 
@@ -693,7 +696,7 @@ def existing_database_run(lane: Lane) -> None:
             )
         lane.check(
             "existing database: runtime role cannot create or alter",
-            runtime_ddl_denied(lane, database),
+            runtime_ddl_denied(lane, database, require_table=False),
         )
         with lane.superuser(database) as admin:
             lane.check("existing database: module tables FORCE RLS", force_rls(admin))
@@ -799,8 +802,10 @@ def sensitivity(lane: Lane) -> None:
 
     # 5. The runtime owner is not a migrator. Either the Billing backfill
     #    (bi_0006) refuses a role that is subject to row-level security, or the
-    #    outbox relay guard (557) refuses a runner that cannot SET ROLE app_admin;
-    #    which comes first is the revision order, and both are the contract.
+    #    outbox relay guard (557) refuses a runner that cannot SET ROLE app_admin,
+    #    or the runtime role, which holds no CREATE on public, cannot even create
+    #    alembic_version; which comes first is the order of events, and all three
+    #    are the contract.
     database = lane.create_database()
     try:
         code, output = lane.alembic_upgrade(database, migrator=OWNER, owner_env=None)
@@ -808,7 +813,11 @@ def sensitivity(lane: Lane) -> None:
             "as the runtime owner: migration is refused",
             []
             if code != 0
-            and ("bi_0006" in output or "cannot SET ROLE app_admin" in output)
+            and (
+                "bi_0006" in output
+                or "cannot SET ROLE app_admin" in output
+                or "permission denied for schema public" in output
+            )
             else [f"exit {code}\n{lane.tail(output)}"],
         )
     finally:
