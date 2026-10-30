@@ -44,6 +44,7 @@ from app.models.sales import (
     LeadStatus,
     Pipeline,
     PipelineStage,
+    Quote,
     QuoteDiscountType,
     QuoteStatus,
     SalesOrder,
@@ -51,6 +52,7 @@ from app.models.sales import (
     SalesOrderStatus,
 )
 from app.models.subscriber import Reseller, Subscriber
+from app.schemas.lead_acquisition import LeadAcquisitionQuery, LeadAcquisitionView
 from app.schemas.sales import (
     LeadCreate,
     LeadUpdate,
@@ -93,9 +95,12 @@ from app.services.sales import (
     quote_documents,
     quote_payment_review,
 )
+from app.services.sales import (
+    lifecycle as lead_lifecycle,
+)
 from app.services.sales.service import QuoteLeadSearchMatch
 from app.services.sales_orders import _resolve_project_for_sales_order
-from app.services.team_inbox_projection import list_agent_options
+from app.services.team_inbox_projection import InboxAgentOption, list_agent_options
 from app.timezone import APP_TIMEZONE
 
 logger = logging.getLogger(__name__)
@@ -189,6 +194,23 @@ class LeadContactView:
     subscriber_id: UUID | None
     party_id: UUID | None
     detail_url: str | None
+
+
+class LeadDetailContext(TypedDict):
+    lead: Lead
+    subscriber: Subscriber | None
+    subscriber_label: str
+    contact: LeadContactView | None
+    pipeline: Pipeline | None
+    stage: PipelineStage | None
+    owner: InboxAgentOption | None
+    quotes: list[Quote]
+    acquisition: LeadAcquisitionView
+    can_create_quote: bool
+    status_val: str
+    lead_statuses: list[str]
+    api_error: str | None
+    success: str | None
 
 
 @dataclass(frozen=True, slots=True)
@@ -746,7 +768,7 @@ def build_leads_failure_context(
     }
 
 
-def build_lead_detail_context(db: Session, *, lead_id: str) -> dict[str, Any]:
+def build_lead_detail_context(db: Session, *, lead_id: str) -> LeadDetailContext:
     lead = sales_service.leads.get(db, lead_id)
     quotes = sales_service.quotes.list(
         db,
@@ -762,6 +784,9 @@ def build_lead_detail_context(db: Session, *, lead_id: str) -> dict[str, Any]:
     agents = list_agent_options(db)
     return {
         "lead": lead,
+        "acquisition": lead_lifecycle.get_lead_acquisition_detail(
+            db, query=LeadAcquisitionQuery(lead_id=lead.id)
+        ),
         "subscriber": lead.subscriber,
         "subscriber_label": subscriber_label(lead.subscriber),
         "contact": contact_map.get(str(lead.id)),

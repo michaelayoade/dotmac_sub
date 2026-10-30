@@ -9,7 +9,11 @@ from uuid import UUID
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.models.team_inbox import InboxMessage, InboxProviderObservation
+from app.models.team_inbox import (
+    InboxConversation,
+    InboxMessage,
+    InboxProviderObservation,
+)
 from app.schemas.fiber_inquiry import FiberAttribution
 from app.schemas.website_handoff import WebsiteHandoffAttribution
 from app.services.customer_identity_normalization import default_country_code
@@ -30,6 +34,35 @@ class WebsiteHandoffQuery:
 @dataclass(frozen=True, slots=True)
 class WebsiteHandoffMessageQuery:
     message_id: UUID
+
+
+@dataclass(frozen=True, slots=True)
+class WebsiteHandoffConversationQuery:
+    conversation_id: UUID
+    message_id: UUID | None = None
+
+
+def resolve_for_conversation(
+    db: Session, *, query: WebsiteHandoffConversationQuery
+) -> WebsiteHandoffAttribution | None:
+    conversation = db.get(InboxConversation, query.conversation_id)
+    if conversation is None or conversation.channel_type != "whatsapp":
+        return None
+    statement = select(InboxMessage).where(
+        InboxMessage.conversation_id == query.conversation_id,
+        InboxMessage.channel_type == "whatsapp",
+        InboxMessage.direction == "inbound",
+    )
+    if query.message_id is not None:
+        statement = statement.where(InboxMessage.id == query.message_id)
+    message = db.scalar(
+        statement.order_by(
+            InboxMessage.created_at.desc(), InboxMessage.id.desc()
+        ).limit(1)
+    )
+    if message is None:
+        return None
+    return resolve_for_message(db, query=WebsiteHandoffMessageQuery(message.id))
 
 
 def resolve_for_message(

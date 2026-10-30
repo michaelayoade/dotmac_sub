@@ -320,17 +320,203 @@ SERVICES: tuple[SOTService, ...] = (
     SOTService(
         name="sales.lead_lifecycle",
         module="app.services.sales.lifecycle",
+        implementation_modules=(
+            "app.services.lead_origin_values",
+            "app.services.lead_acquisition_values",
+            "app.services.website_enquiry_queries",
+        ),
         owns=(
             "Party-first Lead identity lifecycle",
             "immutable structured Lead origin capture",
             "reviewed Lead to Subscriber account attachment",
             "Lead-to-Quote and Lead-to-Ticket Party alignment",
+            "immutable Lead acquisition detail query",
+            "saved website enquiry browse projection",
         ),
-        depends_on=("party.registry", "communications.campaigns"),
+        depends_on=(
+            "party.registry",
+            "communications.campaigns",
+            "communications.website_handoff_attribution",
+            "integration.inbox",
+            "customer.accounts",
+        ),
         notes=(
             "Native Sub campaign responses and external ad-provider "
             "identifiers are deliberately distinct. dotmac_mkt and CRM "
             "have no lead, customer, attribution, or lifecycle authority."
+        ),
+        contract=ServiceContract(
+            concerns=tuple(
+                ConcernContract(
+                    name=name,
+                    role=OwnerRole.COMMAND_WRITER,
+                    input_names=(
+                        "reviewed lifecycle command",
+                        "canonical Party and account identity",
+                        "canonical account record",
+                        "native campaign evidence",
+                        "verified website handoff",
+                    ),
+                    canonical_writer="sales.lead_lifecycle",
+                )
+                for name in (
+                    "Party-first Lead identity lifecycle",
+                    "immutable structured Lead origin capture",
+                    "reviewed Lead to Subscriber account attachment",
+                    "Lead-to-Quote and Lead-to-Ticket Party alignment",
+                )
+            )
+            + (
+                ConcernContract(
+                    name="immutable Lead acquisition detail query",
+                    role=OwnerRole.RESOLVER,
+                    input_names=(
+                        "immutable acquisition origin",
+                        "linked website receipt",
+                    ),
+                ),
+                ConcernContract(
+                    name="saved website enquiry browse projection",
+                    role=OwnerRole.RESOLVER,
+                    input_names=(
+                        "immutable acquisition origin",
+                        "saved website enquiry receipts",
+                    ),
+                ),
+            ),
+            authoritative_inputs=(
+                AuthorityInput(
+                    name="saved website enquiry receipts",
+                    owner="integration.inbox",
+                    kind=AuthorityKind.OBSERVATION,
+                    source="All retained verified Fiber capability receipts, validated through FiberInquiryRequest. WebsiteEnquiryListQuery/DetailQuery use receipt identity and exact origin links, independent of conversation status; unavailable fields stay explicit and no Lead link is inferred.",
+                ),
+                AuthorityInput(
+                    name="immutable acquisition origin",
+                    owner="sales.lead_lifecycle",
+                    kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                    source="LeadOriginCapture selected by exact Lead ID; read-only LeadAcquisitionQuery returns typed allowlisted facts without metadata inference or repair.",
+                ),
+                AuthorityInput(
+                    name="linked website receipt",
+                    owner="integration.inbox",
+                    kind=AuthorityKind.OBSERVATION,
+                    source="Exact origin.integration_inbox_id; validate FiberInquiryRequest, captured form and journey before projecting original submitted identity/location/tags. Missing, unavailable and invalid evidence stay distinct.",
+                ),
+                AuthorityInput(
+                    name="reviewed lifecycle command",
+                    owner="sales.lead_lifecycle",
+                    kind=AuthorityKind.CONTROL_INPUT,
+                    source="Typed LeadOriginCaptureCreate and InboxAcquisitionContext; reviewed identity/link commands and native provider identifier observations supplied by the caller. The caller owns the decision to create a Lead; native identifiers take precedence as one family over website identifiers.",
+                ),
+                AuthorityInput(
+                    name="canonical Party and account identity",
+                    owner="party.registry",
+                    kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                    source="Current routable Party and canonical Party identity; no phone-based identity inference.",
+                ),
+                AuthorityInput(
+                    name="canonical account record",
+                    owner="customer.accounts",
+                    kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                    source="Existing Subscriber and its reviewed Party binding; account lifecycle remains with its own owner.",
+                ),
+                AuthorityInput(
+                    name="native campaign evidence",
+                    owner="communications.campaigns",
+                    kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                    source="Canonical Sub campaign and recipient relationship; these identifiers are separate from external provider identifiers.",
+                ),
+                AuthorityInput(
+                    name="verified website handoff",
+                    owner="communications.website_handoff_attribution",
+                    kind=AuthorityKind.OBSERVATION,
+                    source="Typed phone/account/reference-bound snapshot of a signed IntegrationInbox receipt. Only optional first capture; never a creation instruction.",
+                ),
+            ),
+            transaction=TransactionContract(
+                mode=TransactionMode.PARTICIPANT,
+                boundary="Writes are flush-only participation in the registered calling command's atomic Lead/Party/origin transaction; no independent commit. Acquisition detail queries only read the caller's session.",
+                locking="Lock the signed receipt before checking its unique origin claim. Optional resolution and validation use execute_owner_savepoint; record safe failure evidence after rollback.",
+                idempotency="One immutable origin per Lead, receipt and customer reference. Exact origin retries return the same capture; conflicting replay fails closed. Existing Lead links never capture again.",
+                retries="Retry the calling owner command after rollback. A claimed or unresolvable receipt leaves normal Lead creation intact without website attribution.",
+            ),
+            errors=ErrorContract(
+                domain_codes=("sales.lead_lifecycle.invalid_evidence",),
+                mapping_owner="calling Sales command and its transport adapter",
+                fail_closed_on=(
+                    "conflicting immutable origin",
+                    "unreviewed Party or account relationship",
+                    "native campaign Party mismatch",
+                ),
+            ),
+            events=EventContract(
+                event_types=("lead.created", "lead.updated"),
+                schema_version=1,
+                delivery_owner="events.dispatcher",
+                compatibility="The calling registered command stages its lifecycle event atomically with this flush-only participant. New Inbox creation carries origin_capture_id; this participant does not emit a second event.",
+                replay="Calling-owner idempotency and immutable origin checks prevent repeat creation. Existing Lead linking does not stage a new lead.created event.",
+            ),
+            projections=(
+                ProjectionContract(
+                    name="Website enquiry browse view",
+                    input_names=(
+                        "immutable acquisition origin",
+                        "saved website enquiry receipts",
+                    ),
+                    writer="sales.lead_lifecycle",
+                    freshness="On-demand receipt/origin reads with one shared filtered predicate for rows and total, deterministic receipt-time/UUID sorting and bounded pagination.",
+                    stale_behavior="Invalid receipts remain visible as unavailable-detail rows. Read failure is unavailable, never a zero count. Resolved conversations do not change membership.",
+                    drift_signal="Invalid form payload or captured-origin form/journey mismatch; missing link is not inferred from matching phone/name.",
+                    rebuild_operation="Repeat the same typed list/detail query; no commands, backfill, conversion events or repairs are invoked.",
+                    repair_owner="sales.lead_lifecycle",
+                ),
+                ProjectionContract(
+                    name="Lead acquisition detail view",
+                    input_names=(
+                        "immutable acquisition origin",
+                        "linked website receipt",
+                    ),
+                    writer="sales.lead_lifecycle",
+                    freshness="On-demand primary-key reads for each page request; submitted facts remain immutable snapshot evidence, not current canonical contact state.",
+                    stale_behavior="Return explicit unavailable/invalid receipt status while preserving visible captured origin; no inference from contact details.",
+                    drift_signal="Receipt form/journey mismatch or invalid/missing linked receipt.",
+                    rebuild_operation="Repeat the exact typed LeadAcquisitionQuery; no writes or re-resolution are performed.",
+                    repair_owner="sales.lead_lifecycle",
+                ),
+                ProjectionContract(
+                    name="Lead origin compatibility fields",
+                    input_names=(
+                        "reviewed lifecycle command",
+                        "native campaign evidence",
+                    ),
+                    writer="sales.lead_lifecycle",
+                    freshness="Written atomically with immutable origin capture.",
+                    stale_behavior="Reject conflicting source/campaign/recipient replay; never rewrite historical origin.",
+                    drift_signal="capture_lead_origin detects Lead compatibility fields differing from the saved origin.",
+                    rebuild_operation="Replay exact typed origin capture to verify; any repair requires reviewed canonical evidence and a separate authorized repair command.",
+                    repair_owner="sales.lead_lifecycle",
+                ),
+            ),
+            migration=MigrationContract(
+                state=AuthorityMigrationState.NATIVE,
+                new_owner="sales.lead_lifecycle",
+                verification="Focused lifecycle, acquisition precedence, manual-path and immutable-origin tests; migrated PostgreSQL acceptance remains required.",
+                fallback_retirement="No resolver in AI materialization or Meta reporting; all new Inbox Lead creation passes through this existing lifecycle owner.",
+            ),
+            steward="sales operations",
+            design_refs=(
+                "docs/designs/SALES_TO_SERVICE_LIFECYCLE_SOT.md",
+                "docs/designs/WHATSAPP_WEBSITE_ATTRIBUTION.md",
+            ),
+            test_refs=(
+                "tests/test_lead_origin_values.py",
+                "tests/test_lead_acquisition_view.py",
+                "tests/test_website_enquiry_ui.py",
+                "tests/test_website_enquiry_queries.py",
+                "tests/test_website_handoff_attribution.py",
+                "tests/architecture/test_website_handoff_boundary.py",
+            ),
         ),
     ),
     SOTService(

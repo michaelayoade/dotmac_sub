@@ -23,6 +23,7 @@ from app.models.sales import (
 )
 from app.models.team_inbox import InboxConversation
 from app.schemas.sales import LeadOriginCaptureCreate
+from app.schemas.website_handoff import InboxAcquisitionContext
 from app.services import conversation_lead_relationships, team_inbox_contact_links
 from app.services.audit_adapter import stage_audit_event
 from app.services.domain_errors import DomainError
@@ -627,7 +628,7 @@ def create_lead_for_party(
                 binding_reason="Existing authoritative Inbox Party reused for Lead creation",
                 origin_capture=LeadOriginCaptureCreate.model_validate(
                     {
-                        "capture_method": LeadCaptureMethod.agent_declared.value,
+                        "capture_method": LeadCaptureMethod.inbox_form.value,
                         "source_platform": LeadSourcePlatform.team_inbox.value,
                         "source_interaction_id": f"inbox-conversation:{conversation.id}",
                         "capture_fingerprint": fingerprint,
@@ -639,6 +640,9 @@ def create_lead_for_party(
                 owner_agent_id=command.actor_system_user_id,
                 pipeline_id=pipeline.id,
                 stage_id=stage.id if stage else None,
+                inbox_acquisition=InboxAcquisitionContext(
+                    conversation_id=conversation.id
+                ),
             )
             emit_event(
                 db,
@@ -648,6 +652,7 @@ def create_lead_for_party(
                     "lead_id": str(lead.id),
                     "party_id": str(command.party_id),
                     "origin_conversation_id": str(conversation.id),
+                    "origin_capture_id": str(lead.origin_capture.id),
                 },
                 actor=command.context.actor,
             )

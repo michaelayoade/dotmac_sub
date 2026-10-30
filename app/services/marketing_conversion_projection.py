@@ -18,6 +18,7 @@ from app.models.catalog import Subscription
 from app.models.sales import Lead, LeadConversionMilestone, LeadOriginCapture
 from app.services.events import emit_event
 from app.services.events.types import Event, EventType
+from app.services.lead_origin_values import AcquisitionEvidence
 from app.services.owner_commands import (
     CommandContext,
     OwnerCommandDefinition,
@@ -82,7 +83,9 @@ def _origin_for_event(db: Session, event: Event) -> LeadOriginCapture | None:
         .join(Lead, Lead.id == LeadOriginCapture.lead_id)
         .where(
             Lead.subscriber_id == subscriber_id,
-            LeadOriginCapture.external_form_id == "fiber-coverage-v1",
+            LeadOriginCapture.external_form_id.in_(
+                ("fiber-coverage-v1", "fiber-whatsapp-v1")
+            ),
             LeadOriginCapture.journey_id.is_not(None),
         )
         .order_by(LeadOriginCapture.captured_at.asc(), LeadOriginCapture.id.asc())
@@ -137,6 +140,8 @@ def _occurred_at(
 ) -> datetime:
     if stage is ConversionStage.visitor:
         return origin.captured_at
+    if stage is ConversionStage.lead and origin.external_form_id == "fiber-whatsapp-v1":
+        return origin.created_at
     if stage is ConversionStage.lead and origin.submitted_at is not None:
         return origin.submitted_at
     return event.occurred_at
@@ -191,8 +196,12 @@ def project_conversion_event(
         origin = _origin_for_event(db, event)
         if (
             origin is None
-            or origin.external_form_id != "fiber-coverage-v1"
-            or origin.journey_id is None
+            or not AcquisitionEvidence(
+                external_form_id=origin.external_form_id,
+                integration_inbox_id=origin.integration_inbox_id,
+                journey_id=origin.journey_id,
+                customer_reference=origin.customer_reference,
+            ).is_fiber_origin
         ):
             return ConversionProjectionResult(milestone_ids=())
         subject_key = _subject_key(origin)

@@ -18,3 +18,12 @@ class WebsiteHandoffAttribution(BaseModel):
     reference: str = Field(pattern=r"^FWA-[A-F0-9]{24}$")
     submitted_at: datetime
     attribution: FiberAttribution
+
+
+class InboxAcquisitionContext(BaseModel):
+    """Creation-time conversation evidence; never a Lead creation instruction."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    conversation_id: UUID
+    message_id: UUID | None = None

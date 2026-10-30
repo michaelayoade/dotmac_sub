@@ -96,6 +96,17 @@ authoritative source if worker/web metrics processes are separate.
 
 ## Staging Test Events
 
+For the `meta.capi` 1.1.0 WhatsApp extension, also enable the explicit staging
+`report_whatsapp_leads` flag. A signed `fiber-whatsapp-v1` enquiry alone must not
+queue a Lead event. Exercise both existing automatic and authorized manual Inbox
+creation. Each committed Lead with its captured signed receipt must produce one
+stable server event with `action_source=system_generated` and Lead creation time.
+Replay must deduplicate; linking an existing Lead must not report another Lead.
+Disable the flag and confirm ordinary Lead creation continues without reporting.
+No production configuration was changed by the local rework. Missing private
+dependencies, migrated PostgreSQL acceptance, or registry generation block
+publication; mocks do not replace staging Test Events evidence.
+
 1. Keep production disabled. In staging, store the access token at the OpenBao
    reference above.
 2. Configure pixel `410389919883152`, API `v26.0`, and the temporary Test Events

@@ -282,11 +282,13 @@ SERVICES: tuple[SOTService, ...] = (
             authoritative_inputs=(
                 AuthorityInput(
                     name="immutable captured origin evidence",
-                    owner="sales.capture",
+                    owner="sales.lead_lifecycle",
                     kind=AuthorityKind.AUTHORITATIVE_RECORD,
                     source=(
                         "Party-bound LeadOriginCapture with journey, attribution, "
-                        "landing, submission, and delivery provenance"
+                        "landing, submission, and delivery provenance; supports "
+                        "fiber-coverage-v1 and receipt-bound fiber-whatsapp-v1. "
+                        "WhatsApp Lead time is origin creation, not form submission."
                     ),
                 ),
                 AuthorityInput(
@@ -497,7 +499,6 @@ SERVICES: tuple[SOTService, ...] = (
             "optional Inbox form enrichment and legacy form conversion",
         ),
         depends_on=(
-            "communications.website_handoff_attribution",
             "ai.intake",
             "auth.staff_provisioning",
             "communications.team_inbox_contact_resolution",

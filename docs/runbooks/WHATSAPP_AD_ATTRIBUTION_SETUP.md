@@ -1,17 +1,35 @@
 # Website to WhatsApp attribution: installation and acceptance
 
-Status: local implementation draft; not deployed, not launch acceptance.
+Status: implementation draft; not deployed, not launch acceptance.
 
-## Local verification (27 October 2026)
+## Local verification (30 October 2026 rework)
 
-- Fourteen database-free policy, boundary and mocked reporting tests passed.
+- Thirty-six database-free policy, boundary, template and mocked reporting tests passed,
+  including native identifier precedence, shared acquisition ownership and the
+  real lifecycle declaration's structural contract (not the full registry graph).
+- Added database-backed automatic/manual acquisition detail reads, Lead page
+  context, Meta opt-in/deduplication and marketing milestone regression tests;
+  these are unexecuted until dependencies are restored.
+- Rendered the actual acquisition template with production CSS and synthetic
+  data at 1440px desktop and a true emulated 390px mobile viewport, including
+  expanded details in dark mode. All three measured no horizontal overflow.
+  This verifies the section, not the full authenticated application/database flow.
+- Added Sales > Website enquiries list/detail with typed search, tag/date/link
+  filters, bounded pagination and shared submitted-data display. Both existing
+  CRM Lead and Inbox read permissions are required. The read query does not
+  depend on conversation status and never creates or backfills a Lead.
+- Desktop and true 390px mobile enquiry-list/detail previews use production CSS
+  and synthetic data; read failure stays unavailable rather than zero results.
+  Full database query and authenticated route checks remain blocked at test
+  collection by the missing private Kernel package.
 - JavaScript handoff tests passed, including encrypted reload recovery and retries.
 - Scoped Ruff lint and formatting checks passed; website PHP syntax passed using
   the target host's interpreter through stdin without installing a file.
 - Database-backed tests and ownership-map generation could not run because the
   pinned private `dotmac_kernel` development package is unavailable. The full
   prescribed suite and migrated PostgreSQL acceptance remain outstanding.
-- The local visual preview timed out; desktop/mobile visual acceptance is pending.
+- The earlier website-form preview timed out; full website desktop/mobile and
+  authenticated application acceptance remain pending.
 - No customer enquiry, Lead, Meta event, deployment or advertisement change was
   made during these checks.
 
@@ -31,6 +49,16 @@ relationship-map manifest, and run focused tests plus the full prescribed suite.
 Run `make test-integration` against an explicitly disposable migrated PostgreSQL/
 PostGIS target. Complete the mandatory feature-to-main, digest-bound staging
 and production release process. A local draft is not production authorization.
+Include the typed acquisition read and Lead detail template in the same backend
+candidate as attribution and reporting. Staging must verify original submitted
+name/phone/address, source tags and IDs on automatically and manually created
+Leads, and confirm legacy Leads show an explicit missing-origin state. Do not
+enable the website handoff or Meta reporting before that candidate is accepted.
+Include the central enquiry list/detail and shared submitted-data templates in
+that same candidate. Confirm both permissions, empty/failed reads, filter and
+pagination behavior, and that resolving a conversation leaves its received
+submission visible. The list contains receipts already received by Selfcare;
+it does not import website outbox entries or reconstruct unstored older Leads.
 
 Staging must prove: enquiry creates no Lead; exact replay preserves reference;
 same reference with another phone/account or expired time contributes no origin;
@@ -75,6 +103,18 @@ evidence, not authenticated Meta referral evidence. Removed references or a
 different sending phone remain unattributed; do not guess from phone or message text.
 
 ## Meta operator
+
+The reworked draft captures acquisition through `sales.lead_lifecycle` for both
+existing automatic and manual Inbox Lead commands. Reporting reads the saved
+origin and signed receipt, without reinterpreting later WhatsApp messages.
+Validate native-ID precedence, receipt single-claim behavior, replay, optional
+failure isolation, manual creation, and downstream marketing milestones before
+enablement. Restore the pinned private Kernel dependency, regenerate the SOT
+manifest and pass the prescribed suite on a development host/CI, including real
+migrated disposable PostgreSQL. PR 3784 is not merged here; its identity-clearance
+eligibility now delegates to the identity owner's typed clearance query. Actual
+combined-branch validation remains an integration gate. Keep production disabled
+until these checks and digest-bound staging acceptance succeed.
 
 1. Provision a suitable dataset access token through an approved operator at
    `bao://secret/integrations/meta_capi#access_token`.

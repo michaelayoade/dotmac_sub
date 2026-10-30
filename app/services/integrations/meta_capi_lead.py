@@ -18,11 +18,9 @@ from app.models.integration_platform import (
     IntegrationBindingState,
     IntegrationCapabilityBinding,
     IntegrationDelivery,
-    IntegrationInbox,
     IntegrationInstallationState,
 )
 from app.models.sales import LeadOriginCapture
-from app.services import website_handoff_attribution
 from app.services.customer_identity_normalization import (
     default_country_code,
     normalize_email_identifier,
@@ -41,6 +39,7 @@ from app.services.integrations.runtime_execution import (
     build_execution_context,
     make_operation_executor,
 )
+from app.services.lead_origin_values import AcquisitionEvidence
 from app.services.owner_commands import (
     CommandContext,
     OwnerCommandDefinition,
@@ -182,40 +181,28 @@ def _stage(db: Session, event: Event) -> StageResult:
     origin = db.get(LeadOriginCapture, origin_id)
     if origin is None:
         return StageResult(StageOutcome.ineligible)
-    whatsapp_handoff = None
-    if (
-        origin.capture_source == "ai.intake"
-        and origin.source_platform == "team_inbox"
+    if str(event.payload.get("lead_id") or "") != str(origin.lead_id):
+        return StageResult(StageOutcome.ineligible)
+    whatsapp_handoff = (
+        origin.source_platform == "team_inbox"
         and origin.lead_source == "Whatsapp"
-        and origin.external_form_id == "fiber-whatsapp-v1"
-    ):
-        if str(event.payload.get("lead_id") or "") != str(origin.lead_id):
-            return StageResult(StageOutcome.ineligible)
-        try:
-            message_id = UUID(
-                str(origin.source_interaction_id).removeprefix("inbox-message:")
-            )
-        except ValueError:
-            return StageResult(StageOutcome.ineligible)
-        whatsapp_handoff = website_handoff_attribution.resolve_for_message(
-            db, query=website_handoff_attribution.WebsiteHandoffMessageQuery(message_id)
-        )
-        if (
-            whatsapp_handoff is None
-            or origin.journey_id != whatsapp_handoff.attribution.journey_id
-        ):
-            return StageResult(StageOutcome.ineligible)
-        if str(
-            (origin.lead.metadata_ or {}).get("website_enquiry_observation_id")
-        ) != str(whatsapp_handoff.observation_id):
-            return StageResult(StageOutcome.ineligible)
-        inquiry = db.get(IntegrationInbox, whatsapp_handoff.integration_inbox_id)
-    else:
-        inquiry = origin.integration_inbox
+        and AcquisitionEvidence(
+            external_form_id=origin.external_form_id,
+            integration_inbox_id=origin.integration_inbox_id,
+            journey_id=origin.journey_id,
+            customer_reference=origin.customer_reference,
+        ).is_whatsapp_handoff
+    )
+    inquiry = origin.integration_inbox
     if inquiry is None:
         return StageResult(StageOutcome.ineligible)
     inbox_payload = dict(inquiry.payload_json or {})
-    if whatsapp_handoff is None and not (
+    if (
+        whatsapp_handoff
+        and str(inbox_payload.get("form_version") or "") != "fiber-whatsapp-v1"
+    ):
+        return StageResult(StageOutcome.ineligible)
+    if not whatsapp_handoff and not (
         origin.capture_source == "fiber.website_inquiry"
         and origin.source_platform == "website"
         and origin.external_form_id == "fiber-coverage-v1"
@@ -226,7 +213,7 @@ def _stage(db: Session, event: Event) -> StageResult:
     if binding is None:
         return StageResult(StageOutcome.disabled)
     revision = binding.installation.current_config_revision
-    if whatsapp_handoff is not None and not (
+    if whatsapp_handoff and not (
         revision is not None
         and (revision.config_json or {}).get("report_whatsapp_leads", False)
     ):
@@ -270,7 +257,7 @@ def _stage(db: Session, event: Event) -> StageResult:
         return StageResult(StageOutcome.ineligible)
     event_time = (
         origin.created_at
-        if whatsapp_handoff is not None
+        if whatsapp_handoff
         else origin.submitted_at or origin.created_at
     )
     if event_time.tzinfo is None:
@@ -284,7 +271,7 @@ def _stage(db: Session, event: Event) -> StageResult:
         "event_source_url": _source_url(origin.landing_path),
         "user_data": user_data,
     }
-    if whatsapp_handoff is not None:
+    if whatsapp_handoff:
         payload["action_source"] = "system_generated"
         payload.pop("event_source_url", None)
     delivery = IntegrationDelivery(

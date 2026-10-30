@@ -60,11 +60,12 @@ from app.schemas.lead_intake import (
     LeadIntakePartyType as LeadIntakePartyTypeValue,
 )
 from app.schemas.sales import LeadOriginCaptureCreate
+from app.schemas.website_handoff import InboxAcquisitionContext
 from app.services import (
     conversation_lead_relationships,
     team_inbox_operations,
     team_inbox_participants,
-    website_handoff_attribution,
+    team_inbox_prospect_resolution,
 )
 from app.services import party as party_service
 from app.services.audit_adapter import stage_audit_event
@@ -76,7 +77,6 @@ from app.services.owner_commands import (
     CommandContext,
     OwnerCommandDefinition,
     execute_owner_command,
-    execute_owner_savepoint,
 )
 from app.services.sales import lifecycle
 from app.services.settings_spec import resolve_value
@@ -654,11 +654,13 @@ def _manual_invitation_eligibility(
         return ManualInvitationEligibility(
             False, "This conversation channel cannot deliver a Lead intake form."
         )
-    resolution = dict((conversation.metadata_ or {}).get("contact_resolution") or {})
-    if (
-        conversation.subscriber_id is not None
-        or resolution.get("status") != "unmatched"
-    ):
+    resolution = team_inbox_prospect_resolution.lead_intake_resolution_eligibility(
+        db,
+        query=team_inbox_prospect_resolution.LeadIntakeResolutionQuery(
+            conversation_id=conversation.id
+        ),
+    )
+    if not resolution.eligible:
         return ManualInvitationEligibility(
             False, "Lead intake is only for people not linked to a customer account."
         )
@@ -876,42 +878,6 @@ def _materialize_lead_candidate(
     )
     template = _candidate_template(db, party_type)
     attribution = command.attribution
-    website_failure: str | None = None
-    try:
-        website = execute_owner_savepoint(
-            db,
-            lambda: website_handoff_attribution.resolve_for_message(
-                db,
-                query=website_handoff_attribution.WebsiteHandoffMessageQuery(
-                    message.id
-                ),
-            ),
-        )
-    except Exception as error:
-        # Optional attribution must never suppress an otherwise valid Sales Lead.
-        # Durable evidence below is staged only after the optional rollback.
-        website = None
-        website_failure = type(error).__name__
-    website_origin = (
-        {
-            "journey_id": website.attribution.journey_id,
-            "external_campaign_id": website.attribution.campaign_id,
-            "external_ad_set_id": website.attribution.ad_set_id,
-            "external_ad_id": website.attribution.ad_id,
-            "external_form_id": website.form_version,
-            "external_click_id": website.attribution.click_id,
-            "utm_source": website.attribution.utm_source,
-            "utm_medium": website.attribution.utm_medium,
-            "utm_campaign": website.attribution.utm_campaign,
-            "utm_content": website.attribution.utm_content,
-            "utm_term": website.attribution.utm_term,
-            "landing_path": website.attribution.landing_path,
-            "captured_at": website.attribution.captured_at,
-            "submitted_at": website.submitted_at,
-        }
-        if website is not None
-        else {}
-    )
     fingerprint = hashlib.sha256(
         (
             f"{conversation.id}:{message.id}:{party_type.value}:"
@@ -941,7 +907,6 @@ def _materialize_lead_candidate(
                     "Final shared AI intake result classified the Inbox conversation "
                     "as a sales prospect"
                 ),
-                **website_origin,
             }
         ),
         metadata={
@@ -955,11 +920,6 @@ def _materialize_lead_candidate(
             "ai_party_type_confidence": (command.classification.party_type_confidence),
             "meta_referral_source": attribution.referral_source,
             "meta_referral_type": attribution.referral_type,
-            "website_enquiry_reference": website.reference if website else None,
-            "website_enquiry_observation_id": str(website.observation_id)
-            if website
-            else None,
-            "website_attribution_failure": website_failure,
             "representative_party_id": (
                 str(representative_party_id) if representative_party_id else None
             ),
@@ -967,6 +927,9 @@ def _materialize_lead_candidate(
         owner_agent_id=template.owner_system_user_id if template else None,
         pipeline_id=template.pipeline_id if template else None,
         stage_id=template.stage_id if template else None,
+        inbox_acquisition=InboxAcquisitionContext(
+            conversation_id=conversation.id, message_id=message.id
+        ),
     )
     team_inbox_participants.bind_endpoint_to_contact_point(
         db,
@@ -1950,6 +1913,9 @@ def submit_form(
                 owner_agent_id=template.owner_system_user_id,
                 pipeline_id=template.pipeline_id,
                 stage_id=template.stage_id,
+                inbox_acquisition=InboxAcquisitionContext(
+                    conversation_id=invitation.conversation_id
+                ),
             )
         conversation = _unknown_conversation(db, invitation.conversation_id)
         team_inbox_participants.bind_endpoint_to_contact_point(
@@ -2011,6 +1977,7 @@ def submit_form(
                 "status": lead.status,
                 "lead_source": lead.lead_source,
                 "origin_conversation_id": str(conversation.id),
+                "origin_capture_id": str(lead.origin_capture.id),
             },
             actor=command.context.actor,
         )

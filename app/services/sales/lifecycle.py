@@ -8,7 +8,8 @@ silent repoints or attribution replacement.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+import json
+from dataclasses import asdict, dataclass
 from datetime import UTC, date, datetime
 from decimal import Decimal
 from typing import Any
@@ -18,6 +19,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.models.comms_campaign import Campaign, CampaignChannel, CampaignRecipient
+from app.models.integration_platform import IntegrationInbox
 from app.models.party import Party, PartyIdentityStatus
 from app.models.sales import (
     Lead,
@@ -27,11 +29,98 @@ from app.models.sales import (
     LeadStatus,
 )
 from app.models.subscriber import Subscriber
+from app.schemas.fiber_inquiry import FiberInquiryRequest
+from app.schemas.lead_acquisition import (
+    AcquisitionTags,
+    LeadAcquisitionOrigin,
+    LeadAcquisitionQuery,
+    LeadAcquisitionView,
+    WebsiteEnquiryStatus,
+)
 from app.schemas.sales import LeadOriginCaptureCreate
+from app.schemas.website_handoff import (
+    InboxAcquisitionContext,
+    WebsiteHandoffAttribution,
+)
+from app.services import website_handoff_attribution
+from app.services.domain_errors import DomainError
+from app.services.lead_acquisition_values import project_website_enquiry
+from app.services.lead_origin_values import (
+    AcquisitionEvidence,
+    compose_inbox_acquisition,
+)
+from app.services.owner_commands import execute_owner_savepoint
 
 
-class LeadLifecycleError(ValueError):
-    pass
+class LeadLifecycleError(DomainError, ValueError):
+    def __init__(self, message: str) -> None:
+        super().__init__(
+            code="sales.lead_lifecycle.invalid_evidence",
+            message=message,
+            retryable=False,
+        )
+
+
+def get_lead_acquisition_detail(
+    db: Session, *, query: LeadAcquisitionQuery
+) -> LeadAcquisitionView:
+    """Read first-capture evidence only; never infer identity or repair history."""
+    if db.get(Lead, query.lead_id) is None:
+        raise LeadLifecycleError("Lead was not found")
+    origin = db.scalar(
+        select(LeadOriginCapture).where(LeadOriginCapture.lead_id == query.lead_id)
+    )
+    if origin is None:
+        return LeadAcquisitionView(None, WebsiteEnquiryStatus.not_recorded)
+    saved = LeadAcquisitionOrigin(
+        origin_id=origin.id,
+        lead_id=origin.lead_id,
+        channel=origin.lead_source,
+        capture_method=origin.capture_method,
+        form_version=origin.external_form_id,
+        captured_at=_acquisition_utc(origin.captured_at),
+        created_at=_acquisition_utc(origin.created_at),
+        submitted_at=_acquisition_utc(origin.submitted_at)
+        if origin.submitted_at
+        else None,
+        reference=origin.customer_reference,
+        receipt_id=origin.integration_inbox_id,
+        journey_id=origin.journey_id,
+        tags=AcquisitionTags(
+            source=origin.utm_source,
+            medium=origin.utm_medium,
+            campaign=origin.utm_campaign,
+            content=origin.utm_content,
+            term=origin.utm_term,
+            campaign_id=origin.external_campaign_id,
+            ad_set_id=origin.external_ad_set_id,
+            ad_id=origin.external_ad_id,
+            click_id=origin.external_click_id,
+            landing_path=origin.landing_path,
+        ),
+    )
+    if saved.receipt_id is None or saved.form_version not in {
+        "fiber-contact-v1",
+        "fiber-coverage-v1",
+        "fiber-whatsapp-v1",
+    }:
+        return LeadAcquisitionView(saved, WebsiteEnquiryStatus.not_linked)
+    receipt = db.get(IntegrationInbox, saved.receipt_id)
+    if receipt is None:
+        return LeadAcquisitionView(saved, WebsiteEnquiryStatus.unavailable)
+    try:
+        enquiry = FiberInquiryRequest.model_validate_json(
+            json.dumps(receipt.payload_json)
+        )
+    except (TypeError, ValueError):
+        # Do not expose raw receipt data or private validation details in the UI.
+        return LeadAcquisitionView(saved, WebsiteEnquiryStatus.invalid)
+    return project_website_enquiry(origin=saved, enquiry=enquiry)
+
+
+def _acquisition_utc(value: datetime) -> datetime:
+    # PostgreSQL uses aware timestamps; the non-authoritative fast lane may not.
+    return value.replace(tzinfo=UTC) if value.tzinfo is None else value.astimezone(UTC)
 
 
 _LEAD_SOURCES = {
@@ -200,6 +289,7 @@ def create_party_lead(
     lost_reason: str | None = None,
     is_active: bool = True,
     reseller_id: UUID | None = None,
+    inbox_acquisition: InboxAcquisitionContext | None = None,
 ) -> Lead:
     """Create one Party-first Lead without committing the caller's transaction.
 
@@ -209,6 +299,36 @@ def create_party_lead(
     every owner has accepted its state.
     """
 
+    acquisition: WebsiteHandoffAttribution | None = None
+    acquisition_failure: str | None = None
+    if (
+        inbox_acquisition is not None
+        and lead_source == "Whatsapp"
+        and origin_capture.source_platform == LeadSourcePlatform.team_inbox
+    ):
+        acquisition_context = inbox_acquisition
+        try:
+            prepared = execute_owner_savepoint(
+                db,
+                lambda: _prepare_inbox_acquisition(
+                    db, context=acquisition_context, original=origin_capture
+                ),
+            )
+            if prepared is not None:
+                origin_capture, acquisition = prepared
+        except Exception as error:
+            # Optional evidence cannot suppress a legitimate creation command.
+            # Failure evidence is written only after the owner's rollback guard.
+            acquisition_failure = type(error).__name__
+    lead_metadata = dict(metadata or {})
+    if inbox_acquisition is not None and lead_source == "Whatsapp":
+        lead_metadata.update(
+            website_enquiry_reference=acquisition.reference if acquisition else None,
+            website_enquiry_observation_id=str(acquisition.observation_id)
+            if acquisition
+            else None,
+            website_attribution_failure=acquisition_failure,
+        )
     lead = Lead(
         id=lead_id,
         title=_required(title, "title"),
@@ -217,7 +337,7 @@ def create_party_lead(
         region=_optional(region),
         address=_optional(address),
         notes=_optional(notes),
-        metadata_=dict(metadata) if metadata else None,
+        metadata_=lead_metadata or None,
         owner_agent_id=owner_agent_id,
         pipeline_id=pipeline_id,
         stage_id=stage_id,
@@ -244,9 +364,50 @@ def create_party_lead(
         db,
         lead_id=lead.id,
         lead_source=lead_source,
-        capture=origin_capture.model_dump(mode="python"),
+        capture=origin_capture,
     )
     return lead
+
+
+def _prepare_inbox_acquisition(
+    db: Session, *, context: InboxAcquisitionContext, original: LeadOriginCaptureCreate
+) -> tuple[LeadOriginCaptureCreate, WebsiteHandoffAttribution] | None:
+    """Resolve and serialise a first claim on a receipt inside the caller owner."""
+    found = website_handoff_attribution.resolve_for_conversation(
+        db,
+        query=website_handoff_attribution.WebsiteHandoffConversationQuery(
+            conversation_id=context.conversation_id, message_id=context.message_id
+        ),
+    )
+    if found is None:
+        return None
+    receipt = db.scalar(
+        select(IntegrationInbox)
+        .where(IntegrationInbox.id == found.integration_inbox_id)
+        .with_for_update()
+    )
+    if (
+        receipt is None
+        or (receipt.payload_json or {}).get("form_version") != "fiber-whatsapp-v1"
+    ):
+        raise LeadLifecycleError("Website attribution has no valid signed receipt")
+    claimed = db.scalar(
+        select(LeadOriginCapture.id)
+        .where(LeadOriginCapture.integration_inbox_id == receipt.id)
+        .limit(1)
+    )
+    if claimed is not None:
+        return None
+    before = AcquisitionEvidence(
+        **original.model_dump(include=set(AcquisitionEvidence.__dataclass_fields__))
+    )
+    after = compose_inbox_acquisition(original=before, website=found)
+    if after == before or not after.is_whatsapp_handoff:
+        return None
+    prepared = LeadOriginCaptureCreate.model_validate(
+        {**original.model_dump(mode="python"), **asdict(after)}
+    )
+    return prepared, found
 
 
 @dataclass(frozen=True, slots=True)
@@ -509,7 +670,7 @@ def capture_lead_origin(
     *,
     lead_id: UUID,
     lead_source: str,
-    capture: dict[str, Any],
+    capture: LeadOriginCaptureCreate,
 ) -> LeadOriginCapture:
     """Capture immutable lead-creation origin and its legacy projection."""
 
@@ -519,7 +680,7 @@ def capture_lead_origin(
             f"Lead '{lead_id}' must have a reviewed Party binding first"
         )
     _routable_party(db, lead.party_id)
-    values = _capture_values(capture, lead_source=lead_source)
+    values = _capture_values(capture.model_dump(mode="python"), lead_source=lead_source)
     campaign_id = values["campaign_id"]
     recipient_id = values["campaign_recipient_id"]
     campaign = db.get(Campaign, campaign_id) if campaign_id else None
@@ -563,7 +724,7 @@ def capture_lead_origin(
             for field in _CAPTURE_FIELDS
             if getattr(existing, field) != values[field]
         ]
-        captured_at = capture.get("captured_at")
+        captured_at = capture.captured_at
         if captured_at is not None and existing.captured_at != captured_at:
             mismatches.append("captured_at")
         if mismatches:
@@ -593,7 +754,7 @@ def capture_lead_origin(
             "Lead campaign recipient conflicts with origin capture"
         )
 
-    captured_at = capture.get("captured_at") or datetime.now(UTC)
+    captured_at = capture.captured_at or datetime.now(UTC)
     origin = LeadOriginCapture(
         **values,
         captured_at=captured_at,

@@ -1,0 +1,37 @@
+{% if enquiries is none %}
+<section role="alert" class="rounded-xl border border-slate-300 bg-white p-5 dark:border-slate-700 dark:bg-slate-800"><h2 class="font-semibold text-slate-900 dark:text-white">Enquiries unavailable</h2><p class="mt-2 text-sm text-slate-600 dark:text-slate-300">Saved enquiries could not be loaded. Apply the filters again to retry.</p></section>
+{% else %}
+<section class="overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm dark:border-slate-700 dark:bg-slate-800" aria-labelledby="enquiry-results-heading">
+    <div class="border-b border-slate-200 px-4 py-3 dark:border-slate-700"><h2 id="enquiry-results-heading" class="text-sm font-semibold text-slate-900 dark:text-white">{{ enquiries.total }} saved submission{{ '' if enquiries.total == 1 else 's' }}</h2><p class="mt-1 text-xs text-slate-500 dark:text-slate-400">Submission totals are not unique people or confirmed Meta conversions.</p></div>
+    {% if enquiries.items %}
+    <div class="hidden overflow-x-auto md:block">
+        <table class="w-full text-left text-sm"><thead class="bg-slate-50 text-xs text-slate-600 dark:bg-slate-900 dark:text-slate-300"><tr><th class="px-4 py-3" scope="col">Received (UTC)</th><th class="px-4 py-3" scope="col">Submitted contact</th><th class="px-4 py-3" scope="col">Installation address</th><th class="px-4 py-3" scope="col">Website campaign</th><th class="px-4 py-3" scope="col">Lead</th><th class="px-4 py-3" scope="col">Enquiry</th></tr></thead><tbody class="divide-y divide-slate-200 dark:divide-slate-700">
+        {% for row in enquiries.items %}
+        <tr class="align-top text-slate-700 dark:text-slate-300">
+            <td class="px-4 py-3"><p class="whitespace-nowrap">{{ row.received_at.strftime('%d %b %Y') }}</p><p class="mt-1 text-xs">{{ row.received_at.strftime('%H:%M') }}</p></td>
+            <td class="px-4 py-3">{% if row.enquiry %}<p class="font-semibold text-slate-900 dark:text-white">{{ row.enquiry.full_name }}</p><p class="mt-1 break-all">{{ row.enquiry.phone or 'Phone not recorded' }}</p><p class="mt-1 break-all text-xs">{{ row.enquiry.email or '' }}</p>{% else %}<p>Details unavailable</p>{% endif %}<p class="mt-2 break-all text-xs text-slate-500 dark:text-slate-400">{{ row.reference or 'Reference not available' }}</p></td>
+            <td class="max-w-xs break-words px-4 py-3">{{ (row.enquiry.address or 'Not recorded') if row.enquiry else 'Details unavailable' }}{% if row.enquiry and row.enquiry.area %}<p class="mt-1 text-xs">{{ row.enquiry.area }}</p>{% endif %}</td>
+            <td class="max-w-xs break-words px-4 py-3">{{ (row.enquiry.tags.campaign or 'Not recorded') if row.enquiry else 'Details unavailable' }}{% if row.enquiry and row.enquiry.tags.source %}<p class="mt-1 text-xs">{{ row.enquiry.tags.source }}</p>{% endif %}</td>
+            <td class="px-4 py-3">{% if row.linked_lead_id %}<a href="/admin/sales/leads/{{ row.linked_lead_id }}" class="font-semibold text-cyan-700 hover:underline dark:text-cyan-400">View Lead</a>{% if row.linked_lead_active is sameas false %}<p class="mt-1 text-xs">Inactive Lead</p>{% endif %}{% else %}<span class="text-xs">No linked Lead</span>{% endif %}</td>
+            <td class="px-4 py-3"><a href="/admin/sales/website-enquiries/{{ row.receipt_id }}" class="font-semibold text-cyan-700 hover:underline dark:text-cyan-400">Open enquiry</a><p class="mt-1 text-xs">{{ row.receipt_state.label }}</p></td>
+        </tr>
+        {% endfor %}
+        </tbody></table>
+    </div>
+    <ul class="divide-y divide-slate-200 md:hidden dark:divide-slate-700">
+        {% for row in enquiries.items %}
+        <li class="space-y-2 p-4 text-sm text-slate-700 dark:text-slate-300">
+            <p class="font-semibold text-slate-900 dark:text-white">{{ row.enquiry.full_name if row.enquiry else 'Details unavailable' }}</p>
+            <p class="break-all">{{ (row.enquiry.phone or 'Phone not recorded') if row.enquiry else 'Details unavailable' }}</p>
+            {% if row.enquiry %}<p class="break-words">{{ row.enquiry.address or 'Address not recorded' }}</p><p class="break-words text-xs">Campaign: {{ row.enquiry.tags.campaign or 'Not recorded' }} · {{ row.enquiry.tags.source or 'Source not recorded' }}</p>{% endif %}
+            <p class="break-all text-xs">{{ row.reference or 'Reference not available' }}</p><p class="text-xs">{{ row.received_at.strftime('%d %b %Y, %H:%M') }} UTC · {{ row.receipt_state.label }}</p>
+            <div class="flex flex-wrap gap-4 pt-1"><a href="/admin/sales/website-enquiries/{{ row.receipt_id }}" class="font-semibold text-cyan-700 dark:text-cyan-400">Open enquiry</a>{% if row.linked_lead_id %}<a href="/admin/sales/leads/{{ row.linked_lead_id }}" class="font-semibold text-cyan-700 dark:text-cyan-400">View Lead{% if row.linked_lead_active is sameas false %} (inactive){% endif %}</a>{% else %}<span class="text-xs">No linked Lead</span>{% endif %}</div>
+        </li>
+        {% endfor %}
+    </ul>
+    <nav aria-label="Enquiry pages" class="flex flex-wrap items-center justify-between gap-3 border-t border-slate-200 px-4 py-3 text-sm dark:border-slate-700"><span class="text-slate-600 dark:text-slate-300">Page {{ enquiries.query.page }} of {{ enquiries.total_pages }}</span><div class="flex gap-4">{% if previous_url %}<a href="{{ previous_url }}" class="font-semibold text-cyan-700 dark:text-cyan-400">Previous</a>{% endif %}{% if next_url %}<a href="{{ next_url }}" class="font-semibold text-cyan-700 dark:text-cyan-400">Next</a>{% endif %}</div></nav>
+    {% else %}
+    <div class="p-6 text-sm text-slate-600 dark:text-slate-300"><p class="font-semibold">No saved website enquiries match these filters.</p><p class="mt-2">Only submissions received by Selfcare appear here. Undelivered website submissions are not included.</p></div>
+    {% endif %}
+</section>
+{% endif %}

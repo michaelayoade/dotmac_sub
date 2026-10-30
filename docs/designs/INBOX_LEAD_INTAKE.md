@@ -5,6 +5,16 @@
 
 ## Purpose
 
+The website-to-WhatsApp attribution draft does not add a Lead creation decision.
+`sales.lead_lifecycle.create_party_lead` optionally composes a verified website
+handoff into the first immutable origin, for classified and existing manual
+creation paths alike. Native provider identifiers retain precedence as a family;
+the signed receipt retains website evidence. Receipt locking prevents a second
+claim. Resolution/validation failure is isolated through the owner savepoint,
+recorded safely after rollback and cannot suppress valid Lead creation. Existing
+Lead links and optional form enrichment never rewrite acquisition origin.
+See `WHATSAPP_WEBSITE_ATTRIBUTION.md` for the draft contract and validation gates.
+
 Lead intake turns a confident qualifying classification for an unknown prospect in
 a supported Meta Inbox conversation into a Party-first Lead. Lead creation does
 not depend on sending or completing a form. The form is optional enrichment for

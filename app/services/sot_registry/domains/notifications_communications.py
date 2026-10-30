@@ -2690,7 +2690,6 @@ DOMAIN = DomainSOT(
                 "communications.conversation_lead_relationships",
                 "sales.capture",
                 "sales.fiber_feasibility",
-                "communications.website_handoff_attribution",
             ),
             contract=_team_inbox_contract(
                 service_name="communications.team_inbox_processing",
@@ -3210,6 +3209,7 @@ DOMAIN = DomainSOT(
         SOTService(
             name="communications.team_inbox_contact_resolution",
             module="app.services.team_inbox_contact_links",
+            implementation_modules=("app.services.team_inbox_prospect_resolution",),
             owns=(
                 "contact subscriber reseller and ticket association resolution",
                 "reviewed contact association and projection repair",
@@ -3277,6 +3277,12 @@ DOMAIN = DomainSOT(
                         source="Conversation channel and normalized contact address.",
                     ),
                     AuthorityInput(
+                        name="prospect intake clearance evidence",
+                        owner="communications.team_inbox_contact_resolution",
+                        kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                        source="Owner-written contact_resolution and identity_correction evidence. Typed LeadIntakeResolutionQuery preserves ordinary unmatched eligibility, blocks open review and requires durable principal/time clearance plus fresh canonical no-match evidence for reviewed_no_match.",
+                    ),
+                    AuthorityInput(
                         name="conversation participant relationship",
                         owner="communications.team_inbox_participants",
                         kind=AuthorityKind.DERIVED_PROJECTION,
@@ -3329,6 +3335,7 @@ DOMAIN = DomainSOT(
                 ),
                 test_refs=(
                     "tests/test_team_inbox_contact_links.py",
+                    "tests/test_inbox_prospect_eligibility.py",
                     "tests/test_team_inbox_admin_contact_links.py",
                     "tests/test_repair_team_inbox_subscriber_links.py",
                     "tests/architecture/test_team_inbox_sot_contracts.py",
