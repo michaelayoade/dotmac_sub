@@ -350,7 +350,10 @@ def process_provider_observation(
                     "message": (str(data["message"]) if data.get("message") else None),
                     "submitted_at": observed_at,
                 }
-                if request_data["form_version"] == "fiber-coverage-v1":
+                if request_data["form_version"] in {
+                    "fiber-coverage-v1",
+                    "fiber-whatsapp-v1",
+                }:
                     request_data.update(
                         {
                             "attribution": {
@@ -378,6 +381,10 @@ def process_provider_observation(
                     selected_plan_name = data.get("selected_plan_name")
                     if selected_plan_name:
                         request_data["selected_plan"] = {"name": selected_plan_name}
+                    if data.get("whatsapp_account_id"):
+                        request_data["whatsapp_account_id"] = data[
+                            "whatsapp_account_id"
+                        ]
                 inbound_result = team_inbox_receive.receive_fiber_inquiry(
                     db,
                     payload=FiberInquiryRequest.model_validate(

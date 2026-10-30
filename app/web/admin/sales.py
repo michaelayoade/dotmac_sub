@@ -20,6 +20,7 @@ sales RBAC owner seeds the keys — the guards are in place regardless.
 from __future__ import annotations
 
 import logging
+from datetime import date
 from urllib.parse import urlencode
 from uuid import UUID
 
@@ -37,7 +38,13 @@ from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session
 
 from app.db import get_db
-from app.services import conversation_lead_relationships
+from app.schemas.website_enquiry import (
+    EnquiryLeadFilter,
+    EnquiryPageSize,
+    WebsiteEnquiryDetailQuery,
+    WebsiteEnquiryListQuery,
+)
+from app.services import conversation_lead_relationships, website_enquiry_queries
 from app.services import customer_search as customer_search_service
 from app.services import web_custom_fields as web_custom_fields_service
 from app.services import web_sales as web_sales_service
@@ -215,6 +222,115 @@ def sales_dashboard_data(
 # ---------------------------------------------------------------------------
 # Leads
 # ---------------------------------------------------------------------------
+
+
+@router.get(
+    "/website-enquiries",
+    response_class=HTMLResponse,
+    dependencies=[
+        Depends(require_permission("crm:lead:read")),
+        Depends(require_permission("support:ticket:read")),
+    ],
+)
+def website_enquiries_list(
+    request: Request,
+    search: str = Query(default="", max_length=200),
+    source: str = Query(default="", max_length=200),
+    campaign: str = Query(default="", max_length=200),
+    lead_filter: EnquiryLeadFilter = Query(default=EnquiryLeadFilter.all),
+    received_from: str | None = Query(default=None, max_length=10),
+    received_to: str | None = Query(default=None, max_length=10),
+    page: int = Query(default=1, ge=1),
+    per_page: EnquiryPageSize = Query(default=EnquiryPageSize.twenty_five),
+    db: Session = Depends(get_db),
+) -> HTMLResponse:
+    try:
+        query = WebsiteEnquiryListQuery(
+            search=search,
+            source=source,
+            campaign=campaign,
+            lead_filter=lead_filter,
+            received_from=date.fromisoformat(received_from) if received_from else None,
+            received_to=date.fromisoformat(received_to) if received_to else None,
+            page=page,
+            per_page=per_page,
+        )
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=422,
+            detail="Choose valid filters and a received-date range with From before To.",
+        ) from exc
+    status_code = 200
+    context = _ctx(request, db, "sales-enquiries")
+    try:
+        listing = website_enquiry_queries.list_website_enquiries(db, query=query)
+        query = listing.query
+    except SQLAlchemyError as exc:
+        db.rollback()
+        logger.warning(
+            "website_enquiries_read_unavailable",
+            extra={"error_type": type(exc).__name__},
+        )
+        listing = None
+        status_code = 503
+    params = query.model_dump(mode="json", exclude_none=True)
+    context.update(
+        query=query,
+        enquiries=listing,
+        previous_url=(
+            "/admin/sales/website-enquiries?"
+            + urlencode({**params, "page": query.page - 1})
+        )
+        if listing and query.page > 1
+        else None,
+        next_url=(
+            "/admin/sales/website-enquiries?"
+            + urlencode({**params, "page": query.page + 1})
+        )
+        if listing and query.page < listing.total_pages
+        else None,
+    )
+    return templates.TemplateResponse(
+        "admin/sales/website_enquiries/index.html",
+        context,
+        status_code=status_code,
+        headers={"Cache-Control": "private, no-store"},
+    )
+
+
+@router.get(
+    "/website-enquiries/{receipt_id}",
+    response_class=HTMLResponse,
+    dependencies=[
+        Depends(require_permission("crm:lead:read")),
+        Depends(require_permission("support:ticket:read")),
+    ],
+)
+def website_enquiry_detail(
+    request: Request, receipt_id: UUID, db: Session = Depends(get_db)
+) -> HTMLResponse:
+    status_code = 200
+    context = _ctx(request, db, "sales-enquiries")
+    try:
+        record = website_enquiry_queries.get_website_enquiry(
+            db, query=WebsiteEnquiryDetailQuery(receipt_id=receipt_id)
+        )
+    except SQLAlchemyError as exc:
+        db.rollback()
+        logger.warning(
+            "website_enquiry_read_unavailable", extra={"error_type": type(exc).__name__}
+        )
+        record = None
+        status_code = 503
+    if record is None and status_code == 200:
+        raise HTTPException(status_code=404, detail="Website enquiry was not found.")
+    context.update(enquiry_record=record, receipt_id=receipt_id)
+    return templates.TemplateResponse(
+        "admin/sales/website_enquiries/detail.html",
+        context,
+        status_code=status_code,
+        headers={"Cache-Control": "private, no-store"},
+    )
 
 
 @router.get(

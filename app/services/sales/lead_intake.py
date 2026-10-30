@@ -59,10 +59,13 @@ from app.schemas.lead_intake import (
 from app.schemas.lead_intake import (
     LeadIntakePartyType as LeadIntakePartyTypeValue,
 )
+from app.schemas.sales import LeadOriginCaptureCreate
+from app.schemas.website_handoff import InboxAcquisitionContext
 from app.services import (
     conversation_lead_relationships,
     team_inbox_operations,
     team_inbox_participants,
+    team_inbox_prospect_resolution,
 )
 from app.services import party as party_service
 from app.services.audit_adapter import stage_audit_event
@@ -651,11 +654,13 @@ def _manual_invitation_eligibility(
         return ManualInvitationEligibility(
             False, "This conversation channel cannot deliver a Lead intake form."
         )
-    resolution = dict((conversation.metadata_ or {}).get("contact_resolution") or {})
-    if (
-        conversation.subscriber_id is not None
-        or resolution.get("status") != "unmatched"
-    ):
+    resolution = team_inbox_prospect_resolution.lead_intake_resolution_eligibility(
+        db,
+        query=team_inbox_prospect_resolution.LeadIntakeResolutionQuery(
+            conversation_id=conversation.id
+        ),
+    )
+    if not resolution.eligible:
         return ManualInvitationEligibility(
             False, "Lead intake is only for people not linked to a customer account."
         )
@@ -889,19 +894,21 @@ def _materialize_lead_candidate(
         binding_reason=(
             "Party created atomically from a final Inbox AI sales classification"
         ),
-        origin_capture={
-            "capture_method": LeadCaptureMethod.inbox_classification.value,
-            "source_platform": LeadSourcePlatform.team_inbox.value,
-            "source_interaction_id": f"inbox-message:{message.id}",
-            "capture_fingerprint": fingerprint,
-            "external_ad_id": attribution.external_ad_id,
-            "external_click_id": attribution.campaign_ref,
-            "capture_source": "ai.intake",
-            "capture_reason": (
-                "Final shared AI intake result classified the Inbox conversation "
-                "as a sales prospect"
-            ),
-        },
+        origin_capture=LeadOriginCaptureCreate.model_validate(
+            {
+                "capture_method": LeadCaptureMethod.inbox_classification.value,
+                "source_platform": LeadSourcePlatform.team_inbox.value,
+                "source_interaction_id": f"inbox-message:{message.id}",
+                "capture_fingerprint": fingerprint,
+                "external_ad_id": attribution.external_ad_id,
+                "external_click_id": attribution.campaign_ref,
+                "capture_source": "ai.intake",
+                "capture_reason": (
+                    "Final shared AI intake result classified the Inbox conversation "
+                    "as a sales prospect"
+                ),
+            }
+        ),
         metadata={
             "origin_conversation_id": str(conversation.id),
             "origin_message_id": str(message.id),
@@ -920,6 +927,9 @@ def _materialize_lead_candidate(
         owner_agent_id=template.owner_system_user_id if template else None,
         pipeline_id=template.pipeline_id if template else None,
         stage_id=template.stage_id if template else None,
+        inbox_acquisition=InboxAcquisitionContext(
+            conversation_id=conversation.id, message_id=message.id
+        ),
     )
     team_inbox_participants.bind_endpoint_to_contact_point(
         db,
@@ -969,6 +979,7 @@ def _materialize_lead_candidate(
             "party_id": str(lead_party.id),
             "status": lead.status,
             "lead_source": lead.lead_source,
+            "origin_capture_id": str(lead.origin_capture.id),
             "origin_conversation_id": str(conversation.id),
         },
         actor=command.context.actor,
@@ -1874,14 +1885,16 @@ def submit_form(
                 lead_source=_lead_source(invitation.channel_type),
                 binding_source=OWNER,
                 binding_reason="Party created atomically from a completed Inbox lead-intake invitation",
-                origin_capture={
-                    "capture_method": LeadCaptureMethod.inbox_form.value,
-                    "source_platform": LeadSourcePlatform.team_inbox.value,
-                    "source_interaction_id": f"lead-intake:{invitation.id}",
-                    "capture_fingerprint": fingerprint,
-                    "capture_source": "public_inbox_lead_intake_form",
-                    "capture_reason": "Customer saved the single-use form issued from an unknown Meta Inbox conversation",
-                },
+                origin_capture=LeadOriginCaptureCreate.model_validate(
+                    {
+                        "capture_method": LeadCaptureMethod.inbox_form.value,
+                        "source_platform": LeadSourcePlatform.team_inbox.value,
+                        "source_interaction_id": f"lead-intake:{invitation.id}",
+                        "capture_fingerprint": fingerprint,
+                        "capture_source": "public_inbox_lead_intake_form",
+                        "capture_reason": "Customer saved the single-use form issued from an unknown Meta Inbox conversation",
+                    }
+                ),
                 region=address.state,
                 address=address.display_name,
                 metadata={
@@ -1900,6 +1913,9 @@ def submit_form(
                 owner_agent_id=template.owner_system_user_id,
                 pipeline_id=template.pipeline_id,
                 stage_id=template.stage_id,
+                inbox_acquisition=InboxAcquisitionContext(
+                    conversation_id=invitation.conversation_id
+                ),
             )
         conversation = _unknown_conversation(db, invitation.conversation_id)
         team_inbox_participants.bind_endpoint_to_contact_point(
@@ -1961,6 +1977,7 @@ def submit_form(
                 "status": lead.status,
                 "lead_source": lead.lead_source,
                 "origin_conversation_id": str(conversation.id),
+                "origin_capture_id": str(lead.origin_capture.id),
             },
             actor=command.context.actor,
         )

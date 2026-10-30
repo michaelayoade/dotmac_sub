@@ -1019,13 +1019,15 @@ DOMAIN = DomainSOT(
                 "Meta website Lead delivery lifecycle",
             ),
             depends_on=(
+                "sales.lead_lifecycle",
                 "events.store",
                 "integration.installations",
                 "integration.runtime",
                 "sales.capture",
             ),
             notes=(
-                "Only committed, new-connection fiber coverage Leads are eligible. "
+                "Only committed new-connection website or verified website-to-WhatsApp Leads are eligible. "
+                "AI and manual creation share the immutable origin; existing Lead links are ineligible. "
                 "The owner persists a PII-minimized delivery before any Meta call."
             ),
             contract=ServiceContract(
@@ -1061,11 +1063,13 @@ DOMAIN = DomainSOT(
                     ),
                     AuthorityInput(
                         name="immutable website Lead origin",
-                        owner="sales.capture",
+                        owner="sales.lead_lifecycle",
                         kind=AuthorityKind.AUTHORITATIVE_RECORD,
                         source=(
                             "LeadOriginCapture plus its signed IntegrationInbox observation: "
-                            "form, interest, submitted time, landing path, email, and phone."
+                            "form, interest, submitted time, landing path, email, and phone. "
+                            "Read the captured receipt; never resolve later conversations. "
+                            "WhatsApp uses origin creation time and requires explicit opt-in."
                         ),
                     ),
                     AuthorityInput(
@@ -1085,7 +1089,7 @@ DOMAIN = DomainSOT(
                         owner="integration.meta_capi_lead",
                         kind=AuthorityKind.CONTROL_INPUT,
                         source=(
-                            "Explicit fiber coverage/new-connection eligibility, deterministic "
+                            "Explicit fiber coverage/new-connection and verified WhatsApp handoff eligibility, deterministic "
                             "event identity, data minimization, bounded retry, and terminal states."
                         ),
                     ),

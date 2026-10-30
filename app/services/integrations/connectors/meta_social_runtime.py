@@ -948,6 +948,17 @@ class MetaCapiRunner:
         event_id = str(params.get("event_id") or "").strip()
         event_time = params.get("event_time")
         event_source_url = str(params.get("event_source_url") or "").strip()
+        action_source = str(params.get("action_source") or "website")
+        if action_source not in {"website", "system_generated"}:
+            return self._result(
+                envelope, OperationStatus.rejected, "action_source_invalid"
+            )
+        if action_source == "system_generated" and not config.get(
+            "report_whatsapp_leads", False
+        ):
+            return self._result(
+                envelope, OperationStatus.rejected, "whatsapp_reporting_disabled"
+            )
         user_data = params.get("user_data")
         if not event_id or not isinstance(event_time, int) or event_time <= 0:
             return self._result(
@@ -959,7 +970,9 @@ class MetaCapiRunner:
             return self._result(
                 envelope, OperationStatus.rejected, "event_source_url_invalid"
             )
-        if parsed_source.scheme != "https" or parsed_source.host != "fiber.dotmac.ng":
+        if action_source == "website" and (
+            parsed_source.scheme != "https" or parsed_source.host != "fiber.dotmac.ng"
+        ):
             return self._result(
                 envelope, OperationStatus.rejected, "event_source_url_invalid"
             )
@@ -1002,12 +1015,14 @@ class MetaCapiRunner:
                     "event_name": "Lead",
                     "event_time": event_time,
                     "event_id": event_id,
-                    "action_source": "website",
+                    "action_source": action_source,
                     "event_source_url": event_source_url,
                     "user_data": user_data,
                 }
             ]
         }
+        if action_source != "website":
+            payload["data"][0].pop("event_source_url", None)
         test_code = str(config.get("test_event_code") or "").strip()
         if test_code:
             payload["test_event_code"] = test_code

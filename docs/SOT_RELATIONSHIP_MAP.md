@@ -29,6 +29,34 @@ lists or service declarations.
 
 ## Modular conversion source evidence
 
+The website-to-WhatsApp attribution draft is described in
+`docs/designs/WHATSAPP_WEBSITE_ATTRIBUTION.md`.
+`communications.website_handoff_attribution` resolves signed website enquiry
+evidence against the received WhatsApp account, phone, reference and chronology.
+`sales.lead_intake` keeps its existing classified-Lead decision and transaction.
+`sales.lead_lifecycle` owns optional first-capture acquisition composition for
+automatic and authorized manual Inbox creation, locks each signed receipt's
+claim, and preserves native provider identifiers as a family over website IDs.
+The immutable origin links the signed receipt and FWA reference. Existing Lead
+links never rewrite origin or emit another creation event.
+The same owner supplies typed acquisition detail reads for the authorized Lead
+page. It validates the exact receipt's form/journey and exposes named original
+enquiry fields separately from current canonical contact details. The web
+adapter and template do not infer attribution or expose raw receipt JSON.
+The same acquisition read owner supplies the permission-guarded Sales website
+enquiry list/detail from retained Fiber receipts and exact origin links. Rows
+and totals share filters and never depend on conversation open/resolved state;
+unlinked receipts stay visible without inferred Lead creation or attribution.
+`integration.meta_capi_lead` projects only a committed eligible Lead, behind the
+explicit connector 1.1.0 reporting flag and reads saved evidence without resolving
+conversations again. `sales.marketing_conversion_projection` accepts these
+origins in its existing milestones. WhatsApp Lead time is creation time;
+coverage requires a real feasibility event. These are first-party URL observations,
+not provider-authenticated ad-click evidence. The generated manifest below must
+be regenerated and checked once the pinned private Kernel dependency is restored;
+the local generator currently fails to import that dependency. This draft is not
+architecture or deployment acceptance.
+
 Sub platform operations retains the bounded Kernel rehearsal responsibility.
 The [Kernel entry prototype](designs/KERNEL_LINEAGE_ENTRY_PROTOTYPE.md) is a
 disposable-fixture migration participant with caller-owned rollback, rather

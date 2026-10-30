@@ -7,6 +7,15 @@ fiber-website inquiry channels
 
 ## Decision
 
+The attribution draft adds a typed read query in
+`team_inbox_prospect_resolution.py` under the existing contact-resolution owner.
+Sales does not interpret PR 3784's `reviewed_no_match` status itself. Ordinary
+unmatched eligibility is retained; reviewed no-match requires durable principal
+and timestamp provenance plus a fresh exact canonical no-match result. Open,
+ambiguous, missing or invalid clearance remains blocked. This read path does not
+clear identity, create a Lead or change the existing classification workflow.
+Database regression and actual combined-branch acceptance remain release gates.
+
 The status owner exposes **Resolve as spam** only for chats with unresolved
 identity and no Customer/Lead link or pending required Lead materialization.
 It validates the same typed eligibility again during the locked transition and

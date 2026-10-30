@@ -39,6 +39,7 @@ from app.services.integrations.runtime_execution import (
     build_execution_context,
     make_operation_executor,
 )
+from app.services.lead_origin_values import AcquisitionEvidence
 from app.services.owner_commands import (
     CommandContext,
     OwnerCommandDefinition,
@@ -178,10 +179,30 @@ def _stage(db: Session, event: Event) -> StageResult:
     except (TypeError, ValueError):
         return StageResult(StageOutcome.ineligible)
     origin = db.get(LeadOriginCapture, origin_id)
-    if origin is None or origin.integration_inbox is None:
+    if origin is None:
         return StageResult(StageOutcome.ineligible)
-    inbox_payload = dict(origin.integration_inbox.payload_json or {})
-    if not (
+    if str(event.payload.get("lead_id") or "") != str(origin.lead_id):
+        return StageResult(StageOutcome.ineligible)
+    whatsapp_handoff = (
+        origin.source_platform == "team_inbox"
+        and origin.lead_source == "Whatsapp"
+        and AcquisitionEvidence(
+            external_form_id=origin.external_form_id,
+            integration_inbox_id=origin.integration_inbox_id,
+            journey_id=origin.journey_id,
+            customer_reference=origin.customer_reference,
+        ).is_whatsapp_handoff
+    )
+    inquiry = origin.integration_inbox
+    if inquiry is None:
+        return StageResult(StageOutcome.ineligible)
+    inbox_payload = dict(inquiry.payload_json or {})
+    if (
+        whatsapp_handoff
+        and str(inbox_payload.get("form_version") or "") != "fiber-whatsapp-v1"
+    ):
+        return StageResult(StageOutcome.ineligible)
+    if not whatsapp_handoff and not (
         origin.capture_source == "fiber.website_inquiry"
         and origin.source_platform == "website"
         and origin.external_form_id == "fiber-coverage-v1"
@@ -190,6 +211,12 @@ def _stage(db: Session, event: Event) -> StageResult:
         return StageResult(StageOutcome.ineligible)
     binding = _enabled_binding(db)
     if binding is None:
+        return StageResult(StageOutcome.disabled)
+    revision = binding.installation.current_config_revision
+    if whatsapp_handoff and not (
+        revision is not None
+        and (revision.config_json or {}).get("report_whatsapp_leads", False)
+    ):
         return StageResult(StageOutcome.disabled)
 
     event_id = meta_lead_event_id(origin.id)
@@ -208,7 +235,7 @@ def _stage(db: Session, event: Event) -> StageResult:
             "Meta CAPI Lead deduplicated",
             extra={
                 "lead_id": str(origin.lead_id),
-                "inquiry_id": str(origin.integration_inbox_id),
+                "inquiry_id": str(inquiry.id),
                 "event_id": event_id,
                 "delivery_state": existing.state,
             },
@@ -228,18 +255,25 @@ def _stage(db: Session, event: Event) -> StageResult:
     }
     if not user_data:
         return StageResult(StageOutcome.ineligible)
-    event_time = origin.submitted_at or origin.created_at
+    event_time = (
+        origin.created_at
+        if whatsapp_handoff
+        else origin.submitted_at or origin.created_at
+    )
     if event_time.tzinfo is None:
         event_time = event_time.replace(tzinfo=UTC)
     payload = {
         "lead_id": str(origin.lead_id),
-        "inquiry_id": str(origin.integration_inbox_id),
+        "inquiry_id": str(inquiry.id),
         "origin_capture_id": str(origin.id),
         "event_id": event_id,
         "event_time": int(event_time.timestamp()),
         "event_source_url": _source_url(origin.landing_path),
         "user_data": user_data,
     }
+    if whatsapp_handoff:
+        payload["action_source"] = "system_generated"
+        payload.pop("event_source_url", None)
     delivery = IntegrationDelivery(
         capability_binding_id=binding.id,
         source_event_id=str(event.event_id),
@@ -259,7 +293,7 @@ def _stage(db: Session, event: Event) -> StageResult:
         "Meta CAPI Lead queued",
         extra={
             "lead_id": str(origin.lead_id),
-            "inquiry_id": str(origin.integration_inbox_id),
+            "inquiry_id": str(inquiry.id),
             "event_id": event_id,
             "delivery_id": str(delivery.id),
             "delivery_state": delivery.state,

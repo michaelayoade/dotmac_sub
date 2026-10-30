@@ -55,6 +55,7 @@ from app.models.sales import (
 )
 from app.models.subscriber import Subscriber
 from app.schemas.sales import (
+    LeadOriginCaptureCreate,
     QuoteCreate,
     QuoteLineItemCreate,
     QuoteLineItemUpdate,
@@ -1756,7 +1757,9 @@ class Leads(ListResponseMixin):
                             db,
                             lead_id=duplicate.id,
                             lead_source=duplicate.lead_source,
-                            capture=origin_capture,
+                            capture=LeadOriginCaptureCreate.model_validate(
+                                origin_capture
+                            ),
                         )
                     except lead_lifecycle.LeadLifecycleError as exc:
                         db.rollback()
@@ -1841,7 +1844,7 @@ class Leads(ListResponseMixin):
                     db,
                     lead_id=lead.id,
                     lead_source=data["lead_source"],
-                    capture=origin_capture,
+                    capture=LeadOriginCaptureCreate.model_validate(origin_capture),
                 )
             _emit_lead_created(db, lead)
             db.commit()

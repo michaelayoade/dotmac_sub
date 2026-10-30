@@ -146,3 +146,74 @@ def test_subject_key_uses_boot_held_conversion_key(db_session, monkeypatch) -> N
     )
 
     assert len(_subject_key(origin)) == 64
+
+
+def test_whatsapp_origin_projects_all_real_milestones_once(
+    db_session, monkeypatch
+) -> None:
+    from tests.test_website_handoff_attribution import _manually_authored_handoff
+
+    monkeypatch.setattr(
+        "app.services.marketing_conversion_projection.settings",
+        SimpleNamespace(conversion_ingest_api_key="test-conversion-key"),
+    )
+    emitted: list[dict[str, object]] = []
+    monkeypatch.setattr(
+        "app.services.marketing_conversion_projection.emit_event",
+        lambda _db, _type, payload, **_kw: emitted.append(payload),
+    )
+    lead_id, origin_id = _manually_authored_handoff(db_session, monkeypatch)
+    cases = (
+        (EventType.lead_created, {}),
+        (EventType.lead_updated, {"status": "qualified"}),
+        (EventType.payment_received, {"amount": "1000", "currency": "NGN"}),
+        (EventType.appointment_scheduled, {}),
+        (EventType.subscription_activated, {}),
+    )
+    for event_type, extra in cases:
+        for attempt in range(2):
+            project_conversion_event(
+                db_session,
+                event=Event(
+                    event_type=event_type,
+                    payload={
+                        "lead_id": str(lead_id),
+                        "origin_capture_id": str(origin_id),
+                        **extra,
+                    },
+                ),
+                context=CommandContext.system(
+                    actor="pytest",
+                    scope="marketing:conversion-projection",
+                    reason="WhatsApp milestone regression",
+                    idempotency_key=f"whatsapp:{event_type.value}:{attempt}",
+                ),
+            )
+    assert len(emitted) == 6
+    assert "coverage_check" not in {item["stage"] for item in emitted}
+    for attempt in range(2):
+        project_conversion_event(
+            db_session,
+            event=Event(
+                event_type=EventType.fiber_coverage_evaluated,
+                payload={"lead_id": str(lead_id), "origin_capture_id": str(origin_id)},
+            ),
+            context=CommandContext.system(
+                actor="pytest",
+                scope="marketing:conversion-projection",
+                reason="real coverage event regression",
+                idempotency_key=f"real-coverage:{attempt}",
+            ),
+        )
+    assert len(emitted) == 7
+    assert sum(item["stage"] == "coverage_check" for item in emitted) == 1
+    assert all(
+        {"phone", "email", "address", "name"}.isdisjoint(item) for item in emitted
+    )
+    origin = db_session.get(LeadOriginCapture, origin_id)
+    lead_milestone = (
+        db_session.query(LeadConversionMilestone)
+        .filter_by(origin_capture_id=origin_id, stage="lead")
+        .one()
+    )
+    assert lead_milestone.occurred_at == origin.created_at

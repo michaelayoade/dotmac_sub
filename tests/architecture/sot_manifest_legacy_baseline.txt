@@ -121,7 +121,6 @@ runtime.db_sessions
 runtime.infrastructure_polling
 runtime.task_heartbeat
 runtime.task_idempotency
-sales.lead_lifecycle
 sales.selfserve
 sales.service
 scheduler.operations

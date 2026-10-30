@@ -233,6 +233,7 @@ class FiberWebsiteInquiryObservation:
     latitude: str | None = None
     longitude: str | None = None
     selected_plan_name: str | None = None
+    whatsapp_account_id: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -420,6 +421,11 @@ def _semantic_payload(
             "latitude": payload.get("latitude"),
             "longitude": payload.get("longitude"),
             "selected_plan_name": payload.get("selected_plan_name"),
+            **(
+                {"whatsapp_account_id": payload.get("whatsapp_account_id")}
+                if payload.get("form_version") == "fiber-whatsapp-v1"
+                else {}
+            ),
         }
 
     html_body = payload.get("html_body")

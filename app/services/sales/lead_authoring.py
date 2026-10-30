@@ -38,6 +38,8 @@ from app.models.service_team import ServiceTeamMember
 from app.models.subscriber import Reseller
 from app.models.system_user import SystemUser
 from app.models.team_inbox import InboxConversation, InboxParticipantRelationship
+from app.schemas.sales import LeadOriginCaptureCreate
+from app.schemas.website_handoff import InboxAcquisitionContext
 from app.services import (
     conversation_lead_relationships,
     team_inbox_contact_links,
@@ -923,7 +925,7 @@ def _operation(db: Session, command: AuthorLeadCommand) -> AuthorLeadOutcome:
         lead_source=source,
         binding_source="sales.lead_authoring",
         binding_reason="Person Party created atomically with the admin Lead",
-        origin_capture=origin,
+        origin_capture=LeadOriginCaptureCreate.model_validate(origin),
         region=region.name if region else None,
         notes=(command.notes or "").strip() or None,
         metadata=lead_metadata,
@@ -942,6 +944,9 @@ def _operation(db: Session, command: AuthorLeadCommand) -> AuthorLeadOutcome:
         ),
         is_active=command.is_active,
         reseller_id=reseller.id if reseller else None,
+        inbox_acquisition=InboxAcquisitionContext(conversation_id=conversation.id)
+        if conversation is not None
+        else None,
     )
     emit_event(
         db,
@@ -952,6 +957,7 @@ def _operation(db: Session, command: AuthorLeadCommand) -> AuthorLeadOutcome:
             "party_id": str(party.id),
             "status": lead.status,
             "lead_source": lead.lead_source,
+            "origin_capture_id": str(lead.origin_capture.id),
             "pipeline_id": str(lead.pipeline_id) if lead.pipeline_id else None,
         },
         actor=command.context.actor,

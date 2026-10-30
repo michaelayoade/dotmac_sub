@@ -35,6 +35,7 @@ from app.models.referral_native import (
     ReferralStatus,
 )
 from app.models.subscriber import Subscriber, SubscriberStatus
+from app.schemas.sales import LeadOriginCaptureCreate
 from app.services import party as party_service
 from app.services import settings_spec
 from app.services.audit_adapter import stage_audit_event
@@ -824,12 +825,14 @@ def _capture_operation(
         lead_source=_REFERRAL_LEAD_SOURCE,
         binding_source="referrals.program",
         binding_reason="Party created for this referral capture",
-        origin_capture={
-            "capture_method": "referral",
-            "source_platform": "referral",
-            "capture_source": values.source,
-            "capture_reason": "Prospect submitted through a referral code",
-        },
+        origin_capture=LeadOriginCaptureCreate.model_validate(
+            {
+                "capture_method": "referral",
+                "source_platform": "referral",
+                "capture_source": values.source,
+                "capture_reason": "Prospect submitted through a referral code",
+            }
+        ),
         region=values.region,
         address=values.address,
         notes=values.notes,

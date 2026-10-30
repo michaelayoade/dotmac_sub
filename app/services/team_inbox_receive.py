@@ -41,6 +41,7 @@ from app.services.events import emit_event
 from app.services.owner_commands import CommandContext, execute_owner_savepoint
 from app.services.realtime_platform import EventType as RealtimeEventType
 from app.services.sales import fiber_feasibility
+from app.services.website_handoff_values import handoff_reference
 
 logger = logging.getLogger(__name__)
 
@@ -215,8 +216,9 @@ def receive_fiber_inquiry(
         else:
             capture_party_id = subscriber.party_id
             capture_subscriber_id = subscriber.id
-    should_capture_lead = identity.status == "unmatched" or (
-        payload.is_coverage_request and identity.status == "linked_subscriber"
+    should_capture_lead = not payload.is_whatsapp_handoff and (
+        identity.status == "unmatched"
+        or (payload.is_coverage_request and identity.status == "linked_subscriber")
     )
     if should_capture_lead:
         lead_result = team_inbox_fiber_receive.capture_fiber_prospect(
@@ -303,6 +305,18 @@ def receive_fiber_inquiry(
                     ),
                 }
 
+    if payload.is_whatsapp_handoff:
+        coverage = {
+            "status": "manual_review",
+            "summary": "Your enquiry has been saved. Sales will review availability on WhatsApp.",
+        }
+    reference = (
+        handoff_reference(delivery_id)
+        if payload.is_whatsapp_handoff
+        else team_inbox_fiber_receive.fiber_customer_reference(delivery_id)
+        if payload.is_coverage_request and lead_result is not None
+        else None
+    )
     routing = team_inbox_routing.resolve_channel_routing_decision(
         db,
         channel_type=channel.value,
@@ -378,11 +392,7 @@ def receive_fiber_inquiry(
             "fiber_inquiry": metadata["fiber_inquiry"],
             "lead_id": str(lead_result.lead.id) if lead_result else None,
             "party_id": str(lead_result.party_id) if lead_result else None,
-            "reference": (
-                team_inbox_fiber_receive.fiber_customer_reference(delivery_id)
-                if payload.is_coverage_request and lead_result is not None
-                else None
-            ),
+            "reference": reference,
             "coverage": coverage,
         },
     )
@@ -436,11 +446,7 @@ def receive_fiber_inquiry(
         subscriber_id=str(identity.subscriber_id) if identity.subscriber_id else None,
         resolution_status=identity.status,
         lead_id=str(lead_result.lead.id) if lead_result else None,
-        reference=(
-            team_inbox_fiber_receive.fiber_customer_reference(delivery_id)
-            if payload.is_coverage_request and lead_result is not None
-            else None
-        ),
+        reference=reference,
         coverage=coverage,
     )
 

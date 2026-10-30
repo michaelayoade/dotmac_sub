@@ -1,5 +1,22 @@
 # CRM marketing and sales owner map
 
+## Website-to-WhatsApp attribution draft
+
+`sales.lead_lifecycle` remains the immutable origin owner for both automatically
+and manually created Inbox Leads. A signed `fiber-whatsapp-v1` enquiry records
+no Lead until an existing authorized creation command succeeds. First capture
+links its receipt, FWA reference and journey; native provider IDs take precedence
+as a family over website IDs. Existing Lead links preserve historical origin.
+`sales.marketing_conversion_projection` consumes this saved origin for visitor,
+Lead, qualification, payment, installation and activation milestones under the
+existing event owners and origin-stage idempotency. Visitor time is capture time;
+WhatsApp Lead time is creation time. Coverage requires a real feasibility event.
+`integration.meta_capi_lead` reads the same saved receipt for opt-in Meta Lead
+reporting; it does not re-resolve conversations or require an AI-specific label.
+These URL observations do not prove Meta click attribution. Validation gates and
+the unmerged identity-correction PR boundary are recorded in
+`WHATSAPP_WEBSITE_ATTRIBUTION.md`; this draft is not deployment acceptance.
+
 **Status:** Partially verified owner map; not a campaign or retention decision
 **As of:** 2026-08-17
 **Decision owner:** Michael

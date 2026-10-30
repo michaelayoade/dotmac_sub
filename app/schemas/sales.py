@@ -111,7 +111,10 @@ class LeadOriginCaptureCreate(BaseModel):
     source_interaction_id: str | None = Field(default=None, max_length=240)
     journey_id: UUID | None = None
     customer_reference: str | None = Field(
-        default=None, min_length=12, max_length=32, pattern=r"^FBR-[A-Z0-9]+$"
+        default=None,
+        min_length=12,
+        max_length=32,
+        pattern=r"^(?:FBR-[A-Z0-9]+|FWA-[A-F0-9]{24})$",
     )
     campaign_id: UUID | None = None
     campaign_recipient_id: UUID | None = None
@@ -130,6 +133,7 @@ class LeadOriginCaptureCreate(BaseModel):
     submitted_at: datetime | None = None
     capture_source: str = Field(min_length=1, max_length=80)
     capture_reason: str = Field(min_length=1)
+    capture_fingerprint: str | None = Field(default=None, pattern=r"^[a-f0-9]{64}$")
 
 
 class LeadContactObservation(BaseModel):

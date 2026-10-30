@@ -99,7 +99,7 @@ class FiberSelectedPlan(BaseModel):
 class FiberInquiryRequest(BaseModel):
     model_config = ConfigDict(extra="forbid", str_strip_whitespace=True, strict=True)
 
-    form_version: str = Field(pattern=r"^fiber-(?:contact|coverage)-v1$")
+    form_version: str = Field(pattern=r"^fiber-(?:contact|coverage|whatsapp)-v1$")
     full_name: str = Field(min_length=2, max_length=200)
     phone: str | None = Field(default=None, max_length=40)
     email: EmailStr | None = None
@@ -109,6 +109,7 @@ class FiberInquiryRequest(BaseModel):
     attribution: FiberAttribution | None = None
     location: FiberLocation | None = None
     selected_plan: FiberSelectedPlan | None = None
+    whatsapp_account_id: str | None = Field(default=None, pattern=r"^[0-9]{1,32}$")
 
     @field_validator("phone", "email", "message", mode="before")
     @classmethod
@@ -126,6 +127,13 @@ class FiberInquiryRequest(BaseModel):
 
     @model_validator(mode="after")
     def validate_version_contract(self) -> FiberInquiryRequest:
+        if self.is_whatsapp_handoff:
+            if not self.whatsapp_account_id:
+                raise ValueError("WhatsApp handoff requires the destination account")
+            if self.interest is not FiberInquiryInterest.new_connection:
+                raise ValueError("WhatsApp handoff requires a new connection enquiry")
+        elif self.whatsapp_account_id is not None:
+            raise ValueError("WhatsApp account is only valid for fiber-whatsapp-v1")
         if self.form_version == "fiber-contact-v1":
             if self.email is None:
                 raise ValueError("email is required for fiber-contact-v1")
@@ -153,6 +161,10 @@ class FiberInquiryRequest(BaseModel):
     @property
     def is_coverage_request(self) -> bool:
         return self.form_version == "fiber-coverage-v1"
+
+    @property
+    def is_whatsapp_handoff(self) -> bool:
+        return self.form_version == "fiber-whatsapp-v1"
 
 
 class FiberCoverageStatus(StrEnum):

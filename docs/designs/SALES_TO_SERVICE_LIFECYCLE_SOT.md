@@ -6,6 +6,17 @@
 
 ## Contract
 
+The website-to-WhatsApp attribution draft keeps `sales.lead_lifecycle` as the
+immutable origin owner. Typed `InboxAcquisitionContext` is optional evidence,
+not permission to create a Lead. Existing automatic/manual calling commands
+retain their transactions and decisions. Lifecycle locks a signed website
+receipt before first capture, preserves native provider identifiers as a family,
+and links the receipt, FWA reference and journey without relabeling WhatsApp as
+Website. An already captured origin cannot be repointed; linking an existing
+Lead never counts as another creation. Optional acquisition failure is recorded
+after owner savepoint rollback. This draft still requires the validation gates
+in `WHATSAPP_WEBSITE_ATTRIBUTION.md` before publication.
+
 ```text
 signed interaction / staff capture
   -> IntegrationInbox receipt (when external)

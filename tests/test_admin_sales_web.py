@@ -421,6 +421,8 @@ def test_lead_detail_context_includes_quotes(db_session):
     assert context["subscriber_label"]
     assert [str(item.id) for item in context["quotes"]] == [str(quote.id)]
     assert context["status_val"] == "new"
+    assert context["acquisition"].origin is None
+    assert context["acquisition"].enquiry_status == "not_recorded"
 
 
 def test_create_quote_context_preselects_lead_and_subscriber(db_session):

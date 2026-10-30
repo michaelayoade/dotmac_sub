@@ -1,0 +1,6 @@
+{% macro acquisition_fact(label, value) -%}
+<div class="min-w-0">
+    <dt class="text-xs font-semibold text-slate-500 dark:text-slate-400">{{ label }}</dt>
+    <dd class="mt-1 whitespace-pre-wrap break-words text-sm text-slate-700 dark:text-slate-300">{{ value if value is not none and value != '' else 'Not recorded' }}</dd>
+</div>
+{%- endmacro %}

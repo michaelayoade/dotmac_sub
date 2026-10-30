@@ -27,7 +27,13 @@ from tests.integration_platform_helpers import enable_capability
 from tests.test_fiber_inquiry_webhook import _binding, _coverage_payload, _post
 
 
-def _enable_capi(db_session, monkeypatch, *, token: str | None = None):
+def _enable_capi(
+    db_session,
+    monkeypatch,
+    *,
+    token: str | None = None,
+    report_whatsapp_leads: bool = False,
+):
     token = token or "test-meta-token"  # nosec B105 -- non-production fixture
     monkeypatch.setenv("META_CAPI_TEST_ACCESS_TOKEN", token)
     return enable_capability(
@@ -39,6 +45,7 @@ def _enable_capi(db_session, monkeypatch, *, token: str | None = None):
             "api_version": meta_capi.DEFAULT_API_VERSION,
             "timeout_seconds": 2,
             "max_attempts": 3,
+            "report_whatsapp_leads": report_whatsapp_leads,
         },
         secret_refs={"access_token": "env://META_CAPI_TEST_ACCESS_TOKEN"},
     )
@@ -50,6 +57,51 @@ def _delivery(db_session) -> IntegrationDelivery:
         .filter(IntegrationDelivery.event_type == "meta.capi.website_lead")
         .one()
     )
+
+
+@pytest.mark.parametrize("enabled", [False, True])
+def test_manual_whatsapp_lead_reporting_requires_opt_in_and_deduplicates(
+    db_session, monkeypatch, enabled
+):
+    from tests.test_website_handoff_attribution import _manually_authored_handoff
+
+    _enable_capi(db_session, monkeypatch, report_whatsapp_leads=enabled)
+    monkeypatch.setattr(meta_capi_lead, "queue_delivery", lambda _result: None)
+    lead_id, origin_id = _manually_authored_handoff(db_session, monkeypatch)
+    event = Event(
+        event_type=EventType.lead_created,
+        payload={"lead_id": str(lead_id), "origin_capture_id": str(origin_id)},
+    )
+    outcomes = []
+    for attempt in range(2):
+        result = meta_capi_lead.stage_lead(
+            db_session,
+            meta_capi_lead.StageMetaCapiLeadCommand(
+                context=CommandContext.system(
+                    actor="pytest",
+                    scope=meta_capi_lead.META_CAPI_STAGE_SCOPE,
+                    reason="manual acquisition reporting regression",
+                    idempotency_key=f"manual-capi:{attempt}",
+                ),
+                event=event,
+            ),
+        )
+        outcomes.append(result.outcome)
+    if not enabled:
+        assert outcomes == [meta_capi_lead.StageOutcome.disabled] * 2
+        assert db_session.query(IntegrationDelivery).count() == 0
+    else:
+        assert outcomes == [
+            meta_capi_lead.StageOutcome.queued,
+            meta_capi_lead.StageOutcome.deduplicated,
+        ]
+        delivery = _delivery(db_session)
+        assert delivery.payload_json["action_source"] == "system_generated"
+        assert "event_source_url" not in delivery.payload_json
+        origin = db_session.get(LeadOriginCapture, origin_id)
+        assert delivery.payload_json["event_time"] == int(
+            origin.created_at.replace(tzinfo=UTC).timestamp()
+        )
 
 
 def _deliver(db_session, delivery: IntegrationDelivery) -> IntegrationDelivery:
