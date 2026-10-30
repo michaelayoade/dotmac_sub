@@ -547,6 +547,13 @@ SELECT has_schema_privilege('dotmac_app', 'public', 'CREATE');  -- expect false
 SELECT has_schema_privilege('app_admin', 'public', 'CREATE');   -- expect true
 ```
 
+Known widening: the grant step re-applies full DML to `dotmac_app` on every
+`app_admin`-owned table on every run, so a `REVOKE` from `dotmac_app` in a
+migration does not hold; it is silently undone at the end of the run. Do not rely
+on `REVOKE` to make a table append-only or read-only for the runtime. Tracked
+follow-up: an explicit exclusions file (like the SECURITY DEFINER allowlist) for
+tables that must not get full DML.
+
 Do not grant `CREATE` on `public` to `dotmac_app` to make a migration pass: a
 failure at the grant step means the migration created something the contract
 refuses, or `app_admin` lacks `CREATE`. Mixed ownership is expected: objects
