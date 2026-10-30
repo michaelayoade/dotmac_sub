@@ -18,10 +18,12 @@ from app.migration_ownership import (
     MigrationOwnershipError,
     MigratorPosture,
     OwnedObject,
+    assert_public_schema_posture,
     grant_runtime_privileges,
     load_definer_allowlist,
     migrator_violations,
     plan_runtime_grants,
+    public_schema_findings,
     runtime_role_from_environ,
     unowned_bypass_violation,
 )
@@ -220,19 +222,34 @@ class _Rows:
 
 
 class FakeConnection:
-    """Replays one snapshot, records GRANTs, answers the privilege proof."""
+    """Replays one snapshot, records GRANTs, answers the privilege proof.
+
+    ``held`` are oids that already hold every privilege; everything else lacks
+    them until a GRANT ran, after which ``still_missing`` (default none) is
+    what the proof reports.
+    """
 
     def __init__(
-        self, snapshot: list[OwnedObject], *, missing: list[str] | None = None
+        self,
+        snapshot: list[OwnedObject],
+        *,
+        held: set[int] | None = None,
+        still_missing: list[str] | None = None,
     ):
         self.snapshot = snapshot
-        self.missing = missing or []
+        self.held = held or set()
+        self.still_missing = still_missing or []
         self.executed: list[str] = []
+        self.granted: set[int] = set()
 
-    def execute(self, statement: object, params: object = None) -> _Rows:
+    def execute(self, statement: object, params: Any = None) -> _Rows:
         sql = str(statement)
         if "has_table_privilege" in sql or "has_sequence_privilege" in sql:
-            return _Rows([(p,) for p in self.missing])
+            if params["oid"] in self.held:
+                return _Rows([])
+            if params["oid"] not in self.granted:
+                return _Rows([(p,) for p in params["privs"]])
+            return _Rows([(p,) for p in self.still_missing])
         return _Rows(
             [
                 (
@@ -253,28 +270,34 @@ class FakeConnection:
 
     def exec_driver_sql(self, statement: str) -> None:
         self.executed.append(statement)
+        for obj in self.snapshot:
+            if f" {obj.ident} TO " in statement:
+                self.granted.add(obj.oid)
 
 
-def grant(conn: FakeConnection, *, before=(), **kw: Any) -> int:
+def grant(conn: FakeConnection) -> int:
     return grant_runtime_privileges(
-        conn,
-        runtime_role="dotmac_app",
-        before=before,
-        definer_allowlist=frozenset(),
-        **kw,
+        conn, runtime_role="dotmac_app", definer_allowlist=frozenset()
     )
 
 
-def test_grant_step_grants_only_new_objects_and_proves_them() -> None:
-    before = [table("old", 1)]
-    conn = FakeConnection([*before, table("new", 2), index("ix_new", 3)])
-    assert grant(conn, before=before) == 1
+def test_grant_step_grants_what_is_missing_and_skips_what_is_held() -> None:
+    conn = FakeConnection(
+        [table("old", 1), table("new", 2), index("ix_new", 3)], held={1}
+    )
+    assert grant(conn) == 1
     assert conn.executed == [f'GRANT {DML} ON TABLE public.new TO "dotmac_app"']
 
 
-def test_grant_step_can_be_read_only() -> None:
+def test_a_retry_after_a_partial_commit_grants_objects_from_the_earlier_run() -> None:
+    """Objects committed by an earlier (failed) run are not 'new' to this one."""
+    conn = FakeConnection([table("committed_earlier", 1), table("also_earlier", 2)])
+    assert grant(conn) == 2
+
+
+def test_version_table_is_only_ever_granted_select() -> None:
     conn = FakeConnection([table("alembic_version", 2)])
-    grant(conn, read_only=True)
+    grant(conn)
     assert conn.executed == [
         'GRANT SELECT ON TABLE public.alembic_version TO "dotmac_app"'
     ]
@@ -287,10 +310,69 @@ def test_refusal_aborts_before_any_grant() -> None:
     assert conn.executed == []
 
 
+def test_an_existing_view_that_lost_security_invoker_is_refused() -> None:
+    """CREATE OR REPLACE VIEW / ALTER VIEW RESET on an already-granted view."""
+    weakened = OwnedObject(
+        "pg_class", 9, "v", "public.v_old", "public.v_old", security_invoker=False
+    )
+    conn = FakeConnection([weakened], held={9})
+    with pytest.raises(MigrationOwnershipError, match="security_invoker"):
+        grant(conn)
+
+
+def test_an_existing_function_made_security_definer_is_refused() -> None:
+    conn = FakeConnection([func("was_plain", 5, secdef=True)])
+    with pytest.raises(MigrationOwnershipError, match="not in the definer allowlist"):
+        grant(conn)
+
+
 def test_grant_step_raises_when_a_privilege_is_not_held_afterwards() -> None:
-    conn = FakeConnection([table("stuck", 2)], missing=["DELETE"])
+    conn = FakeConnection([table("stuck", 2)], still_missing=["DELETE"])
     with pytest.raises(MigrationOwnershipError, match="lacks planned privileges"):
         grant(conn)
+
+
+def test_public_create_is_refused_for_the_migrator_and_only_reported_for_runtime() -> (
+    None
+):
+    refusals, reports = public_schema_findings(
+        migrator_can_create=False, runtime_can_create=False, runtime_role="dotmac_app"
+    )
+    assert len(refusals) == 1 and reports == ()
+    refusals, reports = public_schema_findings(
+        migrator_can_create=True, runtime_can_create=True, runtime_role="dotmac_app"
+    )
+    assert refusals == () and "dotmac_app holds CREATE" in reports[0]
+    assert public_schema_findings(
+        migrator_can_create=True, runtime_can_create=False, runtime_role="dotmac_app"
+    ) == ((), ())
+
+
+class _PostureConnection:
+    def __init__(self, migrator: bool, runtime: bool) -> None:
+        self.row = (migrator, runtime)
+
+    def execute(self, _statement: object, _params: object = None):
+        rows = [self.row]
+
+        class _Result:
+            def fetchall(self) -> list[tuple[bool, bool]]:
+                return rows
+
+        return _Result()
+
+
+def test_posture_check_raises_without_migrator_create_and_reports_runtime_create() -> (
+    None
+):
+    with pytest.raises(MigrationOwnershipError, match="lacks CREATE"):
+        assert_public_schema_posture(
+            _PostureConnection(False, False), runtime_role="dotmac_app"
+        )
+    reports = assert_public_schema_posture(
+        _PostureConnection(True, True), runtime_role="dotmac_app"
+    )
+    assert len(reports) == 1
 
 
 def test_runtime_role_prefers_the_new_name_and_accepts_the_legacy_one() -> None:
@@ -373,12 +455,10 @@ def test_env_grants_inside_the_migration_transaction_and_before_commit() -> None
     body = ENV[ENV.index("def run_migrations_online") :]
     # Bootstrap table: granted before the intermediate commit.
     assert body.index("grant_runtime_privileges(") < body.index("connection.commit()")
-    # Migrations: snapshot, run, grant, all inside begin_transaction.
+    # Migrations: run, then grant, inside begin_transaction.
     inside = body[body.index("with context.begin_transaction():") :]
-    assert (
-        inside.index("snapshot_owned_objects(connection)")
-        < inside.index("context.run_migrations()")
-        < inside.index("grant_runtime_privileges(")
+    assert inside.index("context.run_migrations()") < inside.index(
+        "grant_runtime_privileges("
     )
 
 

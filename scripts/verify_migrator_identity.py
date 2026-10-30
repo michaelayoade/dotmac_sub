@@ -30,6 +30,7 @@ from app.migration_ownership import (
     RUNTIME_ROLE_ENV_VAR,
     MigrationOwnershipError,
     assert_migrator_identity,
+    assert_public_schema_posture,
     runtime_role_from_environ,
 )
 
@@ -51,10 +52,13 @@ def main() -> int:
             connection.execute("SET TRANSACTION READ ONLY")
             try:
                 assert_migrator_identity(connection, owner=owner)
+                reports = assert_public_schema_posture(connection, runtime_role=owner)
             except MigrationOwnershipError as exc:
                 print(f"MIGRATOR IDENTITY REFUSED: {exc}", file=sys.stderr)
                 return 1
             connection.rollback()
+            for report in reports:
+                print(f"MIGRATOR IDENTITY NOTE: {report}", file=sys.stderr)
     except psycopg.Error:
         print(
             "database connection or identity query failed; connection details "

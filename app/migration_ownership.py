@@ -25,7 +25,7 @@ from __future__ import annotations
 
 import re
 from collections.abc import Iterable, Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any, Final
 
@@ -163,7 +163,8 @@ def plan_runtime_grants(
     definer_allowlist: frozenset[str],
     table_privileges: tuple[str, ...] = TABLE_PRIVILEGES,
 ) -> GrantPlan:
-    """Decide what the runtime role is granted on each NEW object, or refuse it.
+    """Decide what the runtime role is granted on each migrator-owned object, or
+    refuse it.
 
     Tables and security_invoker views get ``table_privileges``; sequences
     (standalone and column-owned alike) get USAGE/SELECT/UPDATE. Indexes, TOAST
@@ -407,64 +408,130 @@ SELECT p FROM unnest(CAST(:privs AS text[])) AS p
 """
 
 
+def _privilege_gaps(connection: Any, *, role: str, item: GrantItem) -> list[str]:
+    sql = (
+        _MISSING_SEQUENCE_PRIVILEGES_SQL
+        if item.is_sequence
+        else _MISSING_TABLE_PRIVILEGES_SQL
+    )
+    rows = _query(
+        connection,
+        sql,
+        {"privs": list(item.privileges), "role": role, "oid": item.oid},
+    )
+    return [str(row[0]) for row in rows]
+
+
 def missing_grants(
     connection: Any, *, role: str, items: Iterable[GrantItem]
 ) -> tuple[str, ...]:
     """Prove ``role`` holds every planned privilege (catalog check, not trust)."""
 
-    problems: list[str] = []
-    for item in items:
-        sql = (
-            _MISSING_SEQUENCE_PRIVILEGES_SQL
-            if item.is_sequence
-            else _MISSING_TABLE_PRIVILEGES_SQL
-        )
-        rows = _query(
-            connection,
-            sql,
-            {"privs": list(item.privileges), "role": role, "oid": item.oid},
-        )
-        problems.extend(f"{item.ident}: {role} lacks {row[0]}" for row in rows)
-    return tuple(problems)
+    return tuple(
+        f"{item.ident}: {role} lacks {priv}"
+        for item in items
+        for priv in _privilege_gaps(connection, role=role, item=item)
+    )
+
+
+#: The runtime reads the revision; only the migrator writes it.
+_READ_ONLY_TABLES: Final = frozenset({"alembic_version", "public.alembic_version"})
 
 
 def grant_runtime_privileges(
     connection: Any,
     *,
     runtime_role: str,
-    before: Iterable[OwnedObject],
     definer_allowlist: frozenset[str],
-    read_only: bool = False,
 ) -> int:
-    """Grant ``runtime_role`` access to everything created since ``before``.
+    """Make ``runtime_role`` fully granted on everything the migrator owns.
 
-    Runs inside the caller's transaction. Raises (rolling the whole run back)
-    on a refused object or if a planned privilege is not held afterwards.
-    ``read_only`` limits tables to SELECT (the ``alembic_version`` bootstrap).
-    Returns the number of ``GRANT`` statements issued.
+    Runs inside the caller's transaction. The refusal checks run over EVERY
+    migrator-owned object, not only the ones this run created, so a migration
+    that weakens an existing one (a view losing ``security_invoker``, a
+    function turned SECURITY DEFINER) is caught too. Grants are issued for
+    every migrator-owned relation or sequence that still lacks a planned
+    privilege, so a retry after a partial commit (``autocommit_block``,
+    ``CONCURRENTLY``) still ends fully granted. Raises (rolling the run back)
+    on a refusal or if a planned privilege is not held afterwards. Returns the
+    number of ``GRANT`` statements issued.
     """
 
-    known = {obj.key for obj in before}
-    after = snapshot_owned_objects(connection)
     plan = plan_runtime_grants(
-        (obj for obj in after if obj.key not in known),
+        snapshot_owned_objects(connection),
         definer_allowlist=definer_allowlist,
-        table_privileges=READ_ONLY_PRIVILEGES if read_only else TABLE_PRIVILEGES,
     )
     if plan.refusals:
         raise MigrationOwnershipError(
-            f"migration created objects that cannot be granted to {runtime_role}: "
+            f"migrator-owned objects that cannot be granted to {runtime_role}: "
             + "; ".join(plan.refusals)
         )
-    for statement in plan.statements(runtime_role):
-        _statement(connection, statement)
-    gaps = missing_grants(connection, role=runtime_role, items=plan.items)
-    if gaps:
-        raise MigrationOwnershipError(
-            f"runtime role {runtime_role} lacks planned privileges after the "
-            "grant step: " + "; ".join(gaps)
+    issued = 0
+    for item in plan.items:
+        if not item.is_sequence and item.ident in _READ_ONLY_TABLES:
+            item = replace(item, privileges=READ_ONLY_PRIVILEGES)
+        if _privilege_gaps(connection, role=runtime_role, item=item):
+            _statement(connection, item.statement(runtime_role))
+            issued += 1
+            gaps = _privilege_gaps(connection, role=runtime_role, item=item)
+            if gaps:
+                raise MigrationOwnershipError(
+                    f"runtime role {runtime_role} lacks planned privileges after "
+                    f"the grant step: {item.ident}: " + ", ".join(gaps)
+                )
+    return issued
+
+
+PUBLIC_POSTURE_SQL: Final = (
+    "SELECT has_schema_privilege(current_user, 'public', 'CREATE'), "
+    "has_schema_privilege(CAST(:role AS text), 'public', 'CREATE')"
+)
+
+
+def public_schema_findings(
+    *, migrator_can_create: bool, runtime_can_create: bool, runtime_role: str
+) -> tuple[tuple[str, ...], tuple[str, ...]]:
+    """``(refusals, reports)`` for CREATE on ``public``.
+
+    The migrator must be able to create there or every migration fails. The
+    runtime role holding CREATE is legacy state: reported, never refused.
+    """
+
+    refusals = (
+        ()
+        if migrator_can_create
+        else (
+            "the migrator lacks CREATE on schema public; migrations cannot create "
+            "objects (the runtime role must not be given it instead)",
         )
-    return len(plan.items)
+    )
+    reports = (
+        (
+            f"{runtime_role} holds CREATE on schema public; the grant model does not need it",
+        )
+        if runtime_can_create
+        else ()
+    )
+    return refusals, reports
+
+
+def assert_public_schema_posture(
+    connection: Any, *, runtime_role: str
+) -> tuple[str, ...]:
+    """Refuse if the migrator lacks CREATE on public; return reports otherwise."""
+
+    row = _query(connection, PUBLIC_POSTURE_SQL, {"role": runtime_role})[0]
+    refusals, reports = public_schema_findings(
+        migrator_can_create=bool(row[0]),
+        runtime_can_create=bool(row[1]),
+        runtime_role=runtime_role,
+    )
+    if refusals:
+        raise MigrationOwnershipError(
+            f"migration identity does not satisfy {CONTRACT_NAME}: "
+            + "; ".join(refusals)
+        )
+    return reports
 
 
 __all__ = [
@@ -479,11 +546,13 @@ __all__ = [
     "OwnedObject",
     "assert_migrator_identity",
     "assert_owner_variable_set_for_bypass",
+    "assert_public_schema_posture",
     "grant_runtime_privileges",
     "load_definer_allowlist",
     "migrator_violations",
     "missing_grants",
     "plan_runtime_grants",
+    "public_schema_findings",
     "runtime_role_from_environ",
     "snapshot_owned_objects",
     "unowned_bypass_violation",

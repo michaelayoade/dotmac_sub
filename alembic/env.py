@@ -23,7 +23,6 @@ from app.migration_ownership import (
     grant_runtime_privileges,
     load_definer_allowlist,
     runtime_role_from_environ,
-    snapshot_owned_objects,
 )
 from app.migration_schema_ops import install_idempotent_schema_ops
 from app.models import (  # noqa: F401
@@ -240,7 +239,6 @@ def run_migrations_online() -> None:
         if owner is not None:
             assert_migrator_identity(connection, owner=owner)
             allowlist = load_definer_allowlist(DEFINER_ALLOWLIST_PATH)
-            before_bootstrap = snapshot_owned_objects(connection)
 
         ensure_alembic_version_table(connection)
         if owner is not None:
@@ -250,9 +248,7 @@ def run_migrations_online() -> None:
             grant_runtime_privileges(
                 connection,
                 runtime_role=owner,
-                before=before_bootstrap,
                 definer_allowlist=allowlist,
-                read_only=True,
             )
         connection.commit()
 
@@ -265,13 +261,11 @@ def run_migrations_online() -> None:
         install_idempotent_schema_ops()
 
         with context.begin_transaction():
-            before = snapshot_owned_objects(connection) if owner else ()
             context.run_migrations()
             if owner is not None:
                 grant_runtime_privileges(
                     connection,
                     runtime_role=owner,
-                    before=before,
                     definer_allowlist=allowlist,
                 )
 

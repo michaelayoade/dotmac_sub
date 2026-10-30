@@ -528,12 +528,19 @@ migrator owns. `alembic/env.py` refuses, and rolls the whole run back on:
 `SECURITY DEFINER` functions outside `alembic/definer_owner_allowlist.txt`,
 materialized views, views without `security_invoker=true` (an `app_admin`-owned
 view would read RLS tables with the owner's BYPASSRLS), new schemas and any
-unknown object kind. It then proves the grants from the catalog before commit.
+unknown object kind. These refusals run over every `app_admin`-owned object,
+not only new ones (so a later `CREATE OR REPLACE VIEW` that drops
+`security_invoker`, or a function turned `SECURITY DEFINER`, is caught). The
+grant step also covers any `app_admin`-owned relation or sequence still missing
+a grant, so a retry after a partially committed run ends fully granted. It then
+proves the grants from the catalog before commit.
 
 `scripts/deploy.sh` passes the runtime role as `MIGRATION_RUNTIME_ROLE=dotmac_app`
 (fixed, not configurable). The previous name `MIGRATION_OBJECT_OWNER` is still
 read by the migration code as an alias and means the same thing (grant, not
-ownership transfer). Preflight check, read-only:
+ownership transfer). The read-only pre-pin identity check (`scripts/verify_migrator_identity.py`)
+refuses the deploy if `app_admin` lacks `CREATE` on `public`, and only prints a
+note if `dotmac_app` still holds it. Equivalent manual check:
 
 ```sql
 SELECT has_schema_privilege('dotmac_app', 'public', 'CREATE');  -- expect false

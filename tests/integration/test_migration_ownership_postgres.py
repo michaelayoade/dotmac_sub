@@ -17,6 +17,7 @@ from sqlalchemy.engine import URL
 from app.migration_ownership import (
     MigrationOwnershipError,
     assert_migrator_identity,
+    assert_public_schema_posture,
     grant_runtime_privileges,
     snapshot_owned_objects,
 )
@@ -55,13 +56,11 @@ def migrator_connection(isolated_database: URL):
         conn.rollback()
 
 
-def grant(conn, *, before, allowlist=frozenset(), **kw) -> int:
+def grant(conn, *, before=None, allowlist=frozenset()) -> int:
+    """`before` is accepted for readability only: the step covers every
+    migrator-owned object, not just the ones created since."""
     return grant_runtime_privileges(
-        conn,
-        runtime_role="dotmac_app",
-        before=before,
-        definer_allowlist=allowlist,
-        **kw,
+        conn, runtime_role="dotmac_app", definer_allowlist=allowlist
     )
 
 
@@ -259,14 +258,18 @@ def test_existing_runtime_owned_objects_are_left_alone(migrator_connection) -> N
     }
 
 
-def test_the_version_table_bootstrap_grant_is_read_only(migrator_connection) -> None:
+def test_a_table_named_alembic_version_is_granted_select_only(
+    migrator_connection,
+) -> None:
     conn = migrator_connection
     before = snapshot_owned_objects(conn)
-    conn.execute("CREATE TABLE public.zz_version (version_num varchar(255))")
-    assert grant(conn, before=before, read_only=True) == 1
+    conn.execute("CREATE TABLE public.alembic_version (version_num varchar(255))")
+    assert grant(conn, before=before) == 1
     as_runtime(conn)
-    assert conn.execute("SELECT count(*) FROM public.zz_version").fetchone() == (0,)
-    denied(conn, "INSERT INTO public.zz_version VALUES ('x')")
+    assert conn.execute("SELECT count(*) FROM public.alembic_version").fetchone() == (
+        0,
+    )
+    denied(conn, "INSERT INTO public.alembic_version VALUES ('x')")
 
 
 def test_an_unlisted_security_definer_function_aborts_the_run(
@@ -335,3 +338,62 @@ def test_a_new_schema_is_refused_rather_than_skipped(migrator_connection) -> Non
     conn.execute("CREATE SCHEMA zz_own_schema")
     with pytest.raises(MigrationOwnershipError, match="pg_namespace"):
         grant(conn, before=before)
+
+
+def test_a_view_that_loses_security_invoker_later_is_refused(
+    migrator_connection,
+) -> None:
+    conn = migrator_connection
+    before = snapshot_owned_objects(conn)
+    conn.execute("CREATE TABLE public.zz_wk_t (id int)")
+    conn.execute(
+        "CREATE VIEW public.zz_wk_v WITH (security_invoker = true) "
+        "AS SELECT id FROM public.zz_wk_t"
+    )
+    grant(conn, before=before)
+    # A later migration weakens the already-granted view.
+    conn.execute("ALTER VIEW public.zz_wk_v RESET (security_invoker)")
+    with pytest.raises(MigrationOwnershipError, match="security_invoker"):
+        grant(conn)
+
+
+def test_an_existing_function_turned_security_definer_is_refused(
+    migrator_connection,
+) -> None:
+    conn = migrator_connection
+    conn.execute(
+        "CREATE FUNCTION public.zz_wk_fn() RETURNS integer LANGUAGE sql "
+        "SET search_path = '' AS 'SELECT 1'"
+    )
+    grant(conn)
+    conn.execute("ALTER FUNCTION public.zz_wk_fn() SECURITY DEFINER")
+    with pytest.raises(MigrationOwnershipError, match="not in the definer allowlist"):
+        grant(conn)
+
+
+def test_a_retry_grants_objects_a_failed_earlier_run_already_committed(
+    migrator_connection,
+) -> None:
+    """Objects left ungranted by a partial commit are granted on the next run."""
+    conn = migrator_connection
+    conn.execute("CREATE TABLE public.zz_retry_t (id serial PRIMARY KEY)")
+    # No grant ran (the earlier run died); this run creates nothing itself.
+    assert grant(conn) == 2  # the table and its serial sequence
+    as_runtime(conn)
+    conn.execute("INSERT INTO public.zz_retry_t DEFAULT VALUES")
+    as_migrator(conn)
+    assert grant(conn) == 0
+
+
+def test_the_posture_check_sees_create_on_public(migrator_connection) -> None:
+    conn = migrator_connection
+    assert assert_public_schema_posture(conn, runtime_role="dotmac_app") == ()
+    conn.execute("RESET ROLE")
+    conn.execute("GRANT CREATE ON SCHEMA public TO dotmac_app")
+    as_migrator(conn)
+    assert len(assert_public_schema_posture(conn, runtime_role="dotmac_app")) == 1
+    conn.execute("RESET ROLE")
+    conn.execute("REVOKE CREATE ON SCHEMA public FROM dotmac_app, app_admin")
+    as_migrator(conn)
+    with pytest.raises(MigrationOwnershipError, match="lacks CREATE"):
+        assert_public_schema_posture(conn, runtime_role="dotmac_app")
