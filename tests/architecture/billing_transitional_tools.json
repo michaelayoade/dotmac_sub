@@ -70,6 +70,20 @@
       "baseline_lines": 117,
       "deletion_trigger": "Delete after the opening import is sealed in dotmac-billing and the final rehearsal artifact is archived.",
       "owner": "michaelayoade"
+    },
+    {
+      "path": "app/services/billing/opening_verifier.py",
+      "purpose": "Read-only Gap B opening verifier provider (import V2, window provision, seal) recomputing from pinned census/assembly/sidecar bytes; Step 5 Phase B + Step 6.",
+      "baseline_lines": 1165,
+      "deletion_trigger": "Delete when the opening window is sealed in dotmac-billing and the final rehearsal/cutover evidence is archived.",
+      "owner": "michaelayoade"
+    },
+    {
+      "path": "scripts/migration/billing_opening_authority.py",
+      "purpose": "Read-only draft/verify CLI for Gap B authority statements.",
+      "baseline_lines": 185,
+      "deletion_trigger": "Delete when the opening window is sealed in dotmac-billing and the final rehearsal/cutover evidence is archived.",
+      "owner": "michaelayoade"
     }
   ]
 }
