@@ -1,6 +1,27 @@
 {% extends "layouts/customer.html" %}
 {% from "components/ui/macros.html" import status_presentation_badge %}
 
+{% macro support_card(support_result, chat_live_enabled, customer) %}
+<aside class="flex flex-col rounded-2xl border border-stone-200 bg-white p-5 dark:border-stone-700 dark:bg-stone-800" aria-label="Support requests">
+    <p class="text-sm text-stone-500 dark:text-stone-400">Support</p>
+    {% if support_result.is_present %}
+        {% set support = support_result.value %}
+        <p class="mt-3 font-display text-xl font-bold text-stone-950 dark:text-white">{{ support.open_count }} open request{{ '' if support.open_count == 1 else 's' }}</p>
+        {% if support.latest_ticket_number %}<p class="mt-2 text-sm text-stone-600 dark:text-stone-300">Latest: {{ support.latest_ticket_number }}{% if support.latest_status_label %} · {{ support.latest_status_label }}{% endif %}</p>{% endif %}
+        {% if support.latest_updated_at %}<p class="mt-1 text-xs text-stone-500 dark:text-stone-400">Updated {{ support.latest_updated_at | portal_datetime('%d %b, %I:%M %p') }}</p>{% endif %}
+    {% else %}
+        <p class="mt-3 font-semibold text-stone-900 dark:text-white">Support requests unavailable</p>
+        <p class="mt-1 text-sm text-stone-500 dark:text-stone-400">We can't confirm your open requests right now.</p>
+    {% endif %}
+    <a href="/portal/support" class="mt-3 text-sm font-semibold text-[var(--color-brand-700)] hover:underline dark:text-[var(--color-brand-300)]">View requests <span aria-hidden="true">→</span></a>
+    {% if chat_live_enabled and not (customer and customer.read_only) %}
+    <button type="button" onclick="window.dmLiveChat && window.dmLiveChat.openWith('/portal/chat/session')" class="mt-auto w-full rounded-xl bg-[var(--color-brand-900)] px-4 py-3 text-sm font-semibold text-white transition hover:bg-[var(--color-brand-800)]">Chat with us</button>
+    {% elif not (customer and customer.read_only) %}
+    <a href="/portal/support/new" class="mt-auto inline-flex w-full justify-center rounded-xl bg-[var(--color-brand-900)] px-4 py-3 text-sm font-semibold text-white transition hover:bg-[var(--color-brand-800)]">Get support</a>
+    {% endif %}
+</aside>
+{% endmacro %}
+
 {% block title %}Dashboard - My Account{% endblock %}
 
 {% block content %}
@@ -26,24 +47,17 @@
     </header>
 
     <section class="grid gap-4 lg:grid-cols-3" aria-label="Account overview">
-        <div class="flex min-h-52 flex-col justify-between rounded-3xl bg-[var(--color-brand-900)] p-6 text-white lg:col-span-2">
+        <div class="flex min-h-52 flex-col justify-between rounded-3xl border border-transparent bg-[var(--color-brand-900)] p-6 text-white dark:border-stone-600 lg:col-span-2">
             <div class="min-w-0">
-                {% if account_health.primary_action and account_health.customer_primary_action_url %}
-                <span class="inline-flex rounded-full bg-lime-200 px-3 py-1 text-xs font-bold text-stone-950">Action needed</span>
-                <h2 class="mt-4 max-w-2xl break-words font-display text-2xl font-bold leading-tight sm:text-3xl">{{ account_health.primary_action.message }}</h2>
-                {% elif account_health.has_partial_data %}
-                <span class="inline-flex rounded-full bg-amber-100 px-3 py-1 text-xs font-bold text-amber-950">Status unavailable</span>
-                <h2 class="mt-4 font-display text-2xl font-bold">We can't confirm your next action right now.</h2>
-                {% else %}
-                <span class="inline-flex rounded-full bg-lime-200 px-3 py-1 text-xs font-bold text-stone-950">Account overview</span>
-                <h2 class="mt-4 font-display text-2xl font-bold">No urgent action is needed right now.</h2>
-                {% endif %}
+                {% set hero = dashboard_highlights.hero %}
+                <span class="inline-flex rounded-full px-3 py-1 text-xs font-bold {{ 'bg-amber-100 text-amber-950' if hero.kind.value == 'unavailable' else 'bg-lime-200 text-stone-950' }}">{{ hero.eyebrow }}</span>
+                <h2 class="mt-4 max-w-2xl break-words font-display text-2xl font-bold leading-tight sm:text-3xl">{{ hero.message }}</h2>
                 {% if dashboard_highlights.services|length == 1 and dashboard_highlights.services[0].health.next_charge_at %}
                 <p class="mt-3 text-sm text-lime-100">Next charge date: {{ dashboard_highlights.services[0].health.next_charge_at | portal_datetime('%d %B %Y', include_tz=False) }}</p>
                 {% endif %}
             </div>
-            {% if account_health.primary_action and account_health.customer_primary_action_url and not (customer and customer.read_only) %}
-            <a href="{{ account_health.customer_primary_action_url }}" class="mt-5 inline-flex w-fit items-center rounded-xl bg-lime-200 px-4 py-2.5 text-sm font-bold text-stone-950 transition hover:bg-lime-100">{{ account_health.primary_action.label }} <span aria-hidden="true" class="ml-2">→</span></a>
+            {% if hero.action_url and hero.action_label and not (customer and customer.read_only) %}
+            <a href="{{ hero.action_url }}" class="mt-5 inline-flex w-fit items-center rounded-xl bg-lime-200 px-4 py-2.5 text-sm font-bold text-stone-950 transition hover:bg-lime-100">{{ hero.action_label }} <span aria-hidden="true" class="ml-2">→</span></a>
             {% endif %}
         </div>
 
@@ -60,11 +74,11 @@
         </div>
     </section>
 
-    <section class="grid gap-4 lg:grid-cols-4" aria-labelledby="dashboard-services-heading">
+    <section class="grid gap-4 md:grid-cols-2" aria-labelledby="dashboard-services-heading">
         <h2 id="dashboard-services-heading" class="sr-only">Your services</h2>
         {% for row in dashboard_highlights.services %}
         {% set service = row.health %}
-        <article class="rounded-2xl border border-stone-200 bg-white p-5 dark:border-stone-700 dark:bg-stone-800 lg:col-span-2">
+        <article class="rounded-2xl border border-stone-200 bg-white p-5 dark:border-stone-700 dark:bg-stone-800 md:col-span-2">
             <div class="flex flex-wrap items-start justify-between gap-3">
                 <div>
                     <h3 class="font-display text-lg font-bold text-stone-950 dark:text-white">{{ service.offer_name }}{% if row.download_mbps is not none %} · {{ row.download_mbps }} Mbps{% endif %}</h3>
@@ -130,27 +144,13 @@
             {% endif %}
             <a href="/portal/usage" class="mt-auto pt-5 text-sm font-semibold text-[var(--color-brand-700)] hover:underline dark:text-[var(--color-brand-300)]">View usage <span aria-hidden="true">→</span></a>
         </aside>
+        {% if loop.first %}
+        {{ support_card(dashboard_highlights.support, chat_live_enabled, customer) }}
+        {% endif %}
         {% else %}
-        <div class="rounded-2xl border border-stone-200 bg-white p-6 text-sm text-stone-600 dark:border-stone-700 dark:bg-stone-800 dark:text-stone-300 lg:col-span-3">No current services are available for this account. <a href="/portal/support" class="font-semibold text-[var(--color-brand-700)] hover:underline dark:text-[var(--color-brand-300)]">Contact support</a> if you expected one.</div>
+        <div class="rounded-2xl border border-stone-200 bg-white p-6 text-sm text-stone-600 dark:border-stone-700 dark:bg-stone-800 dark:text-stone-300 md:col-span-2">No current services are available for this account. <a href="/portal/support" class="font-semibold text-[var(--color-brand-700)] hover:underline dark:text-[var(--color-brand-300)]">Contact support</a> if you expected one.</div>
+        {{ support_card(dashboard_highlights.support, chat_live_enabled, customer) }}
         {% endfor %}
-        <aside class="flex flex-col rounded-2xl border border-stone-200 bg-white p-5 dark:border-stone-700 dark:bg-stone-800" aria-label="Support requests">
-            <p class="text-sm text-stone-500 dark:text-stone-400">Support</p>
-            {% if dashboard_highlights.support.is_present %}
-                {% set support = dashboard_highlights.support.value %}
-                <p class="mt-3 font-display text-xl font-bold text-stone-950 dark:text-white">{{ support.open_count }} open request{{ '' if support.open_count == 1 else 's' }}</p>
-                {% if support.latest_ticket_number %}<p class="mt-2 text-sm text-stone-600 dark:text-stone-300">Latest: {{ support.latest_ticket_number }}{% if support.latest_status_label %} · {{ support.latest_status_label }}{% endif %}</p>{% endif %}
-                {% if support.latest_updated_at %}<p class="mt-1 text-xs text-stone-500 dark:text-stone-400">Updated {{ support.latest_updated_at | portal_datetime('%d %b, %I:%M %p') }}</p>{% endif %}
-            {% else %}
-                <p class="mt-3 font-semibold text-stone-900 dark:text-white">Support requests unavailable</p>
-                <p class="mt-1 text-sm text-stone-500 dark:text-stone-400">We can't confirm your open requests right now.</p>
-            {% endif %}
-            <a href="/portal/support" class="mt-3 text-sm font-semibold text-[var(--color-brand-700)] hover:underline dark:text-[var(--color-brand-300)]">View requests <span aria-hidden="true">→</span></a>
-            {% if chat_live_enabled and not (customer and customer.read_only) %}
-            <button type="button" onclick="window.dmLiveChat && window.dmLiveChat.openWith('/portal/chat/session')" class="mt-auto w-full rounded-xl bg-[var(--color-brand-900)] px-4 py-3 text-sm font-semibold text-white transition hover:bg-[var(--color-brand-800)]">Chat with us</button>
-            {% elif not (customer and customer.read_only) %}
-            <a href="/portal/support/new" class="mt-auto inline-flex w-full justify-center rounded-xl bg-[var(--color-brand-900)] px-4 py-3 text-sm font-semibold text-white transition hover:bg-[var(--color-brand-800)]">Get support</a>
-            {% endif %}
-        </aside>
     </section>
     <section class="space-y-3" aria-labelledby="dashboard-activity-heading">
         <div class="flex flex-wrap items-center justify-between gap-3">

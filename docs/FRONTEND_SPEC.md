@@ -121,6 +121,15 @@ marks the feed partial without hiding confirmed connection evidence. Review,
 service details, support, and notifications link to existing customer pages.
 The chat button opens the shared chat widget only when chat is enabled and the
 customer session permits changes.
+The account-overview hero consumes the typed dashboard hero result. Existing
+service-status actions take priority. For active prepaid service with one exact
+funded period and a matching renewal anchor, it shows an advance top-up action
+from seven days before renewal only when the canonical taxed renewal charge
+exceeds reviewed available funding. A current confirmed area outage appears
+when no payment action is due, with the exact text
+"There is an outage in your area".
+The clear state appears only after complete required reads. The template does
+not calculate the renewal shortfall or infer outage state.
 Service detail and reseller Jinja surfaces share
 `templates/components/portal/account_health.html`; mobile
 uses `GET /api/v1/me/account-health`. Neither client derives those semantics or

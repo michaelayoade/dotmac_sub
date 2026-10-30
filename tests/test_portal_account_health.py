@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import uuid
+from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from pathlib import Path
@@ -18,6 +19,7 @@ from app.models.billing import (
     ServiceEntitlementStatus,
 )
 from app.models.catalog import (
+    BillingCycle,
     BillingMode,
     CatalogOffer,
     Subscription,
@@ -32,6 +34,7 @@ from app.models.subscription_change import (
 from app.models.support import Ticket
 from app.models.usage import QuotaBucket
 from app.schemas.portal_account_health import PortalAccountHealthRead
+from app.schemas.service_status import ServiceStatusAction, ServiceStatusActionKind
 from app.services import catalog as catalog_service
 from app.services import portal_account_health
 from app.services.portal_account_health import build_portal_account_health
@@ -252,6 +255,8 @@ def test_portal_templates_share_owner_projection_and_remove_generic_balance():
     assert "account_health" in customer
     assert "account_health" in reseller
     assert "dashboard_highlights" in customer
+    assert "dashboard_highlights.hero" in customer
+    assert "account_health.primary_action" not in customer
     assert "dashboard_highlights.support" in customer
     assert "dashboard_highlights.activity" in customer
     assert "tickets.open_count" not in customer
@@ -266,6 +271,239 @@ def test_portal_templates_share_owner_projection_and_remove_generic_balance():
     assert "Current Balance" not in customer
     assert "Outstanding receivables" in shared
     assert "Prepaid service funding" in shared
+
+
+def test_customer_dashboard_hero_prioritizes_renewal_then_outage(
+    db_session, subscriber_account, subscription, monkeypatch
+):
+    from app.services import (
+        customer_chargeability,
+        prepaid_service_renewals,
+    )
+
+    as_of = datetime(2026, 10, 28, 12, tzinfo=UTC)
+    renewal_at = as_of + timedelta(days=7)
+    subscriber_account.billing_mode = BillingMode.prepaid
+    subscription.billing_mode = BillingMode.prepaid
+    subscription.status = SubscriptionStatus.active
+    subscription.next_billing_at = renewal_at
+    db_session.commit()
+    health = build_portal_account_health(db_session, subscriber_account.id, as_of=as_of)
+    financial = replace(
+        health.financial,
+        billing_mode=StateValue.present("Prepaid"),
+        receivables=StateValue.present(()),
+        prepaid_funding=StateValue.present(
+            portal_account_health.MoneyAmount(Decimal("12500.00"), "NGN")
+        ),
+    )
+    service = replace(
+        health.services[0],
+        billing_mode=BillingMode.prepaid.value,
+        access_state=portal_account_health.PortalServiceAccessState.available,
+        next_charge_at=renewal_at,
+        connection=StateValue.present(
+            portal_account_health.PortalConnectionDiagnosis(
+                state="outage",
+                status_presentation=health.services[0].access,
+                headline="Area outage",
+                message="Area outage confirmed",
+                advice=None,
+                medium=None,
+                area_outage=True,
+                checked_at=as_of,
+            ),
+            as_of=as_of,
+        ),
+    )
+    health = replace(
+        health,
+        financial=financial,
+        services=(service,),
+        primary_action=None,
+        customer_primary_action_url=None,
+    )
+    row = portal_account_health.CustomerDashboardService(
+        health=service,
+        download_mbps=None,
+        upload_mbps=None,
+        service_period=StateValue.present(
+            portal_account_health.CustomerDashboardPeriod(
+                starts_at=as_of - timedelta(days=23),
+                ends_at=renewal_at,
+                elapsed_percent=77,
+                elapsed_days=23,
+                total_days=30,
+                days_remaining=7,
+            ),
+            as_of=as_of,
+        ),
+        data_usage=StateValue.unknown(),
+    )
+    monkeypatch.setattr(
+        customer_chargeability,
+        "confirmed_free_subscription_ids",
+        lambda _db, _subscriptions: frozenset(),
+    )
+    monkeypatch.setattr(
+        prepaid_service_renewals,
+        "resolve_prepaid_monthly_charges",
+        lambda _db, subscriptions, _deadline: {
+            candidate.id: (Decimal("28500.00"), "NGN", BillingCycle.monthly)
+            for candidate in subscriptions
+        },
+    )
+
+    hero = portal_account_health._dashboard_hero(
+        db_session, health, (row,), {subscription.id: subscription}
+    )
+    assert hero.kind is portal_account_health.CustomerDashboardHeroKind.renewal
+    assert hero.renewal_at == renewal_at
+    assert hero.renewal_shortfall.amount == Decimal("16000.00")
+    assert hero.action_label == "Top up"
+    assert hero.action_url == "/portal/billing/topup"
+    assert "7 days" in hero.message
+
+    covered = replace(
+        health,
+        financial=replace(
+            financial,
+            prepaid_funding=StateValue.present(
+                portal_account_health.MoneyAmount(Decimal("28500.00"), "NGN")
+            ),
+        ),
+    )
+    outage = portal_account_health._dashboard_hero(
+        db_session, covered, (row,), {subscription.id: subscription}
+    )
+    assert outage.kind is portal_account_health.CustomerDashboardHeroKind.outage
+    assert outage.message == "There is an outage in your area"
+    assert outage.action_url is None
+
+    healthy_service = replace(
+        service,
+        connection=StateValue.present(
+            replace(service.connection.value, area_outage=False)
+        ),
+    )
+    clear = portal_account_health._dashboard_hero(
+        db_session,
+        replace(covered, services=(healthy_service,)),
+        (replace(row, health=healthy_service),),
+        {subscription.id: subscription},
+    )
+    assert clear.kind is portal_account_health.CustomerDashboardHeroKind.clear
+    assert clear.message == "No urgent action is needed right now."
+
+    stale_service = replace(
+        service,
+        connection=StateValue.stale(
+            service.connection.value, as_of=as_of - timedelta(hours=1)
+        ),
+    )
+    stale = portal_account_health._dashboard_hero(
+        db_session,
+        replace(covered, services=(stale_service,)),
+        (replace(row, health=stale_service),),
+        {subscription.id: subscription},
+    )
+    assert stale.kind is portal_account_health.CustomerDashboardHeroKind.unavailable
+
+    outside_window = portal_account_health._dashboard_hero(
+        db_session,
+        replace(health, as_of=as_of - timedelta(seconds=1)),
+        (row,),
+        {subscription.id: subscription},
+    )
+    assert outside_window.kind is portal_account_health.CustomerDashboardHeroKind.outage
+
+    active_action = ServiceStatusAction(
+        kind=ServiceStatusActionKind.contact_support,
+        label="Contact support",
+        message="Your service needs support.",
+    )
+    action = portal_account_health._dashboard_hero(
+        db_session,
+        replace(
+            health,
+            primary_action=active_action,
+            customer_primary_action_url="/portal/support/new",
+        ),
+        (row,),
+        {subscription.id: subscription},
+    )
+    assert action.kind is portal_account_health.CustomerDashboardHeroKind.action
+    assert action.message == active_action.message
+
+
+def test_customer_dashboard_hero_withholds_unverified_renewal_amount(
+    db_session, subscriber_account, subscription, monkeypatch
+):
+    from app.services import customer_chargeability, prepaid_service_renewals
+
+    as_of = datetime(2026, 10, 28, 12, tzinfo=UTC)
+    renewal_at = as_of + timedelta(days=1)
+    subscriber_account.billing_mode = BillingMode.prepaid
+    subscription.billing_mode = BillingMode.prepaid
+    subscription.status = SubscriptionStatus.active
+    db_session.commit()
+    health = build_portal_account_health(db_session, subscriber_account.id, as_of=as_of)
+    service = replace(
+        health.services[0],
+        billing_mode=BillingMode.prepaid.value,
+        next_charge_at=renewal_at,
+    )
+    health = replace(
+        health,
+        financial=replace(
+            health.financial,
+            prepaid_funding=StateValue.present(
+                portal_account_health.MoneyAmount(Decimal("0.00"), "NGN")
+            ),
+        ),
+        services=(service,),
+        primary_action=None,
+        customer_primary_action_url=None,
+    )
+    row = portal_account_health.CustomerDashboardService(
+        health=service,
+        download_mbps=None,
+        upload_mbps=None,
+        service_period=StateValue.present(
+            portal_account_health.CustomerDashboardPeriod(
+                starts_at=as_of - timedelta(days=29),
+                ends_at=renewal_at,
+                elapsed_percent=97,
+                elapsed_days=29,
+                total_days=30,
+                days_remaining=1,
+            )
+        ),
+        data_usage=StateValue.unknown(),
+    )
+    monkeypatch.setattr(
+        customer_chargeability,
+        "confirmed_free_subscription_ids",
+        lambda _db, _subscriptions: frozenset(),
+    )
+    monkeypatch.setattr(
+        prepaid_service_renewals,
+        "resolve_prepaid_monthly_charges",
+        lambda _db, _subscriptions, _deadline: {subscription.id: None},
+    )
+    hero = portal_account_health._dashboard_hero(
+        db_session, health, (row,), {subscription.id: subscription}
+    )
+    assert hero.kind is portal_account_health.CustomerDashboardHeroKind.unavailable
+    assert hero.action_url is None
+
+    mismatch = portal_account_health._dashboard_hero(
+        db_session,
+        health,
+        (replace(row, service_period=StateValue.unknown()),),
+        {subscription.id: subscription},
+    )
+    assert mismatch.kind is portal_account_health.CustomerDashboardHeroKind.unavailable
 
 
 def test_customer_dashboard_highlights_read_credit_and_plan_speed(

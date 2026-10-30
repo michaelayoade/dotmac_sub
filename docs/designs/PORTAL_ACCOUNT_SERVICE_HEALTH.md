@@ -101,15 +101,32 @@ OLT, ONT, NAS, or RADIUS polling.
 - Read owner: `ui.portal_account_health_projection`; dashboard highlights use
   its typed `CustomerDashboardHighlightsQuery` and result. Source records are
   the account, currency-scoped unallocated-credit ledger, scoped offers, funded
-  service entitlements, rated quota buckets, canonical support-ticket queries,
-  issued invoice records, and the shared connection projection.
-- First viewport: local greeting, account lifecycle, canonical primary action,
+  service entitlements, exact taxed prepaid renewal charge, reviewed prepaid
+  funding, customer chargeability and billing treatment, rated quota buckets,
+  canonical support-ticket queries, issued invoice records, and the shared
+  connection projection.
+- First viewport: local greeting, account lifecycle, canonical primary action or
+  seven-day renewal warning or confirmed area outage,
   account credit, and per-service lifecycle, access, session, connection,
   plan speed, next charge date, connection evidence time, funded service period,
   rated capped-allowance usage, open support requests, and relevant invoice and
   connection updates.
 - Actions: the primary action uses the service-status owner's label and URL;
-  billing history, service details, support requests, invoice review, and
+  the dashboard-only advance-renewal action links to prepaid top-up. It starts
+  at most seven 24-hour days before the confirmed renewal date only when the
+  exact contracted charge exceeds available prepaid funding. The projected
+  shortfall is the cumulative amount needed for renewals due by that date;
+  confirmed free or customer-billing-suppressed services do not request funds.
+  Existing active service-status actions take precedence, then the advance
+  renewal action, then a confirmed area-outage message, then the clear state.
+  The area-outage message requires a current confirmed diagnosis, is exactly
+  "There is an outage in your area", and has no payment action. When neither
+  applies and all required reads are complete, including current connection
+  diagnoses, the card says "No urgent action is needed right now." A failed or
+  ambiguous near-term renewal quote never becomes a payment CTA or a clear-state
+  claim.
+  This reminder does not change prepaid enforcement, grace, or suspension.
+  The existing billing history, service details, support requests, invoice review, and
   notifications are read-only drill-downs. Chat opens the existing portal chat
   widget only when enabled for a writable customer session; otherwise the
   existing support page is the destination. View-only sessions do not show a
@@ -130,11 +147,19 @@ OLT, ONT, NAS, or RADIUS polling.
   connection update has a distinct empty message.
 - Freshness and provenance: Account Health and connection observations carry
   their own timestamps. The dashboard does not poll equipment or cache a second
-  status decision. Dates display in Lagos time. Sensitive financial amounts
+  status decision. The reminder requires one active funded entitlement whose
+  end matches the subscription billing anchor, and quotes the canonical taxed
+  contracted renewal charge at that end instant. It compares the charge with
+  the reviewed available prepaid funding in the same currency. A missing or
+  conflicting entitlement, anchor, price, currency, or funding read fails
+  closed. Dates display in Lagos time. Sensitive financial amounts
   remain inside the authenticated customer session.
-- Layout: the same facts stack on mobile. The shared customer layout owns the
-  topbar. The support card sits beside the first service and usage cards on
-  wide screens; the update rows follow below.
+- Layout: the same facts stack on mobile. From the medium breakpoint, each
+  service card spans the full available width. The first usage and support cards
+  share a row beneath the first service card, giving both cards room for their
+  details without stretching them to service-card height. Additional service
+  and usage cards follow below. The shared customer layout owns the topbar, and
+  the update rows follow the cards.
 
 Templates and mobile clients may choose navigation and native layout. They do
 not derive billing position, access eligibility, session freshness, outage
@@ -176,6 +201,14 @@ unlimited bucket's zero as measured usage. Quota usage carries the bucket's
 recorded time and may lag live traffic. Missing or conflicting source evidence
 does not produce a percentage or fabricated data amount. The new entitlement
 and quota reads are each batched across the already-scoped service IDs.
+
+The seven-day reminder reuses those exact periods and the Account Health
+prepaid-funding read. It groups eligible renewal dates, checks free-service and
+billing-treatment decisions, and requests canonical contracted charges only
+for groups in the window. The first cumulative funding shortfall becomes the
+dashboard advisory. An unavailable dependency suppresses a financial CTA.
+These bounded dashboard reads do not change the separate Account Health query
+budget or perform a write.
 
 The dashboard support card uses the support owner's canonical customer scope
 and non-closed status scope. The previous dashboard-context open-count query,

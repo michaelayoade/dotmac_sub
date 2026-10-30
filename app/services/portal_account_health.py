@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass, replace
-from datetime import UTC, date, datetime
+from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
 from enum import StrEnum
 from math import ceil
@@ -276,11 +276,48 @@ class CustomerDashboardActivity:
     due_at: datetime | None = None
 
 
+class CustomerDashboardHeroKind(StrEnum):
+    action = "action"
+    renewal = "renewal"
+    outage = "outage"
+    unavailable = "unavailable"
+    clear = "clear"
+
+
+@dataclass(frozen=True, slots=True)
+class CustomerDashboardHero:
+    kind: CustomerDashboardHeroKind
+    eyebrow: str
+    message: str
+    action_label: str | None = None
+    action_url: str | None = None
+    renewal_at: datetime | None = None
+    renewal_shortfall: MoneyAmount | None = None
+
+    def __post_init__(self) -> None:
+        if (self.action_label is None) != (self.action_url is None):
+            raise ValueError("Dashboard action label and URL must be paired")
+        if self.kind in {
+            CustomerDashboardHeroKind.action,
+            CustomerDashboardHeroKind.renewal,
+        }:
+            if self.action_url is None:
+                raise ValueError("Action dashboard hero requires a CTA")
+        elif self.action_url is not None:
+            raise ValueError("Non-action dashboard hero cannot carry a CTA")
+        if self.kind is CustomerDashboardHeroKind.renewal:
+            if self.renewal_at is None or self.renewal_shortfall is None:
+                raise ValueError("Renewal hero requires deadline and shortfall")
+        elif self.renewal_at is not None or self.renewal_shortfall is not None:
+            raise ValueError("Only renewal hero may carry renewal evidence")
+
+
 @dataclass(frozen=True, slots=True)
 class CustomerDashboardHighlights:
     greeting_name: str
     greeting_period: str
     observed_at: datetime
+    hero: CustomerDashboardHero
     account_credit: StateValue
     services: tuple[CustomerDashboardService, ...]
     support: StateValue
@@ -817,6 +854,191 @@ def _dashboard_activity(
     return StateValue.present(tuple(items), as_of=datetime.now(UTC)), partial
 
 
+def _utc_instant(value: datetime) -> datetime:
+    return value.replace(tzinfo=UTC) if value.tzinfo is None else value.astimezone(UTC)
+
+
+def _renewal_window_hero(
+    db: Session,
+    health: PortalAccountHealth,
+    services: tuple[CustomerDashboardService, ...],
+    subscriptions: dict[UUID, Subscription],
+) -> tuple[CustomerDashboardHero | None, bool]:
+    """Show only an exact, underfunded prepaid renewal in the next seven days."""
+    from app.services.customer_chargeability import confirmed_free_subscription_ids
+    from app.services.prepaid_service_renewals import resolve_prepaid_monthly_charges
+    from app.services.subscription_billing_treatments import (
+        resolve_subscription_billing_treatments,
+    )
+
+    by_deadline: dict[datetime, list[Subscription]] = {}
+    uncertain = False
+    for row in services:
+        if row.health.billing_mode != BillingMode.prepaid.value:
+            continue
+        subscription = subscriptions.get(row.health.subscription_id)
+        if (
+            subscription is not None
+            and subscription.status is not SubscriptionStatus.active
+        ):
+            continue
+        period = row.service_period
+        anchor = row.health.next_charge_at
+        if (
+            subscription is None
+            or anchor is None
+            or not period.is_present
+            or period.is_stale
+        ):
+            uncertain = True
+            continue
+        deadline = _utc_instant(period.value.ends_at)
+        if _utc_instant(anchor) != deadline:
+            uncertain = True
+            continue
+        remaining = deadline - health.as_of
+        if not timedelta(0) < remaining <= timedelta(days=7):
+            continue
+        by_deadline.setdefault(deadline, []).append(subscription)
+
+    if not by_deadline:
+        return None, uncertain
+    if (
+        uncertain
+        or not health.financial.prepaid_funding.is_present
+        or health.financial.prepaid_funding.is_stale
+    ):
+        return None, True
+
+    funding: MoneyAmount = health.financial.prepaid_funding.value
+    candidate_subscriptions = [
+        subscription
+        for deadline in sorted(by_deadline)
+        for subscription in by_deadline[deadline]
+    ]
+    try:
+        free_ids = confirmed_free_subscription_ids(db, candidate_subscriptions)
+        required = Decimal("0.00")
+        for deadline in sorted(by_deadline):
+            candidates = by_deadline[deadline]
+            treatments = resolve_subscription_billing_treatments(
+                db, candidates, as_of=deadline
+            )
+            billable = [
+                subscription
+                for subscription in candidates
+                if subscription.id not in free_ids
+                and not treatments[subscription.id].suppress_customer_billing
+            ]
+            charges = resolve_prepaid_monthly_charges(db, billable, deadline)
+            group_total = Decimal("0.00")
+            for subscription in billable:
+                charge = charges.get(subscription.id)
+                if charge is None:
+                    return None, True
+                amount, currency, _cycle = charge
+                if currency != funding.currency or amount <= 0:
+                    return None, True
+                group_total += amount
+            required += group_total
+            if required <= funding.amount:
+                continue
+
+            shortfall = required - funding.amount
+            days = ceil((deadline - health.as_of).total_seconds() / 86400)
+            plural = "s" if days != 1 else ""
+            count = sum(
+                len(by_deadline[item_deadline])
+                for item_deadline in by_deadline
+                if item_deadline <= deadline
+            )
+            subject = "Your services renew" if count > 1 else "Your service renews"
+            object_label = "them" if count > 1 else "it"
+            amount_text = display_format.format_money(
+                shortfall, currency=funding.currency
+            )
+            return (
+                CustomerDashboardHero(
+                    kind=CustomerDashboardHeroKind.renewal,
+                    eyebrow="Action needed",
+                    message=(
+                        f"{subject} in {days} day{plural}. "
+                        f"Top up {amount_text} to keep {object_label} active."
+                    ),
+                    action_label="Top up",
+                    action_url="/portal/billing/topup",
+                    renewal_at=deadline,
+                    renewal_shortfall=MoneyAmount(
+                        amount=shortfall, currency=funding.currency
+                    ),
+                ),
+                False,
+            )
+    except Exception as exc:
+        logger.warning(
+            "customer_dashboard_renewal_advisory_unavailable",
+            extra={
+                "account_id": str(health.account_id),
+                "error_type": type(exc).__name__,
+            },
+        )
+        return None, True
+    return None, False
+
+
+def _dashboard_hero(
+    db: Session,
+    health: PortalAccountHealth,
+    services: tuple[CustomerDashboardService, ...],
+    subscriptions: dict[UUID, Subscription],
+) -> CustomerDashboardHero:
+    action = health.primary_action
+    if action is not None and health.customer_primary_action_url is not None:
+        return CustomerDashboardHero(
+            kind=CustomerDashboardHeroKind.action,
+            eyebrow="Action needed",
+            message=action.message,
+            action_label=action.label,
+            action_url=health.customer_primary_action_url,
+        )
+
+    renewal, renewal_uncertain = _renewal_window_hero(
+        db, health, services, subscriptions
+    )
+    if renewal is not None:
+        return renewal
+    if any(
+        row.health.connection.kind.value == "present"
+        and not row.health.connection.is_stale
+        and row.health.connection.value.area_outage
+        for row in services
+    ):
+        return CustomerDashboardHero(
+            kind=CustomerDashboardHeroKind.outage,
+            eyebrow="Service update",
+            message="There is an outage in your area",
+        )
+    if (
+        renewal_uncertain
+        or health.has_partial_data
+        or any(
+            row.health.connection.kind.value != "present"
+            or row.health.connection.is_stale
+            for row in services
+        )
+    ):
+        return CustomerDashboardHero(
+            kind=CustomerDashboardHeroKind.unavailable,
+            eyebrow="Status unavailable",
+            message="We can't confirm your next action right now.",
+        )
+    return CustomerDashboardHero(
+        kind=CustomerDashboardHeroKind.clear,
+        eyebrow="Account overview",
+        message="No urgent action is needed right now.",
+    )
+
+
 def get_customer_dashboard_highlights(
     db: Session,
     query: CustomerDashboardHighlightsQuery,
@@ -1048,6 +1270,7 @@ def get_customer_dashboard_highlights(
         greeting_name=greeting_name or "Customer",
         greeting_period=greeting_period,
         observed_at=health.as_of,
+        hero=_dashboard_hero(db, health, services, subscriptions),
         account_credit=credit,
         services=services,
         support=_dashboard_support(db, health.account_id),
