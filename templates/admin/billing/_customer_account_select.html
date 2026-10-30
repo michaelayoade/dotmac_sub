@@ -16,7 +16,11 @@
         </div>
         <span class="rounded-full bg-slate-200 px-2 py-0.5 text-xs text-slate-600 dark:bg-slate-600 dark:text-slate-200">Auto</span>
     </div>
-    <input type="hidden" name="account_id" value="{{ account.id }}">
+    <input type="hidden" name="account_id" value="{{ account.id }}"
+           data-vat-locked="{{ 'true' if account.vat_selection.selection_locked else 'false' }}"
+           data-vat-rate-id="{{ account.vat_selection.tax_rate_id or '' }}"
+           data-vat-name="{{ account.vat_selection.tax_rate_name or '' }}"
+           data-vat-percent="{{ account.vat_selection.tax_rate_percent if account.vat_selection.tax_rate_percent is not none else '' }}">
     <script>
         (() => {
             const script = document.currentScript;
@@ -31,7 +35,12 @@
             class="block w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm focus:border-primary-500 focus:outline-none focus:ring-1 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
         <option value="">Select billing account...</option>
         {% for account in accounts %}
-        <option value="{{ account.id }}" {% if selected_account_id and selected_account_id|string == account.id|string %}selected{% endif %}>
+        <option value="{{ account.id }}"
+                data-vat-locked="{{ 'true' if account.vat_selection.selection_locked else 'false' }}"
+                data-vat-rate-id="{{ account.vat_selection.tax_rate_id or '' }}"
+                data-vat-name="{{ account.vat_selection.tax_rate_name or '' }}"
+                data-vat-percent="{{ account.vat_selection.tax_rate_percent if account.vat_selection.tax_rate_percent is not none else '' }}"
+                {% if selected_account_id and selected_account_id|string == account.id|string %}selected{% endif %}>
             {{ account.label }}{% if account.account_number %} ({{ account.account_number }}){% endif %}
         </option>
         {% endfor %}

@@ -39,13 +39,30 @@ class DaemonProof(EnrolledHost):
         c.require(self.run(["systemctl", "is-active", UNIT]) == "active")
         self.audit_key = "dotmac_g0_" + uuid4().hex[:16]
         self.normal_poll = ("", "", "")
+        self.last_invocation = self.invocation()
 
-    def control(self, action: str) -> None:
+    def control(self, action: str, *, capture_invocation: bool = True) -> None:
         c.require(action in ("stop", "start", "restart", "daemon-reload"))
+        c.require(capture_invocation or action == "stop")
+        if action == "stop" and capture_invocation:
+            state = self.result(["systemctl", "is-active", UNIT])
+            c.require(
+                (state.returncode, state.stdout.strip())
+                in ((0, "active"), (3, "inactive"))
+            )
+            if state.returncode == 0:
+                self.last_invocation = self.invocation()
         self.run(
             ["systemctl", action] + ([] if action == "daemon-reload" else [UNIT]),
             timeout=300,
         )
+
+    def invocation(self) -> str:
+        value = self.run(
+            ["systemctl", "show", UNIT, "--property=InvocationID", "--value"]
+        )
+        c.require(re.fullmatch(r"[0-9a-f]{32}", value) is not None)
+        return value
 
     def cursor(self) -> str:
         raw = self.run(
@@ -121,6 +138,7 @@ class DaemonProof(EnrolledHost):
             )
             self.run(["git", "merge-base", "--is-ancestor", ancestor, head])
         self.control("stop")
+        original_invocation = fixture_invocation = self.last_invocation
         created_parent = not parent.exists()
         owned: dict[Path, bytes] = {}
         try:
@@ -156,9 +174,11 @@ class DaemonProof(EnrolledHost):
             owned[DROPIN] = DROPIN.read_bytes()
             self.control("daemon-reload")
             self.control("start")
+            fixture_invocation = self.invocation()
+            c.require(fixture_invocation != original_invocation)
             yield
         finally:
-            self.control("stop")
+            self.control("stop", capture_invocation=False)
             foreign = False
             for path, expected in owned.items():
                 if (
@@ -198,6 +218,7 @@ class DaemonProof(EnrolledHost):
             )
             cursor = self.cursor()
             self.control("start")
+            c.require(self.invocation() != fixture_invocation)
             c.require(self.run(["systemctl", "is-active", UNIT]) == "active")
             command = self.run(
                 ["systemctl", "show", UNIT, "--property=ExecStart", "--value"]
@@ -220,10 +241,7 @@ class DaemonProof(EnrolledHost):
                     "--no-pager",
                 ]
             )
-            invocation = self.run(
-                ["systemctl", "show", UNIT, "--property=InvocationID", "--value"]
-            )
-            c.require(re.fullmatch(r"[0-9a-f]{32}", invocation) is not None)
+            invocation = self.invocation()
             entries = [json.loads(line) for line in journal.splitlines()]
             matched = [
                 entry
@@ -298,6 +316,11 @@ def refusal(proof: DaemonProof, signed: bytes, code: str) -> RefusalEvidence:
                 report_raw == original_report and report["disposition"] == "applied"
                 if code == "nonce_replay"
                 else report["disposition"] == "refused" and report["reason"] == code
+            )
+        if code == "nonce_replay":
+            c.require(
+                nonce_path.read_bytes() == c.canonical_json(doc)
+                and report_path.read_bytes() == original_report
             )
         after_cleanup = proof.observe()
         c.require(

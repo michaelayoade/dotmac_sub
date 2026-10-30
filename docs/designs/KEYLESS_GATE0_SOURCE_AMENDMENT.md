@@ -1,12 +1,13 @@
 # Keyless Gate 0 measured source amendment
 
-Status: source-only; Michael approved the measured shipping ceilings on 2026-10-22.
+Status: source-only; Michael approved the revised measured ceilings on 2026-10-23.
 
 Michael approved the original complete source-only scope on 2026-10-22:
 the existing staging signer, pull agent, ledger, five proofs and finite
 provisioning adapters. The later measurement exception permitted unpublished
 completion and review while retaining the earlier shipping ceilings.
 Michael's separate measured decision approved the completion ceilings below.
+The 2026-10-23 source adoption measured 20,892 overall and 8,707 test lines after retiring 1,409 closed-procedure lines; later same-feature packaging and review corrections remain counted.
 Ordinary protected review and exact CI remain mandatory.
 This amendment grants no live activation or production authorization.
 
@@ -21,16 +22,17 @@ the shared Sub evidence dependency counts once. The approval snapshot measured
 
 | Component | Earlier ceiling | Completion ceiling |
 | --- | ---: | ---: |
-| All counted source | 13,000 | 20,000 |
+| All counted source | 13,000 | 21,000 |
 | CP Python / mandatory metadata / combined | 1,450 / 300 / 1,750 | 2,400 / 300 / 2,700 |
 | Agent runtime / each deployment-contract copy | 1,100 / 450 | Unchanged |
 | Launcher, unit and public configuration | 150 | Unchanged |
 | CI changes | 350 | Unchanged |
 | OpenBao, credential helpers and private transport | 1,400 | Unchanged |
 | Egress renderer and configuration | 150 | Unchanged |
+| Native resolver runtime+build / acceptance / build-config-docs | Not adopted | 600 / 1,500 / 200 |
 | Proof and restore runtime, including adopted diagnostics | 1,400 | 4,100 |
 | Finite provisioning, including adopted runtime wrappers | 950 | Unchanged |
-| Required tests / approved predecessor guard runtime | 4,400 / 60 | 7,700 / 60 |
+| Required tests / approved predecessor guard runtime | 4,400 / 60 | 8,800 / 60 |
 
 Each ceiling binds independently. Completion ceilings were approved by
 Michael's explicit measured decision. Their small reserve permits necessary
@@ -46,7 +48,7 @@ scope and authoritative signed references, preserve immutable retries, and
 refuse conflicting evidence or unsuccessful publication.
 
 Each proof run applies its genuine forward candidate before replaying that
-same run's fresh consumed nonce. The next-morning candidate has a distinct
+same run's fresh consumed nonce. The same-session repeatability candidate has a distinct
 source, tree and digest, linked to the prior accepted image. Uncertain issuance
 leaves the daemon stopped; unknown restore observations remain nullable FAIL.
 Normal polling resumes after refusal fixtures, while the CP's latest consumed
@@ -59,9 +61,21 @@ host-root-equivalent. Workflow signature checks do not contain compromise of
 an account with unrestricted Docker access.
 
 All five committed live proofs, immutable ledger evidence, Michael's signoff,
-the next-morning rerun of proofs 2–4, and separate authorization of the same
+the same-session repeatability rerun of proofs 2–4, and separate authorization of the same
 accepted production digest remain required. The old Lane 3 execution remains
 stopped until replacement acceptance. Only production and staging app_admin
 reset/token closeout is complete; do not repeat those resets.
 Governed OpenBao JWT apply and human custody, public key fingerprint
 verification, and explicit activation approval remain separate live gates.
+
+Michael approved the lean repeatability amendment on 2026-10-22. Future typed
+requests use `initial` or `repeatability`; `next_morning` is retired without
+rewriting historical artifacts. Only the calendar wait is removed. Repeatability
+may follow the initial published PASS in the same session and still repeats
+proofs2–4 with the prior evidence digest, image continuity and a genuinely new
+source revision, tree, desired nonce and target digest. Nonce/outbox/ledger resets, key rotation, reinstall and test-hook residue
+are forbidden between runs.
+Protected enrollment hashes and exact refusal cleanup enforce the installed
+configuration and key bindings. Existing controlled stop/start and current
+InvocationID journal matching prove daemon restart and nonce/report durability;
+no additional daemon orchestrator is introduced. Live acceptance remains pending.
