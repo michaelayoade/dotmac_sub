@@ -73,6 +73,59 @@ _SHADOW_IMPORTS = {
         ("dotmac_billing", "OpeningObservedSettlementV1"),
         ("dotmac_billing", "OpeningSubObservationV2"),
     },
+    # Gap B opening verifier (Step 5 Phase B / Step 6, transitional, deleted at
+    # seal): implements Billing's opening verifier ports by recomputing from
+    # pinned evidence. Contracts and pure digest/parse helpers only; no
+    # service entrypoint, session or writer is imported.
+    "app/services/billing/opening_verifier.py": {
+        ("dotmac_billing.opening_contracts", "OpeningEvidenceError"),
+        ("dotmac_billing.opening_contracts", "OpeningPartitionV1"),
+        ("dotmac_billing.opening_contracts", "OpeningVerificationUnavailable"),
+        (
+            "dotmac_billing.opening_receivable_contracts",
+            "OpeningImportVerificationRequestV2",
+        ),
+        (
+            "dotmac_billing.opening_receivable_contracts",
+            "OpeningImportVerificationV2",
+        ),
+        (
+            "dotmac_billing.opening_receivable_validation",
+            "opening_account_command_digest_v2",
+        ),
+        (
+            "dotmac_billing.opening_receivable_validation",
+            "opening_manifest_fingerprint_v2",
+        ),
+        ("dotmac_billing.opening_rehearsal", "opening_rehearsal_assembly_digest"),
+        ("dotmac_billing.opening_rehearsal", "opening_rehearsal_assembly_wire"),
+        ("dotmac_billing.opening_rehearsal", "parse_opening_rehearsal_assembly"),
+        ("dotmac_billing.opening_rehearsal", "parse_opening_rehearsal_json"),
+        (
+            "dotmac_billing.opening_rehearsal",
+            "parse_opening_rehearsal_original_evidence",
+        ),
+        (
+            "dotmac_billing.opening_window_contracts",
+            "OpeningWindowProvisionVerificationRequestV1",
+        ),
+        (
+            "dotmac_billing.opening_window_contracts",
+            "OpeningWindowProvisionVerificationV1",
+        ),
+        (
+            "dotmac_billing.opening_window_contracts",
+            "OpeningWindowSealVerificationRequestV1",
+        ),
+        (
+            "dotmac_billing.opening_window_contracts",
+            "OpeningWindowSealVerificationV1",
+        ),
+        (
+            "dotmac_billing.opening_window_contracts",
+            "opening_admission_population_digest",
+        ),
+    },
     # Thin-client settlement back-half (ADR 0031): provider evidence is
     # confirmed in dotmac-payments and discharged in dotmac-billing for
     # Starter-issued invoices; Sub mirrors from the Starter position.

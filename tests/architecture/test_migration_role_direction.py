@@ -65,15 +65,16 @@ def test_bootstrap_repair_never_builds_the_old_edge_from_the_contract() -> None:
     assert grant.index("owner, migrator") < grant.index("dry_run=dry_run")
 
 
-def test_the_deploy_hands_objects_to_a_fixed_owner() -> None:
+def test_the_deploy_grants_a_fixed_runtime_role() -> None:
     deploy = _read("scripts/deploy.sh")
-    assert 'MIGRATION_OBJECT_OWNER_ROLE="dotmac_app"' in deploy
-    assert '-e MIGRATION_OBJECT_OWNER="${MIGRATION_OBJECT_OWNER_ROLE}"' in deploy
+    assert 'MIGRATION_RUNTIME_ROLE="dotmac_app"' in deploy
+    assert '-e MIGRATION_RUNTIME_ROLE="${MIGRATION_RUNTIME_ROLE}"' in deploy
+    assert "OWNER TO" not in _read("app/migration_ownership.py")
 
 
 def test_env_py_is_opt_in_and_names_the_contract() -> None:
     env = _read("alembic/env.py")
-    assert "OWNER_ENV_VAR" in env
+    assert "runtime_role_from_environ" in env
     ownership = _read("app/migration_ownership.py")
     assert 'CONTRACT_NAME: Final = "module_database_roles.v1"' in ownership
 
@@ -104,7 +105,10 @@ def test_production_roles_job_is_part_of_the_required_tests_context() -> None:
 def test_production_roles_lane_audits_and_proves_its_own_sensitivity() -> None:
     lane = _read("scripts/ci/migrations_production_roles.py")
     for needle in (
-        "nothing new is owned by the migrator",
+        "new objects are migrator-owned; relay definers stay with it",
+        "runtime role holds DML and sequence grants on every new object",
+        "runtime role has no CREATE on public",
+        "runtime role cannot create or alter in public",
         "every module table is FORCE row-level security",
         "owner is bound by row-level security",
         "no edge: ALTER alembic_version needs ownership",
