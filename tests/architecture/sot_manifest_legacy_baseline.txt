@@ -99,7 +99,6 @@ network.ont_runtime_status
 network.ont_status_refresh
 network.ont_topology_observations
 network.operation_ledger
-network.outage_impact
 network.routeros_sot
 network.splitter_inventory
 observability.channel_health_contracts

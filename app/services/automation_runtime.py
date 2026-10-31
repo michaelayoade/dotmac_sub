@@ -28,6 +28,7 @@ from app.models.automation import (
     AutomationStepRun,
     AutomationStepStatus,
 )
+from app.models.subscription_pause import SubscriptionPauseCause
 from app.services import automation_actions, automation_capabilities
 from app.services.automation_contracts import (
     AutomationConditionField,
@@ -206,6 +207,7 @@ class AutomationStepSummary:
     error_message: str | None
     started_at: datetime | None
     completed_at: datetime | None
+    affected_subscription_count: int | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -1004,6 +1006,24 @@ def get_run_detail(
         started_at=run.started_at,
         completed_at=run.completed_at,
     )
+    asset_pause_counts = {
+        step_index: count
+        for step_index, count in db.execute(
+            select(
+                SubscriptionPauseCause.automation_step_index,
+                func.count(SubscriptionPauseCause.id),
+            )
+            .where(
+                SubscriptionPauseCause.automation_event_id == run.event_id,
+                SubscriptionPauseCause.automation_rule_id == run.rule_id,
+                SubscriptionPauseCause.automation_rule_version_id
+                == run.rule_version_id,
+                SubscriptionPauseCause.ticket_id == run.target_id,
+                SubscriptionPauseCause.selection_policy == "asset_served_subscriptions",
+            )
+            .group_by(SubscriptionPauseCause.automation_step_index)
+        ).all()
+    }
     return AutomationRunDetail(
         summary=summary,
         rule_name=rule.name,
@@ -1019,6 +1039,12 @@ def get_run_detail(
                 error_message=row.error_message,
                 started_at=row.started_at,
                 completed_at=row.completed_at,
+                affected_subscription_count=(
+                    int(asset_pause_counts.get(row.step_index, 0))
+                    if row.action_key == "support.ticket.pause_asset_services"
+                    and row.status == AutomationStepStatus.succeeded.value
+                    else None
+                ),
             )
             for row in step_rows
         ),

@@ -7,7 +7,7 @@ import json
 import logging
 from collections.abc import Callable
 from contextlib import closing
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 from decimal import Decimal
 from enum import StrEnum
@@ -30,9 +30,14 @@ from app.models.subscription_pause import (
 )
 from app.models.support import Ticket, TicketStatus
 from app.models.ticket_workflow import SlaBreach, SlaClock, SlaClockStatus
+from app.schemas.infrastructure import TicketLocationReference
 from app.services import account_lifecycle
 from app.services.domain_errors import DomainError
 from app.services.events.types import EventType
+from app.services.network.outage_impact import (
+    TicketAssetAudienceQuery,
+    resolve_ticket_asset_audience,
+)
 from app.services.owner_commands import (
     CommandContext,
     OwnerCommandDefinition,
@@ -53,6 +58,11 @@ _PAUSE = OwnerCommandDefinition(
     owner=OWNER,
     concern=PAUSE_CONCERN,
     name="pause_unique_active_service_for_ticket_sla_breach",
+)
+_PAUSE_ASSET = OwnerCommandDefinition(
+    owner=OWNER,
+    concern=PAUSE_CONCERN,
+    name="pause_ticket_asset_services_for_sla_breach",
 )
 _RESUME = OwnerCommandDefinition(
     owner=OWNER,
@@ -88,6 +98,23 @@ class PauseTicketServiceForSlaBreachOutcome:
     subscription_id: UUID
     pause_episode_id: UUID
     pause_cause_id: UUID
+    replayed: bool
+
+
+@dataclass(frozen=True, slots=True)
+class PauseTicketAssetServicesForSlaBreachCommand:
+    ticket_id: UUID
+    event_id: UUID
+    rule_id: UUID
+    rule_version_id: UUID
+    step_index: int
+    context: CommandContext
+
+
+@dataclass(frozen=True, slots=True)
+class PauseTicketAssetServicesForSlaBreachOutcome:
+    ticket_id: UUID
+    affected_count: int
     replayed: bool
 
 
@@ -237,6 +264,75 @@ def _pause_source(command: PauseTicketServiceForSlaBreachCommand) -> str:
     )[:255]
 
 
+def _verified_breach_ticket(
+    db: Session, *, ticket_id: UUID, event_id: UUID
+) -> tuple[Ticket, SlaClock, SlaBreach]:
+    event = db.scalar(
+        select(EventStore).where(EventStore.event_id == event_id).with_for_update()
+    )
+    if event is None or event.event_type != EventType.support_ticket_sla_breached.value:
+        raise _error(
+            "sla_breach_not_authoritative",
+            "The automation event is not authoritative SLA-breach evidence.",
+            event_id=str(event_id),
+        )
+    if str(event.payload.get("ticket_id") or "") != str(ticket_id):
+        raise _error(
+            "sla_breach_not_authoritative",
+            "The SLA-breach event does not belong to the requested ticket.",
+            event_id=str(event_id),
+        )
+    try:
+        sla_clock_id = UUID(str(event.payload.get("sla_clock_id") or ""))
+    except ValueError as exc:
+        raise _error(
+            "sla_breach_not_authoritative",
+            "The SLA-breach event has no valid SLA clock identity.",
+            event_id=str(event_id),
+        ) from exc
+    sla_clock = db.scalar(
+        select(SlaClock).where(SlaClock.id == sla_clock_id).with_for_update()
+    )
+    sla_breach = db.scalar(
+        select(SlaBreach)
+        .where(SlaBreach.clock_id == sla_clock_id)
+        .order_by(SlaBreach.breached_at.desc(), SlaBreach.id.desc())
+        .with_for_update()
+    )
+    if (
+        sla_clock is None
+        or sla_clock.entity_id != ticket_id
+        or sla_clock.status != SlaClockStatus.breached.value
+        or sla_clock.breached_at is None
+        or sla_breach is None
+    ):
+        raise _error(
+            "sla_breach_not_authoritative",
+            "The SLA clock does not confirm a current breach for this ticket.",
+            event_id=str(event_id),
+            sla_clock_id=str(sla_clock_id),
+        )
+    ticket = db.scalar(select(Ticket).where(Ticket.id == ticket_id).with_for_update())
+    if ticket is None:
+        raise _error(
+            "ticket_not_found",
+            "The SLA-breached ticket no longer exists.",
+            ticket_id=str(ticket_id),
+        )
+    if ticket.status in {
+        TicketStatus.pending_confirmation.value,
+        TicketStatus.closed.value,
+        TicketStatus.canceled.value,
+    }:
+        raise _error(
+            "ticket_already_resolved",
+            "The ticket was resolved before the service pause executed.",
+            ticket_id=str(ticket.id),
+            ticket_status=ticket.status,
+        )
+    return ticket, sla_clock, sla_breach
+
+
 def pause_unique_active_service_for_ticket_sla_breach(
     db: Session,
     command: PauseTicketServiceForSlaBreachCommand,
@@ -244,78 +340,9 @@ def pause_unique_active_service_for_ticket_sla_breach(
     """Pause the linked customer's unique active service after a real SLA breach."""
 
     def operation() -> PauseTicketServiceForSlaBreachOutcome:
-        event = db.scalar(
-            select(EventStore)
-            .where(EventStore.event_id == command.event_id)
-            .with_for_update()
+        ticket, sla_clock, sla_breach = _verified_breach_ticket(
+            db, ticket_id=command.ticket_id, event_id=command.event_id
         )
-        if (
-            event is None
-            or event.event_type != EventType.support_ticket_sla_breached.value
-        ):
-            raise _error(
-                "sla_breach_not_authoritative",
-                "The automation event is not authoritative SLA-breach evidence.",
-                event_id=str(command.event_id),
-            )
-        payload_ticket_id = str(event.payload.get("ticket_id") or "")
-        payload_clock_id = str(event.payload.get("sla_clock_id") or "")
-        if payload_ticket_id != str(command.ticket_id):
-            raise _error(
-                "sla_breach_not_authoritative",
-                "The SLA-breach event does not belong to the requested ticket.",
-                event_id=str(command.event_id),
-            )
-        try:
-            sla_clock_id = UUID(payload_clock_id)
-        except ValueError as exc:
-            raise _error(
-                "sla_breach_not_authoritative",
-                "The SLA-breach event has no valid SLA clock identity.",
-                event_id=str(command.event_id),
-            ) from exc
-        sla_clock = db.scalar(
-            select(SlaClock).where(SlaClock.id == sla_clock_id).with_for_update()
-        )
-        sla_breach = db.scalar(
-            select(SlaBreach)
-            .where(SlaBreach.clock_id == sla_clock_id)
-            .order_by(SlaBreach.breached_at.desc(), SlaBreach.id.desc())
-            .with_for_update()
-        )
-        if (
-            sla_clock is None
-            or sla_clock.entity_id != command.ticket_id
-            or sla_clock.status != SlaClockStatus.breached.value
-            or sla_clock.breached_at is None
-            or sla_breach is None
-        ):
-            raise _error(
-                "sla_breach_not_authoritative",
-                "The SLA clock does not confirm a current breach for this ticket.",
-                event_id=str(command.event_id),
-                sla_clock_id=str(sla_clock_id),
-            )
-        ticket = db.scalar(
-            select(Ticket).where(Ticket.id == command.ticket_id).with_for_update()
-        )
-        if ticket is None:
-            raise _error(
-                "ticket_not_found",
-                "The SLA-breached ticket no longer exists.",
-                ticket_id=str(command.ticket_id),
-            )
-        if ticket.status in {
-            TicketStatus.pending_confirmation.value,
-            TicketStatus.closed.value,
-            TicketStatus.canceled.value,
-        }:
-            raise _error(
-                "ticket_already_resolved",
-                "The ticket was resolved before the service pause executed.",
-                ticket_id=str(ticket.id),
-                ticket_status=ticket.status,
-            )
         account_id = ticket.customer_account_id or ticket.subscriber_id
         if account_id is None:
             raise _error(
@@ -421,6 +448,131 @@ def pause_unique_active_service_for_ticket_sla_breach(
         definition=_PAUSE,
         context=command.context,
         operation=operation,
+    )
+
+
+def pause_ticket_asset_services_for_sla_breach(
+    db: Session, command: PauseTicketAssetServicesForSlaBreachCommand
+) -> PauseTicketAssetServicesForSlaBreachOutcome:
+    """Atomically pause every verified active service behind the ticket asset."""
+
+    def operation() -> PauseTicketAssetServicesForSlaBreachOutcome:
+        ticket, sla_clock, sla_breach = _verified_breach_ticket(
+            db, ticket_id=command.ticket_id, event_id=command.event_id
+        )
+        metadata = ticket.metadata_ if isinstance(ticket.metadata_, dict) else {}
+        raw_reference = metadata.get("base_station_reference")
+        try:
+            if not isinstance(raw_reference, dict):
+                raise ValueError("Missing ticket asset reference")
+            reference = TicketLocationReference.model_validate(raw_reference)
+        except (ValueError, TypeError) as exc:
+            raise _error(
+                "ticket_asset_missing",
+                "The ticket has no valid selected base station or access point.",
+                ticket_id=str(ticket.id),
+            ) from exc
+
+        prior_causes = tuple(
+            db.scalars(
+                select(SubscriptionPauseCause)
+                .where(
+                    SubscriptionPauseCause.automation_event_id == command.event_id,
+                    SubscriptionPauseCause.automation_rule_id == command.rule_id,
+                    SubscriptionPauseCause.automation_rule_version_id
+                    == command.rule_version_id,
+                    SubscriptionPauseCause.automation_step_index == command.step_index,
+                    SubscriptionPauseCause.ticket_id == ticket.id,
+                    SubscriptionPauseCause.selection_policy
+                    == "asset_served_subscriptions",
+                )
+                .with_for_update()
+            )
+        )
+        if prior_causes:
+            return PauseTicketAssetServicesForSlaBreachOutcome(
+                ticket_id=ticket.id,
+                affected_count=len(prior_causes),
+                replayed=True,
+            )
+
+        audience = resolve_ticket_asset_audience(
+            db, query=TicketAssetAudienceQuery(asset=reference)
+        )
+        subscriptions = tuple(
+            db.scalars(
+                select(Subscription)
+                .where(Subscription.id.in_(audience.subscription_ids))
+                .order_by(Subscription.id)
+                .with_for_update()
+            )
+        )
+        if len(subscriptions) != audience.affected_count or any(
+            subscription.status != SubscriptionStatus.active
+            for subscription in subscriptions
+        ):
+            raise _error(
+                "asset_audience_changed",
+                "The affected subscriptions changed while the action was starting. No services were paused.",
+            )
+        refreshed_audience = resolve_ticket_asset_audience(
+            db, query=TicketAssetAudienceQuery(asset=reference)
+        )
+        if refreshed_audience.scope_token != audience.scope_token:
+            raise _error(
+                "asset_audience_changed",
+                "The selected asset's affected group changed while the action was starting. No services were paused.",
+            )
+        effective_at = datetime.now(UTC)
+        for subscription in subscriptions:
+            source = (
+                f"automation:ticket-sla-asset-pause:{command.event_id}:"
+                f"{command.rule_version_id}:{command.step_index}:"
+                f"{subscription.id}"
+            )
+            try:
+                account_lifecycle.pause_subscription_for_cause(
+                    db,
+                    account_lifecycle.PauseSubscriptionCauseCommand(
+                        subscription_id=subscription.id,
+                        reason=SubscriptionPauseReason.ticket_resolution_sla_breach,
+                        source_type=SubscriptionPauseSource.automation_workflow,
+                        source_id=source,
+                        selection_policy="asset_served_subscriptions",
+                        resume_policy=(
+                            SubscriptionPauseResumePolicy.manual_after_ticket_resolution
+                        ),
+                        billing_policy=(
+                            SubscriptionPauseBillingPolicy.extend_by_effective_pause_duration
+                        ),
+                        requested_at=effective_at,
+                        effective_at=effective_at,
+                        actor=command.context.actor,
+                        idempotency_key=source,
+                        context=replace(command.context, idempotency_key=source),
+                        ticket_id=ticket.id,
+                        sla_clock_id=sla_clock.id,
+                        sla_breach_id=sla_breach.id,
+                        automation_event_id=command.event_id,
+                        automation_rule_id=command.rule_id,
+                        automation_rule_version_id=command.rule_version_id,
+                        automation_step_index=command.step_index,
+                    ),
+                )
+            except ValueError as exc:
+                raise _error(
+                    "asset_pause_conflict",
+                    "An affected subscription could not be paused. No services were paused.",
+                    subscription_id=str(subscription.id),
+                ) from exc
+        return PauseTicketAssetServicesForSlaBreachOutcome(
+            ticket_id=ticket.id,
+            affected_count=audience.affected_count,
+            replayed=False,
+        )
+
+    return execute_owner_command(
+        db, definition=_PAUSE_ASSET, context=command.context, operation=operation
     )
 
 
@@ -1171,6 +1323,8 @@ __all__ = [
     "auto_resume_resolved_ticket_pauses",
     "PauseTicketServiceForSlaBreachCommand",
     "PauseTicketServiceForSlaBreachOutcome",
+    "PauseTicketAssetServicesForSlaBreachCommand",
+    "PauseTicketAssetServicesForSlaBreachOutcome",
     "ReconcileTicketPausedPrepaidServiceCommand",
     "ReconcileTicketPausedPrepaidServiceOutcome",
     "ResumeTicketPausedServiceCommand",
@@ -1182,6 +1336,7 @@ __all__ = [
     "TicketSlaServiceSelectionPolicy",
     "TicketSlaServiceAutomationError",
     "pause_unique_active_service_for_ticket_sla_breach",
+    "pause_ticket_asset_services_for_sla_breach",
     "preview_ticket_service_resume",
     "preview_ticket_service_resume_for_subscription",
     "preview_ticket_paused_prepaid_reconciliation",

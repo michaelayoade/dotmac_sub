@@ -20,7 +20,9 @@ from sqlalchemy.sql import ColumnElement
 
 from app.models.subscriber import Subscriber
 from app.models.support import Ticket, TicketStatus
-from app.schemas.support import TicketCreate
+from app.schemas.infrastructure import TicketLocationSuggestion
+from app.schemas.support import AdminTicketCreate, TicketCreate
+from app.services import infrastructure_catalogue
 from app.services.customer_support_links import (
     ticket_customer_any_link_filter,
     ticket_has_customer_link,
@@ -93,7 +95,9 @@ def base_station_required_ticket_types() -> list[str]:
     return sorted(_BASE_STATION_REQUIRED_TICKET_TYPES)
 
 
-def validate_ticket_creation(db: Session, payload: TicketCreate) -> None:
+def validate_ticket_creation(
+    db: Session, payload: TicketCreate, *, lock_location: bool = False
+) -> TicketLocationSuggestion | None:
     """Reject invalid user-created tickets before any row is inserted."""
     if (
         _created_by_is_customer(db, payload)
@@ -114,7 +118,33 @@ def validate_ticket_creation(db: Session, payload: TicketCreate) -> None:
         )
 
     metadata = payload.metadata_ if isinstance(payload.metadata_, dict) else {}
-    base_station_details = str(metadata.get("base_station_details") or "").strip()
+    location = None
+    if (
+        isinstance(payload, AdminTicketCreate)
+        and payload.location_reference is not None
+    ):
+        location = infrastructure_catalogue.resolve_ticket_location(
+            db, reference=payload.location_reference, lock=lock_location
+        )
+        if location is None:
+            raise TicketValidationError(
+                code="ticket_location_unavailable",
+                message="The selected base station or access point is no longer available. Choose another result.",
+            )
+    if (
+        ticket_type_requires_base_station(payload.ticket_type)
+        and isinstance(payload, AdminTicketCreate)
+        and location is None
+    ):
+        raise TicketValidationError(
+            code="ticket_location_selection_required",
+            message="Choose a base station or access point from the list.",
+        )
+    base_station_details = (
+        location.label
+        if location is not None
+        else str(metadata.get("base_station_details") or "").strip()
+    )
     if (
         ticket_type_requires_base_station(payload.ticket_type)
         and not base_station_details
@@ -131,6 +161,7 @@ def validate_ticket_creation(db: Session, payload: TicketCreate) -> None:
             code="ticket_duplicate_conflict",
             message=f"Duplicate open ticket already exists (blocking ticket: {duplicate_ticket_id})",
         )
+    return location
 
 
 def build_pre_create_context(db: Session, payload: TicketCreate) -> dict[str, Any]:

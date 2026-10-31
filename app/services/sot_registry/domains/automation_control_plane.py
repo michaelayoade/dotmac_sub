@@ -332,6 +332,7 @@ DOMAIN = DomainSOT(
                 "automation.rule_definitions",
                 "events.store",
                 "events.replay_evidence",
+                "access.subscription_lifecycle",
             ),
             contract=ServiceContract(
                 concerns=(
@@ -344,6 +345,7 @@ DOMAIN = DomainSOT(
                             "published automation rule versions",
                             "declared automation runtime adapters",
                             "tenant-scoped automation run evidence",
+                            "canonical ticket pause causes",
                         ),
                     ),
                 ),
@@ -392,6 +394,12 @@ DOMAIN = DomainSOT(
                             "AutomationRun, AutomationStepRun, and actor-attributed "
                             "AutomationRunRetry rows"
                         ),
+                    ),
+                    AuthorityInput(
+                        name="canonical ticket pause causes",
+                        owner="access.subscription_lifecycle",
+                        kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                        source="Ticket-linked SubscriptionPauseCause rows for an exact automation event, rule version, and step",
                     ),
                 ),
                 transaction=TransactionContract(

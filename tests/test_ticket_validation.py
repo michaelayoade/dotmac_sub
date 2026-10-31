@@ -1,8 +1,12 @@
 from __future__ import annotations
 
+from uuid import uuid4
+
 import pytest
 
-from app.schemas.support import TicketCreate
+from app.models.network_monitoring import PopSite
+from app.schemas.infrastructure import TicketLocationReference, TicketLocationSource
+from app.schemas.support import AdminTicketCreate, AdminTicketCreateForm, TicketCreate
 from app.services import support as support_service
 from app.services import ticket_validation, web_support_tickets
 from app.services.domain_errors import DomainError
@@ -17,6 +21,12 @@ def _payload(**overrides) -> TicketCreate:
     }
     data.update(overrides)
     return TicketCreate(**data)
+
+
+def _admin_payload(**overrides) -> AdminTicketCreate:
+    data = {"title": "Customer service issue", "description": "Needs review"}
+    data.update(overrides)
+    return AdminTicketCreate(**data)
 
 
 def test_customer_created_ticket_requires_ticket_type(db_session, subscriber):
@@ -66,17 +76,71 @@ def test_base_station_required_ticket_type_accepts_metadata_details(db_session):
 
 
 def test_admin_form_payload_maps_base_station_details_to_ticket_metadata():
+    location_id = uuid4()
     payload = web_support_tickets.build_ticket_create_payload(
-        title="Access point offline",
-        description="Customers cannot connect",
-        ticket_type="Access Point Outage",
-        base_station_details="  Garki AP sector 2  ",
-        priority="normal",
-        channel="web",
-        status="open",
+        AdminTicketCreateForm.model_validate(
+            {
+                "title": "Access point offline",
+                "description": "Customers cannot connect",
+                "ticket_type": "Access Point Outage",
+                "base_station_details": "  Garki AP sector 2  ",
+                "location_source": "wireless_access_point",
+                "location_id": str(location_id),
+            }
+        )
     )
 
     assert payload.metadata_ == {"base_station_details": "Garki AP sector 2"}
+    assert isinstance(payload, AdminTicketCreate)
+    assert payload.location_reference == TicketLocationReference(
+        source=TicketLocationSource.wireless_access_point, id=location_id
+    )
+
+
+def test_admin_ticket_rejects_unselected_text_and_saves_selected_asset(db_session):
+    station = PopSite(name="Jabi BTS", zabbix_group_id="jabi-ticket", is_active=True)
+    db_session.add(station)
+    db_session.commit()
+
+    with pytest.raises(DomainError) as exc:
+        ticket_validation.validate_ticket_creation(
+            db_session,
+            _admin_payload(
+                ticket_type="BTS Outage",
+                metadata={"base_station_details": "Unlisted station"},
+            ),
+        )
+    assert exc.value.code == "ticket_location_selection_required"
+    db_session.rollback()
+
+    reference = TicketLocationReference(
+        source=TicketLocationSource.base_station, id=station.id
+    )
+    ticket = support_service.tickets.create(
+        db_session,
+        _admin_payload(
+            ticket_type="BTS Outage",
+            location_reference=reference,
+            metadata={"base_station_details": "Untrusted label"},
+        ),
+    )
+    assert ticket.metadata_["base_station_details"] == "Jabi BTS"
+    assert ticket.metadata_["base_station_reference"] == {
+        "source": "base_station",
+        "id": str(station.id),
+    }
+
+    station.is_active = False
+    db_session.commit()
+    with pytest.raises(DomainError) as exc:
+        ticket_validation.validate_ticket_creation(
+            db_session,
+            _admin_payload(
+                ticket_type="BTS Outage",
+                location_reference=reference,
+            ),
+        )
+    assert exc.value.code == "ticket_location_unavailable"
 
 
 def test_admin_form_exposes_ticket_validation_message():

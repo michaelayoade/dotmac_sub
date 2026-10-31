@@ -8,11 +8,12 @@ from dataclasses import dataclass
 from uuid import UUID
 
 from sqlalchemy import String, literal, or_, select
+from sqlalchemy.engine import Row
 from sqlalchemy.orm import Session
 from sqlalchemy.sql import Select
 
 from app.models.catalog import NasDevice
-from app.models.network import FdhCabinet, OLTDevice, PonPort
+from app.models.network import FdhCabinet, FiberAccessPoint, OLTDevice, PonPort
 from app.models.network_monitoring import DeviceType, NetworkDevice, PopSite
 from app.schemas.infrastructure import (
     InfrastructureOption,
@@ -20,6 +21,11 @@ from app.schemas.infrastructure import (
     InfrastructureReference,
     InfrastructureSearch,
     InfrastructureType,
+    TicketLocationReference,
+    TicketLocationSource,
+    TicketLocationSuggestion,
+    TicketLocationSuggestionQuery,
+    TicketLocationSuggestions,
 )
 
 InfrastructureSelect = (
@@ -117,6 +123,156 @@ def search(db: Session, *, query: InfrastructureSearch) -> InfrastructureOptions
             InfrastructureOption(id=row[0], label=row[1], context=row[2])
             for row in rows
         )
+    )
+
+
+def ticket_location_suggestions(
+    db: Session, *, query: TicketLocationSuggestionQuery
+) -> TicketLocationSuggestions:
+    """Suggest active BTS sites and both native access-point inventories."""
+
+    term = query.query.strip()
+    if term and len(term) < 2:
+        return TicketLocationSuggestions(base_stations=(), access_points=())
+    pattern = f"%{term}%"
+    base_rows = db.execute(
+        select(PopSite.id, PopSite.name, PopSite.city)
+        .where(
+            PopSite.is_active.is_(True),
+            PopSite.zabbix_group_id.is_not(None),
+            or_(
+                PopSite.name.ilike(pattern),
+                PopSite.code.ilike(pattern),
+                PopSite.city.ilike(pattern),
+            ),
+        )
+        .order_by(PopSite.name, PopSite.id)
+        .limit(query.limit_per_source)
+    ).all()
+    wireless_rows = db.execute(
+        select(NetworkDevice.id, NetworkDevice.name, PopSite.name)
+        .outerjoin(PopSite, PopSite.id == NetworkDevice.pop_site_id)
+        .where(
+            NetworkDevice.is_active.is_(True),
+            NetworkDevice.archived_at.is_(None),
+            NetworkDevice.device_type == DeviceType.access_point,
+            or_(
+                NetworkDevice.name.ilike(pattern),
+                NetworkDevice.hostname.ilike(pattern),
+                NetworkDevice.mgmt_ip.ilike(pattern),
+                PopSite.name.ilike(pattern),
+            ),
+        )
+        .order_by(NetworkDevice.name, NetworkDevice.id)
+        .limit(query.limit_per_source)
+    ).all()
+    fiber_rows = db.execute(
+        select(FiberAccessPoint.id, FiberAccessPoint.name, FiberAccessPoint.city)
+        .where(
+            FiberAccessPoint.is_active.is_(True),
+            or_(
+                FiberAccessPoint.name.ilike(pattern),
+                FiberAccessPoint.code.ilike(pattern),
+                FiberAccessPoint.street.ilike(pattern),
+                FiberAccessPoint.city.ilike(pattern),
+            ),
+        )
+        .order_by(FiberAccessPoint.name, FiberAccessPoint.id)
+        .limit(query.limit_per_source)
+    ).all()
+    base_stations = tuple(
+        TicketLocationSuggestion(
+            id=row[0],
+            source=TicketLocationSource.base_station,
+            label=row[1],
+            context=row[2],
+        )
+        for row in base_rows
+    )
+    wireless = tuple(
+        TicketLocationSuggestion(
+            id=row[0],
+            source=TicketLocationSource.wireless_access_point,
+            label=row[1],
+            context=row[2],
+        )
+        for row in wireless_rows
+    )
+    fiber = tuple(
+        TicketLocationSuggestion(
+            id=row[0],
+            source=TicketLocationSource.fiber_access_point,
+            label=row[1],
+            context=row[2],
+        )
+        for row in fiber_rows
+    )
+    return TicketLocationSuggestions(
+        base_stations=base_stations,
+        access_points=tuple(
+            sorted(
+                (*wireless, *fiber),
+                key=lambda item: (item.label.casefold(), item.source, str(item.id)),
+            )
+        ),
+    )
+
+
+def resolve_ticket_location(
+    db: Session, *, reference: TicketLocationReference, lock: bool = False
+) -> TicketLocationSuggestion | None:
+    """Resolve a selected ticket location against its current native record."""
+
+    if lock:
+        if reference.source is TicketLocationSource.base_station:
+            lock_query = select(PopSite.id).where(PopSite.id == reference.id)
+        elif reference.source is TicketLocationSource.wireless_access_point:
+            lock_query = select(NetworkDevice.id).where(
+                NetworkDevice.id == reference.id
+            )
+        else:
+            lock_query = select(FiberAccessPoint.id).where(
+                FiberAccessPoint.id == reference.id
+            )
+        db.execute(lock_query.with_for_update(read=True)).one_or_none()
+    row: Row[tuple[UUID, str, str | None]] | Row[tuple[UUID, str, str]] | None
+    if reference.source is TicketLocationSource.base_station:
+        row = db.execute(
+            select(PopSite.id, PopSite.name, PopSite.city).where(
+                PopSite.id == reference.id,
+                PopSite.is_active.is_(True),
+                PopSite.zabbix_group_id.is_not(None),
+            )
+        ).one_or_none()
+    elif reference.source is TicketLocationSource.wireless_access_point:
+        row = db.execute(
+            select(NetworkDevice.id, NetworkDevice.name, PopSite.name)
+            .outerjoin(PopSite, PopSite.id == NetworkDevice.pop_site_id)
+            .where(
+                NetworkDevice.id == reference.id,
+                NetworkDevice.is_active.is_(True),
+                NetworkDevice.archived_at.is_(None),
+                NetworkDevice.device_type == DeviceType.access_point,
+            )
+        ).one_or_none()
+    else:
+        row = db.execute(
+            select(
+                FiberAccessPoint.id, FiberAccessPoint.name, FiberAccessPoint.city
+            ).where(
+                FiberAccessPoint.id == reference.id,
+                FiberAccessPoint.is_active.is_(True),
+            )
+        ).one_or_none()
+    return (
+        TicketLocationSuggestion(
+            id=row[0],
+            source=reference.source,
+            label=row[1],
+            context=row[2],
+        )
+        if row is not None
+        else None
     )
 
 

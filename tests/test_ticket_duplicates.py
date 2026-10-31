@@ -12,7 +12,7 @@ import pytest
 from app.api import support as support_api
 from app.models.subscriber import Subscriber
 from app.models.support import TicketStatus
-from app.schemas.support import TicketCreate
+from app.schemas.support import AdminTicketCreateForm, TicketCreate
 from app.services import support as support_service
 from app.services import ticket_validation
 from app.services import web_support_tickets as web_service
@@ -291,11 +291,13 @@ def test_web_create_blocks_duplicate_without_override(db_session, subscriber):
             request=None,
             actor_id=None,
             attachments=[],
-            **_form_values(
-                title="Router keeps rebooting",
-                subscriber_id=str(subscriber.id),
-                customer_account_id=str(subscriber.id),
-                ticket_type="Router Troubleshooting",
+            form=AdminTicketCreateForm.model_validate(
+                _form_values(
+                    title="Router keeps rebooting",
+                    subscriber_id=str(subscriber.id),
+                    customer_account_id=str(subscriber.id),
+                    ticket_type="Router Troubleshooting",
+                )
             ),
         )
 
@@ -317,11 +319,13 @@ def test_web_create_override_records_duplicate_metadata(db_session, subscriber):
         actor_id=None,
         attachments=[],
         duplicate_override=True,
-        **_form_values(
-            title="Router keeps rebooting",
-            subscriber_id=str(subscriber.id),
-            customer_account_id=str(subscriber.id),
-            ticket_type="Router Troubleshooting",
+        form=AdminTicketCreateForm.model_validate(
+            _form_values(
+                title="Router keeps rebooting",
+                subscriber_id=str(subscriber.id),
+                customer_account_id=str(subscriber.id),
+                ticket_type="Router Troubleshooting",
+            )
         ),
     )
 

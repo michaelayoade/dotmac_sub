@@ -8,6 +8,29 @@ Status: implemented
 writer. The retired `support.tickets` architecture name has no registry entry
 and must not appear as an owner, dependency, or client contract.
 
+## New-ticket location suggestions
+
+The admin new-ticket form keeps `Base Station Details` as a required field for the
+ticket types declared by `ticket_validation`. Its grouped typeahead is a read
+projection from `network.infrastructure_catalogue`: active BTS-linked POP sites
+appear under Base Stations; active wireless network devices and fiber access
+points appear together under Access Points. Sites without a BTS link and sectors
+are not suggestion categories. Fiber and wireless results identify their source.
+The query is bounded and reads current native inventory on demand. On the admin
+form, staff must choose a listed asset for a ticket type requiring Base Station
+Details; typing a name without selecting a result is rejected. The Ticket owner
+re-resolves the typed source and UUID in its create transaction and rejects a
+missing, inactive, or role-mismatched asset while holding a shared lock on the
+selected inventory row. `AdminTicketCreateForm` carries the validated form
+values, and `AdminTicketCreate` carries the exact selected reference to the
+owner. It saves the current label as a historical text snapshot and the
+verified source/UUID in Ticket metadata. The
+reference is selection evidence, not an inventory writer or foreign key. A
+later inventory rename or retirement does not rewrite the historical snapshot.
+Duplicate checks compare the selected label. Other ticket-creation channels
+retain their existing text contract. The lookup requires
+`support:ticket:create` and does not grant network inventory write access.
+
 The lifecycle owner controls, in one root owner command:
 
 - Ticket creation, native identity, customer/Lead binding, and ticket number;

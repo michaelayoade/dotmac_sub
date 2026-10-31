@@ -11,6 +11,7 @@ from pydantic import (
     Field,
     computed_field,
     field_validator,
+    model_validator,
 )
 
 from app.models.support import (
@@ -21,6 +22,7 @@ from app.models.support import (
     canonical_ticket_status_value,
     ticket_status_display_value,
 )
+from app.schemas.infrastructure import TicketLocationReference, TicketLocationSource
 from app.schemas.portal import CustomerSelfCareAction
 from app.schemas.status_presentation import StatusPresentation
 
@@ -98,6 +100,46 @@ class TicketCreate(TicketBase):
             value = value.value
         text = str(value).strip()
         return text or None
+
+
+class AdminTicketCreate(TicketCreate):
+    """Admin creation requires an exact native location for affected ticket types."""
+
+    location_reference: TicketLocationReference | None = None
+
+
+class AdminTicketCreateForm(BaseModel):
+    """Validated admin form values before building a Ticket command."""
+
+    model_config = ConfigDict(str_strip_whitespace=True)
+
+    title: str
+    description: str = ""
+    publish_description: bool = False
+    subscriber_id: UUID | None = None
+    customer_account_id: UUID | None = None
+    customer_person_id: UUID | None = None
+    region: str | None = None
+    technician_person_id: UUID | None = None
+    ticket_manager_person_id: UUID | None = None
+    service_team_id: UUID | None = None
+    ticket_type: str | None = None
+    base_station_details: str | None = None
+    location_source: TicketLocationSource | None = None
+    location_id: UUID | None = None
+    priority: str = "normal"
+    channel: str = "web"
+    status: str = "open"
+    due_at: str | None = None
+    tags: str | None = None
+    related_outage_ticket_id: str | None = None
+    assignee_person_ids: tuple[UUID, ...] = ()
+
+    @model_validator(mode="after")
+    def _complete_location_reference(self) -> AdminTicketCreateForm:
+        if (self.location_source is None) != (self.location_id is None):
+            raise ValueError("Choose a base station or access point from the list.")
+        return self
 
 
 class TicketUpdate(BaseModel):

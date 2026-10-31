@@ -13,6 +13,7 @@ from enum import Enum
 from typing import BinaryIO, Protocol, runtime_checkable
 from uuid import UUID
 
+from fastapi import Request, UploadFile
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
@@ -37,8 +38,11 @@ from app.models.support import (
     parse_ticket_status,
 )
 from app.models.system_user import SystemUser
+from app.schemas.infrastructure import TicketLocationReference
 from app.schemas.status_presentation import StatusPresentation
 from app.schemas.support import (
+    AdminTicketCreate,
+    AdminTicketCreateForm,
     AttachmentMeta,
     TicketCommentCreate,
     TicketCommentUpdate,
@@ -883,6 +887,8 @@ def build_ticket_form_context(
             if ticket
             else str(params.get("base_station_details", "") or "")
         ),
+        "location_source": str(params.get("location_source", "") or ""),
+        "location_id": str(params.get("location_id", "") or ""),
         "priority": ticket.priority
         if ticket
         else str(
@@ -999,44 +1005,40 @@ def build_ticket_edit_page_context(
     return context
 
 
-def build_ticket_create_payload(**kwargs) -> TicketCreate:
-    tags = kwargs.pop("tags", None)
-    assignee_person_ids = kwargs.pop("assignee_person_ids", [])
-    base_station_details = str(kwargs.pop("base_station_details", "") or "").strip()
-    return TicketCreate(
-        title=kwargs["title"],
-        description=kwargs["description"] or None,
-        description_is_internal=not bool(kwargs.get("publish_description")),
-        subscriber_id=parse_uuid_or_none(kwargs.get("subscriber_id")),
-        customer_account_id=parse_uuid_or_none(kwargs.get("customer_account_id")),
-        customer_person_id=parse_uuid_or_none(kwargs.get("customer_person_id")),
+def build_ticket_create_payload(form: AdminTicketCreateForm) -> AdminTicketCreate:
+    base_station_details = (form.base_station_details or "").strip()
+    location_reference = (
+        TicketLocationReference(source=form.location_source, id=form.location_id)
+        if form.location_source is not None and form.location_id is not None
+        else None
+    )
+    return AdminTicketCreate(
+        title=form.title,
+        description=form.description or None,
+        description_is_internal=not form.publish_description,
+        subscriber_id=form.subscriber_id,
+        customer_account_id=form.customer_account_id,
+        customer_person_id=form.customer_person_id,
         created_by_person_id=None,
-        region=kwargs.get("region") or None,
-        technician_person_id=parse_uuid_or_none(kwargs.get("technician_person_id")),
-        ticket_manager_person_id=parse_uuid_or_none(
-            kwargs.get("ticket_manager_person_id")
-        ),
+        region=form.region or None,
+        technician_person_id=form.technician_person_id,
+        ticket_manager_person_id=form.ticket_manager_person_id,
         site_coordinator_person_id=None,
-        service_team_id=parse_uuid_or_none(kwargs.get("service_team_id")),
-        ticket_type=kwargs.get("ticket_type") or None,
-        priority=kwargs["priority"],
-        channel=kwargs["channel"],
-        status=kwargs["status"],
-        due_at=parse_dt_or_none(kwargs.get("due_at")),
-        tags=[item.strip() for item in (tags or "").split(",") if item.strip()],
+        service_team_id=form.service_team_id,
+        ticket_type=form.ticket_type or None,
+        location_reference=location_reference,
+        priority=form.priority,
+        channel=TicketChannel(form.channel),
+        status=TicketStatus(form.status),
+        due_at=parse_dt_or_none(form.due_at),
+        tags=[item.strip() for item in (form.tags or "").split(",") if item.strip()],
         metadata_=(
             {"base_station_details": base_station_details}
             if base_station_details
             else None
         ),
-        assignee_person_ids=[
-            uid
-            for uid in (parse_uuid_or_none(item) for item in assignee_person_ids)
-            if uid
-        ],
-        related_outage_ticket_id=parse_uuid_or_none(
-            kwargs.get("related_outage_ticket_id")
-        ),
+        assignee_person_ids=list(form.assignee_person_ids),
+        related_outage_ticket_id=parse_uuid_or_none(form.related_outage_ticket_id),
     )
 
 
@@ -1137,11 +1139,11 @@ def _duplicate_input_from_payload(
 def create_ticket_from_form(
     db: Session,
     *,
-    request,
+    request: Request | None,
     actor_id: str | None,
-    attachments: list,
+    attachments: list[UploadFile],
+    form: AdminTicketCreateForm,
     duplicate_override: bool = False,
-    **form,
 ) -> Ticket:
     """Create a support ticket from web form values and attach uploaded files.
 
@@ -1149,12 +1151,17 @@ def create_ticket_from_form(
     server-side on submit; without the operator's ``duplicate_override``
     confirmation a warning is raised so the route can re-render the form.
     """
-    form["status"] = _admin_status_value(
+    status = _admin_status_value(
         db,
-        str(form.get("status") or ""),
+        form.status,
         surface=support_ticket_settings_service.OperatorTicketStatusSurface.create,
     )
-    payload = build_ticket_create_payload(actor_id=actor_id, **form)
+    payload = build_ticket_create_payload(form.model_copy(update={"status": status}))
+    selected_location = ticket_validation.validate_ticket_creation(db, payload)
+    if selected_location is not None:
+        metadata = dict(payload.metadata_ or {})
+        metadata["base_station_details"] = selected_location.label
+        payload.metadata_ = metadata
     duplicate_result = ticket_validation.find_duplicate_ticket_candidates(
         db, _duplicate_input_from_payload(payload)
     )

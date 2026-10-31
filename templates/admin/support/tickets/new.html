@@ -26,6 +26,7 @@
           enctype="multipart/form-data"
           class="space-y-6"
           data-automation-target="support.ticket"
+          {% if form_mode != 'edit' %}@submit="validateLocationSelection($event)"{% endif %}
           data-automation-record-id="{{ ticket.id if ticket else '' }}">
         <input type="hidden" name="_csrf_token" value="{{ request.state.csrf_token }}">
         <fieldset class="space-y-6">
@@ -186,7 +187,7 @@
 
             <div>
                 <label class="mb-1 block text-sm font-medium text-slate-700 dark:text-slate-200">Ticket Type</label>
-                <select name="ticket_type" x-model="selectedTicketType" class="w-full rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                <select name="ticket_type" x-model="selectedTicketType" @change="onTicketTypeChange()" class="w-full rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
                     <option value="">Select type</option>
                     {% for t in ticket_type_options %}
                     <option value="{{ t }}" {% if prefill.ticket_type == t %}selected{% endif %}>{{ t }}</option>
@@ -196,13 +197,48 @@
 
             {% if form_mode != 'edit' %}
             <div x-show="requiresBaseStation" x-cloak class="lg:col-span-2">
-                <label class="mb-1 block text-sm font-medium text-slate-700 dark:text-slate-200">Base Station Details *</label>
-                <input name="base_station_details"
-                       :required="requiresBaseStation"
-                       value="{{ prefill.base_station_details }}"
-                       placeholder="Base station, access point, site, or sector"
-                       class="w-full rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
-                <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">Required for site, infrastructure, and access-point outage ticket types.</p>
+                <label for="ticket-base-station-details" class="mb-1 block text-sm font-medium text-slate-700 dark:text-slate-200">Base Station Details *</label>
+                <div class="relative" @click.outside="locationOpen = false">
+                    <input id="ticket-base-station-details"
+                           x-ref="locationInput"
+                           name="base_station_details"
+                           type="search"
+                           x-model="baseStationDetails"
+                           :required="requiresBaseStation"
+                           :aria-expanded="locationOpen.toString()"
+                           :aria-activedescendant="locationActiveIndex >= 0 ? 'ticket-location-option-' + locationActiveIndex : null"
+                           aria-controls="ticket-location-options"
+                           aria-autocomplete="list"
+                           autocomplete="off"
+                           @focus="openLocationSuggestions()"
+                           @input="clearLocationSelection(); searchLocationSuggestions()"
+                           @keydown.arrow-down.prevent="moveLocationChoice(1)"
+                           @keydown.arrow-up.prevent="moveLocationChoice(-1)"
+                           @keydown.enter="selectActiveLocation($event)"
+                           @keydown.escape="locationOpen = false"
+                           placeholder="Search base stations and access points"
+                           class="w-full rounded-xl border border-slate-200 bg-white px-3 py-2.5 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                    <input type="hidden" name="location_source" x-model="locationSource">
+                    <input type="hidden" name="location_id" x-model="locationId">
+                    <div id="ticket-location-options" x-show="locationOpen" x-cloak role="listbox" aria-label="Base stations and access points" class="absolute z-30 mt-1 max-h-72 w-full overflow-y-auto rounded-xl border border-slate-200 bg-white py-1 shadow-lg dark:border-slate-600 dark:bg-slate-800">
+                        <p x-show="locationLoading" class="px-3 py-2 text-sm text-slate-500 dark:text-slate-400">Searching...</p>
+                        <p x-show="locationError" class="px-3 py-2 text-sm text-red-700 dark:text-red-300">Could not load locations. Type again to retry.</p>
+                        <p x-show="baseStationDetails.trim().length === 1" class="px-3 py-2 text-sm text-slate-500 dark:text-slate-400">Type one more character to search.</p>
+                        <template x-for="group in locationGroups" :key="group.title">
+                            <div x-show="group.items.length" role="group" :aria-label="group.title">
+                                <p class="px-3 pb-1 pt-2 text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400" x-text="group.title"></p>
+                                <template x-for="item in group.items" :key="item.source + ':' + item.id">
+                                    <button type="button" role="option" :id="'ticket-location-option-' + locationOptionIndex(item)" :aria-selected="locationOptionIndex(item) === locationActiveIndex" @click="chooseLocation(item)" class="flex w-full items-center justify-between gap-3 px-3 py-2 text-left text-sm text-slate-800 hover:bg-amber-50 focus:bg-amber-50 focus:outline-none dark:text-slate-100 dark:hover:bg-slate-700 dark:focus:bg-slate-700" :class="locationOptionIndex(item) === locationActiveIndex ? 'bg-amber-50 dark:bg-slate-700' : ''">
+                                        <span class="min-w-0 truncate" x-text="item.label"></span>
+                                        <span class="shrink-0 text-xs text-slate-500 dark:text-slate-400" x-text="locationContext(item)"></span>
+                                    </button>
+                                </template>
+                            </div>
+                        </template>
+                        <p x-show="!locationLoading && !locationError && baseStationDetails.trim().length !== 1 && !locationItems.length" class="px-3 py-2 text-sm text-slate-500 dark:text-slate-400">No matching base stations or access points.</p>
+                    </div>
+                </div>
+                <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">Choose a base station or access point from the list to create the ticket.</p>
             </div>
             {% endif %}
 
@@ -322,6 +358,17 @@ function ticketFormPage() {
         selectedTeam: {{ (prefill.service_team_id or '')|tojson }},
         selectedTicketType: {{ (prefill.ticket_type or '')|tojson }},
         baseStationRequiredTicketTypes: {{ base_station_required_ticket_types|tojson }},
+        baseStationDetails: {{ (prefill.base_station_details or '')|tojson }},
+        locationSource: {{ (prefill.location_source or '')|tojson }},
+        locationId: {{ (prefill.location_id or '')|tojson }},
+        locationGroups: [{title: 'Base Stations', items: []}, {title: 'Access Points', items: []}],
+        locationOpen: false,
+        locationLoading: false,
+        locationError: false,
+        locationActiveIndex: -1,
+        locationRequestId: 0,
+        locationTimer: null,
+        locationController: null,
         selectedRegion: {{ (prefill.region or '')|tojson }},
         selectedManager: {{ (prefill.ticket_manager_person_id or '')|tojson }},
         autoFilledManager: '',
@@ -348,6 +395,102 @@ function ticketFormPage() {
             return this.baseStationRequiredTicketTypes.includes(
                 (this.selectedTicketType || '').trim().toLowerCase(),
             );
+        },
+        onTicketTypeChange() {
+            if (this.requiresBaseStation) return;
+            this.baseStationDetails = '';
+            this.clearLocationSelection();
+            this.locationOpen = false;
+        },
+        get locationItems() {
+            return this.locationGroups.flatMap((group) => group.items);
+        },
+        locationOptionIndex(item) {
+            return this.locationItems.findIndex((entry) => entry.source === item.source && entry.id === item.id);
+        },
+        locationContext(item) {
+            const source = item.source === 'fiber_access_point' ? 'Fiber' : item.source === 'wireless_access_point' ? 'Wireless' : '';
+            return [source, item.context].filter(Boolean).join(' · ');
+        },
+        clearLocationSelection() {
+            this.locationSource = '';
+            this.locationId = '';
+            this.$refs.locationInput?.setCustomValidity('');
+        },
+        validateLocationSelection(event) {
+            if (!this.requiresBaseStation || (this.locationSource && this.locationId)) return;
+            event.preventDefault();
+            const input = this.$refs.locationInput;
+            input.setCustomValidity('Choose a base station or access point from the list.');
+            input.reportValidity();
+        },
+        openLocationSuggestions() {
+            this.locationOpen = true;
+            this.loadLocationSuggestions();
+        },
+        searchLocationSuggestions() {
+            this.locationOpen = true;
+            this.locationActiveIndex = -1;
+            this.locationGroups = [{title: 'Base Stations', items: []}, {title: 'Access Points', items: []}];
+            if (this.locationTimer) window.clearTimeout(this.locationTimer);
+            if (this.locationController) this.locationController.abort();
+            this.locationRequestId += 1;
+            if (this.baseStationDetails.trim().length === 1) {
+                this.locationGroups = [{title: 'Base Stations', items: []}, {title: 'Access Points', items: []}];
+                this.locationLoading = false;
+                this.locationError = false;
+                return;
+            }
+            this.locationTimer = window.setTimeout(() => this.loadLocationSuggestions(), 250);
+        },
+        async loadLocationSuggestions() {
+            const term = this.baseStationDetails.trim();
+            if (term.length === 1) return;
+            if (this.locationController) this.locationController.abort();
+            const controller = new AbortController();
+            this.locationController = controller;
+            const requestId = ++this.locationRequestId;
+            this.locationLoading = true;
+            this.locationError = false;
+            try {
+                const response = await fetch(`/admin/support/tickets/location-suggestions?q=${encodeURIComponent(term)}&limit=12`, {signal: controller.signal});
+                if (!response.ok) throw new Error('Location lookup failed');
+                const data = await response.json();
+                if (requestId !== this.locationRequestId) return;
+                this.locationGroups = [
+                    {title: 'Base Stations', items: data.base_stations || []},
+                    {title: 'Access Points', items: data.access_points || []},
+                ];
+            } catch (error) {
+                if (requestId !== this.locationRequestId || error.name === 'AbortError') return;
+                this.locationError = true;
+                this.locationGroups = [{title: 'Base Stations', items: []}, {title: 'Access Points', items: []}];
+            } finally {
+                if (requestId === this.locationRequestId) this.locationLoading = false;
+            }
+        },
+        moveLocationChoice(step) {
+            if (!this.locationOpen) this.openLocationSuggestions();
+            const count = this.locationItems.length;
+            if (count) this.locationActiveIndex = (this.locationActiveIndex + step + count) % count;
+        },
+        selectActiveLocation(event) {
+            const item = this.locationItems[this.locationActiveIndex];
+            if (!this.locationOpen || !item) return;
+            event.preventDefault();
+            this.chooseLocation(item);
+        },
+        chooseLocation(item) {
+            if (this.locationController) this.locationController.abort();
+            if (this.locationTimer) window.clearTimeout(this.locationTimer);
+            this.locationRequestId += 1;
+            this.baseStationDetails = item.label;
+            this.locationSource = item.source;
+            this.locationId = item.id;
+            this.$refs.locationInput?.setCustomValidity('');
+            this.locationOpen = false;
+            this.locationActiveIndex = -1;
+            this.$nextTick(() => this.$refs.locationInput?.dispatchEvent(new Event('change', {bubbles: true})));
         },
         get filteredStaff() {
             const search = this.assigneeSearch.trim().toLowerCase();
@@ -444,6 +587,7 @@ function ticketFormPage() {
     const accountHidden = document.querySelector('input[name="customer_account_id"]');
     const customerHidden = document.querySelector('input[name="customer_person_id"][data-typeahead-hidden]');
     const typeSelect = document.querySelector('select[name="ticket_type"]');
+    const baseStationInput = document.querySelector('input[name="base_station_details"]');
     const regionSelect = document.querySelector('select[name="region"]');
     const tagsInput = document.querySelector('input[name="tags"]');
     let timer = null;
@@ -526,6 +670,7 @@ function ticketFormPage() {
         if (accountId) params.set('customer_account_id', accountId);
         if (customerId) params.set('customer_person_id', customerId);
         if (typeSelect && typeSelect.value) params.set('ticket_type', typeSelect.value);
+        if (baseStationInput && baseStationInput.value.trim()) params.set('base_station_details', baseStationInput.value.trim());
         if (tagsInput && tagsInput.value.trim()) params.set('tags', tagsInput.value.trim());
         if (regionSelect && regionSelect.value) params.set('region', regionSelect.value);
 
@@ -560,7 +705,7 @@ function ticketFormPage() {
         timer = window.setTimeout(runCheck, 350);
     };
 
-    [titleInput, descriptionInput, subscriberHidden, accountHidden, customerHidden, typeSelect, tagsInput, regionSelect]
+    [titleInput, descriptionInput, subscriberHidden, accountHidden, customerHidden, typeSelect, baseStationInput, tagsInput, regionSelect]
         .filter(Boolean)
         .forEach((el) => {
             ['input', 'change'].forEach((eventName) => {
