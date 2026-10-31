@@ -1028,8 +1028,8 @@ def build_ticket_create_payload(form: AdminTicketCreateForm) -> AdminTicketCreat
         ticket_type=form.ticket_type or None,
         location_reference=location_reference,
         priority=form.priority,
-        channel=form.channel,
-        status=form.status,
+        channel=TicketChannel(form.channel),
+        status=TicketStatus(form.status),
         due_at=parse_dt_or_none(form.due_at),
         tags=[item.strip() for item in (form.tags or "").split(",") if item.strip()],
         metadata_=(

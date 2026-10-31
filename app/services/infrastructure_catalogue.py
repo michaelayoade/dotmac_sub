@@ -8,6 +8,7 @@ from dataclasses import dataclass
 from uuid import UUID
 
 from sqlalchemy import String, literal, or_, select
+from sqlalchemy.engine import Row
 from sqlalchemy.orm import Session
 from sqlalchemy.sql import Select
 
@@ -223,14 +224,18 @@ def resolve_ticket_location(
     """Resolve a selected ticket location against its current native record."""
 
     if lock:
-        model = {
-            TicketLocationSource.base_station: PopSite,
-            TicketLocationSource.wireless_access_point: NetworkDevice,
-            TicketLocationSource.fiber_access_point: FiberAccessPoint,
-        }[reference.source]
-        db.execute(
-            select(model.id).where(model.id == reference.id).with_for_update(read=True)
-        ).one_or_none()
+        if reference.source is TicketLocationSource.base_station:
+            lock_query = select(PopSite.id).where(PopSite.id == reference.id)
+        elif reference.source is TicketLocationSource.wireless_access_point:
+            lock_query = select(NetworkDevice.id).where(
+                NetworkDevice.id == reference.id
+            )
+        else:
+            lock_query = select(FiberAccessPoint.id).where(
+                FiberAccessPoint.id == reference.id
+            )
+        db.execute(lock_query.with_for_update(read=True)).one_or_none()
+    row: Row[tuple[UUID, str, str | None]] | Row[tuple[UUID, str, str]] | None
     if reference.source is TicketLocationSource.base_station:
         row = db.execute(
             select(PopSite.id, PopSite.name, PopSite.city).where(

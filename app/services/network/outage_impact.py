@@ -9,12 +9,6 @@ from uuid import UUID
 from sqlalchemy import or_, select
 from sqlalchemy.orm import Session
 
-from app.models.catalog import (
-    AccessType,
-    CatalogOffer,
-    Subscription,
-    SubscriptionStatus,
-)
 from app.models.network import (
     CPEDevice,
     DeviceStatus,
@@ -33,6 +27,11 @@ from app.services.topology.affected import affected_customers, fdh_impact_rows
 from app.services.topology.customer_path import (
     RadioResolutionTier,
     resolve_customer_path,
+)
+from app.services.topology.ticket_asset_membership import (
+    WirelessSubscriptionMatch,
+    active_fiber_subscription_ids,
+    wireless_subscription_match,
 )
 
 TICKET_RADIO_EDGE_TTL = timedelta(minutes=30)
@@ -185,25 +184,18 @@ def resolve_ticket_asset_audience(
                     "radio_subscription_missing",
                     "A customer radio at this access point is not linked to a specific subscription.",
                 )
-            subscription = db.get(Subscription, radio.subscription_id)
-            if (
-                subscription is None
-                or subscription.subscriber_id != radio.subscriber_id
-            ):
+            match = wireless_subscription_match(
+                db,
+                subscription_id=radio.subscription_id,
+                subscriber_id=radio.subscriber_id,
+            )
+            if match is WirelessSubscriptionMatch.conflicting:
                 raise _ticket_audience_error(
                     "radio_subscription_conflict",
-                    "A customer radio and its subscription do not agree.",
+                    "A customer radio and its wireless subscription do not agree.",
                 )
-            if (
-                subscription.offer is None
-                or subscription.offer.access_type is not AccessType.fixed_wireless
-            ):
-                raise _ticket_audience_error(
-                    "radio_subscription_conflict",
-                    "A customer radio is linked to a subscription that is not wireless.",
-                )
-            if subscription.status == SubscriptionStatus.active:
-                subscription_ids.add(subscription.id)
+            if match is WirelessSubscriptionMatch.active:
+                subscription_ids.add(radio.subscription_id)
     else:
         termination_ids = set(
             db.scalars(
@@ -220,16 +212,7 @@ def resolve_ticket_asset_audience(
                 "fiber_endpoint_missing",
                 "This fiber access point has no single verified connection endpoint.",
             )
-        fiber_ids = db.scalars(
-            select(Subscription.id)
-            .join(CatalogOffer, CatalogOffer.id == Subscription.offer_id)
-            .where(
-                Subscription.status == SubscriptionStatus.active,
-                CatalogOffer.access_type == AccessType.fiber,
-            )
-            .order_by(Subscription.id)
-        ).all()
-        for subscription_id in fiber_ids:
+        for subscription_id in active_fiber_subscription_ids(db):
             trace = trace_fiber_subscription(db, subscription_id)
             if not trace.customer_trace_complete:
                 raise _ticket_audience_error(

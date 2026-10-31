@@ -249,6 +249,9 @@ def test_domain_sot_relationships_encode_cross_domain_dependencies() -> None:
     assert sot_relationships.dependencies_for("network.outage_impact") == (
         "network.access_path",
         "network.forwarding_topology",
+        "network.infrastructure_catalogue",
+        "network.fiber_topology",
+        "access.subscription_lifecycle",
     )
     assert sot_relationships.dependencies_for("network.fiber_topology") == (
         "network.identity",

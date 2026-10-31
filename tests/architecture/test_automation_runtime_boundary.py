@@ -21,6 +21,7 @@ def test_execution_coordinator_is_fully_contracted() -> None:
         "automation.rule_definitions",
         "events.store",
         "events.replay_evidence",
+        "access.subscription_lifecycle",
     )
 
 
