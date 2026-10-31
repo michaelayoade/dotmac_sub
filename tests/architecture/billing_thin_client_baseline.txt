@@ -6,7 +6,7 @@
 # approval from Michael.
 # Regenerate with tests.architecture.billing_thin_client_inventory
 # .render_baseline(<repo root>).
-TOTAL 96876
+TOTAL 98226
 app/services/account_billing_approval.py
 app/services/api_billing_webhooks.py
 app/services/billing/__init__.py
@@ -33,6 +33,7 @@ app/services/billing/opening_census_wire.py
 app/services/billing/opening_export.py
 app/services/billing/opening_export_contracts.py
 app/services/billing/opening_rehearsal_assembly.py
+app/services/billing/opening_verifier.py
 app/services/billing/payment_invoice_paid.py
 app/services/billing/payment_receipt_identity.py
 app/services/billing/payments.py
@@ -153,4 +154,5 @@ scripts/billing/return_legacy_over_allocation.py
 scripts/billing/settle_reviewed_prepaid_draft.py
 scripts/migration/billing_numbering_activation_proof.py
 scripts/migration/billing_numbering_readiness.py
+scripts/migration/billing_opening_authority.py
 scripts/migration/billing_opening_export.py

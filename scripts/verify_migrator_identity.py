@@ -5,8 +5,9 @@
 BEFORE it pins an image, so a role-graph mismatch refuses the deploy while
 nothing has changed. It runs the same check ``alembic/env.py`` repeats when it
 migrates (``app.migration_ownership.assert_migrator_identity``): the connection
-is the BYPASSRLS non-superuser migrator, a member of the object owner with
-INHERIT and SET, and the owner does not reach the migrator.
+is the BYPASSRLS non-superuser migrator, a member of the runtime role (which
+owns the pre-existing objects) with INHERIT and SET, and the runtime role does
+not reach the migrator.
 
 Exit codes: 0 satisfied, 1 contract violation, 2 usage or connection error.
 Nothing is written and no connection detail is printed.
@@ -26,16 +27,22 @@ import psycopg
 
 from app.config import settings
 from app.migration_ownership import (
-    OWNER_ENV_VAR,
+    RUNTIME_ROLE_ENV_VAR,
     MigrationOwnershipError,
     assert_migrator_identity,
+    assert_public_schema_posture,
+    runtime_role_from_environ,
 )
 
 
 def main() -> int:
-    owner = os.environ.get(OWNER_ENV_VAR, "").strip()
+    try:
+        owner = runtime_role_from_environ(os.environ)
+    except MigrationOwnershipError as exc:
+        print(f"MIGRATOR IDENTITY REFUSED: {exc}", file=sys.stderr)
+        return 2
     if not owner:
-        print(f"{OWNER_ENV_VAR} is not set", file=sys.stderr)
+        print(f"{RUNTIME_ROLE_ENV_VAR} is not set", file=sys.stderr)
         return 2
     url = settings.alembic_database_url.replace(
         "postgresql+psycopg://", "postgresql://", 1
@@ -45,10 +52,13 @@ def main() -> int:
             connection.execute("SET TRANSACTION READ ONLY")
             try:
                 assert_migrator_identity(connection, owner=owner)
+                reports = assert_public_schema_posture(connection, runtime_role=owner)
             except MigrationOwnershipError as exc:
                 print(f"MIGRATOR IDENTITY REFUSED: {exc}", file=sys.stderr)
                 return 1
             connection.rollback()
+            for report in reports:
+                print(f"MIGRATOR IDENTITY NOTE: {report}", file=sys.stderr)
     except psycopg.Error:
         print(
             "database connection or identity query failed; connection details "

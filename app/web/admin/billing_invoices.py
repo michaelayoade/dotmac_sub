@@ -27,6 +27,7 @@ from app.services.auth_dependencies import (
 )
 from app.services.billing.invoices import is_controlled_invoice_draft
 from app.services.inclusive_date_range import InclusiveDateRangeError
+from app.services.invoice_draft_authoring import resolve_account_vat_selection
 from app.services.list_query import ListQuery
 
 templates = Jinja2Templates(directory="templates")
@@ -41,6 +42,32 @@ def _actor_id(request: Request) -> str | None:
         return None
     value = current_user.get("actor_id") or current_user.get("subscriber_id")
     return str(value) if value else None
+
+
+def _apply_account_vat_to_form_state(
+    db: Session, state: dict[str, object] | None
+) -> None:
+    """Adapt the draft owner's VAT decision into Alpine form configuration."""
+
+    if not state or not state.get("selected_account_id"):
+        return
+    account = web_billing_invoice_forms_service.resolve_selected_account(
+        db, str(state["selected_account_id"])
+    )
+    config = state.get("invoice_config")
+    if account is None or not isinstance(config, dict):
+        return
+    selection = resolve_account_vat_selection(db, account=account)
+    config.update(
+        accountVatLocked=selection.selection_locked,
+        accountVatRateId=str(selection.tax_rate_id or ""),
+        accountVatName=selection.tax_rate_name or "",
+        accountVatPercent=(
+            float(selection.tax_rate_percent)
+            if selection.tax_rate_percent is not None
+            else None
+        ),
+    )
 
 
 def _resolve_invoice_new_account_id(
@@ -341,6 +368,7 @@ def invoice_new(
         db,
         account_id=resolved_account_id,
     )
+    _apply_account_vat_to_form_state(db, state)
 
     from app.web.admin import get_current_user, get_sidebar_stats
 
@@ -434,6 +462,7 @@ def invoice_create(
             db,
             account_id=locals().get("resolved_account_id") or account_id,
         )
+        _apply_account_vat_to_form_state(db, state)
         from app.web.admin import get_current_user, get_sidebar_stats
 
         return templates.TemplateResponse(
@@ -470,6 +499,7 @@ def invoice_edit(request: Request, invoice_id: UUID, db: Session = Depends(get_d
         db,
         invoice_id=str(invoice_id),
     )
+    _apply_account_vat_to_form_state(db, state)
     if not state:
         return templates.TemplateResponse(
             "admin/errors/404.html",
@@ -564,6 +594,7 @@ def invoice_update(
             db,
             invoice_id=str(invoice_id),
         )
+        _apply_account_vat_to_form_state(db, state)
         from app.web.admin import get_current_user, get_sidebar_stats
 
         return templates.TemplateResponse(

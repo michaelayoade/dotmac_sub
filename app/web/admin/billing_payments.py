@@ -33,6 +33,7 @@ from app.services.audit_helpers import build_audit_activities
 from app.services.auth_dependencies import has_permission, require_permission
 from app.services.db_session_adapter import db_session_adapter
 from app.services.inclusive_date_range import InclusiveDateRangeError
+from app.services.invoice_draft_authoring import resolve_account_vat_selection
 from app.services.list_query import ListQuery
 from app.web.request_parsing import parse_json_body
 
@@ -355,6 +356,12 @@ def billing_customer_accounts(
     db: Session = Depends(get_db),
 ):
     accounts = web_billing_customers_service.accounts_for_customer(db, customer_ref)
+    for account in accounts:
+        subscriber = db.get(Subscriber, UUID(str(account["id"])))
+        if subscriber is None:
+            continue
+        selection = resolve_account_vat_selection(db, account=subscriber)
+        account["vat_selection"] = selection
     return templates.TemplateResponse(
         "admin/billing/_customer_account_select.html",
         {
