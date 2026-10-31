@@ -4,6 +4,7 @@ import logging
 from dataclasses import replace
 from datetime import UTC, datetime
 from decimal import Decimal
+from typing import cast
 from urllib.parse import quote_plus, urlsplit
 from uuid import UUID, uuid4
 
@@ -87,6 +88,11 @@ from app.services.domain_errors import DomainError
 from app.services.file_storage import build_content_disposition, file_uploads
 from app.services.object_storage import ObjectNotFoundError
 from app.services.owner_commands import CommandContext
+from app.services.portal_account_health import (
+    CustomerDashboardHighlightsQuery,
+    PortalAccountHealth,
+    get_customer_dashboard_highlights,
+)
 from app.services.prepaid_funding_reconstruction import (
     PrepaidFundingBaselineMissingError,
 )
@@ -306,6 +312,15 @@ def _render_dashboard(
 ) -> Response:
     """Render full or restricted dashboard based on subscriber status."""
     template_name, context = get_dashboard_template_context(db, customer)
+    if template_name == "customer/dashboard/index.html" and context.get(
+        "account_health"
+    ):
+        context["dashboard_highlights"] = get_customer_dashboard_highlights(
+            db,
+            CustomerDashboardHighlightsQuery(
+                account_health=cast(PortalAccountHealth, context["account_health"]),
+            ),
+        )
     return templates.TemplateResponse(
         template_name,
         {"request": request, **context},

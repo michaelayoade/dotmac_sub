@@ -10,20 +10,30 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass, replace
-from datetime import UTC, date, datetime
+from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
 from enum import StrEnum
+from math import ceil
 from uuid import UUID
+from zoneinfo import ZoneInfo
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session, selectinload
 
+from app.models.billing import (
+    Invoice,
+    InvoiceDueDateBasis,
+    InvoiceStatus,
+    ServiceEntitlement,
+    ServiceEntitlementStatus,
+)
 from app.models.catalog import BillingMode, Subscription, SubscriptionStatus
 from app.models.subscriber import Subscriber
 from app.models.subscription_change import (
     SubscriptionChangeRequest,
     SubscriptionChangeStatus,
 )
+from app.models.usage import QuotaBucket
 from app.schemas.service_status import ServiceStatusAction, ServiceStatusItem
 from app.schemas.status_presentation import StatusPresentation
 from app.services import display_format
@@ -50,8 +60,10 @@ from app.services.service_status import (
 from app.services.status_presentation import (
     access_session_status_presentation,
     account_status_presentation,
+    invoice_status_presentation,
     service_access_status_presentation,
     subscription_status_presentation,
+    ticket_status_presentation,
 )
 from app.services.subscription_lifecycle import classify_service_change_delivery
 from app.services.topology.connection_status import assess
@@ -203,6 +215,114 @@ class PortalAccountHealth:
             primary_action=None,
             customer_primary_action_url=None,
         )
+
+
+@dataclass(frozen=True, slots=True)
+class CustomerDashboardHighlightsQuery:
+    """Compose dashboard-only facts around an already scoped account projection."""
+
+    account_health: PortalAccountHealth
+
+
+@dataclass(frozen=True, slots=True)
+class CustomerDashboardService:
+    health: PortalServiceHealth
+    download_mbps: int | None
+    upload_mbps: int | None
+    service_period: StateValue
+    data_usage: StateValue
+
+
+@dataclass(frozen=True, slots=True)
+class CustomerDashboardPeriod:
+    starts_at: datetime
+    ends_at: datetime
+    elapsed_percent: int
+    elapsed_days: int
+    total_days: int
+    days_remaining: int
+
+
+@dataclass(frozen=True, slots=True)
+class CustomerDashboardUsage:
+    used_gb: Decimal
+    allowance_gb: Decimal
+    starts_at: datetime
+    ends_at: datetime
+
+
+@dataclass(frozen=True, slots=True)
+class CustomerDashboardSupport:
+    open_count: int
+    latest_ticket_number: str | None
+    latest_status_label: str | None
+    latest_updated_at: datetime | None
+
+
+class CustomerDashboardActivityKind(StrEnum):
+    invoice = "invoice"
+    connection = "connection"
+
+
+@dataclass(frozen=True, slots=True)
+class CustomerDashboardActivity:
+    kind: CustomerDashboardActivityKind
+    title: str
+    detail: str
+    observed_at: datetime
+    action_label: str
+    action_url: str
+    amount_due: MoneyAmount | None = None
+    due_at: datetime | None = None
+
+
+class CustomerDashboardHeroKind(StrEnum):
+    action = "action"
+    renewal = "renewal"
+    outage = "outage"
+    unavailable = "unavailable"
+    clear = "clear"
+
+
+@dataclass(frozen=True, slots=True)
+class CustomerDashboardHero:
+    kind: CustomerDashboardHeroKind
+    eyebrow: str
+    message: str
+    action_label: str | None = None
+    action_url: str | None = None
+    renewal_at: datetime | None = None
+    renewal_shortfall: MoneyAmount | None = None
+
+    def __post_init__(self) -> None:
+        if (self.action_label is None) != (self.action_url is None):
+            raise ValueError("Dashboard action label and URL must be paired")
+        if self.kind in {
+            CustomerDashboardHeroKind.action,
+            CustomerDashboardHeroKind.renewal,
+        }:
+            if self.action_url is None:
+                raise ValueError("Action dashboard hero requires a CTA")
+        elif self.action_url is not None:
+            raise ValueError("Non-action dashboard hero cannot carry a CTA")
+        if self.kind is CustomerDashboardHeroKind.renewal:
+            if self.renewal_at is None or self.renewal_shortfall is None:
+                raise ValueError("Renewal hero requires deadline and shortfall")
+        elif self.renewal_at is not None or self.renewal_shortfall is not None:
+            raise ValueError("Only renewal hero may carry renewal evidence")
+
+
+@dataclass(frozen=True, slots=True)
+class CustomerDashboardHighlights:
+    greeting_name: str
+    greeting_period: str
+    observed_at: datetime
+    hero: CustomerDashboardHero
+    account_credit: StateValue
+    services: tuple[CustomerDashboardService, ...]
+    support: StateValue
+    activity: StateValue
+    activity_partial: bool
 
 
 _CUSTOMER_ACTION_URLS = {
@@ -591,4 +711,569 @@ def build_portal_account_health(
         primary_action=primary_action,
         customer_primary_action_url=_customer_action_url(primary_action),
         as_of=evaluated_at,
+    )
+
+
+def _dashboard_support(db: Session, account_id: UUID) -> StateValue:
+    """Project the exact account's active, non-terminal support requests."""
+    try:
+        from app.services.support import Tickets, TicketStatusScope
+
+        status_scope = TicketStatusScope.not_closed()
+        open_count = Tickets.count(
+            db,
+            subscriber_id=str(account_id),
+            is_active=True,
+            status_scope=status_scope,
+        )
+        latest_rows = Tickets.list(
+            db,
+            subscriber_id=str(account_id),
+            is_active=True,
+            status_scope=status_scope,
+            order_by="updated_at",
+            order_dir="desc",
+            limit=1,
+        )
+        latest = latest_rows[0] if latest_rows else None
+        return StateValue.present(
+            CustomerDashboardSupport(
+                open_count=open_count,
+                latest_ticket_number=latest.number if latest is not None else None,
+                latest_status_label=(
+                    ticket_status_presentation(latest.status).label
+                    if latest is not None
+                    else None
+                ),
+                latest_updated_at=latest.updated_at if latest is not None else None,
+            ),
+            as_of=datetime.now(UTC),
+        )
+    except Exception as exc:
+        logger.warning(
+            "customer_dashboard_support_unavailable",
+            extra={"account_id": str(account_id), "error_type": type(exc).__name__},
+        )
+        return StateValue.unavailable()
+
+
+def _dashboard_activity(
+    db: Session, health: PortalAccountHealth
+) -> tuple[StateValue, bool]:
+    """Compose customer-safe invoice and connection updates from their owners."""
+    items: list[CustomerDashboardActivity] = []
+    partial = any(
+        service.connection.kind.value in {"unknown", "unavailable"}
+        for service in health.services
+    )
+    try:
+        invoice = db.scalar(
+            select(Invoice)
+            .where(Invoice.account_id == health.account_id)
+            .where(Invoice.is_active.is_(True))
+            .where(Invoice.is_proforma.is_not(True))
+            .where(
+                Invoice.status.in_(
+                    (
+                        InvoiceStatus.issued,
+                        InvoiceStatus.partially_paid,
+                        InvoiceStatus.overdue,
+                    )
+                )
+            )
+            .where(Invoice.balance_due > Decimal("0"))
+            .order_by(Invoice.issued_at.desc(), Invoice.created_at.desc())
+            .limit(1)
+        )
+        if invoice is not None:
+            number = invoice.invoice_number or str(invoice.id)[:8]
+            title = (
+                f"Invoice {number} is ready"
+                if invoice.status == InvoiceStatus.issued
+                else f"Invoice {number} · {invoice_status_presentation(invoice.status).label}"
+            )
+            observed_at = invoice.issued_at or invoice.created_at
+            items.append(
+                CustomerDashboardActivity(
+                    kind=CustomerDashboardActivityKind.invoice,
+                    title=title,
+                    detail="Review your latest open invoice.",
+                    observed_at=(
+                        observed_at.replace(tzinfo=UTC)
+                        if observed_at.tzinfo is None
+                        else observed_at
+                    ),
+                    action_label="Review",
+                    action_url=f"/portal/billing/invoices/{invoice.id}",
+                    amount_due=MoneyAmount(
+                        amount=invoice.balance_due, currency=invoice.currency
+                    ),
+                    due_at=(
+                        invoice.due_at
+                        if invoice.due_date_basis
+                        not in (None, InvoiceDueDateBasis.unknown_unverified)
+                        else None
+                    ),
+                )
+            )
+    except Exception as exc:
+        logger.warning(
+            "customer_dashboard_invoice_activity_unavailable",
+            extra={
+                "account_id": str(health.account_id),
+                "error_type": type(exc).__name__,
+            },
+        )
+        partial = True
+
+    connected_services = [
+        service for service in health.services if service.connection.is_present
+    ]
+    if connected_services:
+        service = max(
+            connected_services,
+            key=lambda candidate: candidate.connection.value.checked_at,
+        )
+        diagnosis = service.connection.value
+        items.append(
+            CustomerDashboardActivity(
+                kind=CustomerDashboardActivityKind.connection,
+                title=(
+                    "Connection status may be out of date"
+                    if service.connection.is_stale
+                    else diagnosis.headline
+                ),
+                detail=diagnosis.message,
+                observed_at=diagnosis.checked_at,
+                action_label="Connection details",
+                action_url=f"/portal/services/{service.subscription_id}",
+            )
+        )
+    if partial and not items:
+        return StateValue.unavailable(), True
+    return StateValue.present(tuple(items), as_of=datetime.now(UTC)), partial
+
+
+def _utc_instant(value: datetime) -> datetime:
+    return value.replace(tzinfo=UTC) if value.tzinfo is None else value.astimezone(UTC)
+
+
+def _renewal_window_hero(
+    db: Session,
+    health: PortalAccountHealth,
+    services: tuple[CustomerDashboardService, ...],
+    subscriptions: dict[UUID, Subscription],
+) -> tuple[CustomerDashboardHero | None, bool]:
+    """Show only an exact, underfunded prepaid renewal in the next seven days."""
+    from app.services.customer_chargeability import confirmed_free_subscription_ids
+    from app.services.prepaid_service_renewals import resolve_prepaid_monthly_charges
+    from app.services.subscription_billing_treatments import (
+        resolve_subscription_billing_treatments,
+    )
+
+    by_deadline: dict[datetime, list[Subscription]] = {}
+    uncertain = False
+    for row in services:
+        if row.health.billing_mode != BillingMode.prepaid.value:
+            continue
+        subscription = subscriptions.get(row.health.subscription_id)
+        if (
+            subscription is not None
+            and subscription.status is not SubscriptionStatus.active
+        ):
+            continue
+        period = row.service_period
+        anchor = row.health.next_charge_at
+        if (
+            subscription is None
+            or anchor is None
+            or not period.is_present
+            or period.is_stale
+        ):
+            uncertain = True
+            continue
+        deadline = _utc_instant(period.value.ends_at)
+        if _utc_instant(anchor) != deadline:
+            uncertain = True
+            continue
+        remaining = deadline - health.as_of
+        if not timedelta(0) < remaining <= timedelta(days=7):
+            continue
+        by_deadline.setdefault(deadline, []).append(subscription)
+
+    if not by_deadline:
+        return None, uncertain
+    if (
+        uncertain
+        or not health.financial.prepaid_funding.is_present
+        or health.financial.prepaid_funding.is_stale
+    ):
+        return None, True
+
+    funding: MoneyAmount = health.financial.prepaid_funding.value
+    candidate_subscriptions = [
+        subscription
+        for deadline in sorted(by_deadline)
+        for subscription in by_deadline[deadline]
+    ]
+    try:
+        free_ids = confirmed_free_subscription_ids(db, candidate_subscriptions)
+        required = Decimal("0.00")
+        for deadline in sorted(by_deadline):
+            candidates = by_deadline[deadline]
+            treatments = resolve_subscription_billing_treatments(
+                db, candidates, as_of=deadline
+            )
+            billable = [
+                subscription
+                for subscription in candidates
+                if subscription.id not in free_ids
+                and not treatments[subscription.id].suppress_customer_billing
+            ]
+            charges = resolve_prepaid_monthly_charges(db, billable, deadline)
+            group_total = Decimal("0.00")
+            for subscription in billable:
+                charge = charges.get(subscription.id)
+                if charge is None:
+                    return None, True
+                amount, currency, _cycle = charge
+                if currency != funding.currency or amount <= 0:
+                    return None, True
+                group_total += amount
+            required += group_total
+            if required <= funding.amount:
+                continue
+
+            shortfall = required - funding.amount
+            days = ceil((deadline - health.as_of).total_seconds() / 86400)
+            plural = "s" if days != 1 else ""
+            count = sum(
+                len(by_deadline[item_deadline])
+                for item_deadline in by_deadline
+                if item_deadline <= deadline
+            )
+            subject = "Your services renew" if count > 1 else "Your service renews"
+            object_label = "them" if count > 1 else "it"
+            amount_text = display_format.format_money(
+                shortfall, currency=funding.currency
+            )
+            return (
+                CustomerDashboardHero(
+                    kind=CustomerDashboardHeroKind.renewal,
+                    eyebrow="Action needed",
+                    message=(
+                        f"{subject} in {days} day{plural}. "
+                        f"Top up {amount_text} to keep {object_label} active."
+                    ),
+                    action_label="Top up",
+                    action_url="/portal/billing/topup",
+                    renewal_at=deadline,
+                    renewal_shortfall=MoneyAmount(
+                        amount=shortfall, currency=funding.currency
+                    ),
+                ),
+                False,
+            )
+    except Exception as exc:
+        logger.warning(
+            "customer_dashboard_renewal_advisory_unavailable",
+            extra={
+                "account_id": str(health.account_id),
+                "error_type": type(exc).__name__,
+            },
+        )
+        return None, True
+    return None, False
+
+
+def _dashboard_hero(
+    db: Session,
+    health: PortalAccountHealth,
+    services: tuple[CustomerDashboardService, ...],
+    subscriptions: dict[UUID, Subscription],
+) -> CustomerDashboardHero:
+    action = health.primary_action
+    if action is not None and health.customer_primary_action_url is not None:
+        return CustomerDashboardHero(
+            kind=CustomerDashboardHeroKind.action,
+            eyebrow="Action needed",
+            message=action.message,
+            action_label=action.label,
+            action_url=health.customer_primary_action_url,
+        )
+
+    renewal, renewal_uncertain = _renewal_window_hero(
+        db, health, services, subscriptions
+    )
+    if renewal is not None:
+        return renewal
+    if any(
+        row.health.connection.kind.value == "present"
+        and not row.health.connection.is_stale
+        and row.health.connection.value.area_outage
+        for row in services
+    ):
+        return CustomerDashboardHero(
+            kind=CustomerDashboardHeroKind.outage,
+            eyebrow="Service update",
+            message="There is an outage in your area",
+        )
+    if (
+        renewal_uncertain
+        or health.has_partial_data
+        or any(
+            row.health.connection.kind.value != "present"
+            or row.health.connection.is_stale
+            for row in services
+        )
+    ):
+        return CustomerDashboardHero(
+            kind=CustomerDashboardHeroKind.unavailable,
+            eyebrow="Status unavailable",
+            message="We can't confirm your next action right now.",
+        )
+    return CustomerDashboardHero(
+        kind=CustomerDashboardHeroKind.clear,
+        eyebrow="Account overview",
+        message="No urgent action is needed right now.",
+    )
+
+
+def get_customer_dashboard_highlights(
+    db: Session,
+    query: CustomerDashboardHighlightsQuery,
+) -> CustomerDashboardHighlights:
+    """Read scoped dashboard facts without introducing a second decision owner."""
+    health = query.account_health
+    account = db.get(Subscriber, health.account_id)
+    greeting_name = (
+        (account.first_name or account.company_name or health.display_name)
+        if account is not None
+        else health.display_name
+    )
+    local_hour = health.as_of.astimezone(ZoneInfo("Africa/Lagos")).hour
+    greeting_period = (
+        "morning" if local_hour < 12 else "afternoon" if local_hour < 17 else "evening"
+    )
+
+    credit = StateValue.unavailable()
+    try:
+        lanes = (
+            health.financial.receivables.value
+            if health.financial.receivables.is_present
+            else ()
+        )
+        if len(lanes) <= 1:
+            from app.services.billing._common import get_account_credit_balance
+
+            currency = (
+                lanes[0].currency if lanes else display_format.default_currency(db)
+            )
+            if health.financial.prepaid_funding.is_present:
+                currency = health.financial.prepaid_funding.value.currency
+            amount = get_account_credit_balance(
+                db, str(health.account_id), currency=currency
+            )
+            if amount >= Decimal("0.00"):
+                credit = StateValue.present(
+                    MoneyAmount(amount=amount, currency=currency),
+                    as_of=health.as_of,
+                )
+    except Exception as exc:
+        logger.warning(
+            "customer_dashboard_credit_unavailable",
+            extra={
+                "account_id": str(health.account_id),
+                "error_type": type(exc).__name__,
+            },
+        )
+
+    subscription_ids = tuple(service.subscription_id for service in health.services)
+    subscriptions: dict[UUID, Subscription] = {}
+    if subscription_ids:
+        try:
+            subscriptions = {
+                row.id: row
+                for row in db.scalars(
+                    select(Subscription)
+                    .where(Subscription.id.in_(subscription_ids))
+                    .where(Subscription.subscriber_id == health.account_id)
+                    .options(selectinload(Subscription.offer))
+                ).all()
+            }
+        except Exception as exc:
+            logger.warning(
+                "customer_dashboard_plan_speed_unavailable",
+                extra={
+                    "account_id": str(health.account_id),
+                    "error_type": type(exc).__name__,
+                },
+            )
+    period_by_service: dict[UUID, StateValue] = {}
+    usage_by_service: dict[UUID, StateValue] = {}
+    if subscription_ids:
+        try:
+            entitlement_rows = db.scalars(
+                select(ServiceEntitlement)
+                .where(ServiceEntitlement.account_id == health.account_id)
+                .where(ServiceEntitlement.subscription_id.in_(subscription_ids))
+                .where(ServiceEntitlement.status == ServiceEntitlementStatus.active)
+                .where(ServiceEntitlement.starts_at <= health.as_of)
+                .where(ServiceEntitlement.ends_at > health.as_of)
+            ).all()
+            entitlements: dict[UUID, list[ServiceEntitlement]] = {}
+            for entitlement_row in entitlement_rows:
+                entitlements.setdefault(entitlement_row.subscription_id, []).append(
+                    entitlement_row
+                )
+            for service_id in subscription_ids:
+                entitlement_candidates = entitlements.get(service_id, [])
+                if len(entitlement_candidates) != 1:
+                    period_by_service[service_id] = StateValue.unknown()
+                    continue
+                entitlement_row = entitlement_candidates[0]
+                starts_at = (
+                    entitlement_row.starts_at.replace(tzinfo=UTC)
+                    if entitlement_row.starts_at.tzinfo is None
+                    else entitlement_row.starts_at
+                )
+                ends_at = (
+                    entitlement_row.ends_at.replace(tzinfo=UTC)
+                    if entitlement_row.ends_at.tzinfo is None
+                    else entitlement_row.ends_at
+                )
+                duration = (ends_at - starts_at).total_seconds()
+                if duration <= 0:
+                    period_by_service[service_id] = StateValue.unknown()
+                    continue
+                remaining = (ends_at - health.as_of).total_seconds()
+                total_days = ceil(duration / 86400)
+                period_by_service[service_id] = StateValue.present(
+                    CustomerDashboardPeriod(
+                        starts_at=starts_at,
+                        ends_at=ends_at,
+                        elapsed_percent=max(
+                            0, min(100, round((1 - remaining / duration) * 100))
+                        ),
+                        elapsed_days=max(
+                            1,
+                            min(total_days, ceil((duration - remaining) / 86400)),
+                        ),
+                        total_days=total_days,
+                        days_remaining=max(0, ceil(remaining / 86400)),
+                    ),
+                    as_of=health.as_of,
+                )
+        except Exception as exc:
+            logger.warning(
+                "customer_dashboard_period_unavailable",
+                extra={
+                    "account_id": str(health.account_id),
+                    "error_type": type(exc).__name__,
+                },
+            )
+            period_by_service = {
+                service_id: StateValue.unavailable() for service_id in subscription_ids
+            }
+
+        try:
+            bucket_rows = db.scalars(
+                select(QuotaBucket)
+                .where(QuotaBucket.subscription_id.in_(subscription_ids))
+                .where(QuotaBucket.period_start <= health.as_of)
+                .where(QuotaBucket.period_end > health.as_of)
+            ).all()
+            buckets: dict[UUID, list[QuotaBucket]] = {}
+            for bucket_row in bucket_rows:
+                buckets.setdefault(bucket_row.subscription_id, []).append(bucket_row)
+            for service_id in subscription_ids:
+                subscription = subscriptions.get(service_id)
+                allowance_id = (
+                    subscription.offer.usage_allowance_id
+                    if subscription is not None and subscription.offer is not None
+                    else None
+                )
+                bucket_candidates = [
+                    candidate
+                    for candidate in buckets.get(service_id, [])
+                    if allowance_id is not None
+                    and candidate.usage_allowance_id == allowance_id
+                ]
+                if len(bucket_candidates) != 1:
+                    usage_by_service[service_id] = StateValue.unknown()
+                    continue
+                bucket_row = bucket_candidates[0]
+                if bucket_row.included_gb is None:
+                    usage_by_service[service_id] = StateValue.not_applicable()
+                    continue
+                allowance_gb = (
+                    bucket_row.included_gb
+                    + (bucket_row.rollover_gb or Decimal("0"))
+                    + (bucket_row.topup_gb or Decimal("0"))
+                )
+                if (
+                    bucket_row.used_gb is None
+                    or bucket_row.used_gb < 0
+                    or allowance_gb < 0
+                ):
+                    usage_by_service[service_id] = StateValue.unknown()
+                    continue
+                usage_by_service[service_id] = StateValue.present(
+                    CustomerDashboardUsage(
+                        used_gb=bucket_row.used_gb,
+                        allowance_gb=allowance_gb,
+                        starts_at=bucket_row.period_start,
+                        ends_at=bucket_row.period_end,
+                    ),
+                    as_of=bucket_row.updated_at.replace(tzinfo=UTC)
+                    if bucket_row.updated_at.tzinfo is None
+                    else bucket_row.updated_at,
+                )
+        except Exception as exc:
+            logger.warning(
+                "customer_dashboard_usage_unavailable",
+                extra={
+                    "account_id": str(health.account_id),
+                    "error_type": type(exc).__name__,
+                },
+            )
+            usage_by_service = {
+                service_id: StateValue.unavailable() for service_id in subscription_ids
+            }
+
+    services = tuple(
+        CustomerDashboardService(
+            health=service,
+            download_mbps=(
+                subscriptions[service.subscription_id].offer.speed_download_mbps
+                if service.subscription_id in subscriptions
+                and subscriptions[service.subscription_id].offer is not None
+                else None
+            ),
+            upload_mbps=(
+                subscriptions[service.subscription_id].offer.speed_upload_mbps
+                if service.subscription_id in subscriptions
+                and subscriptions[service.subscription_id].offer is not None
+                else None
+            ),
+            service_period=period_by_service.get(
+                service.subscription_id, StateValue.unknown()
+            ),
+            data_usage=usage_by_service.get(
+                service.subscription_id, StateValue.unknown()
+            ),
+        )
+        for service in health.services
+    )
+    activity, activity_partial = _dashboard_activity(db, health)
+    return CustomerDashboardHighlights(
+        greeting_name=greeting_name or "Customer",
+        greeting_period=greeting_period,
+        observed_at=health.as_of,
+        hero=_dashboard_hero(db, health, services, subscriptions),
+        account_credit=credit,
+        services=services,
+        support=_dashboard_support(db, health.account_id),
+        activity=activity,
+        activity_partial=activity_partial,
     )

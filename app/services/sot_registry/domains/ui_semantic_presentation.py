@@ -695,6 +695,8 @@ DOMAIN = DomainSOT(
             module="app.services.portal_account_health",
             owns=(
                 "customer and reseller account-health first-viewport projection",
+                "customer dashboard identity, credit, plan, period, usage, support, and activity highlights",
+                "customer dashboard renewal warning and outage hero",
                 "subscription-scoped service-health row projection",
                 "portal financial-position currency-lane projection",
                 "mobile account-health transport projection",
@@ -705,14 +707,21 @@ DOMAIN = DomainSOT(
                 "customer.accounts",
                 "customer.financial_position",
                 "customer.service_status",
+                "financial.account_credit_applications",
                 "financial.billing_profile",
+                "financial.customer_chargeability",
+                "financial.invoices",
+                "financial.prepaid_service_renewals",
                 "financial.prepaid_funding_reconstruction",
+                "financial.subscription_billing_treatments",
                 "network.connection_health",
                 "network.outage_lifecycle",
                 "network.radius_sessions",
                 "service_intent.subscription_lifecycle",
+                "support.ticket_lifecycle",
                 "ui.projection_contracts",
                 "ui.status_presentation",
+                "usage.quota_cycle_policy",
             ),
             notes=(
                 "One read owner composes lifecycle, billing mode, currency-typed "
@@ -734,6 +743,34 @@ DOMAIN = DomainSOT(
                             "canonical customer financial position",
                             "canonical service-health rows",
                             "UI projection vocabulary",
+                        ),
+                    ),
+                    ConcernContract(
+                        name="customer dashboard identity, credit, plan, period, usage, support, and activity highlights",
+                        role=OwnerRole.RESOLVER,
+                        input_names=(
+                            "canonical account-health projection",
+                            "canonical account state",
+                            "canonical account credit",
+                            "canonical current subscriptions",
+                            "funded prepaid service period evidence",
+                            "rated quota period and usage evidence",
+                            "canonical customer invoice updates",
+                            "canonical customer support request scope",
+                        ),
+                    ),
+                    ConcernContract(
+                        name="customer dashboard renewal warning and outage hero",
+                        role=OwnerRole.RESOLVER,
+                        input_names=(
+                            "canonical account-health projection",
+                            "funded prepaid service period evidence",
+                            "canonical contracted prepaid renewal charge",
+                            "canonical customer financial position",
+                            "canonical customer chargeability",
+                            "canonical subscription billing treatment",
+                            "canonical connection and outage diagnosis",
+                            "canonical service access decision",
                         ),
                     ),
                     ConcernContract(
@@ -782,13 +819,61 @@ DOMAIN = DomainSOT(
                         source="Subscriber identity and lifecycle status",
                     ),
                     AuthorityInput(
+                        name="canonical account credit",
+                        owner="financial.account_credit_applications",
+                        kind=AuthorityKind.DERIVED_PROJECTION,
+                        source="currency-scoped unallocated credit from the customer ledger",
+                    ),
+                    AuthorityInput(
                         name="canonical current subscriptions",
                         owner="access.subscription_lifecycle",
                         kind=AuthorityKind.AUTHORITATIVE_RECORD,
                         source=(
-                            "operationally-current Subscription identity, offer, "
+                            "operationally-current Subscription identity, offer and speed, "
                             "billing mode, and lifecycle status"
                         ),
+                    ),
+                    AuthorityInput(
+                        name="funded prepaid service period evidence",
+                        owner="financial.prepaid_service_renewals",
+                        kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                        source="active account- and subscription-scoped ServiceEntitlement interval",
+                    ),
+                    AuthorityInput(
+                        name="canonical contracted prepaid renewal charge",
+                        owner="financial.prepaid_service_renewals",
+                        kind=AuthorityKind.DERIVED_PROJECTION,
+                        source="exact taxed contracted charge resolved for the renewal instant",
+                    ),
+                    AuthorityInput(
+                        name="canonical customer chargeability",
+                        owner="financial.customer_chargeability",
+                        kind=AuthorityKind.DERIVED_PROJECTION,
+                        source="explicitly free recurring service classification",
+                    ),
+                    AuthorityInput(
+                        name="canonical subscription billing treatment",
+                        owner="financial.subscription_billing_treatments",
+                        kind=AuthorityKind.DERIVED_PROJECTION,
+                        source="customer-billing suppression effective at the renewal instant",
+                    ),
+                    AuthorityInput(
+                        name="rated quota period and usage evidence",
+                        owner="usage.quota_cycle_policy",
+                        kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                        source="current exact-subscription QuotaBucket with matching offer allowance",
+                    ),
+                    AuthorityInput(
+                        name="canonical customer invoice updates",
+                        owner="financial.invoices",
+                        kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                        source="customer-scoped issued, partially paid, or overdue active invoice",
+                    ),
+                    AuthorityInput(
+                        name="canonical customer support request scope",
+                        owner="support.ticket_lifecycle",
+                        kind=AuthorityKind.DERIVED_PROJECTION,
+                        source="canonical Tickets count and latest row under TicketStatusScope.not_closed",
                     ),
                     AuthorityInput(
                         name="canonical billing profile",

@@ -100,11 +100,38 @@ domain state.
 ### Portal Account Health contract
 
 Customer dashboard, customer service detail, reseller account detail, and the
-customer mobile app consume `app.services.portal_account_health`. The first
-viewport keeps account lifecycle, billing mode, currency-separated receivables,
+customer mobile app consume `app.services.portal_account_health`. The shared
+projection keeps account lifecycle, billing mode, currency-separated receivables,
 prepaid funding, service access, subscription-scoped live-session evidence,
-connection/outage diagnosis, freshness, and the canonical next action together.
-Jinja surfaces share `templates/components/portal/account_health.html`; mobile
+connection/outage diagnosis, freshness, and the canonical next action distinct.
+The customer dashboard's first viewport prioritizes the canonical action,
+account credit, and service status. It adds typed dashboard-only identity,
+account-credit, and plan-speed highlights while retaining the shared health
+decision. It presents unavailable inputs explicitly and never calculates a
+payment shortfall in Jinja. Billing details remain available on `/portal/billing`.
+Each service card also shows progress through an exact active funded prepaid
+entitlement when one exists. A companion card shows recorded usage for one
+current capped quota bucket matching that service's offer allowance, with the
+allowance window and recording time. Missing, ambiguous, or uncapped evidence
+has its own plain-language state; the template does not invent a period, total,
+or zero. The support card uses the canonical ticket scope and distinguishes
+confirmed zero requests from an unavailable read. The update rows use an open
+customer invoice and the existing connection diagnosis; a failed invoice read
+marks the feed partial without hiding confirmed connection evidence. Review,
+service details, support, and notifications link to existing customer pages.
+The chat button opens the shared chat widget only when chat is enabled and the
+customer session permits changes.
+The account-overview hero consumes the typed dashboard hero result. Existing
+service-status actions take priority. For active prepaid service with one exact
+funded period and a matching renewal anchor, it shows an advance top-up action
+from seven days before renewal only when the canonical taxed renewal charge
+exceeds reviewed available funding. A current confirmed area outage appears
+when no payment action is due, with the exact text
+"There is an outage in your area".
+The clear state appears only after complete required reads. The template does
+not calculate the renewal shortfall or infer outage state.
+Service detail and reseller Jinja surfaces share
+`templates/components/portal/account_health.html`; mobile
 uses `GET /api/v1/me/account-health`. Neither client derives those semantics or
 issues a parallel connection-status request. See
 `docs/designs/PORTAL_ACCOUNT_SERVICE_HEALTH.md` for ownership, query budget, and

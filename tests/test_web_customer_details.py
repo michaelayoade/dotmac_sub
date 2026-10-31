@@ -851,15 +851,18 @@ def test_customer_detail_projects_safe_legacy_unsuspend(
     assert len(action["fingerprint"]) == 64
 
 
-def test_customer_dashboard_welcome_card_keeps_content_inset() -> None:
+def test_customer_dashboard_action_card_keeps_content_inset() -> None:
     template = Path("templates/customer/dashboard/index.html").read_text(
         encoding="utf-8"
     )
 
-    assert "px-6 py-6 sm:px-8 sm:py-7" in template
-    assert "min-w-0 flex-1" in template
-    assert "break-words text-3xl" in template
-    assert "max-w-2xl leading-relaxed" in template
+    overview = template.split('aria-label="Account overview">', 1)[1].split(
+        "</section>", 1
+    )[0]
+    assert "bg-[var(--color-brand-900)] p-6" in overview
+    assert '<div class="min-w-0">' in overview
+    assert "max-w-2xl break-words" in overview
+    assert "leading-tight sm:text-3xl" in overview
 
 
 def test_customer_detail_exposes_invoice_status_presentations(db_session, subscriber):

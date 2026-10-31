@@ -67,7 +67,16 @@ OLT, ONT, NAS, or RADIUS polling.
 
 ## Surface contracts
 
-- Customer dashboard renders the shared financial and service-health macros.
+- Customer dashboard composes the shared Account Health projection with a typed,
+  dashboard-only identity, currency-scoped unallocated-credit, and offer-speed
+  read. The first viewport shows the canonical action when one exists, account
+  credit separately from prepaid funding and receivables, and one service card
+  per operationally-current subscription. A missing credit or speed read shows
+  an explicit unavailable message. A missing action is described as no payment
+  action only when Account Health is complete. The topbar remains owned by the
+  shared customer layout. The dashboard also shows exact funded prepaid
+  service-period progress, rated capped-allowance usage per service, customer
+  support requests, and customer-safe invoice and connection updates.
 - Customer service detail narrows the same account projection to the requested
   subscription after the existing ownership check. If an owned subscription is
   missing from that projection, the detail service returns no result so the
@@ -82,6 +91,75 @@ OLT, ONT, NAS, or RADIUS polling.
   an independent connection or change-status summary.
 - Mobile calls `GET /api/v1/me/account-health` and renders the transport schema
   in `app.schemas.portal_account_health`.
+
+### Customer dashboard page contract
+
+- Screen: `/portal/dashboard`, customer glance dashboard. The customer decides
+  whether an owner-confirmed action is needed and which service to inspect.
+- Primary identity: authenticated account number and operationally-current
+  subscription IDs. The customer session scopes the read before projection.
+- Read owner: `ui.portal_account_health_projection`; dashboard highlights use
+  its typed `CustomerDashboardHighlightsQuery` and result. Source records are
+  the account, currency-scoped unallocated-credit ledger, scoped offers, funded
+  service entitlements, exact taxed prepaid renewal charge, reviewed prepaid
+  funding, customer chargeability and billing treatment, rated quota buckets,
+  canonical support-ticket queries, issued invoice records, and the shared
+  connection projection.
+- First viewport: local greeting, account lifecycle, canonical primary action or
+  seven-day renewal warning or confirmed area outage,
+  account credit, and per-service lifecycle, access, session, connection,
+  plan speed, next charge date, connection evidence time, funded service period,
+  rated capped-allowance usage, open support requests, and relevant invoice and
+  connection updates.
+- Actions: the primary action uses the service-status owner's label and URL;
+  the dashboard-only advance-renewal action links to prepaid top-up. It starts
+  at most seven 24-hour days before the confirmed renewal date only when the
+  exact contracted charge exceeds available prepaid funding. The projected
+  shortfall is the cumulative amount needed for renewals due by that date;
+  confirmed free or customer-billing-suppressed services do not request funds.
+  Existing active service-status actions take precedence, then the advance
+  renewal action, then a confirmed area-outage message, then the clear state.
+  The area-outage message requires a current confirmed diagnosis, is exactly
+  "There is an outage in your area", and has no payment action. When neither
+  applies and all required reads are complete, including current connection
+  diagnoses, the card says "No urgent action is needed right now." A failed or
+  ambiguous near-term renewal quote never becomes a payment CTA or a clear-state
+  claim.
+  This reminder does not change prepaid enforcement, grace, or suspension.
+  The existing billing history, service details, support requests, invoice review, and
+  notifications are read-only drill-downs. Chat opens the existing portal chat
+  widget only when enabled for a writable customer session; otherwise the
+  existing support page is the destination. View-only sessions do not show a
+  payment or chat action. No destructive or bulk action exists.
+- Availability: absent account health shows a page warning; unavailable credit,
+  speed, charge date, or connection shows an explicit message. Confirmed zero
+  credit remains zero. Multiple currencies do not collapse into one credit
+  amount. A period progress bar appears only for one unambiguous active funded
+  entitlement. Usage appears only for one current quota bucket matching the
+  service's offer allowance; an uncapped bucket is identified separately.
+  Missing or ambiguous evidence shows an unavailable message. No operational
+  service yields a dedicated empty state. A confirmed zero open-ticket count is
+  shown as zero; a failed support read says unavailable. Invoice activity uses
+  only active, non-proforma, issued or partially paid or overdue invoices with
+  a positive balance. Its due date appears only with verified due-date basis.
+  A failed invoice read or missing connection diagnosis cannot erase a confirmed
+  update from the other owner and is marked as a partial feed. No invoice or
+  connection update has a distinct empty message.
+- Freshness and provenance: Account Health and connection observations carry
+  their own timestamps. The dashboard does not poll equipment or cache a second
+  status decision. The reminder requires one active funded entitlement whose
+  end matches the subscription billing anchor, and quotes the canonical taxed
+  contracted renewal charge at that end instant. It compares the charge with
+  the reviewed available prepaid funding in the same currency. A missing or
+  conflicting entitlement, anchor, price, currency, or funding read fails
+  closed. Dates display in Lagos time. Sensitive financial amounts
+  remain inside the authenticated customer session.
+- Layout: the same facts stack on mobile. From the medium breakpoint, each
+  service card spans the full available width. The first usage and support cards
+  share a row beneath the first service card, giving both cards room for their
+  details without stretching them to service-card height. Additional service
+  and usage cards follow below. The shared customer layout owns the topbar, and
+  the update rows follow the cards.
 
 Templates and mobile clients may choose navigation and native layout. They do
 not derive billing position, access eligibility, session freshness, outage
@@ -109,6 +187,34 @@ The account projection is one request and receives the exact current service
 cohort once. Live sessions are batch-resolved for that cohort. Full topology
 diagnosis runs only for active services. No historical subscription receives a
 diagnosis and no client issues a second connection-status request.
+
+The customer dashboard highlights read reuses that projection and batch-loads
+offer speeds for its already-scoped service IDs. It reads ledger credit in one
+currency lane; it never nets credit against receivables or infers a payment
+amount from a future charge. A separate account-credit read failure does not
+replace a confirmed zero or fail the whole page.
+
+The dashboard batch-reads active funded entitlements for exact prepaid service
+periods and current rated quota buckets for capped usage. It never infers a paid
+period from `next_billing_at`, merges multiple quota windows, or treats an
+unlimited bucket's zero as measured usage. Quota usage carries the bucket's
+recorded time and may lag live traffic. Missing or conflicting source evidence
+does not produce a percentage or fabricated data amount. The new entitlement
+and quota reads are each batched across the already-scoped service IDs.
+
+The seven-day reminder reuses those exact periods and the Account Health
+prepaid-funding read. It groups eligible renewal dates, checks free-service and
+billing-treatment decisions, and requests canonical contracted charges only
+for groups in the window. The first cumulative funding shortfall becomes the
+dashboard advisory. An unavailable dependency suppresses a financial CTA.
+These bounded dashboard reads do not change the separate Account Health query
+budget or perform a write.
+
+The dashboard support card uses the support owner's canonical customer scope
+and non-closed status scope. The previous dashboard-context open-count query,
+which turned a failed read into zero, is retired. Invoice activity reads one
+customer-scoped open invoice. Connection activity reuses the Account Health
+diagnosis already loaded for each current service and adds no network poll.
 
 The one-active-service fixture currently uses 26 SQL statements and is guarded
 at a maximum of 28. Any increase must identify the new authoritative input and

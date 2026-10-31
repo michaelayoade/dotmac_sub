@@ -24,7 +24,6 @@ from app.models.subscriber import (
     Subscriber,
     SubscriberCategory,
 )
-from app.models.support import Ticket
 from app.services import billing as billing_service
 from app.services import catalog as catalog_service
 from app.services import subscriber as subscriber_service
@@ -40,7 +39,6 @@ from app.services.customer_context import (
     resolve_customer_account_ids,
 )
 from app.services.customer_financial_position import get_customer_financial_position
-from app.services.customer_support_links import ticket_customer_link_filter
 from app.services.invoice_classification import collectible_ar_invoice_filter
 from app.services.prepaid_funding_reconstruction import (
     PrepaidFundingBaselineMissingError,
@@ -239,29 +237,6 @@ def get_dashboard_context(db: Session, session: dict) -> dict:
         elif subscriber.first_name:
             user = {"first_name": subscriber.first_name}
 
-    open_count = 0
-    if account_id:
-        try:
-            open_count = (
-                db.scalar(
-                    select(func.count(Ticket.id))
-                    .where(Ticket.is_active.is_(True))
-                    .where(ticket_customer_link_filter(Ticket, account_id))
-                    .where(
-                        Ticket.status.notin_(
-                            (
-                                "closed",
-                                "canceled",
-                                "merged",
-                            )
-                        )
-                    )
-                )
-                or 0
-            )
-        except Exception:
-            open_count = 0
-
     from app.services.portal_account_health import build_portal_account_health
 
     health_account_id = account_id or subscriber_id
@@ -274,7 +249,6 @@ def get_dashboard_context(db: Session, session: dict) -> dict:
     return {
         "user": SimpleNamespace(**user),
         "account_health": account_health,
-        "tickets": SimpleNamespace(open_count=open_count),
         "stats_error": account_health is None or account_health.has_partial_data,
     }
 
