@@ -6,7 +6,7 @@ from uuid import uuid4
 import pytest
 
 from app.models.billing import ServiceEntitlement, ServiceEntitlementStatus
-from app.models.catalog import BillingMode
+from app.models.catalog import BillingMode, Subscription, SubscriptionStatus
 from app.models.event_store import EventStore
 from app.models.service_extension import (
     ServiceExtension,
@@ -30,8 +30,10 @@ from app.models.ticket_workflow import (
     SlaTarget,
     WorkflowEntityType,
 )
+from app.schemas.infrastructure import TicketLocationSource
 from app.services import account_lifecycle, ticket_sla_service_automation
 from app.services.events.types import EventType
+from app.services.network.outage_impact import TicketAssetAudience
 from app.services.owner_commands import CommandContext
 
 
@@ -59,6 +61,136 @@ def _pause_command(ticket_id):
             idempotency_key=f"automation-pause-test:{event_id}",
         ),
     )
+
+
+def _asset_pause_command(ticket_id):
+    event_id = uuid4()
+    return ticket_sla_service_automation.PauseTicketAssetServicesForSlaBreachCommand(
+        ticket_id=ticket_id,
+        event_id=event_id,
+        rule_id=uuid4(),
+        rule_version_id=uuid4(),
+        step_index=0,
+        context=CommandContext.system(
+            actor="automation-runtime",
+            scope="subscription:pause",
+            reason="test ticket asset SLA pause",
+            correlation_id=event_id,
+            idempotency_key=f"automation-asset-pause-test:{event_id}",
+        ),
+    )
+
+
+def test_asset_pause_requires_recorded_sla_breach(
+    db_session, active_subscription, monkeypatch
+):
+    ticket = Ticket(
+        title="Unverified asset outage",
+        status=TicketStatus.open.value,
+        priority="urgent",
+        metadata_={
+            "base_station_reference": {
+                "source": TicketLocationSource.base_station.value,
+                "id": str(uuid4()),
+            }
+        },
+    )
+    db_session.add(ticket)
+    db_session.flush()
+    ticket_id = ticket.id
+    db_session.commit()
+    called = []
+    monkeypatch.setattr(
+        ticket_sla_service_automation,
+        "resolve_ticket_asset_audience",
+        lambda *_args, **_kwargs: called.append(True),
+    )
+
+    with pytest.raises(
+        ticket_sla_service_automation.TicketSlaServiceAutomationError
+    ) as exc:
+        ticket_sla_service_automation.pause_ticket_asset_services_for_sla_breach(
+            db_session, _asset_pause_command(ticket_id)
+        )
+
+    assert exc.value.code.endswith(".sla_breach_not_authoritative")
+    assert not called
+
+
+def test_asset_pause_applies_to_every_verified_active_subscription(
+    db_session, subscriber, active_subscription, monkeypatch
+):
+    from app.schemas.infrastructure import TicketLocationReference
+
+    reference = TicketLocationReference(
+        source=TicketLocationSource.base_station, id=uuid4()
+    )
+    ticket = Ticket(
+        title="Base station outage",
+        status=TicketStatus.open.value,
+        priority="urgent",
+        metadata_={
+            "base_station_reference": {
+                "source": reference.source.value,
+                "id": str(reference.id),
+            }
+        },
+    )
+    other = Subscription(
+        subscriber_id=subscriber.id,
+        offer_id=active_subscription.offer_id,
+        status=SubscriptionStatus.active,
+        billing_mode=BillingMode.postpaid,
+    )
+    db_session.add_all((ticket, other))
+    db_session.flush()
+    ticket_id = ticket.id
+    other_id = other.id
+    active_id = active_subscription.id
+    db_session.commit()
+    command = _asset_pause_command(ticket_id)
+    _seed_authoritative_breach(db_session, ticket_id=ticket_id, command=command)
+    audience = TicketAssetAudience(
+        asset=reference,
+        subscription_ids=tuple(sorted((active_id, other_id))),
+        affected_count=2,
+        scope_token="verified-audience",
+    )
+    monkeypatch.setattr(
+        ticket_sla_service_automation,
+        "resolve_ticket_asset_audience",
+        lambda *_args, **_kwargs: audience,
+    )
+    captured = []
+
+    def fake_pause(_db, pause_command):
+        captured.append(pause_command)
+        return account_lifecycle.PauseSubscriptionCauseOutcome(
+            episode_id=uuid4(),
+            cause_id=uuid4(),
+            subscription_id=pause_command.subscription_id,
+            account_status=subscriber.status,
+            cause_added=False,
+            replayed=False,
+        )
+
+    monkeypatch.setattr(account_lifecycle, "pause_subscription_for_cause", fake_pause)
+
+    outcome = ticket_sla_service_automation.pause_ticket_asset_services_for_sla_breach(
+        db_session, command
+    )
+
+    assert outcome.affected_count == 2
+    assert {item.subscription_id for item in captured} == {
+        active_id,
+        other_id,
+    }
+    assert all(
+        item.resume_policy
+        is SubscriptionPauseResumePolicy.manual_after_ticket_resolution
+        for item in captured
+    )
+    assert len({item.source_id for item in captured}) == 2
 
 
 def _seed_authoritative_breach(db_session, *, ticket_id, command):

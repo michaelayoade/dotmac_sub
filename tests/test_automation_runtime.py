@@ -196,6 +196,57 @@ def test_run_history_list_contract_preserves_filter_and_page() -> None:
     assert "status=failed" in query.url("/admin/automation/runs", page=3)
 
 
+def test_run_detail_reports_ticket_asset_pause_count() -> None:
+    tenant_id = uuid4()
+    event_id = uuid4()
+    rule_id = uuid4()
+    rule_version_id = uuid4()
+    run_id = uuid4()
+    step = SimpleNamespace(
+        id=uuid4(),
+        step_index=0,
+        action_key="support.ticket.pause_asset_services",
+        status=AutomationStepStatus.succeeded.value,
+        attempt_count=1,
+        error_code=None,
+        error_message=None,
+        started_at=None,
+        completed_at=None,
+    )
+    run = SimpleNamespace(
+        id=run_id,
+        rule_id=rule_id,
+        rule_version_id=rule_version_id,
+        event_id=event_id,
+        event_type="support.ticket.sla_breached",
+        target_type="support.ticket",
+        target_id=uuid4(),
+        status="succeeded",
+        matched=True,
+        error_code=None,
+        error_message=None,
+        created_at=None,
+        started_at=None,
+        completed_at=None,
+    )
+    db = Mock(spec=Session)
+    db.scalar.side_effect = [
+        run,
+        SimpleNamespace(name="Asset SLA rule", trigger_key=run.event_type),
+    ]
+    db.scalars.side_effect = [(step,), ()]
+    db.execute.return_value.all.return_value = [(0, 2)]
+
+    detail = automation_runtime.get_run_detail(
+        db,
+        automation_runtime.GetAutomationRunDetailQuery(
+            tenant_id=tenant_id, run_id=run_id
+        ),
+    )
+
+    assert detail.steps[0].affected_subscription_count == 2
+
+
 def test_execute_prepared_run_releases_action_read_transaction_before_finishing(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

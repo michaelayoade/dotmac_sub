@@ -37,6 +37,26 @@ def test_automation_pause_action_delegates_to_registered_coordinator() -> None:
     assert "Subscriber.status" not in adapter_source
 
 
+def test_asset_pause_action_uses_one_registered_audience_and_pause_owner() -> None:
+    capability = automation_capabilities.action_capability(
+        "support.ticket.pause_asset_services"
+    )
+    owner = service_relationship("support.ticket_sla_service_consequence")
+    audience_owner = service_relationship("network.outage_impact")
+    coordinator_source = (
+        ROOT / "app/services/ticket_sla_service_automation.py"
+    ).read_text(encoding="utf-8")
+
+    assert capability.command_owner == owner.name
+    assert capability.command_name == "pause_ticket_asset_services_for_sla_breach"
+    assert capability.authoring_enabled and capability.runtime_enabled
+    assert audience_owner.contract is not None
+    assert "network.outage_impact" in owner.depends_on
+    assert "resolve_ticket_asset_audience(" in coordinator_source
+    assert "account_lifecycle.pause_subscription_for_cause(" in coordinator_source
+    assert "Subscription.status = SubscriptionStatus.paused" not in coordinator_source
+
+
 def test_ticket_pause_resume_consumes_canonical_prepaid_coverage() -> None:
     owner = service_relationship("support.ticket_sla_service_consequence")
     source = (ROOT / "app/services/ticket_sla_service_automation.py").read_text(

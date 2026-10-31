@@ -1270,6 +1270,7 @@ DOMAIN = DomainSOT(
                 "access.subscription_lifecycle",
                 "automation.execution",
                 "financial.prepaid_service_coverage",
+                "network.outage_impact",
             ),
             contract=ServiceContract(
                 concerns=(
@@ -1280,6 +1281,7 @@ DOMAIN = DomainSOT(
                             "canonical support ticket customer link",
                             "canonical subscription lifecycle state",
                             "durable automation action identity",
+                            "ticket-selected infrastructure asset and verified audience",
                         ),
                     ),
                     ConcernContract(
@@ -1340,6 +1342,15 @@ DOMAIN = DomainSOT(
                         ),
                     ),
                     AuthorityInput(
+                        name="ticket-selected infrastructure asset and verified audience",
+                        owner="network.outage_impact",
+                        kind=AuthorityKind.DERIVED_PROJECTION,
+                        source=(
+                            "Ticket base_station_reference resolved against active native "
+                            "inventory and exact active-subscription topology"
+                        ),
+                    ),
+                    AuthorityInput(
                         name="authoritative prepaid pause coverage evidence",
                         owner="financial.prepaid_service_coverage",
                         kind=AuthorityKind.DERIVED_PROJECTION,
@@ -1367,12 +1378,14 @@ DOMAIN = DomainSOT(
                         "subscription lock is held."
                     ),
                     idempotency=(
-                        "The event, rule version, and step derive one stable pause-cause "
-                        "source; an exact active source is returned as replay."
+                        "The event, rule version, and step derive one stable "
+                        "pause-cause source per subscription; exact prior causes "
+                        "are returned as replay."
                     ),
                     retries=(
-                        "Retry the complete owner command; exact prior success replays "
-                        "and zero or multiple active services fail closed."
+                        "Retry the complete owner command; exact prior success replays. "
+                        "The linked-customer action requires one active service; "
+                        "the asset action requires a verified non-empty audience."
                     ),
                 ),
                 errors=ErrorContract(
@@ -1394,6 +1407,9 @@ DOMAIN = DomainSOT(
                             "support.ticket_sla_service_consequence."
                             "active_service_ambiguous"
                         ),
+                        "support.ticket_sla_service_consequence.ticket_asset_missing",
+                        "support.ticket_sla_service_consequence.asset_audience_changed",
+                        "support.ticket_sla_service_consequence.asset_pause_conflict",
                         (
                             "support.ticket_sla_service_consequence."
                             "sla_breach_not_authoritative"
@@ -1425,6 +1441,8 @@ DOMAIN = DomainSOT(
                         "missing Ticket or customer account link",
                         "missing merge destination, merge cycle, or merge-chain customer mismatch",
                         "zero or multiple active linked services",
+                        "missing selected asset or incomplete asset audience",
+                        "changed asset audience before pause",
                         "conflicting replay evidence",
                         "missing, discontinuous, or anchor-inconsistent prepaid coverage",
                     ),
@@ -2385,6 +2403,23 @@ DOMAIN = DomainSOT(
                 author_permission="subscription:pause",
                 runtime_scope="subscription:pause",
                 idempotency="event, rule version, step, and pause-cause source",
+                conflict_scope="support.ticket.sla_service_access_consequence",
+                runtime_enabled=True,
+            ),
+            AutomationActionCapability(
+                key="support.ticket.pause_asset_services",
+                label=(
+                    "Pause all verified services behind the selected base station "
+                    "or access point after an SLA breach"
+                ),
+                entity_type="support.ticket",
+                command_owner="support.ticket_sla_service_consequence",
+                command_name="pause_ticket_asset_services_for_sla_breach",
+                input_schema_version=1,
+                inputs=(),
+                author_permission="subscription:pause",
+                runtime_scope="subscription:pause",
+                idempotency="event, rule version, step, and subscription",
                 conflict_scope="support.ticket.sla_service_access_consequence",
                 runtime_enabled=True,
             ),

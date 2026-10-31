@@ -545,6 +545,14 @@ canonical termination and segment mutations.
   `fiber_access_point` endpoint type is explicit; FATs are not hidden under the
   ambiguous legacy `terminal` type.
 
+For a Ticket SLA bulk pause, `network.outage_impact` uses this exact fiber
+access-point termination and `trace_fiber_subscription` to identify active
+services whose reviewed route passes through it. The query checks every active
+fiber subscription because an incomplete route could hide an affected service.
+If any trace is incomplete, the action stops with a visible reason and pauses
+none. The audience is rebuilt from current native inventory and route evidence
+on each attempt; the network topology and access owners repair missing links.
+
 Operator flow:
 
 ```bash

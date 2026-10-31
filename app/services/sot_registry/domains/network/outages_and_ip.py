@@ -27,10 +27,14 @@ SERVICES: tuple[SOTService, ...] = (
             "affected-customer impact",
             "outage scope impact",
             "tokenized cabinet audience membership",
+            "verified ticket asset subscription audience",
         ),
         depends_on=(
             "network.access_path",
             "network.forwarding_topology",
+            "network.infrastructure_catalogue",
+            "network.fiber_topology",
+            "access.subscription_lifecycle",
         ),
         notes=(
             "resolve_fdh_audience projects the exact subscription "
@@ -38,6 +42,117 @@ SERVICES: tuple[SOTService, ...] = (
             "membership token; consumers (network.cabinet_notice) "
             "compare that token between preview and execution instead "
             "of trusting a snapshot."
+        ),
+        contract=ServiceContract(
+            concerns=(
+                ConcernContract(
+                    name="affected-customer impact",
+                    role=OwnerRole.RESOLVER,
+                    input_names=("active service attachment and network topology",),
+                ),
+                ConcernContract(
+                    name="outage scope impact",
+                    role=OwnerRole.RESOLVER,
+                    input_names=("active service attachment and network topology",),
+                ),
+                ConcernContract(
+                    name="tokenized cabinet audience membership",
+                    role=OwnerRole.RESOLVER,
+                    input_names=("active service attachment and network topology",),
+                ),
+                ConcernContract(
+                    name="verified ticket asset subscription audience",
+                    role=OwnerRole.RESOLVER,
+                    input_names=(
+                        "active ticket asset inventory",
+                        "active service attachment and network topology",
+                        "validated fiber subscription traces",
+                    ),
+                ),
+            ),
+            authoritative_inputs=(
+                AuthorityInput(
+                    name="active ticket asset inventory",
+                    owner="network.infrastructure_catalogue",
+                    kind=AuthorityKind.DERIVED_PROJECTION,
+                    source="Active native base station, wireless AP, and fiber AP identity",
+                ),
+                AuthorityInput(
+                    name="active service attachment and network topology",
+                    owner="network.access_path",
+                    kind=AuthorityKind.DERIVED_PROJECTION,
+                    source="Active subscription and exact customer access path membership",
+                ),
+                AuthorityInput(
+                    name="validated fiber subscription traces",
+                    owner="network.fiber_topology",
+                    kind=AuthorityKind.DERIVED_PROJECTION,
+                    source="Exhaustive active-fiber trace with reviewed termination and segment edges",
+                ),
+            ),
+            transaction=TransactionContract(
+                mode=TransactionMode.READ_ONLY,
+                boundary="Typed audience query reads inside the caller's transaction and never commits",
+                locking="Selected native asset is shared-locked; the pause coordinator locks exact subscription rows before writing",
+                idempotency="Identical active topology and subscription state yield the same ordered IDs and membership token",
+                retries="A changed asset or incomplete route stops the caller; retry only after topology is repaired",
+            ),
+            errors=ErrorContract(
+                domain_codes=tuple(
+                    f"network.outage_impact.{code}"
+                    for code in (
+                        "asset_unavailable",
+                        "site_topology_missing",
+                        "site_membership_unverified",
+                        "radio_subscription_missing",
+                        "radio_subscription_conflict",
+                        "radio_topology_stale",
+                        "fiber_endpoint_missing",
+                        "fiber_route_incomplete",
+                        "no_active_subscriptions",
+                    )
+                ),
+                mapping_owner="support ticket SLA consequence and automation run adapter",
+                fail_closed_on=(
+                    "missing or ambiguous asset identity",
+                    "missing customer-to-subscription attachment",
+                    "stale wireless association observation",
+                    "incomplete fiber route coverage",
+                ),
+            ),
+            projections=(
+                ProjectionContract(
+                    name="verified ticket asset subscription audience",
+                    input_names=(
+                        "active ticket asset inventory",
+                        "active service attachment and network topology",
+                        "validated fiber subscription traces",
+                    ),
+                    writer="network.outage_impact",
+                    freshness="Recomputed from current native records at action execution",
+                    stale_behavior="No saved audience is reused; missing coverage blocks the action",
+                    drift_signal="An asset, exact attachment, or validated route changes the membership token or produces a gap",
+                    rebuild_operation="Rerun resolve_ticket_asset_audience after topology repair",
+                    repair_owner="network.outage_impact",
+                ),
+            ),
+            migration=MigrationContract(
+                state=AuthorityMigrationState.NATIVE,
+                new_owner="network.outage_impact",
+                verification="Focused asset-audience and SLA consequence tests",
+                cutover_gate="Only verified audience results authorize the bulk pause action",
+                fallback_retirement="No manual name or proximity-based audience fallback",
+            ),
+            steward="network operations",
+            design_refs=(
+                "docs/designs/NETWORK_TOPOLOGY_CUSTOMER_PATH.md",
+                "docs/designs/FIBER_TOPOLOGY_SOT.md",
+                "docs/designs/AUTOMATION_CENTER_SOT.md",
+            ),
+            test_refs=(
+                "tests/test_ticket_asset_audience.py",
+                "tests/test_ticket_sla_service_automation.py",
+            ),
         ),
     ),
     SOTService(

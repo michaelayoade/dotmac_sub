@@ -236,6 +236,30 @@ the pull request's CI suite before merge.
 
 ## Ticket SLA service consequences
 
+The separate `support.ticket.pause_asset_services` action is available in the
+same SLA-breach workflow builder. Staff can filter the rule by ticket type.
+When the rule runs, it reads the exact Base Station Details selection saved on
+the Ticket and asks `network.outage_impact` for the affected active subscription
+IDs. Base stations use their linked active network equipment and each
+subscription's resolved access path. Wireless access points require exact
+radio-to-subscription links and a UISP association checked within 30 minutes
+(two ordinary 15-minute sync intervals). Fiber access points require one active referenced
+termination and complete reviewed routes for the entire active fiber cohort;
+one incomplete route means the full group cannot be proven. Site and sector
+selection is not supported. Missing asset identity, incomplete attachment,
+ambiguous routes, or an empty affected group stop the action with an operator
+reason. No subscription is paused on such a failure.
+
+The coordinator checks the durable breach and current Ticket status, locks all
+selected subscriptions, and adds one independent Ticket pause cause per
+subscription in one transaction. It uses the established pause lifecycle and
+`extend_by_effective_pause_duration` billing treatment. Recovery is always a
+separate staff action after the Ticket reaches a resolved state. A replay of a
+completed step reads its existing causes instead of adding new ones. The run
+detail page shows the number paused for a successful action; failed actions
+show the specific reason under Why it stopped. No workflow is created or
+published by deployment.
+
 Support exposes the runtime-enabled `support.ticket.sla_breached` trigger from
 the durable breach fact owned by `support.ticket_sla_clock`. Its version-1
 payload contains the operator tenant, Ticket, SLA clock, breach time, normalized
