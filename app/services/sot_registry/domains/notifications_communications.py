@@ -3179,12 +3179,16 @@ DOMAIN = DomainSOT(
                 "conversation-scoped representative customer association resolution",
                 "exact provider-scoped Party identity evidence",
                 "Inbox-origin Lead endpoint identity repair",
+                "reviewed Inbox identity correction requests",
             ),
             depends_on=(
                 "party.registry",
                 "customer.identity_scope",
                 "communications.team_inbox_threads",
                 "communications.team_inbox_participants",
+                "auth.staff_provisioning",
+                "auth.system_user_assignments",
+                "auth.permission_gate",
             ),
             contract=_team_inbox_contract(
                 service_name="communications.team_inbox_contact_resolution",
@@ -3217,6 +3221,10 @@ DOMAIN = DomainSOT(
                         "Inbox-origin Lead endpoint identity repair",
                         OwnerRole.RECONCILER,
                     ),
+                    (
+                        "reviewed Inbox identity correction requests",
+                        OwnerRole.COMMAND_WRITER,
+                    ),
                 ),
                 inputs=(
                     AuthorityInput(
@@ -3242,6 +3250,18 @@ DOMAIN = DomainSOT(
                         owner="communications.team_inbox_participants",
                         kind=AuthorityKind.DERIVED_PROJECTION,
                         source="Exact active participant and reviewed conversation-scoped representative classification.",
+                    ),
+                    AuthorityInput(
+                        name="canonical staff review identity",
+                        owner="auth.staff_provisioning",
+                        kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                        source="Authenticated staff principal and persisted display name for every correction decision.",
+                    ),
+                    AuthorityInput(
+                        name="administrator role membership",
+                        owner="auth.system_user_assignments",
+                        kind=AuthorityKind.CONTROL_INPUT,
+                        source="Transaction-current canonical admin role required to correct or clear disputed contact ownership.",
                     ),
                 ),
                 transaction_mode=TransactionMode.OWNER_MANAGED,
@@ -3275,11 +3295,18 @@ DOMAIN = DomainSOT(
                     "communications.team_inbox_contact_resolution.stale_contact_route",
                     "communications.team_inbox_contact_resolution.stale_contact_link",
                 ),
-                event_types=("team_inbox.contact_link_changed.v1",),
+                event_types=(
+                    "team_inbox.contact_link_changed.v1",
+                    "team_inbox.identity_correction_requested.v1",
+                    "team_inbox.identity_correction_cleared.v1",
+                    "team_inbox.identity_correction_resolved_existing.v1",
+                    "team_inbox.incorrect_party_contact_removed.v1",
+                ),
                 projections=(
                     "InboxContactLink canonical contact-point projection",
                     "bounded lazy Customer link options",
                     "conversation-scoped represented Customer association",
+                    "exact sender match review and open administrator correction worklist",
                 ),
                 design_refs=(
                     "docs/designs/TEAM_INBOX_SOURCE_OF_TRUTH.md",
@@ -4422,6 +4449,7 @@ DOMAIN = DomainSOT(
                 "communications.team_inbox_contact_resolution",
                 "sales.lead_lifecycle",
                 "auth.permission_gate",
+                "auth.staff_provisioning",
             ),
             contract=_team_inbox_contract(
                 service_name="communications.inbox_lead_actions",
@@ -4443,6 +4471,12 @@ DOMAIN = DomainSOT(
                         owner="auth.permission_gate",
                         kind=AuthorityKind.CONTROL_INPUT,
                         source="Independent Inbox, customer-profile, and CRM permission decisions.",
+                    ),
+                    AuthorityInput(
+                        name="canonical staff selection identity",
+                        owner="auth.staff_provisioning",
+                        kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                        source="Authenticated staff principal and canonical display name for reviewed Lead selection audit.",
                     ),
                 ),
                 transaction_mode=TransactionMode.COORDINATOR_MANAGED,

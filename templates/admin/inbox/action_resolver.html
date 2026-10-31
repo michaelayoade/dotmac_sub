@@ -39,7 +39,8 @@
         <button class="min-h-11 rounded-lg bg-cyan-700 px-4 text-sm font-semibold text-white">Create Lead for existing Party</button>
     </form>
     {% elif action.action_type.value == 'identity_review_required' %}
-    <div class="rounded-xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-900 dark:border-amber-800 dark:bg-amber-950/30 dark:text-amber-100">No identity or Lead was created. Review and link the authoritative customer identity from the conversation drawer first.</div>
+    <div class="rounded-xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-900 dark:border-amber-800 dark:bg-amber-950/30 dark:text-amber-100">The sender detail matches another record. Review the exact matches before choosing a Customer or Lead.</div>
+    <a href="/admin/inbox/{{ timeline_id }}/identity-review" class="inline-flex min-h-11 items-center rounded-lg bg-cyan-700 px-4 text-sm font-semibold text-white">Review matching records</a>
     {% else %}
     <div class="rounded-xl border border-slate-200 p-4 text-sm text-slate-600 dark:border-slate-700 dark:text-slate-300">{{ action.reason or 'This action is currently unavailable.' }}</div>
     {% endif %}

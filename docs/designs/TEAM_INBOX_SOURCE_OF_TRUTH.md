@@ -255,6 +255,47 @@ multiple exact owners require review. Reusing a person does not itself decide
 whether to reuse an existing opportunity or create another Lead: Sales SOT owns
 that opportunity decision, and either outcome keeps the same Party.
 
+### Inbox sender identity review and correction
+
+The Inbox identity review shows only exact active Party contact-point matches
+for the observed inbound endpoint (and the provider account for social
+channels). Each match names the Party, any readable active Customer or Lead
+role, and the exact matching reason. Discovery suggestions and names never
+become identity evidence. A reviewed Customer selection uses the existing
+contact-link owner; a reviewed active Lead selection uses the
+conversation-to-Lead owner. Both recheck a digest of the current exact evidence
+inside the owning transaction, so a stale form cannot link a different record.
+The conversation is reopened from its UUID and resolution readiness is
+recomputed by the existing completion owner.
+If an open correction request is resolved by choosing a matching existing
+Customer or Lead, it is closed as `resolved_existing` with the selected record
+and staff principal retained in audit evidence.
+
+If none of the matches belongs to the sender, an authenticated staff user can
+request correction with a reason. `communications.team_inbox_contact_resolution`
+stores the open request and evidence digest in the conversation's metadata and
+stages a staff-attributed audit event and durable domain event in the same
+transaction. Reviewed selection also fails closed when an existing structural
+conversation association points to a different Party; an administrator must
+correct that association before selection. Its bounded open-request worklist is
+visible only to the canonical
+`admin` role (shown as Administrator in the UI). An administrator corrects
+Customer, Reseller, or Lead contact information in its canonical editor. A Party
+with no
+Customer, Reseller, or Lead record may have the exact incorrect contact point
+deactivated through the reviewed Party participant, preserving the old point as
+inactive evidence. Every correction requires a reason and a fresh match check.
+The same reviewed removal applies to a wrong provider-scoped social subject,
+because the Customer and Lead profile editors do not own those provider IDs.
+The administrator can clear the request only when the exact endpoint has no
+remaining canonical Party match. A recorded ambiguous contact-resolution status
+then becomes `reviewed_no_match`, with the original request and audit retained.
+While the request is open, the Lead action stays in identity review even if
+another edit removes the last match. After clearance, the existing Sales owner
+may create the Party-backed Lead. The open request itself is a durable drift
+signal; the Inbox worklist and review page are its repair path. No correction
+automatically merges Parties or creates a Lead.
+
 The Existing Customer selector is lazy and has two explicit read modes. Focus
 on an empty field requests at most eight conversation-derived likely matches;
 there is no unrelated recently-updated-Customer fallback. Entering at least two

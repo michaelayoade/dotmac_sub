@@ -22,8 +22,12 @@ from app.models.sales import (
     PipelineStage,
 )
 from app.models.team_inbox import InboxConversation
-from app.services import conversation_lead_relationships, team_inbox_contact_links
-from app.services.audit_adapter import stage_audit_event
+from app.services import (
+    conversation_lead_relationships,
+    staff_provisioning,
+    team_inbox_contact_links,
+)
+from app.services.audit_adapter import AuditActor, stage_audit_event
 from app.services.domain_errors import DomainError
 from app.services.events import emit_event
 from app.services.events.types import EventType
@@ -125,6 +129,16 @@ class LinkExistingLeadCommand:
     lead_id: UUID
     actor_person_id: UUID | None
     source: conversation_lead_relationships.ConversationLeadLinkSource
+
+
+@dataclass(frozen=True, slots=True)
+class LinkReviewedLeadCommand:
+    context: CommandContext
+    conversation_id: UUID
+    lead_id: UUID
+    expected_evidence_digest: str
+    actor_system_user_id: UUID
+    actor_person_id: UUID | None
 
 
 @dataclass(frozen=True, slots=True)
@@ -268,9 +282,17 @@ def resolve_action(
     endpoint_evidence = _endpoint_identity(db, conversation)
     if party_id is None:
         party_id = endpoint_evidence.exact_party_id
-    ambiguous_identity = ambiguous_exact or (
-        endpoint_evidence.disposition
-        is team_inbox_contact_links.IdentityEvidenceDisposition.ambiguous_match
+    correction_open = (
+        team_inbox_contact_links.identity_correction_status(conversation)
+        is team_inbox_contact_links.IdentityCorrectionStatus.open
+    )
+    ambiguous_identity = (
+        ambiguous_exact
+        or correction_open
+        or (
+            endpoint_evidence.disposition
+            is team_inbox_contact_links.IdentityEvidenceDisposition.ambiguous_match
+        )
     )
 
     if intent == InboxActionIntent.profile:
@@ -508,6 +530,116 @@ def resolve_action(
         subscriber_id=subscriber_id,
         pipeline_id=pipeline.id,
         pipelines=pipelines,
+    )
+
+
+def link_reviewed_lead(
+    db: Session, command: LinkReviewedLeadCommand
+) -> InboxLeadActionOutcome:
+    """Apply an explicit Lead choice among exact sender matches."""
+
+    def operation() -> InboxLeadActionOutcome:
+        conversation = db.scalar(
+            select(InboxConversation)
+            .where(
+                InboxConversation.id == command.conversation_id,
+                InboxConversation.is_active.is_(True),
+            )
+            .with_for_update()
+        )
+        if conversation is None:
+            raise _error("conversation_not_found", "Inbox conversation was not found.")
+        if command.context.actor != f"user:{command.actor_system_user_id}":
+            raise _error("actor_required", "An authenticated staff user is required.")
+        staff = staff_provisioning.resolve_staff_display_identities(
+            db,
+            query=staff_provisioning.StaffDisplayIdentityQuery(
+                user_ids=frozenset({command.actor_system_user_id})
+            ),
+        ).identities
+        if len(staff) != 1 or not staff[0].display_name.strip():
+            raise _error("actor_required", "The staff account needs a display name.")
+        evidence = team_inbox_contact_links.lock_conversation_identity_evidence(
+            db, conversation
+        )
+        if (
+            team_inbox_contact_links.identity_evidence_digest(evidence)
+            != command.expected_evidence_digest
+        ):
+            raise _error(
+                "stale_identity_review",
+                "Contact matches changed. Refresh the review before continuing.",
+            )
+        lead = db.scalar(
+            select(Lead).where(Lead.id == command.lead_id).with_for_update()
+        )
+        if (
+            lead is None
+            or not lead.is_active
+            or lead.status not in _OPEN_STATUSES
+            or lead.party_id not in evidence.authoritative_party_ids
+        ):
+            raise _error(
+                "lead_not_matched",
+                "The selected Lead no longer matches the sender.",
+            )
+        structural_party_ids = conversation_lead_relationships.exact_party_ids(
+            db, conversation
+        )
+        if structural_party_ids and structural_party_ids != (lead.party_id,):
+            raise _error(
+                "party_mismatch",
+                "This conversation has a different reviewed identity.",
+            )
+        link = conversation_lead_relationships.link_conversation_lead_participant(
+            db,
+            conversation_lead_relationships.ConversationLeadLinkCommand(
+                context=command.context,
+                conversation_id=conversation.id,
+                lead_id=lead.id,
+                party_id=lead.party_id,
+                actor_person_id=command.actor_person_id,
+                source=conversation_lead_relationships.ConversationLeadLinkSource.reviewed_selection,
+                reason="Operator selected this Lead after reviewing exact sender matches",
+            ),
+        )
+        team_inbox_contact_links.resolve_identity_correction_by_selection(
+            db,
+            conversation=conversation,
+            context=command.context,
+            actor_system_user_id=command.actor_system_user_id,
+            selected_kind="lead",
+            selected_id=lead.id,
+        )
+        if not link.replayed:
+            stage_audit_event(
+                db,
+                action="inbox.reviewed_lead_selected",
+                entity_type="inbox_conversation",
+                entity_id=str(conversation.id),
+                actor=AuditActor.user(
+                    str(command.actor_system_user_id), label=staff[0].display_name
+                ),
+                request_id=str(command.context.command_id),
+                metadata={
+                    "lead_id": str(lead.id),
+                    "evidence_digest": command.expected_evidence_digest,
+                },
+            )
+        return InboxLeadActionOutcome(
+            conversation.id,
+            lead.party_id,
+            lead.id,
+            link.link_id,
+            False,
+            link.replayed,
+        )
+
+    return execute_owner_command(
+        db,
+        definition=_ACTION_COMMAND,
+        context=command.context,
+        operation=operation,
     )
 
 
