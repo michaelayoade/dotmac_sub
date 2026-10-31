@@ -200,6 +200,7 @@ WORKFLOW_GUIDANCE: tuple[AdminWorkflowGuidance, ...] = (
         "In Workflows, choose the module and one or more owner-produced events shown by the form; workflow is the user-facing name for a central rule.",
         "Use AND, OR, and NOT condition groups to express broad matches and exceptions, such as excluding a particular ticket status.",
         "For system-backed condition values, type into the lookup field and choose a returned option; the list is loaded on demand from current system records and configuration.",
+        "For an infrastructure ticket, choose the ticket SLA breach event and the Pause subscriptions served by ticket asset action; add a ticket type condition if the rule should cover only selected ticket types.",
         "For recurring work, choose a scheduled event, set an interval or cron cadence and time zone, and keep scheduled triggers together; add a notification action when an operator or customer needs an update.",
         "Add only declared conditions and typed actions, then save the workflow as a draft before activation.",
         "In Client scripts, bind browser JavaScript to one registered module target and form event; use the restricted form API.",
@@ -208,6 +209,7 @@ WORKFLOW_GUIDANCE: tuple[AdminWorkflowGuidance, ...] = (
         "In Server scripts, bind JavaScript to one registered target and server event; request typed owner actions instead of direct database writes.",
         "Review runtime readiness before publication: server scripts require the isolated digest-pinned runtime and typed owner-command adapter.",
         "Review recent execution evidence in run history to find failed runs, then open a run to inspect the affected record, steps, and error details.",
+        "For a ticket asset pause, the run details show how many subscriptions were paused or why the action stopped without pausing any. Restore service through a separate staff action after the ticket is resolved.",
         "If you have retry permission, continue a failed run; successful steps are skipped, and the retry result is recorded.",
         notes=(
             "Workflow and rule refer to the same central event-to-action mechanism; the technical /rules routes remain for compatibility.",
@@ -858,6 +860,7 @@ WORKFLOW_GUIDANCE: tuple[AdminWorkflowGuidance, ...] = (
         "Track customer issues with the right account, service, network, and billing context.",
         ("/admin/support/tickets", "/admin/tickets"),
         "Find the customer and check existing tickets or shared incidents before recording a complaint or service request; capture the problem and site/access information on the correct ticket.",
+        "When Base Station Details is required, search and select one listed base station or wireless or fiber access point. The list does not include sites or sectors, and typed text alone cannot be submitted.",
         "Link the customer and relevant subscription, invoice, payment, proof, or network facts. For a shared incident, use Review incident correlation to select the exact affected native service and record a reason; each complaint remains a separate support case.",
         "Use ordinary ticket editing for status, priority, description, and assignment details.",
         "Assign or reassign an engineer, manager, service team, or additional assignee from the ticket edit workflow.",
