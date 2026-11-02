@@ -175,16 +175,17 @@ def _settled_account_credit(db_session, subscriber, *, amount: Decimal) -> None:
         channel=TopupIntentChannel.customer_selfcare,
         created_by="pytest",
     )
+    intent_id = intent.id
     db_session.commit()
     AccountCreditDeposits.settle_verified(
         db_session,
         SettleAccountCreditDepositCommand(
-            intent_id=intent.id,
+            intent_id=intent_id,
             provider_type="paystack",
             external_transaction_id=f"starter-credit-payment-{suffix}",
             amount=amount,
             currency="NGN",
-            provider_intent_id=intent.id,
+            provider_intent_id=intent_id,
             source=AccountCreditDepositSettlementSource.customer_gateway_verify,
         ),
         context=CommandContext.system(
