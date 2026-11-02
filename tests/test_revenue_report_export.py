@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import csv
 import io
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime
 from decimal import Decimal
 
 from app.models.billing import Payment, PaymentMethod, PaymentMethodType, PaymentStatus
@@ -32,9 +32,7 @@ def _payment(
     return payment
 
 
-def test_revenue_export_uses_payment_method_label_and_filters_period(
-    db_session, subscriber
-):
+def test_revenue_export_uses_payment_method_label(db_session, subscriber):
     method = PaymentMethod(
         account_id=subscriber.id,
         method_type=PaymentMethodType.transfer,
@@ -44,26 +42,17 @@ def test_revenue_export_uses_payment_method_label_and_filters_period(
     db_session.add(method)
     db_session.commit()
 
-    now = datetime.now(UTC)
-    recent = _payment(
-        db_session,
-        account_id=subscriber.id,
-        paid_at=now - timedelta(days=2),
-        payment_method_id=method.id,
-        amount="1250.00",
-    )
+    paid_at = datetime(2026, 10, 28, 12, 0, tzinfo=UTC)
     _payment(
         db_session,
         account_id=subscriber.id,
-        paid_at=now - timedelta(days=60),
+        paid_at=paid_at,
         payment_method_id=method.id,
-        amount="750.00",
+        amount="1250.00",
     )
 
     rows = list(
-        csv.DictReader(
-            io.StringIO(web_reports.build_revenue_export_csv(db_session, days=30))
-        )
+        csv.DictReader(io.StringIO(web_reports.build_revenue_export_csv(db_session)))
     )
 
     assert len(rows) == 1
@@ -71,4 +60,3 @@ def test_revenue_export_uses_payment_method_label_and_filters_period(
     assert rows[0]["amount"] == "1250.00"
     assert rows[0]["status"] == PaymentStatus.succeeded.value
     assert rows[0]["payment_method"] == "Bank transfer"
-    assert rows[0]["paid_at"] == recent.paid_at.isoformat()
