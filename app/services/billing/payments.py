@@ -7024,9 +7024,6 @@ def _build_refund_preview(
     origin: PaymentRefundOrigin,
     provider_event_id: UUID | None = None,
 ) -> PaymentRefundPreview:
-    capability = _refund_capability(payment, origin=origin)
-    if not capability.allowed:
-        raise HTTPException(status_code=409, detail=capability.reason)
     if _has_starter_credit_allocation(db, payment.id):
         raise HTTPException(
             status_code=409,
@@ -7035,6 +7032,9 @@ def _build_refund_preview(
                 "credit-application reversal owner"
             ),
         )
+    capability = _refund_capability(payment, origin=origin)
+    if not capability.allowed:
+        raise HTTPException(status_code=409, detail=capability.reason)
     provider_event = _validate_refund_provider_event(
         db,
         payment=payment,

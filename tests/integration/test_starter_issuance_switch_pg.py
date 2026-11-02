@@ -111,7 +111,7 @@ def _draft(db_session, subscriber, *, total: str = "107.50") -> Invoice:
     tax_rate = TaxRate(
         name=f"Slice6a VAT {uuid4().hex[:8]}",
         code="vat_standard",
-        rate=Decimal("0.0750"),
+        rate=Decimal("7.5000"),
         is_active=True,
     )
     db_session.add(tax_rate)
