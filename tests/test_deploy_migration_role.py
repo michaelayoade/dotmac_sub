@@ -89,8 +89,9 @@ def test_valid_credential_runs_migrations_as_app_admin(tmp_path: Path) -> None:
     assert "alembic upgrade heads" in call
     assert "PGPASSFILE=/run/secrets/migration-admin.pgpass" in call
     assert f"MIGRATION_DATABASE_URL={GOOD_URL}" in call
-    # Every object the migration creates is handed back to the runtime owner.
-    assert "MIGRATION_OBJECT_OWNER=dotmac_app" in call
+    # The migrator owns new objects; the runtime role is granted on them.
+    assert "MIGRATION_RUNTIME_ROLE=dotmac_app" in call
+    assert "MIGRATION_OBJECT_OWNER" not in call
     assert "s3cret-not-real" not in out + err + call
 
 
@@ -136,7 +137,7 @@ def test_group_readable_pgpass_is_refused_by_name(tmp_path: Path) -> None:
     assert calls == []
 
 
-# --- Identity check and hand-back wiring ------------------------------------
+# --- Identity check and runtime-grant wiring ------------------------------------
 
 IDENTITY_HARNESS = """
 set -uo pipefail
@@ -182,7 +183,7 @@ def test_identity_check_runs_the_read_only_script_with_the_migration_credential(
     assert call.endswith("app python scripts/verify_migrator_identity.py")
     assert "PGPASSFILE=/run/secrets/migration-admin.pgpass" in call
     assert "MIGRATION_DATABASE_URL=postgresql://app_admin@db:5432/dotmac_sub" in call
-    assert "MIGRATION_OBJECT_OWNER=dotmac_app" in call
+    assert "MIGRATION_RUNTIME_ROLE=dotmac_app" in call
     assert "alembic" not in call
 
 
@@ -204,10 +205,10 @@ def test_identity_check_precedes_the_pin_and_is_skipped_only_for_resume() -> Non
     assert "DEPLOY REFUSED before pinning" in refusal[: refusal.index("Pinning")]
 
 
-def test_owner_role_is_fixed_not_environment_configurable() -> None:
+def test_runtime_role_is_fixed_not_environment_configurable() -> None:
     source = DEPLOY_SH.read_text(encoding="utf-8")
-    assert '\nMIGRATION_OBJECT_OWNER_ROLE="dotmac_app"\n' in source
-    assert "MIGRATION_OBJECT_OWNER_ROLE:-" not in source
+    assert '\nMIGRATION_RUNTIME_ROLE="dotmac_app"\n' in source
+    assert "MIGRATION_RUNTIME_ROLE:-" not in source
 
 
 def test_candidate_image_is_named_for_the_pre_pin_check() -> None:

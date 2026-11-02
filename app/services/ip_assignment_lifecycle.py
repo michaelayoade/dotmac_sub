@@ -30,7 +30,7 @@ from enum import StrEnum
 from typing import NoReturn
 from uuid import UUID
 
-from sqlalchemy import or_, select, text
+from sqlalchemy import and_, or_, select, text
 from sqlalchemy.exc import OperationalError
 from sqlalchemy.orm import Session, joinedload
 
@@ -3486,6 +3486,863 @@ def release_unbound_ip_assignment(
     )
 
 
+# ---------------------------------------------------------------------------
+# Historic served-IPv4 display-column clearing (W0 N5 column pass, ruling R7)
+# ---------------------------------------------------------------------------
+#
+# ``Subscription.ipv4_address`` is a Sub-owned display/compatibility column.
+# On a non-active service whose exact active primary assignment does not equal
+# it, the column is historic residue that collides with live holders of the
+# same address (``ip_column_reuse_historic``). This command NULLs ONE such
+# column. It never touches assignments, RADIUS or sessions, and emits no
+# re-projection event.
+#
+# It deliberately SKIPS every service the column can still serve: an active
+# service, an online one (the suspended address-list block in
+# ``enforcement.py`` reads this column), a test-connection grant, and anything
+# the RADIUS plan still projects. The inverse restores the recorded value.
+
+_CLEAR_COMMAND = OwnerCommandDefinition(
+    owner=_OWNER,
+    concern=_PROJECTION_CONCERN,
+    name="clear_historic_served_ipv4",
+)
+_RESTORE_COMMAND = OwnerCommandDefinition(
+    owner=_OWNER,
+    concern=_PROJECTION_CONCERN,
+    name="restore_cleared_served_ipv4",
+)
+_CLEAR_ITEM_AUDIT_ACTION = "network.ip_assignment.historic_served_ipv4_cleared"
+_CLEAR_BATCH_AUDIT_ACTION = "network.ip_assignment.historic_served_ipv4_cleared_batch"
+_RESTORE_ITEM_AUDIT_ACTION = "network.ip_assignment.historic_served_ipv4_restored"
+_RESTORE_BATCH_AUDIT_ACTION = (
+    "network.ip_assignment.historic_served_ipv4_restored_batch"
+)
+_CLEAR_AUDIT_ENTITY = "subscription_served_ipv4"
+
+
+class HistoricServedIPv4ClearDecision(StrEnum):
+    ready_clear = "ready_clear"
+    subscription_not_found = "subscription_not_found"
+    served_ipv4_empty = "served_ipv4_empty"
+    subscription_active = "subscription_active"
+    status_suspended_or_blocked = "status_suspended_or_blocked"
+    column_without_exact_assignment_ip_free = "column_without_exact_assignment_ip_free"
+    column_matches_own_assignment = "column_matches_own_assignment"
+    column_is_pending_link_key = "column_is_pending_link_key"
+    online_session = "online_session"
+    open_accounting_session = "open_accounting_session"
+    test_connection_access = "test_connection_access"
+    radius_projects_service = "radius_projects_service"
+    address_list_block_dependency = "address_list_block_dependency"
+
+
+class ClearedServedIPv4RestoreDecision(StrEnum):
+    ready_restore = "ready_restore"
+    subscription_not_found = "subscription_not_found"
+    no_clear_record = "no_clear_record"
+    served_ipv4_not_empty = "served_ipv4_not_empty"
+    address_in_live_use = "address_in_live_use"
+    address_held_by_other_assignment = "address_held_by_other_assignment"
+    address_not_restorable = "address_not_restorable"
+    service_not_restorable = "service_not_restorable"
+    service_evidence_changed = "service_evidence_changed"
+
+
+@dataclass(frozen=True, slots=True)
+class HistoricServedIPv4ClearPreview:
+    subscription_id: UUID
+    subscriber_id: UUID | None
+    status: str | None
+    served_ipv4: str | None
+    own_primary_address: str | None
+    own_exact_addresses: tuple[str, ...]
+    ip_held_by_active_assignment: bool
+    online_session: bool
+    open_accounting_session: bool
+    test_connection_access: bool
+    radius_mode: str | None
+    address_list_block_dependency: bool
+    pending_link_key: bool
+    decision: HistoricServedIPv4ClearDecision
+    fingerprint: str
+
+    @property
+    def applicable(self) -> bool:
+        return self.decision is HistoricServedIPv4ClearDecision.ready_clear
+
+
+@dataclass(frozen=True, slots=True)
+class ClearHistoricServedIPv4Command:
+    context: CommandContext
+    subscription_id: UUID
+    preview_fingerprint: str
+
+
+@dataclass(frozen=True, slots=True)
+class HistoricServedIPv4ClearOutcome:
+    subscription_id: UUID
+    cleared_ipv4: str | None
+    preview_fingerprint: str
+    replayed: bool
+
+
+@dataclass(frozen=True, slots=True)
+class ClearedServedIPv4RestorePreview:
+    subscription_id: UUID
+    current_served_ipv4: str | None
+    restore_ipv4: str | None
+    live_use: bool
+    decision: ClearedServedIPv4RestoreDecision
+    fingerprint: str
+
+    @property
+    def applicable(self) -> bool:
+        return self.decision is ClearedServedIPv4RestoreDecision.ready_restore
+
+
+@dataclass(frozen=True, slots=True)
+class RestoreClearedServedIPv4Command:
+    context: CommandContext
+    subscription_id: UUID
+    preview_fingerprint: str
+
+
+@dataclass(frozen=True, slots=True)
+class ClearedServedIPv4RestoreOutcome:
+    subscription_id: UUID
+    restored_ipv4: str | None
+    preview_fingerprint: str
+    replayed: bool
+
+
+def preview_historic_served_ipv4_clear(
+    db: Session,
+    *,
+    subscription_id: UUID,
+) -> HistoricServedIPv4ClearPreview:
+    """Read-only plan to NULL one historic served-IPv4 column."""
+
+    from app.models.usage import AccountingStatus, RadiusAccountingSession
+
+    subscription = db.get(Subscription, subscription_id)
+    subscriber_id = subscription.subscriber_id if subscription is not None else None
+    status = subscription.status.value if subscription is not None else None
+    served = (
+        str(subscription.ipv4_address or "").strip() or None
+        if subscription is not None
+        else None
+    )
+    own_primary: str | None = None
+    own_exact: tuple[str, ...] = ()
+    ip_held = False
+    online = False
+    accounting = False
+    test_access = False
+    radius_mode: str | None = None
+    nas_dependency = False
+    pending_link_key = False
+    decision = HistoricServedIPv4ClearDecision.subscription_not_found
+
+    if subscription is not None:
+        bare = (served or "").split("/", 1)[0] or None
+        own_primary_row = db.scalar(
+            select(IPv4Address.address)
+            .join(IPAssignment, IPAssignment.ipv4_address_id == IPv4Address.id)
+            .where(
+                IPAssignment.subscription_id == subscription.id,
+                IPAssignment.ip_version == IPVersion.ipv4,
+                IPAssignment.is_active.is_(True),
+                IPAssignment.is_primary.is_(True),
+            )
+        )
+        own_primary = _normalized_ip(own_primary_row).removesuffix("/32") or None
+        own_exact = tuple(
+            sorted(
+                _normalized_ip(value).removesuffix("/32")
+                for value in db.scalars(
+                    select(IPv4Address.address)
+                    .join(IPAssignment, IPAssignment.ipv4_address_id == IPv4Address.id)
+                    .where(
+                        IPAssignment.subscription_id == subscription.id,
+                        IPAssignment.ip_version == IPVersion.ipv4,
+                        IPAssignment.is_active.is_(True),
+                    )
+                )
+            )
+        )
+        if bare is not None:
+            candidates = _address_candidates({bare})
+            # Only this service's own sessions, or sessions with no
+            # subscription attribution: another customer's session on the
+            # address does not make THIS service online.
+            online = (
+                db.scalar(
+                    select(RadiusActiveSession.id)
+                    .where(
+                        or_(
+                            RadiusActiveSession.subscription_id == subscription.id,
+                            and_(
+                                RadiusActiveSession.subscription_id.is_(None),
+                                RadiusActiveSession.framed_ip_address.in_(candidates),
+                            ),
+                        )
+                    )
+                    .limit(1)
+                )
+                is not None
+            )
+            ip_held = (
+                db.scalar(
+                    select(IPAssignment.id)
+                    .join(IPv4Address, IPAssignment.ipv4_address_id == IPv4Address.id)
+                    .where(
+                        IPAssignment.is_active.is_(True),
+                        IPAssignment.ip_version == IPVersion.ipv4,
+                        IPv4Address.address.in_(candidates),
+                    )
+                    .limit(1)
+                )
+                is not None
+            )
+            pending_link_key = (
+                subscriber_id is not None
+                and db.scalar(
+                    select(IPAssignment.id)
+                    .join(IPv4Address, IPAssignment.ipv4_address_id == IPv4Address.id)
+                    .where(
+                        IPAssignment.subscriber_id == subscriber_id,
+                        IPAssignment.subscription_id.is_(None),
+                        IPAssignment.is_active.is_(True),
+                        IPAssignment.ip_version == IPVersion.ipv4,
+                        IPv4Address.address.in_(candidates),
+                    )
+                    .limit(1)
+                )
+                is not None
+            )
+        accounting = (
+            db.scalar(
+                select(RadiusAccountingSession.id)
+                .where(
+                    RadiusAccountingSession.subscription_id == subscription.id,
+                    RadiusAccountingSession.session_end.is_(None),
+                    RadiusAccountingSession.status_type != AccountingStatus.stop,
+                )
+                .limit(1)
+            )
+            is not None
+        )
+        from app.services.radius_projection_planner import (
+            plan_login_radius_projections,
+        )
+        from app.services.test_connection import access_for_subscription
+
+        test_access = access_for_subscription(db, subscription.id) is not None
+        login = str(subscription.login or "").strip()
+        if login:
+            projection = plan_login_radius_projections(
+                db, [subscription], include_test_access=False
+            ).get(login)
+            radius_mode = projection.plan.mode if projection is not None else None
+        # The non-RADIUS suspended address-list block resolves its NAS from an
+        # open session or ``provisioning_nas_device_id`` and reads this column.
+        nas_dependency = (
+            not login and subscription.provisioning_nas_device_id is not None
+        )
+
+        if served is None:
+            decision = HistoricServedIPv4ClearDecision.served_ipv4_empty
+        elif subscription.status == SubscriptionStatus.active:
+            decision = HistoricServedIPv4ClearDecision.subscription_active
+        elif subscription.status in {
+            SubscriptionStatus.suspended,
+            SubscriptionStatus.blocked,
+        }:
+            # Address-list lift (enforcement.py) and cancel cleanup silently
+            # no-op on an empty column and orphan the NAS entry.
+            decision = HistoricServedIPv4ClearDecision.status_suspended_or_blocked
+        elif bare in own_exact:
+            decision = HistoricServedIPv4ClearDecision.column_matches_own_assignment
+        elif pending_link_key:
+            decision = HistoricServedIPv4ClearDecision.column_is_pending_link_key
+        elif (
+            subscription.status not in _TERMINAL_STATUSES
+            and not own_exact
+            and not ip_held
+        ):
+            # Non-terminal service whose served IP is free in IPAM: the column
+            # is its only record. N9 is link-don't-release; route to
+            # repair_service_ipv4_assignment ready_create.
+            decision = (
+                HistoricServedIPv4ClearDecision.column_without_exact_assignment_ip_free
+            )
+        elif online:
+            decision = HistoricServedIPv4ClearDecision.online_session
+        elif accounting:
+            decision = HistoricServedIPv4ClearDecision.open_accounting_session
+        elif test_access:
+            decision = HistoricServedIPv4ClearDecision.test_connection_access
+        elif radius_mode in {"active", "captive"}:
+            decision = HistoricServedIPv4ClearDecision.radius_projects_service
+        elif nas_dependency:
+            decision = HistoricServedIPv4ClearDecision.address_list_block_dependency
+        else:
+            decision = HistoricServedIPv4ClearDecision.ready_clear
+
+    payload: dict[str, object] = {
+        "subscription_id": str(subscription_id),
+        "subscriber_id": str(subscriber_id) if subscriber_id is not None else None,
+        "status": status,
+        "served_ipv4": served,
+        "own_primary_address": own_primary,
+        "own_exact_addresses": list(own_exact),
+        "ip_held_by_active_assignment": ip_held,
+        "online_session": online,
+        "open_accounting_session": accounting,
+        "test_connection_access": test_access,
+        "radius_mode": radius_mode,
+        "address_list_block_dependency": nas_dependency,
+        "pending_link_key": pending_link_key,
+        "decision": decision.value,
+    }
+    return HistoricServedIPv4ClearPreview(
+        subscription_id=subscription_id,
+        subscriber_id=subscriber_id,
+        status=status,
+        served_ipv4=served,
+        own_primary_address=own_primary,
+        own_exact_addresses=own_exact,
+        ip_held_by_active_assignment=ip_held,
+        online_session=online,
+        open_accounting_session=accounting,
+        test_connection_access=test_access,
+        radius_mode=radius_mode,
+        address_list_block_dependency=nas_dependency,
+        pending_link_key=pending_link_key,
+        decision=decision,
+        fingerprint=_repair_fingerprint(payload),
+    )
+
+
+def _historic_restore_service_evidence(
+    db: Session, *, subscription_id: UUID, restore_ipv4: str
+) -> tuple[str, bool]:
+    """Fingerprint service facts shared by clear-time and restore-time review.
+
+    The served column intentionally differs after clear. Address ownership and
+    eligibility are checked separately at restore time; these facts describe
+    whether restoring a historic projection could now change service delivery.
+    """
+
+    service = preview_historic_served_ipv4_clear(db, subscription_id=subscription_id)
+    subscription = db.get(Subscription, subscription_id)
+    own_assignments = db.execute(
+        select(IPAssignment, IPv4Address.address)
+        .outerjoin(IPv4Address, IPAssignment.ipv4_address_id == IPv4Address.id)
+        .where(
+            IPAssignment.subscription_id == subscription_id,
+            IPAssignment.ip_version == IPVersion.ipv4,
+            IPAssignment.is_active.is_(True),
+        )
+        .order_by(IPAssignment.id)
+    ).all()
+    online = (
+        db.scalar(
+            select(RadiusActiveSession.id)
+            .where(
+                or_(
+                    RadiusActiveSession.subscription_id == subscription_id,
+                    and_(
+                        RadiusActiveSession.subscription_id.is_(None),
+                        RadiusActiveSession.framed_ip_address.in_(
+                            _address_candidates({restore_ipv4.split("/", 1)[0]})
+                        ),
+                    ),
+                )
+            )
+            .limit(1)
+        )
+        is not None
+    )
+    payload: dict[str, object] = {
+        "subscriber_id": str(service.subscriber_id),
+        "status": service.status,
+        "login": subscription.login if subscription is not None else None,
+        "provisioning_nas_device_id": (
+            str(subscription.provisioning_nas_device_id)
+            if subscription is not None
+            and subscription.provisioning_nas_device_id is not None
+            else None
+        ),
+        "own_assignments": [
+            {
+                "assignment_id": str(assignment.id),
+                "subscriber_id": str(assignment.subscriber_id),
+                "address_id": str(assignment.ipv4_address_id),
+                "address": address,
+                "is_primary": assignment.is_primary,
+            }
+            for assignment, address in own_assignments
+        ],
+        "online_session": online,
+        "open_accounting_session": service.open_accounting_session,
+        "test_connection_access": service.test_connection_access,
+        "radius_mode": service.radius_mode,
+        "address_list_block_dependency": service.address_list_block_dependency,
+    }
+    unsafe = (
+        subscription is None
+        or subscription.status
+        in {
+            SubscriptionStatus.active,
+            SubscriptionStatus.suspended,
+            SubscriptionStatus.blocked,
+        }
+        or online
+        or service.open_accounting_session
+        or service.test_connection_access
+        or service.radius_mode in {"active", "captive"}
+        or service.address_list_block_dependency
+    )
+    return _repair_fingerprint(payload), unsafe
+
+
+def _write_served_ipv4_preserving_updated_at(
+    db: Session, subscription: Subscription, value: str | None
+) -> None:
+    """Single-writer column write that does not move ``updated_at``.
+
+    ``updated_at`` is the status-change evidence of the retention sweep; a
+    display-column clear is not a customer edit and must not postpone release.
+    """
+
+    from sqlalchemy.orm.attributes import flag_modified
+
+    previous_updated_at = subscription.updated_at
+    _project_served_ipv4(subscription, value)
+    subscription.updated_at = previous_updated_at
+    flag_modified(subscription, "updated_at")
+    db.flush()
+
+
+def _prior_clear_outcome(
+    db: Session,
+    *,
+    action: str,
+    entity_type: str,
+    idempotency_key: str,
+    preview_fingerprint: str,
+) -> tuple[AuditEvent, str] | None:
+    prior = db.scalar(
+        select(AuditEvent).where(
+            AuditEvent.action == action,
+            AuditEvent.entity_type == entity_type,
+            AuditEvent.entity_id == idempotency_key,
+        )
+    )
+    if prior is None:
+        return None
+    metadata = prior.metadata_ if isinstance(prior.metadata_, dict) else {}
+    prior_fingerprint = str(metadata.get("preview_fingerprint") or "")
+    if not secrets.compare_digest(prior_fingerprint, preview_fingerprint):
+        _error(
+            "idempotency_conflict",
+            "The idempotency key was already used for different IPAM evidence.",
+        )
+    return prior, prior_fingerprint
+
+
+def _clear_historic_served_ipv4(
+    db: Session,
+    command: ClearHistoricServedIPv4Command,
+) -> HistoricServedIPv4ClearOutcome:
+    idempotency_key = (command.context.idempotency_key or "").strip()
+    if not idempotency_key:
+        _error("missing_idempotency_key", "An idempotency key is required.")
+    prior = _prior_clear_outcome(
+        db,
+        action=_CLEAR_BATCH_AUDIT_ACTION,
+        entity_type=_CLEAR_AUDIT_ENTITY,
+        idempotency_key=idempotency_key,
+        preview_fingerprint=command.preview_fingerprint,
+    )
+    if prior is not None:
+        metadata = prior[0].metadata_ if isinstance(prior[0].metadata_, dict) else {}
+        return HistoricServedIPv4ClearOutcome(
+            subscription_id=command.subscription_id,
+            cleared_ipv4=metadata.get("cleared_ipv4"),
+            preview_fingerprint=prior[1],
+            replayed=True,
+        )
+
+    subscription = db.scalar(
+        select(Subscription)
+        .where(Subscription.id == command.subscription_id)
+        .with_for_update()
+    )
+    if subscription is None:
+        _error("subscription_not_found", "The reviewed subscription no longer exists.")
+    # Serialise with link/repair commands that lock the subscriber first.
+    db.scalar(
+        select(Subscriber)
+        .where(Subscriber.id == subscription.subscriber_id)
+        .with_for_update()
+    )
+    list(
+        db.scalars(
+            select(IPAssignment.id)
+            .where(IPAssignment.subscriber_id == subscription.subscriber_id)
+            .order_by(IPAssignment.id)
+            .with_for_update()
+        )
+    )
+    current = preview_historic_served_ipv4_clear(
+        db, subscription_id=command.subscription_id
+    )
+    if not secrets.compare_digest(current.fingerprint, command.preview_fingerprint):
+        _error(
+            "stale_preview",
+            "IPAM evidence changed after preview; preview again.",
+            current_fingerprint=current.fingerprint,
+        )
+    if not current.applicable:
+        _error(
+            "unsafe_cohort",
+            "The reviewed served-IPv4 clear is no longer safe to apply.",
+            decision=current.decision.value,
+        )
+
+    cleared = current.served_ipv4
+    restore_service_fingerprint, _ = _historic_restore_service_evidence(
+        db, subscription_id=subscription.id, restore_ipv4=cleared or ""
+    )
+    _write_served_ipv4_preserving_updated_at(db, subscription, None)
+    stage_audit_event(
+        db,
+        action=_CLEAR_ITEM_AUDIT_ACTION,
+        entity_type="subscription",
+        entity_id=str(subscription.id),
+        actor=AuditActor.service(command.context.actor),
+        metadata={
+            # Restore source: the exact pre-clear column value.
+            "previous_ipv4_address": cleared,
+            "restore_service_fingerprint": restore_service_fingerprint,
+            "status": current.status,
+            "preview_fingerprint": current.fingerprint,
+            "reason": command.context.reason,
+        },
+    )
+    stage_audit_event(
+        db,
+        action=_CLEAR_BATCH_AUDIT_ACTION,
+        entity_type=_CLEAR_AUDIT_ENTITY,
+        entity_id=idempotency_key,
+        actor=AuditActor.service(command.context.actor),
+        metadata={
+            "cleared_ipv4": cleared,
+            "preview_fingerprint": current.fingerprint,
+            "reason": command.context.reason,
+        },
+    )
+    db.flush()
+    return HistoricServedIPv4ClearOutcome(
+        subscription_id=subscription.id,
+        cleared_ipv4=cleared,
+        preview_fingerprint=current.fingerprint,
+        replayed=False,
+    )
+
+
+def clear_historic_served_ipv4(
+    db: Session,
+    command: ClearHistoricServedIPv4Command,
+) -> HistoricServedIPv4ClearOutcome:
+    """NULL one historic served-IPv4 column under a fingerprinted preview."""
+
+    return execute_owner_command(
+        db,
+        definition=_CLEAR_COMMAND,
+        context=command.context,
+        operation=lambda: _clear_historic_served_ipv4(db, command),
+    )
+
+
+def preview_cleared_served_ipv4_restore(
+    db: Session,
+    *,
+    subscription_id: UUID,
+) -> ClearedServedIPv4RestorePreview:
+    """Read-only plan to restore the value the latest clear recorded."""
+
+    subscription = db.get(Subscription, subscription_id)
+    current_served = (
+        str(subscription.ipv4_address or "").strip() or None
+        if subscription is not None
+        else None
+    )
+    restore: str | None = None
+    live_use = False
+    service_fingerprint: str | None = None
+    clear_record_id: str | None = None
+    address_id: str | None = None
+    held = False
+    not_restorable = False
+    decision = ClearedServedIPv4RestoreDecision.subscription_not_found
+    if subscription is not None:
+        record = db.scalar(
+            select(AuditEvent)
+            .where(
+                AuditEvent.action.in_(
+                    (_CLEAR_ITEM_AUDIT_ACTION, _RESTORE_ITEM_AUDIT_ACTION)
+                ),
+                AuditEvent.entity_type == "subscription",
+                AuditEvent.entity_id == str(subscription_id),
+            )
+            .order_by(AuditEvent.occurred_at.desc(), AuditEvent.id.desc())
+            .limit(1)
+        )
+        metadata = (
+            record.metadata_
+            if record is not None and isinstance(record.metadata_, dict)
+            else {}
+        )
+        recorded = str(metadata.get("previous_ipv4_address") or "").strip() or None
+        if (
+            record is None
+            or record.action != _CLEAR_ITEM_AUDIT_ACTION
+            or recorded is None
+        ):
+            # Never cleared, or already restored by the latest record.
+            decision = ClearedServedIPv4RestoreDecision.no_clear_record
+        else:
+            restore = recorded
+            clear_record_id = str(record.id)
+            service_fingerprint, service_unsafe = _historic_restore_service_evidence(
+                db, subscription_id=subscription_id, restore_ipv4=recorded
+            )
+            if current_served is not None:
+                decision = ClearedServedIPv4RestoreDecision.served_ipv4_not_empty
+            else:
+                bare = recorded.split("/", 1)[0]
+                live_use = find_ipv4_live_use(
+                    db, subscription_id=subscription_id, addresses={recorded}
+                ).in_use
+                held = (
+                    db.scalar(
+                        select(IPAssignment.id)
+                        .join(
+                            IPv4Address,
+                            IPAssignment.ipv4_address_id == IPv4Address.id,
+                        )
+                        .where(
+                            IPAssignment.is_active.is_(True),
+                            IPAssignment.ip_version == IPVersion.ipv4,
+                            IPv4Address.address.in_(_address_candidates({bare})),
+                            or_(
+                                IPAssignment.subscription_id.is_(None),
+                                IPAssignment.subscription_id != subscription_id,
+                            ),
+                        )
+                        .limit(1)
+                    )
+                    is not None
+                )
+                address_row = db.scalar(
+                    select(IPv4Address).where(
+                        IPv4Address.address.in_(_address_candidates({bare}))
+                    )
+                )
+                address_id = str(address_row.id) if address_row is not None else None
+                not_restorable = (
+                    address_row is None
+                    or bool(address_row.is_reserved)
+                    or _target_address_is_device_host(db, bare)
+                    or _address_is_in_active_routed_block(db, bare)
+                )
+                if live_use:
+                    decision = ClearedServedIPv4RestoreDecision.address_in_live_use
+                elif held:
+                    decision = ClearedServedIPv4RestoreDecision.address_held_by_other_assignment
+                elif not_restorable:
+                    decision = ClearedServedIPv4RestoreDecision.address_not_restorable
+                elif service_unsafe:
+                    decision = ClearedServedIPv4RestoreDecision.service_not_restorable
+                elif metadata.get("restore_service_fingerprint") != service_fingerprint:
+                    # Legacy records lack the clear-time evidence needed to
+                    # prove a safe inverse. A new preview cannot approve drift.
+                    decision = ClearedServedIPv4RestoreDecision.service_evidence_changed
+                else:
+                    decision = ClearedServedIPv4RestoreDecision.ready_restore
+    payload: dict[str, object] = {
+        "subscription_id": str(subscription_id),
+        "current_served_ipv4": current_served,
+        "restore_ipv4": restore,
+        "clear_record_id": clear_record_id,
+        "service_fingerprint": service_fingerprint,
+        "address_id": address_id,
+        "held": held,
+        "not_restorable": not_restorable,
+        "live_use": live_use,
+        "decision": decision.value,
+    }
+    return ClearedServedIPv4RestorePreview(
+        subscription_id=subscription_id,
+        current_served_ipv4=current_served,
+        restore_ipv4=restore,
+        live_use=live_use,
+        decision=decision,
+        fingerprint=_repair_fingerprint(payload),
+    )
+
+
+def _restore_cleared_served_ipv4(
+    db: Session,
+    command: RestoreClearedServedIPv4Command,
+) -> ClearedServedIPv4RestoreOutcome:
+    idempotency_key = (command.context.idempotency_key or "").strip()
+    if not idempotency_key:
+        _error("missing_idempotency_key", "An idempotency key is required.")
+    prior = _prior_clear_outcome(
+        db,
+        action=_RESTORE_BATCH_AUDIT_ACTION,
+        entity_type=_CLEAR_AUDIT_ENTITY,
+        idempotency_key=idempotency_key,
+        preview_fingerprint=command.preview_fingerprint,
+    )
+    if prior is not None:
+        metadata = prior[0].metadata_ if isinstance(prior[0].metadata_, dict) else {}
+        return ClearedServedIPv4RestoreOutcome(
+            subscription_id=command.subscription_id,
+            restored_ipv4=metadata.get("restored_ipv4"),
+            preview_fingerprint=prior[1],
+            replayed=True,
+        )
+    subscription = db.scalar(
+        select(Subscription)
+        .where(Subscription.id == command.subscription_id)
+        .with_for_update()
+        .execution_options(populate_existing=True)
+    )
+    if subscription is None:
+        _error("subscription_not_found", "The reviewed subscription no longer exists.")
+    db.scalar(
+        select(Subscriber)
+        .where(Subscriber.id == subscription.subscriber_id)
+        .with_for_update()
+    )
+    reviewed = preview_cleared_served_ipv4_restore(
+        db, subscription_id=command.subscription_id
+    )
+    # Use the same address -> pool -> eligibility inventory -> assignments
+    # order as assignment repair. The address row also serializes allocators,
+    # including when no assignment exists yet. Missing inventory fails closed.
+    addresses = list(
+        db.scalars(
+            select(IPv4Address)
+            .where(
+                IPv4Address.address.in_(
+                    _address_candidates(
+                        {(reviewed.restore_ipv4 or "").split("/", 1)[0]}
+                    )
+                )
+            )
+            .order_by(IPv4Address.id)
+            .with_for_update()
+            .execution_options(populate_existing=True)
+        )
+    )
+    pool_ids = {address.pool_id for address in addresses if address.pool_id is not None}
+    if pool_ids:
+        list(
+            db.scalars(
+                select(IpPool)
+                .where(IpPool.id.in_(pool_ids))
+                .order_by(IpPool.id)
+                .with_for_update()
+            )
+        )
+    _lock_eligibility_inventory(db)
+    list(
+        db.scalars(
+            select(IPAssignment)
+            .where(
+                or_(
+                    IPAssignment.subscriber_id == subscription.subscriber_id,
+                    IPAssignment.subscription_id == subscription.id,
+                    IPAssignment.ipv4_address_id.in_(
+                        [address.id for address in addresses]
+                    ),
+                )
+            )
+            .order_by(IPAssignment.id)
+            .with_for_update()
+            .execution_options(populate_existing=True)
+        )
+    )
+    current = preview_cleared_served_ipv4_restore(
+        db, subscription_id=command.subscription_id
+    )
+    if not secrets.compare_digest(current.fingerprint, command.preview_fingerprint):
+        _error(
+            "stale_preview",
+            "IPAM evidence changed after preview; preview again.",
+            current_fingerprint=current.fingerprint,
+        )
+    if not current.applicable or current.restore_ipv4 is None:
+        _error(
+            "unsafe_cohort",
+            "The reviewed served-IPv4 restore is no longer safe to apply.",
+            decision=current.decision.value,
+        )
+    _write_served_ipv4_preserving_updated_at(db, subscription, current.restore_ipv4)
+    stage_audit_event(
+        db,
+        action=_RESTORE_ITEM_AUDIT_ACTION,
+        entity_type="subscription",
+        entity_id=str(subscription.id),
+        actor=AuditActor.service(command.context.actor),
+        metadata={
+            "restored_ipv4_address": current.restore_ipv4,
+            "preview_fingerprint": current.fingerprint,
+            "reason": command.context.reason,
+        },
+    )
+    stage_audit_event(
+        db,
+        action=_RESTORE_BATCH_AUDIT_ACTION,
+        entity_type=_CLEAR_AUDIT_ENTITY,
+        entity_id=idempotency_key,
+        actor=AuditActor.service(command.context.actor),
+        metadata={
+            "restored_ipv4": current.restore_ipv4,
+            "preview_fingerprint": current.fingerprint,
+            "reason": command.context.reason,
+        },
+    )
+    db.flush()
+    return ClearedServedIPv4RestoreOutcome(
+        subscription_id=subscription.id,
+        restored_ipv4=current.restore_ipv4,
+        preview_fingerprint=current.fingerprint,
+        replayed=False,
+    )
+
+
+def restore_cleared_served_ipv4(
+    db: Session,
+    command: RestoreClearedServedIPv4Command,
+) -> ClearedServedIPv4RestoreOutcome:
+    """Inverse of ``clear_historic_served_ipv4`` from its recorded value."""
+
+    return execute_owner_command(
+        db,
+        definition=_RESTORE_COMMAND,
+        context=command.context,
+        operation=lambda: _restore_cleared_served_ipv4(db, command),
+    )
+
+
 __all__ = [
     "IPv4LiveUseEvidence",
     "find_ipv4_live_use",
@@ -3537,4 +4394,16 @@ __all__ = [
     "UnboundIPv4ServiceEvidence",
     "preview_unbound_ip_assignment_release",
     "release_unbound_ip_assignment",
+    "ClearHistoricServedIPv4Command",
+    "ClearedServedIPv4RestoreDecision",
+    "ClearedServedIPv4RestoreOutcome",
+    "ClearedServedIPv4RestorePreview",
+    "HistoricServedIPv4ClearDecision",
+    "HistoricServedIPv4ClearOutcome",
+    "HistoricServedIPv4ClearPreview",
+    "RestoreClearedServedIPv4Command",
+    "clear_historic_served_ipv4",
+    "preview_cleared_served_ipv4_restore",
+    "preview_historic_served_ipv4_clear",
+    "restore_cleared_served_ipv4",
 ]

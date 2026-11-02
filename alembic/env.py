@@ -18,12 +18,11 @@ from app.migration_bindings import (
     ASSEMBLY_PREREQUISITE_BINDINGS,
 )
 from app.migration_ownership import (
-    OWNER_ENV_VAR,
     assert_migrator_identity,
     assert_owner_variable_set_for_bypass,
-    hand_back_new_objects,
+    grant_runtime_privileges,
     load_definer_allowlist,
-    snapshot_owned_objects,
+    runtime_role_from_environ,
 )
 from app.migration_schema_ops import install_idempotent_schema_ops
 from app.models import (  # noqa: F401
@@ -205,17 +204,20 @@ def _set_migration_idle_transaction_timeout(connection) -> None:
     apply_migration_idle_transaction_timeout(connection)
 
 
-def _migration_object_owner(connection) -> str | None:
-    """The role every migration-created object is handed to, or ``None``.
+def _migration_runtime_role(connection) -> str | None:
+    """The runtime role granted access to every migration-created object, or ``None``.
 
-    Set by the deploy (``MIGRATION_OBJECT_OWNER=dotmac_app``) when migrations
-    run as the BYPASSRLS migrator. Unset keeps the historical behaviour, so
-    local and CI runs as a single owner or superuser are unchanged.
+    Set by the deploy (``MIGRATION_RUNTIME_ROLE=dotmac_app``) when migrations
+    run as the BYPASSRLS migrator. New objects stay owned by the migrator; the
+    runtime role gets explicit DML grants in the same transaction. Unset keeps
+    the historical behaviour, so local and CI runs as a single owner or
+    superuser are unchanged. The legacy ``MIGRATION_OBJECT_OWNER`` spelling is
+    still read (see ``runtime_role_from_environ``).
     """
-    owner = os.environ.get(OWNER_ENV_VAR, "").strip()
-    if not owner or connection.dialect.name != "postgresql":
+    role = runtime_role_from_environ(os.environ)
+    if not role or connection.dialect.name != "postgresql":
         return None
-    return owner
+    return role
 
 
 def run_migrations_online() -> None:
@@ -230,23 +232,22 @@ def run_migrations_online() -> None:
         _set_migration_lock_timeout(connection)
         _set_migration_idle_transaction_timeout(connection)
 
-        owner = _migration_object_owner(connection)
+        owner = _migration_runtime_role(connection)
         if owner is None and connection.dialect.name == "postgresql":
             assert_owner_variable_set_for_bypass(connection)
         allowlist = frozenset()
         if owner is not None:
             assert_migrator_identity(connection, owner=owner)
             allowlist = load_definer_allowlist(DEFINER_ALLOWLIST_PATH)
-            before_bootstrap = snapshot_owned_objects(connection)
 
         ensure_alembic_version_table(connection)
         if owner is not None:
             # A fresh database creates alembic_version here, committed below,
-            # so it must be handed back before that commit.
-            hand_back_new_objects(
+            # so the runtime grant must land before that commit. The runtime
+            # reads the revision; only the migrator writes it.
+            grant_runtime_privileges(
                 connection,
-                owner=owner,
-                before=before_bootstrap,
+                runtime_role=owner,
                 definer_allowlist=allowlist,
             )
         connection.commit()
@@ -260,13 +261,11 @@ def run_migrations_online() -> None:
         install_idempotent_schema_ops()
 
         with context.begin_transaction():
-            before = snapshot_owned_objects(connection) if owner else ()
             context.run_migrations()
             if owner is not None:
-                hand_back_new_objects(
+                grant_runtime_privileges(
                     connection,
-                    owner=owner,
-                    before=before,
+                    runtime_role=owner,
                     definer_allowlist=allowlist,
                 )
 

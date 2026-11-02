@@ -399,6 +399,36 @@ one `IPAssignment` row only; the address, pool, served columns and RADIUS are
 untouched. It is dry-run by default and has no automatic inverse (re-allocate
 from the audit record).
 
+Historic served-IPv4 clearing (W0 N5 column pass) uses
+`python -m scripts.one_off.clear_historic_served_ipv4`. It NULLs
+`Subscription.ipv4_address` on one non-active service whose exact active primary
+assignment does not equal it. It skips active services, suspended and blocked
+services unconditionally (the address-list lift and cancel cleanup in
+`enforcement.py` silently no-op on an empty column and orphan the NAS entry),
+any column equal to one of the service's own exact assignments, a non-terminal
+service with no exact assignment whose served IP is free in IPAM (N9: route to
+`repair_service_ipv4_assignment` ready_create), online services (own or
+unattributed sessions only), open
+accounting sessions, test-connection grants, services RADIUS still projects
+(active/captive), non-RADIUS services whose address-list block resolves a
+provisioning NAS, and any column an unbound assignment of the same subscriber
+still links by (P3 must reach 0 first). It never touches assignments, RADIUS or
+sessions, stages no re-projection event and does not move `updated_at` (the
+retention sweep's status-change evidence). `--restore` is the inverse: it
+restores the value the latest clear recorded, refusing if the column was
+repopulated, the address is in live use, held by another active assignment,
+reserved, a device host or in a routed block, or missing from IPv4 inventory.
+The clear audit records a fingerprint of status, login/provisioning NAS, exact
+active assignment identities, addresses and primary flags, and service session,
+accounting, test-access and RADIUS dependencies. Restore refuses active,
+suspended or blocked service, current delivery dependencies, and any drift from
+that clear-time evidence; records predating this evidence cannot be restored by
+this command. A fresh preview cannot approve service drift. Apply locks the
+subscription, subscriber, restored address and pool, eligibility inventory and
+relevant assignments in the assignment-repair order, then previews again so a
+concurrent allocation or inventory edit cannot invalidate the checked address.
+Both are dry-run by default and fingerprint-gated.
+
 Served projection repair uses
 `python -m scripts.one_off.repair_service_ipv4_projection` with the exact
 subscription and assignment identifiers. It is also dry-run by default and

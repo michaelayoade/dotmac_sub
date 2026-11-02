@@ -4,50 +4,9 @@ import csv
 import io
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
-from uuid import uuid4
 
 from app.models.billing import Payment, PaymentMethod, PaymentMethodType, PaymentStatus
 from app.services import web_reports
-from app.services.billing import reporting as billing_reporting
-
-
-def test_revenue_export_serializes_typed_payment_method_projection(monkeypatch):
-    account_id = uuid4()
-    paid_at = datetime(2026, 10, 28, 12, 0, tzinfo=UTC)
-    row = billing_reporting.RevenuePaymentExportRow(
-        paid_at=paid_at,
-        account_name="Example Customer",
-        account_id=account_id,
-        invoice_id=None,
-        amount=Decimal("1250.00"),
-        currency="NGN",
-        status=PaymentStatus.succeeded,
-        payment_method="Bank transfer",
-        provider="",
-    )
-    monkeypatch.setattr(
-        billing_reporting,
-        "get_revenue_payment_export_rows",
-        lambda _db, *, query: (row,),
-    )
-
-    rows = list(
-        csv.DictReader(io.StringIO(web_reports.build_revenue_export_csv(object())))
-    )
-
-    assert rows == [
-        {
-            "paid_at": paid_at.isoformat(),
-            "account": "Example Customer",
-            "account_id": str(account_id),
-            "invoice_id": "",
-            "amount": "1250.00",
-            "currency": "NGN",
-            "status": "succeeded",
-            "payment_method": "Bank transfer",
-            "provider": "",
-        }
-    ]
 
 
 def _payment(

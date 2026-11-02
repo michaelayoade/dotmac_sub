@@ -330,6 +330,8 @@ class LinkContactCommand:
     actor_person_id: UUID | None
     note: str | None = None
     expected_active_link_id: UUID | None = None
+    expected_identity_evidence_digest: str | None = None
+    actor_system_user_id: UUID | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -2052,6 +2054,21 @@ def link_contact(db: Session, command: LinkContactCommand) -> ContactLinkOutcome
             mutation=ai_conversation_ownership.HumanConversationMutation.contact,
             for_update=False,
         )
+        if command.expected_identity_evidence_digest is not None:
+            selected_customer = db.get(Subscriber, command.target.target_id)
+            structural_party_ids = conversation_lead_relationships.exact_party_ids(
+                db, conversation
+            )
+            if (
+                selected_customer is not None
+                and structural_party_ids
+                and structural_party_ids != (selected_customer.party_id,)
+            ):
+                raise team_inbox_contact_links.ContactLinkError(
+                    "This conversation has a different recorded contact. "
+                    "An administrator must correct that link before selection.",
+                    suffix="conversation_party_mismatch",
+                )
         result = team_inbox_contact_links.link_conversation_contact(
             db,
             team_inbox_contact_links.LinkConversationContactCommand(
@@ -2064,9 +2081,52 @@ def link_contact(db: Session, command: LinkContactCommand) -> ContactLinkOutcome
                 ),
                 note=command.note,
                 expected_active_link_id=command.expected_active_link_id,
+                expected_identity_evidence_digest=command.expected_identity_evidence_digest,
             ),
         )
+        if (
+            command.expected_identity_evidence_digest is not None
+            and command.actor_system_user_id is not None
+            and result.subscriber_id is not None
+        ):
+            team_inbox_contact_links.resolve_identity_correction_by_selection(
+                db,
+                conversation=conversation,
+                context=command.context,
+                actor_system_user_id=command.actor_system_user_id,
+                selected_kind="customer",
+                selected_id=result.subscriber_id,
+            )
         actor_uuid = command.actor_person_id
+        if command.actor_system_user_id is not None:
+            from app.services import staff_provisioning
+
+            if command.context.actor != f"user:{command.actor_system_user_id}":
+                raise team_inbox_contact_links.ContactLinkError(
+                    "An authenticated staff identity is required.",
+                    suffix="actor_required",
+                )
+            identities = staff_provisioning.resolve_staff_display_identities(
+                db,
+                query=staff_provisioning.StaffDisplayIdentityQuery(
+                    user_ids=frozenset({command.actor_system_user_id})
+                ),
+            ).identities
+            if len(identities) != 1 or not identities[0].display_name.strip():
+                raise team_inbox_contact_links.ContactLinkError(
+                    "The staff account needs a display name.",
+                    suffix="actor_required",
+                )
+            audit_actor = AuditActor.user(
+                str(command.actor_system_user_id), label=identities[0].display_name
+            )
+        else:
+            audit_actor = AuditActor(
+                actor_type=(
+                    AuditActorType.user if actor_uuid else AuditActorType.service
+                ),
+                actor_id=(str(actor_uuid) if actor_uuid else OWNER),
+            )
         selected_customer = (
             db.get(Subscriber, result.subscriber_id) if result.subscriber_id else None
         )
@@ -2075,12 +2135,7 @@ def link_contact(db: Session, command: LinkContactCommand) -> ContactLinkOutcome
             action="inbox_contact_identity_selected",
             entity_type="inbox_conversation",
             entity_id=str(conversation.id),
-            actor=AuditActor(
-                actor_type=(
-                    AuditActorType.user if actor_uuid else AuditActorType.service
-                ),
-                actor_id=(str(actor_uuid) if actor_uuid else OWNER),
-            ),
+            actor=audit_actor,
             metadata={
                 "decision_source": "reviewed_inbox_selection",
                 "selected_customer_id": (

@@ -26,16 +26,27 @@ Lowered 2026-09-27 by the CRM ticket-poller retirement: `connector_task`
 the conserved finding for the deleted `tests/test_crm_ticket_pull.py` removed
 (15 → 14).
 
+Raised 2026-10-27 by the Integrator FreeRADIUS transport slice:
+`outbound_transport` 44 → 45 for
+`app/services/integrations/network_provision_client.py`. This is the ratchet
+working in its intended direction, not new provider surface: the client
+speaks only to the Dotmac Integrator's product provision port (the boundary
+providers are moving behind), carries no provider credential of its own
+beyond the Integrator-issued API key, and stays disarmed
+(`NETWORK_PROVISION_ENABLED`, off) until the network-suite-v1 cutover flips
+the RADIUS single writer. At that flip the incumbent direct RADIUS writers
+retire and this count is expected to fall below 44 again.
+
 | Category | Baseline |
 | --- | ---: |
-| `outbound_transport` | 44 |
+| `outbound_transport` | 45 |
 | `webhook_surface` | 4 |
 | `provider_credential` | 3 |
 | `connector_task` | 17 |
 | `sync_checkpoint` | 10 |
 | `delivery_retry` | 7 |
 
-### `outbound_transport` — 44 files
+### `outbound_transport` — 45 files
 
 `app/services/ai/client.py`, `app/services/ai/voice_transcription.py`,
 `app/services/bandwidth_metrics_adapter.py`, `app/services/core_router_metrics.py`,
@@ -48,6 +59,7 @@ the conserved finding for the deleted `tests/test_crm_ticket_pull.py` removed
 `app/services/integrations/connectors/nextcloud_talk.py`,
 `app/services/integrations/connectors/payment_gateway.py`,
 `app/services/integrations/connectors/whatsapp_runtime.py`,
+`app/services/integrations/network_provision_client.py`,
 `app/services/meta_oauth.py`, `app/services/meta_pages.py`,
 `app/services/metrics_store.py`, `app/services/monitoring_metrics.py`,
 `app/services/nas/_mikrotik.py`, `app/services/nas/provisioner.py`,

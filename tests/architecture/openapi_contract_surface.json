@@ -5391,6 +5391,17 @@
     "422": "a11c9d9b2af8"
    }
   },
+  "GET /api/v1/integration/observations/network-capability-registry": {
+   "params": [
+    "header:authorization",
+    "header:x-api-key"
+   ],
+   "request": null,
+   "responses": {
+    "200": "461116428930",
+    "422": "a11c9d9b2af8"
+   }
+  },
   "GET /api/v1/integration/observations/payment-settlements/{capability_binding_id}/descriptor": {
    "params": [
     "header:authorization",
@@ -15810,6 +15821,17 @@
     "422": "a11c9d9b2af8"
    }
   },
+  "POST /api/v1/integration/observations/projection-secret": {
+   "params": [
+    "header:authorization",
+    "header:x-api-key"
+   ],
+   "request": "8a7885180918",
+   "responses": {
+    "200": "f9cf1acfcf93",
+    "422": "a11c9d9b2af8"
+   }
+  },
   "POST /api/v1/integration/observations/{capability_binding_id}": {
    "params": [
     "header:authorization",
@@ -21201,6 +21223,8 @@
   "ProjectType": "a29853f91876",
   "ProjectUpdate": "53c319e44d41",
   "ProjectWorkOrderIssued": "520595b20a85",
+  "ProjectionSecretFetchRequest": "da674e7d19e1",
+  "ProjectionSecretFetchResponse": "f484b511000f",
   "ProofReview": "f8be89429b4e",
   "ProrationPolicy": "d107683093f4",
   "ProviderEventOrderBy": "92e8a0fc9bbe",

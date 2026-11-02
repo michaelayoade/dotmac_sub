@@ -509,6 +509,58 @@ Do not apply these manually as hidden deploy state. They belong to
 `scripts/bootstrap_outbox_dispatcher_roles.py --repair`, and the deploy
 preflight verifies them before backup.
 
+## Migration object ownership and runtime grants
+
+Migrations run as `app_admin` (BYPASSRLS, not superuser), the same owner+grant
+model Starter and ERP use. `app_admin` **owns every new object**; `dotmac_app`
+(the runtime role) is **granted** access and never owns anything new:
+
+| New object | Runtime grant (same transaction) |
+| --- | --- |
+| table, partition, view | `SELECT, INSERT, UPDATE, DELETE` |
+| sequence (standalone or column-owned) | `USAGE, SELECT, UPDATE` |
+| enum/domain/range type, ordinary function | none (PUBLIC `USAGE`/`EXECUTE`) |
+| `alembic_version` (first bootstrap only) | `SELECT` |
+
+`dotmac_app` holds `USAGE` but **not** `CREATE` on `public`, so it cannot create
+objects or run DDL (`ALTER`, `DROP`, `CREATE INDEX`, `TRUNCATE`) on anything the
+migrator owns. `alembic/env.py` refuses, and rolls the whole run back on:
+`SECURITY DEFINER` functions outside `alembic/definer_owner_allowlist.txt`,
+materialized views, views without `security_invoker=true` (an `app_admin`-owned
+view would read RLS tables with the owner's BYPASSRLS), new schemas and any
+unknown object kind. These refusals run over every `app_admin`-owned object,
+not only new ones (so a later `CREATE OR REPLACE VIEW` that drops
+`security_invoker`, or a function turned `SECURITY DEFINER`, is caught). The
+grant step also covers any `app_admin`-owned relation or sequence still missing
+a grant, so a retry after a partially committed run ends fully granted. It then
+proves the grants from the catalog before commit.
+
+`scripts/deploy.sh` passes the runtime role as `MIGRATION_RUNTIME_ROLE=dotmac_app`
+(fixed, not configurable). The previous name `MIGRATION_OBJECT_OWNER` is still
+read by the migration code as an alias and means the same thing (grant, not
+ownership transfer). The read-only pre-pin identity check (`scripts/verify_migrator_identity.py`)
+refuses the deploy if `app_admin` lacks `CREATE` on `public`, and only prints a
+note if `dotmac_app` still holds it. Equivalent manual check:
+
+```sql
+SELECT has_schema_privilege('dotmac_app', 'public', 'CREATE');  -- expect false
+SELECT has_schema_privilege('app_admin', 'public', 'CREATE');   -- expect true
+```
+
+Known widening: the grant step re-applies full DML to `dotmac_app` on every
+`app_admin`-owned table on every run, so a `REVOKE` from `dotmac_app` in a
+migration does not hold; it is silently undone at the end of the run. Do not rely
+on `REVOKE` to make a table append-only or read-only for the runtime. Tracked
+follow-up: an explicit exclusions file (like the SECURITY DEFINER allowlist) for
+tables that must not get full DML.
+
+Do not grant `CREATE` on `public` to `dotmac_app` to make a migration pass: a
+failure at the grant step means the migration created something the contract
+refuses, or `app_admin` lacks `CREATE`. Mixed ownership is expected: objects
+`dotmac_app` already owned stay with it (no `REASSIGN OWNED`), and `app_admin`
+reaches them through its inherited membership. Operator scripts that run DDL on
+a table created after this change must run as `app_admin`, not `dotmac_app`.
+
 ## Post-migration resume
 
 For interrupted regional-report index builds, see

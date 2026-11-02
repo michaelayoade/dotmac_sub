@@ -127,6 +127,10 @@ remediation_*.json
 # Sub Thin Shadow host-generated credentials (mode 0600, never committed)
 deploy/shadow/.env
 
+# Local Docs for studying the application and its processes. These are not part of the codebase.
+/inbox-log-fixes.md
+Billing-summary.md
+
 # Local overrides for development/testing (never committed)
 *.local
 .agents/

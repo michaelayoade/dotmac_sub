@@ -223,17 +223,22 @@ already-baselined files looks like an ordinary shrink-and-grow pair.
 
 | Family | Files | Write sites |
 |---|---|---|
-| `service` | 21 | 95 |
+| `service` | 21 | 98 |
 | `web_presenter` | 4 | 12 |
 | `cli_script` | 5 | 12 |
 | `migration` | 9 | 12 |
-| **total** | **39** | **131** |
+| **total** | **39** | **134** |
 
 The detail location retirement removes one existing presenter write site:
 132 → 131, 40 → 39 counted files, and 29 → 28 production writer surfaces.
 No replacement persistence path is added. Three test-only construction sites
 (one migrated-clone engine and two Sessions) raise the fixture census from
 322 to 325; production Session-construction allowances remain unchanged.
+
+The Inbox identity correction adds three write sites to the existing
+`party.registry` owner. It locks and deactivates only the reviewed incorrect
+contact point, clears its primary flag, and records the correction source.
+The counted total moves from 131 to 134 without adding a writer file.
 
 `api_route`, `webhook_handler`, `web_route`, `task_worker`, `scheduled_job`,
 `event_handler`, `websocket`, `importer`, `poller`, `app_module` and
@@ -409,7 +414,7 @@ prerequisite for unrelated modules.
 
 | Path | Owner | Writes |
 |---|---|---|
-| `app/services/party.py` | `party.registry` | 23 |
+| `app/services/party.py` | `party.registry` | 26 |
 | `app/services/customer_canonical_profile_patch.py` | `customer.canonical_profile_patch` | 20 |
 | `app/services/customer_registration_metadata.py` | `customer.registration_metadata` | 4 |
 | `app/services/customer_account_deletion.py` | `customer.account_deletion` | 1 |

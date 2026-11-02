@@ -571,9 +571,13 @@ migration_admin_credential_available() {
   return "${ok}"
 }
 
-# Every object a migration creates is handed back to this runtime owner inside
-# the migration transaction (alembic/env.py). Fixed, not env-configurable.
-MIGRATION_OBJECT_OWNER_ROLE="dotmac_app"
+# The runtime role. Migrations run as the migrator, which owns every NEW object;
+# alembic/env.py grants this role DML on them (sequences: USAGE/SELECT/UPDATE)
+# inside the migration transaction. The runtime role never owns new objects and
+# needs no CREATE on public. Objects it already owns are untouched. Fixed, not
+# env-configurable. (Older images read the same setting as MIGRATION_OBJECT_OWNER;
+# the candidate image named below is always the one that migrates.)
+MIGRATION_RUNTIME_ROLE="dotmac_app"
 
 # Read-only, pre-pin: the migration credential must be the contract migrator
 # (member of the object owner with INHERIT and SET, BYPASSRLS, not superuser,
@@ -585,7 +589,7 @@ verify_migration_identity() {
     -v "${MIGRATION_ADMIN_PGPASS}:${MIGRATION_ADMIN_PGPASS_MOUNT}:ro" \
     -e PGPASSFILE="${MIGRATION_ADMIN_PGPASS_MOUNT}" \
     -e MIGRATION_DATABASE_URL="${MIGRATION_ADMIN_URL}" \
-    -e MIGRATION_OBJECT_OWNER="${MIGRATION_OBJECT_OWNER_ROLE}" \
+    -e MIGRATION_RUNTIME_ROLE="${MIGRATION_RUNTIME_ROLE}" \
     app python scripts/verify_migrator_identity.py
 }
 
@@ -600,7 +604,7 @@ run_migrations() {
       -v "${MIGRATION_ADMIN_PGPASS}:${MIGRATION_ADMIN_PGPASS_MOUNT}:ro" \
       -e PGPASSFILE="${MIGRATION_ADMIN_PGPASS_MOUNT}" \
       -e MIGRATION_DATABASE_URL="${MIGRATION_ADMIN_URL}" \
-      -e MIGRATION_OBJECT_OWNER="${MIGRATION_OBJECT_OWNER_ROLE}" \
+      -e MIGRATION_RUNTIME_ROLE="${MIGRATION_RUNTIME_ROLE}" \
       --name "${MIGRATION_RUN_PREFIX}${attempt}" app alembic upgrade heads 2>&1)"; then
       printf '%s\n' "${output}"
       return 0

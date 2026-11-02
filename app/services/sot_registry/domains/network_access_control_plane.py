@@ -1677,6 +1677,131 @@ DOMAIN = DomainSOT(
             ),
         ),
         SOTService(
+            name="access.projection_secret_fetch",
+            module="app.services.integrations.projection_secret_fetch",
+            owns=("single-use projection secret fetch authorizations",),
+            depends_on=("access.radius_projection",),
+            notes=(
+                "Credential-owner side of the ADR-0076 section 7 fetch: a "
+                "request is opened when a projection plan is authored and "
+                "burned by the one redeem that releases the secret, with "
+                "every refusal collapsed to one opaque outcome. The request "
+                "rows name the credential and secret version only; no secret "
+                "material is persisted here or in any plan. Replaced at the "
+                "suite cutover by the access-credentials module's native "
+                "secret versions."
+            ),
+            contract=ServiceContract(
+                concerns=(
+                    ConcernContract(
+                        name="single-use projection secret fetch authorizations",
+                        role=OwnerRole.AUTHORITATIVE_RECORD,
+                        input_names=(
+                            "owner-authored projection plan",
+                            "single-use redeem request",
+                        ),
+                        canonical_writer="access.projection_secret_fetch",
+                    ),
+                ),
+                authoritative_inputs=(
+                    AuthorityInput(
+                        name="owner-authored projection plan",
+                        owner="access.radius_projection",
+                        kind=AuthorityKind.CONTROL_INPUT,
+                        source=(
+                            "Translated per-login work item naming the "
+                            "credential and the secret version planned against"
+                        ),
+                    ),
+                    AuthorityInput(
+                        name="single-use redeem request",
+                        owner="access.projection_secret_fetch",
+                        kind=AuthorityKind.CONTROL_INPUT,
+                        source=(
+                            "Integrator machine principal presenting the "
+                            "request ref, credential id and secret version"
+                        ),
+                    ),
+                ),
+                transaction=TransactionContract(
+                    mode=TransactionMode.OWNER_MANAGED,
+                    boundary=(
+                        "Opening joins the plan author's transaction (flush "
+                        "only); redeem enters the typed owner-command boundary "
+                        "on a transaction-free session. Decryption stays in "
+                        "memory; burn and pending reveal event commit together "
+                        "before cleartext is returned. Pre-commit failures "
+                        "roll back both; an uncertain commit may already have "
+                        "spent the authorization without returning cleartext."
+                    ),
+                    locking=(
+                        "Lock and refresh the credential, then the request, "
+                        "through owner completion. Check version, active state "
+                        "and expiry after lock waits; a concurrent redeem "
+                        "observes the committed redeemed_at burn."
+                    ),
+                    idempotency=(
+                        "One redeem per request ref, ever. Refusals are one "
+                        "opaque outcome so the endpoint cannot probe "
+                        "credential state."
+                    ),
+                    retries=(
+                        "No retry of a burned ref; the plan author opens a "
+                        "fresh request and replans."
+                    ),
+                ),
+                errors=ErrorContract(
+                    domain_codes=(
+                        *owner_command_boundary_error_codes(
+                            "access.projection_secret_fetch"
+                        ),
+                        "access.projection_secret_fetch.refused",
+                    ),
+                    mapping_owner="integrator observations API adapter",
+                    fail_closed_on=(
+                        "unknown, expired or already-redeemed request ref",
+                        "credential rotated since the plan was authored",
+                        "credential inactive, missing or reference-typed",
+                    ),
+                ),
+                events=EventContract(
+                    event_types=("access_projection_secret.revealed",),
+                    schema_version=1,
+                    delivery_owner="events.dispatcher",
+                    compatibility=(
+                        "Version 1 carries credential id, secret version and "
+                        "request ref only; the secret and username are omitted."
+                    ),
+                    replay=(
+                        "One pending event per committed reveal and burn, "
+                        "delivered by the durable dispatcher. It is not a "
+                        "connector receipt; replay cannot release the secret "
+                        "again after the burn."
+                    ),
+                ),
+                migration=MigrationContract(
+                    state=AuthorityMigrationState.NATIVE,
+                    new_owner="access.projection_secret_fetch",
+                    verification=(
+                        "Migrated PostgreSQL concurrent redeem, rotation, "
+                        "post-lock expiry and rollback canaries; replaced by the "
+                        "access-credentials module"
+                    ),
+                ),
+                steward="network access operations",
+                design_refs=(
+                    "docs/SOT_RELATIONSHIP_MAP.md",
+                    "docs/designs/PROJECTION_SECRET_FETCH_ATOMICITY.md",
+                ),
+                test_refs=(
+                    "tests/test_projection_secret_fetch.py",
+                    "tests/test_projection_secret_fetch_api.py",
+                    "tests/integration/test_projection_secret_fetch_concurrency_pg.py",
+                    "tests/architecture/test_projection_secret_fetch_boundary.py",
+                ),
+            ),
+        ),
+        SOTService(
             name="access.session_enforcement",
             module="app.services.enforcement",
             owns=("typed access-state CoA/disconnect execution",),

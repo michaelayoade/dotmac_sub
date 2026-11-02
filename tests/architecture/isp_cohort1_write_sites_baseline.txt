@@ -61,6 +61,12 @@
 # deletion coordinator reduces that corrected census to 132. The remaining
 # address deletion is existing debt; no runtime write behavior was added.
 
+# 2026-10-22 — Inbox identity correction adds three writes in the existing
+# party.registry owner: deactivate the reviewed incorrect contact point,
+# release its primary slot, and record the correction source. This is a
+# specific, locked Party contact-point correction; no adapter writes cohort
+# state and no new writer file is introduced. Census 131 -> 134.
+
 2 cli_script|scripts/migration/backfill_crm_subscriber_links.py
 2 cli_script|scripts/migration/backfill_party_status.py
 1 cli_script|scripts/migration/import_crm_phase3.py
@@ -92,7 +98,7 @@
 1 service|app/services/mrr_snapshot.py
 1 service|app/services/network_subscriber_bridge.py
 1 service|app/services/nin_verifications.py
-23 service|app/services/party.py
+26 service|app/services/party.py
 15 service|app/services/subscriber.py
 2 service|app/services/subscriber_profile_cleanup.py
 3 service|app/services/team_inbox_commands.py
@@ -100,4 +106,4 @@
 7 web_presenter|app/services/web_customer_actions.py
 1 web_presenter|app/services/web_system_import_wizard.py
 3 web_presenter|app/services/web_system_restore_tool.py
-TOTAL 131
+TOTAL 134

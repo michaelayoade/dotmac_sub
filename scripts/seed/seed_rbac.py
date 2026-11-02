@@ -21,6 +21,11 @@ ADMIN_ONLY_PERMISSION_KEYS = {
     # so "accept inbound observations" cannot be attached to an ordinary role;
     # the read-only mirror scope beside it stays assignable on purpose.
     "integration:observations:write",
+    # Single-use projection-secret reveal for the Integrator machine
+    # principal (ADR-0076 section 7). Kept out of the role builder for the
+    # same reason: a credential scope for a machine caller, never a human
+    # role permission.
+    "integration:projection-secret:reveal",
     # Egress authority for a future ERP accounting-sync machine principal.
     # Kept out of the ordinary role builder for the same reason as the
     # ingress scope above: this is a credential scope for a machine caller,
@@ -76,6 +81,10 @@ DEFAULT_PERMISSIONS = [
     (
         "integration:observations:mirror",
         "Integrator inbound observation parity evidence, read-only",
+    ),
+    (
+        "integration:projection-secret:reveal",
+        "Integrator single-use projection secret reveal (ADR-0076 section 7)",
     ),
     (
         "integration:accounting_sync:read",

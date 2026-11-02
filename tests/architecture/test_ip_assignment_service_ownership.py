@@ -151,6 +151,22 @@ def test_unbound_release_adapter_is_dry_run_first_and_names_its_class() -> None:
     assert ".commit(" not in source
 
 
+def test_historic_clear_adapter_is_dry_run_first_and_fingerprint_gated() -> None:
+    source = (ROOT / "scripts/one_off/clear_historic_served_ipv4.py").read_text(
+        encoding="utf-8"
+    )
+
+    assert '"--apply"' in source
+    assert '"--fingerprint"' in source
+    assert '"--idempotency-key"' in source
+    assert '"--restore"' in source
+    assert "preview_historic_served_ipv4_clear(" in source
+    assert "clear_historic_served_ipv4(" in source
+    assert "restore_cleared_served_ipv4(" in source
+    assert ".commit(" not in source
+    assert "emit_event" not in source
+
+
 def test_projection_operator_adapter_is_dry_run_first_and_fingerprint_gated() -> None:
     source = PROJECTION_SCRIPT.read_text(encoding="utf-8")
 

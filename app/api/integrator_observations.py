@@ -49,11 +49,12 @@ event are two receipts and one observation.
 
 from __future__ import annotations
 
-from uuid import UUID
+from uuid import UUID, uuid4
 
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 
+from app.config import settings
 from app.db import get_db
 from app.schemas.integrator_observation import (
     IntegratorMirrorFieldDisagreement,
@@ -71,6 +72,10 @@ from app.schemas.integrator_settlement_observation import (
     SettlementProductPortDescriptorV2,
     SettlementProductPortDescriptorV3,
 )
+from app.schemas.projection_secret_fetch import (
+    ProjectionSecretFetchRequest,
+    ProjectionSecretFetchResponse,
+)
 from app.services import payment_webhook_commands as settlement_commands
 from app.services import (
     team_inbox_integrator_envelope as envelopes,
@@ -85,6 +90,10 @@ from app.services import (
 from app.services.auth_dependencies import require_any_permission, require_permission
 from app.services.db_session_adapter import db_session_adapter
 from app.services.integrations import inbox as integration_inbox
+from app.services.integrations import (
+    network_capability_contracts,
+    projection_secret_fetch,
+)
 from app.services.integrations import product_port_descriptor as descriptors
 from app.services.integrations.connectors.integrator_http import (
     INTEGRATOR_RECEIVE_CAPABILITY,
@@ -95,7 +104,7 @@ from app.services.integrations.runtime_execution import (
     RuntimeExecutionError,
     build_execution_context,
 )
-from app.services.owner_commands import CommandContext
+from app.services.owner_commands import CommandContext, OwnerCommandError
 
 router = APIRouter(prefix="/integration/observations", tags=["integrator-observations"])
 
@@ -111,6 +120,86 @@ INTEGRATOR_MIRROR_SCOPE = "integration:observations:mirror"
 _require_descriptor_auth = require_any_permission(
     INTEGRATOR_OBSERVATION_SCOPE, INTEGRATOR_MIRROR_SCOPE
 )
+
+
+#: The one scope that may redeem a projection secret. Narrower than every
+#: other Integrator scope: it can fetch a secret the owner already opened a
+#: request for, once, and can do nothing else on this port.
+PROJECTION_SECRET_FETCH_SCOPE = projection_secret_fetch.PROJECTION_SECRET_FETCH_SCOPE
+
+
+@router.post("/projection-secret", response_model=ProjectionSecretFetchResponse)
+def fetch_projection_secret(
+    body: ProjectionSecretFetchRequest,
+    _auth: dict[str, object] = Depends(
+        require_permission(PROJECTION_SECRET_FETCH_SCOPE)
+    ),
+) -> ProjectionSecretFetchResponse:
+    """Redeem one open projection request for its credential's secret.
+
+    Disarmed with the rest of outbound provisioning: while
+    `network_provision_enabled` is off nothing can have opened a request
+    through the composition, and the endpoint answers the same opaque 409
+    as every other refusal rather than confirming it exists.
+    """
+    if not settings.network_provision_enabled:
+        raise HTTPException(status_code=409, detail="projection secret refused")
+    if _auth.get("principal_type") != "api_key":
+        raise HTTPException(status_code=403, detail="Machine principal required")
+    try:
+        principal_id = UUID(str(_auth["principal_id"]))
+    except (KeyError, TypeError, ValueError):
+        raise HTTPException(
+            status_code=403, detail="Machine principal required"
+        ) from None
+    command_id = uuid4()
+    command = projection_secret_fetch.RedeemProjectionSecretCommand(
+        context=CommandContext(
+            command_id=command_id,
+            correlation_id=command_id,
+            actor=f"api_key:{principal_id}",
+            scope=PROJECTION_SECRET_FETCH_SCOPE,
+            reason="Redeem a projection secret authorization",
+        ),
+        request_ref=body.projection_request_ref,
+        credential_id=body.credential_id,
+        secret_version=body.secret_version,
+    )
+    try:
+        # Authentication may have used another read session. The command owner
+        # receives a fresh session and owns the complete business transaction.
+        with db_session_adapter.owner_command_session() as command_db:
+            outcome = projection_secret_fetch.redeem_projection_secret(
+                command_db, command=command
+            )
+    except projection_secret_fetch.SecretFetchRefused:
+        raise HTTPException(
+            status_code=409, detail="projection secret refused"
+        ) from None
+    except OwnerCommandError:
+        raise HTTPException(
+            status_code=503, detail="projection secret unavailable"
+        ) from None
+    return ProjectionSecretFetchResponse(secret=outcome.secret)
+
+
+@router.get("/network-capability-registry")
+def read_network_capability_registry(
+    _auth: dict = Depends(_require_descriptor_auth),
+) -> dict[str, object]:
+    """Publish Sub's network capability contracts for Integrator install.
+
+    Off by default until the network-suite-v1 cutover arms it
+    (`NETWORK_CAPABILITY_REGISTRY_ENABLED`). When off the route answers 404,
+    the same as an unknown capability, so an authenticated caller cannot
+    learn what Sub would publish. The Integrator pins the document's
+    `descriptor_digest`; serving a different digest refuses its startup.
+    """
+    if not settings.network_capability_registry_enabled:
+        raise HTTPException(
+            status_code=404, detail="Network capability registry not published"
+        )
+    return network_capability_contracts.capability_registry_document()
 
 
 def _settlement_observation(

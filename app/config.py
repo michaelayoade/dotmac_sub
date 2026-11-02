@@ -29,6 +29,19 @@ class Settings:
     # Deploy-config allowlist of outbound effects permitted outside production
     # (comma separated Effect names). Environment only; never a database row.
     outbound_effects_allow: str = os.getenv("OUTBOUND_EFFECTS_ALLOW", "")
+    #: Publishes Sub's network capability contracts to the Integrator.
+    #: Off until the network-suite-v1 cutover: serving the document alone
+    #: executes nothing, but an Integrator deployment pinned to it would
+    #: install the contracts, so publication is a deliberate switch.
+    network_capability_registry_enabled: bool = _env_bool(
+        "NETWORK_CAPABILITY_REGISTRY_ENABLED", False
+    )
+    #: Arms outbound RADIUS projection submission to the Integrator. Off
+    #: until the single-writer flip in the network-suite-v1 cutover; the
+    #: incumbent radius_population remains the only writer while off.
+    network_provision_enabled: bool = _env_bool("NETWORK_PROVISION_ENABLED", False)
+    integrator_provision_base_url: str = os.getenv("INTEGRATOR_PROVISION_BASE_URL", "")
+    integrator_provision_api_key: str = os.getenv("INTEGRATOR_PROVISION_API_KEY", "")
     #: The environment exactly as declared, EMPTY when neither APP_ENV nor
     #: ENVIRONMENT is set. ``app_env`` above defaults to "development", which
     #: would hide an omission from a fail-closed deploy guard.

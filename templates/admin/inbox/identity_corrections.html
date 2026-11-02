@@ -1,0 +1,19 @@
+{% extends "layouts/admin.html" %}
+{% block title %}Inbox identity corrections{% endblock %}
+{% block content %}
+<div class="mx-auto max-w-3xl space-y-4 px-4 py-6">
+    <a href="/admin/inbox" class="text-sm font-semibold text-cyan-700 hover:underline dark:text-cyan-300">&larr; Inbox</a>
+    <h1 class="text-2xl font-bold">Inbox identity corrections</h1>
+    <p class="text-sm text-slate-600 dark:text-slate-300">Review contact matches flagged as incorrect. Correct the contact records, then confirm the sender detail is clear.</p>
+    {% for item in corrections %}
+    <a href="/admin/inbox/{{ item.conversation_id }}/identity-review" class="block rounded-xl border border-slate-200 p-4 hover:border-cyan-500 dark:border-slate-700">
+        <strong class="block">{{ item.subject }}</strong>
+        <span class="mt-1 block text-xs text-slate-500">{{ item.channel_type | replace('_', ' ') | title }} &middot; {{ item.requested_at }}</span>
+        <span class="mt-2 block text-sm">{{ item.reason }}</span>
+    </a>
+    {% else %}
+    <p class="rounded-xl border border-slate-200 p-4 text-sm text-slate-500 dark:border-slate-700">No open correction requests.</p>
+    {% endfor %}
+    {% if corrections | length == 50 %}<a href="?offset={{ offset + 50 }}" class="text-sm font-semibold text-cyan-700">Next 50 requests</a>{% endif %}
+</div>
+{% endblock %}

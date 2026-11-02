@@ -5,6 +5,7 @@ from __future__ import annotations
 from scripts.ci.migrations_production_roles import (
     RELAY_DEFINERS,
     edge_violations,
+    grant_gap_findings,
     migrator_owned_violations,
 )
 
@@ -36,18 +37,15 @@ def test_admin_inherit_and_set_are_each_checked() -> None:
     )
 
 
-def test_only_the_four_relay_definers_may_stay_with_the_migrator() -> None:
+def test_the_four_relay_definers_must_stay_with_the_migrator() -> None:
     definers = [("pg_proc", name) for name in sorted(RELAY_DEFINERS)]
     assert migrator_owned_violations(definers) == ()
 
 
-def test_any_other_migrator_owned_object_is_reported() -> None:
+def test_new_tables_and_sequences_owned_by_the_migrator_are_expected() -> None:
     owned = [("pg_proc", name) for name in sorted(RELAY_DEFINERS)]
     owned += [("pg_class", "public.invoices"), ("pg_proc", "helper")]
-    assert migrator_owned_violations(owned) == (
-        "migrator owns pg_class public.invoices",
-        "migrator owns pg_proc helper",
-    )
+    assert migrator_owned_violations(owned) == ()
 
 
 def test_a_missing_relay_definer_is_reported() -> None:
@@ -55,3 +53,15 @@ def test_a_missing_relay_definer_is_reported() -> None:
     violations = migrator_owned_violations(owned)
     assert len(violations) == 3
     assert all("is not owned by app_admin" in v for v in violations)
+
+
+def test_grant_gaps_name_the_relation_and_the_missing_privileges() -> None:
+    rows = [
+        ("relation", "public.a", []),
+        ("relation", "public.b", ["INSERT", "DELETE"]),
+        ("sequence", "public.b_id_seq", ["USAGE"]),
+    ]
+    assert grant_gap_findings(rows) == (
+        "relation public.b: dotmac_app lacks INSERT, DELETE",
+        "sequence public.b_id_seq: dotmac_app lacks USAGE",
+    )
