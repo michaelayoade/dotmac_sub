@@ -21,6 +21,7 @@ from dotmac_billing import (
 )
 from dotmac_kernel.cache import TenantScope
 from dotmac_kernel.money import Currency
+from fastapi import HTTPException
 from sqlalchemy import select
 
 from app.models.billing import (
@@ -28,14 +29,28 @@ from app.models.billing import (
     InvoiceDueDateBasis,
     InvoiceLine,
     InvoiceStatus,
+    PaymentAllocation,
+    PaymentProvider,
+    PaymentProviderType,
     StarterInvoiceLink,
 )
 from app.models.catalog import BillingMode
+from app.schemas.billing import PaymentRefundPreviewRequest
 from app.services import web_billing_invoices as web_invoices
+from app.services.account_credit_deposits import (
+    SETTLEMENT_SCOPE,
+    AccountCreditDeposits,
+    AccountCreditDepositSettlementSource,
+    SettleAccountCreditDepositCommand,
+)
 from app.services.billing import starter_issuance as issuance
 from app.services.billing import starter_policies
+from app.services.billing._common import get_account_credit_balance
+from app.services.billing.payments import Refunds
 from app.services.brand_profiles import upsert_brand_profile
 from app.services.operator_tenant import OPERATOR_TENANT_ID
+from app.services.owner_commands import CommandContext
+from app.services.topup_intents import TopupIntentChannel
 
 pytestmark = pytest.mark.integration
 
@@ -136,6 +151,50 @@ def _draft(db_session, subscriber, *, total: str = "107.50") -> Invoice:
     return invoice
 
 
+def _settled_account_credit(db_session, subscriber, *, amount: Decimal) -> None:
+    suffix = uuid4().hex[:12]
+    provider = PaymentProvider(
+        name=f"Starter credit Paystack {suffix}",
+        provider_type=PaymentProviderType.paystack,
+        is_active=True,
+    )
+    db_session.add(provider)
+    db_session.flush()
+    intent, _preview, _replayed = AccountCreditDeposits.stage_intent(
+        db_session,
+        account_id=subscriber.id,
+        amount=str(amount),
+        currency="NGN",
+        minimum="1.00",
+        maximum="500000.00",
+        reference=f"starter-credit-{suffix}",
+        provider_type="paystack",
+        provider_id=provider.id,
+        expires_at=datetime.now(UTC) + timedelta(minutes=30),
+        idempotency_key=f"starter-credit-intent-{suffix}",
+        channel=TopupIntentChannel.customer_selfcare,
+        created_by="pytest",
+    )
+    db_session.commit()
+    AccountCreditDeposits.settle_verified(
+        db_session,
+        SettleAccountCreditDepositCommand(
+            intent_id=intent.id,
+            provider_type="paystack",
+            external_transaction_id=f"starter-credit-payment-{suffix}",
+            amount=amount,
+            currency="NGN",
+            provider_intent_id=intent.id,
+            source=AccountCreditDepositSettlementSource.customer_gateway_verify,
+        ),
+        context=CommandContext.system(
+            actor="pytest:starter-account-credit",
+            scope=SETTLEMENT_SCOPE,
+            reason="Starter account-credit issuance proof",
+        ),
+    )
+
+
 def test_eligible_draft_issues_through_starter(
     db_session, subscriber, _seller_and_bank, _starter_series_isolation
 ) -> None:
@@ -168,6 +227,71 @@ def test_eligible_draft_issues_through_starter(
     )
     assert current.position is not None
     assert current.position.collectible_receivable.amount == Decimal("107.50")
+
+
+@pytest.mark.parametrize(
+    ("credit", "expected_status", "expected_remaining"),
+    (
+        (Decimal("107.50"), InvoiceStatus.paid, Decimal("0.00")),
+        (Decimal("80.00"), InvoiceStatus.partially_paid, Decimal("27.50")),
+    ),
+)
+def test_starter_issuance_applies_existing_account_credit_atomically(
+    db_session,
+    subscriber,
+    _seller_and_bank,
+    _starter_series_isolation,
+    credit,
+    expected_status,
+    expected_remaining,
+) -> None:
+    subscriber.billing_mode = BillingMode.postpaid
+    subscriber.billing_address_line1 = "2 Customer Close"
+    subscriber.billing_city = "Abuja"
+    db_session.commit()
+    _settled_account_credit(db_session, subscriber, amount=credit)
+    assert get_account_credit_balance(db_session, str(subscriber.id)) == credit
+    invoice = _draft(db_session, subscriber)
+
+    issued = web_invoices.issue_invoice_from_detail(
+        db_session, invoice_id=invoice.id, actor_ref="user:starter-credit-proof"
+    )
+
+    assert issued.status is expected_status
+    assert issued.balance_due == expected_remaining
+    link = db_session.scalar(
+        select(StarterInvoiceLink).where(StarterInvoiceLink.invoice_id == invoice.id)
+    )
+    assert link is not None
+    current = get_current_receivable_position(
+        db_session,
+        scope=TenantScope(OPERATOR_TENANT_ID),
+        request=GetCurrentReceivablePositionV1(
+            scope=TenantScope(OPERATOR_TENANT_ID),
+            billing_account_id=link.billing_account_id,
+            currency=Currency("NGN", 2),
+        ),
+    )
+    assert current.position is not None
+    assert current.position.collectible_receivable.amount == expected_remaining
+    assert current.position.available_credit.amount == Decimal("0.00")
+    allocation = db_session.scalar(
+        select(PaymentAllocation).where(
+            PaymentAllocation.invoice_id == invoice.id,
+            PaymentAllocation.is_active.is_(True),
+        )
+    )
+    assert allocation is not None
+    assert allocation.amount == credit
+    assert allocation.ledger_entry is not None
+    assert allocation.ledger_entry.affects_customer_position is False
+    assert get_account_credit_balance(db_session, str(subscriber.id)) == Decimal("0.00")
+    with pytest.raises(HTTPException, match="Starter invoice"):
+        Refunds.preview(
+            db_session,
+            str(allocation.payment_id),
+            PaymentRefundPreviewRequest(amount=credit, reason="proof refusal"),
+        )
 
 
 def test_homogeneous_multiline_draft_issues_through_starter(

@@ -131,3 +131,19 @@ def test_baseline_shrinks_only() -> None:
         "from the baseline so it keeps meaning what it says:\n  "
         + "\n  ".join(sorted(stale))
     )
+
+
+def test_starter_issuance_credit_bypass_has_one_coordinator() -> None:
+    """Only the atomic Starter bridge may consume a linked reservation."""
+
+    callers: set[str] = set()
+    for path in sorted(APP.rglob("*.py")):
+        tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+        if any(
+            isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Attribute)
+            and node.func.attr == "apply_starter_invoice_issuance_funding"
+            for node in ast.walk(tree)
+        ):
+            callers.add(path.relative_to(ROOT).as_posix())
+    assert callers == {"app/services/billing/starter_account_credit.py"}

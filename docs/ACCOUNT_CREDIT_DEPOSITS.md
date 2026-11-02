@@ -3,6 +3,15 @@
 Sub owns this lifecycle. It is account credit, not a wallet, and it has no CRM
 runtime dependency.
 
+For a Starter-issued admin or scheduled postpaid invoice, the same exact
+payment-backed credit is bridged during issuance. The account-credit owner
+reserves the sources before the draft posts a receivable; Starter then accepts
+each exact slice into its `available_credit` lane and applies it to the new
+document, while Sub records the matching `PaymentAllocation` and consumption
+evidence for payment/ERP traceability. These writes commit or roll back
+together, so the credit cannot remain available in Sub after Starter uses it.
+See `docs/designs/STARTER_ACCOUNT_CREDIT_SETTLEMENT.md`.
+
 ## Contract and owners
 
 `financial.account_credit_deposits` owns eligibility, preview, typed intent,

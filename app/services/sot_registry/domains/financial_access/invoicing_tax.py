@@ -3607,12 +3607,16 @@ SERVICES: tuple[SOTService, ...] = (
     SOTService(
         name="financial.starter_issuance",
         module="app.services.billing.starter_issuance",
-        implementation_modules=("app.services.web_billing_invoices",),
+        implementation_modules=(
+            "app.services.billing.starter_account_credit",
+            "app.services.web_billing_invoices",
+        ),
         owns=(
             "Starter-issued admin invoice mirror and structural link",
             "Starter issuance eligibility decision for admin drafts",
             "Starter-issued multi-line admin invoice line links",
             "Starter-issued scheduled-cycle invoice mirror",
+            "Starter available-credit application during invoice issuance",
         ),
         depends_on=(
             "control.settings_spec",
@@ -3634,11 +3638,14 @@ SERVICES: tuple[SOTService, ...] = (
             "flows delegate to incumbent owners. The scheduled-cycle lane "
             "reuses the same core as a caller: app.services.billing_automation stages "
             "cycle drafts, appends lines, and at end-of-run issues eligible "
-            "drafts (single-subscription homogeneous line sets with no "
-            "spendable account credit) through this service inside the "
+            "drafts (single-subscription homogeneous line sets) through this "
+            "service inside the "
             "cycle transaction; ineligible drafts keep legacy system "
-            "issuance, and Starter-linked invoices are excluded from both "
-            "legacy line appends and legacy account-credit settlement."
+            "issuance. Exact payment-backed account credit is reserved before "
+            "issuance, accepted into Starter's available-credit lane, applied "
+            "to the new document, and consumed by the payment-allocation owner "
+            "in the same transaction. The allocation is Sub/ERP settlement "
+            "evidence; Starter remains authoritative for the receivable."
         ),
         contract=ServiceContract(
             concerns=(
@@ -3682,11 +3689,21 @@ SERVICES: tuple[SOTService, ...] = (
                     role=OwnerRole.COMMAND_WRITER,
                     input_names=(
                         "eligible scheduled-cycle draft invoice",
-                        "canonical account-credit funding preview",
+                        "canonical account-credit issuance reservation",
                         "canonical Starter billing policies",
                         "canonical seller legal identity",
                         "canonical subscriber billing identity",
                         "canonical collection bank account",
+                    ),
+                    canonical_writer="financial.starter_issuance",
+                ),
+                ConcernContract(
+                    name="Starter available-credit application during invoice issuance",
+                    role=OwnerRole.COMMAND_WRITER,
+                    input_names=(
+                        "canonical account-credit issuance reservation",
+                        "Starter-issued invoice and structural link",
+                        "canonical Starter account-credit policies",
                     ),
                     canonical_writer="financial.starter_issuance",
                 ),
@@ -3715,13 +3732,31 @@ SERVICES: tuple[SOTService, ...] = (
                     ),
                 ),
                 AuthorityInput(
-                    name="canonical account-credit funding preview",
+                    name="canonical account-credit issuance reservation",
                     owner="financial.account_credit_applications",
                     kind=AuthorityKind.AUTHORITATIVE_RECORD,
                     source=(
-                        "write-free funding projection proving the account "
-                        "holds no spendable credit for this invoice, so no "
-                        "legacy credit application is bypassed"
+                        "account-locked pre-issuance reservation naming each "
+                        "exact succeeded Payment, amount, currency, invoice, "
+                        "and tamper-evident funding fingerprint"
+                    ),
+                ),
+                AuthorityInput(
+                    name="Starter-issued invoice and structural link",
+                    owner="financial.starter_issuance",
+                    kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                    source=(
+                        "new StarterInvoiceLink binding the Sub draft to its "
+                        "Starter billing account and document in this transaction"
+                    ),
+                ),
+                AuthorityInput(
+                    name="canonical Starter account-credit policies",
+                    owner="control.settings_spec",
+                    kind=AuthorityKind.CONTROL_INPUT,
+                    source=(
+                        "settings-resolved settlement trust, available-credit "
+                        "lane, and deterministic settlement/application templates"
                     ),
                 ),
                 AuthorityInput(
@@ -3767,21 +3802,26 @@ SERVICES: tuple[SOTService, ...] = (
                 mode=TransactionMode.PARTICIPANT,
                 boundary=(
                     "The caller owns the transaction: Starter obligation, "
-                    "document, numbering allocation, Sub mirror, link, "
-                    "audit row, and announce event commit or roll back "
+                    "document, numbering allocation, optional available-credit "
+                    "acceptance/application, exact Sub payment allocation, "
+                    "Sub mirror, link, audit row, and events commit or roll back "
                     "together. A Starter refusal propagates and never "
                     "falls back to the legacy writer for that draft."
                 ),
                 locking=(
-                    "No Sub-side row locks beyond the caller's invoice "
-                    "load; Starter billing and numbering apply their own "
+                    "The account-credit owner locks the customer account and "
+                    "revalidates each reserved Payment under its allocation "
+                    "fence; Starter billing and numbering apply their own "
                     "writer fences inside the same transaction."
                 ),
                 idempotency=(
                     "The obligation source fact and correlation derive "
                     "from the Sub invoice identity, so a replay after "
                     "rollback re-presents identical evidence; a committed "
-                    "issuance leaves the draft issued and ineligible."
+                    "issuance leaves the draft issued and ineligible. Each "
+                    "credit transfer key derives from the immutable payment "
+                    "settlement and invoice identities, while allocation "
+                    "idempotency remains payment-plus-invoice."
                 ),
                 retries=(
                     "Callers retry the whole issuance after rollback with "
@@ -3795,6 +3835,10 @@ SERVICES: tuple[SOTService, ...] = (
                     "financial.starter_issuance.ineligible",
                     "financial.starter_issuance.source_kind_undeclared",
                     "financial.starter_issuance.starter_refused",
+                    "financial.starter_account_credit.configuration_invalid",
+                    "financial.starter_account_credit.reservation_mismatch",
+                    "financial.starter_account_credit.source_changed",
+                    "financial.starter_account_credit.starter_refused",
                 ),
                 mapping_owner="admin billing invoice adapters",
                 retryable_codes=(),
@@ -3802,17 +3846,19 @@ SERVICES: tuple[SOTService, ...] = (
                     "incomplete seller, customer, or bank document evidence",
                     "unreconciled totals or missing frozen tax snapshot",
                     "Starter billing refusal after eligibility was granted",
+                    "reserved payment credit changing before application",
+                    "Starter and Sub refusing different sides of the atomic draw",
                     "undeclared obligation source kind",
                 ),
             ),
             events=EventContract(
-                event_types=("invoice.sent",),
+                event_types=("invoice.sent", "payment.received"),
                 schema_version=1,
                 delivery_owner="events.dispatcher",
                 compatibility=(
-                    "Version 1 payload is identical to the legacy "
-                    "issue-with-announce event: invoice identity, number, "
-                    "total, due date, currency, and status transition."
+                    "invoice.sent retains the legacy issue-with-announce "
+                    "shape. payment.received is emitted by the canonical "
+                    "payment-allocation participant for each exact credit source."
                 ),
                 replay=(
                     "Replay re-notifies from the committed mirror row; "
@@ -3826,7 +3872,10 @@ SERVICES: tuple[SOTService, ...] = (
                 verification=(
                     "Eligibility unit tests and the migrated-PostgreSQL "
                     "switch proof: eligible drafts carry Starter numbers "
-                    "and links with exact collectible position; "
+                    "and links with exact collectible position; full and "
+                    "partial pre-existing credit produce paid/partially-paid "
+                    "mirrors, zero Starter residual credit, and no reusable "
+                    "legacy duplicate; "
                     "ineligible drafts stay on the legacy writer."
                 ),
                 cutover_gate=(
@@ -3843,6 +3892,8 @@ SERVICES: tuple[SOTService, ...] = (
             steward="billing operations",
             design_refs=(
                 "docs/adr/0031-composable-starter-billing-policies.md",
+                "docs/ACCOUNT_CREDIT_DEPOSITS.md",
+                "docs/designs/STARTER_ACCOUNT_CREDIT_SETTLEMENT.md",
                 "docs/SOT_RELATIONSHIP_MAP.md",
             ),
             test_refs=(

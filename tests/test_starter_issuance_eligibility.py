@@ -13,7 +13,6 @@ from app.models.catalog import BillingMode, Subscription
 from app.models.subscriber import Subscriber
 from app.services.billing import starter_issuance as issuance
 from app.services.billing import starter_policies
-from app.services.billing.account_credit import AccountCreditApplications
 
 _POLICY_DEFAULTS = {
     "starter_billing_account_ref_template": "subscriber:{subscriber_id}",
@@ -266,22 +265,15 @@ def _subscription(**overrides) -> Subscription:
     return subscription
 
 
-def _stub_recurring_evidence(monkeypatch, *, account_credit: Decimal) -> None:
-    from types import SimpleNamespace
-
+def _stub_recurring_evidence(monkeypatch) -> None:
     monkeypatch.setattr(issuance, "_seller_snapshot", lambda *_a, **_k: object())
     monkeypatch.setattr(
         issuance, "get_invoice_bank_details", lambda *_a, **_k: object()
     )
-    monkeypatch.setattr(
-        AccountCreditApplications,
-        "preview_invoice_funding",
-        staticmethod(lambda *_a, **_k: SimpleNamespace(account_credit=account_credit)),
-    )
 
 
 def test_system_numbered_draft_is_recurring_eligible(monkeypatch) -> None:
-    _stub_recurring_evidence(monkeypatch, account_credit=Decimal("0.00"))
+    _stub_recurring_evidence(monkeypatch)
     reason = issuance.recurring_eligibility_reason(
         _Db(_subscriber(), _subscription()),  # type: ignore[arg-type]
         _recurring_invoice(),
@@ -289,17 +281,17 @@ def test_system_numbered_draft_is_recurring_eligible(monkeypatch) -> None:
     assert reason is None
 
 
-def test_recurring_with_account_credit_stays_legacy(monkeypatch) -> None:
-    _stub_recurring_evidence(monkeypatch, account_credit=Decimal("25.00"))
+def test_recurring_account_credit_is_applied_in_starter_lane(monkeypatch) -> None:
+    _stub_recurring_evidence(monkeypatch)
     reason = issuance.recurring_eligibility_reason(
         _Db(_subscriber(), _subscription()),  # type: ignore[arg-type]
         _recurring_invoice(),
     )
-    assert reason is not None and "account credit" in reason
+    assert reason is None
 
 
 def test_recurring_prepaid_subscription_stays_legacy(monkeypatch) -> None:
-    _stub_recurring_evidence(monkeypatch, account_credit=Decimal("0.00"))
+    _stub_recurring_evidence(monkeypatch)
     reason = issuance.recurring_eligibility_reason(
         _Db(  # type: ignore[arg-type]
             _subscriber(), _subscription(billing_mode=BillingMode.prepaid)
@@ -310,7 +302,7 @@ def test_recurring_prepaid_subscription_stays_legacy(monkeypatch) -> None:
 
 
 def test_recurring_line_without_subscription_stays_legacy(monkeypatch) -> None:
-    _stub_recurring_evidence(monkeypatch, account_credit=Decimal("0.00"))
+    _stub_recurring_evidence(monkeypatch)
     invoice = _recurring_invoice()
     invoice.lines[0].subscription_id = None  # type: ignore[attr-defined]
     reason = issuance.recurring_eligibility_reason(

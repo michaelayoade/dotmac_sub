@@ -43,6 +43,7 @@ from app.models.billing import (
     PaymentStatus,
     ServiceEntitlement,
     ServiceEntitlementStatus,
+    StarterInvoiceLink,
 )
 from app.models.catalog import (
     BillingCycle,
@@ -165,6 +166,7 @@ class PaymentAllocationFinalizationMode(str, Enum):
     standard = "standard"
     historical_debt = "historical_debt"
     issuance_reserved_credit = "issuance_reserved_credit"
+    starter_issuance_credit = "starter_issuance_credit"
     reviewed_document_correction = "reviewed_document_correction"
     legacy_prepaid_debit_replacement = "legacy_prepaid_debit_replacement"
 
@@ -5851,6 +5853,20 @@ class PaymentAllocations(ListResponseMixin):
         )
 
     @staticmethod
+    def stage_confirm_starter_issuance_credit_for_owner(
+        db: Session,
+        payload: PaymentAllocationConfirm,
+    ) -> PaymentAllocationResult:
+        """Record Starter settlement evidence without a second position credit."""
+
+        return PaymentAllocations._confirm(
+            db,
+            payload,
+            complete_transaction=False,
+            finalization_mode=PaymentAllocationFinalizationMode.starter_issuance_credit,
+        )
+
+    @staticmethod
     def confirm(
         db: Session,
         payload: PaymentAllocationConfirm,
@@ -5950,6 +5966,14 @@ class PaymentAllocations(ListResponseMixin):
                     status_code=409,
                     detail="Invoice allocation ledger evidence could not be created",
                 )
+            if resolved_finalization_mode is (
+                PaymentAllocationFinalizationMode.starter_issuance_credit
+            ):
+                # Starter owns the receivable debit and its settlement. This
+                # row remains structural payment/ERP evidence only; counting it
+                # in Sub's customer position would post a second credit without
+                # a Sub-owned invoice debit.
+                invoice_entry.affects_customer_position = False
             consumption_entry = LedgerEntry(
                 account_id=payment.account_id,
                 invoice_id=None,
@@ -6262,6 +6286,21 @@ class PaymentAllocations(ListResponseMixin):
         if payment is None or invoice is None:
             raise HTTPException(
                 status_code=409, detail="Allocation evidence is incomplete"
+            )
+        if (
+            db.scalar(
+                select(StarterInvoiceLink.id).where(
+                    StarterInvoiceLink.invoice_id == invoice.id
+                )
+            )
+            is not None
+        ):
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    "Starter invoice allocation reversal requires the Starter "
+                    "credit-application reversal owner"
+                ),
             )
         if payment.account_id is None:
             raise HTTPException(
@@ -6957,6 +6996,26 @@ def _refund_fingerprint(
     return hashlib.sha256(encoded.encode("utf-8")).hexdigest()
 
 
+def _has_starter_credit_allocation(db: Session, payment_id: UUID) -> bool:
+    """Whether payment value has crossed into a Starter-owned receivable."""
+
+    return (
+        db.execute(
+            select(PaymentAllocation.id)
+            .join(
+                StarterInvoiceLink,
+                StarterInvoiceLink.invoice_id == PaymentAllocation.invoice_id,
+            )
+            .where(
+                PaymentAllocation.payment_id == payment_id,
+                PaymentAllocation.is_active.is_(True),
+            )
+            .limit(1)
+        ).first()
+        is not None
+    )
+
+
 def _build_refund_preview(
     db: Session,
     payment: Payment,
@@ -6968,6 +7027,14 @@ def _build_refund_preview(
     capability = _refund_capability(payment, origin=origin)
     if not capability.allowed:
         raise HTTPException(status_code=409, detail=capability.reason)
+    if _has_starter_credit_allocation(db, payment.id):
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                "Payment funded a Starter invoice; refund requires the Starter "
+                "credit-application reversal owner"
+            ),
+        )
     provider_event = _validate_refund_provider_event(
         db,
         payment=payment,
@@ -7884,6 +7951,14 @@ def _build_reversal_preview(
     capability = _reversal_capability(payment, origin=origin)
     if not capability.allowed:
         raise HTTPException(status_code=409, detail=capability.reason)
+    if _has_starter_credit_allocation(db, payment.id):
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                "Payment funded a Starter invoice; reversal requires the Starter "
+                "credit-application reversal owner"
+            ),
+        )
     provider_event = _validate_reversal_provider_event(
         db,
         payment=payment,

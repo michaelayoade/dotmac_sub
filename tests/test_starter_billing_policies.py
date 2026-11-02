@@ -68,6 +68,18 @@ _DEFAULTS = {
     "starter_billing_credit_note_series_prefix": "CN",
     "starter_billing_default_country_code": "NGA",
     "starter_billing_series_start_value": 1,
+    "starter_payments_settlement_source_system": "dotmac-payments",
+    "starter_billing_settlement_source_version": "1",
+    "starter_billing_settlement_funding_lane": "available_credit",
+    "starter_billing_settlement_source_ref_template": "payments-confirmation:{confirmation_id}",
+    "starter_payments_confirmation_evidence": "dotmac-payments:confirmed-cash-v1",
+    "starter_billing_account_credit_source_system": "dotmac-sub",
+    "starter_billing_account_credit_evidence": "dotmac-sub:settled-payment-credit-v1",
+    "starter_billing_account_credit_accepted_evidence": (
+        "dotmac-sub:settled-payment-credit-v1"
+    ),
+    "starter_billing_account_credit_settlement_key_template": "sub-account-credit:{idempotency_key}",
+    "starter_billing_account_credit_source_ref_template": "sub-account-credit-draw:{idempotency_key}",
 }
 
 
@@ -205,3 +217,19 @@ def test_accepted_evidence_is_a_settings_driven_set(settings) -> None:
     assert policies.accepted_confirmation_evidence(None) == frozenset(  # type: ignore[arg-type]
         {"a:1", "b:2"}
     )
+
+
+def test_account_credit_bridge_policy_renders_idempotent_references(settings) -> None:
+    resolved = policies.resolve_starter_account_credit_policies(None)  # type: ignore[arg-type]
+    key = "settlement-id:invoice-id"
+    assert resolved.funding_lane == "available_credit"
+    assert resolved.settlement_source_system == "dotmac-sub"
+    assert resolved.confirmation_evidence == "dotmac-sub:settled-payment-credit-v1"
+    assert resolved.settlement_key(key) == f"sub-account-credit:{key}"
+    assert resolved.application_source_ref(key) == f"sub-account-credit-draw:{key}"
+
+
+def test_account_credit_evidence_must_be_explicitly_accepted(settings) -> None:
+    settings["starter_billing_account_credit_accepted_evidence"] = "another:evidence"
+    with pytest.raises(policies.StarterBillingPolicyError):
+        policies.resolve_starter_account_credit_policies(None)  # type: ignore[arg-type]

@@ -24,6 +24,7 @@ from app.services.settings_spec import resolve_value
 __all__ = [
     "StarterBillingPolicies",
     "StarterBillingPolicyError",
+    "StarterAccountCreditPolicies",
     "StarterSettlementPolicies",
     "account_ref_policy",
     "accepted_confirmation_evidence",
@@ -34,6 +35,7 @@ __all__ = [
     "StarterPrepaidFundingPolicies",
     "StarterResellerSettlementPolicies",
     "resolve_starter_billing_policies",
+    "resolve_starter_account_credit_policies",
     "resolve_starter_manual_settlement_policies",
     "resolve_starter_prepaid_funding_policies",
     "resolve_starter_reseller_settlement_policies",
@@ -586,6 +588,73 @@ def resolve_starter_settlement_policies(db: Session) -> StarterSettlementPolicie
         ),
         confirmation_evidence=presented,
         accepted_confirmation_evidence=accepted,
+    )
+
+
+@dataclass(frozen=True, slots=True)
+class StarterAccountCreditPolicies:
+    """Resolved policy for projecting legacy payment credit into Starter."""
+
+    settlement_source_system: str
+    settlement_source_version: str
+    funding_lane: str
+    confirmation_evidence: str
+    accepted_confirmation_evidence: frozenset[str]
+    settlement_key_template: str
+    application_source_ref_template: str
+
+    def settlement_key(self, idempotency_key: str) -> str:
+        return _render_template(
+            self.settlement_key_template,
+            "idempotency_key",
+            idempotency_key,
+            setting="starter_billing_account_credit_settlement_key_template",
+        )
+
+    def application_source_ref(self, idempotency_key: str) -> str:
+        return _render_template(
+            self.application_source_ref_template,
+            "idempotency_key",
+            idempotency_key,
+            setting="starter_billing_account_credit_source_ref_template",
+        )
+
+
+def resolve_starter_account_credit_policies(
+    db: Session,
+) -> StarterAccountCreditPolicies:
+    """Resolve the exact trust and idempotency contract for credit draws."""
+
+    evidence = _text(db, "starter_billing_account_credit_evidence")
+    accepted = frozenset(
+        value.strip()
+        for value in _text(
+            db, "starter_billing_account_credit_accepted_evidence"
+        ).split(",")
+        if value.strip()
+    )
+    if evidence not in accepted:
+        raise _error(
+            "configuration_invalid",
+            "Account-credit evidence is not in the accepted evidence set",
+            setting="starter_billing_account_credit_evidence",
+        )
+    return StarterAccountCreditPolicies(
+        settlement_source_system=_text(
+            db, "starter_billing_account_credit_source_system"
+        ),
+        settlement_source_version=_text(
+            db, "starter_billing_settlement_source_version"
+        ),
+        funding_lane=_text(db, "starter_billing_settlement_funding_lane"),
+        confirmation_evidence=evidence,
+        accepted_confirmation_evidence=accepted,
+        settlement_key_template=_text(
+            db, "starter_billing_account_credit_settlement_key_template"
+        ),
+        application_source_ref_template=_text(
+            db, "starter_billing_account_credit_source_ref_template"
+        ),
     )
 
 

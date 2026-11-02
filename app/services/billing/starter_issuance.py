@@ -492,6 +492,7 @@ def _issue_via_starter(
     fx_observation_id: str,
     due_evidence_ref: str,
     announce: bool,
+    apply_account_credit: bool,
 ) -> StarterInvoiceLink:
     """Issue one eligible draft through Starter as sole ledger writer.
 
@@ -502,6 +503,13 @@ def _issue_via_starter(
     """
 
     policies = resolve_starter_billing_policies(db)
+    reservation = None
+    if apply_account_credit:
+        from app.services.billing.account_credit import AccountCreditApplications
+
+        reservation = AccountCreditApplications.preview_invoice_issuance_funding(
+            db, invoice
+        )
     lines = _active_lines(invoice)
     subscriber = db.get(Subscriber, invoice.account_id)
     assert subscriber is not None  # eligibility proved presence
@@ -692,6 +700,20 @@ def _issue_via_starter(
                     obligation_id=obligation_id,
                 )
             )
+    db.flush()
+    credit_result = None
+    if reservation is not None and reservation.reserved_amount > Decimal("0.00"):
+        from app.services.billing.starter_account_credit import (
+            apply_reserved_account_credit,
+        )
+
+        credit_result = apply_reserved_account_credit(
+            db,
+            invoice=invoice,
+            link=link,
+            reservation=reservation,
+            occurred_at=issued_at,
+        )
     AuditEvents.stage(
         db,
         AuditEventCreate(
@@ -700,7 +722,7 @@ def _issue_via_starter(
             entity_id=str(invoice.id),
             metadata_={
                 "from_status": InvoiceStatus.draft.value,
-                "to_status": InvoiceStatus.issued.value,
+                "to_status": invoice.status.value,
                 "reason": flavor.audit_reason,
                 "issued_at": issued_at.isoformat(),
                 "issuance_lane": "starter",
@@ -710,6 +732,14 @@ def _issue_via_starter(
                     str(obligation_id) for _, obligation_id in line_obligations
                 ],
                 "source_fact_id": link.source_fact_id,
+                "account_credit_applied": (
+                    str(credit_result.applied) if credit_result is not None else "0.00"
+                ),
+                "account_credit_allocation_ids": (
+                    [str(value) for value in credit_result.allocation_ids]
+                    if credit_result is not None
+                    else []
+                ),
             },
         ),
     )
@@ -727,7 +757,7 @@ def _issue_via_starter(
                 ),
                 "currency": invoice.currency,
                 "from_status": InvoiceStatus.draft.value,
-                "to_status": InvoiceStatus.issued.value,
+                "to_status": invoice.status.value,
             },
             account_id=invoice.account_id,
             invoice_id=invoice.id,
@@ -762,6 +792,7 @@ def issue_admin_invoice_via_starter(
         fx_observation_id=policies.admin_fx_observation_id(invoice.id),
         due_evidence_ref=policies.due_evidence_ref(invoice.id),
         announce=announce,
+        apply_account_credit=True,
     )
 
 
@@ -769,17 +800,15 @@ def recurring_eligibility_reason(db: Session, invoice: Invoice) -> str | None:
     """Return why this cycle draft cannot take the Starter lane yet.
 
     Beyond the shared draft checks, the scheduled cycle lane requires a
-    postpaid subscription behind every line and no spendable account
-    credit: legacy credit application is not wired to Starter
-    receivables in this slice, so credited accounts keep the legacy
-    issuance path.
+    postpaid subscription behind every line. Exact payment-backed account
+    credit is reserved before issuance and applied through Starter's
+    available-credit lane in the same transaction.
     """
 
     reason = eligibility_reason(db, invoice, allow_numbered=True)
     if reason is not None:
         return reason
     from app.models.catalog import Subscription
-    from app.services.billing.account_credit import AccountCreditApplications
 
     subscription_ids = {line.subscription_id for line in _active_lines(invoice)}
     (subscription_id,) = subscription_ids  # shared checks proved exactly one
@@ -794,9 +823,6 @@ def recurring_eligibility_reason(db: Session, invoice: Invoice) -> str | None:
         return "billing mode has no Starter collection timing mapping"
     if timing != "arrears":
         return "prepaid issuance stays on the legacy lane in this slice"
-    preview = AccountCreditApplications.preview_invoice_funding(db, invoice)
-    if preview.account_credit > 0:
-        return "available account credit stays on the legacy lane in this slice"
     return None
 
 
@@ -831,6 +857,7 @@ def issue_recurring_invoice_via_starter(
         fx_observation_id=policies.recurring_fx_observation_id(invoice.id),
         due_evidence_ref=due_ref,
         announce=False,
+        apply_account_credit=True,
     )
 
 
@@ -894,4 +921,5 @@ def issue_prepaid_invoice_via_starter(
         fx_observation_id=policies.prepaid_fx_observation_id(invoice.id),
         due_evidence_ref=due_ref,
         announce=False,
+        apply_account_credit=False,
     )

@@ -60,6 +60,17 @@ _SHADOW_IMPORTS = {
         ("dotmac_billing.service", "create_multi_line_draft_document"),
         ("dotmac_billing.service", "issue_document"),
     },
+    # Starter issuance account-credit bridge: exact payment-backed slices
+    # enter the available-credit lane and are applied to the new document in
+    # the same transaction as the Sub allocation evidence.
+    "app/services/billing/starter_account_credit.py": {
+        ("dotmac_billing", "AcceptSettlementV1"),
+        ("dotmac_billing.commands", "ApplyAvailableCreditCommand"),
+        ("dotmac_billing.contracts", "SettlementFundingLane"),
+        ("dotmac_billing.errors", "BillingError"),
+        ("dotmac_billing.service", "accept_settlement"),
+        ("dotmac_billing.service", "apply_available_credit"),
+    },
     # Step 5 opening rehearsal assembly (ADR 0020/0031): pure census-to-
     # observation translation onto the pinned rehearsal contracts; it
     # verifies nothing and writes no money state.

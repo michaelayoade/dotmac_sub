@@ -651,7 +651,48 @@ class AccountCreditApplications:
     ) -> AccountCreditApplicationResult:
         """Apply the exact credit reserved before this invoice posted its debit."""
 
-        _refuse_starter_linked_invoice(db, invoice)
+        return AccountCreditApplications._apply_invoice_issuance_funding(
+            db,
+            invoice,
+            reservation=reservation,
+            allow_starter_linked=False,
+        )
+
+    @staticmethod
+    def apply_starter_invoice_issuance_funding(
+        db: Session,
+        invoice: Invoice,
+        *,
+        reservation: InvoiceIssuanceFundingReservation,
+    ) -> AccountCreditApplicationResult:
+        """Consume reserved legacy credit after Starter accepted the exact draw.
+
+        The Starter account-credit bridge calls this participant in the same
+        transaction as ``accept_settlement`` and ``apply_available_credit``.
+        The resulting allocation is the exact payment/ERP evidence and removes
+        the source from legacy reusable credit; Starter remains authoritative
+        for the receivable balance and status.
+        """
+
+        return AccountCreditApplications._apply_invoice_issuance_funding(
+            db,
+            invoice,
+            reservation=reservation,
+            allow_starter_linked=True,
+        )
+
+    @staticmethod
+    def _apply_invoice_issuance_funding(
+        db: Session,
+        invoice: Invoice,
+        *,
+        reservation: InvoiceIssuanceFundingReservation,
+        allow_starter_linked: bool,
+    ) -> AccountCreditApplicationResult:
+        """Shared flush-only implementation for legacy and Starter issuance."""
+
+        if not allow_starter_linked:
+            _refuse_starter_linked_invoice(db, invoice)
         lock_account(db, str(invoice.account_id))
         db.refresh(invoice)
         current_remaining = round_money(to_decimal(invoice.balance_due))
@@ -704,15 +745,18 @@ class AccountCreditApplications:
                 preview = PaymentAllocations.preview_issuance_reserved_credit_for_owner(
                     db, request
                 )
-                confirmation = (
-                    PaymentAllocations.stage_confirm_issuance_reserved_credit_for_owner(
-                        db,
-                        PaymentAllocationConfirm(
-                            **request.model_dump(),
-                            preview_fingerprint=preview.fingerprint,
-                            idempotency_key=_allocation_key(payment, invoice),
-                        ),
-                    )
+                confirm = (
+                    PaymentAllocations.stage_confirm_starter_issuance_credit_for_owner
+                    if allow_starter_linked
+                    else PaymentAllocations.stage_confirm_issuance_reserved_credit_for_owner
+                )
+                confirmation = confirm(
+                    db,
+                    PaymentAllocationConfirm(
+                        **request.model_dump(),
+                        preview_fingerprint=preview.fingerprint,
+                        idempotency_key=_allocation_key(payment, invoice),
+                    ),
                 )
             except HTTPException as exc:
                 raise AccountCreditApplicationError(
@@ -725,15 +769,16 @@ class AccountCreditApplications:
                     },
                 ) from exc
             applied = round_money(to_decimal(confirmation.allocation.amount))
-            _stage_application_posting(
-                db,
-                allocation=confirmation.allocation,
-                invoice=invoice,
-                payment=payment,
-                currency=reservation.currency,
-                amount=applied,
-                idempotency_suffix=":issuance",
-            )
+            if not allow_starter_linked:
+                _stage_application_posting(
+                    db,
+                    allocation=confirmation.allocation,
+                    invoice=invoice,
+                    payment=payment,
+                    currency=reservation.currency,
+                    amount=applied,
+                    idempotency_suffix=":issuance",
+                )
             result.applied = round_money(result.applied + applied)
             result.allocation_ids.append(str(confirmation.allocation.id))
             result.invoices_touched.append(str(invoice.id))
