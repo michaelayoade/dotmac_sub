@@ -42,6 +42,7 @@ class CommunicationClass(enum.StrEnum):
 
 class CommunicationAttachmentKind(enum.StrEnum):
     invoice_pdf = "invoice_pdf"
+    customer_statement_pdf = "customer_statement_pdf"
     quote_pdf = "quote_pdf"
     ncc_weekly_csv = "ncc_weekly_csv"
     ncc_weekly_xlsx = "ncc_weekly_xlsx"

@@ -163,6 +163,189 @@ DOMAIN = DomainSOT(
     domain="customer_context",
     setting_domains=("subscriber",),
     services=(
+        SOTService(
+            name="customer.account_statement",
+            module="app.services.customer_account_statement",
+            owns=("customer account statement PDF projection",),
+            depends_on=(
+                "customer.accounts",
+                "customer.financial_position",
+                "financial.ledger",
+            ),
+            notes="Customer-only read projection; pre-opening archive history is labelled unavailable and never affects balances.",
+            contract=ServiceContract(
+                concerns=(
+                    ConcernContract(
+                        name="customer account statement PDF projection",
+                        role=OwnerRole.RESOLVER,
+                        input_names=(
+                            "canonical customer account",
+                            "canonical customer financial events",
+                            "separate receivable and prepaid summaries",
+                        ),
+                    ),
+                ),
+                authoritative_inputs=(
+                    AuthorityInput(
+                        name="canonical customer account",
+                        owner="customer.accounts",
+                        kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                        source="Subscriber account ID and account number, scoped by the customer portal adapter.",
+                    ),
+                    AuthorityInput(
+                        name="canonical customer financial events",
+                        owner="financial.ledger",
+                        kind=AuthorityKind.DERIVED_PROJECTION,
+                        source="customer_financial_ledger reviewed opening and native document events; archived mirror excluded.",
+                    ),
+                    AuthorityInput(
+                        name="separate receivable and prepaid summaries",
+                        owner="customer.financial_position",
+                        kind=AuthorityKind.DERIVED_PROJECTION,
+                        source="Currency-typed outstanding invoices and verified prepaid funding.",
+                    ),
+                ),
+                transaction=TransactionContract(
+                    mode=TransactionMode.READ_ONLY,
+                    boundary="Statement query and PDF rendering never write or commit; adapters own read session lifecycle.",
+                    locking="No mutation locks.",
+                    idempotency="The same committed facts and date window produce the same financial rows and balances.",
+                    retries="Safe to repeat; unavailable funding remains unavailable.",
+                ),
+                errors=ErrorContract(
+                    domain_codes=(
+                        "customer.account_statement.invalid_dates",
+                        "customer.account_statement.account_not_found",
+                    ),
+                    mapping_owner="app.web.customer.routes",
+                    fail_closed_on=("invalid dates", "missing account"),
+                ),
+                projections=(
+                    ProjectionContract(
+                        name="customer account statement PDF projection",
+                        input_names=(
+                            "canonical customer account",
+                            "canonical customer financial events",
+                            "separate receivable and prepaid summaries",
+                        ),
+                        writer="customer.account_statement",
+                        freshness="rebuilt from committed records for each request",
+                        stale_behavior="Missing prepaid authority is labelled unavailable; archived history is never guessed.",
+                        drift_signal="Statement rows or summaries disagree with canonical financial events and invoice/funding owners.",
+                        rebuild_operation="Re-run read_customer_statement for the account and date window.",
+                        repair_owner="customer.account_statement",
+                    ),
+                ),
+                migration=MigrationContract(
+                    state=AuthorityMigrationState.NATIVE,
+                    new_owner="customer.account_statement",
+                    verification="Customer statement projection, scope, and PDF tests.",
+                    fallback_retirement="No customer statement predecessor or archived-history fallback.",
+                ),
+                steward="finance operations",
+                design_refs=(
+                    "docs/designs/CUSTOMER_ACCOUNT_STATEMENT.md",
+                    "docs/SOT_RELATIONSHIP_MAP.md",
+                ),
+                test_refs=(
+                    "tests/test_customer_account_statement.py",
+                    "tests/architecture/test_customer_statement_boundary.py",
+                ),
+            ),
+        ),
+        SOTService(
+            name="customer.account_statement_email",
+            module="app.services.customer_account_statement",
+            owns=("customer statement PDF email request",),
+            depends_on=(
+                "customer.account_statement",
+                "customer.accounts",
+                "customer.identity_scope",
+                "communications.intents",
+            ),
+            notes="Only the signed-in principal's verified email receives the selected account's scoped PDF attachment; communication intents own delivery.",
+            contract=ServiceContract(
+                concerns=(
+                    ConcernContract(
+                        name="customer statement PDF email request",
+                        role=OwnerRole.COMMAND_WRITER,
+                        input_names=(
+                            "canonical customer account",
+                            "authenticated customer principal",
+                            "customer email request",
+                        ),
+                        canonical_writer="customer.account_statement_email",
+                    ),
+                ),
+                authoritative_inputs=(
+                    AuthorityInput(
+                        name="canonical customer account",
+                        owner="customer.accounts",
+                        kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                        source="Selected Subscriber billing account ID.",
+                    ),
+                    AuthorityInput(
+                        name="authenticated customer principal",
+                        owner="customer.identity_scope",
+                        kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                        source="Authenticated portal Subscriber principal and current verified email address.",
+                    ),
+                    AuthorityInput(
+                        name="customer email request",
+                        owner="customer.account_statement_email",
+                        kind=AuthorityKind.CONTROL_INPUT,
+                        source="Authenticated portal account, typed date window, and request UUID.",
+                    ),
+                ),
+                transaction=TransactionContract(
+                    mode=TransactionMode.OWNER_MANAGED,
+                    boundary="execute_owner_command commits the intent, audit, and event together.",
+                    locking="Communication intent dedupe key serializes repeat requests; the current principal email is checked inside the owner command.",
+                    idempotency="The same account, date window, and request UUID replays the existing intent without a second audit or event.",
+                    retries="Retry the same typed command after a transient rollback.",
+                ),
+                errors=ErrorContract(
+                    domain_codes=owner_command_boundary_error_codes(
+                        "customer.account_statement_email"
+                    )
+                    + (
+                        "customer.account_statement.account_not_found",
+                        "customer.account_statement.email_unverified",
+                        "customer.account_statement.email_unavailable",
+                        "customer.account_statement.email_attachment_too_large",
+                        "customer.account_statement.email_idempotency_conflict",
+                    ),
+                    mapping_owner="app.web.customer.routes",
+                    fail_closed_on=(
+                        "unverified address",
+                        "suppressed delivery",
+                        "ambiguous account",
+                    ),
+                ),
+                events=EventContract(
+                    event_types=("customer.account_statement.email_queued",),
+                    schema_version=1,
+                    delivery_owner="events.dispatcher",
+                    compatibility="Carries account and intent IDs only; PDF is resolved by the communication attachment owner.",
+                    replay="Communication intent dedupe prevents a second send.",
+                ),
+                migration=MigrationContract(
+                    state=AuthorityMigrationState.NATIVE,
+                    new_owner="customer.account_statement_email",
+                    verification="Verified-address, scope, attachment, and replay tests.",
+                    fallback_retirement="No text-only or arbitrary-recipient customer statement path.",
+                ),
+                steward="finance operations",
+                design_refs=(
+                    "docs/designs/CUSTOMER_ACCOUNT_STATEMENT.md",
+                    "docs/SOT_RELATIONSHIP_MAP.md",
+                ),
+                test_refs=(
+                    "tests/test_customer_account_statement.py",
+                    "tests/architecture/test_customer_statement_boundary.py",
+                ),
+            ),
+        ),
         CUSTOMER_FIELD_IDENTITY_SERVICE,
         SOTService(
             name="customer.legacy_address_display",

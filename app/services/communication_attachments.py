@@ -6,6 +6,7 @@ import hashlib
 import re
 from dataclasses import dataclass
 from uuid import UUID
+from zoneinfo import ZoneInfo
 
 from sqlalchemy.orm import Session
 
@@ -13,6 +14,7 @@ from app.models.billing import Invoice, InvoicePdfExportStatus, InvoiceStatus
 from app.models.ncc_reporting import NccWeeklyReportRun, NccWeeklyReportRunStatus
 from app.models.notification import Notification
 from app.models.sales import QuotePdfExport
+from app.models.subscriber import Subscriber
 from app.services import billing_invoice_pdf
 from app.services.communication_intents import (
     MAX_EMAIL_ATTACHMENT_BYTES,
@@ -130,6 +132,62 @@ def _resolve_quote_pdf(
     )
 
 
+def _resolve_customer_statement_pdf(
+    db: Session, notification: Notification, descriptor: dict[str, object]
+) -> ResolvedEmailAttachment:
+    """Materialize only a statement still addressed to its verified owner."""
+    from app.services.customer_account_statement import (
+        CustomerStatementQuery,
+        read_customer_statement,
+        render_statement_pdf,
+        statement_range,
+    )
+
+    try:
+        account_id = UUID(str(descriptor.get("entity_id") or ""))
+    except ValueError as exc:
+        raise CommunicationAttachmentError("statement_invalid_reference") from exc
+    metadata = notification.metadata_ or {}
+    try:
+        principal_id = UUID(str(metadata["statement_principal_id"]))
+        metadata_account_id = UUID(str(metadata["statement_account_id"]))
+    except (KeyError, ValueError) as exc:
+        raise CommunicationAttachmentError("statement_scope_mismatch") from exc
+    principal = db.get(Subscriber, principal_id)
+    if (
+        metadata_account_id != account_id
+        or principal is None
+        or notification.subscriber_id != principal_id
+        or not principal.email_verified
+        or notification.recipient.casefold() != principal.email.strip().casefold()
+    ):
+        raise CommunicationAttachmentError("statement_scope_mismatch")
+    if db.get(Subscriber, account_id) is None:
+        raise CommunicationAttachmentError("statement_scope_mismatch")
+    try:
+        period = statement_range(
+            start_date=str(metadata["statement_start_date"]),
+            end_date=str(metadata["statement_end_date"]),
+            timezone=ZoneInfo(str(metadata["statement_timezone"])),
+        )
+        content = render_statement_pdf(
+            read_customer_statement(
+                db, query=CustomerStatementQuery(account_id=account_id, period=period)
+            )
+        )
+    except Exception as exc:
+        raise CommunicationAttachmentError("statement_pdf_generation_failed") from exc
+    if not content.startswith(b"%PDF-"):
+        raise CommunicationAttachmentError("statement_pdf_invalid_content")
+    if len(content) > MAX_EMAIL_ATTACHMENT_BYTES:
+        raise CommunicationAttachmentError("statement_pdf_too_large")
+    return ResolvedEmailAttachment(
+        filename=_safe_filename(descriptor.get("filename") or "account-statement.pdf"),
+        content_type="application/pdf",
+        content=content,
+    )
+
+
 def _resolve_ncc_weekly_artifact(
     db: Session, notification: Notification, descriptor: dict[str, object]
 ) -> ResolvedEmailAttachment:
@@ -182,6 +240,8 @@ def resolve_email_attachments(
             raise CommunicationAttachmentError("unsupported_attachment_kind") from exc
         if kind == CommunicationAttachmentKind.invoice_pdf:
             resolved.append(_resolve_invoice_pdf(db, notification, item))
+        elif kind == CommunicationAttachmentKind.customer_statement_pdf:
+            resolved.append(_resolve_customer_statement_pdf(db, notification, item))
         elif kind == CommunicationAttachmentKind.quote_pdf:
             resolved.append(_resolve_quote_pdf(db, notification, item))
         elif kind in (
