@@ -107,6 +107,13 @@ TASK_RELIABILITY_CONTRACTS: dict[str, TaskReliabilityContract] = {
         HEALTH,
         "Bounded retention sweep; locked batches converge safely on replay.",
     ),
+    "app.tasks.outbox_backlog.publish_outbox_backlog": _c(
+        "platform",
+        AUTORETRY,
+        IDEMP,
+        HEALTH,
+        "Read-only snapshot of the composed-module outbox; replay is harmless.",
+    ),
     "app.tasks.admin_alerts.evaluate_infrastructure_alerts": _c(
         "monitoring", SWEEP, IDEMP, HEALTH
     ),

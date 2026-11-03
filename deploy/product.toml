@@ -404,8 +404,9 @@ command = ["python", "-m", "app.outbox_relay"]
 # in the change that records the first deployment.
 replicas = 0
 stop_grace_seconds = 30
-# Only the EXECUTE-only outbox_dispatcher credential. Not DATABASE_URL.
-materials = ["OUTBOX_RELAY_DATABASE_URL"]
+# The EXECUTE-only outbox_dispatcher credential (never DATABASE_URL), plus the
+# optional RLS tenant credential required once the first handler is registered.
+materials = ["OUTBOX_RELAY_DATABASE_URL", "OUTBOX_RELAY_TENANT_DATABASE_URL"]
 
 [roles.resources]
 cpus = "0.25"

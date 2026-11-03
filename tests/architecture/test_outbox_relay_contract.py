@@ -66,10 +66,13 @@ def test_compose_service_has_no_app_credentials_and_is_profile_gated() -> None:
     assert service["command"] == ["python", "-m", "app.outbox_relay"]
 
 
-def test_descriptor_role_declares_only_the_dispatcher_material() -> None:
+def test_descriptor_role_declares_only_the_relay_materials() -> None:
     descriptor = tomllib.loads((ROOT / "deploy/product.toml").read_text())
     (role,) = [r for r in descriptor["roles"] if r["code"] == "outbox-relay"]
-    assert role["materials"] == ["OUTBOX_RELAY_DATABASE_URL"]
+    assert role["materials"] == [
+        "OUTBOX_RELAY_DATABASE_URL",
+        "OUTBOX_RELAY_TENANT_DATABASE_URL",
+    ]
     assert role["command"] == ["python", "-m", "app.outbox_relay"]
 
 
@@ -88,3 +91,29 @@ def test_dead_letter_alert_rule_exists() -> None:
         "outbox_relay_dead_lettered_total" in alerts["OutboxRelayDeadLettered"]["expr"]
     )
     assert alerts["OutboxRelayDeadLettered"]["labels"]["severity"] == "critical"
+
+
+def test_backlog_alerts_use_the_database_side_snapshot_not_a_bare_absent() -> None:
+    rules = yaml.safe_load(
+        (ROOT / "deploy/observability/outbox_relay.rules.yml").read_text()
+    )
+    alerts = {r["alert"]: r for g in rules["groups"] for r in g["rules"]}
+    queued = alerts["OutboxEventsQueuedRelayNotRunning"]["expr"]
+    assert 'domain="outbox_backlog"' in queued
+    assert "oldest_pending_age_seconds" in queued
+    assert "absent(outbox_relay_last_poll_timestamp_seconds)" in queued
+    for name in ("OutboxEventTypeParked", "OutboxEventTypeParkedLong"):
+        assert "by (event_type)" in alerts[name]["expr"]
+    assert alerts["OutboxEventTypeParkedLong"]["labels"]["severity"] == "critical"
+
+
+def test_backlog_task_is_scheduled_and_has_a_reliability_contract() -> None:
+    task = "app.tasks.outbox_backlog.publish_outbox_backlog"
+    assert task in (ROOT / "app/services/scheduler_config.py").read_text()
+    assert task in (ROOT / "app/services/task_reliability.py").read_text()
+    assert '"outbox_backlog"' in (ROOT / "app/services/observability.py").read_text()
+
+
+def test_the_sub_local_loop_is_a_named_deletion_registered_deviation() -> None:
+    assert "NAMED DEVIATION D6" in (PACKAGE / "dispatcher.py").read_text()
+    assert "Deviation D6" in (ROOT / "docs/runbooks/OUTBOX_RELAY.md").read_text()

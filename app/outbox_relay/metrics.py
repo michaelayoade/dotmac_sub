@@ -27,8 +27,25 @@ DEAD_LETTERED = Counter(
     "outbox_relay_dead_lettered_total", "Events dead-lettered at max attempts"
 )
 PARKED = Counter(
-    "outbox_relay_parked_total", "Claims parked because no handler is registered"
+    "outbox_relay_parked_total",
+    "Claims parked because no handler is registered, by event type",
+    ["event_type"],
 )
+#: Event types come from database strings; cap distinct label values so a
+#: producer bug cannot create unbounded series.
+MAX_PARKED_TYPE_LABELS = 50
+_parked_types: set[str] = set()
+
+
+def parked_label(event_type: str) -> str:
+    if event_type in _parked_types:
+        return event_type
+    if len(_parked_types) < MAX_PARKED_TYPE_LABELS:
+        _parked_types.add(event_type)
+        return event_type
+    return "other"
+
+
 LEASE_LOST = Counter(
     "outbox_relay_lease_lost_total", "Settles refused because the lease was lost"
 )
@@ -49,6 +66,9 @@ class CycleResult:
     failed: int = 0
     dead_lettered: int = 0
     parked: int = 0
+    #: Parked count by event type (sums to ``parked``).
+    parked_by_type: tuple[tuple[str, int], ...] = ()
+    acknowledged: int = 0
     lease_lost: int = 0
     #: created_at of the oldest event left pending by this cycle, if any.
     oldest_pending_created_at: datetime | None = None
@@ -85,7 +105,8 @@ def record_cycle(
     SUCCEEDED.inc(result.succeeded)
     FAILED.inc(result.failed)
     DEAD_LETTERED.inc(result.dead_lettered)
-    PARKED.inc(result.parked)
+    for event_type, count in result.parked_by_type:
+        PARKED.labels(event_type=parked_label(event_type)).inc(count)
     LEASE_LOST.inc(result.lease_lost)
     tracker.observe(result.oldest_pending_created_at, moment)
     OLDEST_PENDING_AGE.set(tracker.age_seconds(moment))

@@ -59,6 +59,18 @@ def main() -> int:
         return EXIT_REFUSED
 
     registry = build_default_registry()
+    tenant_factory = None
+    if config.tenant_database_url:
+        tenant_engine = create_engine(
+            config.tenant_database_url, pool_size=1, max_overflow=0, pool_pre_ping=True
+        )
+        tenant_factory = sessionmaker(bind=tenant_engine, expire_on_commit=False)
+    elif registry.event_types:
+        log.error(
+            "outbox relay refused to start: handlers are registered but "
+            "OUTBOX_RELAY_TENANT_DATABASE_URL is not set"
+        )
+        return EXIT_REFUSED
     policy = RelayPolicy(
         batch_size=config.batch_size,
         max_attempts=config.max_attempts,
@@ -81,6 +93,7 @@ def main() -> int:
     )
     run_forever(
         session_factory=factory,
+        tenant_session_factory=tenant_factory,
         registry=registry,
         policy=policy,
         worker_id=worker_id,

@@ -1088,7 +1088,10 @@ statements are Sub's own thin calls to the same SECURITY DEFINER functions
 (they also read `created_at`). `claim_batch`, `dotmac_kernel.messaging.worker`
 (which requires a second, tenant-scoped database credential Sub does not
 supply), the platform plane and `enqueue_*` stay outside the admitted surface.
-The relay is not imported by the web app, Celery or any boot path, so the
+Deviation D6 (named, pending Michael's decision, built as recommended): the Sub-local
+loop duplicates `messaging.worker.run_forever` until the kernel gains a park
+outcome and `ClaimedEvent.created_at`; it is deleted at the first kernel bump
+that provides both (`docs/runbooks/OUTBOX_RELAY.md`). The relay is not imported by the web app, Celery or any boot path, so the
 "no relay constructed at Sub boot" boundary is unchanged.
 
 `dotmac_kernel.exceptions` is narrowed to `BadRequestError`,

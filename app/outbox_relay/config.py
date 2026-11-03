@@ -8,6 +8,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 URL_VAR = "OUTBOX_RELAY_DATABASE_URL"
+TENANT_URL_VAR = "OUTBOX_RELAY_TENANT_DATABASE_URL"
 DEFAULT_HEARTBEAT_PATH = Path(tempfile.gettempdir()) / "outbox_relay.heartbeat"
 
 
@@ -31,6 +32,9 @@ def _int(env: Mapping[str, str], name: str, default: int, *, minimum: int) -> in
 @dataclass(frozen=True, slots=True)
 class RelayConfig:
     database_url: str = ""
+    #: Optional app_user-class credential (RLS), required only once a handler
+    #: is registered. Never the dispatcher credential.
+    tenant_database_url: str = ""
     batch_size: int = 50
     max_attempts: int = 8
     stale_lease_seconds: int = 300
@@ -52,9 +56,18 @@ class RelayConfig:
             )
         if not url.startswith(("postgresql://", "postgresql+")):
             raise RelayConfigError(f"{URL_VAR} must be a PostgreSQL URL")
+        tenant_url = env.get(TENANT_URL_VAR, "").strip()
+        if tenant_url and not tenant_url.startswith(("postgresql://", "postgresql+")):
+            raise RelayConfigError(f"{TENANT_URL_VAR} must be a PostgreSQL URL")
+        if tenant_url == url:
+            raise RelayConfigError(
+                f"{TENANT_URL_VAR} must differ from {URL_VAR}: the dispatcher "
+                "credential never performs tenant reads"
+            )
         heartbeat = env.get("OUTBOX_RELAY_HEARTBEAT_PATH", "").strip()
         return cls(
             database_url=url,
+            tenant_database_url=tenant_url,
             batch_size=_int(env, "OUTBOX_RELAY_BATCH_SIZE", 50, minimum=1),
             max_attempts=_int(env, "OUTBOX_RELAY_MAX_ATTEMPTS", 8, minimum=1),
             stale_lease_seconds=_int(

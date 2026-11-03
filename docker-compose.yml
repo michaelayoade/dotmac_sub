@@ -896,6 +896,10 @@ services:
     extra_hosts: *observability_extra_hosts
     environment:
       OUTBOX_RELAY_DATABASE_URL: ${OUTBOX_RELAY_DATABASE_URL:-}
+      # Optional until the first handler is registered; an RLS (app_user-class)
+      # credential, never the dispatcher's. Start-up refuses if handlers exist
+      # and this is unset.
+      OUTBOX_RELAY_TENANT_DATABASE_URL: ${OUTBOX_RELAY_TENANT_DATABASE_URL:-}
       OUTBOX_RELAY_BATCH_SIZE: ${OUTBOX_RELAY_BATCH_SIZE:-50}
       OUTBOX_RELAY_MAX_ATTEMPTS: ${OUTBOX_RELAY_MAX_ATTEMPTS:-8}
       OUTBOX_RELAY_PARK_SECONDS: ${OUTBOX_RELAY_PARK_SECONDS:-300}

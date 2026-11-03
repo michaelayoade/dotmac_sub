@@ -59,9 +59,9 @@ def test_park_deliver_and_dead_letter_against_the_real_functions(
         {"p": PARKED, "s": SENT, "d": DEAD, "t": TENANT},
     )
     registry = OutboxHandlerRegistry()
-    registry.register("canary.ok", lambda event: None)
+    registry.register("canary.ok", lambda event, tenant_db: None)
 
-    def boom(event: ClaimedEvent) -> None:
+    def boom(event: ClaimedEvent, tenant_db: Session) -> None:
         raise RuntimeError("private")
 
     registry.register("canary.boom", boom)
@@ -73,6 +73,9 @@ def test_park_deliver_and_dead_letter_against_the_real_functions(
         policy=RelayPolicy(max_attempts=2),
         worker_id="canary-worker",
         park_seconds=600,
+        tenant_session_factory=lambda: Session(
+            bind=connection, join_transaction_mode="create_savepoint"
+        ),
     )
     assert (result.claimed, result.succeeded, result.parked, result.dead_lettered) == (
         3,
@@ -88,4 +91,9 @@ def test_park_deliver_and_dead_letter_against_the_real_functions(
         {"i": PARKED},
     ).scalar()
     assert _status(connection, SENT)[0] == "sent"
+    from app.services.outbox_backlog import read_outbox_backlog
+
+    backlog = read_outbox_backlog(Session(bind=connection))
+    assert (backlog.pending, backlog.dead) == (1, 1)
+    assert backlog.oldest_pending_age_seconds >= 0.0
     assert _status(connection, DEAD) == ("dead", 2, "RuntimeError")

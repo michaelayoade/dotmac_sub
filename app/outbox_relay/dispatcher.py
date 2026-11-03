@@ -1,9 +1,20 @@
 """Claim, route, settle. Mechanical: policy lives in the kernel and the registry.
 
+NAMED DEVIATION D6 (deletion-registered). This Sub-local loop exists only
+because the kernel's ``messaging.worker.run_forever`` has no park outcome and
+``ClaimedEvent`` carries no ``created_at``. It deliberately keeps the kernel's
+shape (dispatcher session + tenant-scoped session restored to the event's
+tenant, handler ``(event, tenant_db)``). DELETE this module's loop, ``claim_rows``
+and ``park_event`` and switch to the kernel worker at the first kernel bump that
+adds ``DeliveryOutcome.PARK`` and ``ClaimedEvent.created_at``. Tracked in
+``docs/runbooks/OUTBOX_RELAY.md`` and the Platform Adoption Ledger.
+
 Per cycle: claim a batch and commit (the lease becomes durable), then for each
 event either deliver through its registered handler or park it.
 
-- registered handler returns   -> ``record_success`` (sent)
+- registered handler returns   -> ``record_success`` (sent), after the tenant
+  session is committed
+- acknowledged-without-consumer -> ``record_success`` (sent), no handler run
 - registered handler raises    -> ``record_failure`` (backoff, or dead at
   ``max_attempts``)
 - NO registered handler        -> park: back to ``pending`` with a later
@@ -36,13 +47,40 @@ from app.outbox_relay.metrics import (
     OldestPendingTracker,
     record_cycle,
 )
-from app.outbox_relay.registry import OutboxHandlerRegistry
+from app.outbox_relay.registry import OutboxEventHandler, OutboxHandlerRegistry
 
 logger = logging.getLogger("app.outbox_relay")
 
 SessionFactory = Callable[[], Session]
 
 _PARK_REASON = "no handler registered for event type"
+
+
+class TenantSessionUnavailableError(RuntimeError):
+    """A handler is registered but no tenant-scoped credential was supplied."""
+
+
+def _deliver(
+    handler: OutboxEventHandler,
+    event: ClaimedEvent,
+    tenant_session_factory: SessionFactory | None,
+) -> None:
+    if tenant_session_factory is None:
+        raise TenantSessionUnavailableError("no tenant session factory configured")
+    # A FRESH tenant-scoped session, RLS context restored to THIS event's tenant.
+    tenant_db = tenant_session_factory()
+    try:
+        tenant_db.execute(
+            text("SELECT set_config('app.current_tenant', :t, true)"),
+            {"t": str(event.tenant_id)},
+        )
+        handler(event, tenant_db)
+        tenant_db.commit()
+    except Exception:
+        tenant_db.rollback()
+        raise
+    finally:
+        tenant_db.close()
 
 
 @dataclass(frozen=True, slots=True)
@@ -120,8 +158,13 @@ def run_cycle(
     policy: RelayPolicy,
     worker_id: str,
     park_seconds: int,
+    tenant_session_factory: SessionFactory | None = None,
     now: Callable[[], datetime] = lambda: datetime.now(UTC),
 ) -> CycleResult:
+    if registry.event_types and tenant_session_factory is None:
+        raise TenantSessionUnavailableError(
+            "handlers are registered but no tenant session factory was supplied"
+        )
     rows = claim_rows(db, worker_id=worker_id, policy=policy)
     db.commit()  # lease durable before any delivery
     result = CycleResult(claimed=len(rows))
@@ -130,6 +173,15 @@ def run_cycle(
         event = row.event
         handler = registry.get(event.event_type)
         try:
+            if handler is None and registry.is_acknowledged(event.event_type):
+                held = record_success(db, event_id=event.id, worker_id=worker_id)
+                db.commit()
+                result = replace(
+                    result,
+                    acknowledged=result.acknowledged + (1 if held else 0),
+                    lease_lost=result.lease_lost + (0 if held else 1),
+                )
+                continue
             if handler is None:
                 held = park_event(
                     db,
@@ -138,16 +190,20 @@ def run_cycle(
                     available_at=now() + timedelta(seconds=park_seconds),
                 )
                 db.commit()
+                counts = dict(result.parked_by_type)
+                if held:
+                    counts[event.event_type] = counts.get(event.event_type, 0) + 1
                 result = replace(
                     result,
                     parked=result.parked + (1 if held else 0),
+                    parked_by_type=tuple(sorted(counts.items())),
                     lease_lost=result.lease_lost + (0 if held else 1),
                 )
                 oldest_pending = _older(oldest_pending, row.created_at)
                 logger.info("outbox event parked (no handler) id=%s", event.id)
                 continue
             try:
-                handler(event)
+                _deliver(handler, event, tenant_session_factory)
             except Exception as exc:  # handler failure: retry or dead-letter
                 outcome = record_failure(
                     db,
@@ -190,6 +246,7 @@ def run_cycle(
 def run_forever(
     *,
     session_factory: SessionFactory,
+    tenant_session_factory: SessionFactory | None,
     registry: OutboxHandlerRegistry,
     policy: RelayPolicy,
     worker_id: str,
@@ -210,6 +267,7 @@ def run_forever(
                 policy=policy,
                 worker_id=worker_id,
                 park_seconds=park_seconds,
+                tenant_session_factory=tenant_session_factory,
             )
             claimed = result.claimed
             record_cycle(result, tracker)

@@ -66,6 +66,37 @@ class FakeSession:
         raise AssertionError("unexpected rollback")
 
 
+class FakeTenantSession:
+    def __init__(self) -> None:
+        self.executed: list[dict[str, object]] = []
+        self.commits = 0
+        self.rollbacks = 0
+        self.closed = False
+
+    def execute(self, statement: object, params: dict[str, object]) -> _Result:
+        assert "set_config('app.current_tenant'" in str(statement)
+        self.executed.append(params)
+        return _Result()
+
+    def commit(self) -> None:
+        self.commits += 1
+
+    def rollback(self) -> None:
+        self.rollbacks += 1
+
+    def close(self) -> None:
+        self.closed = True
+
+
+def _factory(sink: list[FakeTenantSession]):
+    def make() -> FakeTenantSession:
+        session = FakeTenantSession()
+        sink.append(session)
+        return session
+
+    return make
+
+
 def _row(event_type: str, attempts: int = 0) -> dict[str, object]:
     return {
         "id": uuid4(),
@@ -79,11 +110,15 @@ def _row(event_type: str, attempts: int = 0) -> dict[str, object]:
 
 
 def _cycle(
-    session: FakeSession, registry: OutboxHandlerRegistry, **kw: object
+    session: FakeSession,
+    registry: OutboxHandlerRegistry,
+    tenants: list[FakeTenantSession] | None = None,
+    **kw: object,
 ) -> metrics.CycleResult:
     return run_cycle(
         session,  # type: ignore[arg-type]
         registry=registry,
+        tenant_session_factory=_factory(tenants if tenants is not None else []),  # type: ignore[arg-type]
         policy=RelayPolicy(max_attempts=3),
         worker_id="w1",
         park_seconds=300,
@@ -96,6 +131,7 @@ def test_unregistered_event_type_is_parked_never_dead_lettered() -> None:
     session = FakeSession([_row("unknown.type", attempts=2)])
     result = _cycle(session, OutboxHandlerRegistry())
 
+    assert result.parked_by_type == (("unknown.type", 1),)
     assert (result.claimed, result.parked, result.failed, result.dead_lettered) == (
         1,
         1,
@@ -113,23 +149,29 @@ def test_unregistered_event_type_is_parked_never_dead_lettered() -> None:
 def test_registered_handler_success_settles_sent() -> None:
     seen: list[ClaimedEvent] = []
     registry = OutboxHandlerRegistry()
-    registry.register("a.b", seen.append)
+    registry.register("a.b", lambda event, tenant_db: seen.append(event))
     session = FakeSession([_row("a.b")])
-    result = _cycle(session, registry)
+    tenants: list[FakeTenantSession] = []
+    result = _cycle(session, registry, tenants)
 
     assert result.succeeded == 1 and len(seen) == 1
+    (tenant,) = tenants  # fresh tenant session, RLS restored, committed, closed
+    assert tenant.executed == [{"t": str(TENANT)}]
+    assert (tenant.commits, tenant.rollbacks, tenant.closed) == (1, 0, True)
     assert "'sent'" in str(session.settles[0]["sql"])
     assert result.oldest_pending_created_at is None
 
 
 def test_handler_failure_backs_off_then_dead_letters_at_max_attempts() -> None:
-    def boom(event: ClaimedEvent) -> None:
+    def boom(event: ClaimedEvent, tenant_db: object) -> None:
         raise RuntimeError("contains-private-payload")
 
     registry = OutboxHandlerRegistry()
     registry.register("a.b", boom)
 
-    retry = _cycle(FakeSession([_row("a.b", attempts=0)]), registry)
+    tenants: list[FakeTenantSession] = []
+    retry = _cycle(FakeSession([_row("a.b", attempts=0)]), registry, tenants)
+    assert tenants[0].rollbacks == 1 and tenants[0].closed
     assert (retry.failed, retry.dead_lettered) == (1, 0)
     assert retry.oldest_pending_created_at is not None
 
@@ -144,24 +186,64 @@ def test_handler_failure_backs_off_then_dead_letters_at_max_attempts() -> None:
 
 def test_lost_lease_is_counted_not_counted_as_success() -> None:
     registry = OutboxHandlerRegistry()
-    registry.register("a.b", lambda event: None)
+    registry.register("a.b", lambda event, tenant_db: None)
     result = _cycle(FakeSession([_row("a.b")], lease_held=False), registry)
     assert (result.succeeded, result.lease_lost) == (0, 1)
 
 
+def test_acknowledged_type_settles_sent_without_handler_or_tenant_session() -> None:
+    registry = OutboxHandlerRegistry()
+    registry.acknowledge_without_consumer("not.ours")
+    with pytest.raises(DuplicateHandlerError):
+        registry.register("not.ours", lambda event, tenant_db: None)
+    session = FakeSession([_row("not.ours")])
+    result = _cycle(session, registry)
+    assert (result.acknowledged, result.parked) == (1, 0)
+    assert "'sent'" in str(session.settles[0]["sql"])
+
+
+def test_handlers_without_a_tenant_session_factory_are_refused() -> None:
+    from app.outbox_relay.dispatcher import TenantSessionUnavailableError
+
+    registry = OutboxHandlerRegistry()
+    registry.register("a.b", lambda event, tenant_db: None)
+    with pytest.raises(TenantSessionUnavailableError):
+        run_cycle(
+            FakeSession([]),  # type: ignore[arg-type]
+            registry=registry,
+            policy=RelayPolicy(),
+            worker_id="w1",
+            park_seconds=300,
+        )
+
+
 def test_one_handler_per_event_type() -> None:
     registry = OutboxHandlerRegistry()
-    registry.register("a.b", lambda event: None)
+    registry.register("a.b", lambda event, tenant_db: None)
     with pytest.raises(DuplicateHandlerError):
-        registry.register("a.b", lambda event: None)
+        registry.register("a.b", lambda event, tenant_db: None)
     with pytest.raises(ValueError):
-        registry.register("  ", lambda event: None)
+        registry.register("  ", lambda event, tenant_db: None)
 
 
 def test_shipped_registry_is_empty() -> None:
     from app.outbox_relay.registry import build_default_registry
 
     assert dict(build_default_registry().event_types) == {}
+
+
+def test_parked_metric_is_per_event_type_with_bounded_labels() -> None:
+    tracker = metrics.OldestPendingTracker(retain_seconds=600)
+    metrics.record_cycle(
+        metrics.CycleResult(parked=3, parked_by_type=(("t.one", 2), ("t.two", 1))),
+        tracker,
+        NOW,
+    )
+    assert metrics.PARKED.labels(event_type="t.one")._value.get() >= 2  # type: ignore[attr-defined]
+    assert metrics.parked_label("t.one") == "t.one"
+    for i in range(metrics.MAX_PARKED_TYPE_LABELS + 5):
+        metrics.parked_label(f"flood.{i}")
+    assert metrics.parked_label("brand.new.type") == "other"
 
 
 def test_record_cycle_updates_the_five_required_metrics() -> None:
@@ -228,6 +310,13 @@ def test_config_refuses_without_dedicated_url_and_hides_it() -> None:
         {"OUTBOX_RELAY_DATABASE_URL": "postgresql://u:topsecret@h/d"}
     )
     assert "topsecret" not in repr(config)
+    with pytest.raises(RelayConfigError, match="must differ"):
+        RelayConfig.from_env(
+            {
+                "OUTBOX_RELAY_DATABASE_URL": "postgresql://u@h/d",
+                "OUTBOX_RELAY_TENANT_DATABASE_URL": "postgresql://u@h/d",
+            }
+        )
     assert (config.batch_size, config.max_attempts, config.metrics_port) == (
         50,
         8,
@@ -242,10 +331,12 @@ def _ok() -> DispatcherObservation:
         bypass_rls=False,
         superuser=False,
         relations_with_privilege=0,
+        role_memberships=0,
         can_claim=True,
         can_settle=True,
-        can_claim_platform=False,
-        can_settle_platform=False,
+        executable_definers=frozenset(
+            {"public.claim_outbox_batch", "public.settle_outbox_event"}
+        ),
     )
 
 
@@ -260,7 +351,21 @@ def test_preflight_accepts_only_the_execute_only_dispatcher() -> None:
         ({"relations_with_privilege": 1}, "table/column privileges"),
         ({"can_claim": False}, "claim_outbox_batch"),
         ({"can_settle": False}, "settle_outbox_event"),
-        ({"can_claim_platform": True}, "platform-plane"),
+        ({"role_memberships": 1}, "member of 1 other role"),
+        (
+            {
+                "executable_definers": frozenset(
+                    {
+                        "public.claim_outbox_batch",
+                        "public.settle_outbox_event",
+                        "mod_billing.some_definer",
+                        "public.claim_platform_outbox_batch",
+                    }
+                )
+            },
+            "beyond the tenant pair: mod_billing.some_definer, "
+            "public.claim_platform_outbox_batch",
+        ),
     ):
         problems = dispatcher_identity_violations(replace(_ok(), **change))
         assert any(fragment in p for p in problems), (change, problems)
