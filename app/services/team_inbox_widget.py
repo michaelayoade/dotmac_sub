@@ -135,11 +135,19 @@ def _presentation_text(value: object, *, key: str, max_length: int) -> str:
 
 
 def _presentation_offset(value: object, *, key: str) -> int:
-    try:
-        normalized = int(value)
-    except (TypeError, ValueError):
-        normalized = int(_presentation_default(key))
+    normalized = _integer_value(value)
+    if normalized is None:
+        normalized = _integer_value(_presentation_default(key)) or 8
     return max(8, min(96, normalized))
+
+
+def _integer_value(value: object) -> int | None:
+    if not isinstance(value, (int, float, str)):
+        return None
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
 
 
 def _presentation_default(key: str) -> object:

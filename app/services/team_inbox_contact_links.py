@@ -2277,11 +2277,9 @@ def schedule_contact_history_repair_after_commit(
     source_conversation_id: UUID,
     cursor: HistoricalContactRepairResult,
 ) -> None:
-    if (
-        not cursor.has_more
-        or not cursor.next_created_at
-        or not cursor.next_conversation_id
-    ):
+    next_created_at = cursor.next_created_at
+    next_conversation_id = cursor.next_conversation_id
+    if not cursor.has_more or next_created_at is None or next_conversation_id is None:
         return
 
     def enqueue(_callback_db: Session) -> None:
@@ -2291,8 +2289,8 @@ def schedule_contact_history_repair_after_commit(
             kwargs={
                 "contact_link_id": str(contact_link_id),
                 "source_conversation_id": str(source_conversation_id),
-                "after_created_at": cursor.next_created_at.isoformat(),
-                "after_conversation_id": str(cursor.next_conversation_id),
+                "after_created_at": next_created_at.isoformat(),
+                "after_conversation_id": str(next_conversation_id),
                 "limit": 200,
             },
             retry=False,

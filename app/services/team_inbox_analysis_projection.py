@@ -45,6 +45,15 @@ class ManagerAnalysisPeriod(StrEnum):
 _MAX_EVIDENCE_CONVERSATIONS = 25
 _MAX_MESSAGES_PER_EVIDENCE_CONVERSATION = 12
 _MAX_RECENT_CONVERSATIONS = 50
+_MAX_CUSTOMER_HISTORY_CONVERSATIONS = 13
+_MAX_CUSTOMER_HISTORY_MESSAGES = 48
+_MAX_CURRENT_CONVERSATION_MESSAGES = _MAX_CUSTOMER_HISTORY_MESSAGES // 2
+_MAX_PRIOR_CONVERSATION_MESSAGES = (
+    _MAX_CUSTOMER_HISTORY_MESSAGES - _MAX_CURRENT_CONVERSATION_MESSAGES
+) // (_MAX_CUSTOMER_HISTORY_CONVERSATIONS - 1)
+_MAX_CUSTOMER_HISTORY_BRIEF_MESSAGES = 4
+_MAX_CUSTOMER_HISTORY_SUBJECT_CHARS = 160
+_MAX_CUSTOMER_HISTORY_BODY_CHARS = 240
 
 
 @dataclass(frozen=True, slots=True)
@@ -123,7 +132,10 @@ class CustomerHistorySummaryProjection:
     availability: team_inbox_contact_context.ContextAvailability
     history_scope: team_inbox_contact_context.ConversationHistoryScope
     conversation_ids: tuple[UUID, ...]
+    total_conversation_count: int
     messages: tuple[CustomerHistorySourceMessage, ...]
+    inspected_message_count: int
+    evidence_is_truncated: bool
     source_watermark: str | None
     message: str | None = None
 
@@ -144,12 +156,79 @@ class CustomerHistoryBrief:
     agent_message_count: int
     latest_activity_at: datetime | None
     recent_messages: tuple[CustomerHistoryBriefMessage, ...]
+    evidence_conversation_count: int
+    evidence_message_count: int
+    inspected_message_count: int
+    evidence_is_truncated: bool
     source_watermark: str | None
     message: str | None = None
 
 
+@dataclass(frozen=True, slots=True)
+class _CustomerHistoryEvidenceBatch:
+    messages: tuple[CustomerHistorySourceMessage, ...]
+    inspected_count: int
+    truncated: bool
+
+
 def _utc(value: datetime) -> datetime:
     return value if value.tzinfo is not None else value.replace(tzinfo=UTC)
+
+
+def _customer_history_message_evidence(
+    db: Session,
+    *,
+    conversation_id: UUID,
+    limit: int,
+) -> _CustomerHistoryEvidenceBatch:
+    """Read one index-backed, work- and byte-bounded stored-message window."""
+
+    occurred = func.coalesce(
+        InboxMessage.received_at,
+        InboxMessage.sent_at,
+        InboxMessage.created_at,
+    )
+    rows = db.execute(
+        select(
+            InboxMessage.id,
+            InboxMessage.conversation_id,
+            InboxMessage.direction,
+            func.substr(InboxMessage.subject, 1, _MAX_CUSTOMER_HISTORY_SUBJECT_CHARS),
+            func.substr(InboxMessage.body, 1, _MAX_CUSTOMER_HISTORY_BODY_CHARS),
+            occurred,
+        )
+        .where(InboxMessage.conversation_id == conversation_id)
+        # ix_inbox_messages_conversation leads on (conversation_id, created_at).
+        # Filtering private/empty rows after this limited read prevents a large
+        # run of notes from turning a drawer open into an unbounded scan.
+        .order_by(InboxMessage.created_at.desc(), InboxMessage.id.desc())
+        .limit(limit + 1)
+    ).all()
+    selected = rows[:limit]
+    messages = tuple(
+        CustomerHistorySourceMessage(
+            id=identifier,
+            conversation_id=row_conversation_id,
+            direction=direction,
+            subject=subject,
+            body=body or "",
+            occurred_at=_utc(occurred_at),
+        )
+        for (
+            identifier,
+            row_conversation_id,
+            direction,
+            subject,
+            body,
+            occurred_at,
+        ) in reversed(selected)
+        if direction in {"inbound", "outbound"} and (body or "").strip()
+    )
+    return _CustomerHistoryEvidenceBatch(
+        messages=messages,
+        inspected_count=len(selected),
+        truncated=len(rows) > limit,
+    )
 
 
 def build_customer_history_summary_projection(
@@ -163,6 +242,7 @@ def build_customer_history_summary_projection(
         team_inbox_contact_context.EligibleConversationHistoryQuery(
             conversation_id=request.conversation_id,
             permitted=request.permitted,
+            evidence_limit=_MAX_CUSTOMER_HISTORY_CONVERSATIONS,
         ),
     )
     if history is None:
@@ -176,56 +256,75 @@ def build_customer_history_summary_projection(
             availability=history.availability,
             history_scope=history.scope,
             conversation_ids=(),
+            total_conversation_count=0,
             messages=(),
+            inspected_message_count=0,
+            evidence_is_truncated=False,
             source_watermark=None,
             message=history.message,
         )
-    occurred = func.coalesce(
-        InboxMessage.received_at,
-        InboxMessage.sent_at,
-        InboxMessage.created_at,
+    current_batch = _customer_history_message_evidence(
+        db,
+        conversation_id=request.conversation_id,
+        limit=_MAX_CURRENT_CONVERSATION_MESSAGES,
     )
-    rows = tuple(
-        db.scalars(
-            select(InboxMessage)
-            .where(
-                InboxMessage.conversation_id.in_(history.conversation_ids),
-                InboxMessage.direction.in_(("inbound", "outbound")),
-            )
-            .order_by(occurred, InboxMessage.id)
-        ).all()
+    prior_batches = tuple(
+        _customer_history_message_evidence(
+            db,
+            conversation_id=conversation_id,
+            limit=_MAX_PRIOR_CONVERSATION_MESSAGES,
+        )
+        for conversation_id in history.conversation_ids
+        if conversation_id != request.conversation_id
     )
     messages = tuple(
-        CustomerHistorySourceMessage(
-            id=row.id,
-            conversation_id=row.conversation_id,
-            direction=row.direction,
-            subject=row.subject,
-            body=row.body or "",
-            occurred_at=_utc(row.received_at or row.sent_at or row.created_at),
+        sorted(
+            (
+                *current_batch.messages,
+                *(message for batch in prior_batches for message in batch.messages),
+            ),
+            key=lambda message: (message.occurred_at, str(message.id)),
         )
-        for row in rows
+    )
+    inspected_message_count = current_batch.inspected_count + sum(
+        batch.inspected_count for batch in prior_batches
+    )
+    messages_are_truncated = current_batch.truncated or any(
+        batch.truncated for batch in prior_batches
+    )
+    total_conversation_count = history.total_conversation_count or len(
+        history.conversation_ids
+    )
+    evidence_is_truncated = messages_are_truncated or total_conversation_count > len(
+        history.conversation_ids
     )
     digest = hashlib.sha256()
+    digest.update(f"total-conversations:{total_conversation_count}\n".encode())
+    digest.update(f"selected-conversations:{len(history.conversation_ids)}\n".encode())
+    digest.update(f"inspected-messages:{inspected_message_count}\n".encode())
+    digest.update(f"evidence-truncated:{int(evidence_is_truncated)}\n".encode())
     for conversation_id in history.conversation_ids:
         digest.update(f"conversation:{conversation_id}\n".encode())
-    for row in rows:
+    for message in messages:
         digest.update(
             (
-                f"message:{row.id}:{row.conversation_id}:{row.direction}:"
-                f"{_utc(row.updated_at).isoformat()}\n"
+                f"message:{message.id}:{message.conversation_id}:"
+                f"{message.direction}:{message.occurred_at.isoformat()}\n"
             ).encode()
         )
-        digest.update((row.subject or "").encode())
+        digest.update((message.subject or "").encode())
         digest.update(b"\0")
-        digest.update((row.body or "").encode())
+        digest.update(message.body.encode())
         digest.update(b"\n")
     return CustomerHistorySummaryProjection(
         conversation_id=request.conversation_id,
         availability=history.availability,
         history_scope=history.scope,
         conversation_ids=history.conversation_ids,
+        total_conversation_count=total_conversation_count,
         messages=messages,
+        inspected_message_count=inspected_message_count,
+        evidence_is_truncated=evidence_is_truncated,
         source_watermark=digest.hexdigest(),
     )
 
@@ -256,6 +355,10 @@ def build_customer_history_brief(
             agent_message_count=0,
             latest_activity_at=None,
             recent_messages=(),
+            evidence_conversation_count=0,
+            evidence_message_count=0,
+            inspected_message_count=0,
+            evidence_is_truncated=False,
             source_watermark=source.source_watermark,
             message=source.message,
         )
@@ -267,11 +370,15 @@ def build_customer_history_brief(
         return CustomerHistoryBrief(
             conversation_id=request.conversation_id,
             availability=team_inbox_contact_context.ContextAvailability.empty,
-            previous_conversation_count=max(len(source.conversation_ids) - 1, 0),
+            previous_conversation_count=max(source.total_conversation_count - 1, 0),
             customer_message_count=0,
             agent_message_count=0,
             latest_activity_at=None,
             recent_messages=(),
+            evidence_conversation_count=0,
+            evidence_message_count=0,
+            inspected_message_count=source.inspected_message_count,
+            evidence_is_truncated=source.evidence_is_truncated,
             source_watermark=source.source_watermark,
             message="No public customer conversation messages yet.",
         )
@@ -279,7 +386,7 @@ def build_customer_history_brief(
     return CustomerHistoryBrief(
         conversation_id=request.conversation_id,
         availability=team_inbox_contact_context.ContextAvailability.available,
-        previous_conversation_count=max(len(source.conversation_ids) - 1, 0),
+        previous_conversation_count=max(source.total_conversation_count - 1, 0),
         customer_message_count=sum(
             message.direction == "inbound" for message in public_messages
         ),
@@ -293,8 +400,14 @@ def build_customer_history_brief(
                 body=_brief_body(message.body),
                 occurred_at=message.occurred_at,
             )
-            for message in public_messages[-4:]
+            for message in public_messages[-_MAX_CUSTOMER_HISTORY_BRIEF_MESSAGES:]
         ),
+        evidence_conversation_count=len(
+            {message.conversation_id for message in public_messages}
+        ),
+        evidence_message_count=len(public_messages),
+        inspected_message_count=source.inspected_message_count,
+        evidence_is_truncated=source.evidence_is_truncated,
         source_watermark=source.source_watermark,
     )
 

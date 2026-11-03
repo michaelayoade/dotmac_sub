@@ -66,9 +66,10 @@
         {% if customer_history_brief.availability.value == 'available' %}
         <div class="grid grid-cols-3 gap-2 text-center">
             <div class="rounded-lg bg-slate-50 px-2 py-2 dark:bg-slate-900/60"><strong class="block text-sm text-slate-900 dark:text-white">{{ customer_history_brief.previous_conversation_count }}</strong><span class="text-[10px] text-slate-500">Earlier chats</span></div>
-            <div class="rounded-lg bg-slate-50 px-2 py-2 dark:bg-slate-900/60"><strong class="block text-sm text-slate-900 dark:text-white">{{ customer_history_brief.customer_message_count }}</strong><span class="text-[10px] text-slate-500">Customer messages</span></div>
-            <div class="rounded-lg bg-slate-50 px-2 py-2 dark:bg-slate-900/60"><strong class="block text-sm text-slate-900 dark:text-white">{{ customer_history_brief.agent_message_count }}</strong><span class="text-[10px] text-slate-500">Agent replies</span></div>
+            <div class="rounded-lg bg-slate-50 px-2 py-2 dark:bg-slate-900/60"><strong class="block text-sm text-slate-900 dark:text-white">{{ customer_history_brief.customer_message_count }}</strong><span class="text-[10px] text-slate-500">Customer messages in evidence</span></div>
+            <div class="rounded-lg bg-slate-50 px-2 py-2 dark:bg-slate-900/60"><strong class="block text-sm text-slate-900 dark:text-white">{{ customer_history_brief.agent_message_count }}</strong><span class="text-[10px] text-slate-500">Agent replies in evidence</span></div>
         </div>
+        <p class="mt-2 text-[10px] text-slate-500">Inspected {{ customer_history_brief.inspected_message_count }} newest stored message records in bounded per-chat windows; {{ customer_history_brief.evidence_message_count }} public messages across {{ customer_history_brief.evidence_conversation_count }} linked chats are represented{% if customer_history_brief.evidence_is_truncated %}. Older records are not included in these evidence counts{% endif %}.</p>
         {% if customer_history_brief.latest_activity_at %}<p class="mt-2 text-[10px] text-slate-500">Updated through {{ ts(customer_history_brief.latest_activity_at) }}</p>{% endif %}
         <ol class="mt-3 space-y-2" aria-label="Recent public conversation messages">
             {% for item in customer_history_brief.recent_messages %}

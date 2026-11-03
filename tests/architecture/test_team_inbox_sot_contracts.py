@@ -334,6 +334,17 @@ def test_analysis_owner_contracts_the_customer_history_brief() -> None:
     assert "bounded factual customer history brief from public messages only" in {
         projection.name for projection in service.contract.projections
     }
+    owner = (ROOT / "app/services/team_inbox_analysis_projection.py").read_text(
+        encoding="utf-8"
+    )
+    assert "_MAX_CUSTOMER_HISTORY_CONVERSATIONS = 13" in owner
+    assert "_MAX_CUSTOMER_HISTORY_MESSAGES = 48" in owner
+    assert ".limit(limit + 1)" in owner
+    assert "InboxMessage.created_at.desc()" in owner
+    assert "func.substr(InboxMessage.body" in owner
+    assert "evidence_limit=_MAX_CUSTOMER_HISTORY_CONVERSATIONS" in owner
+    assert 'digest.update(f"total-conversations:{total_conversation_count}' in owner
+    assert 'digest.update(f"evidence-truncated:{int(evidence_is_truncated)}' in owner
 
 
 def test_widget_owner_contracts_the_settings_backed_public_projection() -> None:
