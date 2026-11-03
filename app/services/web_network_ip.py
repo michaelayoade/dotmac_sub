@@ -12,10 +12,11 @@ from collections import defaultdict
 from uuid import UUID
 
 from pydantic import ValidationError
+from sqlalchemy import delete as sa_delete
 from sqlalchemy import or_, select
 from sqlalchemy.orm import joinedload
 
-from app.models.catalog import NasDevice, Subscription
+from app.models.catalog import NasDevice, NasPoolBinding, Subscription
 from app.models.network import (
     IPAssignment,
     IpPool,
@@ -31,6 +32,7 @@ from app.schemas.network import (
     IpPoolCreate,
     IpPoolUpdate,
 )
+from app.services import ip_pool_labels
 from app.services import network as network_service
 from app.services.audit_helpers import diff_dicts, model_to_dict
 from app.services.common import coerce_uuid, validate_enum
@@ -1808,7 +1810,35 @@ def get_ip_pool_new_form_data(db=None) -> dict[str, object]:
         "olt_devices": list_active_olts(db),
         "vlans": list_active_vlans(db),
         "nas_devices": list_active_nas_devices(db),
+        **pool_label_form_context(db, pool_id=None),
     }
+
+
+def pool_label_form_context(
+    db, *, pool_id: str | None, submitted_nas_ids: list[str] | None = None
+) -> dict[str, object]:
+    """Context for the purpose / site / NAS-binding fields of the pool form."""
+    context: dict[str, object] = {
+        "pool_purposes": ip_pool_labels.POOL_PURPOSES,
+        "pop_sites": [],
+        "label_nas_options": [],
+        "selected_nas_ids": [],
+        "nas_prefilled": False,
+    }
+    if db is None:
+        return context
+    state = ip_pool_labels.pool_label_form_state(
+        db, pool_id=pool_id, submitted_nas_ids=submitted_nas_ids
+    )
+    context.update(
+        {
+            "pop_sites": state.sites,
+            "label_nas_options": state.nas_options,
+            "selected_nas_ids": state.selected_nas_ids,
+            "nas_prefilled": state.nas_prefilled,
+        }
+    )
+    return context
 
 
 def get_ip_block_new_form_data(db, *, pool_id: str | None = None) -> dict[str, object]:
@@ -1963,7 +1993,24 @@ def parse_ip_pool_form(form) -> dict[str, object]:
         "allow_network_broadcast": form.get("allow_network_broadcast") == "true",
         "is_fallback": form.get("is_fallback") == "true",
         "is_active": form.get("is_active") == "true",
+        "purpose": form.get("purpose", "").strip() or None,
+        "site_ref": form.get("site_ref", "").strip() or None,
+        # Present only when the label fields were on the submitted form, so a
+        # submit without them never wipes saved bindings.
+        "nas_binding_ids": (
+            _form_list(form, "nas_binding_ids")
+            if form.get("labels_form") == "1"
+            else None
+        ),
     }
+
+
+def _form_list(form, key: str) -> list[str]:
+    getter = getattr(form, "getlist", None)
+    raw = getter(key) if getter else form.get(key, [])
+    if isinstance(raw, str):
+        raw = [raw]
+    return [str(v).strip() for v in raw or [] if str(v).strip()]
 
 
 def _parse_prefix_length(raw: object) -> int | None:
@@ -2042,6 +2089,19 @@ def validate_ip_pool_values(values: dict[str, object]) -> str | None:
 
 
 def _ip_pool_scope_error(db, values: dict[str, object]) -> str | None:
+    site_ref = str(values.get("site_ref") or "").strip()
+    if site_ref:
+        try:
+            coerce_uuid(site_ref)
+        except (TypeError, ValueError):
+            return "Selected site is invalid."
+    for raw_nas in values.get("nas_binding_ids") or []:
+        try:
+            nas_row = db.get(NasDevice, coerce_uuid(str(raw_nas)))
+        except (TypeError, ValueError):
+            return "Selected NAS is invalid."
+        if nas_row is None:
+            return "Selected NAS was not found."
     nas_id = str(values.get("nas_device_id") or "").strip()
     if nas_id:
         try:
@@ -2089,6 +2149,9 @@ def pool_form_snapshot(
         "allow_network_broadcast": values.get("allow_network_broadcast"),
         "is_fallback": values.get("is_fallback"),
         "is_active": values.get("is_active"),
+        "purpose": values.get("purpose"),
+        "site_ref": values.get("site_ref"),
+        "nas_binding_ids": values.get("nas_binding_ids"),
     }
     if pool_id:
         data["id"] = pool_id
@@ -2122,6 +2185,8 @@ def pool_form_snapshot_from_model(pool) -> dict[str, object]:
         == "true",
         "is_fallback": is_fallback_pool_notes(pool.notes),
         "is_active": pool.is_active,
+        "purpose": pool.purpose,
+        "site_ref": str(pool.site_ref) if pool.site_ref else None,
     }
 
 
@@ -2150,6 +2215,7 @@ def create_ip_pool(db, values: dict[str, object]):
         normalized.pop("network_type", None)
         normalized.pop("router", None)
         scope_error = _ip_pool_scope_error(db, normalized)
+        normalized.pop("nas_binding_ids", None)
         if scope_error:
             return None, scope_error
         normalized["ip_version"] = validate_enum(
@@ -2164,6 +2230,9 @@ def create_ip_pool(db, values: dict[str, object]):
         if overlap_error:
             return None, overlap_error
         pool = network_service.ip_pools.create(db=db, payload=payload)
+        binding_error = _save_pool_nas_bindings(db, pool.id, values)
+        if binding_error:
+            return None, binding_error
         return pool, None
     except ValidationError as exc:
         return None, exc.errors()[0]["msg"]
@@ -2171,9 +2240,57 @@ def create_ip_pool(db, values: dict[str, object]):
         return None, str(exc)
 
 
+def set_pool_nas_bindings(db, *, pool_id: UUID, nas_ids: list[str]) -> str | None:
+    """Replace the pool's NAS bindings with ``nas_ids``. Returns an error or None.
+
+    Flushes only; the caller owns the commit.
+    """
+    wanted: set[UUID] = set()
+    for raw in nas_ids:
+        try:
+            wanted.add(coerce_uuid(str(raw)))
+        except (TypeError, ValueError):
+            return "Selected NAS is invalid."
+    if wanted:
+        found = set(
+            db.execute(select(NasDevice.id).where(NasDevice.id.in_(wanted)))
+            .scalars()
+            .all()
+        )
+        if found != wanted:
+            return "Selected NAS was not found."
+    current = set(ip_pool_labels.saved_binding_nas_ids(db, pool_id))
+    current_ids = {coerce_uuid(i) for i in current}
+    stale = current_ids - wanted
+    if stale:
+        db.execute(
+            sa_delete(NasPoolBinding).where(
+                NasPoolBinding.pool_id == pool_id,
+                NasPoolBinding.nas_device_id.in_(stale),
+            )
+        )
+    for nas_id in sorted(wanted - current_ids, key=str):
+        db.add(NasPoolBinding(pool_id=pool_id, nas_device_id=nas_id))
+    db.flush()
+    return None
+
+
+def _save_pool_nas_bindings(db, pool_id, values: dict[str, object]) -> str | None:
+    """Persist the NAS multi-select when the label fields were submitted."""
+    nas_ids = values.get("nas_binding_ids")
+    if nas_ids is None:
+        return None
+    error = set_pool_nas_bindings(db, pool_id=pool_id, nas_ids=list(nas_ids))
+    if error:
+        db.rollback()
+        return error
+    db.commit()
+    return None
+
+
 def update_ip_pool(db, *, pool_id: str, values: dict[str, object]):
     try:
-        current = network_service.ip_pools.get(db=db, pool_id=pool_id)
+        current = network_service.ip_pools.get_including_inactive(db, pool_id)
     except Exception:
         return None, None, "IP Pool not found"
 
@@ -2202,6 +2319,7 @@ def update_ip_pool(db, *, pool_id: str, values: dict[str, object]):
         normalized.pop("network_type", None)
         normalized.pop("router", None)
         scope_error = _ip_pool_scope_error(db, normalized)
+        normalized.pop("nas_binding_ids", None)
         if scope_error:
             return None, None, scope_error
         if values.get("ip_version"):
@@ -2223,8 +2341,13 @@ def update_ip_pool(db, *, pool_id: str, values: dict[str, object]):
         )
         if overlap_error:
             return None, None, overlap_error
-        network_service.ip_pools.update(db=db, pool_id=pool_id, payload=payload)
-        after = network_service.ip_pools.get(db=db, pool_id=pool_id)
+        network_service.ip_pools.update(
+            db=db, pool_id=pool_id, payload=payload, include_inactive=True
+        )
+        binding_error = _save_pool_nas_bindings(db, current.id, values)
+        if binding_error:
+            return None, None, binding_error
+        after = network_service.ip_pools.get_including_inactive(db, pool_id)
         after_snapshot = model_to_dict(after)
         changes = diff_dicts(before_snapshot, after_snapshot)
         return after, changes, None
@@ -2318,7 +2441,7 @@ def build_ip_pool_detail_data(db, *, pool_id: str) -> dict[str, object] | None:
 
 def get_ip_pool_for_edit(db, *, pool_id: str):
     try:
-        return network_service.ip_pools.get(db=db, pool_id=pool_id)
+        return network_service.ip_pools.get_including_inactive(db, pool_id)
     except Exception:
         return None
 
@@ -2523,9 +2646,13 @@ def build_ip_addresses_data(db, *, ip_version: str) -> dict[str, object]:
     }
 
 
-def build_ip_pools_data(db, *, pool_type: str = "all") -> dict[str, object]:
+def build_ip_pools_data(
+    db, *, pool_type: str = "all", label_filter: str = "all"
+) -> dict[str, object]:
     from app.models.network import IpBlock, IpPool
 
+    # All pools, active and inactive: the label gate counts every pool, and an
+    # inactive pool must stay reachable here so it can be labelled.
     total_pools = _query_count(db, IpPool)
     pools_all = network_service.ip_pools.list(
         db=db,
@@ -2535,6 +2662,7 @@ def build_ip_pools_data(db, *, pool_type: str = "all") -> dict[str, object]:
         order_dir="asc",
         limit=max(int(total_pools), 1),
         offset=0,
+        include_inactive=True,
     )
     normalized_pool_type = str(pool_type or "all").strip().lower()
     if normalized_pool_type not in {"all", "fallback", "standard"}:
@@ -2552,6 +2680,18 @@ def build_ip_pools_data(db, *, pool_type: str = "all") -> dict[str, object]:
     else:
         pools = pools_all
 
+    # Label gate: the unlabelled count always covers every pool (active and
+    # inactive), independent of the type filter.
+    label_rows = ip_pool_labels.build_pool_label_rows(db, pools_all)
+    unlabelled_count = sum(1 for row in label_rows.values() if row.unlabelled)
+    normalized_label_filter = (
+        "unlabelled"
+        if str(label_filter or "").strip().lower() == "unlabelled"
+        else "all"
+    )
+    if normalized_label_filter == "unlabelled":
+        pools = [pool for pool in pools if label_rows[str(pool.id)].unlabelled]
+
     selected_pool_ids = {str(pool.id) for pool in pools}
     total_blocks = _query_count(db, IpBlock, IpBlock.is_active.is_(True))
     blocks = network_service.ip_blocks.list(
@@ -2563,7 +2703,9 @@ def build_ip_pools_data(db, *, pool_type: str = "all") -> dict[str, object]:
         limit=max(int(total_blocks), 1),
         offset=0,
     )
-    if normalized_pool_type in {"fallback", "standard"}:
+    if normalized_pool_type in {"fallback", "standard"} or (
+        normalized_label_filter == "unlabelled"
+    ):
         blocks = [
             block
             for block in blocks
@@ -2588,6 +2730,10 @@ def build_ip_pools_data(db, *, pool_type: str = "all") -> dict[str, object]:
         "pool_utilization": pool_utilization,
         "block_utilization": block_utilization,
         "pool_type": normalized_pool_type,
+        "label_filter": normalized_label_filter,
+        "label_rows": label_rows,
+        "unlabelled_count": unlabelled_count,
+        "total_pool_count": len(pools_all),
         "fallback_pool_ids": fallback_pool_ids,
         "stats": stats,
     }

@@ -188,6 +188,11 @@ def ip_pool_form_context(
         "olt_devices": ip_service.list_active_olts(db),
         "vlans": ip_service.list_active_vlans(db),
         "nas_devices": ip_service.list_active_nas_devices(db),
+        **ip_service.pool_label_form_context(
+            db,
+            pool_id=str(pool_data["id"]) if pool_data.get("id") else None,
+            submitted_nas_ids=pool_data.get("nas_binding_ids"),  # type: ignore[arg-type]
+        ),
     }
     if error:
         context["error"] = error

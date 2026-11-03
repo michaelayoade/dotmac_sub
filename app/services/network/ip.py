@@ -344,10 +344,14 @@ class IpPools(CRUDManager[IpPool]):
         order_dir: str,
         limit: int,
         offset: int,
+        *,
+        include_inactive: bool = False,
     ):
         query = db.query(IpPool)
         query = apply_optional_equals(query, {IpPool.ip_version: ip_version})
-        query = apply_active_state(query, IpPool.is_active, is_active)
+        query = apply_active_state(
+            query, IpPool.is_active, is_active, default_active=not include_inactive
+        )
         query = _apply_ordering(
             query,
             order_by,
@@ -357,8 +361,27 @@ class IpPools(CRUDManager[IpPool]):
         return _apply_pagination(query, limit, offset).all()
 
     @classmethod
-    def update(cls, db: Session, pool_id: str, payload: IpPoolUpdate):
-        return super().update(db, pool_id, payload)
+    def get_including_inactive(cls, db: Session, pool_id: str):
+        return cls._get_or_404(db, coerce_uuid(pool_id), include_inactive=True)
+
+    @classmethod
+    def update(
+        cls,
+        db: Session,
+        pool_id: str,
+        payload: IpPoolUpdate,
+        *,
+        include_inactive: bool = False,
+    ):
+        if not include_inactive:
+            return super().update(db, pool_id, payload)
+        # Admin pool edit must reach inactive pools so they can be labelled.
+        entity = cls._get_or_404(db, coerce_uuid(pool_id), include_inactive=True)
+        for key, value in cls._payload_dict(payload, exclude_unset=True).items():
+            setattr(entity, key, value)
+        db.commit()
+        db.refresh(entity)
+        return entity
 
     @classmethod
     def delete(cls, db: Session, pool_id: str):

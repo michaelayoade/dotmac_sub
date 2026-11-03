@@ -121,6 +121,44 @@
                         <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">Subscriber provisioning only allocates this pool to subscriptions served by the selected BNG.</p>
                     </div>
 
+                    <input type="hidden" name="labels_form" value="1">
+                    <div>
+                        <label for="purpose" class="block text-sm font-medium text-slate-700 dark:text-slate-300">Purpose</label>
+                        <select name="purpose" id="purpose"
+                            class="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm shadow-sm focus:border-primary-500 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                            <option value="">Unlabelled</option>
+                            {% for value, label in pool_purposes or [] %}
+                            <option value="{{ value }}" {% if pool and pool.purpose == value %}selected{% endif %}>{{ label }}</option>
+                            {% endfor %}
+                        </select>
+                    </div>
+
+                    <div>
+                        <label for="site_ref" class="block text-sm font-medium text-slate-700 dark:text-slate-300">Site</label>
+                        <select name="site_ref" id="site_ref"
+                            class="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm shadow-sm focus:border-primary-500 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                            <option value="">Unlabelled</option>
+                            {% for site in pop_sites or [] %}
+                            <option value="{{ site.id }}" {% if pool and pool.site_ref == site.id|string %}selected{% endif %}>{{ site.name }}{% if site.city %} ({{ site.city }}){% endif %}</option>
+                            {% endfor %}
+                        </select>
+                        <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">For a pool served at several sites, pick its main site.</p>
+                    </div>
+
+                    <div>
+                        <label for="nas_binding_ids" class="block text-sm font-medium text-slate-700 dark:text-slate-300">Served by NAS (label)</label>
+                        <select name="nas_binding_ids" id="nas_binding_ids" multiple size="6"
+                            class="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm shadow-sm focus:border-primary-500 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                            {% for nas in label_nas_options or [] %}
+                            <option value="{{ nas.id }}" {% if nas.id|string in (selected_nas_ids or []) %}selected{% endif %}>{{ nas.name }}{% if nas.nas_ip %} ({{ nas.nas_ip }}){% endif %}</option>
+                            {% endfor %}
+                        </select>
+                        {% if nas_prefilled %}
+                        <p class="mt-1 text-xs text-amber-600 dark:text-amber-400">Suggested from the current BNG scope and RADIUS pool tags. Nothing is saved until you submit this form.</p>
+                        {% endif %}
+                        <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">Label only: allocation and RADIUS behaviour are unchanged. Hold Ctrl/Cmd to select several.</p>
+                    </div>
+
                     <div>
                         <label for="olt_device_id" class="block text-sm font-medium text-slate-700 dark:text-slate-300">OLT Scope</label>
                         <select name="olt_device_id" id="olt_device_id" x-model="selectedOlt" @change="selectedVlan = ''"
