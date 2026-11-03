@@ -35,11 +35,34 @@ _BACKLOG = text(
 )
 
 
+_TENANTS = text("SELECT id FROM public.tenants")
+_SCOPE = text("SELECT set_config('app.current_tenant', :tenant, true)")
+
+
 def read_outbox_backlog(db: Session) -> OutboxBacklog:
-    row = db.execute(_BACKLOG).one()
+    """Sum the backlog across every tenant.
+
+    ``outbox_events`` is FORCE-RLS, so the runtime role sees only the row set of
+    the ``app.current_tenant`` in force. A single unscoped read would therefore
+    report the operator tenant only, or zero. The tenant context is set per
+    tenant (transaction-local, discarded by the caller's rollback) and the
+    counts are summed. No grant or function is added.
+    """
+    pending = claimed = dead = 0
+    oldest = 0.0
+    tenant_ids = list(db.execute(_TENANTS).scalars())
+    scopes: list[str | None] = [str(t) for t in tenant_ids] or [None]
+    for tenant in scopes:
+        if tenant is not None:
+            db.execute(_SCOPE, {"tenant": tenant})
+        row = db.execute(_BACKLOG).one()
+        pending += int(row.pending)
+        claimed += int(row.claimed)
+        dead += int(row.dead)
+        oldest = max(oldest, float(row.oldest_age))
     return OutboxBacklog(
-        pending=int(row.pending),
-        claimed=int(row.claimed),
-        dead=int(row.dead),
-        oldest_pending_age_seconds=max(0.0, float(row.oldest_age)),
+        pending=pending,
+        claimed=claimed,
+        dead=dead,
+        oldest_pending_age_seconds=max(0.0, oldest),
     )
