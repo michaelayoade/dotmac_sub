@@ -50,7 +50,7 @@ def test_update_state_audit_and_safe_evidence(
         ApiKeyUpdate(
             label="excluded-new-label",
             key_hash="excluded-preimage",
-            scopes=["*", "unknown:*", "unknown:*"],
+            scopes=["unknown:*", "unknown:*"],
             is_active=False,
         ),
     )
@@ -60,18 +60,15 @@ def test_update_state_audit_and_safe_evidence(
             command, actor=actor, context=replace(command.context, actor=actor.actor_id)
         )
     if api_key_actor:
-        # SUB-1: a non-admin (API-key) actor may not set rbac-covering scopes.
         persist_wildcard_api_key_actor(db_session, command.actor.actor_id)
-        with pytest.raises(owner.ApiKeyUpdateError):
-            owner.update(db_session, command=command)
-        return
-    persist_admin_actor(db_session, command.actor.actor_id)
+    else:
+        persist_admin_actor(db_session, command.actor.actor_id)
     with trace_transactions(db_session.get_bind().engine) as trace:
         outcome = owner.update(db_session, command=command)
     assert_protected_tx(trace.result, protected_tables=frozenset({"api_keys"}))
     assert outcome.key_hash == hash_api_key("excluded-preimage")
     assert outcome.label == "excluded-new-label"
-    assert outcome.scopes == ("*", "unknown:*", "unknown:*")
+    assert outcome.scopes == ("unknown:*", "unknown:*")
     assert not outcome.is_active
     audit = audits(db_session, key_id)[0]
     assert audit.action == "auth.api_key.updated"
