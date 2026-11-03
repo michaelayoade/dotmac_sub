@@ -59,11 +59,11 @@ def test_real_artifact_and_complete_collision_inventory_remain_explicit() -> Non
     assert "party_roles" in collisions
     assert "alembic_version" not in collisions
     assert len(signatures) == 4
-    assert len(blobs) == 28
-    assert len({name for name, _ in blobs}) == 28
+    assert len(blobs) == 30
+    assert len({name for name, _ in blobs}) == 30
     assert all(len(sha) == 40 for _, sha in blobs)
-    assert ast.literal_eval(values["KERNEL_VERSION"]) == "0.1.0a105"
-    assert ast.literal_eval(values["KERNEL_HEAD"]) == "0028_machine_attribution"
+    assert ast.literal_eval(values["KERNEL_VERSION"]) == "0.1.0a107"
+    assert ast.literal_eval(values["KERNEL_HEAD"]) == "0030_credential_tenant_key"
     # Preserve the old diagnostic rather than converting expected failure into
     # a success/adoption assertion for this much narrower probe.
     legacy = (ROOT / "tests/integration/test_kernel_lineage_rehearsal.py").read_text()
@@ -93,7 +93,7 @@ def test_entry_docs_retain_full_handoff_gates() -> None:
         "runtime writer cutover",
         "lost commit acknowledgment",
         "independent post-commit",
-        "0.1.0a105",
-        "0028_machine_attribution",
+        "0.1.0a107",
+        "0030_credential_tenant_key",
     ):
         assert claim in source, claim
