@@ -16,7 +16,7 @@ def test_customer_statement_owners_are_separate_from_admin_projection() -> None:
     email_owner = services["customer.account_statement_email"]
     admin_owner = services["ui.billing_account_workspace_projection"]
     assert read_owner.module == "app.services.customer_account_statement"
-    assert email_owner.module == read_owner.module
+    assert email_owner.module == "app.services.customer_account_statement_email"
     assert read_owner.contract is not None
     assert email_owner.contract is not None
     assert read_owner.contract.transaction.mode is TransactionMode.READ_ONLY

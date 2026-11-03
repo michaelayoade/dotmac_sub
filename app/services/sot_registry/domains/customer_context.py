@@ -255,7 +255,7 @@ DOMAIN = DomainSOT(
         ),
         SOTService(
             name="customer.account_statement_email",
-            module="app.services.customer_account_statement",
+            module="app.services.customer_account_statement_email",
             owns=("customer statement PDF email request",),
             depends_on=(
                 "customer.account_statement",

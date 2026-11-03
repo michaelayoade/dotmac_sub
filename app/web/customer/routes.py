@@ -54,6 +54,7 @@ from app.services import (
     web_support_tickets,
 )
 from app.services import customer_account_statement as statement_service
+from app.services import customer_account_statement_email as statement_email_service
 from app.services import customer_portal_bandwidth as customer_portal_bandwidth_service
 from app.services import customer_portal_contacts as customer_portal_contacts_service
 from app.services import customer_portal_flow_payment_methods as customer_cards
@@ -841,9 +842,9 @@ def customer_statement_email(
             timezone=display_format.display_timezone(db),
         )
         finish_read_transaction(db)
-        statement_service.request_customer_statement_email(
+        statement_email_service.request_customer_statement_email(
             db,
-            command=statement_service.CustomerStatementEmailCommand(
+            command=statement_email_service.CustomerStatementEmailCommand(
                 query=statement_service.CustomerStatementQuery(
                     account_id=selected, period=period
                 ),

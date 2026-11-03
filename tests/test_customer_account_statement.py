@@ -10,6 +10,7 @@ from fastapi import HTTPException
 
 from app.models.billing import LedgerEntryType, LedgerSource
 from app.services import customer_account_statement as statements
+from app.services import customer_account_statement_email as statement_email
 from app.services.communication_attachments import (
     CommunicationAttachmentError,
     _resolve_customer_statement_pdf,
@@ -232,7 +233,7 @@ def test_email_request_targets_verified_account_and_replay_writes_no_new_audit(
         def flush(self) -> None:
             pass
 
-    command = statements.CustomerStatementEmailCommand(
+    command = statement_email.CustomerStatementEmailCommand(
         query=statements.CustomerStatementQuery(
             account_id=account_id,
             period=statements.CustomerStatementRange(
@@ -248,20 +249,22 @@ def test_email_request_targets_verified_account_and_replay_writes_no_new_audit(
         ),
     )
     monkeypatch.setattr(
-        statements, "execute_owner_command", lambda _db, **kwargs: kwargs["operation"]()
+        statement_email,
+        "execute_owner_command",
+        lambda _db, **kwargs: kwargs["operation"](),
     )
     monkeypatch.setattr(
-        statements, "read_customer_statement", lambda *_a, **_k: object()
+        statement_email, "read_customer_statement", lambda *_a, **_k: object()
     )
     monkeypatch.setattr(
-        statements, "render_statement_pdf", lambda _statement: b"%PDF-1.4"
+        statement_email, "render_statement_pdf", lambda _statement: b"%PDF-1.4"
     )
     written: list[str] = []
     monkeypatch.setattr(
-        statements, "stage_audit_event", lambda *_a, **_k: written.append("audit")
+        statement_email, "stage_audit_event", lambda *_a, **_k: written.append("audit")
     )
     monkeypatch.setattr(
-        statements, "emit_event", lambda *_a, **_k: written.append("event")
+        statement_email, "emit_event", lambda *_a, **_k: written.append("event")
     )
     sent: list[object] = []
 
@@ -274,12 +277,12 @@ def test_email_request_targets_verified_account_and_replay_writes_no_new_audit(
             replayed=len(sent) > 1,
         )
 
-    monkeypatch.setattr(statements, "submit", submit_intent)
-    first = statements.request_customer_statement_email(
+    monkeypatch.setattr(statement_email, "submit", submit_intent)
+    first = statement_email.request_customer_statement_email(
         AccountSession(),
         command=command,  # type: ignore[arg-type]
     )
-    second = statements.request_customer_statement_email(
+    second = statement_email.request_customer_statement_email(
         AccountSession(),
         command=command,  # type: ignore[arg-type]
     )
@@ -287,7 +290,7 @@ def test_email_request_targets_verified_account_and_replay_writes_no_new_audit(
     assert not first.replayed and second.replayed
     assert written == ["audit", "event"]
     assert sent[0].recipients == {
-        statements.NotificationChannel.email: "verified@example.com"
+        statement_email.NotificationChannel.email: "verified@example.com"
     }
     assert sent[0].attachments[0].entity_id == account_id
     assert sent[0].metadata["statement_start_date"] == "2026-01-01"
@@ -306,7 +309,7 @@ def test_email_replay_does_not_reread_changed_email(
     period = statements.CustomerStatementRange(
         start_date=date(2026, 1, 1), end_date=date(2026, 1, 31)
     )
-    command = statements.CustomerStatementEmailCommand(
+    command = statement_email.CustomerStatementEmailCommand(
         query=statements.CustomerStatementQuery(account_id=account_id, period=period),
         principal_id=principal_id,
         idempotency_key=uuid4(),
@@ -337,9 +340,11 @@ def test_email_replay_does_not_reread_changed_email(
             raise AssertionError("replay must not inspect a changed email")
 
     monkeypatch.setattr(
-        statements, "execute_owner_command", lambda _db, **kwargs: kwargs["operation"]()
+        statement_email,
+        "execute_owner_command",
+        lambda _db, **kwargs: kwargs["operation"](),
     )
-    outcome = statements.request_customer_statement_email(
+    outcome = statement_email.request_customer_statement_email(
         ReplaySession(),
         command=command,  # type: ignore[arg-type]
     )
