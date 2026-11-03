@@ -23,6 +23,7 @@ from app.services.team_inbox_assignment import (
     team_capacity_snapshots,
 )
 from app.services.team_inbox_queue_notifications import current_visible_position
+from tests.team_inbox_presence_fixtures import add_active_presence_lease
 
 
 def _team(db_session) -> ServiceTeam:
@@ -67,6 +68,7 @@ def _agent(db_session, team: ServiceTeam, *, capacity: int) -> SystemUser:
             last_seen_at=datetime.now(UTC),
         )
     )
+    add_active_presence_lease(db_session, system_user_id=user.id)
     db_session.flush()
     return user
 

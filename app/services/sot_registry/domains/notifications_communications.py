@@ -1887,7 +1887,6 @@ DOMAIN = DomainSOT(
                 "auth.permission_gate",
                 "auth.staff_provisioning",
                 "communications.notification_service",
-                "communications.team_inbox_agent_introduction",
                 "operations.sla_escalation",
             ),
             notes=(
@@ -1905,7 +1904,6 @@ DOMAIN = DomainSOT(
                             "validated staff notification request",
                             "validated staff assignment notification command",
                             "canonical staff account identity",
-                            "per-agent Inbox assignment notification preference",
                             "canonical internal notification row",
                         ),
                         canonical_writer="communications.staff_notifications",
@@ -1919,7 +1917,6 @@ DOMAIN = DomainSOT(
                             "validated staff notification request",
                             "validated staff assignment notification command",
                             "canonical staff account identity",
-                            "per-agent Inbox assignment notification preference",
                         ),
                     ),
                     ConcernContract(
@@ -1957,15 +1954,6 @@ DOMAIN = DomainSOT(
                         owner="auth.staff_provisioning",
                         kind=AuthorityKind.AUTHORITATIVE_RECORD,
                         source="Active SystemUser identity and current staff email address.",
-                    ),
-                    AuthorityInput(
-                        name="per-agent Inbox assignment notification preference",
-                        owner="communications.team_inbox_agent_introduction",
-                        kind=AuthorityKind.CONTROL_INPUT,
-                        source=(
-                            "The agent's independently selectable in-app and email "
-                            "choices for future Team Inbox assignments."
-                        ),
                     ),
                     AuthorityInput(
                         name="canonical internal notification row",
@@ -3473,6 +3461,15 @@ DOMAIN = DomainSOT(
                         source=(
                             "The routing event and newly assigned active staff principal "
                             "used to stage one idempotent personal assignment notice."
+                        ),
+                    ),
+                    AuthorityInput(
+                        name="per-agent Inbox assignment notification preference",
+                        owner="communications.team_inbox_agent_introduction",
+                        kind=AuthorityKind.CONTROL_INPUT,
+                        source=(
+                            "The newly assigned agent's independently selected in-app "
+                            "and email choices, resolved by routing before notification."
                         ),
                     ),
                     AuthorityInput(

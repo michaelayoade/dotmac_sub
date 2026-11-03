@@ -20,6 +20,7 @@ from app.models.team_inbox import (
 from app.services import team_inbox_assignment
 from app.services.owner_commands import CommandContext
 from tests.staff_identity_fixtures import add_bound_staff_user
+from tests.team_inbox_presence_fixtures import add_active_presence_lease
 
 
 def _team(name: str) -> ServiceTeam:
@@ -56,6 +57,7 @@ def test_shared_agent_cannot_consume_one_capacity_slot_from_two_teams(engine):
         first = _conversation()
         second = _conversation()
         setup.add_all([first, second])
+        add_active_presence_lease(setup, system_user_id=agent.id)
         setup.commit()
         team_ids = (first_team.id, second_team.id)
         conversation_ids = (first.id, second.id)
@@ -155,6 +157,7 @@ def test_simultaneous_promotion_workers_promote_only_the_true_head(engine):
         first = _conversation()
         second = _conversation()
         setup.add_all([first, second])
+        add_active_presence_lease(setup, system_user_id=agent.id, observed_at=now)
         setup.flush()
         team_inbox_assignment.queue_conversation_for_team(
             setup, conversation=first, service_team_id=team.id, now=now
@@ -220,6 +223,7 @@ def test_locked_team_head_cannot_be_skipped_by_another_promotion_worker(engine):
         first = _conversation()
         second = _conversation()
         setup.add_all([first, second])
+        add_active_presence_lease(setup, system_user_id=agent.id, observed_at=now)
         setup.flush()
         team_inbox_assignment.queue_conversation_for_team(
             setup,

@@ -29,6 +29,7 @@ from app.services import (
 )
 from app.services.owner_commands import CommandContext
 from tests.staff_identity_fixtures import add_bound_staff_user
+from tests.team_inbox_presence_fixtures import add_active_presence_lease
 
 NOW = datetime(2026, 9, 14, 12, 0, tzinfo=UTC)
 
@@ -60,6 +61,7 @@ def _team_and_agent(db_session, *, capacity: int = 10):
             last_seen_at=NOW,
         )
     )
+    add_active_presence_lease(db_session, system_user_id=user.id, observed_at=NOW)
     db_session.flush()
     return team, user.id
 

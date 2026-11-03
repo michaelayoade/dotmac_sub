@@ -24,6 +24,7 @@ from app.services import (
 )
 from scripts.one_off import team_inbox_lifecycle_audit as lifecycle_audit_cli
 from tests.staff_identity_fixtures import add_bound_staff_user
+from tests.team_inbox_presence_fixtures import add_active_presence_lease
 
 
 def _team_and_agent(db_session):
@@ -41,6 +42,7 @@ def _team_and_agent(db_session):
             last_seen_at=datetime.now(UTC),
         )
     )
+    add_active_presence_lease(db_session, system_user_id=user.id)
     db_session.flush()
     return team, user.id
 
@@ -65,6 +67,7 @@ def test_reassignment_closes_interval_through_authoritative_event(db_session):
             last_seen_at=datetime.now(UTC),
         )
     )
+    add_active_presence_lease(db_session, system_user_id=_other_user.id)
     db_session.flush()
     second_agent = _other_user.id
     conversation = _conversation(db_session)

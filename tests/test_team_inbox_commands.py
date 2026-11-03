@@ -19,6 +19,7 @@ from app.models.team_inbox import (
 from app.services import team_inbox_commands, team_inbox_outbound
 from app.services.workqueue.permissions import WorkqueuePrincipal
 from tests.staff_identity_fixtures import add_bound_staff_user
+from tests.team_inbox_presence_fixtures import add_active_presence_lease
 
 
 def _conversation(db_session, *, contact_address: str | None = "ada@example.com"):
@@ -71,6 +72,11 @@ def _eligible_actor(
         ]
     )
     conversation.primary_service_team_id = team.id
+    add_active_presence_lease(
+        db_session,
+        system_user_id=user.id,
+        observed_at=last_seen_at or datetime.now(UTC),
+    )
     db_session.flush()
     return user.id
 

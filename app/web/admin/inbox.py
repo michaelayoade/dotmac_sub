@@ -34,7 +34,7 @@ from sqlalchemy.orm import Session
 from app.db import finish_read_transaction, get_db
 from app.models.audit import AuditActorType
 from app.models.domain_settings import SettingDomain
-from app.models.team_inbox import InboxChannelType, InboxConversation
+from app.models.team_inbox import InboxChannelType
 from app.schemas.common import ListResponse
 from app.schemas.plan_family_catalogue import ResolveShareablePlanFamilyCatalogueQuery
 from app.schemas.settings import DomainSettingUpdate
@@ -1357,7 +1357,6 @@ def team_inbox_identity_review(
     except team_inbox_contact_links.ConversationContactLinkError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     context = _ctx(request, db)
-    reviewed_conversation = db.get(InboxConversation, conversation_id)
     lead_action = inbox_lead_actions.resolve_action(
         db,
         conversation_id=conversation_id,
@@ -1372,11 +1371,9 @@ def team_inbox_identity_review(
             and can(request, "support:inbox:contact_link")
             and can(request, "customer:read"),
             "expected_active_contact_link_id": (
-                team_inbox_contact_links.active_contact_link_id(
-                    db, reviewed_conversation
+                team_inbox_contact_links.active_contact_link_id_for_conversation(
+                    db, conversation_id
                 )
-                if reviewed_conversation is not None
-                else None
             ),
             "can_link_lead": can(request, "support:ticket:update")
             and can(request, "crm:lead:read")

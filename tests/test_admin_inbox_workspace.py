@@ -40,6 +40,7 @@ from app.services import (
 from app.services.list_query import PageMeta
 from app.services.workqueue.permissions import WorkqueuePrincipal
 from tests.staff_identity_fixtures import add_bound_staff_user
+from tests.team_inbox_presence_fixtures import add_active_presence_lease
 
 
 def _conversation(db_session) -> uuid.UUID:
@@ -78,6 +79,7 @@ def _eligible_reply_actor(db_session, conversation_id: uuid.UUID) -> uuid.UUID:
         ]
     )
     conversation.primary_service_team_id = team.id
+    add_active_presence_lease(db_session, system_user_id=user.id)
     db_session.flush()
     return user.id
 
@@ -615,7 +617,8 @@ def test_presence_projection_uses_the_routing_owners_session_lease_evidence(
 
     assert fresh is not None
     assert fresh.status == InboxAgentPresenceStatus.online.value
-    assert fresh.last_seen_at == observed_at
+    assert fresh.last_seen_at is not None
+    assert fresh.last_seen_at.replace(tzinfo=UTC) == observed_at
     assert stale is not None
     assert stale.status == InboxAgentPresenceStatus.offline.value
     assert stale.last_seen_at is None
@@ -640,6 +643,7 @@ def test_assignment_agent_options_show_team_and_presence_status(db_session):
             last_seen_at=datetime.now(UTC),
         )
     )
+    add_active_presence_lease(db_session, system_user_id=user.id)
     db_session.commit()
 
     projection = team_inbox_projection.build_queue_projection(

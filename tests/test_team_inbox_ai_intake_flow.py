@@ -62,6 +62,7 @@ from app.services.owner_commands import CommandContext
 from app.tasks import notifications as notification_tasks
 from app.tasks import team_inbox as team_inbox_tasks
 from tests.staff_identity_fixtures import add_bound_staff_user
+from tests.team_inbox_presence_fixtures import add_active_presence_lease
 
 
 @pytest.fixture(autouse=True)
@@ -451,6 +452,7 @@ def _available_member(db_session, team: ServiceTeam):
             last_seen_at=datetime.now(UTC),
         )
     )
+    add_active_presence_lease(db_session, system_user_id=user.id)
     db_session.flush()
     return user.id
 

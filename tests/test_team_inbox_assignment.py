@@ -770,13 +770,14 @@ def test_presence_heartbeat_creates_online_presence_for_active_staff(db_session)
     system_user_id = system_user.id
     observed_at = datetime(2026, 9, 10, 12, 0, tzinfo=UTC)
     auth_session = _staff_session(db_session, system_user, now=observed_at)
+    auth_session_id = auth_session.id
     db_session.commit()
 
     outcome = team_inbox_assignment.refresh_agent_presence(
         db_session,
         command=_presence_heartbeat_command(
             system_user_id,
-            auth_session_id=auth_session.id,
+            auth_session_id=auth_session_id,
             observed_at=observed_at,
         ),
     )
@@ -803,6 +804,7 @@ def test_presence_heartbeat_revives_stale_selected_online_presence(db_session):
     system_user_id = system_user.id
     observed_at = datetime(2026, 9, 10, 12, 0, tzinfo=UTC)
     auth_session = _staff_session(db_session, system_user, now=observed_at)
+    auth_session_id = auth_session.id
     presence = InboxAgentPresence(
         person_id=system_user_id,
         status=InboxAgentPresenceStatus.online.value,
@@ -816,7 +818,7 @@ def test_presence_heartbeat_revives_stale_selected_online_presence(db_session):
         db_session,
         command=_presence_heartbeat_command(
             system_user_id,
-            auth_session_id=auth_session.id,
+            auth_session_id=auth_session_id,
             observed_at=observed_at,
         ),
     )
@@ -847,6 +849,7 @@ def test_presence_heartbeat_preserves_explicit_unavailable_state(
     original_seen_at = datetime(2026, 9, 10, 11, 0, tzinfo=UTC)
     observed_at = datetime(2026, 9, 10, 12, 0, tzinfo=UTC)
     auth_session = _staff_session(db_session, system_user, now=observed_at)
+    auth_session_id = auth_session.id
     presence = InboxAgentPresence(
         person_id=system_user_id,
         status=selected_status.value,
@@ -860,7 +863,7 @@ def test_presence_heartbeat_preserves_explicit_unavailable_state(
         db_session,
         command=_presence_heartbeat_command(
             system_user_id,
-            auth_session_id=auth_session.id,
+            auth_session_id=auth_session_id,
             observed_at=observed_at,
         ),
     )
@@ -880,6 +883,7 @@ def test_presence_heartbeat_rejects_inactive_staff_without_writing(db_session):
     system_user_id = system_user.id
     observed_at = datetime(2026, 9, 10, 12, 0, tzinfo=UTC)
     auth_session = _staff_session(db_session, system_user, now=observed_at)
+    auth_session_id = auth_session.id
     system_user.is_active = False
     db_session.commit()
 
@@ -887,7 +891,7 @@ def test_presence_heartbeat_rejects_inactive_staff_without_writing(db_session):
         db_session,
         command=_presence_heartbeat_command(
             system_user_id,
-            auth_session_id=auth_session.id,
+            auth_session_id=auth_session_id,
             observed_at=observed_at,
         ),
     )
@@ -909,13 +913,15 @@ def test_presence_heartbeat_rejects_wrong_or_revoked_staff_session(db_session):
     revoked_session = _staff_session(db_session, system_user, now=observed_at)
     revoked_session.status = SessionStatus.revoked
     revoked_session.revoked_at = observed_at
+    system_user_id = system_user.id
+    session_ids = (wrong_session.id, revoked_session.id)
     db_session.commit()
 
-    for auth_session_id in (wrong_session.id, revoked_session.id):
+    for auth_session_id in session_ids:
         outcome = team_inbox_assignment.refresh_agent_presence(
             db_session,
             command=_presence_heartbeat_command(
-                system_user.id,
+                system_user_id,
                 auth_session_id=auth_session_id,
                 observed_at=observed_at,
             ),
@@ -974,9 +980,11 @@ def test_disabling_auto_offline_still_requires_a_live_bound_session(
     system_user, _person = add_bound_staff_user(db_session)
     observed_at = datetime(2026, 9, 10, 12, 0, tzinfo=UTC)
     auth_session = _staff_session(db_session, system_user, now=observed_at)
+    system_user_id = system_user.id
+    auth_session_id = auth_session.id
     db_session.add(
         InboxAgentPresence(
-            person_id=system_user.id,
+            person_id=system_user_id,
             status=InboxAgentPresenceStatus.online.value,
             last_seen_at=observed_at - timedelta(minutes=5),
             auto_offline=True,
@@ -984,8 +992,8 @@ def test_disabling_auto_offline_still_requires_a_live_bound_session(
     )
     db_session.add(
         InboxAgentPresenceSessionLease(
-            person_id=system_user.id,
-            auth_session_id=auth_session.id,
+            person_id=system_user_id,
+            auth_session_id=auth_session_id,
             last_seen_at=observed_at - timedelta(minutes=5),
         )
     )
@@ -995,11 +1003,11 @@ def test_disabling_auto_offline_still_requires_a_live_bound_session(
         db_session,
         command=team_inbox_assignment.AgentPresencePreferenceCommand(
             context=CommandContext.system(
-                actor=f"system-user:{system_user.id}",
+                actor=f"system-user:{system_user_id}",
                 scope="test:team-inbox-presence-preference",
                 reason="test explicit auto-offline preference",
             ),
-            system_user_id=system_user.id,
+            system_user_id=system_user_id,
             auto_offline=False,
             observed_at=observed_at,
         ),
@@ -1016,11 +1024,11 @@ def test_disabling_auto_offline_still_requires_a_live_bound_session(
     )
     available = team_inbox_assignment.agent_availability_snapshots(
         db_session,
-        (system_user.id,),
+        (system_user_id,),
         now=observed_at,
     )
-    assert available[system_user.id].presence_status is InboxAgentPresenceStatus.online
-    assert available[system_user.id].assignment_eligible is True
+    assert available[system_user_id].presence_status is InboxAgentPresenceStatus.online
+    assert available[system_user_id].assignment_eligible is True
 
     if terminal_state == "revoked":
         auth_session.status = SessionStatus.revoked
@@ -1031,13 +1039,13 @@ def test_disabling_auto_offline_still_requires_a_live_bound_session(
 
     unavailable = team_inbox_assignment.agent_availability_snapshots(
         db_session,
-        (system_user.id,),
+        (system_user_id,),
         now=observed_at + timedelta(seconds=1),
     )
     assert (
-        unavailable[system_user.id].presence_status is InboxAgentPresenceStatus.offline
+        unavailable[system_user_id].presence_status is InboxAgentPresenceStatus.offline
     )
-    assert unavailable[system_user.id].assignment_eligible is False
+    assert unavailable[system_user_id].assignment_eligible is False
 
 
 def test_set_agent_presence_creates_manual_override(db_session):
@@ -1085,9 +1093,12 @@ def test_staff_sign_in_preserves_explicit_unavailable_override(db_session):
     assert outcome.transition_recorded is False
     assert presence.status == InboxAgentPresenceStatus.away.value
     assert presence.manual_override_status == InboxAgentPresenceStatus.away.value
-    assert presence.last_seen_at == signed_in_at - timedelta(minutes=5)
+    assert presence.last_seen_at is not None
+    assert presence.last_seen_at.replace(tzinfo=UTC) == signed_in_at - timedelta(
+        minutes=5
+    )
     assert lease.auth_session_id == auth_session.id
-    assert lease.last_seen_at == signed_in_at
+    assert lease.last_seen_at.replace(tzinfo=UTC) == signed_in_at
     assert db_session.query(InboxAgentPresenceEvent).count() == 0
 
 
@@ -1128,5 +1139,6 @@ def test_staff_sign_in_refreshes_online_presence_without_false_transition(db_ses
     assert outcome.transition_recorded is False
     assert presence.status == InboxAgentPresenceStatus.online.value
     assert presence.manual_override_status is None
-    assert presence.last_seen_at == signed_in_at
+    assert presence.last_seen_at is not None
+    assert presence.last_seen_at.replace(tzinfo=UTC) == signed_in_at
     assert db_session.query(InboxAgentPresenceEvent).count() == 0

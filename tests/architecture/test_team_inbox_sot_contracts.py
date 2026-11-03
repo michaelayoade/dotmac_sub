@@ -142,7 +142,7 @@ def test_routing_owner_contracts_signed_in_agent_presence() -> None:
     assert "record_agent_signed_in_presence(" in session_staging
     assert "InboxAgentPresence(" not in session_staging
     assert "agent_availability_snapshots(" in projection
-    assert "InboxAgentPresenceLease" in assignment
+    assert "InboxAgentPresenceSessionLease" in assignment
 
 
 def test_routing_owner_reuses_staff_assignment_notifications() -> None:

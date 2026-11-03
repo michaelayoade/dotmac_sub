@@ -126,6 +126,8 @@ class StageStaffAssignmentNotifications:
     body: str
     target_url: str
     actor_identity_id: UUID | None = None
+    in_app_enabled: bool | None = None
+    email_enabled: bool | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -370,21 +372,16 @@ def _validate_assignment_notification(
 
 
 def _assignment_channel_preferences(
-    db: Session,
     *,
-    user_id: UUID,
-    event_type: StaffAssignmentEventType,
+    command: StageStaffAssignmentNotifications,
 ) -> tuple[bool, bool]:
-    """Resolve per-agent channel choices for events that expose them."""
+    """Use owner-resolved choices only for events that expose them."""
 
-    if event_type is not StaffAssignmentEventType.team_inbox_assignment:
+    if command.event_type is not StaffAssignmentEventType.team_inbox_assignment:
         return True, True
-    from app.services import team_inbox_agent_introduction
-
-    preference = team_inbox_agent_introduction.preference_for_agent(db, user_id)
     return (
-        preference.assignment_in_app_notifications,
-        preference.assignment_email_notifications,
+        command.in_app_enabled is not False,
+        command.email_enabled is not False,
     )
 
 
@@ -426,9 +423,7 @@ def stage_staff_assignment_notifications(
         }:
             continue
         in_app_enabled, email_enabled = _assignment_channel_preferences(
-            db,
-            user_id=user.id,
-            event_type=command.event_type,
+            command=command,
         )
         channel_staged = False
         if in_app_enabled:

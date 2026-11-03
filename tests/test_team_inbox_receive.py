@@ -15,6 +15,7 @@ from app.models.team_inbox import (
 )
 from app.services import team_inbox_receive
 from tests.staff_identity_fixtures import add_bound_staff_user
+from tests.team_inbox_presence_fixtures import add_active_presence_lease
 
 
 def _team(db_session, name: str, team_type: str) -> ServiceTeam:
@@ -105,6 +106,7 @@ def test_receive_inbound_email_auto_assigns_route_to_online_agent(db_session):
             last_seen_at=datetime.now(UTC),
         )
     )
+    add_active_presence_lease(db_session, system_user_id=user.id)
     _route(
         db_session,
         support,

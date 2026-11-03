@@ -42,6 +42,7 @@ from app.services import (
 from app.services.owner_commands import CommandContext
 from app.web.admin import inbox as inbox_web
 from tests.staff_identity_fixtures import add_bound_staff_user
+from tests.team_inbox_presence_fixtures import add_active_presence_lease
 
 
 def _request() -> Request:
@@ -113,6 +114,7 @@ def _online_reply_agent(db_session, conversation: InboxConversation):
         ]
     )
     conversation.primary_service_team_id = team.id
+    add_active_presence_lease(db_session, system_user_id=user.id)
     db_session.flush()
     return user
 

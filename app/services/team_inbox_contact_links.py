@@ -2192,6 +2192,17 @@ def active_contact_link_id(db: Session, conversation: InboxConversation) -> UUID
     )
 
 
+def active_contact_link_id_for_conversation(
+    db: Session, conversation_id: UUID
+) -> UUID | None:
+    """Resolve active contact-link evidence without leaking ORM reads to adapters."""
+
+    conversation = db.get(InboxConversation, conversation_id)
+    if conversation is None or not conversation.is_active:
+        return None
+    return active_contact_link_id(db, conversation)
+
+
 def _repair_contact_history_batch(
     db: Session,
     *,

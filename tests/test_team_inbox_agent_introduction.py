@@ -17,6 +17,7 @@ from app.services.team_inbox_agent_introduction import (
     update_preference,
 )
 from app.services.team_inbox_assignment import assign_conversation_to_agent
+from tests.team_inbox_presence_fixtures import add_active_presence_lease
 
 
 def _agent_and_team(db_session):
@@ -46,6 +47,7 @@ def _agent_and_team(db_session):
             last_seen_at=datetime.now(UTC),
         )
     )
+    add_active_presence_lease(db_session, system_user_id=user.id)
     db_session.flush()
     return user, team
 

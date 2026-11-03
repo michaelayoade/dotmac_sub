@@ -38,6 +38,7 @@ from app.services import (
 )
 from app.web.admin import reports as admin_reports
 from tests.staff_identity_fixtures import add_bound_staff_user
+from tests.team_inbox_presence_fixtures import add_active_presence_lease
 
 
 def _team(db_session, name: str = "Support") -> ServiceTeam:
@@ -1070,6 +1071,7 @@ def test_escalation_candidates_ignore_responded_assigned_conversation(db_session
             last_seen_at=datetime.now(UTC),
         )
     )
+    add_active_presence_lease(db_session, system_user_id=user.id)
     base = datetime(2026, 7, 10, 8, 0, tzinfo=UTC)
     conversation = _conversation(db_session, team, first_at=base)
     _message(
@@ -1196,6 +1198,7 @@ def test_inbox_escalation_report_action_auto_assigns_candidate(db_session):
             last_seen_at=datetime.now(UTC),
         )
     )
+    add_active_presence_lease(db_session, system_user_id=user.id)
     base = datetime(2026, 1, 1, 8, 0, tzinfo=UTC)
     conversation = _conversation(db_session, team, first_at=base)
     _message(

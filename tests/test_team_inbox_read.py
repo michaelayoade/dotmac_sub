@@ -31,6 +31,7 @@ from app.models.team_inbox import (
 from app.services import service_team_composition, team_inbox_read
 from app.web.admin import inbox as admin_inbox
 from tests.staff_identity_fixtures import add_bound_staff_user
+from tests.team_inbox_presence_fixtures import add_active_presence_lease
 
 
 def _team(db_session, name: str, team_type: str = ServiceTeamType.support.value):
@@ -111,6 +112,7 @@ def _online_reply_agent(db_session, team: ServiceTeam):
             ),
         ]
     )
+    add_active_presence_lease(db_session, system_user_id=user.id)
     db_session.flush()
     return user
 

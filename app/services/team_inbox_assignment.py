@@ -1121,6 +1121,26 @@ def record_agent_signed_in_presence(
             status=InboxAgentPresenceStatus(selected_status),
             transition_recorded=False,
         )
+    if existing is not None:
+        # Signing in restores session freshness; it does not change an already
+        # selected ONLINE state. Refresh the routing evidence without emitting
+        # a false selected-state transition from a formerly stale timestamp.
+        existing.status = InboxAgentPresenceStatus.online.value
+        existing.manual_override_status = None
+        existing.last_seen_at = command.signed_in_at
+        db.flush()
+        schedule_agent_presence_changed_after_commit(
+            db,
+            presence=existing,
+            observed_at=command.signed_in_at,
+            reason=InboxPresenceReason.staff_sign_in,
+        )
+        return AgentSignedInPresenceOutcome(
+            system_user_id=command.system_user_id,
+            presence_id=existing.id,
+            status=InboxAgentPresenceStatus.online,
+            transition_recorded=False,
+        )
     presence = set_agent_presence(
         db,
         person_id=command.system_user_id,
@@ -2014,6 +2034,9 @@ def assign_conversation_to_agent(
         metadata_={"reason": reason, "source": source},
     )
     db.add(assignment)
+    notification_preference = team_inbox_agent_introduction.preference_for_agent(
+        db, person_uuid
+    )
     staff_notifications.stage_staff_assignment_notifications(
         db,
         staff_notifications.StageStaffAssignmentNotifications(
@@ -2027,6 +2050,8 @@ def assign_conversation_to_agent(
             body="A Team Inbox conversation is ready for your attention.",
             target_url=f"/admin/inbox?conversation_id={conversation.id}",
             actor_identity_id=actor_uuid,
+            in_app_enabled=(notification_preference.assignment_in_app_notifications),
+            email_enabled=(notification_preference.assignment_email_notifications),
         ),
     )
     settled_entry = _settle_queue_entry(

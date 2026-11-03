@@ -1209,9 +1209,12 @@ def test_successful_staff_login_preserves_explicit_offline_presence(
     lease = db_session.query(InboxAgentPresenceSessionLease).one()
     assert presence.status == InboxAgentPresenceStatus.offline.value
     assert presence.manual_override_status == InboxAgentPresenceStatus.offline.value
-    assert presence.last_seen_at == prior_seen_at
+    assert presence.last_seen_at is not None
+    assert presence.last_seen_at.replace(tzinfo=UTC) == prior_seen_at
     assert lease.auth_session_id == session.id
-    assert lease.last_seen_at == session.created_at
+    assert lease.last_seen_at.replace(tzinfo=UTC) == session.created_at.replace(
+        tzinfo=UTC
+    )
     assert db_session.query(InboxAgentPresenceEvent).count() == 0
 
 
