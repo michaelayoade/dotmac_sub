@@ -3639,7 +3639,6 @@ DOMAIN = DomainSOT(
                 "chat-widget first-pickup introduction policy",
             ),
             depends_on=(
-                "communications.team_inbox_routing",
                 "communications.team_inbox_outbound_intents",
                 "auth.permission_gate",
             ),
