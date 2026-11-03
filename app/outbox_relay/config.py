@@ -2,12 +2,13 @@
 
 from __future__ import annotations
 
+import tempfile
 from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
 
 URL_VAR = "OUTBOX_RELAY_DATABASE_URL"
-DEFAULT_HEARTBEAT_PATH = Path("/tmp/outbox_relay.heartbeat")  # noqa: S108
+DEFAULT_HEARTBEAT_PATH = Path(tempfile.gettempdir()) / "outbox_relay.heartbeat"
 
 
 class RelayConfigError(ValueError):

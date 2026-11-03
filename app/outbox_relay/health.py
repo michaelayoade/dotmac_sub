@@ -8,6 +8,8 @@ import sys
 import time
 from pathlib import Path
 
+from app.outbox_relay.config import DEFAULT_HEARTBEAT_PATH
+
 
 def write_heartbeat(path: Path) -> None:
     tmp = path.with_suffix(path.suffix + ".tmp")
@@ -27,9 +29,8 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--max-age-seconds", type=float, default=60.0)
     args = parser.parse_args(argv)
-    path = Path(
-        os.environ.get("OUTBOX_RELAY_HEARTBEAT_PATH") or "/tmp/outbox_relay.heartbeat"  # noqa: S108
-    )
+    override = os.environ.get("OUTBOX_RELAY_HEARTBEAT_PATH")
+    path = Path(override) if override else DEFAULT_HEARTBEAT_PATH
     fresh = heartbeat_is_fresh(
         path, max_age_seconds=args.max_age_seconds, now=time.time()
     )
