@@ -420,3 +420,126 @@ def test_inactive_pool_can_be_labelled(db_session) -> None:
     db_session.expire_all()
     saved = db_session.get(IpPool, pool.id)
     assert saved.purpose == "infrastructure" and saved.is_active is False
+
+
+def test_inactive_pool_update_writes_only_labels_and_skips_checks(db_session) -> None:
+    site = _site(db_session)
+    nas = _nas(db_session, "n1", "203.0.113.1")
+    # An active pool now owns the same CIDR, so overlap checks would refuse.
+    _pool(db_session, "live", "192.0.2.0/24")
+    old = _pool(db_session, "old", "192.0.2.0/24", is_active=False)
+    form = FormData(
+        [
+            ("name", "renamed"),
+            ("ip_version", "ipv4"),
+            ("cidr", "10.9.9.0/24"),
+            ("is_active", "true"),
+            ("labels_form", "1"),
+            ("purpose", "management"),
+            ("site_ref", str(site.id)),
+            ("nas_binding_ids", str(nas.id)),
+        ]
+    )
+    result = update_ip_pool_from_form(
+        _request(), db_session, pool_id=str(old.id), form=form
+    )
+    assert result.success, result.error
+    db_session.expire_all()
+    saved = db_session.get(IpPool, old.id)
+    assert saved.is_active is False
+    assert saved.name == "old" and saved.cidr == "192.0.2.0/24"
+    assert saved.purpose == "management" and saved.site_ref == site.id
+    assert ip_pool_labels.saved_binding_nas_ids(db_session, old.id) == [str(nas.id)]
+
+
+def test_active_pool_overlap_still_refused(db_session) -> None:
+    _pool(db_session, "live", "192.0.2.0/24")
+    other = _pool(db_session, "other", "198.51.100.0/24")
+    result = update_ip_pool_from_form(
+        _request(),
+        db_session,
+        pool_id=str(other.id),
+        form=_form(other, cidr="192.0.2.0/24"),
+    )
+    assert not result.success
+
+
+def test_active_update_is_single_transaction_and_audits_bindings(db_session) -> None:
+    pool = _pool(db_session, "p", "192.0.2.0/24")
+    nas = _nas(db_session, "n1", "203.0.113.1")
+    values = web_network_ip.parse_ip_pool_form(
+        _form(pool, nas_binding_ids=[str(nas.id)])
+    )
+    commits = []
+    original = db_session.commit
+    db_session.commit = lambda: (commits.append(1), original())[1]  # type: ignore[method-assign]
+    try:
+        _, changes, error = web_network_ip.update_ip_pool(
+            db_session, pool_id=str(pool.id), values=values
+        )
+    finally:
+        db_session.commit = original  # type: ignore[method-assign]
+    assert error is None
+    assert len(commits) == 1
+    assert changes["nas_binding_ids"] == {"from": [], "to": [str(nas.id)]}
+
+
+def test_bad_binding_rolls_back_pool_fields(db_session) -> None:
+    pool = _pool(db_session, "p", "192.0.2.0/24")
+    values = web_network_ip.parse_ip_pool_form(
+        _form(pool, purpose="customer", nas_binding_ids=[str(uuid.uuid4())])
+    )
+    _, _, error = web_network_ip.update_ip_pool(
+        db_session, pool_id=str(pool.id), values=values
+    )
+    assert error
+    db_session.expire_all()
+    assert db_session.get(IpPool, pool.id).purpose is None
+
+
+def test_crafted_non_uuid_nas_ids_do_not_break_error_rerender(db_session) -> None:
+    pool = _pool(db_session, "p", "192.0.2.0/24")
+    result = update_ip_pool_from_form(
+        _request(),
+        db_session,
+        pool_id=str(pool.id),
+        form=_form(pool, purpose="bogus", nas_binding_ids=["not-a-uuid"]),
+    )
+    assert not result.success
+    assert result.form_context["selected_nas_ids"] == []
+
+
+def test_submit_without_labels_form_cannot_clear_labels(db_session) -> None:
+    site = _site(db_session)
+    pool = _pool(db_session, "p", "192.0.2.0/24", purpose="customer", site_ref=site.id)
+    form = FormData(
+        [
+            ("name", "p"),
+            ("ip_version", "ipv4"),
+            ("cidr", "192.0.2.0/24"),
+            ("is_active", "true"),
+        ]
+    )
+    result = update_ip_pool_from_form(
+        _request(), db_session, pool_id=str(pool.id), form=form
+    )
+    assert result.success, result.error
+    db_session.expire_all()
+    saved = db_session.get(IpPool, pool.id)
+    assert saved.purpose == "customer" and saved.site_ref == site.id
+
+
+def test_pool_list_label_cells_follow_gateway_header(db_session) -> None:
+    html = (ROOT / "templates/admin/network/ip-management/pools.html").read_text()
+    headers = html[html.index("<thead>") : html.index("</thead>")]
+    assert (
+        headers.index(">Gateway<")
+        < headers.index(">Purpose<")
+        < headers.index(">Used<")
+    )
+    row = html[html.index("{% for pool in pools %}") :]
+    assert (
+        row.index("pool.gateway")
+        < row.index("label.purpose_label")
+        < row.index("util = pool_utilization")
+    )

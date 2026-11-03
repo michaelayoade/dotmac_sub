@@ -21,6 +21,11 @@
     <form method="POST" action="{{ action_url }}" class="space-y-6"
           x-data="{ selectedOlt: {{ selected_olt_id|tojson }}, selectedVlan: {{ selected_vlan_id|tojson }} }">
         {% include "components/forms/csrf_input.html" %}
+        {% if pool and pool.id and pool.is_active is defined and not pool.is_active %}
+        <div class="rounded-lg border border-amber-300 bg-amber-50 px-4 py-3 text-sm text-amber-800 dark:border-amber-700 dark:bg-amber-900/20 dark:text-amber-300">
+            This pool is inactive. Only Purpose, Site and Served by NAS are saved; other fields are ignored and the pool stays inactive.
+        </div>
+        {% endif %}
         {% set fallback_from_notes = pool and pool.notes and ('[fallback]' in (pool.notes|lower)) %}
         {% set fallback_from_field = pool and pool.is_fallback is defined and pool.is_fallback %}
         <div class="rounded-xl border border-slate-200 bg-white shadow-sm dark:border-slate-700 dark:bg-slate-800">

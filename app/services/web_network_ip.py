@@ -1971,6 +1971,7 @@ def create_ip_block(db, values: dict[str, object]):
 
 
 def parse_ip_pool_form(form) -> dict[str, object]:
+    labels_present = form.get("labels_form") == "1"
     return {
         "name": form.get("name", "").strip(),
         "ip_version": form.get("ip_version", "").strip(),
@@ -1993,14 +1994,18 @@ def parse_ip_pool_form(form) -> dict[str, object]:
         "allow_network_broadcast": form.get("allow_network_broadcast") == "true",
         "is_fallback": form.get("is_fallback") == "true",
         "is_active": form.get("is_active") == "true",
-        "purpose": form.get("purpose", "").strip() or None,
-        "site_ref": form.get("site_ref", "").strip() or None,
-        # Present only when the label fields were on the submitted form, so a
-        # submit without them never wipes saved bindings.
+        # Label fields are read only when they were on the submitted form
+        # (hidden ``labels_form``), so a submit without them never clears
+        # saved labels or bindings.
+        "labels_present": labels_present,
+        "purpose": (form.get("purpose", "").strip() or None)
+        if labels_present
+        else None,
+        "site_ref": (form.get("site_ref", "").strip() or None)
+        if labels_present
+        else None,
         "nas_binding_ids": (
-            _form_list(form, "nas_binding_ids")
-            if form.get("labels_form") == "1"
-            else None
+            _form_list(form, "nas_binding_ids") if labels_present else None
         ),
     }
 
@@ -2216,6 +2221,7 @@ def create_ip_pool(db, values: dict[str, object]):
         normalized.pop("router", None)
         scope_error = _ip_pool_scope_error(db, normalized)
         normalized.pop("nas_binding_ids", None)
+        normalized.pop("labels_present", None)
         if scope_error:
             return None, scope_error
         normalized["ip_version"] = validate_enum(
@@ -2229,6 +2235,9 @@ def create_ip_pool(db, values: dict[str, object]):
         )
         if overlap_error:
             return None, overlap_error
+        # Create stays two-step: the CRUD create commits internally and the
+        # bindings need the generated pool id. A new pool has no bindings yet,
+        # so a failed binding save leaves an unlabelled pool, not a mixed state.
         pool = network_service.ip_pools.create(db=db, payload=payload)
         binding_error = _save_pool_nas_bindings(db, pool.id, values)
         if binding_error:
@@ -2288,13 +2297,76 @@ def _save_pool_nas_bindings(db, pool_id, values: dict[str, object]) -> str | Non
     return None
 
 
+def _pool_nas_binding_ids(db, pool_id) -> list[str]:
+    return ip_pool_labels.saved_binding_nas_ids(db, pool_id)
+
+
+def _update_inactive_pool_labels(db, current, values: dict[str, object]):
+    """Label-only update for an inactive pool.
+
+    Writes only purpose, site_ref and NAS bindings. ``is_active`` and every
+    other field are ignored, and the overlap/scope checks are skipped, so an
+    inactive pool whose CIDR was reused can still be labelled and an inactive
+    pool cannot be reactivated through this path.
+    """
+    before_snapshot = model_to_dict(current)
+    before_nas = _pool_nas_binding_ids(db, current.id)
+    label_values: dict[str, object] = {
+        "site_ref": values.get("site_ref"),
+        "nas_binding_ids": values.get("nas_binding_ids"),
+    }
+    label_error = _ip_pool_scope_error(db, label_values)
+    if label_error:
+        return None, None, label_error
+    fields: dict[str, object] = {}
+    if values.get("labels_present"):
+        fields = {"purpose": values.get("purpose"), "site_ref": values.get("site_ref")}
+    payload = IpPoolUpdate.model_validate(fields)
+    network_service.ip_pools.update(
+        db=db,
+        pool_id=str(current.id),
+        payload=payload,
+        include_inactive=True,
+        commit=False,
+    )
+    nas_ids = values.get("nas_binding_ids")
+    if nas_ids is not None:
+        binding_error = set_pool_nas_bindings(
+            db, pool_id=current.id, nas_ids=list(nas_ids)
+        )
+        if binding_error:
+            db.rollback()
+            return None, None, binding_error
+    db.commit()
+    after = network_service.ip_pools.get_including_inactive(db, str(current.id))
+    changes = diff_dicts(before_snapshot, model_to_dict(after))
+    _add_binding_audit(db, changes, before_nas, current.id)
+    return after, changes, None
+
+
+def _add_binding_audit(db, changes: dict, before_nas: list[str], pool_id) -> None:
+    after_nas = _pool_nas_binding_ids(db, pool_id)
+    if sorted(before_nas) != sorted(after_nas):
+        changes["nas_binding_ids"] = {"from": sorted(before_nas), "to": after_nas}
+
+
 def update_ip_pool(db, *, pool_id: str, values: dict[str, object]):
     try:
         current = network_service.ip_pools.get_including_inactive(db, pool_id)
     except Exception:
         return None, None, "IP Pool not found"
 
+    if not current.is_active:
+        try:
+            return _update_inactive_pool_labels(db, current, values)
+        except ValidationError as exc:
+            return None, None, exc.errors()[0]["msg"]
+        except Exception as exc:
+            db.rollback()
+            return None, None, str(exc)
+
     before_snapshot = model_to_dict(current)
+    before_nas = _pool_nas_binding_ids(db, current.id)
     try:
         from app.models.network import IPVersion
 
@@ -2320,6 +2392,10 @@ def update_ip_pool(db, *, pool_id: str, values: dict[str, object]):
         normalized.pop("router", None)
         scope_error = _ip_pool_scope_error(db, normalized)
         normalized.pop("nas_binding_ids", None)
+        if not normalized.pop("labels_present", False):
+            # Label fields were not on the form: leave saved labels untouched.
+            normalized.pop("purpose", None)
+            normalized.pop("site_ref", None)
         if scope_error:
             return None, None, scope_error
         if values.get("ip_version"):
@@ -2341,19 +2417,32 @@ def update_ip_pool(db, *, pool_id: str, values: dict[str, object]):
         )
         if overlap_error:
             return None, None, overlap_error
+        # One transaction: pool fields and bindings commit together.
         network_service.ip_pools.update(
-            db=db, pool_id=pool_id, payload=payload, include_inactive=True
+            db=db,
+            pool_id=pool_id,
+            payload=payload,
+            include_inactive=True,
+            commit=False,
         )
-        binding_error = _save_pool_nas_bindings(db, current.id, values)
-        if binding_error:
-            return None, None, binding_error
+        nas_ids = values.get("nas_binding_ids")
+        if nas_ids is not None:
+            binding_error = set_pool_nas_bindings(
+                db, pool_id=current.id, nas_ids=list(nas_ids)
+            )
+            if binding_error:
+                db.rollback()
+                return None, None, binding_error
+        db.commit()
         after = network_service.ip_pools.get_including_inactive(db, pool_id)
         after_snapshot = model_to_dict(after)
         changes = diff_dicts(before_snapshot, after_snapshot)
+        _add_binding_audit(db, changes, before_nas, current.id)
         return after, changes, None
     except ValidationError as exc:
         return None, None, exc.errors()[0]["msg"]
     except Exception as exc:
+        db.rollback()
         return None, None, str(exc)
 
 

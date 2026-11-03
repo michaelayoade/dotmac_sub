@@ -175,6 +175,19 @@ def create_ip_block_from_form(request: Request, db, form) -> IpWebActionResult:
     )
 
 
+def _valid_uuid_strings(raw: object) -> list[str] | None:
+    """Keep only well-formed UUIDs from a submitted selection (None stays None)."""
+    if raw is None:
+        return None
+    cleaned: list[str] = []
+    for item in raw if isinstance(raw, list | tuple) else []:
+        try:
+            cleaned.append(str(uuid.UUID(str(item))))
+        except (TypeError, ValueError):
+            continue
+    return cleaned
+
+
 def ip_pool_form_context(
     db,
     pool_data: dict[str, object],
@@ -191,7 +204,7 @@ def ip_pool_form_context(
         **ip_service.pool_label_form_context(
             db,
             pool_id=str(pool_data["id"]) if pool_data.get("id") else None,
-            submitted_nas_ids=pool_data.get("nas_binding_ids"),  # type: ignore[arg-type]
+            submitted_nas_ids=_valid_uuid_strings(pool_data.get("nas_binding_ids")),
         ),
     }
     if error:
@@ -250,7 +263,8 @@ def update_ip_pool_from_form(
         return IpWebActionResult(success=False, not_found_message="IP Pool not found")
 
     pool_values = ip_service.parse_ip_pool_form(form)
-    error = ip_service.validate_ip_pool_values(pool_values)
+    # Inactive pools accept label edits only; the other fields are ignored.
+    error = ip_service.validate_ip_pool_values(pool_values) if pool.is_active else None
     pool_data = ip_service.pool_form_snapshot(pool_values, pool_id=str(pool.id))
     action_url = f"/admin/network/ip-management/pools/{pool_id}"
     if error:

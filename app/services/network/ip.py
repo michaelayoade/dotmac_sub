@@ -372,14 +372,18 @@ class IpPools(CRUDManager[IpPool]):
         payload: IpPoolUpdate,
         *,
         include_inactive: bool = False,
+        commit: bool = True,
     ):
         if not include_inactive:
-            return super().update(db, pool_id, payload)
+            return super().update(db, pool_id, payload, commit=commit)
         # Admin pool edit must reach inactive pools so they can be labelled.
         entity = cls._get_or_404(db, coerce_uuid(pool_id), include_inactive=True)
         for key, value in cls._payload_dict(payload, exclude_unset=True).items():
             setattr(entity, key, value)
-        db.commit()
+        if commit:
+            db.commit()
+        else:
+            db.flush()
         db.refresh(entity)
         return entity
 

@@ -439,6 +439,24 @@ WORKFLOW_GUIDANCE: tuple[AdminWorkflowGuidance, ...] = (
         ),
     ),
     _guide(
+        "ip-pool-labels",
+        "Network and access",
+        "Label IP pools",
+        "Network team",
+        "Give every IP pool a purpose, a main site and the NAS it is served by, so IP rules can later be applied by label.",
+        ("/admin/network/ip-management/pools",),
+        "Open IP Management, then Pools. Use the Unlabelled (N of M) button to list pools that still need labels; the count covers every pool, including inactive ones. The goal is zero unlabelled pools.",
+        "Open a pool and choose Edit. Set Purpose: Customer is for subscriber addresses, Customer (NAT / CGNAT) is for subscriber addresses behind NAT, Infrastructure is for links, loopbacks and router or server addresses, and Management is for device management such as OLT or ONT management.",
+        "Set Site to the pool's main site. For a pool served at several sites, pick the main one.",
+        "Set Served by NAS to the NAS devices the pool is exclusive to; select several if needed. When a pool has no saved NAS yet, the list is pre-filled with the NAS from the current pool scope and RADIUS pool tags. That is only a suggestion: nothing is saved until you submit the form.",
+        "A pool counts as unlabelled when Purpose or Site is empty, or when it is active, a Customer or Customer (NAT) pool, and has no NAS selected.",
+        "Inactive pools can be opened and labelled, but only the labels change; the pool stays inactive and its other settings are not edited.",
+        notes=(
+            "Labels do not change how addresses are allocated, assigned or sent to RADIUS.",
+            "Labels can be edited again at any time.",
+        ),
+    ),
+    _guide(
         "cross-app-drift",
         "Network and access",
         "Review cross-app drift and router posture",
@@ -1622,6 +1640,24 @@ _ACTION_SPECS: dict[str, tuple[_ActionSpec, ...]] = {
             "know-fix-clears", "Know when a finding clears", 4, permission="router:read"
         ),
     ),
+    "ip-pool-labels": (
+        _action(
+            "find-unlabelled-pools",
+            "Find unlabelled pools",
+            0,
+            4,
+            permission="network:ip:read",
+        ),
+        _action(
+            "label-a-pool",
+            "Label a pool",
+            1,
+            2,
+            3,
+            5,
+            permission="network:ip:write",
+        ),
+    ),
     "cross-app-drift": (
         _action("review-drift", "Review drift findings", 0, 1),
         _action("review-router-posture", "Review router posture", 2, 3),
@@ -2515,6 +2551,7 @@ HELP_NAVIGATION: tuple[AdminHelpNavigationSection, ...] = (
         (
             "network-access",
             "router-health",
+            "ip-pool-labels",
             "cross-app-drift",
             "olt-operational-health",
             "ont-wifi-pppoe-actions",
