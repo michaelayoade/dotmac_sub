@@ -209,8 +209,12 @@ def _json_mapping_list(value: str | None) -> tuple[dict[str, object], ...]:
     return tuple(dict(item) for item in parsed)
 
 
-def _uuid_form_value(value: str | None) -> UUID | None:
-    text = str(value or "").strip()
+def _uuid_form_value(value: object) -> UUID | None:
+    if isinstance(value, UUID):
+        return value
+    if not isinstance(value, str):
+        return None
+    text = value.strip()
     if not text:
         return None
     return UUID(text)

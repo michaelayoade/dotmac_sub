@@ -216,6 +216,7 @@ def test_locked_team_head_cannot_be_skipped_by_another_promotion_worker(engine):
                 person_id=agent.id,
                 status="online",
                 manual_override_status="online",
+                auto_offline=False,
                 max_concurrent_conversations=1,
                 last_seen_at=now,
             )

@@ -591,6 +591,8 @@ def test_customer_value_replacement_requires_explicit_confirmation(db_session):
 
 def test_customer_profile_rejects_future_date_of_birth(db_session):
     conversation, customer = _customer_conversation(db_session)
+    conversation_id = conversation.id
+    customer_id = customer.id
     db_session.commit()
 
     with pytest.raises(DomainError) as captured:
@@ -602,8 +604,8 @@ def test_customer_profile_rejects_future_date_of_birth(db_session):
                     scope="team-inbox:customer-profile-completion",
                     reason="pytest DOB validation",
                 ),
-                conversation_id=conversation.id,
-                customer_id=customer.id,
+                conversation_id=conversation_id,
+                customer_id=customer_id,
                 values=team_inbox_customer_completion.CustomerProfileValues(
                     date_of_birth="2999-01-01"
                 ),

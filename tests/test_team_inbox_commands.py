@@ -412,13 +412,13 @@ def test_reply_reassigns_conversation_from_offline_owner(
 
 
 def test_successful_reply_refreshes_online_actor_presence(monkeypatch, db_session):
-    stale_seen_at = datetime.now(UTC) - timedelta(minutes=20)
+    prior_seen_at = datetime.now(UTC) - timedelta(seconds=20)
     conversation = _conversation(db_session)
     conversation_id = conversation.id
     actor_id = _eligible_actor(
         db_session,
         conversation,
-        last_seen_at=stale_seen_at,
+        last_seen_at=prior_seen_at,
     )
     db_session.commit()
     presence = db_session.query(InboxAgentPresence).filter_by(person_id=actor_id).one()
@@ -457,7 +457,7 @@ def test_successful_reply_refreshes_online_actor_presence(monkeypatch, db_sessio
     assert refreshed_seen_at is not None
     if refreshed_seen_at.tzinfo is None:
         refreshed_seen_at = refreshed_seen_at.replace(tzinfo=UTC)
-    assert refreshed_seen_at > stale_seen_at
+    assert refreshed_seen_at > prior_seen_at
 
 
 @pytest.mark.parametrize(
