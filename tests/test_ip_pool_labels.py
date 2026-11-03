@@ -143,37 +143,20 @@ def test_migration_is_single_head_child_of_702() -> None:
 # --- model -----------------------------------------------------------------
 
 
-def _bare_engine(*tables):
-    """Isolated SQLite engine so constraint violations need no session rollback."""
-    from sqlalchemy import create_engine
-
-    engine = create_engine("sqlite+pysqlite://")
-    for table in tables:
-        table.create(engine)
-    return engine
-
-
-def test_model_check_constraint_declared_and_enforced() -> None:
+def test_model_check_constraint_declared_and_enforced(db_session) -> None:
     from sqlalchemy import insert
 
     assert "ck_ip_pools_purpose" in {c.name for c in IpPool.__table__.constraints}
-    engine = _bare_engine(IpPool.__table__)
     for n, purpose in enumerate(
         (None, "customer", "customer_nat", "infrastructure", "management")
     ):
-        with engine.begin() as conn:
-            conn.execute(
-                insert(IpPool.__table__).values(
-                    id=uuid.uuid4(),
-                    name=f"ok-{n}",
-                    cidr="192.0.2.0/24",
-                    purpose=purpose,
-                )
-            )
-    with pytest.raises(IntegrityError), engine.begin() as conn:
-        conn.execute(
+        _pool(db_session, f"ok-{n}", f"192.0.{n}.0/24", purpose=purpose)
+    # Last statement of the test: the failed insert aborts the transaction,
+    # which the fixture rolls back at teardown.
+    with pytest.raises(IntegrityError):
+        db_session.connection().execute(
             insert(IpPool.__table__).values(
-                id=uuid.uuid4(), name="bad", cidr="192.0.2.0/24", purpose="bogus"
+                id=uuid.uuid4(), name="bad", cidr="198.51.100.0/24", purpose="bogus"
             )
         )
 
