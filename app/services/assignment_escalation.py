@@ -52,6 +52,7 @@ CODE_PREFIX = "auth.assignment_escalation"
 EXCEEDS = f"{CODE_PREFIX}.exceeds_actor_permissions"
 SELF = f"{CODE_PREFIX}.self_assignment"
 UNKNOWN_ACTOR = f"{CODE_PREFIX}.unknown_actor"
+ADMIN_REFUSED = f"{CODE_PREFIX}.admin_or_admin_only_role_refused"
 
 
 class AssignmentEscalationError(DomainError):
@@ -249,10 +250,21 @@ def enforce_api_key_scopes(
     authority = resolve_actor(db, actor_type=actor_type, actor_id=actor_id)
     if authority.exempt or authority.admin:
         return
+    # Keys that cover rbac:assign are themselves a grant path (machine callers
+    # of /staff skip the subset rule), so only admins may mint or touch them.
+    privileged = [
+        scope
+        for scope in requested
+        if permission_keys_allow(frozenset({scope}), "rbac:assign")
+    ]
+    if privileged:
+        raise AssignmentEscalationError(
+            code=ADMIN_REFUSED,
+            message="Only an administrator may create or change API keys that cover rbac:assign.",
+            details={"permission_keys": sorted(set(privileged))},
+            retryable=False,
+        )
     enforce_key_subset(authority, requested)
-
-
-ADMIN_REFUSED = f"{CODE_PREFIX}.admin_or_admin_only_role_refused"
 
 
 def enforce_machine_role_grant(

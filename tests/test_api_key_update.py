@@ -60,9 +60,12 @@ def test_update_state_audit_and_safe_evidence(
             command, actor=actor, context=replace(command.context, actor=actor.actor_id)
         )
     if api_key_actor:
+        # SUB-1: a non-admin (API-key) actor may not set rbac-covering scopes.
         persist_wildcard_api_key_actor(db_session, command.actor.actor_id)
-    else:
-        persist_admin_actor(db_session, command.actor.actor_id)
+        with pytest.raises(owner.ApiKeyUpdateError):
+            owner.update(db_session, command=command)
+        return
+    persist_admin_actor(db_session, command.actor.actor_id)
     with trace_transactions(db_session.get_bind().engine) as trace:
         outcome = owner.update(db_session, command=command)
     assert_protected_tx(trace.result, protected_tables=frozenset({"api_keys"}))

@@ -612,3 +612,107 @@ def test_machine_callers_skip_subset_but_not_admin_admin_only_or_self(db_session
     with pytest.raises(assignment_escalation.AssignmentEscalationError) as exc:
         sync(key_owner, sub_name)
     assert exc.value.code == SELF
+
+
+# ---- rbac-covering API keys are admin-only ------------------------------------
+
+
+def test_only_admins_touch_api_keys_covering_rbac_assign(db_session):
+    f = _fixture(db_session)
+    p1 = db_session.get(Permission, f["p1"]).key
+    # A non-admin who genuinely holds rbac:assign plus the wildcard-free p1.
+    rbac_perm = db_session.query(Permission).filter_by(key="rbac:assign").first()
+    if rbac_perm is None:
+        rbac_perm = Permission(key="rbac:assign", is_active=True)
+        db_session.add(rbac_perm)
+        db_session.commit()
+    holder = _staff_actor(db_session, [f["p1"], rbac_perm.id])
+    actor = AuditActor.user(str(holder))
+    for scope in ("rbac:assign", "rbac:*", "*"):
+        with pytest.raises(keys.ApiKeyIssuanceError) as exc:
+            keys.create(_idle(db_session), command=_issue_cmd(actor, [scope]))
+        assert exc.value.code == assignment_escalation.ADMIN_REFUSED
+    with pytest.raises(keys.ApiKeyIssuanceError):
+        keys.generate(
+            _idle(db_session), command=_issue_cmd(actor, ["rbac:assign"], generate=True)
+        )
+    with pytest.raises(keys.WebApiKeyError):
+        keys.web_create(
+            _idle(db_session),
+            command=keys.WebCreateApiKeyCommand(
+                context=CommandContext.system(
+                    actor=f"user:{holder}", scope=keys.WEB_CREATE_SCOPE, reason="t"
+                ),
+                actor=actor,
+                subscriber_id=None,
+                label="k",
+                scopes=("rbac:assign",),
+            ),
+        )
+    # Unaffected: a key without rbac scopes.
+    assert keys.create(_idle(db_session), command=_issue_cmd(actor, [p1])).scopes == (
+        p1,
+    )
+
+    priv = ApiKey(key_hash=f"h-{uuid4().hex}", scopes=["rbac:assign"], is_active=True)
+    plain = ApiKey(key_hash=f"h-{uuid4().hex}", scopes=[p1], is_active=True)
+    db_session.add_all((priv, plain))
+    db_session.commit()
+    F = keys.ApiKeyUpdateField
+
+    def update(who, key_id, fields, **kw):
+        return keys.update(
+            _idle(db_session),
+            command=keys.UpdateApiKeyCommand(
+                context=CommandContext.system(
+                    actor=str(who.actor_id), scope=keys.UPDATE_SCOPE, reason="t"
+                ),
+                key_id=key_id,
+                actor=who,
+                fields=frozenset(fields),
+                **kw,
+            ),
+        )
+
+    with pytest.raises(keys.ApiKeyUpdateError):  # extend scopes
+        update(actor, plain.id, [F.SCOPES], scopes=(p1, "rbac:assign"))
+    with pytest.raises(keys.ApiKeyUpdateError):  # re-secret a privileged key
+        update(actor, priv.id, [F.KEY_HASH], supplied_secret="x")
+    assert update(actor, plain.id, [F.KEY_HASH], supplied_secret="ok").key_hash
+    admin = AuditActor.user(str(_admin_actor(db_session)))
+    assert keys.create(
+        _idle(db_session), command=_issue_cmd(admin, ["rbac:assign"])
+    ).scopes == ("rbac:assign",)
+    assert update(admin, priv.id, [F.KEY_HASH], supplied_secret="admin-ok").key_hash
+
+
+# ---- HTTP actor-context builders never emit system:/service: -------------------
+
+
+def test_http_actor_context_builders_emit_only_user_or_api_key():
+    from types import SimpleNamespace
+
+    from app.api import rbac as rbac_api
+    from app.api import staff_sync
+    from app.web.admin import resellers as reseller_web
+    from app.web.admin import system as system_web
+
+    # Builders found: rbac._context, staff_sync._context/_actor,
+    # system._system_command_context (staff create, assignments, API-key web
+    # create), resellers._command_context.
+    for principal_type in ("api_key", "system_user", "subscriber", "service", "system"):
+        auth = {"principal_id": str(uuid4()), "principal_type": principal_type}
+        request = SimpleNamespace(state=SimpleNamespace(auth=auth, actor_id=None))
+        actors = [
+            rbac_api._context(auth, scope="rbac:assign", reason="t", key="k").actor,
+            staff_sync._context(auth, reason="t", idempotency_key="k").actor,
+            staff_sync._actor(auth),
+            system_web._system_command_context(
+                request, reason="t", idempotency_key="k"
+            ).actor,
+            reseller_web._command_context(
+                auth, scope="rbac:assign", reason="t", idempotency_key="k"
+            ).actor,
+        ]
+        for actor in actors:
+            assert actor.partition(":")[0] in {"user", "api_key"}, actor
