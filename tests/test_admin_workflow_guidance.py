@@ -436,7 +436,7 @@ def test_period_review_guidance_explains_manual_approval_and_reserved_cash() -> 
 
 def test_every_help_guide_has_complete_action_sections() -> None:
     guides = (*WORKFLOW_GUIDANCE, *HELP_ONLY_GUIDANCE)
-    assert len(guides) == 66
+    assert len(guides) == 67
     for guide in guides:
         actions = help_actions_for(guide)
         assert actions, guide.id
@@ -584,3 +584,13 @@ def test_installed_talk_guide_explains_save_validation_and_unchanged_delivery():
     assert "both settings and secrets write access" in content
     assert "without sending a notification" in content
     assert "global notification setting unchanged" in content
+
+
+def test_ip_pool_labelling_guide_is_route_specific() -> None:
+    from app.services import admin_workflow_guidance as guidance
+
+    guide = guidance.guidance_for_path("/admin/network/ip-management/pools")
+    assert guide is not None and guide.id == "ip-pool-labels"
+    content = " ".join((guide.purpose, *guide.steps, *guide.notes))
+    for needle in ("NAT", "main site", "Unlabelled", "inactive"):
+        assert needle in content

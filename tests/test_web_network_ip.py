@@ -4,6 +4,7 @@ import uuid
 from pathlib import Path
 from types import SimpleNamespace
 
+import pytest
 from starlette.requests import Request
 
 from app.models.network import (
@@ -43,6 +44,21 @@ class FakeSession:
 
     def commit(self):
         self.commits += 1
+
+
+@pytest.fixture(autouse=True)
+def _stub_pool_label_rows(monkeypatch):
+    """These tests use a query-only FakeSession; label rows have their own tests."""
+    from app.services import ip_pool_labels
+
+    monkeypatch.setattr(
+        ip_pool_labels,
+        "build_pool_label_rows",
+        lambda _db, pools: {
+            str(pool.id): ip_pool_labels.PoolLabelRow(None, None, None, 0, True)
+            for pool in pools
+        },
+    )
 
 
 def _request(path: str = "/admin/network/ip-management") -> Request:
