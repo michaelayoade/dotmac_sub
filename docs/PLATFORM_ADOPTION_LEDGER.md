@@ -1805,3 +1805,11 @@ changes grants, roles or RLS. Sub's reviewed lineage-entry participant
 (`scripts/migration/kernel_lineage_entry.py`, still not composed or run by any
 deployment path) is re-measured to the 30 a107 revisions. No source, schema,
 runtime composition or authority change is included.
+
+The guarded transitive kernel module snapshot grows by four at a107:
+`request_evidence` (reached via `assembly` and `platform_auth`), `logging`
+(reached via `request_evidence` and `errors`; import-time inert: it defines a
+context variable, a formatter and the `setup_logging` function and configures
+nothing, so Sub's logging is unchanged), and `_identity_operation` and
+`_identity_persistence` (reached via `external_identity`). They are loaded, not
+used: `app/` imports none of them and no kernel middleware is mounted.

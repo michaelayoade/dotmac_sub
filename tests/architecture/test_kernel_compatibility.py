@@ -118,6 +118,14 @@ KERNEL_SOURCE = "forgejo"
 #: classifies savepoint conflicts inside the billing writer's own calls; Sub
 #: constructs no transaction owner from it.
 #:
+#: The a107 pin (SUB-3) widens the snapshot by four, all reached through
+#: already-admitted modules: `request_evidence` via `assembly` (TrustedProxyPolicy)
+#: and `platform_auth`; `logging` via `request_evidence` and `errors` (it only
+#: defines a context variable, a formatter and a `setup_logging` function, and
+#: nothing runs at import, so Sub's logging configuration is unchanged);
+#: `_identity_operation` and `_identity_persistence` via `external_identity`.
+#: Sub imports none of them and mounts no kernel middleware.
+#:
 #: Being LOADED is not being USED: a module in `sys.modules` creates no second
 #: authority, mounts no route, and answers no question Sub asks. The sibling
 #: test below proves that separately, on middleware and routes. But the cost of
@@ -130,6 +138,8 @@ KERNEL_SOURCE = "forgejo"
 #: of these — that list is `ALLOWED_KERNEL_MODULES`, and it is the boundary.
 TRANSITIVE_KERNEL_MODULES = frozenset(
     {
+        "dotmac_kernel._identity_operation",
+        "dotmac_kernel._identity_persistence",
         "dotmac_kernel._transactions",
         "dotmac_kernel.audit",
         "dotmac_kernel.audit_actions",
@@ -152,6 +162,7 @@ TRANSITIVE_KERNEL_MODULES = frozenset(
         "dotmac_kernel.idempotency",
         "dotmac_kernel.idempotency_models",
         "dotmac_kernel.identity",
+        "dotmac_kernel.logging",
         "dotmac_kernel.machine_auth",
         "dotmac_kernel.machine_models",
         "dotmac_kernel.machine_rotation",
@@ -177,6 +188,7 @@ TRANSITIVE_KERNEL_MODULES = frozenset(
         "dotmac_kernel.product_database_catalog",
         "dotmac_kernel.product_manifest",
         "dotmac_kernel.query",
+        "dotmac_kernel.request_evidence",
         "dotmac_kernel.route_metadata",
         "dotmac_kernel.semantic_encoding",
         "dotmac_kernel.security",
