@@ -789,7 +789,7 @@ def customer_statement_pdf(
         )
     selected, _, _ = _customer_statement_account(db, customer, account_id)
     try:
-        statement = statement_service.read_customer_statement(
+        document = statement_service.read_customer_statement_document(
             db,
             query=statement_service.CustomerStatementQuery(
                 account_id=selected,
@@ -800,7 +800,7 @@ def customer_statement_pdf(
                 ),
             ),
         )
-        content = statement_service.render_statement_pdf(statement)
+        content = statement_service.render_statement_pdf(document)
     except statement_service.CustomerStatementError as exc:
         raise HTTPException(status_code=400, detail=exc.message) from exc
     except Exception as exc:
@@ -813,7 +813,7 @@ def customer_statement_pdf(
         media_type="application/pdf",
         headers={
             "Content-Disposition": build_content_disposition(
-                statement_service.statement_filename(statement)
+                statement_service.statement_filename(document.statement)
             ),
             "Cache-Control": "private, no-store",
         },

@@ -18,6 +18,11 @@ from sqlalchemy.orm import Session
 
 from app.models.subscriber import Subscriber
 from app.services import display_format
+from app.services.brand_profiles import (
+    resolve_brand,
+    resolve_brand_logo_source,
+)
+from app.services.brand_theme import generate_scale
 from app.services.customer_financial_ledger import list_customer_financial_events
 from app.services.customer_financial_position import (
     get_customer_receivable_summaries,
@@ -93,6 +98,29 @@ class CustomerStatement:
     rows: tuple[CustomerStatementRow, ...]
     generated_at: datetime
     before_opening_available: bool = False
+
+
+@dataclass(frozen=True, slots=True)
+class CustomerStatementBrand:
+    legal_name: str
+    product_name: str
+    tagline: str
+    primary_color: str
+    primary_dark_color: str
+    primary_tint_color: str
+    secondary_color: str
+    logo_source: str | None
+    support_email: str
+    support_phone: str
+    address_lines: tuple[str, ...]
+    source_scope: str
+    source_scope_id: str | None
+
+
+@dataclass(frozen=True, slots=True)
+class CustomerStatementDocument:
+    statement: CustomerStatement
+    brand: CustomerStatementBrand
 
 
 def statement_range(
@@ -221,6 +249,55 @@ def read_customer_statement(
     )
 
 
+def read_customer_statement_document(
+    db: Session, *, query: CustomerStatementQuery
+) -> CustomerStatementDocument:
+    """Compose canonical financial facts with the customer-facing brand."""
+    statement = read_customer_statement(db, query=query)
+    resolved = resolve_brand(db, subscriber_id=query.account_id)
+    primary_scale = generate_scale(resolved.primary_color)
+    secondary_scale = generate_scale(resolved.secondary_color)
+    address = resolved.legal_address or {}
+    city_line = " ".join(
+        part.strip()
+        for part in (
+            str(address.get("city") or ""),
+            str(address.get("postal_code") or ""),
+        )
+        if part.strip()
+    )
+    address_lines = tuple(
+        line
+        for line in (
+            str(address.get("street1") or "").strip(),
+            str(address.get("street2") or "").strip(),
+            city_line,
+            str(address.get("country") or "").strip(),
+        )
+        if line
+    )
+    return CustomerStatementDocument(
+        statement=statement,
+        brand=CustomerStatementBrand(
+            legal_name=(resolved.legal_name or resolved.product_name or resolved.name),
+            product_name=(resolved.product_name or resolved.name),
+            tagline=resolved.tagline,
+            primary_color=primary_scale[600],
+            primary_dark_color=primary_scale[900],
+            primary_tint_color=primary_scale[50],
+            secondary_color=secondary_scale[600],
+            logo_source=resolve_brand_logo_source(
+                db, configured_logo=resolved.logo_url
+            ),
+            support_email=resolved.support_email,
+            support_phone=resolved.support_phone,
+            address_lines=address_lines,
+            source_scope=resolved.source_scope,
+            source_scope_id=resolved.source_scope_id,
+        ),
+    )
+
+
 def statement_filename(statement: CustomerStatement) -> str:
     return (
         "account-statement-"
@@ -229,8 +306,11 @@ def statement_filename(statement: CustomerStatement) -> str:
     )
 
 
-def render_statement_html(statement: CustomerStatement) -> str:
+def render_statement_html(document: CustomerStatementDocument) -> str:
     """Build a printable, escaped view of the typed statement."""
+
+    statement = document.statement
+    brand = document.brand
 
     def money(value: Decimal | None, currency: str) -> str:
         return (
@@ -266,43 +346,222 @@ def render_statement_html(statement: CustomerStatement) -> str:
         "</tr>"
         for row in statement.rows
     )
-    activity_rows = rows or '<tr><td colspan="8">No activity in this period.</td></tr>'
-    return (
-        "<!doctype html><html><head><meta charset='utf-8'><style>"
-        "@page{size:A4 landscape;margin:16mm}body{font:11px Arial,sans-serif;color:#172323}"
-        "h1{font-size:22px}h2{font-size:15px;margin-top:22px}"
-        "table{width:100%;border-collapse:collapse;table-layout:fixed}"
-        "th,td{border-bottom:1px solid #dbe5e3;padding:6px;text-align:left;"
-        "vertical-align:top;overflow-wrap:anywhere}th{background:#eaf5ef}"
-        "thead{display:table-header-group}tr{break-inside:avoid}"
-        ".notice{padding:12px;background:#f4f6f5}"
-        "</style></head><body>"
-        "<h1>Account statement</h1>"
-        f"<p>Account: {escape(statement.account_label)}<br>"
-        f"Period: {statement.period.start_date.isoformat()} to "
-        f"{statement.period.end_date.isoformat()}</p>"
-        f"<p>Generated: {statement.generated_at.astimezone(statement.period.timezone).date().isoformat()} ({escape(statement.period.timezone.key)})</p>"
-        "<h2>Account summary</h2><table><thead><tr>"
-        "<th>Currency</th><th>Period opening</th><th>Activity</th>"
-        "<th>Period closing</th><th>Current amount owed</th>"
-        "<th>Current prepaid credit</th>"
-        f"</tr></thead><tbody>{summaries}</tbody></table>"
-        "<h2>History before the reviewed opening</h2>"
-        "<p class='notice'>Unavailable. Older transaction history is not included "
-        "in this statement.</p>"
-        "<h2>History after the reviewed opening</h2>"
-        "<table><thead><tr><th>Entry</th><th>Type</th>"
-        "<th>Source</th><th>Debit</th><th>Credit</th>"
-        "<th>Running balance</th><th>Description</th><th>Date</th></tr></thead>"
-        f"<tbody>{activity_rows}</tbody>"
-        "</table></body></html>"
+    activity_rows = rows or (
+        '<tr><td class="empty" colspan="8">No activity in this period.</td></tr>'
     )
+    legal_name = escape(brand.legal_name)
+    footer_name = (
+        brand.legal_name.replace("\\", "\\\\")
+        .replace('"', '\\"')
+        .replace("\r", " ")
+        .replace("\n", " ")
+    )
+    contact_parts = tuple(
+        value
+        for value in (
+            escape(brand.support_email.strip()),
+            escape(brand.support_phone.strip()),
+        )
+        if value
+    )
+    company_lines = "".join(
+        f"<div>{escape(line)}</div>" for line in brand.address_lines
+    )
+    contact_line = " &nbsp;&middot;&nbsp; ".join(contact_parts)
+    logo_markup = (
+        f'<img class="logo" src="{escape(brand.logo_source, quote=True)}" '
+        f'alt="{legal_name} logo">'
+        if brand.logo_source
+        else f'<div class="logo-fallback">{escape(brand.legal_name[:1].upper())}</div>'
+    )
+    generated = statement.generated_at.astimezone(statement.period.timezone)
+    generated_label = generated.strftime("%d %b %Y, %H:%M")
+    period_label = (
+        f"{statement.period.start_date.strftime('%d %b %Y')} &ndash; "
+        f"{statement.period.end_date.strftime('%d %b %Y')}"
+    )
+    return f"""<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>Account statement - {escape(statement.account_label)}</title>
+<style>
+  @page {{
+    size: A4 landscape;
+    margin: 13mm 13mm 17mm;
+    @bottom-left {{
+      content: "{footer_name}  |  Account statement";
+      color: #64748b;
+      font: 8px "DejaVu Sans", Arial, sans-serif;
+    }}
+    @bottom-right {{
+      content: "Page " counter(page) " of " counter(pages);
+      color: #64748b;
+      font: 8px "DejaVu Sans", Arial, sans-serif;
+    }}
+  }}
+  :root {{
+    --brand: {brand.primary_color};
+    --brand-dark: {brand.primary_dark_color};
+    --brand-tint: {brand.primary_tint_color};
+    --accent: {brand.secondary_color};
+    --ink: #0f172a;
+    --muted: #64748b;
+    --line: #dbe3ea;
+    --soft: #f8fafc;
+    --white: #ffffff;
+  }}
+  * {{ box-sizing: border-box; }}
+  body {{
+    margin: 0;
+    color: var(--ink);
+    background: var(--white);
+    font: 9.5px/1.45 "DejaVu Sans", Arial, sans-serif;
+  }}
+  .masthead {{
+    display: flex;
+    justify-content: space-between;
+    align-items: stretch;
+    min-height: 124px;
+    overflow: hidden;
+    border-radius: 14px;
+    background: var(--brand-dark);
+    color: var(--white);
+  }}
+  .company {{ display: flex; gap: 14px; padding: 19px 20px; max-width: 58%; }}
+  .logo {{
+    display: block;
+    max-width: 148px;
+    max-height: 54px;
+    padding: 6px 9px;
+    border-radius: 9px;
+    background: var(--white);
+    object-fit: contain;
+  }}
+  .logo-fallback {{
+    width: 50px;
+    height: 50px;
+    border: 1px solid rgba(255,255,255,.32);
+    border-radius: 12px;
+    background: rgba(255,255,255,.14);
+    font-size: 23px;
+    font-weight: 800;
+    line-height: 50px;
+    text-align: center;
+  }}
+  .company-copy {{ padding-top: 1px; }}
+  .legal-name {{ margin: 0 0 5px; font-size: 16px; font-weight: 750; }}
+  .tagline {{ margin: 0 0 9px; color: rgba(255,255,255,.82); }}
+  .company-detail {{ color: rgba(255,255,255,.9); font-size: 8.5px; }}
+  .statement-title {{
+    min-width: 37%;
+    padding: 19px 21px;
+    background: rgba(255,255,255,.1);
+    border-left: 1px solid rgba(255,255,255,.2);
+  }}
+  .eyebrow {{
+    margin: 0 0 4px;
+    color: rgba(255,255,255,.75);
+    font-size: 8px;
+    font-weight: 700;
+    letter-spacing: .18em;
+    text-transform: uppercase;
+  }}
+  h1 {{ margin: 0 0 13px; font-size: 24px; line-height: 1.05; }}
+  .meta {{ width: 100%; border-collapse: collapse; }}
+  .meta td {{ padding: 2px 0; border: 0; color: var(--white); }}
+  .meta td:first-child {{ width: 39%; color: rgba(255,255,255,.72); }}
+  .summary {{ margin-top: 13px; }}
+  .section-heading {{
+    margin: 16px 0 7px;
+    color: var(--brand-dark);
+    font-size: 12px;
+    font-weight: 800;
+  }}
+  table.data {{ width: 100%; border-collapse: collapse; table-layout: fixed; }}
+  table.data th, table.data td {{
+    padding: 6px 7px;
+    border-bottom: 1px solid var(--line);
+    text-align: left;
+    vertical-align: top;
+    overflow-wrap: anywhere;
+  }}
+  table.data th {{
+    background: var(--brand-tint);
+    color: var(--brand-dark);
+    font-size: 8px;
+    font-weight: 800;
+    letter-spacing: .02em;
+  }}
+  table.data tbody tr:nth-child(even) {{ background: var(--soft); }}
+  table.data thead {{ display: table-header-group; }}
+  table.data tr {{ break-inside: avoid; }}
+  .notice {{
+    margin: 0;
+    padding: 9px 11px;
+    border-left: 4px solid var(--accent);
+    border-radius: 4px;
+    background: var(--soft);
+    color: #475569;
+  }}
+  .empty {{ padding: 17px !important; color: var(--muted); text-align: center !important; }}
+  .activity th:nth-child(1) {{ width: 9%; }}
+  .activity th:nth-child(2) {{ width: 10%; }}
+  .activity th:nth-child(3) {{ width: 10%; }}
+  .activity th:nth-child(4), .activity th:nth-child(5) {{ width: 10%; }}
+  .activity th:nth-child(6) {{ width: 13%; }}
+  .activity th:nth-child(7) {{ width: 25%; }}
+  .activity th:nth-child(8) {{ width: 13%; }}
+</style>
+</head>
+<body>
+  <header class="masthead">
+    <div class="company">
+      <div>{logo_markup}</div>
+      <div class="company-copy">
+        <p class="legal-name">{legal_name}</p>
+        <p class="tagline">{escape(brand.tagline)}</p>
+        <div class="company-detail">{company_lines}</div>
+        <div class="company-detail">{contact_line}</div>
+      </div>
+    </div>
+    <div class="statement-title">
+      <p class="eyebrow">Official customer document</p>
+      <h1>Account statement</h1>
+      <table class="meta" role="presentation">
+        <tr><td>Account</td><td>{escape(statement.account_label)}</td></tr>
+        <tr><td>Statement period</td><td>{period_label}</td></tr>
+        <tr><td>Generated</td><td>{generated_label} ({escape(statement.period.timezone.key)})</td></tr>
+      </table>
+    </div>
+  </header>
+  <section class="summary">
+    <h2 class="section-heading">Account summary</h2>
+    <table class="data"><thead><tr>
+      <th>Currency</th><th>Period opening</th><th>Activity</th>
+      <th>Period closing</th><th>Current amount owed</th>
+      <th>Current prepaid credit</th>
+    </tr></thead><tbody>{summaries}</tbody></table>
+  </section>
+  <section>
+    <h2 class="section-heading">History before the reviewed opening</h2>
+    <p class="notice">Unavailable. Older transaction history is not included in this statement.</p>
+  </section>
+  <section>
+    <h2 class="section-heading">History after the reviewed opening</h2>
+    <table class="data activity"><thead><tr>
+      <th>Entry</th><th>Type</th><th>Source</th><th>Debit</th>
+      <th>Credit</th><th>Running balance</th><th>Description</th><th>Date</th>
+    </tr></thead><tbody>{activity_rows}</tbody></table>
+  </section>
+</body>
+</html>"""
 
 
-def render_statement_pdf(statement: CustomerStatement) -> bytes:
+def render_statement_pdf(document: CustomerStatementDocument) -> bytes:
     from app.services.billing_invoice_pdf import _ensure_weasyprint_pydyf_compat
 
     _ensure_weasyprint_pydyf_compat()
     from weasyprint import HTML
 
-    return HTML(string=render_statement_html(statement)).write_pdf()
+    return HTML(string=render_statement_html(document)).write_pdf()
