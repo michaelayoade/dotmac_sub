@@ -61,6 +61,35 @@
          x-show="contactTab === 'details'"
          role="tabpanel"
          aria-labelledby="contact-details-tab-{{ timeline.id }}">
+    {% if customer_history_brief %}
+    {% call ctx_section("Customer history brief") %}
+        {% if customer_history_brief.availability.value == 'available' %}
+        <div class="grid grid-cols-3 gap-2 text-center">
+            <div class="rounded-lg bg-slate-50 px-2 py-2 dark:bg-slate-900/60"><strong class="block text-sm text-slate-900 dark:text-white">{{ customer_history_brief.previous_conversation_count }}</strong><span class="text-[10px] text-slate-500">Earlier chats</span></div>
+            <div class="rounded-lg bg-slate-50 px-2 py-2 dark:bg-slate-900/60"><strong class="block text-sm text-slate-900 dark:text-white">{{ customer_history_brief.customer_message_count }}</strong><span class="text-[10px] text-slate-500">Customer messages</span></div>
+            <div class="rounded-lg bg-slate-50 px-2 py-2 dark:bg-slate-900/60"><strong class="block text-sm text-slate-900 dark:text-white">{{ customer_history_brief.agent_message_count }}</strong><span class="text-[10px] text-slate-500">Agent replies</span></div>
+        </div>
+        {% if customer_history_brief.latest_activity_at %}<p class="mt-2 text-[10px] text-slate-500">Updated through {{ ts(customer_history_brief.latest_activity_at) }}</p>{% endif %}
+        <ol class="mt-3 space-y-2" aria-label="Recent public conversation messages">
+            {% for item in customer_history_brief.recent_messages %}
+            <li class="rounded-lg border px-2.5 py-2 text-xs {% if item.direction == 'inbound' %}border-amber-200 bg-amber-50/60 dark:border-amber-900 dark:bg-amber-950/20{% else %}border-slate-200 bg-slate-50 dark:border-slate-700 dark:bg-slate-900/60{% endif %}">
+                <div class="flex items-center justify-between gap-2 text-[10px] font-semibold uppercase tracking-wide text-slate-500"><span>{{ 'Customer' if item.direction == 'inbound' else 'Agent' }}</span><span>{{ ts(item.occurred_at) }}</span></div>
+                <p class="mt-1 whitespace-pre-wrap text-slate-800 dark:text-slate-200">{{ item.body }}</p>
+            </li>
+            {% endfor %}
+        </ol>
+        <p class="mt-2 text-[10px] text-slate-500">Source-backed public messages only. Private team notes are excluded.</p>
+        {% elif customer_history_brief.availability.value == 'empty' %}
+        <p class="text-xs text-slate-500">No public customer conversation messages yet.</p>
+        {% elif customer_history_brief.availability.value == 'not_calculated' %}
+        <p class="text-xs text-amber-700 dark:text-amber-300">Identity review is required before customer history can be combined.</p>
+        {% elif customer_history_brief.availability.value == 'restricted' %}
+        <p class="text-xs text-slate-500">Customer history is restricted.</p>
+        {% else %}
+        <p class="text-xs text-slate-500">Customer history is not available for this conversation.</p>
+        {% endif %}
+    {% endcall %}
+    {% endif %}
     {% set conversation_history_in_tab = true %}
     {% include "admin/inbox/_authoritative_context.html" %}
 
@@ -184,6 +213,8 @@
             <div class="flex justify-between gap-2"><dt class="text-slate-500">Last activity</dt><dd class="text-slate-800 dark:text-slate-200">{{ ts(timeline.last_message_at) }}</dd></div>
         </dl>
     {% endcall %}
+
+    {% include "admin/customers/_custom_fields.html" %}
 
     {% call ctx_section("Assignments") %}
         {% set active_assignments = timeline.assignments | selectattr('is_active') | list %}

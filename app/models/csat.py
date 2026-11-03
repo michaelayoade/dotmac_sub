@@ -62,6 +62,7 @@ class SupportCsatRequest(Base):
         Index("ix_support_csat_customer", "customer_id"),
         Index("ix_support_csat_agent_submitted", "agent_person_id", "submitted_at"),
         Index("ix_support_csat_team_submitted", "service_team_id", "submitted_at"),
+        Index("ix_support_csat_channel_resolution", "source_channel", "resolution_at"),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(
@@ -82,6 +83,7 @@ class SupportCsatRequest(Base):
     agent_display_name: Mapped[str | None] = mapped_column(String(180))
     service_team_id: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
     service_team_name: Mapped[str | None] = mapped_column(String(180))
+    source_channel: Mapped[str | None] = mapped_column(String(40))
 
     status: Mapped[str] = mapped_column(
         String(24),

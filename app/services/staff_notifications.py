@@ -26,7 +26,7 @@ from app.models.rbac import (
 )
 from app.models.service_team import ServiceTeam, ServiceTeamMember
 from app.models.system_user import SystemUser
-from app.schemas.notification import NotificationCreate
+from app.schemas.notification import NotificationCreate, PushIntent
 from app.services import admin_alerts
 from app.services.branding_config import get_brand
 from app.services.domain_errors import DomainError
@@ -111,6 +111,7 @@ class StaffAssignmentEventType(StrEnum):
 
     ticket_assignment = "ticket.assignment"
     project_assignment = "project.assignment"
+    team_inbox_assignment = "team_inbox.assignment"
 
 
 @dataclass(frozen=True, slots=True)
@@ -134,6 +135,21 @@ class StaffAssignmentNotificationResult:
     email_notification_ids: tuple[UUID, ...]
 
 
+def _assignment_push_intent(
+    command: StageStaffAssignmentNotifications,
+) -> PushIntent | None:
+    """Return the closed mobile navigation intent for supported assignments."""
+
+    if command.event_type is not StaffAssignmentEventType.team_inbox_assignment:
+        return None
+    return PushIntent(
+        intent_code="chat.message",
+        subject_kind="conversation",
+        subject_id=str(command.source_entity_id),
+        collapse_key=f"inbox-assignment:{command.source_entity_id}",
+    )
+
+
 def _raise_assignment_replay_conflict() -> None:
     raise StaffNotificationError(
         code="communications.staff_notifications.assignment_replay_conflict",
@@ -148,6 +164,7 @@ def _validate_notification_replay(
     recipient: str,
 ) -> None:
     metadata = dict(notification.metadata_ or {})
+    push_intent = _assignment_push_intent(command)
     if (
         notification.recipient != recipient
         or notification.subject != command.subject
@@ -156,6 +173,15 @@ def _validate_notification_replay(
         or metadata.get("source_event_id") != str(command.source_event_id)
         or metadata.get("source_entity_id") != str(command.source_entity_id)
         or metadata.get("target_url") != command.target_url
+        or (
+            notification.channel is NotificationChannel.push
+            and metadata.get("push_intent")
+            != (
+                push_intent.model_dump(mode="json", exclude_none=True)
+                if push_intent is not None
+                else None
+            )
+        )
     ):
         _raise_assignment_replay_conflict()
 
@@ -343,6 +369,25 @@ def _validate_assignment_notification(
         )
 
 
+def _assignment_channel_preferences(
+    db: Session,
+    *,
+    user_id: UUID,
+    event_type: StaffAssignmentEventType,
+) -> tuple[bool, bool]:
+    """Resolve per-agent channel choices for events that expose them."""
+
+    if event_type is not StaffAssignmentEventType.team_inbox_assignment:
+        return True, True
+    from app.services import team_inbox_agent_introduction
+
+    preference = team_inbox_agent_introduction.preference_for_agent(db, user_id)
+    return (
+        preference.assignment_in_app_notifications,
+        preference.assignment_email_notifications,
+    )
+
+
 def stage_staff_assignment_notifications(
     db: Session,
     command: StageStaffAssignmentNotifications,
@@ -366,7 +411,11 @@ def stage_staff_assignment_notifications(
     email_notification_ids: list[UUID] = []
     category = (
         "support"
-        if command.event_type is StaffAssignmentEventType.ticket_assignment
+        if command.event_type
+        in {
+            StaffAssignmentEventType.ticket_assignment,
+            StaffAssignmentEventType.team_inbox_assignment,
+        }
         else "operations"
     )
 
@@ -376,71 +425,91 @@ def stage_staff_assignment_notifications(
             user.person_party_id,
         }:
             continue
-        push_dedupe_key = _assignment_notification_dedupe_key(
-            command,
-            system_user_id=user.id,
-            channel=NotificationChannel.push,
+        in_app_enabled, email_enabled = _assignment_channel_preferences(
+            db,
+            user_id=user.id,
+            event_type=command.event_type,
         )
-        push_notification = (
-            db.query(Notification)
-            .filter(Notification.channel == NotificationChannel.push)
-            .filter(Notification.dedupe_key == push_dedupe_key)
-            .one_or_none()
-        )
-        if push_notification is None:
-            push_notification = queue_staff_notification(
-                db,
-                channel=NotificationChannel.push,
-                recipient=str(user.id),
-                subject=command.subject,
-                body=command.body,
-                delivered=True,
-                event_type=command.event_type.value,
-                category=category,
-                audience_type="system_user",
-                audience_id=user.id,
-                metadata={
-                    "source_event_id": str(command.source_event_id),
-                    "source_entity_id": str(command.source_entity_id),
-                    "target_url": command.target_url,
-                    "internal_only": True,
-                },
-            )
-            if push_notification is None:  # pragma: no cover - IDs are validated.
-                continue
-            push_notification.dedupe_key = push_dedupe_key
-        else:
-            _validate_notification_replay(
-                push_notification,
+        channel_staged = False
+        if in_app_enabled:
+            push_intent = _assignment_push_intent(command)
+            push_dedupe_key = _assignment_notification_dedupe_key(
                 command,
-                recipient=str(user.id),
+                system_user_id=user.id,
+                channel=NotificationChannel.push,
             )
-
-        admin_notification = (
-            db.query(AdminNotification)
-            .filter(AdminNotification.source_notification_id == push_notification.id)
-            .one_or_none()
-        )
-        if admin_notification is None:
-            db.add(
-                AdminNotification(
-                    source_notification_id=push_notification.id,
-                    system_user_id=user.id,
-                    title=command.subject[:180],
+            push_notification = (
+                db.query(Notification)
+                .filter(Notification.channel == NotificationChannel.push)
+                .filter(Notification.dedupe_key == push_dedupe_key)
+                .one_or_none()
+            )
+            if push_notification is None:
+                push_notification = queue_staff_notification(
+                    db,
+                    channel=NotificationChannel.push,
+                    recipient=str(user.id),
+                    subject=command.subject,
                     body=command.body,
-                    target_url=command.target_url,
+                    delivered=push_intent is None,
+                    event_type=command.event_type.value,
+                    category=category,
+                    audience_type="system_user",
+                    audience_id=user.id,
+                    metadata={
+                        "source_event_id": str(command.source_event_id),
+                        "source_entity_id": str(command.source_entity_id),
+                        "target_url": command.target_url,
+                        "internal_only": True,
+                        **(
+                            {
+                                "push_intent": push_intent.model_dump(
+                                    mode="json", exclude_none=True
+                                )
+                            }
+                            if push_intent is not None
+                            else {}
+                        ),
+                    },
                 )
-            )
-        elif (
-            admin_notification.system_user_id != user.id
-            or admin_notification.title != command.subject[:180]
-            or admin_notification.body != command.body
-            or admin_notification.target_url != command.target_url
-        ):
-            _raise_assignment_replay_conflict()
-        push_notification_ids.append(push_notification.id)
+                if push_notification is None:  # pragma: no cover
+                    continue
+                push_notification.dedupe_key = push_dedupe_key
+            else:
+                _validate_notification_replay(
+                    push_notification,
+                    command,
+                    recipient=str(user.id),
+                )
 
-        if user.email:
+            admin_notification = (
+                db.query(AdminNotification)
+                .filter(
+                    AdminNotification.source_notification_id == push_notification.id
+                )
+                .one_or_none()
+            )
+            if admin_notification is None:
+                db.add(
+                    AdminNotification(
+                        source_notification_id=push_notification.id,
+                        system_user_id=user.id,
+                        title=command.subject[:180],
+                        body=command.body,
+                        target_url=command.target_url,
+                    )
+                )
+            elif (
+                admin_notification.system_user_id != user.id
+                or admin_notification.title != command.subject[:180]
+                or admin_notification.body != command.body
+                or admin_notification.target_url != command.target_url
+            ):
+                _raise_assignment_replay_conflict()
+            push_notification_ids.append(push_notification.id)
+            channel_staged = True
+
+        if email_enabled and user.email:
             email_dedupe_key = _assignment_notification_dedupe_key(
                 command,
                 system_user_id=user.id,
@@ -480,8 +549,10 @@ def stage_staff_assignment_notifications(
                 )
             if email_notification is not None:
                 email_notification_ids.append(email_notification.id)
+                channel_staged = True
 
-        notified_user_ids.append(user.id)
+        if channel_staged:
+            notified_user_ids.append(user.id)
 
     db.flush()
     return StaffAssignmentNotificationResult(

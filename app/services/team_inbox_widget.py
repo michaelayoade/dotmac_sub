@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 import uuid
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -13,6 +14,7 @@ from jose import JWTError, jwt
 from sqlalchemy.orm import Session
 
 from app.config import settings
+from app.models.domain_settings import SettingDomain
 from app.models.party import PartyContactPointType, PartyType
 from app.models.sales import LeadCaptureMethod, LeadSourcePlatform
 from app.models.subscriber import Reseller, ResellerUser, Subscriber
@@ -33,6 +35,7 @@ from app.schemas.sales import (
 from app.services import auth_flow as auth_flow_service
 from app.services import (
     conversation_lead_relationships,
+    settings_spec,
     team_inbox_channel_receive,
     team_inbox_customer_completion_policy,
     team_inbox_media,
@@ -67,6 +70,20 @@ _WIDGET_COMMAND = OwnerCommandDefinition(
     name="execute_team_inbox_widget_command",
 )
 
+WIDGET_PRESENTATION_SETTING_KEYS = (
+    "inbox_widget_title",
+    "inbox_widget_subtitle",
+    "inbox_widget_intro",
+    "inbox_widget_brand_color",
+    "inbox_widget_position",
+    "inbox_widget_offset_x",
+    "inbox_widget_offset_y",
+    "inbox_widget_start_button_text",
+    "inbox_widget_send_button_text",
+    "inbox_widget_message_placeholder",
+    "inbox_widget_agent_name",
+)
+
 
 class TeamInboxWidgetError(DomainError):
     """Stable visitor-widget failure mapped by transport adapters."""
@@ -74,6 +91,126 @@ class TeamInboxWidgetError(DomainError):
 
 def _error(suffix: str, message: str) -> TeamInboxWidgetError:
     return TeamInboxWidgetError(code=f"{OWNER}.{suffix}", message=message)
+
+
+@dataclass(frozen=True, slots=True)
+class FiberWidgetPresentationQuery:
+    surface: str = "fiber_public"
+
+
+@dataclass(frozen=True, slots=True)
+class FiberWidgetPresentation:
+    title: str
+    subtitle: str
+    intro: str
+    brand_color: str
+    position: str
+    offset_x: int
+    offset_y: int
+    start_button_text: str
+    send_button_text: str
+    message_placeholder: str
+    agent_name: str
+
+    def as_response(self) -> dict[str, object]:
+        return {
+            "title": self.title,
+            "subtitle": self.subtitle,
+            "intro": self.intro,
+            "brandColor": self.brand_color,
+            "position": self.position,
+            "offsetX": self.offset_x,
+            "offsetY": self.offset_y,
+            "startButtonText": self.start_button_text,
+            "sendButtonText": self.send_button_text,
+            "messagePlaceholder": self.message_placeholder,
+            "agentName": self.agent_name,
+        }
+
+
+def _presentation_text(value: object, *, key: str, max_length: int) -> str:
+    fallback = str(_presentation_default(key))
+    normalized = str(value or "").strip()
+    return (normalized or fallback)[:max_length]
+
+
+def _presentation_offset(value: object, *, key: str) -> int:
+    try:
+        normalized = int(value)
+    except (TypeError, ValueError):
+        normalized = int(_presentation_default(key))
+    return max(8, min(96, normalized))
+
+
+def _presentation_default(key: str) -> object:
+    spec = settings_spec.get_spec(SettingDomain.comms, key)
+    if spec is None or key not in WIDGET_PRESENTATION_SETTING_KEYS:
+        raise RuntimeError(f"Missing canonical widget setting specification: {key}")
+    return spec.default
+
+
+def fiber_widget_presentation(
+    db: Session, query: FiberWidgetPresentationQuery
+) -> FiberWidgetPresentation:
+    """Return the safe public presentation subset for one registered surface."""
+
+    if query.surface != "fiber_public":
+        raise _error("unsupported_surface", "Widget surface is not supported")
+    values = {
+        key: _presentation_default(key) for key in WIDGET_PRESENTATION_SETTING_KEYS
+    }
+    values.update(
+        settings_spec.resolve_values_atomic(
+            db, SettingDomain.comms, list(WIDGET_PRESENTATION_SETTING_KEYS)
+        )
+    )
+    color = str(values["inbox_widget_brand_color"] or "").strip().lower()
+    if re.fullmatch(r"#[0-9a-f]{6}", color) is None:
+        color = str(_presentation_default("inbox_widget_brand_color"))
+    position = str(values["inbox_widget_position"] or "").strip().lower()
+    if position not in {"left", "right"}:
+        position = str(_presentation_default("inbox_widget_position"))
+    return FiberWidgetPresentation(
+        title=_presentation_text(
+            values["inbox_widget_title"], key="inbox_widget_title", max_length=80
+        ),
+        subtitle=_presentation_text(
+            values["inbox_widget_subtitle"],
+            key="inbox_widget_subtitle",
+            max_length=120,
+        ),
+        intro=_presentation_text(
+            values["inbox_widget_intro"], key="inbox_widget_intro", max_length=240
+        ),
+        brand_color=color,
+        position=position,
+        offset_x=_presentation_offset(
+            values["inbox_widget_offset_x"], key="inbox_widget_offset_x"
+        ),
+        offset_y=_presentation_offset(
+            values["inbox_widget_offset_y"], key="inbox_widget_offset_y"
+        ),
+        start_button_text=_presentation_text(
+            values["inbox_widget_start_button_text"],
+            key="inbox_widget_start_button_text",
+            max_length=60,
+        ),
+        send_button_text=_presentation_text(
+            values["inbox_widget_send_button_text"],
+            key="inbox_widget_send_button_text",
+            max_length=40,
+        ),
+        message_placeholder=_presentation_text(
+            values["inbox_widget_message_placeholder"],
+            key="inbox_widget_message_placeholder",
+            max_length=120,
+        ),
+        agent_name=_presentation_text(
+            values["inbox_widget_agent_name"],
+            key="inbox_widget_agent_name",
+            max_length=80,
+        ),
+    )
 
 
 def _commit(db: Session, action: Callable[[], T]) -> T:
@@ -183,9 +320,21 @@ class WidgetMessageRead:
 @dataclass(frozen=True, slots=True)
 class WidgetMessageHistory:
     messages: tuple[WidgetMessageRead, ...]
+    satisfaction_eligible: bool = False
+    satisfaction_submitted: bool = False
+    satisfaction_style: str = "stars"
+    satisfaction_message: str = "How would you rate this conversation?"
 
     def as_response(self) -> dict[str, object]:
-        return {"messages": [message.as_response() for message in self.messages]}
+        return {
+            "messages": [message.as_response() for message in self.messages],
+            "satisfaction": {
+                "eligible": self.satisfaction_eligible,
+                "submitted": self.satisfaction_submitted,
+                "style": self.satisfaction_style,
+                "message": self.satisfaction_message,
+            },
+        }
 
 
 MAX_VISITOR_PHOTOS = 5
@@ -1003,6 +1152,24 @@ def list_session_messages(
     *,
     query: WidgetMessageHistoryQuery,
 ) -> WidgetMessageHistory:
+    from app.models.csat import CsatRequestStatus, CsatSourceType, SupportCsatRequest
+    from app.services import support_csat
+
+    conversation = db.get(InboxConversation, query.principal.conversation_id)
+    latest_csat = (
+        db.query(SupportCsatRequest)
+        .filter(
+            SupportCsatRequest.source_type == CsatSourceType.inbox_conversation.value,
+            SupportCsatRequest.source_id == query.principal.conversation_id,
+        )
+        .order_by(SupportCsatRequest.requested_at.desc(), SupportCsatRequest.id.desc())
+        .first()
+    )
+    survey_policy = (
+        support_csat.inbox_survey_policy(db, conversation)
+        if conversation is not None
+        else support_csat.InboxCsatPolicy(enabled=False)
+    )
     messages = (
         db.query(InboxMessage)
         .filter(InboxMessage.conversation_id == query.principal.conversation_id)
@@ -1028,7 +1195,20 @@ def list_session_messages(
             )
             for message in messages
             if message.direction != InboxMessageDirection.internal.value
-        )
+        ),
+        satisfaction_eligible=bool(
+            conversation is not None
+            and survey_policy.enabled
+            and conversation.status == InboxConversationStatus.resolved.value
+            and latest_csat is not None
+            and latest_csat.status == CsatRequestStatus.pending.value
+        ),
+        satisfaction_submitted=bool(
+            latest_csat is not None
+            and latest_csat.status == CsatRequestStatus.submitted.value
+        ),
+        satisfaction_style=survey_policy.style,
+        satisfaction_message=survey_policy.message,
     )
 
 

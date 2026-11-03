@@ -30,6 +30,7 @@ from app.models.system_user import SystemUser
 from app.models.team_inbox import (
     InboxAgentPresence,
     InboxAgentPresenceEvent,
+    InboxAgentPresenceSessionLease,
     InboxAgentPresenceStatus,
 )
 from app.services import auth_flow as auth_flow_service
@@ -1180,7 +1181,9 @@ def test_admin_login_mfa_verify_issues_tokens(db_session, monkeypatch):
     assert presence.manual_override_status is None
 
 
-def test_successful_staff_login_defaults_agent_presence_online(db_session, monkeypatch):
+def test_successful_staff_login_preserves_explicit_offline_presence(
+    db_session, monkeypatch
+):
     monkeypatch.setenv("JWT_SECRET", "test-secret")
     system_user, _credential = _system_user_with_credential(
         db_session, "admin-online-by-default@example.com"
@@ -1203,12 +1206,13 @@ def test_successful_staff_login_defaults_agent_presence_online(db_session, monke
     assert result["access_token"]
     session = db_session.query(AuthSession).one()
     presence = db_session.query(InboxAgentPresence).one()
-    event = db_session.query(InboxAgentPresenceEvent).one()
-    assert presence.status == InboxAgentPresenceStatus.online.value
-    assert presence.manual_override_status is None
-    assert presence.last_seen_at == session.created_at
-    assert event.reason_code == "staff_sign_in"
-    assert event.source_id == f"auth-session:{session.id}"
+    lease = db_session.query(InboxAgentPresenceSessionLease).one()
+    assert presence.status == InboxAgentPresenceStatus.offline.value
+    assert presence.manual_override_status == InboxAgentPresenceStatus.offline.value
+    assert presence.last_seen_at == prior_seen_at
+    assert lease.auth_session_id == session.id
+    assert lease.last_seen_at == session.created_at
+    assert db_session.query(InboxAgentPresenceEvent).count() == 0
 
 
 def test_successful_subscriber_login_does_not_create_agent_presence(

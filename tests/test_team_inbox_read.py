@@ -213,6 +213,53 @@ def test_list_conversations_filters_by_team_search_and_response_need(db_session)
     assert result.items[0].needs_response is True
 
 
+def test_search_maps_historical_message_hit_to_current_continuous_episode(
+    db_session,
+):
+    support = _team(db_session, "Continuous search")
+    base = datetime(2026, 7, 10, 8, 0, tzinfo=UTC)
+    historical = _conversation(
+        db_session,
+        support,
+        subject="Earlier support episode",
+        status=InboxConversationStatus.resolved.value,
+        first_at=base,
+    )
+    _message(
+        db_session,
+        historical,
+        direction=InboxMessageDirection.inbound.value,
+        body="The unique optical reference is ALPHA-742",
+        at=base,
+    )
+    current = _conversation(
+        db_session,
+        support,
+        subject="Current support episode",
+        first_at=base.replace(hour=9),
+    )
+    current.continued_from_conversation_id = historical.id
+    current.metadata_ = {"conversation_mode": "continuous"}
+    _message(
+        db_session,
+        current,
+        direction=InboxMessageDirection.inbound.value,
+        body="Following up",
+        at=base.replace(hour=9),
+    )
+    db_session.commit()
+
+    result = team_inbox_read.list_conversations(
+        db_session,
+        service_team_id=support.id,
+        search="ALPHA-742",
+        open_only=True,
+    )
+
+    assert result.count == 1
+    assert [item.id for item in result.items] == [str(current.id)]
+
+
 def test_list_conversations_filters_by_contact_resolution_status(db_session):
     support = _team(db_session, "Support")
     unmatched = _conversation(
@@ -240,6 +287,51 @@ def test_list_conversations_filters_by_contact_resolution_status(db_session):
     assert result.count == 1
     assert result.items[0].id == str(unmatched.id)
     assert result.items[0].contact_resolution_status == "unmatched"
+
+
+def test_list_conversations_keeps_latest_named_provider_identity(db_session):
+    support = _team(db_session, "Support")
+    conversation = _conversation(
+        db_session,
+        support,
+        subject="Provider identity",
+        contact_address="provider-123",
+    )
+    named = _message(
+        db_session,
+        conversation,
+        direction=InboxMessageDirection.inbound.value,
+        body="Hello",
+        at=datetime(2026, 7, 10, 8, 0, tzinfo=UTC),
+    )
+    named.metadata_ = {"from_name": "Ada Customer"}
+    _message(
+        db_session,
+        conversation,
+        direction=InboxMessageDirection.inbound.value,
+        body="Still there?",
+        at=datetime(2026, 7, 10, 8, 1, tzinfo=UTC),
+    )
+    _message(
+        db_session,
+        conversation,
+        direction=InboxMessageDirection.outbound.value,
+        body="Yes, how can we help?",
+        at=datetime(2026, 7, 10, 8, 2, tzinfo=UTC),
+    )
+    db_session.commit()
+
+    result = team_inbox_read.list_conversations(db_session)
+    timeline = team_inbox_read.get_conversation_timeline(
+        db_session,
+        conversation.id,
+        message_page=team_inbox_read.InboxTimelineMessagePageRequest(),
+    )
+
+    assert result.items[0].contact_name == "Ada Customer"
+    assert result.items[0].latest_message_body == "Yes, how can we help?"
+    assert timeline is not None
+    assert timeline.contact_name == "Ada Customer"
 
 
 def test_list_conversations_api_returns_list_response(db_session):
@@ -523,6 +615,130 @@ def test_conversation_timeline_returns_teams_assignments_and_messages(db_session
         timeline.messages[1].sender.source
         is team_inbox_read.InboxTimelineSenderSource.fallback
     )
+
+
+def test_conversation_message_pages_load_ten_newest_then_ten_older(db_session):
+    team = _team(db_session, "Support")
+    conversation = _conversation(db_session, team, subject="Long thread")
+    base = datetime(2026, 7, 10, 8, 0, tzinfo=UTC)
+    for index in range(25):
+        _message(
+            db_session,
+            conversation,
+            direction=InboxMessageDirection.inbound.value,
+            body=f"Message {index:02d}",
+            at=base.replace(minute=index),
+        )
+    db_session.commit()
+
+    newest = team_inbox_read.get_conversation_message_page(
+        db_session,
+        conversation_id=conversation.id,
+        page=team_inbox_read.InboxTimelineMessagePageRequest(),
+    )
+
+    assert newest is not None
+    assert [message.body for message in newest.messages] == [
+        f"Message {index:02d}" for index in range(15, 25)
+    ]
+    assert newest.has_older_messages is True
+    assert newest.oldest_message_id is not None
+
+    older = team_inbox_read.get_conversation_message_page(
+        db_session,
+        conversation_id=conversation.id,
+        page=team_inbox_read.InboxTimelineMessagePageRequest(
+            before_message_id=newest.oldest_message_id
+        ),
+    )
+
+    assert older is not None
+    assert [message.body for message in older.messages] == [
+        f"Message {index:02d}" for index in range(5, 15)
+    ]
+    assert older.has_older_messages is True
+
+
+def test_conversation_message_page_rejects_cursor_from_another_thread(db_session):
+    team = _team(db_session, "Support")
+    requested = _conversation(db_session, team, subject="Requested")
+    other = _conversation(db_session, team, subject="Other")
+    other_message = _message(
+        db_session,
+        other,
+        direction=InboxMessageDirection.inbound.value,
+        body="Private to the other thread",
+        at=datetime(2026, 7, 10, 8, 0, tzinfo=UTC),
+    )
+    db_session.commit()
+
+    page = team_inbox_read.get_conversation_message_page(
+        db_session,
+        conversation_id=requested.id,
+        page=team_inbox_read.InboxTimelineMessagePageRequest(
+            before_message_id=other_message.id
+        ),
+    )
+
+    assert page is None
+
+
+def test_paged_conversation_timeline_contains_only_latest_ten_messages(db_session):
+    team = _team(db_session, "Support")
+    conversation = _conversation(db_session, team, subject="Paged detail")
+    base = datetime(2026, 7, 10, 8, 0, tzinfo=UTC)
+    for index in range(12):
+        _message(
+            db_session,
+            conversation,
+            direction=InboxMessageDirection.inbound.value,
+            body=f"Message {index:02d}",
+            at=base.replace(minute=index),
+        )
+    db_session.commit()
+
+    timeline = team_inbox_read.get_conversation_timeline(
+        db_session,
+        conversation.id,
+        message_page=team_inbox_read.InboxTimelineMessagePageRequest(),
+    )
+
+    assert timeline is not None
+    assert [message.body for message in timeline.messages] == [
+        f"Message {index:02d}" for index in range(2, 12)
+    ]
+    assert timeline.has_older_messages is True
+    assert timeline.oldest_message_id == timeline.messages[0].id
+
+
+def test_social_comment_timeline_stays_complete_until_tree_paging_exists(db_session):
+    team = _team(db_session, "Social")
+    conversation = _conversation(
+        db_session,
+        team,
+        subject="Public comment tree",
+        channel_type="facebook_comment",
+    )
+    base = datetime(2026, 7, 10, 8, 0, tzinfo=UTC)
+    for index in range(12):
+        _message(
+            db_session,
+            conversation,
+            direction=InboxMessageDirection.inbound.value,
+            body=f"Comment {index:02d}",
+            at=base.replace(minute=index),
+        )
+    db_session.commit()
+
+    timeline = team_inbox_read.get_conversation_timeline(
+        db_session,
+        conversation.id,
+        message_page=team_inbox_read.InboxTimelineMessagePageRequest(),
+    )
+
+    assert timeline is not None
+    assert len(timeline.messages) == 12
+    assert timeline.has_older_messages is False
 
 
 def test_conversation_timeline_resolves_inactive_outbound_sender_identity(db_session):

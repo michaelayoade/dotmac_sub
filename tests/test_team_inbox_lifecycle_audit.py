@@ -157,6 +157,38 @@ def test_status_and_presence_transitions_append_native_evidence(db_session):
     assert presence_event.actor_person_id == actor_id
 
 
+def test_status_transition_emits_the_declared_automation_event(db_session, monkeypatch):
+    emitted: list[tuple[object, dict[str, object], str | None]] = []
+
+    def capture_event(_db, event_type, payload, *, actor=None, **_kwargs):
+        emitted.append((event_type, payload, actor))
+
+    monkeypatch.setattr(team_inbox_status, "emit_event", capture_event)
+    conversation = _conversation(db_session)
+
+    team_inbox_status.apply_status_transition(
+        db_session,
+        conversation=conversation,
+        status=InboxConversationStatus.pending,
+        actor_person_id=None,
+        reason=team_inbox_status.InboxStatusReason.operator_change,
+        source_id="test:automation-event",
+    )
+
+    assert len(emitted) == 1
+    _event_type, payload, actor = emitted[0]
+    assert payload == {
+        "name": "team_inbox.status_changed.v1",
+        "tenant_id": str(team_inbox_status.OPERATOR_TENANT_ID),
+        "conversation_id": str(conversation.id),
+        "previous_status": "open",
+        "status": "pending",
+        "reason": "operator_change",
+        "channel": conversation.channel_type,
+    }
+    assert actor == team_inbox_status.OWNER
+
+
 def test_reconstruction_preview_is_deterministic_and_preserves_unknown_end(db_session):
     team, agent = _team_and_agent(db_session)
     conversation = _conversation(db_session)

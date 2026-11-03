@@ -46,6 +46,47 @@ base URL configured outside Git as `DOTMAC_FIBER_CHAT_API_URL`. That public base
 URL is not a secret. The signed inquiry endpoint and its HMAC secret must never
 be exposed to the browser.
 
+The same embed configuration may set presentation-only options without adding
+a second chat writer or transport:
+
+```html
+<script>
+window.DotMacFiberChatConfig = {
+  apiUrl: "https://sub.example.com",
+  title: "Chat with support",
+  subtitle: "We usually reply in a few minutes",
+  intro: "Tell us how we can help.",
+  brandColor: "#0b7a45",
+  position: "right",
+  offsetX: 22,
+  offsetY: 22,
+  startButtonText: "Start chat",
+  sendButtonText: "Send",
+  messagePlaceholder: "Type a message…",
+  agentName: "Support"
+};
+</script>
+<script src="https://sub.example.com/static/js/fiber-chat-widget.js" defer></script>
+```
+
+Inbox administrators can manage the same values under **Inbox settings → Agent
+operations → Public widget appearance**. The browser reads those defaults from
+`GET /widget/fiber/config`; the endpoint accepts only the configured Fiber
+origin and returns no credentials, routing policy, or customer data. A value
+explicitly present in the embed object takes precedence over the managed
+default, allowing a deliberate site-specific presentation without another
+configuration writer.
+
+These values affect presentation only. The widget normalizes text lengths,
+accepts only six-digit hex colors, restricts placement to left or right, bounds
+offsets, and chooses a readable foreground color. Configured text is assigned
+as text rather than HTML. Origin policy, rate limits, identity handling,
+conversation ownership, and message storage remain enforced by Sub's existing
+native Team Inbox owners. Managed defaults are declared `comms` settings and
+are written atomically by the existing audited settings-form owner. The widget
+owner provides the bounded read projection only; it does not become a second
+settings writer and the embed object is not a settings database.
+
 ## One authority
 
 Between 2026-07-27 and 2026-08-30 a `comms.chat_session_authority` setting

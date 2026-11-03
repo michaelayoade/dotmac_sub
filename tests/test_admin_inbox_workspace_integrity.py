@@ -38,6 +38,12 @@ INDEX = Path("templates/admin/inbox/index.html").read_text(encoding="utf-8")
 COMMENTS = Path("templates/admin/inbox/comments.html").read_text(encoding="utf-8")
 LAYOUT = Path("templates/layouts/admin.html").read_text(encoding="utf-8")
 OVERLAYS = Path("templates/admin/inbox/_overlays.html").read_text(encoding="utf-8")
+MESSAGE_PAGE = Path("templates/admin/inbox/_message_page.html").read_text(
+    encoding="utf-8"
+)
+OLDER_MESSAGES_TRIGGER = Path(
+    "templates/admin/inbox/_older_messages_trigger.html"
+).read_text(encoding="utf-8")
 QUEUE = Path("templates/admin/inbox/_queue_macros.html").read_text(encoding="utf-8")
 SIDEBAR = Path("templates/admin/inbox/_sidebar.html").read_text(
     encoding="utf-8"
@@ -187,6 +193,15 @@ def test_opened_conversation_stays_at_latest_message_after_content_loads():
     assert "this.disconnectThreadAutoScroll();" in JAVASCRIPT
 
 
+def test_agents_can_copy_a_direct_conversation_link() -> None:
+    assert "Copy conversation link" in CONVERSATION
+    assert '{ id: "copy-link"' in JAVASCRIPT
+    assert "async copyConversationLink()" in JAVASCRIPT
+    assert 'url.searchParams.set("conversation_id", conversationId)' in JAVASCRIPT
+    assert "navigator.clipboard.writeText(url.toString())" in JAVASCRIPT
+    assert "Copy conversation link" in OVERLAYS
+
+
 def test_mark_read_posts_with_csrf_header():
     marker = JAVASCRIPT.index("async markConversationRead")
     body = JAVASCRIPT[marker : marker + 1200]
@@ -261,7 +276,7 @@ def test_reply_submission_refreshes_inbox_fragments_without_page_navigation():
     assert 'workspace?.refreshConversationList?.("reply")' not in JAVASCRIPT
     assert 'this.draft = ""' in JAVASCRIPT
     assert "window.location.reload" not in JAVASCRIPT
-    assert "admin-inbox.js?v=20260915-navigation" in INDEX
+    assert "admin-inbox.js?v=20261103-message-pages" in INDEX
     assert "admin-inbox.js?v=20260910a" not in INDEX
     assert "admin-inbox.js?v=20260904a" not in INDEX
     assert "admin-inbox.js?v=20260830a" not in INDEX
@@ -347,8 +362,21 @@ def test_delivery_status_waits_for_the_exact_message_fragment():
 def test_incremental_refresh_is_bounded_and_has_stable_fragment_targets():
     assert "window.htmx.config.timeout = 15000" in JAVASCRIPT
     assert 'id="inbox-message-list"' in CONVERSATION
-    assert 'data-inbox-message-id="{{ entry.message.id }}"' in CONVERSATION
+    assert 'data-inbox-message-id="{{ message.id }}"' in CONVERSATION
     assert 'id="inbox-conversation-row-{{ row.id }}"' in QUEUE
+
+
+def test_older_messages_are_loaded_in_scoped_pages_without_jumping_the_reader():
+    assert "timeline.has_older_messages" in CONVERSATION
+    assert "data-inbox-load-older" in OLDER_MESSAGES_TRIGGER
+    assert 'hx-trigger="click, intersect once"' in OLDER_MESSAGES_TRIGGER
+    assert "/messages/older?before={{ oldest_message_id }}" in (OLDER_MESSAGES_TRIGGER)
+    assert 'hx-swap="outerHTML"' in OLDER_MESSAGES_TRIGGER
+    assert "has_older_messages and oldest_message_id" in MESSAGE_PAGE
+    assert 'data-inbox-message-id="{{ message.id }}"' in MESSAGE_PAGE
+    assert "__inboxOlderScrollHeight" in JAVASCRIPT
+    assert "olderScrollNode.scrollHeight - previousHeight" in JAVASCRIPT
+    assert "olderDetailSequence !== this.detailRequestSequence" in JAVASCRIPT
 
 
 def test_delivery_status_updates_in_place_from_authoritative_realtime_hint():
@@ -519,7 +547,11 @@ def test_live_indicator_and_search_match_the_sidebar_contract():
     assert SIDEBAR.index(search_marker) < SIDEBAR.index(
         'aria-controls="inbox-stats-filters"'
     )
-    assert 'placeholder="Search conversations..."' in SIDEBAR
+    assert (
+        '<span class="sr-only">Search customers, conversations and messages</span>'
+        in SIDEBAR
+    )
+    assert 'placeholder="Search customers, conversations and messages..."' in SIDEBAR
     assert '@input.debounce.300ms="searchConversations($el.value)"' in SIDEBAR
     for class_name in (
         "px-4 py-3",
@@ -1033,10 +1065,36 @@ def test_visible_workspace_refreshes_agent_presence_without_overriding_status():
     for contract in (
         "startPresenceHeartbeat()",
         'document.visibilityState !== "visible"',
+        'this.socket.send(JSON.stringify({ type: "ping" }))',
         'fetchWithTimeout("/admin/inbox/presence/heartbeat"',
-        "5 * 60 * 1000",
+        "60 * 1000",
     ):
         assert contract in JAVASCRIPT
+
+
+def test_presence_controls_cover_all_states_and_auto_offline_preference():
+    for value, label in (
+        ("online", "Online"),
+        ("away", "Away / Busy"),
+        ("on_break", "On break"),
+        ("offline", "Offline"),
+    ):
+        assert f"('{value}', '{label}')" in SIDEBAR
+    assert "agent_presence.selected_status" in SIDEBAR
+    assert "agent_presence.auto_offline" in SIDEBAR
+    assert 'action="/admin/inbox/presence/preference"' in SIDEBAR
+    assert 'name="auto_offline" value="true"' in SIDEBAR
+    assert "flex-wrap" in SIDEBAR
+    assert "min-h-11" in SIDEBAR
+
+
+def test_presence_realtime_event_invalidates_server_projections():
+    marker = JAVASCRIPT.index('eventType === "agent_presence_changed"')
+    body = JAVASCRIPT[marker : marker + 500]
+    assert 'this.refreshSidebar("presence")' in body
+    assert "this.refreshOpenManagerDashboard()" in body
+    assert 'window.htmx.ajax("GET", "/admin/inbox/manager-dashboard"' in JAVASCRIPT
+    assert "data.status" not in body
 
 
 def test_manager_capacity_links_to_an_explicit_bounded_save_control():

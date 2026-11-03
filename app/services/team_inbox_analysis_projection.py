@@ -7,6 +7,7 @@ result and never reads Inbox ORM rows itself.
 
 from __future__ import annotations
 
+import hashlib
 from collections import Counter, defaultdict
 from dataclasses import dataclass
 from datetime import UTC, date, datetime, time, timedelta
@@ -23,6 +24,7 @@ from app.models.team_inbox import (
     InboxRoutingEvent,
     InboxStatusTransitionEvent,
 )
+from app.services import team_inbox_contact_context
 from app.services.workqueue.scope import WorkqueueScope
 
 
@@ -99,8 +101,202 @@ class ManagerAnalysisProjection:
     evidence_conversations: tuple[ManagerEvidenceConversation, ...]
 
 
+@dataclass(frozen=True, slots=True)
+class CustomerHistorySummaryRequest:
+    conversation_id: UUID
+    permitted: bool
+
+
+@dataclass(frozen=True, slots=True)
+class CustomerHistorySourceMessage:
+    id: UUID
+    conversation_id: UUID
+    direction: str
+    subject: str | None
+    body: str
+    occurred_at: datetime
+
+
+@dataclass(frozen=True, slots=True)
+class CustomerHistorySummaryProjection:
+    conversation_id: UUID
+    availability: team_inbox_contact_context.ContextAvailability
+    history_scope: team_inbox_contact_context.ConversationHistoryScope
+    conversation_ids: tuple[UUID, ...]
+    messages: tuple[CustomerHistorySourceMessage, ...]
+    source_watermark: str | None
+    message: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class CustomerHistoryBriefMessage:
+    direction: str
+    body: str
+    occurred_at: datetime
+
+
+@dataclass(frozen=True, slots=True)
+class CustomerHistoryBrief:
+    conversation_id: UUID
+    availability: team_inbox_contact_context.ContextAvailability
+    previous_conversation_count: int
+    customer_message_count: int
+    agent_message_count: int
+    latest_activity_at: datetime | None
+    recent_messages: tuple[CustomerHistoryBriefMessage, ...]
+    source_watermark: str | None
+    message: str | None = None
+
+
 def _utc(value: datetime) -> datetime:
     return value if value.tzinfo is not None else value.replace(tzinfo=UTC)
+
+
+def build_customer_history_summary_projection(
+    db: Session,
+    request: CustomerHistorySummaryRequest,
+) -> CustomerHistorySummaryProjection | None:
+    """Return public conversation evidence from one reviewed identity cohort."""
+
+    history = team_inbox_contact_context.eligible_conversation_history(
+        db,
+        team_inbox_contact_context.EligibleConversationHistoryQuery(
+            conversation_id=request.conversation_id,
+            permitted=request.permitted,
+        ),
+    )
+    if history is None:
+        return None
+    if (
+        history.availability
+        is not team_inbox_contact_context.ContextAvailability.available
+    ):
+        return CustomerHistorySummaryProjection(
+            conversation_id=request.conversation_id,
+            availability=history.availability,
+            history_scope=history.scope,
+            conversation_ids=(),
+            messages=(),
+            source_watermark=None,
+            message=history.message,
+        )
+    occurred = func.coalesce(
+        InboxMessage.received_at,
+        InboxMessage.sent_at,
+        InboxMessage.created_at,
+    )
+    rows = tuple(
+        db.scalars(
+            select(InboxMessage)
+            .where(
+                InboxMessage.conversation_id.in_(history.conversation_ids),
+                InboxMessage.direction.in_(("inbound", "outbound")),
+            )
+            .order_by(occurred, InboxMessage.id)
+        ).all()
+    )
+    messages = tuple(
+        CustomerHistorySourceMessage(
+            id=row.id,
+            conversation_id=row.conversation_id,
+            direction=row.direction,
+            subject=row.subject,
+            body=row.body or "",
+            occurred_at=_utc(row.received_at or row.sent_at or row.created_at),
+        )
+        for row in rows
+    )
+    digest = hashlib.sha256()
+    for conversation_id in history.conversation_ids:
+        digest.update(f"conversation:{conversation_id}\n".encode())
+    for row in rows:
+        digest.update(
+            (
+                f"message:{row.id}:{row.conversation_id}:{row.direction}:"
+                f"{_utc(row.updated_at).isoformat()}\n"
+            ).encode()
+        )
+        digest.update((row.subject or "").encode())
+        digest.update(b"\0")
+        digest.update((row.body or "").encode())
+        digest.update(b"\n")
+    return CustomerHistorySummaryProjection(
+        conversation_id=request.conversation_id,
+        availability=history.availability,
+        history_scope=history.scope,
+        conversation_ids=history.conversation_ids,
+        messages=messages,
+        source_watermark=digest.hexdigest(),
+    )
+
+
+def _brief_body(value: str, *, limit: int = 240) -> str:
+    clean = " ".join(value.split())
+    return clean if len(clean) <= limit else f"{clean[: limit - 1].rstrip()}…"
+
+
+def build_customer_history_brief(
+    db: Session,
+    request: CustomerHistorySummaryRequest,
+) -> CustomerHistoryBrief | None:
+    """Return a bounded factual brief from public customer conversation evidence."""
+
+    source = build_customer_history_summary_projection(db, request)
+    if source is None:
+        return None
+    if (
+        source.availability
+        is not team_inbox_contact_context.ContextAvailability.available
+    ):
+        return CustomerHistoryBrief(
+            conversation_id=request.conversation_id,
+            availability=source.availability,
+            previous_conversation_count=0,
+            customer_message_count=0,
+            agent_message_count=0,
+            latest_activity_at=None,
+            recent_messages=(),
+            source_watermark=source.source_watermark,
+            message=source.message,
+        )
+
+    public_messages = tuple(
+        message for message in source.messages if message.body.strip()
+    )
+    if not public_messages:
+        return CustomerHistoryBrief(
+            conversation_id=request.conversation_id,
+            availability=team_inbox_contact_context.ContextAvailability.empty,
+            previous_conversation_count=max(len(source.conversation_ids) - 1, 0),
+            customer_message_count=0,
+            agent_message_count=0,
+            latest_activity_at=None,
+            recent_messages=(),
+            source_watermark=source.source_watermark,
+            message="No public customer conversation messages yet.",
+        )
+
+    return CustomerHistoryBrief(
+        conversation_id=request.conversation_id,
+        availability=team_inbox_contact_context.ContextAvailability.available,
+        previous_conversation_count=max(len(source.conversation_ids) - 1, 0),
+        customer_message_count=sum(
+            message.direction == "inbound" for message in public_messages
+        ),
+        agent_message_count=sum(
+            message.direction == "outbound" for message in public_messages
+        ),
+        latest_activity_at=public_messages[-1].occurred_at,
+        recent_messages=tuple(
+            CustomerHistoryBriefMessage(
+                direction=message.direction,
+                body=_brief_body(message.body),
+                occurred_at=message.occurred_at,
+            )
+            for message in public_messages[-4:]
+        ),
+        source_watermark=source.source_watermark,
+    )
 
 
 def resolve_period(

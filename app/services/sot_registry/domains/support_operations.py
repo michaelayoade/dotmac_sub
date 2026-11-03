@@ -1905,8 +1905,8 @@ DOMAIN = DomainSOT(
                         kind=AuthorityKind.AUTHORITATIVE_RECORD,
                         source=(
                             "support_csat_requests rows with source, resolution-cycle "
-                            "key, customer, agent, team, rating, comment, and submission "
-                            "timestamps"
+                            "key, customer, agent, team, inbox-channel snapshot, rating, "
+                            "comment, and submission timestamps"
                         ),
                     ),
                 ),

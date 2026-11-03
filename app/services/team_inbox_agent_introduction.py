@@ -1,4 +1,4 @@
-"""Per-agent introduction templates and chat-widget pickup greeting policy."""
+"""Per-agent Inbox introduction and assignment-notification preferences."""
 
 from __future__ import annotations
 
@@ -35,6 +35,8 @@ _COMMAND = OwnerCommandDefinition(
 class AgentIntroductionPreference:
     template: str
     auto_send_chat_widget: bool
+    assignment_in_app_notifications: bool = True
+    assignment_email_notifications: bool = True
 
 
 @dataclass(frozen=True)
@@ -43,6 +45,8 @@ class UpdateAgentIntroductionCommand:
     person_id: UUID
     template: str
     auto_send_chat_widget: bool
+    assignment_in_app_notifications: bool = True
+    assignment_email_notifications: bool = True
 
 
 def _validate_template(template: str) -> str:
@@ -65,6 +69,12 @@ def preference_for_agent(db: Session, person_id: UUID) -> AgentIntroductionPrefe
     return AgentIntroductionPreference(
         template=row.template if row else DEFAULT_TEMPLATE,
         auto_send_chat_widget=row.auto_send_chat_widget if row else True,
+        assignment_in_app_notifications=(
+            row.assignment_in_app_notifications if row else True
+        ),
+        assignment_email_notifications=(
+            row.assignment_email_notifications if row else True
+        ),
     )
 
 
@@ -74,6 +84,8 @@ def update_preference(
     person_id: UUID,
     template: str,
     auto_send_chat_widget: bool,
+    assignment_in_app_notifications: bool = True,
+    assignment_email_notifications: bool = True,
 ) -> AgentIntroductionPreference:
     clean = _validate_template(template)
     row = (
@@ -87,9 +99,14 @@ def update_preference(
         db.add(row)
     row.template = clean
     row.auto_send_chat_widget = auto_send_chat_widget
+    row.assignment_in_app_notifications = assignment_in_app_notifications
+    row.assignment_email_notifications = assignment_email_notifications
     db.flush()
     return AgentIntroductionPreference(
-        template=row.template, auto_send_chat_widget=row.auto_send_chat_widget
+        template=row.template,
+        auto_send_chat_widget=row.auto_send_chat_widget,
+        assignment_in_app_notifications=row.assignment_in_app_notifications,
+        assignment_email_notifications=row.assignment_email_notifications,
     )
 
 
@@ -105,6 +122,8 @@ def update_preference_committed(
             person_id=command.person_id,
             template=command.template,
             auto_send_chat_widget=command.auto_send_chat_widget,
+            assignment_in_app_notifications=(command.assignment_in_app_notifications),
+            assignment_email_notifications=command.assignment_email_notifications,
         ),
     )
 

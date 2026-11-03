@@ -12,11 +12,14 @@ from app.models.team_inbox import (
     InboxContactLink,
     InboxConversation,
     InboxConversationParticipant,
+    InboxMessage,
+    InboxMessageDirection,
     InboxParticipantAdmissionSource,
 )
 from app.services import (
     conversation_lead_relationships,
     inbox_lead_actions,
+    team_inbox_analysis_projection,
     team_inbox_contact_context,
     team_inbox_contact_links,
     team_inbox_customer_completion,
@@ -162,6 +165,171 @@ def _link_direct_lead(
         ),
     )
     return lead
+
+
+def test_customer_history_summary_projection_reuses_reviewed_identity_and_public_messages(
+    db_session,
+):
+    current = _conversation(
+        db_session,
+        address=f"current-{uuid4()}@example.com",
+        last_message_at=datetime(2026, 10, 2, tzinfo=UTC),
+    )
+    party = _bind_party(db_session, current)
+    previous = _conversation(
+        db_session,
+        address=f"previous-{uuid4()}@example.com",
+        last_message_at=datetime(2026, 10, 1, tzinfo=UTC),
+    )
+    _bind_existing_party(db_session, previous, party)
+    db_session.add_all(
+        [
+            InboxMessage(
+                conversation_id=previous.id,
+                channel_type="email",
+                direction=InboxMessageDirection.inbound.value,
+                body="The earlier public issue",
+                received_at=datetime(2026, 10, 1, 9, tzinfo=UTC),
+            ),
+            InboxMessage(
+                conversation_id=previous.id,
+                channel_type="email",
+                direction=InboxMessageDirection.internal.value,
+                body="Private staff note",
+                created_at=datetime(2026, 10, 1, 10, tzinfo=UTC),
+            ),
+            InboxMessage(
+                conversation_id=current.id,
+                channel_type="email",
+                direction=InboxMessageDirection.outbound.value,
+                body="The current public reply",
+                sent_at=datetime(2026, 10, 2, 9, tzinfo=UTC),
+            ),
+        ]
+    )
+    db_session.commit()
+
+    first = team_inbox_analysis_projection.build_customer_history_summary_projection(
+        db_session,
+        team_inbox_analysis_projection.CustomerHistorySummaryRequest(
+            conversation_id=current.id,
+            permitted=True,
+        ),
+    )
+
+    assert first is not None
+    assert (
+        first.availability is team_inbox_contact_context.ContextAvailability.available
+    )
+    assert set(first.conversation_ids) == {current.id, previous.id}
+    assert tuple(message.body for message in first.messages) == (
+        "The earlier public issue",
+        "The current public reply",
+    )
+    assert first.source_watermark
+
+    brief = team_inbox_analysis_projection.build_customer_history_brief(
+        db_session,
+        team_inbox_analysis_projection.CustomerHistorySummaryRequest(
+            conversation_id=current.id,
+            permitted=True,
+        ),
+    )
+    assert brief is not None
+    assert (
+        brief.availability is team_inbox_contact_context.ContextAvailability.available
+    )
+    assert brief.previous_conversation_count == 1
+    assert brief.customer_message_count == 1
+    assert brief.agent_message_count == 1
+    assert tuple(message.body for message in brief.recent_messages) == (
+        "The earlier public issue",
+        "The current public reply",
+    )
+    assert all("Private staff note" not in item.body for item in brief.recent_messages)
+
+    restricted = (
+        team_inbox_analysis_projection.build_customer_history_summary_projection(
+            db_session,
+            team_inbox_analysis_projection.CustomerHistorySummaryRequest(
+                conversation_id=current.id,
+                permitted=False,
+            ),
+        )
+    )
+    assert restricted is not None
+    assert restricted.availability is (
+        team_inbox_contact_context.ContextAvailability.restricted
+    )
+    assert restricted.conversation_ids == ()
+    assert restricted.messages == ()
+    assert restricted.source_watermark is None
+
+    db_session.add(
+        InboxMessage(
+            conversation_id=current.id,
+            channel_type="email",
+            direction=InboxMessageDirection.inbound.value,
+            body="A newer public message",
+            received_at=datetime(2026, 10, 2, 11, tzinfo=UTC),
+        )
+    )
+    db_session.commit()
+    refreshed = (
+        team_inbox_analysis_projection.build_customer_history_summary_projection(
+            db_session,
+            team_inbox_analysis_projection.CustomerHistorySummaryRequest(
+                conversation_id=current.id,
+                permitted=True,
+            ),
+        )
+    )
+
+    assert refreshed is not None
+    assert refreshed.source_watermark != first.source_watermark
+
+
+def test_customer_history_summary_projection_refuses_ambiguous_identity(db_session):
+    conversation = _conversation(
+        db_session,
+        address=f"ambiguous-{uuid4()}@example.com",
+    )
+    conversation.metadata_ = {
+        "contact_resolution": {
+            "status": "ambiguous",
+            "normalized_contact": conversation.contact_address,
+        }
+    }
+    db_session.commit()
+
+    result = team_inbox_analysis_projection.build_customer_history_summary_projection(
+        db_session,
+        team_inbox_analysis_projection.CustomerHistorySummaryRequest(
+            conversation_id=conversation.id,
+            permitted=True,
+        ),
+    )
+
+    assert result is not None
+    assert result.availability is (
+        team_inbox_contact_context.ContextAvailability.not_calculated
+    )
+    assert result.conversation_ids == ()
+    assert result.messages == ()
+    assert result.source_watermark is None
+
+    brief = team_inbox_analysis_projection.build_customer_history_brief(
+        db_session,
+        team_inbox_analysis_projection.CustomerHistorySummaryRequest(
+            conversation_id=conversation.id,
+            permitted=True,
+        ),
+    )
+    assert brief is not None
+    assert brief.availability is (
+        team_inbox_contact_context.ContextAvailability.not_calculated
+    )
+    assert brief.recent_messages == ()
 
 
 def test_structural_fiber_lead_is_visible_without_contact_point(db_session):

@@ -19,6 +19,7 @@ from app.models.team_inbox import (
     InboxChannelType,
     InboxContactLink,
     InboxConversation,
+    InboxConversationLabel,
     InboxConversationLeadLink,
     InboxConversationParticipant,
     InboxConversationStatus,
@@ -29,13 +30,16 @@ from app.models.team_inbox import (
     InboxParticipantAdmissionSource,
     InboxParticipantRelationship,
     InboxReplyMacro,
+    InboxStatusTransitionEvent,
 )
 from app.services import (
+    team_inbox_commands,
     team_inbox_contact_links,
     team_inbox_operations,
     team_inbox_projection,
     team_inbox_read,
 )
+from app.services.owner_commands import CommandContext
 from app.web.admin import inbox as inbox_web
 from tests.staff_identity_fixtures import add_bound_staff_user
 
@@ -719,6 +723,173 @@ def test_macro_actions_can_set_status_and_apply_label(db_session):
     assert conversation.metadata_["status_history"][-1]["macro_id"] == str(macro.id)
     assert labels[0].name == "Outage"
     assert macro.execution_count == 1
+
+
+def test_automation_label_command_is_idempotent_and_keeps_provenance(db_session):
+    conversation = _conversation(db_session)
+    label = InboxLabel(name="Priority follow-up", slug="priority-follow-up")
+    db_session.add(label)
+    db_session.commit()
+    command = team_inbox_commands.ApplyConversationLabelFromAutomationCommand(
+        context=CommandContext.system(
+            actor="automation-test",
+            scope="support:ticket:update",
+            reason="test Inbox automation label",
+        ),
+        conversation_id=conversation.id,
+        label_id=label.id,
+        event_id=uuid.uuid4(),
+        rule_id=uuid.uuid4(),
+        rule_version_id=uuid.uuid4(),
+        step_index=0,
+    )
+
+    first = team_inbox_commands.apply_conversation_label_from_automation(
+        db_session, command=command
+    )
+    second = team_inbox_commands.apply_conversation_label_from_automation(
+        db_session, command=command
+    )
+
+    links = (
+        db_session.query(InboxConversationLabel)
+        .filter(InboxConversationLabel.conversation_id == conversation.id)
+        .filter(InboxConversationLabel.label_id == label.id)
+        .all()
+    )
+    assert first.link_id == second.link_id
+    assert len(links) == 1
+    assert links[0].metadata_["automation"] == {
+        "event_id": str(command.event_id),
+        "rule_id": str(command.rule_id),
+        "rule_version_id": str(command.rule_version_id),
+        "step_index": 0,
+    }
+
+
+def test_automation_label_command_preserves_manual_label_provenance(db_session):
+    conversation = _conversation(db_session)
+    label = InboxLabel(name="Manual review", slug="manual-review")
+    _, person = add_bound_staff_user(db_session)
+    db_session.add(label)
+    db_session.flush()
+    manual_link = team_inbox_operations.apply_label(
+        db_session,
+        conversation=conversation,
+        label_id=label.id,
+        applied_by_person_id=person.id,
+    )
+
+    outcome = team_inbox_commands.apply_conversation_label_from_automation(
+        db_session,
+        command=team_inbox_commands.ApplyConversationLabelFromAutomationCommand(
+            context=CommandContext.system(
+                actor="automation-test",
+                scope="support:ticket:update",
+                reason="test manual Inbox label preservation",
+            ),
+            conversation_id=conversation.id,
+            label_id=label.id,
+            event_id=uuid.uuid4(),
+            rule_id=uuid.uuid4(),
+            rule_version_id=uuid.uuid4(),
+            step_index=0,
+        ),
+    )
+
+    db_session.refresh(manual_link)
+    assert outcome.link_id == manual_link.id
+    assert manual_link.applied_by_person_id == person.id
+    assert "automation" not in (manual_link.metadata_ or {})
+
+
+def test_automation_priority_command_is_idempotent_and_keeps_provenance(db_session):
+    conversation = _conversation(db_session)
+    event_id = uuid.uuid4()
+    rule_id = uuid.uuid4()
+    rule_version_id = uuid.uuid4()
+    command = team_inbox_commands.SetConversationPriorityFromAutomationCommand(
+        context=CommandContext.system(
+            actor="automation-test",
+            scope="support:ticket:update",
+            reason="test Inbox automation priority",
+        ),
+        conversation_id=conversation.id,
+        priority=25,
+        event_id=event_id,
+        rule_id=rule_id,
+        rule_version_id=rule_version_id,
+        step_index=1,
+    )
+
+    first = team_inbox_commands.set_conversation_priority_from_automation(
+        db_session, command=command
+    )
+    second = team_inbox_commands.set_conversation_priority_from_automation(
+        db_session, command=command
+    )
+
+    db_session.refresh(conversation)
+    assert first.changed is True
+    assert first.previous_priority == 100
+    assert second.changed is False
+    assert conversation.priority == 25
+    history = conversation.metadata_["workflow_history"]
+    assert len(history) == 1
+    assert history[0]["source"] == "automation_rule"
+    assert history[0]["automation"] == {
+        "event_id": str(event_id),
+        "rule_id": str(rule_id),
+        "rule_version_id": str(rule_version_id),
+        "step_index": 1,
+    }
+
+
+def test_automation_status_command_is_idempotent_and_keeps_provenance(db_session):
+    conversation = _conversation(db_session)
+    command = team_inbox_commands.SetConversationStatusFromAutomationCommand(
+        context=CommandContext.system(
+            actor="automation-test",
+            scope="support:ticket:update",
+            reason="test Inbox automation status",
+        ),
+        conversation_id=conversation.id,
+        status=InboxConversationStatus.pending,
+        event_id=uuid.uuid4(),
+        rule_id=uuid.uuid4(),
+        rule_version_id=uuid.uuid4(),
+        step_index=2,
+    )
+
+    first = team_inbox_commands.set_conversation_status_from_automation(
+        db_session, command=command
+    )
+    second = team_inbox_commands.set_conversation_status_from_automation(
+        db_session, command=command
+    )
+
+    db_session.refresh(conversation)
+    events = db_session.query(InboxStatusTransitionEvent).all()
+    assert first.changed is True
+    assert first.previous_status is InboxConversationStatus.open
+    assert first.event_id == events[0].id
+    assert second.changed is False
+    assert second.event_id is None
+    assert conversation.status == InboxConversationStatus.pending.value
+    assert len(events) == 1
+    assert events[0].reason_code == "automation_rule"
+    assert events[0].source_id == (
+        f"automation:{command.event_id}:{command.rule_id}:{command.rule_version_id}:2"
+    )
+    assert conversation.metadata_["status_history"] == [
+        {
+            "from": "open",
+            "to": "pending",
+            "at": conversation.metadata_["status_history"][0]["at"],
+            "actor_id": None,
+            "source": "automation_rule",
+        }
+    ]
 
 
 def test_admin_template_create_and_reply_uses_template(db_session, monkeypatch):
