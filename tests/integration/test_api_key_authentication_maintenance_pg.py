@@ -16,6 +16,7 @@ from app.models.auth import ApiKey
 from app.schemas.auth import ApiKeyUpdate
 from app.services import api_key_administration as owner
 from app.services import staff_provisioning as staff
+from tests.api_key_actor_fixtures import persist_admin_actor
 from tests.api_key_update_fixtures import update_command
 from tests.integration import test_api_key_revocation_concurrency as revocations
 from tests.integration import test_oidc_atomic_session_concurrency as races
@@ -98,10 +99,11 @@ def mutation_worker(
         if operation == "revoke":
             return owner.revoke(db, command=revocations.command(key_id))
         if operation == "scope":
-            return owner.update(
-                db,
-                command=update_command(key_id, ApiKeyUpdate(scopes=["billing:read"])),
-            )
+            command = update_command(key_id, ApiKeyUpdate(scopes=["billing:read"]))
+            # SUB-1: the acting principal must resolve (real admin actor).
+            with Session(engine) as actor_db:
+                persist_admin_actor(actor_db, command.actor.actor_id)
+            return owner.update(db, command=command)
         return staff.delete_staff_account(db, command=delete_staff_command(target[0]))
 
 
