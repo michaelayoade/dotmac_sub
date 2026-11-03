@@ -10,7 +10,7 @@ day, to `dotmac-kernel==0.1.0a94` on 2026-08-25, and to
 `dotmac-kernel==0.1.0a97` for the proposed Template Studio shadow composition
 on 2026-09-30, followed by the source-only `0.1.0a98` / Tax a4 candidate
 on 2026-10-13, followed by the source-only `0.1.0a105` candidate
-on 2026-10-15 — see "Pin history".
+on 2026-10-15, followed by the published `0.1.0a107` pin on 2026-11-03 — see "Pin history".
 Supersedes the
 2026-07-19 Phase-0 draft, which was surveyed before the kernel was released and
 against `origin/main` 7807afcd. No code, schema, or dependency change is
@@ -1788,3 +1788,20 @@ only: no caller switch, backfill, opening-balance import or authority change is
 included, and Sub's incumbent billing/payment writers remain authoritative until
 the sealed cutover. Hosted CI must prove install-from-lock, the composition
 canaries at the new heads, and unchanged runtime authority before acceptance.
+
+**2026-11-03 — `0.1.0a105` → `0.1.0a107` (SUB-3; pin move only, not deployed).**
+Sub moves to the published Kernel a107 artifacts. The a107 source commit is
+`8c12998b57a31b5cf4a3e296d092460f97e638ba`; annotated tag object
+`eda92ec62a8b0aa3f90727b1a1a15740465483ae`. The authoritative published wheel
+SHA256 is `887b4bccb0fe2760df9a8e6d627553da4a2dc82451f9fa501d9b1e0bc774e341`; the
+sdist SHA256 is `6f146c85faab91084c38f93fc6140dc9cbb54b6b665ee5f21ea816b11cc53144`
+(Starter `docs/inventories/kernel-release-verifications/0.1.0a107.json`, state
+verified by the protected release workflow). The only `pyproject.toml` change in
+Kernel between a105 and a107 is the version string: direct dependencies, extras,
+Python bounds and backend are unchanged. a106 and a107 CHANGELOGs list Added and
+Fixed entries only; no removal is listed. Kernel migration revisions `0029_audit_history_shape`
+and `0030_credential_tenant_key` are new (0001-0028 byte-identical); neither
+changes grants, roles or RLS. Sub's reviewed lineage-entry participant
+(`scripts/migration/kernel_lineage_entry.py`, still not composed or run by any
+deployment path) is re-measured to the 30 a107 revisions. No source, schema,
+runtime composition or authority change is included.

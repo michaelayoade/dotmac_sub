@@ -60,9 +60,9 @@ PYPROJECT = PROJECT_ROOT / "pyproject.toml"
 
 #: The reviewed kernel pin. Changing it is a ledger amendment
 #: (docs/PLATFORM_ADOPTION_LEDGER.md), never a lockfile side effect.
-KERNEL_PIN = "0.1.0a105"
-KERNEL_WHEEL_SHA256 = "f8937e5525c3efd27e2030bf69ed0c37e137c345e376668a79e00ebf349b6ffa"
-KERNEL_SDIST_SHA256 = "76a3ccb7d0344befe565681b710edfd3a563e64127b801e43bb239d5bc5b80d2"
+KERNEL_PIN = "0.1.0a107"
+KERNEL_WHEEL_SHA256 = "887b4bccb0fe2760df9a8e6d627553da4a2dc82451f9fa501d9b1e0bc774e341"
+KERNEL_SDIST_SHA256 = "6f146c85faab91084c38f93fc6140dc9cbb54b6b665ee5f21ea816b11cc53144"
 
 #: The private index source name pyproject must route the kernel through.
 KERNEL_SOURCE = "forgejo"
@@ -101,7 +101,7 @@ KERNEL_SOURCE = "forgejo"
 #:
 #: a98 adds capability_composition and capability_contract via the package root.
 #: Their imports only reach the already-reviewed product_manifest contract.
-#: a105's public API documentation, auth, catalog and session-runtime imports
+#: a107's public API documentation, auth, catalog and session-runtime imports
 #: are captured below as an exact transitive snapshot. Loading
 #: session_runtime does not construct or bind a runtime; its reference factory
 #: and DatabaseRuntime construction remain excluded from Sub boot.
@@ -321,7 +321,7 @@ def test_pyproject_pins_kernel_exactly_from_the_named_index() -> None:
 
 
 def test_lock_carries_the_reviewed_kernel_release_bytes() -> None:
-    """The current pin resolves to the exact reviewed a105 lock artifacts."""
+    """The current pin resolves to the exact reviewed a107 lock artifacts."""
     import tomllib
 
     with (PROJECT_ROOT / "poetry.lock").open("rb") as lock_file:
