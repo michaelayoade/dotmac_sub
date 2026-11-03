@@ -467,6 +467,61 @@ def test_customer_history_brief_reserves_prior_conversation_evidence(db_session)
     ) == ("Previous reply 03", "Previous reply 04")
 
 
+def test_customer_history_brief_does_not_claim_empty_when_private_rows_starve_window(
+    db_session,
+):
+    conversation = _conversation(
+        db_session,
+        address=f"private-window-{uuid4()}@example.com",
+        last_message_at=datetime(2026, 10, 4, tzinfo=UTC),
+    )
+    _bind_party(db_session, conversation)
+    older_public = InboxMessage(
+        conversation_id=conversation.id,
+        channel_type="email",
+        direction=InboxMessageDirection.inbound.value,
+        body="Older public issue outside the bounded window",
+        received_at=datetime(2026, 10, 3, tzinfo=UTC),
+        created_at=datetime(2026, 10, 3, tzinfo=UTC),
+    )
+    newer_private = [
+        InboxMessage(
+            conversation_id=conversation.id,
+            channel_type="email",
+            direction=InboxMessageDirection.internal.value,
+            body=f"Private note {index:02d}",
+            created_at=datetime(2026, 10, 4, tzinfo=UTC) + timedelta(minutes=index),
+        )
+        for index in range(26)
+    ]
+    db_session.add_all([older_public, *newer_private])
+    db_session.commit()
+
+    brief = team_inbox_analysis_projection.build_customer_history_brief(
+        db_session,
+        team_inbox_analysis_projection.CustomerHistorySummaryRequest(
+            conversation_id=conversation.id,
+            permitted=True,
+        ),
+    )
+
+    assert brief is not None
+    assert brief.availability is (
+        team_inbox_contact_context.ContextAvailability.unavailable
+    )
+    assert brief.evidence_is_truncated is True
+    assert brief.customer_message_count == 0
+    assert brief.agent_message_count == 0
+    assert brief.evidence_message_count == 0
+    assert brief.inspected_message_count == 0
+    assert brief.recent_messages == ()
+    assert brief.message == (
+        "No public messages were found in the bounded recent window. "
+        "Older records were not scanned."
+    )
+    assert "private" not in brief.message.lower()
+
+
 def test_structural_fiber_lead_is_visible_without_contact_point(db_session):
     conversation = _conversation(
         db_session,

@@ -69,7 +69,7 @@
             <div class="rounded-lg bg-slate-50 px-2 py-2 dark:bg-slate-900/60"><strong class="block text-sm text-slate-900 dark:text-white">{{ customer_history_brief.customer_message_count }}</strong><span class="text-[10px] text-slate-500">Customer messages in evidence</span></div>
             <div class="rounded-lg bg-slate-50 px-2 py-2 dark:bg-slate-900/60"><strong class="block text-sm text-slate-900 dark:text-white">{{ customer_history_brief.agent_message_count }}</strong><span class="text-[10px] text-slate-500">Agent replies in evidence</span></div>
         </div>
-        <p class="mt-2 text-[10px] text-slate-500">Inspected {{ customer_history_brief.inspected_message_count }} newest stored message records in bounded per-chat windows; {{ customer_history_brief.evidence_message_count }} public messages across {{ customer_history_brief.evidence_conversation_count }} linked chats are represented{% if customer_history_brief.evidence_is_truncated %}. Older records are not included in these evidence counts{% endif %}.</p>
+        <p class="mt-2 text-[10px] text-slate-500">Bounded recent per-chat windows contain {{ customer_history_brief.evidence_message_count }} public evidence messages across {{ customer_history_brief.evidence_conversation_count }} linked chats{% if customer_history_brief.evidence_is_truncated %}. Older records are not included in these evidence counts{% endif %}.</p>
         {% if customer_history_brief.latest_activity_at %}<p class="mt-2 text-[10px] text-slate-500">Updated through {{ ts(customer_history_brief.latest_activity_at) }}</p>{% endif %}
         <ol class="mt-3 space-y-2" aria-label="Recent public conversation messages">
             {% for item in customer_history_brief.recent_messages %}
@@ -86,6 +86,8 @@
         <p class="text-xs text-amber-700 dark:text-amber-300">Identity review is required before customer history can be combined.</p>
         {% elif customer_history_brief.availability.value == 'restricted' %}
         <p class="text-xs text-slate-500">Customer history is restricted.</p>
+        {% elif customer_history_brief.availability.value == 'unavailable' %}
+        <p class="text-xs text-slate-500">{{ customer_history_brief.message or 'Public customer-history evidence is unavailable.' }}</p>
         {% else %}
         <p class="text-xs text-slate-500">Customer history is not available for this conversation.</p>
         {% endif %}

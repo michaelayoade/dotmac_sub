@@ -367,6 +367,27 @@ def build_customer_history_brief(
         message for message in source.messages if message.body.strip()
     )
     if not public_messages:
+        if source.evidence_is_truncated:
+            return CustomerHistoryBrief(
+                conversation_id=request.conversation_id,
+                availability=team_inbox_contact_context.ContextAvailability.unavailable,
+                previous_conversation_count=max(source.total_conversation_count - 1, 0),
+                customer_message_count=0,
+                agent_message_count=0,
+                latest_activity_at=None,
+                recent_messages=(),
+                evidence_conversation_count=0,
+                evidence_message_count=0,
+                # Do not let the public-evidence projection disclose how many
+                # private/blank records occupied the bounded stored window.
+                inspected_message_count=0,
+                evidence_is_truncated=True,
+                source_watermark=source.source_watermark,
+                message=(
+                    "No public messages were found in the bounded recent window. "
+                    "Older records were not scanned."
+                ),
+            )
         return CustomerHistoryBrief(
             conversation_id=request.conversation_id,
             availability=team_inbox_contact_context.ContextAvailability.empty,
