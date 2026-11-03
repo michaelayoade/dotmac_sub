@@ -1,0 +1,70 @@
+# Outbox relay dispatcher alerts (SUB-2). Metrics are exported by
+# `python -m app.outbox_relay` (outbox_relay_* series). The dispatcher role
+# cannot read tables, so these are process-observed signals; counters reset on
+# restart, so use increase() windows, never absolute values.
+groups:
+  - name: outbox_relay
+    rules:
+      - alert: OutboxRelayDeadLettered
+        expr: sum(increase(outbox_relay_dead_lettered_total[1h])) > 0
+        for: 0m
+        labels:
+          severity: critical
+          area: outbox-relay
+          owner: platform-operations
+        annotations:
+          summary: "Outbox relay dead-lettered an event"
+          description: >
+            A registered handler failed an event until max attempts and the
+            relay retained it as status 'dead'. Inspect public.outbox_events
+            (status = 'dead', last_error holds the exception class only) with
+            an owner-role session; the dispatcher role cannot read it. Unregistered
+            event types are parked, never dead-lettered, so this always means a
+            real handler failure.
+          runbook: "docs/runbooks/OUTBOX_RELAY.md"
+
+      - alert: OutboxRelayOldestPendingAgeHigh
+        expr: max(outbox_relay_oldest_pending_age_seconds) > 3600
+        for: 15m
+        labels:
+          severity: warning
+          area: outbox-relay
+          owner: platform-operations
+        annotations:
+          summary: "An outbox event has stayed pending for over an hour"
+          description: >
+            The oldest event left pending (parked for want of a handler, or
+            awaiting retry) is older than one hour. Parked events mean a
+            composed module is enqueuing an event type with no registered
+            handler; check the relay log for 'parked (no handler)'.
+          runbook: "docs/runbooks/OUTBOX_RELAY.md"
+
+      - alert: OutboxRelayPollStale
+        expr: time() - max(outbox_relay_last_poll_timestamp_seconds) > 300
+        for: 5m
+        labels:
+          severity: warning
+          area: outbox-relay
+          owner: platform-operations
+        annotations:
+          summary: "Outbox relay has stopped polling"
+          description: >
+            The series exists but has not advanced for five minutes. Note that
+            once the target has been down past the staleness window the series
+            disappears and this rule goes silent; add an absent() rule on the
+            first production deployment, when absence becomes meaningful.
+          runbook: "docs/runbooks/OUTBOX_RELAY.md"
+
+      - alert: OutboxRelayCycleErrors
+        expr: sum(increase(outbox_relay_cycle_errors_total[15m])) > 3
+        for: 5m
+        labels:
+          severity: warning
+          area: outbox-relay
+          owner: platform-operations
+        annotations:
+          summary: "Outbox relay dispatch cycles are failing"
+          description: >
+            Claim or connection errors in the dispatch loop. Check the
+            outbox_dispatcher credential and database reachability.
+          runbook: "docs/runbooks/OUTBOX_RELAY.md"

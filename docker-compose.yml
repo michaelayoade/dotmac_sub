@@ -876,6 +876,51 @@ services:
     - python
     - -m
     - app.syslog
+  outbox-relay:
+    # Tenant-plane dispatcher for the composed-module outbox (SUB-2). Profile
+    # gated and started by name by the operator (OPS-4); a deploy never creates
+    # it on a host that has not run it. It is idle while public.outbox_events is
+    # empty. It deliberately takes NO env_file and NO DATABASE_URL: its only
+    # credential is the EXECUTE-only outbox_dispatcher role, supplied as
+    # OUTBOX_RELAY_DATABASE_URL, and it refuses to start as any other role.
+    profiles:
+    - outbox-relay
+    image: ${APP_IMAGE:?APP_IMAGE must be set in .env to an immutable app image}
+    container_name: dotmac_sub_outbox_relay
+    restart: unless-stopped
+    mem_limit: 256m
+    mem_reservation: 128m
+    cpus: 0.25
+    pids_limit: 64
+    logging: *id001
+    extra_hosts: *observability_extra_hosts
+    environment:
+      OUTBOX_RELAY_DATABASE_URL: ${OUTBOX_RELAY_DATABASE_URL:-}
+      OUTBOX_RELAY_BATCH_SIZE: ${OUTBOX_RELAY_BATCH_SIZE:-50}
+      OUTBOX_RELAY_MAX_ATTEMPTS: ${OUTBOX_RELAY_MAX_ATTEMPTS:-8}
+      OUTBOX_RELAY_PARK_SECONDS: ${OUTBOX_RELAY_PARK_SECONDS:-300}
+      OUTBOX_RELAY_STALE_LEASE_SECONDS: ${OUTBOX_RELAY_STALE_LEASE_SECONDS:-300}
+      OUTBOX_RELAY_POLL_INTERVAL_SECONDS: ${OUTBOX_RELAY_POLL_INTERVAL_SECONDS:-2}
+      OUTBOX_RELAY_METRICS_PORT: '9108'
+      APP_RELEASE: ${APP_RELEASE:-}
+      GIT_SHA: ${GIT_SHA:-}
+    volumes: []
+    command:
+    - python
+    - -m
+    - app.outbox_relay
+    healthcheck:
+      test:
+      - CMD
+      - python
+      - -m
+      - app.outbox_relay.health
+      - --max-age-seconds
+      - '60'
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
   team-inbox-smtp:
     profiles:
     - smtp-inbound

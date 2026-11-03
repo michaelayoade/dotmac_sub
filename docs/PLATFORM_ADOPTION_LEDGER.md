@@ -1059,6 +1059,9 @@ and the settings cutover all import from this list.
 - `dotmac_kernel.machine_auth`
 - `dotmac_kernel.machine_models` — `MachineCredential` only, for the read-only
   deployment requirement query. The 2026-10-13 amendment below narrows its use.
+- `dotmac_kernel.messaging.relay` — `ClaimedEvent`, `RelayPolicy`,
+  `record_failure` and `record_success` only, for the outbox relay dispatcher
+  (2026-11-03 amendment below).
 - `dotmac_kernel.models`
 - `dotmac_kernel.money`
 - `dotmac_kernel.namespaces`
@@ -1075,6 +1078,18 @@ and the settings cutover all import from this list.
 - `dotmac_kernel.settings_models`
 - `dotmac_kernel.settings_resolver`
 - `dotmac_kernel.transactions`
+
+`dotmac_kernel.messaging.relay` is narrowed to `ClaimedEvent`, `RelayPolicy`,
+`record_failure` and `record_success`, added 2026-11-03 (SUB-2) for the
+separate `python -m app.outbox_relay` dispatcher process. The kernel owns the
+retry, backoff and dead-letter policy; reimplementing it in Sub would create a
+second, divergent policy over the same `outbox_events` rows. The claim and park
+statements are Sub's own thin calls to the same SECURITY DEFINER functions
+(they also read `created_at`). `claim_batch`, `dotmac_kernel.messaging.worker`
+(which requires a second, tenant-scoped database credential Sub does not
+supply), the platform plane and `enqueue_*` stay outside the admitted surface.
+The relay is not imported by the web app, Celery or any boot path, so the
+"no relay constructed at Sub boot" boundary is unchanged.
 
 `dotmac_kernel.exceptions` is narrowed to `BadRequestError`,
 `NotFoundError` and `ConflictError` for payment-template adoption and versioned
