@@ -34,12 +34,13 @@ from app.services.owner_commands import CommandContext
 
 def _contexts(
     key: str = "reseller-onboarding-test",
+    actor: str = "service:reseller-onboarding-test",
 ) -> tuple[CommandContext, CommandContext]:
     correlation_id = uuid.uuid4()
     owner = CommandContext(
         command_id=uuid.uuid4(),
         correlation_id=correlation_id,
-        actor="service:reseller-onboarding-test",
+        actor=actor,
         scope=reseller_onboarding.RESELLER_WRITE_SCOPE,
         reason="verify reseller onboarding semantics",
         idempotency_key=key,
@@ -690,3 +691,59 @@ def test_the_owner_mints_a_distinct_secret_per_account_and_accepts_none(
         "two resellers provisioned through the owner share a password hash — "
         "the per-account mint has been replaced by a shared value"
     )
+
+
+def test_non_admin_staff_cannot_onboard_reseller_with_role_above_their_own(
+    db_session,
+    legacy_principal_mode,
+) -> None:
+    """SUB-1 deploy effect: interactive staff get 403-class refusals here."""
+    from app.models.rbac import (
+        Permission,
+        RolePermission,
+        SystemUserPermission,
+    )
+    from app.models.system_user import SystemUser
+    from app.services.assignment_escalation import (
+        EXCEEDS,
+        AssignmentEscalationError,
+    )
+
+    perm = Permission(key=f"sub1:held.{uuid.uuid4().hex[:6]}", is_active=True)
+    role = Role(name=f"reseller-owner-{uuid.uuid4().hex[:6]}", is_active=True)
+    staff = SystemUser(
+        first_name="N", last_name="A", email=f"na-{uuid.uuid4().hex}@example.com"
+    )
+    db_session.add_all((perm, role, staff))
+    db_session.flush()
+    db_session.add(RolePermission(role_id=role.id, permission_id=perm.id))
+    role_name, staff_id = role.name, staff.id
+    db_session.commit()
+    owner, assignment = _contexts(actor=f"user:{staff_id}")
+
+    with pytest.raises(AssignmentEscalationError) as refused:
+        reseller_onboarding.create_reseller(
+            db_session,
+            reseller_onboarding.CreateResellerCommand(
+                context=owner,
+                reseller=ResellerCreate(name="Esc Reseller", code="ESC-RSL"),
+                portal_user=_user(role_name=role_name),
+                assignment_context=assignment,
+            ),
+        )
+    assert refused.value.code == EXCEEDS
+    assert db_session.query(Reseller).filter_by(code="ESC-RSL").count() == 0
+
+    db_session.add(SystemUserPermission(system_user_id=staff_id, permission_id=perm.id))
+    db_session.commit()
+    owner, assignment = _contexts(actor=f"user:{staff_id}", key="allowed")
+    result = reseller_onboarding.create_reseller(
+        db_session,
+        reseller_onboarding.CreateResellerCommand(
+            context=owner,
+            reseller=ResellerCreate(name="Ok Reseller", code="OK-RSL"),
+            portal_user=_user(role_name=role_name),
+            assignment_context=assignment,
+        ),
+    )
+    assert result.reseller_id

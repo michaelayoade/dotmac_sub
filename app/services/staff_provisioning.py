@@ -1023,14 +1023,13 @@ def _enforce_role_no_escalation(
     user_id: UUID | None,
     role_ids: tuple[UUID, ...],
 ) -> None:
-    """SUB-1 for interactive (``user``) actors; see ``assignment_escalation``.
+    """SUB-1; see ``assignment_escalation``.
 
-    Machine actors (``api_key``: the ERP HR reconciliation integration) are a
-    documented out-of-scope follow-up, because enforcing the subset rule there
-    would stop the integration unless its credential holds every synced role.
+    Interactive (``user``) actors get the full rule. Machine callers (the ERP
+    HR sync ``api_key``, ``service``) are exempt from the subset rule only.
     """
 
-    if actor_type is not AuditActorType.user:
+    if actor_type is AuditActorType.system:
         return
     existing: set[UUID] = set()
     if user_id is not None:
@@ -1044,6 +1043,17 @@ def _enforce_role_no_escalation(
             ).scalars()
         )
     added = set(role_ids) - existing
+    if actor_type is not AuditActorType.user:
+        # Named widening: ERP HR sync key / service actors skip the subset rule;
+        # admin, admin-only roles and self-grants are still refused.
+        assignment_escalation.enforce_machine_role_grant(
+            db,
+            actor_type=actor_type,
+            actor_id=actor_id,
+            target_principal_ids=(user_id,) if user_id is not None else (),
+            role_ids=added,
+        )
+        return
     assignment_escalation.enforce_grant(
         db,
         actor_type=actor_type,

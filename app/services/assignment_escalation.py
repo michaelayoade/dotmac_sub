@@ -250,3 +250,52 @@ def enforce_api_key_scopes(
     if authority.exempt or authority.admin:
         return
     enforce_key_subset(authority, requested)
+
+
+ADMIN_REFUSED = f"{CODE_PREFIX}.admin_or_admin_only_role_refused"
+
+
+def enforce_machine_role_grant(
+    db: Session,
+    *,
+    actor_type: AuditActorType,
+    actor_id: str,
+    target_principal_ids: Iterable[UUID],
+    role_ids: Iterable[UUID],
+) -> None:
+    """Named widening for machine callers (ERP HR sync key, service actors).
+
+    They skip the subset rule, but may never grant the ``admin`` role, a role
+    carrying an admin-only-grant key, or any role to the key's own owner.
+    """
+    from app.services.permission_authorization import ADMIN_ONLY_GRANT_PERMISSION_KEYS
+
+    own: frozenset[UUID] = frozenset()
+    if actor_type is AuditActorType.api_key:
+        # Kernel machine credentials have no api_keys row: no owner to compare,
+        # but the admin / admin-only refusal below still applies.
+        try:
+            own = resolve_actor(
+                db, actor_type=actor_type, actor_id=actor_id
+            ).own_principal_ids
+        except AssignmentEscalationError:
+            own = frozenset()
+    roles = role_permission_keys(db, role_ids)
+    refused = sorted(
+        name
+        for name, keys in roles.items()
+        if "*" in keys or keys & ADMIN_ONLY_GRANT_PERMISSION_KEYS
+    )
+    if refused:
+        raise AssignmentEscalationError(
+            code=ADMIN_REFUSED,
+            message="Machine callers may not grant the admin role or admin-only roles.",
+            details={"roles": refused},
+            retryable=False,
+        )
+    if roles and own.intersection(target_principal_ids):
+        raise AssignmentEscalationError(
+            code=SELF,
+            message="You cannot grant roles or permissions to your own account.",
+            retryable=False,
+        )

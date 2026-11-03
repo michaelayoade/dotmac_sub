@@ -558,3 +558,57 @@ def test_internal_system_actor_is_not_evaluated(db_session):
         db_session, actor_type=AuditActorType.system, actor_id="scheduler"
     )
     assert auth.exempt
+
+
+# ---- machine callers on staff provisioning (named widening) -----------------
+
+
+def test_machine_callers_skip_subset_but_not_admin_admin_only_or_self(db_session):
+    from app.services.permission_authorization import ADMIN_ONLY_GRANT_PERMISSION_KEYS
+
+    f = _fixture(db_session)
+    admin_role = db_session.query(Role).filter_by(name="admin").first()
+    if admin_role is None:
+        admin_role = Role(name="admin", is_active=True)
+        db_session.add(admin_role)
+    gated = Permission(key=sorted(ADMIN_ONLY_GRANT_PERMISSION_KEYS)[0], is_active=True)
+    existing = db_session.query(Permission).filter_by(key=gated.key).first()
+    if existing is None:
+        db_session.add(gated)
+        existing = gated
+    db_session.commit()
+    gated_role = _role(db_session, [existing.id])
+    key_owner = _staff_actor(db_session, [])
+    key = ApiKey(
+        key_hash=f"h-{uuid4().hex}",
+        scopes=["rbac:assign"],
+        system_user_id=key_owner,
+        is_active=True,
+    )
+    db_session.add(key)
+    db_session.commit()
+    sub_name = db_session.get(Role, f["role_sub"]).name
+    sup_name = db_session.get(Role, f["role_sup"]).name
+    admin_name, gated_name = admin_role.name, db_session.get(Role, gated_role).name
+    target = _staff_actor(db_session, [])
+    actor = f"api_key:{key.id}"
+
+    def sync(user_id, *names):
+        return staff_provisioning.sync_staff_account_roles(
+            _idle(db_session),
+            staff_provisioning.SyncStaffRolesCommand(
+                context=_ctx(actor, staff_provisioning.STAFF_ASSIGN_SCOPE),
+                user_id=user_id,
+                role_names=tuple(names),
+            ),
+        )
+
+    # Ordinary synced roles (even above the key's own scopes) are allowed.
+    assert sync(target, sub_name, sup_name).changed
+    for bad in (admin_name, gated_name):
+        with pytest.raises(assignment_escalation.AssignmentEscalationError) as exc:
+            sync(target, bad)
+        assert exc.value.code == assignment_escalation.ADMIN_REFUSED
+    with pytest.raises(assignment_escalation.AssignmentEscalationError) as exc:
+        sync(key_owner, sub_name)
+    assert exc.value.code == SELF
