@@ -1,7 +1,7 @@
 """add session-scoped Team Inbox presence evidence
 
-Revision ID: 704_inbox_agent_presence_session_leases
-Revises: 703_inbox_assignment_notification_preferences
+Revision ID: 705_inbox_agent_presence_session_leases
+Revises: 704_inbox_assignment_notification_preferences
 Create Date: 2026-11-03
 """
 
@@ -12,8 +12,8 @@ from sqlalchemy.dialects import postgresql
 
 from alembic import op
 
-revision: str = "704_inbox_agent_presence_session_leases"
-down_revision: str | None = "703_inbox_assignment_notification_preferences"
+revision: str = "705_inbox_agent_presence_session_leases"
+down_revision: str | None = "704_inbox_assignment_notification_preferences"
 branch_labels = None
 depends_on = None
 

@@ -309,9 +309,15 @@ def test_existing_customer_card_uses_lazy_validated_typeahead() -> None:
 
 
 def test_admin_contact_link_route_links_subscriber(db_session, monkeypatch):
-    actor_id = uuid.uuid4()
+    actor, _person = add_bound_staff_user(db_session)
+    actor_id = actor.id
     subscriber = _subscriber(db_session)
     conversation = _conversation(db_session)
+    subscriber_id = subscriber.id
+    conversation_id = conversation.id
+    request = _request()
+    request.state.user = SimpleNamespace(id=actor_id)
+    db_session.commit()
     from app.services import web_admin as web_admin_service
 
     monkeypatch.setattr(
@@ -319,10 +325,10 @@ def test_admin_contact_link_route_links_subscriber(db_session, monkeypatch):
     )
 
     response = inbox_web.team_inbox_contact_link(
-        conversation.id,
-        _request(),
+        conversation_id,
+        request,
         target_type="subscriber",
-        subscriber_id=str(subscriber.id),
+        subscriber_id=str(subscriber_id),
         reseller_id=None,
         subscriber_id_manual=None,
         reseller_id_manual=None,
@@ -333,7 +339,7 @@ def test_admin_contact_link_route_links_subscriber(db_session, monkeypatch):
     link = db_session.query(InboxContactLink).one()
     assert response.status_code == 303
     assert "status=success" in response.headers["location"]
-    assert link.subscriber_id == subscriber.id
+    assert link.subscriber_id == subscriber_id
     assert link.linked_by_person_id == actor_id
 
 

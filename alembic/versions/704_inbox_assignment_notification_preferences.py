@@ -1,6 +1,6 @@
 """add per-agent Team Inbox assignment notification preferences
 
-Revision ID: 703_inbox_assignment_notification_preferences
+Revision ID: 704_inbox_assignment_notification_preferences
 Revises: 703_ip_pool_labels
 Create Date: 2026-11-03
 """
@@ -11,7 +11,7 @@ import sqlalchemy as sa
 
 from alembic import op
 
-revision: str = "703_inbox_assignment_notification_preferences"
+revision: str = "704_inbox_assignment_notification_preferences"
 down_revision: str | None = "703_ip_pool_labels"
 branch_labels = None
 depends_on = None

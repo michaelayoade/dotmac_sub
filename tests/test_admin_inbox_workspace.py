@@ -379,10 +379,10 @@ def test_workspace_exposes_responsive_realtime_and_accessible_controls():
     assert 'name="cc"' in conversation
     assert 'name="bcc"' in conversation
     assert (
-        'hx-get="/admin/inbox/{{ row.id }}?view=20260910b"'
+        'hx-get="/admin/inbox/{{ row.id }}?view=20261103a"'
         in Path("templates/admin/inbox/_queue_macros.html").read_text()
     )
-    assert 'const INBOX_FRAGMENT_VERSION = "20260910b"' in javascript
+    assert 'const INBOX_FRAGMENT_VERSION = "20261103a"' in javascript
     assert "import message_bubble with context" in conversation
     triage = Path("templates/components/ui/triage.html").read_text()
     assert "att.mime_type.startswith('video/')" in triage

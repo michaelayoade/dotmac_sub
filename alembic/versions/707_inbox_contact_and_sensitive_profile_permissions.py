@@ -1,7 +1,7 @@
 """Add granular Inbox contact and sensitive Customer permissions.
 
-Revision ID: 706_inbox_contact_sensitive_permissions
-Revises: 705_support_csat_report_depth
+Revision ID: 707_inbox_contact_sensitive_permissions
+Revises: 706_support_csat_report_depth
 Create Date: 2026-11-03
 """
 
@@ -15,8 +15,8 @@ import sqlalchemy as sa
 
 from alembic import op
 
-revision: str = "706_inbox_contact_sensitive_permissions"
-down_revision: str | None = "705_support_csat_report_depth"
+revision: str = "707_inbox_contact_sensitive_permissions"
+down_revision: str | None = "706_support_csat_report_depth"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 

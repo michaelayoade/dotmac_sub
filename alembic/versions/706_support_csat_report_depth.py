@@ -1,7 +1,7 @@
 """add CSAT inbox-channel report evidence
 
-Revision ID: 705_support_csat_report_depth
-Revises: 704_inbox_agent_presence_session_leases
+Revision ID: 706_support_csat_report_depth
+Revises: 705_inbox_agent_presence_session_leases
 Create Date: 2026-11-03
 """
 
@@ -12,8 +12,8 @@ from sqlalchemy import text
 
 from alembic import op
 
-revision: str = "705_support_csat_report_depth"
-down_revision: str | None = "704_inbox_agent_presence_session_leases"
+revision: str = "706_support_csat_report_depth"
+down_revision: str | None = "705_inbox_agent_presence_session_leases"
 branch_labels = None
 depends_on = None
 
