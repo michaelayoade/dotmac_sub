@@ -39,7 +39,7 @@ def _contexts(
     owner = CommandContext(
         command_id=uuid.uuid4(),
         correlation_id=correlation_id,
-        actor="user:reseller-onboarding-test",
+        actor="service:reseller-onboarding-test",
         scope=reseller_onboarding.RESELLER_WRITE_SCOPE,
         reason="verify reseller onboarding semantics",
         idempotency_key=key,

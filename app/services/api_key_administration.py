@@ -17,6 +17,7 @@ from sqlalchemy.orm import Session
 from app.models.audit import AuditActorType
 from app.models.auth import ApiKey
 from app.models.subscriber import Subscriber
+from app.services import assignment_escalation
 from app.services.audit_adapter import AuditActor, stage_audit_event
 from app.services.domain_errors import DomainError
 from app.services.owner_commands import (
@@ -217,6 +218,28 @@ def _validate_issuance_actor(
         )
 
 
+def _guard_scopes(
+    db: Session,
+    *,
+    actor: AuditActor,
+    scopes: tuple[str, ...],
+    error: type[DomainError],
+) -> None:
+    """SUB-1: an API key may not carry scopes the acting principal lacks."""
+
+    try:
+        assignment_escalation.enforce_api_key_scopes(
+            db,
+            actor_type=actor.actor_type,
+            actor_id=str(actor.actor_id),
+            scopes=scopes,
+        )
+    except assignment_escalation.AssignmentEscalationError as exc:
+        raise error(
+            code=exc.code, message=exc.message, details=exc.details, retryable=False
+        ) from None
+
+
 def _stage_issuance(
     db: Session,
     *,
@@ -266,6 +289,9 @@ def _stage_issuance(
             raise ApiKeyIssuanceError(
                 code=f"{OWNER}.subscriber_not_found", message="Subscriber not found"
             )
+    _guard_scopes(
+        db, actor=command.actor, scopes=command.scopes, error=ApiKeyIssuanceError
+    )
     key = ApiKey(
         subscriber_id=command.subscriber_id,
         label=command.label,
@@ -491,6 +517,22 @@ def update(db: Session, *, command: UpdateApiKeyCommand) -> ApiKeyUpdateOutcome:
                 raise ApiKeyUpdateError(
                     code=f"{OWNER}.subscriber_not_found", message="Subscriber not found"
                 )
+        # SUB-1: new scopes must be within the actor's own; replacing the secret
+        # hands the actor the key's EXISTING scopes, so those must be too.
+        if ApiKeyUpdateField.SCOPES in command.fields and command.scopes is not None:
+            _guard_scopes(
+                db,
+                actor=command.actor,
+                scopes=command.scopes,
+                error=ApiKeyUpdateError,
+            )
+        if ApiKeyUpdateField.KEY_HASH in command.fields:
+            _guard_scopes(
+                db,
+                actor=command.actor,
+                scopes=tuple(str(item) for item in (key.scopes or ())),
+                error=ApiKeyUpdateError,
+            )
         previous_hash = key.key_hash
         # Explicit assignments preserve legacy exclude_unset semantics. Nullable
         # command values intentionally reach persistence, including constraint failures.
@@ -730,6 +772,9 @@ def web_create(db: Session, *, command: WebCreateApiKeyCommand) -> WebApiKeyOutc
         from app.services.auth import hash_api_key
 
         _web_timeout(db)
+        _guard_scopes(
+            db, actor=command.actor, scopes=command.scopes, error=WebApiKeyError
+        )
         if (
             command.subscriber_id is not None
             and db.get(Subscriber, command.subscriber_id) is None
