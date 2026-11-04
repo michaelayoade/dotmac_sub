@@ -1935,8 +1935,8 @@ legacy-compatible referral reference, so existing credit evidence repairs the
 Referral link without paying twice. PII-free versioned events are staged with
 the transition. Reward notification is a deduplicated consequence resolved by
 the canonical notification template/channel policy, never an in-service push.
-Program settings, including the share-base URL, resolve only through
-`control.settings_spec`.
+Program settings resolve only through `control.settings_spec`. Referral links
+use the customer portal origin resolved from `selfcare_domain` or `APP_URL`.
 
 Referral customer reads/writes are permanently native. The prior referral
 read/write controls, CRM referral mutation, mirror write-through, and scheduled

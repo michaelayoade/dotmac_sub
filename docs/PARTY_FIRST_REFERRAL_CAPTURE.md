@@ -144,8 +144,9 @@ create a second intent.
 
 ## Runtime policy
 
-Program enablement, reward amount/currency, qualification window,
-auto-approval, and share-base URL resolve only through `control.settings_spec`.
+Program enablement, reward amount/currency, qualification window, and
+auto-approval resolve only through `control.settings_spec`. Referral links use
+the customer portal origin resolved from `selfcare_domain` or `APP_URL`.
 Their defaults and bounds are declared only in the settings registry;
 `referrals.program`, API/web adapters, and documentation do not repeat runtime
 fallbacks. The code alphabet/length, field-size limits, exact lifecycle

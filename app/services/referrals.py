@@ -18,7 +18,6 @@ from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal, InvalidOperation
 from typing import Literal, TypeVar
-from urllib.parse import urlsplit
 from uuid import UUID
 
 from sqlalchemy import select
@@ -51,6 +50,7 @@ from app.services.customer_identity_resolution import resolve_customer_identity
 from app.services.domain_errors import DomainError
 from app.services.events import emit_event
 from app.services.events.types import EventType
+from app.services.email import _get_app_url
 from app.services.owner_commands import (
     CommandContext,
     OwnerCommandDefinition,
@@ -92,7 +92,6 @@ _PROGRAM_POLICY_KEYS = (
     "referral_qualify_window_days",
     "referral_auto_approve_reward",
 )
-_SHARE_BASE_URL_KEY = "referral_share_base_url"
 
 _PROGRAM_TRANSITION_CONCERN = "atomic referral program transition orchestration"
 _ENSURE_CODE_COMMAND = OwnerCommandDefinition(
@@ -347,12 +346,9 @@ def _program_policy(db: Session) -> _ProgramPolicy:
 
 
 def _share_base_url(db: Session) -> str:
-    value = settings_spec.resolve_value(db, _DOMAIN, _SHARE_BASE_URL_KEY)
-    share_base_url = str(value or "").strip().rstrip("/")
-    parsed_share_url = urlsplit(share_base_url)
-    if parsed_share_url.scheme not in {"http", "https"} or not parsed_share_url.netloc:
-        raise _error("invalid_configuration", "Referral share URL policy is invalid.")
-    return share_base_url
+    # The public signup page is served by this app. Use the same configured
+    # customer portal origin as other customer-facing links.
+    return _get_app_url(db, next_login_path="/portal")
 
 
 def _normalize_capture(command: CaptureReferralCommand) -> _CaptureValues:

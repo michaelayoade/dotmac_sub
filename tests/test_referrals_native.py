@@ -795,25 +795,16 @@ def test_read_for_subscriber_matches_mirror_shape(db_session):
     assert Decimal(payload["program"]["reward_amount"]) == Decimal("2500")
 
 
-def test_share_url_uses_the_canonical_configured_base(db_session):
-    configured_base = "https://referrals.example.test/customer"
+def test_share_url_uses_the_customer_portal_origin(db_session, monkeypatch):
+    configured_base = "https://selfcare.example.test"
+    monkeypatch.setenv("APP_URL", configured_base)
     _program(db_session)
-    db_session.add(
-        DomainSetting(
-            domain=SettingDomain.subscriber,
-            key="referral_share_base_url",
-            value_type=SettingValueType.string,
-            value_text=configured_base,
-            is_active=True,
-        )
-    )
-    db_session.commit()
     referrer = _subscriber(db_session)
     ensure_code(db_session, referrer.id)
 
     payload = referrals.read_for_subscriber(db_session, str(referrer.id))
 
-    assert payload["share_url"].startswith(f"{configured_base}/r/")
+    assert payload["share_url"] == f"{configured_base}/r/{payload['code']}"
 
 
 def test_refer_a_friend_portal_shape(db_session):
