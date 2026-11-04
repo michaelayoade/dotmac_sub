@@ -37,6 +37,29 @@ def test_park_deliver_and_dead_letter_against_the_real_functions(
     db_session: Session,
 ) -> None:
     connection = db_session.connection()
+    # The shared test database can hold committed outbox rows from other tests.
+    # Make them unclaimable for THIS transaction only (db_session rolls it
+    # back): push pending rows out of the window and freshen stale leases. Rows
+    # are neither deleted nor changed beyond the transaction.
+    connection.execute(
+        sa.text(
+            "UPDATE public.outbox_events SET "
+            "available_at = CASE WHEN status = 'pending' "
+            "THEN now() + interval '1 day' ELSE available_at END, "
+            "leased_at = CASE WHEN status = 'claimed' THEN now() ELSE leased_at END "
+            "WHERE status IN ('pending', 'claimed')"
+        )
+    )
+    assert (
+        connection.execute(
+            sa.text(
+                "SELECT count(*) FROM public.outbox_events "
+                "WHERE (status = 'pending' AND available_at <= now()) "
+                "OR (status = 'claimed' AND leased_at < now() - interval '300 seconds')"
+            )
+        ).scalar()
+        == 0
+    )
     connection.execute(
         sa.text(
             "INSERT INTO public.outbox_events "
