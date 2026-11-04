@@ -19,6 +19,62 @@ from app.services.sot_manifest import (
 
 SERVICES: tuple[SOTService, ...] = (
     SOTService(
+        name="operations.vendor_creation",
+        module="app.services.vendor_creation",
+        owns=("native vendor creation and ERP supplier delivery intent",),
+        depends_on=("integration.backoffice_adapter",),
+        contract=ServiceContract(
+            concerns=(
+                ConcernContract(
+                    name="native vendor creation and ERP supplier delivery intent",
+                    role=OwnerRole.COMMAND_WRITER,
+                    input_names=("staff vendor creation command",),
+                    canonical_writer="operations.vendor_creation",
+                ),
+            ),
+            authoritative_inputs=(
+                AuthorityInput(
+                    name="staff vendor creation command",
+                    owner="auth.permission_gate",
+                    kind=AuthorityKind.CONTROL_INPUT,
+                    source="authenticated staff vendor form and command context",
+                ),
+            ),
+            transaction=TransactionContract(
+                mode=TransactionMode.OWNER_MANAGED,
+                boundary="Native Vendor, FieldVendor bridge and ERP supplier outbox intent commit atomically.",
+                locking="New vendor ID is unique; code uniqueness is checked on native and portal tables.",
+                idempotency="One unique supplier outbox key per native vendor UUID.",
+                retries="ERP delivery retries after the vendor transaction commits.",
+            ),
+            errors=ErrorContract(
+                domain_codes=(
+                    "operations.vendor_creation.active_caller_transaction",
+                    "operations.vendor_creation.command_contract_violation",
+                    "operations.vendor_creation.invalid_command_context",
+                    "operations.vendor_creation.nested_owner_command",
+                    "operations.vendor_creation.nested_transaction_completion",
+                ),
+                mapping_owner="app.web.admin.vendors",
+            ),
+            events=EventContract(
+                event_types=("vendor.created",),
+                schema_version=1,
+                delivery_owner="events.dispatcher",
+                compatibility="The supplier payload is versioned and keyed by source Vendor UUID.",
+                replay="The ERP supplier endpoint returns the existing supplier for a repeated source UUID.",
+            ),
+            migration=MigrationContract(
+                state=AuthorityMigrationState.NATIVE,
+                new_owner="operations.vendor_creation",
+                verification="Vendor creation, atomic outbox, ERP delivery and repair tests.",
+            ),
+            steward="vendor operations",
+            design_refs=("docs/BACKOFFICE_INTEGRATION_BOUNDARY.md",),
+            test_refs=("tests/test_vendor_supplier_sync.py",),
+        ),
+    ),
+    SOTService(
         name="auth.vendor_user_provisioning",
         module="app.services.vendor_user_provisioning",
         owns=(

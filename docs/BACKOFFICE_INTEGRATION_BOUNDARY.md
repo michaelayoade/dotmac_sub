@@ -50,7 +50,36 @@ operation.
 | Expense claim | `expense_system`, `expense_claim_reference`, `expense_claim_status` | `app.services.dotmac_erp.expense_sync` |
 | Procurement order | `procurement_system`, `procurement_order_reference` | `app.services.dotmac_erp.purchase_order_sync` |
 | Supplier/payables document | `payables_system`, `payables_document_reference`, `payment_status` | `app.services.dotmac_erp.purchase_invoice_sync` |
+| Vendor supplier identity | `supplier_system`, `supplier_reference` | `app.services.dotmac_erp.vendor_supplier_sync` |
 | Workforce observation | `workforce_system`, `workforce_employee_reference` | configured workforce adapter |
+
+Vendor creation commits the native vendor, its portal identity bridge, and a
+versioned supplier delivery intent together. ERP resolves the organization
+specific `gl.sub_supplier_ap_control_account_id` setting and validates that
+the selected UUID is an active AP liability account. Account code 2000 (Trade
+Payables) is the intended operator selection for the current organization;
+it is never embedded in the wire contract. ERP owns supplier accounting and
+tax identity. A duplicate source vendor UUID returns the existing supplier;
+an unrelated supplier code collision requires review. The Sub outbox retains
+failed delivery evidence and can repair an accepted supplier reference from
+its stored response.
+
+### Vendor supplier validation and rollout
+
+- Focused Ruff lint and format checks, targeted mypy, Python compilation, and
+  the Sub source-of-truth registry validation passed in the feature worktree.
+- Focused pytest collection is blocked locally by the absent `dotmac_billing`
+  package. The ERP feature worktree has the same issue with `dotmac_files`.
+  Alembic graph checks also require the unavailable `dotmac_kernel.migrations`
+  package. Run both repositories' required CI and migrated PostgreSQL suites
+  before merging.
+- Deploy ERP's supplier endpoint and migration first. Finance must configure
+  the organization AP control account UUID (expected account code 2000), and
+  the Sub service key needs `sub:suppliers:write`. Then deploy the Sub flow.
+- Staging acceptance must create a vendor in Sub, deliver the outbox event,
+  confirm one ERP supplier with the configured AP account, confirm Sub's
+  `supplier_reference`, and replay the request to verify the same supplier ID.
+  No live cross-application acceptance has been run from this checkout.
 
 Replacing Dotmac ERP means implementing the same versioned capabilities in
 another connector, selecting it with a Sub-local capability binding, migrating
