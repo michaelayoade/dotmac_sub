@@ -488,7 +488,7 @@ def _sync_referral_expiry_schedule(session) -> None:
         name="expire_pending_referrals",
         task_name="app.tasks.referrals.expire_pending_referrals",
         enabled=True,
-        interval_seconds=3600,
+        interval_seconds=86400,
     )
 
 
