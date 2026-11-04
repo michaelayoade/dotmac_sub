@@ -44,7 +44,9 @@ def _context(auth: dict, *, scope: str, reason: str, key: str) -> CommandContext
 
 
 def _domain_error(exc: DomainError) -> HTTPException:
-    if exc.code.endswith("_not_found"):
+    if exc.code.startswith("auth.assignment_escalation."):
+        status_code = 403
+    elif exc.code.endswith("_not_found"):
         status_code = 404
     elif exc.code.endswith(("_conflict", "_in_use")) or exc.code.endswith(
         ".active_caller_transaction"

@@ -18,7 +18,7 @@ from app.models.rbac import (
     SystemUserRole,
 )
 from app.models.system_user import SystemUser
-from app.services import auth_cache
+from app.services import assignment_escalation, auth_cache
 from app.services.audit_adapter import AuditActor, stage_audit_event
 from app.services.domain_errors import DomainError
 from app.services.entitlement_revocation import (
@@ -156,6 +156,14 @@ def _active_roles_by_ids(
     if missing:
         raise RoleResolutionError(role_ids=missing)
     return tuple(by_id[role_id] for role_id in ids)
+
+
+def active_roles_by_names(
+    db: Session, role_names: list[str] | tuple[str, ...]
+) -> tuple[Role, ...]:
+    """Resolve active roles by name (raises ``RoleResolutionError``)."""
+
+    return _active_roles_by_names(db, role_names)
 
 
 def _locked_admin_role(db: Session, *, nowait: bool = False) -> Role | None:
@@ -654,6 +662,43 @@ def _admin_required_error(keys: tuple[str, ...]) -> SystemUserAssignmentError:
     )
 
 
+def _enforce_no_escalation(
+    db: Session,
+    command: ReplaceSystemUserAssignmentsCommand,
+    actor_type: AuditActorType,
+    actor_id: str,
+) -> None:
+    """SUB-1: the actor may only ADD access it holds, and never to itself."""
+
+    existing_roles = set(
+        db.execute(
+            select(SystemUserRole.role_id).where(
+                SystemUserRole.system_user_id == command.user_id,
+                SystemUserRole.scope_type == "",
+                SystemUserRole.scope_id == "",
+            )
+        ).scalars()
+    )
+    existing_permissions = set(
+        db.execute(
+            select(SystemUserPermission.permission_id).where(
+                SystemUserPermission.system_user_id == command.user_id
+            )
+        ).scalars()
+    )
+    added_roles = set(command.role_ids) - existing_roles
+    added_permissions = set(command.direct_permission_ids) - existing_permissions
+    assignment_escalation.enforce_grant(
+        db,
+        actor_type=actor_type,
+        actor_id=actor_id,
+        target_principal_ids=(command.user_id,),
+        role_ids=added_roles,
+        permission_ids=added_permissions,
+        check_self=bool(added_roles or added_permissions),
+    )
+
+
 def replace_system_user_assignments(
     db: Session,
     command: ReplaceSystemUserAssignmentsCommand,
@@ -677,6 +722,7 @@ def replace_system_user_assignments(
                 "Assignment command exceeds the supported cardinality.",
             )
 
+        _enforce_no_escalation(db, command, actor_type, actor_id)
         before_roles, before_permissions = _effective_access(db, user.id)
         role_result = sync_source_roles_by_ids(
             db,

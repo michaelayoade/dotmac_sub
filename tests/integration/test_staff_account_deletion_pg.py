@@ -316,7 +316,7 @@ def test_parent_audit_failure_rolls_back_successful_key_participant(
 
 
 def grantor_scenario(engine: Engine, scenario: StaffScenario) -> tuple[UUID, UUID]:
-    from app.models.rbac import Permission, Role
+    from app.models.rbac import Permission, Role, SystemUserPermission
 
     with Session(engine) as db:
         # Deterministic A < B so bulk deletion necessarily locks A before busy B.
@@ -337,6 +337,12 @@ def grantor_scenario(engine: Engine, scenario: StaffScenario) -> tuple[UUID, UUI
         db.add(permission)
         db.flush()
         permission_id = permission.id
+        # SUB-1: the acting grantor must itself hold what it grants.
+        db.add(
+            SystemUserPermission(
+                system_user_id=scenario.user_id, permission_id=permission_id
+            )
+        )
         db.commit()
         return target_id, permission_id
 
