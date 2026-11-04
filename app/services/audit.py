@@ -13,6 +13,7 @@ from sqlalchemy.orm.exc import DetachedInstanceError
 
 from app.models.audit import AuditActorType, AuditEvent
 from app.schemas.audit import AuditEventCreate, AuditEventRead
+from app.services.audit_adapter import AuditActor
 from app.services.common import apply_ordering, apply_pagination
 from app.services.response import ListResponseMixin
 from app.services.session_hooks import run_after_commit
@@ -586,30 +587,131 @@ class AuditEvents(ListResponseMixin):
         return list(db.scalars(apply_pagination(stmt, query.limit, query.offset)).all())
 
     @staticmethod
-    def log_request(db: Session, request: Request, response: Response):
-        payload = AuditEvents.build_request_payload(request, response)
+    def log_request(db: Session, request: Request, response: Response) -> None:
+        actor = AuditEvents._request_actor(request)
+        if actor.actor_id and actor.actor_type in {
+            AuditActorType.user,
+            AuditActorType.api_key,
+        }:
+            # Import lazily because the compatibility helper also imports this
+            # owner. The lookup happens in the audit middleware's independent
+            # session, so the label is a canonical write-time snapshot rather
+            # than a value trusted from request headers or form input.
+            from app.services.audit_helpers import resolve_actor_label_from_db
+
+            canonical_label = resolve_actor_label_from_db(
+                db,
+                actor.actor_id,
+                actor.actor_type,
+            )
+            if canonical_label:
+                actor = AuditActor(
+                    actor_type=actor.actor_type,
+                    actor_id=actor.actor_id,
+                    label=canonical_label,
+                    party_id=actor.party_id,
+                )
+        payload = AuditEvents.build_request_payload(request, response, actor=actor)
         event = AuditEvents._build_event(payload)
         db.add(event)
         db.commit()
 
     @staticmethod
-    def build_request_payload(request: Request, response: Response) -> AuditEventCreate:
-        actor_type = request.headers.get("x-actor-type")
-        actor_id = request.headers.get("x-actor-id")
-        if not actor_type:
-            actor_type = getattr(request.state, "actor_type", None)
-        if not actor_id:
-            actor_id = getattr(request.state, "actor_id", None)
-        if not actor_type:
-            actor_type = AuditActorType.system.value
+    def _request_actor(request: Request) -> AuditActor:
+        """Normalize authenticated request state into the closed actor contract.
+
+        Authentication adapters use product principal kinds such as
+        ``system_user`` and ``subscriber``. Those are user principals for audit
+        purposes; attempting to construct ``AuditActorType`` directly from the
+        product kind previously downgraded staff to ``system``. Actor headers
+        are deliberately ignored because they are caller-controlled transport
+        input, not authentication evidence.
+        """
+
+        state = request.state
+        auth = getattr(state, "auth", None)
+        auth_actor_id = auth.get("principal_id") if isinstance(auth, Mapping) else None
+        auth_actor_type = (
+            auth.get("principal_type") if isinstance(auth, Mapping) else None
+        )
+        actor_id = (
+            str(auth_actor_id or getattr(state, "actor_id", None) or "").strip() or None
+        )
+        raw_actor_type = (
+            str(auth_actor_type or getattr(state, "actor_type", None) or "")
+            .strip()
+            .lower()
+        )
+        if raw_actor_type in {
+            "subscriber",
+            "system_user",
+            "reseller_user",
+            "vendor_user",
+            AuditActorType.user.value,
+        }:
+            actor_type = AuditActorType.user
+        elif raw_actor_type == AuditActorType.api_key.value:
+            actor_type = AuditActorType.api_key
+        elif raw_actor_type == AuditActorType.service.value:
+            actor_type = AuditActorType.service
+        elif raw_actor_type == AuditActorType.system.value:
+            actor_type = AuditActorType.system
+        elif not raw_actor_type:
+            actor_type = AuditActorType.user if actor_id else AuditActorType.system
+        else:
+            raise ValueError(
+                "authenticated request actor type is outside the audit contract: "
+                f"{raw_actor_type!r}"
+            )
+
+        display_name, _email = AuditEvents._request_actor_identity(request)
+        return AuditActor(
+            actor_type=actor_type,
+            actor_id=actor_id,
+            label=display_name if actor_type is AuditActorType.user else None,
+        )
+
+    @staticmethod
+    def _request_actor_identity(request: Request) -> tuple[str | None, str | None]:
+        """Read an already-loaded actor label without triggering lazy DB IO."""
+
+        person = getattr(request.state, "user", None)
+        if not person:
+            return None, None
+        state = getattr(person, "__dict__", {})
+        try:
+            if isinstance(person, Mapping):
+                first_name = str(person.get("first_name") or "").strip()
+                last_name = str(person.get("last_name") or "").strip()
+                display_name = str(
+                    person.get("display_name") or person.get("name") or ""
+                ).strip()
+                email = str(person.get("email") or "").strip()
+            else:
+                first_name = str(state.get("first_name") or "").strip()
+                last_name = str(state.get("last_name") or "").strip()
+                display_name = str(state.get("display_name") or "").strip()
+                email = str(state.get("email") or "").strip()
+            if not display_name:
+                display_name = f"{first_name} {last_name}".strip()
+        except DetachedInstanceError:
+            return None, None
+        except Exception:
+            return None, None
+        return display_name or None, email or None
+
+    @staticmethod
+    def build_request_payload(
+        request: Request,
+        response: Response,
+        *,
+        actor: AuditActor | None = None,
+    ) -> AuditEventCreate:
+        resolved_actor = actor or AuditEvents._request_actor(request)
         request_id = request.headers.get("x-request-id")
         entity_id = request.headers.get("x-entity-id")
         ip_address = request.client.host if request.client else None
         user_agent = request.headers.get("user-agent")
-        try:
-            resolved_actor_type = AuditActorType(actor_type)
-        except ValueError:
-            resolved_actor_type = AuditActorType.system
         try:
             query_params = dict(request.query_params)
         except KeyError:
@@ -622,31 +724,19 @@ class AuditEvents(ListResponseMixin):
                 for key, value in query_params.items()
             },
         }
-        person = getattr(request.state, "user", None)
-        if person:
-            # request.state.user can be detached by middleware ordering; read only
-            # already-loaded values to avoid lazy-loading on a dead Session.
-            state = getattr(person, "__dict__", {})
-            try:
-                first_name = (state.get("first_name") or "").strip()
-                last_name = (state.get("last_name") or "").strip()
-                display_name = (state.get("display_name") or "").strip()
-                if not display_name:
-                    display_name = f"{first_name} {last_name}".strip()
-                email = state.get("email")
-            except DetachedInstanceError:
-                display_name = None
-                email = None
-            except Exception:
-                display_name = None
-                email = None
-            if display_name:
-                metadata["actor_name"] = display_name
-            if email:
-                metadata["actor_email"] = email
+        display_name, email = AuditEvents._request_actor_identity(request)
+        actor_label = resolved_actor.label or (
+            display_name if resolved_actor.actor_type is AuditActorType.user else None
+        )
+        if actor_label:
+            metadata["actor_name"] = actor_label
+        if email and resolved_actor.actor_type is AuditActorType.user:
+            metadata["actor_email"] = email
         payload = AuditEventCreate(
-            actor_type=resolved_actor_type,
-            actor_id=actor_id,
+            actor_type=resolved_actor.actor_type,
+            actor_id=resolved_actor.actor_id,
+            actor_label=actor_label,
+            actor_party_id=resolved_actor.party_id,
             action=request.method,
             entity_type=request.url.path,
             entity_id=entity_id,

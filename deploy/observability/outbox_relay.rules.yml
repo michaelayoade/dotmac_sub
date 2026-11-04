@@ -1,0 +1,149 @@
+# Outbox relay dispatcher alerts (SUB-2). Metrics are exported by
+# `python -m app.outbox_relay` (outbox_relay_* series). The dispatcher role
+# cannot read tables, so these are process-observed signals; counters reset on
+# restart, so use increase() windows, never absolute values. Backlog rules use
+# the DATABASE-side snapshot (observability_state{domain="outbox_backlog"})
+# published by the main app's celery task, which works whether or not the relay
+# is running.
+groups:
+  - name: outbox_relay
+    rules:
+      - alert: OutboxRelayDeadLettered
+        expr: sum(increase(outbox_relay_dead_lettered_total[1h])) > 0
+        for: 0m
+        labels:
+          severity: critical
+          area: outbox-relay
+          owner: platform-operations
+        annotations:
+          summary: "Outbox relay dead-lettered an event"
+          description: >
+            A registered handler failed an event until max attempts and the
+            relay retained it as status 'dead'. Inspect public.outbox_events
+            (status = 'dead', last_error holds the exception class only) with
+            an owner-role session; the dispatcher role cannot read it. Unregistered
+            event types are parked, never dead-lettered, so this always means a
+            real handler failure.
+          runbook: "docs/runbooks/OUTBOX_RELAY.md"
+
+      - alert: OutboxRelayOldestPendingAgeHigh
+        expr: max(outbox_relay_oldest_pending_age_seconds) > 3600
+        for: 15m
+        labels:
+          severity: warning
+          area: outbox-relay
+          owner: platform-operations
+        annotations:
+          summary: "An outbox event has stayed pending for over an hour"
+          description: >
+            The oldest event left pending (parked for want of a handler, or
+            awaiting retry) is older than one hour. Parked events mean a
+            composed module is enqueuing an event type with no registered
+            handler; check the relay log for 'parked (no handler)'.
+          runbook: "docs/runbooks/OUTBOX_RELAY.md"
+
+      - alert: OutboxRelayPollStale
+        expr: time() - max(outbox_relay_last_poll_timestamp_seconds) > 300
+        for: 5m
+        labels:
+          severity: warning
+          area: outbox-relay
+          owner: platform-operations
+        annotations:
+          summary: "Outbox relay has stopped polling"
+          description: >
+            The series exists but has not advanced for five minutes. Note that
+            once the target has been down past the staleness window the series
+            disappears and this rule goes silent; add an absent() rule on the
+            first production deployment, when absence becomes meaningful.
+          runbook: "docs/runbooks/OUTBOX_RELAY.md"
+
+      - alert: OutboxRelayCycleErrors
+        expr: sum(increase(outbox_relay_cycle_errors_total[15m])) > 3
+        for: 5m
+        labels:
+          severity: warning
+          area: outbox-relay
+          owner: platform-operations
+        annotations:
+          summary: "Outbox relay dispatch cycles are failing"
+          description: >
+            Claim or connection errors in the dispatch loop. Check the
+            outbox_dispatcher credential and database reachability.
+          runbook: "docs/runbooks/OUTBOX_RELAY.md"
+
+      # --- Database-side backlog (does not depend on the relay process).
+      - alert: OutboxEventsQueuedRelayNotRunning
+        expr: >
+          max(observability_state{domain="outbox_backlog",signal="oldest_pending_age_seconds",scope="global"}) > 900
+          and absent(outbox_relay_last_poll_timestamp_seconds)
+        for: 10m
+        labels:
+          severity: critical
+          area: outbox-relay
+          owner: platform-operations
+        annotations:
+          summary: "Outbox events are queued and the relay is not running"
+          description: >
+            The database shows events pending or claimed for over 15 minutes
+            and no relay metrics are being scraped. This is the failure the
+            profile-gated relay cannot report about itself. Unlike a bare
+            absent() it stays silent on hosts with an empty outbox.
+          runbook: "docs/runbooks/OUTBOX_RELAY.md"
+
+      - alert: OutboxDeadEventsPresent
+        expr: max(observability_state{domain="outbox_backlog",signal="dead",scope="global"}) > 0
+        for: 30m
+        labels:
+          severity: warning
+          area: outbox-relay
+          owner: platform-operations
+        annotations:
+          summary: "Dead-lettered outbox events exist in the database"
+          description: >
+            status = 'dead' rows are retained until someone resolves them. This
+            persists after relay restarts, unlike the dead-letter counter.
+          runbook: "docs/runbooks/OUTBOX_RELAY.md"
+
+      - alert: OutboxBacklogSnapshotMissing
+        expr: absent(observability_snapshot_age_seconds{domain="outbox_backlog"}) == 1
+        for: 30m
+        labels:
+          severity: warning
+          area: outbox-relay
+          owner: platform-operations
+        annotations:
+          summary: "Outbox backlog snapshot is not being published"
+          description: >
+            The app's outbox_backlog_snapshot task has not published. Check
+            celery beat and the default-queue worker.
+          runbook: "docs/runbooks/OUTBOX_RELAY.md"
+
+      # --- Parked (unregistered) event types: a silent forever-park guard.
+      - alert: OutboxEventTypeParked
+        expr: sum by (event_type) (increase(outbox_relay_parked_total[1h])) > 0
+        for: 1h
+        labels:
+          severity: warning
+          area: outbox-relay
+          owner: platform-operations
+        annotations:
+          summary: "Outbox event type {{ $labels.event_type }} has been parking for an hour"
+          description: >
+            No handler is registered for this type. Register a handler or
+            declare acknowledge_without_consumer for it.
+          runbook: "docs/runbooks/OUTBOX_RELAY.md"
+
+      - alert: OutboxEventTypeParkedLong
+        expr: sum by (event_type) (increase(outbox_relay_parked_total[24h])) > 0
+        for: 24h
+        labels:
+          severity: critical
+          area: outbox-relay
+          owner: platform-operations
+        annotations:
+          summary: "Outbox event type {{ $labels.event_type }} has been parking for 24 hours"
+          description: >
+            A composed module is publishing a type nobody consumes and nobody
+            has declared unconsumed. Phase B PASS 10 requires zero parked rows.
+          runbook: "docs/runbooks/OUTBOX_RELAY.md"
