@@ -8,10 +8,13 @@ from app.schemas.auth import ApiKeyUpdate
 from app.services import api_key_administration as owner
 from app.services.audit_adapter import AuditActor
 from app.services.owner_commands import CommandContext
+from tests.api_key_actor_fixtures import persist_admin_actor
 
 
-def update_command(key_id: UUID, payload: ApiKeyUpdate) -> owner.UpdateApiKeyCommand:
-    actor = AuditActor.user(str(uuid4()))
+def update_command(
+    key_id: UUID, payload: ApiKeyUpdate, *, actor_id: str | None = None
+) -> owner.UpdateApiKeyCommand:
+    actor = AuditActor.user(actor_id or str(uuid4()))
     assert actor.actor_id is not None
     return owner.UpdateApiKeyCommand(
         context=CommandContext.system(
@@ -37,5 +40,6 @@ def update(
     db: Session, key_id: str, payload: ApiKeyUpdate
 ) -> owner.ApiKeyUpdateOutcome:
     command = update_command(UUID(key_id), payload)
+    persist_admin_actor(db, command.actor.actor_id)
     db.commit()  # End fixture setup/reads before invoking the command owner.
     return owner.update(db, command=command)

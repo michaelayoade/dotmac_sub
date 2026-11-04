@@ -129,7 +129,9 @@ def _context(
 
 
 def _domain_error(exc: DomainError) -> HTTPException:
-    if (
+    if exc.code.startswith("auth.assignment_escalation."):
+        status_code = 403
+    elif (
         exc.code.endswith(".unknown_roles")
         or exc.code.endswith(".invalid_command")
         or exc.code.endswith(".invalid_mapping")

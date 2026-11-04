@@ -14,7 +14,7 @@ from sqlalchemy.orm import Session
 from app.models.audit import AuditActorType
 from app.models.rbac import Permission, Role, SubscriberPermission, SubscriberRole
 from app.models.subscriber import Subscriber
-from app.services import auth_cache
+from app.services import assignment_escalation, auth_cache
 from app.services.audit_adapter import stage_audit_event
 from app.services.common import apply_ordering, apply_pagination
 from app.services.domain_errors import DomainError
@@ -443,6 +443,13 @@ def grant_subscriber_role(
 
     def operation() -> SubscriberRoleOutcome:
         actor_type, actor_id = _validate_context(command.context)
+        assignment_escalation.enforce_grant(
+            db,
+            actor_type=actor_type,
+            actor_id=actor_id,
+            target_principal_ids=(command.subscriber_id,),
+            role_ids=(command.role_id,),
+        )
         grant, changed = _ensure_role_grant(
             db,
             subscriber_id=command.subscriber_id,
@@ -495,6 +502,15 @@ def update_subscriber_role(
             command.scope_type if command.scope_type is not None else grant.scope_type
         )
         scope_id = command.scope_id if command.scope_id is not None else grant.scope_id
+        # An update re-points an existing grant: the resulting role is a grant
+        # to the (possibly new) subscriber, and the original owner is touched.
+        assignment_escalation.enforce_grant(
+            db,
+            actor_type=actor_type,
+            actor_id=actor_id,
+            target_principal_ids=(original_subscriber_id, subscriber_id),
+            role_ids=(role_id,),
+        )
         _locked_subscriber(db, subscriber_id)
         _locked_role(db, role_id)
         normalized_type, normalized_id = _normalize_scope(scope_type, scope_id)
@@ -606,6 +622,13 @@ def grant_subscriber_permission(
 
     def operation() -> SubscriberPermissionOutcome:
         actor_type, actor_id = _validate_context(command.context)
+        assignment_escalation.enforce_grant(
+            db,
+            actor_type=actor_type,
+            actor_id=actor_id,
+            target_principal_ids=(command.subscriber_id,),
+            permission_ids=(command.permission_id,),
+        )
         grant, changed = _ensure_permission_grant(
             db,
             subscriber_id=command.subscriber_id,
@@ -657,6 +680,13 @@ def update_subscriber_permission(
             command.granted_by_subscriber_id
             if command.update_granted_by
             else grant.granted_by_subscriber_id
+        )
+        assignment_escalation.enforce_grant(
+            db,
+            actor_type=actor_type,
+            actor_id=actor_id,
+            target_principal_ids=(original_subscriber_id, subscriber_id),
+            permission_ids=(permission_id,),
         )
         _locked_subscriber(db, subscriber_id)
         _locked_permission(db, permission_id)
@@ -774,6 +804,30 @@ def replace_subscriber_assignments(
             (role_grant.role_id, role_grant.scope_type, role_grant.scope_id): role_grant
             for role_grant in existing_roles
         }
+        existing_permissions_for_guard = set(
+            db.execute(
+                select(SubscriberPermission.permission_id).where(
+                    SubscriberPermission.subscriber_id == command.subscriber_id
+                )
+            ).scalars()
+        )
+        # Only ADDITIONS are grants; retained and removed items are not.
+        assignment_escalation.enforce_grant(
+            db,
+            actor_type=actor_type,
+            actor_id=actor_id,
+            target_principal_ids=(command.subscriber_id,),
+            role_ids={
+                spec.role_id
+                for key, spec in desired_roles.items()
+                if key not in existing_role_keys
+            },
+            permission_ids=desired_permission_ids - existing_permissions_for_guard,
+            check_self=bool(
+                set(desired_roles) - set(existing_role_keys)
+                or desired_permission_ids - existing_permissions_for_guard
+            ),
+        )
         changed = False
         for key, role_grant in existing_role_keys.items():
             if key not in desired_roles:
@@ -857,6 +911,13 @@ def ensure_role_grant_in_transaction(
     """Grant a role inside an authorized application-coordinator transaction."""
 
     actor_type, actor_id = _validate_context(context)
+    assignment_escalation.enforce_grant(
+        db,
+        actor_type=actor_type,
+        actor_id=actor_id,
+        target_principal_ids=(subscriber_id,),
+        role_ids=(role_id,),
+    )
     grant, changed = _ensure_role_grant(
         db,
         subscriber_id=subscriber_id,

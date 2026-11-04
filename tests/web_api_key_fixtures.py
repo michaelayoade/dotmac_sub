@@ -8,6 +8,7 @@ from app.models.auth import ApiKey
 from app.services import api_key_administration as owner
 from app.services.audit_adapter import AuditActor
 from app.services.owner_commands import CommandContext
+from tests.api_key_actor_fixtures import persist_admin_actor
 
 
 def context(scope: str) -> tuple[CommandContext, AuditActor]:
@@ -67,6 +68,7 @@ def create_api_key(
     command = create_command(
         subscriber_id=subscriber_id, label=label, expires_in=expires_in, scopes=scopes
     )
+    persist_admin_actor(db, command.actor.actor_id)
     db.commit()
     secret = owner.web_create(db, command=command).secret
     assert secret is not None
