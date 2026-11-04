@@ -277,7 +277,7 @@ class IPAssignments(CRUDManager[IPAssignment]):
             "subscription_id" in data
             and data["subscription_id"] is None
             and assignment.subscription_id is not None
-            and data.get("ip_version", assignment.ip_version) == IPVersion.ipv4
+            and assignment.ipv4_address_id is not None
         ):
             raise HTTPException(
                 status_code=400,

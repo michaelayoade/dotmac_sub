@@ -555,3 +555,31 @@ def test_import_assign_refuses_subscription_owned_by_another_subscriber(db_sessi
             subscription_id=str(foreign_sub.id),
         )
     assert db_session.query(IPAssignment).count() == 0
+
+
+def test_update_null_ip_version_and_null_subscription_cannot_bypass_guard(db_session):
+    pool = _pool(db_session, "198.51.100.0/24")
+    address = _address(db_session, pool, "198.51.100.63")
+    subscriber = _subscriber(db_session)
+    subscription = _subscription(db_session, subscriber)
+    assignment = network_service.ip_assignments.create(
+        db_session,
+        IPAssignmentCreate(
+            subscription_id=subscription.id,
+            ip_version=IPVersion.ipv4,
+            ipv4_address_id=address.id,
+        ),
+    )
+
+    with pytest.raises(HTTPException) as exc:
+        network_service.ip_assignments.update(
+            db=db_session,
+            assignment_id=str(assignment.id),
+            payload=IPAssignmentUpdate.model_validate(
+                {"ip_version": None, "subscription_id": None}
+            ),
+        )
+
+    assert exc.value.status_code == 400
+    db_session.refresh(assignment)
+    assert assignment.subscription_id == subscription.id
