@@ -45,6 +45,7 @@ from app.models.team_inbox import (
     InboxChannelType,
     InboxConversation,
     InboxConversationAssignment,
+    InboxConversationLabel,
     InboxConversationStatus,
     InboxConversationTeam,
     InboxMessage,
@@ -330,6 +331,7 @@ class LinkContactCommand:
     actor_person_id: UUID | None
     note: str | None = None
     expected_active_link_id: UUID | None = None
+    check_expected_active_link: bool = False
     expected_identity_evidence_digest: str | None = None
     actor_system_user_id: UUID | None = None
 
@@ -464,6 +466,63 @@ class SuppressAiOutboundOutcome:
     notification_id: UUID
     suppressed: bool
     reason: str | None
+
+
+@dataclass(frozen=True, slots=True)
+class ApplyConversationLabelFromAutomationCommand:
+    context: CommandContext
+    conversation_id: UUID
+    label_id: UUID
+    event_id: UUID
+    rule_id: UUID
+    rule_version_id: UUID
+    step_index: int
+
+
+@dataclass(frozen=True, slots=True)
+class ApplyConversationLabelFromAutomationOutcome:
+    conversation_id: UUID
+    label_id: UUID
+    link_id: UUID
+
+
+@dataclass(frozen=True, slots=True)
+class SetConversationPriorityFromAutomationCommand:
+    context: CommandContext
+    conversation_id: UUID
+    priority: int
+    event_id: UUID
+    rule_id: UUID
+    rule_version_id: UUID
+    step_index: int
+
+
+@dataclass(frozen=True, slots=True)
+class SetConversationPriorityFromAutomationOutcome:
+    conversation_id: UUID
+    previous_priority: int
+    priority: int
+    changed: bool
+
+
+@dataclass(frozen=True, slots=True)
+class SetConversationStatusFromAutomationCommand:
+    context: CommandContext
+    conversation_id: UUID
+    status: InboxConversationStatus
+    event_id: UUID
+    rule_id: UUID
+    rule_version_id: UUID
+    step_index: int
+
+
+@dataclass(frozen=True, slots=True)
+class SetConversationStatusFromAutomationOutcome:
+    conversation_id: UUID
+    previous_status: InboxConversationStatus
+    status: InboxConversationStatus
+    changed: bool
+    event_id: UUID | None
 
 
 _TAKEOVER_PERMISSIONS = frozenset(
@@ -1218,6 +1277,166 @@ def apply_label(
     _commit(db, action)
 
 
+def apply_conversation_label_from_automation(
+    db: Session,
+    *,
+    command: ApplyConversationLabelFromAutomationCommand,
+) -> ApplyConversationLabelFromAutomationOutcome:
+    """Apply one declared label idempotently through the Inbox command owner."""
+
+    def action() -> ApplyConversationLabelFromAutomationOutcome:
+        conversation = _active_conversation(
+            db, command.conversation_id, for_update=True
+        )
+        _require_human_control(
+            db,
+            conversation,
+            mutation=ai_conversation_ownership.HumanConversationMutation.label,
+        )
+        existing = (
+            db.query(InboxConversationLabel)
+            .filter(
+                InboxConversationLabel.conversation_id == conversation.id,
+                InboxConversationLabel.label_id == command.label_id,
+                InboxConversationLabel.is_active.is_(True),
+            )
+            .one_or_none()
+        )
+        if existing is not None:
+            return ApplyConversationLabelFromAutomationOutcome(
+                conversation_id=conversation.id,
+                label_id=command.label_id,
+                link_id=existing.id,
+            )
+        link = team_inbox_operations.apply_label(
+            db,
+            conversation=conversation,
+            label_id=command.label_id,
+            applied_by_person_id=None,
+        )
+        metadata = dict(link.metadata_ or {})
+        metadata["automation"] = {
+            "event_id": str(command.event_id),
+            "rule_id": str(command.rule_id),
+            "rule_version_id": str(command.rule_version_id),
+            "step_index": command.step_index,
+        }
+        link.metadata_ = metadata
+        db.flush()
+        return ApplyConversationLabelFromAutomationOutcome(
+            conversation_id=conversation.id,
+            label_id=command.label_id,
+            link_id=link.id,
+        )
+
+    return _commit(db, action, context=command.context)
+
+
+def set_conversation_priority_from_automation(
+    db: Session,
+    *,
+    command: SetConversationPriorityFromAutomationCommand,
+) -> SetConversationPriorityFromAutomationOutcome:
+    """Set Inbox priority through the canonical workflow writer."""
+
+    if command.priority < 0 or command.priority > 999:
+        raise InboxCommandRejected("Inbox priority must be between 0 and 999.")
+
+    def action() -> SetConversationPriorityFromAutomationOutcome:
+        conversation = _active_conversation(
+            db, command.conversation_id, for_update=True
+        )
+        _require_human_control(
+            db,
+            conversation,
+            mutation=ai_conversation_ownership.HumanConversationMutation.workflow,
+        )
+        previous_priority = conversation.priority
+        if previous_priority == command.priority:
+            return SetConversationPriorityFromAutomationOutcome(
+                conversation_id=conversation.id,
+                previous_priority=previous_priority,
+                priority=command.priority,
+                changed=False,
+            )
+        team_inbox_operations.update_conversation_workflow(
+            db,
+            conversation=conversation,
+            priority=command.priority,
+            actor_person_id=None,
+        )
+        metadata = dict(conversation.metadata_ or {})
+        history = list(metadata.get("workflow_history") or [])
+        if history and isinstance(history[-1], dict):
+            entry = dict(history[-1])
+            entry["source"] = "automation_rule"
+            entry["automation"] = {
+                "event_id": str(command.event_id),
+                "rule_id": str(command.rule_id),
+                "rule_version_id": str(command.rule_version_id),
+                "step_index": command.step_index,
+            }
+            history[-1] = entry
+            metadata["workflow_history"] = history
+            conversation.metadata_ = metadata
+        db.flush()
+        return SetConversationPriorityFromAutomationOutcome(
+            conversation_id=conversation.id,
+            previous_priority=previous_priority,
+            priority=command.priority,
+            changed=True,
+        )
+
+    return _commit(db, action, context=command.context)
+
+
+def set_conversation_status_from_automation(
+    db: Session,
+    *,
+    command: SetConversationStatusFromAutomationCommand,
+) -> SetConversationStatusFromAutomationOutcome:
+    """Set an automation-safe Inbox status through the lifecycle owner."""
+
+    allowed_statuses = frozenset(
+        {InboxConversationStatus.open, InboxConversationStatus.pending}
+    )
+    if command.status not in allowed_statuses:
+        raise InboxCommandRejected(
+            "Inbox automation may only set status to open or pending."
+        )
+
+    def action() -> SetConversationStatusFromAutomationOutcome:
+        conversation = _active_conversation(
+            db, command.conversation_id, for_update=True
+        )
+        _require_human_control(
+            db,
+            conversation,
+            mutation=ai_conversation_ownership.HumanConversationMutation.status,
+        )
+        transition = team_inbox_status.apply_status_transition(
+            db,
+            conversation=conversation,
+            status=command.status,
+            actor_person_id=None,
+            reason=team_inbox_status.InboxStatusReason.automation_rule,
+            source_id=(
+                f"automation:{command.event_id}:{command.rule_id}:"
+                f"{command.rule_version_id}:{command.step_index}"
+            ),
+            compatibility_source="automation_rule",
+        )
+        return SetConversationStatusFromAutomationOutcome(
+            conversation_id=transition.conversation_id,
+            previous_status=transition.previous_status,
+            status=transition.status,
+            changed=not transition.already_set,
+            event_id=transition.event_id,
+        )
+
+    return _commit(db, action, context=command.context)
+
+
 def remove_label(
     db: Session,
     *,
@@ -1498,6 +1717,16 @@ def refresh_agent_presence(
     """Delegate authenticated activity to the routing presence owner."""
 
     return team_inbox_assignment.refresh_agent_presence(db, command=command)
+
+
+def set_agent_presence_preference(
+    db: Session,
+    *,
+    command: team_inbox_assignment.AgentPresencePreferenceCommand,
+) -> team_inbox_assignment.AgentPresencePreferenceOutcome:
+    """Delegate the typed preference change to the routing presence owner."""
+
+    return team_inbox_assignment.set_agent_presence_preference(db, command=command)
 
 
 def bulk_action(
@@ -2081,6 +2310,7 @@ def link_contact(db: Session, command: LinkContactCommand) -> ContactLinkOutcome
                 ),
                 note=command.note,
                 expected_active_link_id=command.expected_active_link_id,
+                check_expected_active_link=command.check_expected_active_link,
                 expected_identity_evidence_digest=command.expected_identity_evidence_digest,
             ),
         )
@@ -3461,6 +3691,12 @@ def create_channel_route(
     display_name: str | None = None,
     allow_ai_routing: bool = True,
     priority: int = 100,
+    csat_enabled: bool = True,
+    csat_style: str = "stars",
+    csat_message: str | None = None,
+    csat_include_labels: tuple[str, ...] = (),
+    csat_exclude_labels: tuple[str, ...] = (),
+    conversation_mode: str = "separate",
 ) -> str:
     def action() -> str:
         route = team_inbox_routing.create_channel_route(
@@ -3472,6 +3708,12 @@ def create_channel_route(
             display_name=display_name,
             allow_ai_routing=allow_ai_routing,
             priority=priority,
+            csat_enabled=csat_enabled,
+            csat_style=csat_style,
+            csat_message=csat_message,
+            csat_include_labels=csat_include_labels,
+            csat_exclude_labels=csat_exclude_labels,
+            conversation_mode=conversation_mode,
         )
         return str(route.id)
 
@@ -3487,6 +3729,12 @@ def update_channel_route(
     allow_ai_routing: bool | None = None,
     priority: int | None = None,
     is_active: bool | None = None,
+    csat_enabled: bool | None = None,
+    csat_style: str | None = None,
+    csat_message: str | None = None,
+    csat_include_labels: tuple[str, ...] | None = None,
+    csat_exclude_labels: tuple[str, ...] | None = None,
+    conversation_mode: str | None = None,
 ) -> None:
     def action() -> None:
         team_inbox_routing.update_channel_route(
@@ -3497,6 +3745,12 @@ def update_channel_route(
             allow_ai_routing=allow_ai_routing,
             priority=priority,
             is_active=is_active,
+            csat_enabled=csat_enabled,
+            csat_style=csat_style,
+            csat_message=csat_message,
+            csat_include_labels=csat_include_labels,
+            csat_exclude_labels=csat_exclude_labels,
+            conversation_mode=conversation_mode,
         )
 
     _commit(db, action)

@@ -8,6 +8,8 @@ an Admin workflow requires updating this module in the same pull request.
 
 from __future__ import annotations
 
+import hashlib
+import re
 from collections.abc import Iterable
 from dataclasses import dataclass
 
@@ -77,6 +79,71 @@ class AdminHelpNavigationSection:
     guide_ids: tuple[str, ...]
     permission: str = ""
     any_permissions: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True, slots=True)
+class AdminKnowledgeProjectionQuery:
+    """Permission scope for one read-only knowledge projection."""
+
+    permission_keys: frozenset[str]
+
+
+@dataclass(frozen=True, slots=True)
+class AdminKnowledgeAction:
+    """One permitted action included in an AI knowledge document."""
+
+    id: str
+    title: str
+    steps: tuple[str, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class AdminKnowledgeDocument:
+    """Permission-filtered Help Center content safe for knowledge retrieval."""
+
+    id: str
+    category: str
+    title: str
+    audience: str
+    purpose: str
+    actions: tuple[AdminKnowledgeAction, ...]
+    notes: tuple[str, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class AdminKnowledgeProjection:
+    """Immutable knowledge documents and their deployed-source watermark."""
+
+    documents: tuple[AdminKnowledgeDocument, ...]
+    source_watermark: str
+
+
+@dataclass(frozen=True, slots=True)
+class AdminKnowledgeRetrievalQuery:
+    """Bounded lexical retrieval over one permission-filtered projection."""
+
+    permission_keys: frozenset[str]
+    query: str
+    category: str = ""
+    limit: int = 5
+
+
+@dataclass(frozen=True, slots=True)
+class AdminKnowledgeMatch:
+    """One permitted knowledge document ranked for a normalized query."""
+
+    document: AdminKnowledgeDocument
+    score: int
+    matched_terms: tuple[str, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class AdminKnowledgeRetrieval:
+    """Deterministic retrieval result suitable for an advisory AI context."""
+
+    query_terms: tuple[str, ...]
+    matches: tuple[AdminKnowledgeMatch, ...]
+    source_watermark: str
 
 
 @dataclass(frozen=True, slots=True)
@@ -2723,6 +2790,179 @@ def guidance_categories() -> tuple[str, ...]:
             categories,
             key=lambda category: (category != "Getting started", category.casefold()),
         )
+    )
+
+
+def build_knowledge_projection(
+    query: AdminKnowledgeProjectionQuery,
+) -> AdminKnowledgeProjection:
+    """Project only guides and action steps visible to the supplied role."""
+
+    permission_keys = query.permission_keys
+    guide_by_id = {guide.id: guide for guide in all_guidance()}
+    documents: list[AdminKnowledgeDocument] = []
+    for section in HELP_NAVIGATION:
+        section_visible = (
+            (not section.permission and not section.any_permissions)
+            or section.permission in permission_keys
+            or bool(permission_keys.intersection(section.any_permissions))
+        )
+        if not section_visible:
+            continue
+        for guide_id in section.guide_ids:
+            required = HELP_GUIDE_VIEW_PERMISSIONS.get(guide_id, ())
+            if required and not permission_keys.intersection(required):
+                continue
+            guide = guide_by_id[guide_id]
+            actions = tuple(
+                AdminKnowledgeAction(
+                    id=action.id,
+                    title=action.title,
+                    steps=action.steps,
+                )
+                for action in help_actions_for(guide)
+                if not action.permission or action.permission in permission_keys
+            )
+            documents.append(
+                AdminKnowledgeDocument(
+                    id=guide.id,
+                    category=guide.category,
+                    title=guide.title,
+                    audience=guide.audience,
+                    purpose=guide.purpose,
+                    actions=actions,
+                    notes=guide.notes,
+                )
+            )
+
+    digest = hashlib.sha256()
+    digest.update(b"ui.admin_workflow_guidance.knowledge.v1\n")
+    for document in documents:
+        for value in (
+            document.id,
+            document.category,
+            document.title,
+            document.audience,
+            document.purpose,
+        ):
+            digest.update(value.encode("utf-8"))
+            digest.update(b"\0")
+        for action in document.actions:
+            digest.update(action.id.encode("utf-8"))
+            digest.update(b"\0")
+            digest.update(action.title.encode("utf-8"))
+            digest.update(b"\0")
+            for step in action.steps:
+                digest.update(step.encode("utf-8"))
+                digest.update(b"\0")
+        for note in document.notes:
+            digest.update(note.encode("utf-8"))
+            digest.update(b"\0")
+        digest.update(b"\n")
+    return AdminKnowledgeProjection(
+        documents=tuple(documents),
+        source_watermark=digest.hexdigest(),
+    )
+
+
+_KNOWLEDGE_TERM = re.compile(r"[a-z0-9][a-z0-9_-]{1,63}")
+_KNOWLEDGE_STOP_WORDS = frozenset(
+    {
+        "a",
+        "an",
+        "and",
+        "for",
+        "from",
+        "how",
+        "in",
+        "is",
+        "of",
+        "on",
+        "the",
+        "to",
+        "with",
+    }
+)
+
+
+def _knowledge_terms(value: str) -> tuple[str, ...]:
+    terms = (
+        term
+        for term in _KNOWLEDGE_TERM.findall(value.casefold()[:500])
+        if term not in _KNOWLEDGE_STOP_WORDS
+    )
+    return tuple(dict.fromkeys(terms))[:16]
+
+
+def _knowledge_match(
+    document: AdminKnowledgeDocument,
+    terms: tuple[str, ...],
+) -> AdminKnowledgeMatch | None:
+    weighted_text = (
+        (document.title, 8),
+        (document.category, 6),
+        (document.purpose, 4),
+        (document.audience, 2),
+        *((action.title, 5) for action in document.actions),
+        *((step, 2) for action in document.actions for step in action.steps),
+        *((note, 1) for note in document.notes),
+    )
+    normalized = tuple((text.casefold(), weight) for text, weight in weighted_text)
+    matched_terms = tuple(
+        term for term in terms if any(term in text for text, _weight in normalized)
+    )
+    if not matched_terms:
+        return None
+    score = sum(
+        weight for text, weight in normalized for term in matched_terms if term in text
+    )
+    return AdminKnowledgeMatch(
+        document=document,
+        score=score,
+        matched_terms=matched_terms,
+    )
+
+
+def retrieve_knowledge(
+    query: AdminKnowledgeRetrievalQuery,
+) -> AdminKnowledgeRetrieval:
+    """Rank only role-visible, deploy-versioned workflow knowledge.
+
+    This is deliberately lexical and stateless. It neither calls an AI provider
+    nor persists an index, prompt, answer, or customer record.
+    """
+
+    projection = build_knowledge_projection(
+        AdminKnowledgeProjectionQuery(permission_keys=query.permission_keys)
+    )
+    terms = _knowledge_terms(query.query)
+    selected_category = query.category.strip().casefold()
+    if not terms:
+        return AdminKnowledgeRetrieval(
+            query_terms=(),
+            matches=(),
+            source_watermark=projection.source_watermark,
+        )
+    matches = tuple(
+        match
+        for document in projection.documents
+        if not selected_category or document.category.casefold() == selected_category
+        if (match := _knowledge_match(document, terms)) is not None
+    )
+    ordered = tuple(
+        sorted(
+            matches,
+            key=lambda item: (
+                -item.score,
+                item.document.title.casefold(),
+                item.document.id,
+            ),
+        )[: max(1, min(int(query.limit), 50))]
+    )
+    return AdminKnowledgeRetrieval(
+        query_terms=terms,
+        matches=ordered,
+        source_watermark=projection.source_watermark,
     )
 
 

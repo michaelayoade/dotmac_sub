@@ -72,6 +72,31 @@ def _uuid_input(inputs: tuple[AutomationActionInputValue, ...], *, key: str) -> 
         ) from exc
 
 
+def _integer_input(
+    inputs: tuple[AutomationActionInputValue, ...],
+    *,
+    key: str,
+    minimum: int,
+    maximum: int,
+) -> int:
+    values = [item.value for item in inputs if item.key == key]
+    if len(values) != 1 or isinstance(values[0], bool):
+        raise AutomationActionExecutorError(
+            f"Automation action requires exactly one integer {key!r} input."
+        )
+    try:
+        value = int(str(values[0]))
+    except (TypeError, ValueError) as exc:
+        raise AutomationActionExecutorError(
+            f"Automation action input {key!r} must be an integer."
+        ) from exc
+    if value < minimum or value > maximum:
+        raise AutomationActionExecutorError(
+            f"Automation action input {key!r} must be between {minimum} and {maximum}."
+        )
+    return value
+
+
 def _assign_support_ticket_service_team(
     db: Session, command: ExecuteAutomationActionCommand
 ) -> AutomationActionOutcome:
@@ -141,6 +166,119 @@ def _set_support_ticket_priority(
     return AutomationActionOutcome(
         disposition=AutomationActionDisposition.succeeded,
         outcome_code="support_ticket_priority_set",
+    )
+
+
+def _apply_inbox_conversation_label(
+    db: Session, command: ExecuteAutomationActionCommand
+) -> AutomationActionOutcome:
+    from app.services import team_inbox_commands
+
+    if command.target.entity_type != "inbox.conversation":
+        raise AutomationActionExecutorError(
+            "The Inbox label action received the wrong target type."
+        )
+    team_inbox_commands.apply_conversation_label_from_automation(
+        db,
+        command=team_inbox_commands.ApplyConversationLabelFromAutomationCommand(
+            context=command.context,
+            conversation_id=command.target.entity_id,
+            label_id=_uuid_input(command.inputs, key="label_id"),
+            event_id=command.event_id,
+            rule_id=command.rule_id,
+            rule_version_id=command.rule_version_id,
+            step_index=command.step_index,
+        ),
+    )
+    return AutomationActionOutcome(
+        disposition=AutomationActionDisposition.succeeded,
+        outcome_code="inbox_conversation_label_applied",
+    )
+
+
+def _set_inbox_conversation_priority(
+    db: Session, command: ExecuteAutomationActionCommand
+) -> AutomationActionOutcome:
+    from app.services import team_inbox_commands
+
+    if command.target.entity_type != "inbox.conversation":
+        raise AutomationActionExecutorError(
+            "The Inbox priority action received the wrong target type."
+        )
+    outcome = team_inbox_commands.set_conversation_priority_from_automation(
+        db,
+        command=team_inbox_commands.SetConversationPriorityFromAutomationCommand(
+            context=command.context,
+            conversation_id=command.target.entity_id,
+            priority=_integer_input(
+                command.inputs,
+                key="priority",
+                minimum=0,
+                maximum=999,
+            ),
+            event_id=command.event_id,
+            rule_id=command.rule_id,
+            rule_version_id=command.rule_version_id,
+            step_index=command.step_index,
+        ),
+    )
+    return AutomationActionOutcome(
+        disposition=AutomationActionDisposition.succeeded,
+        outcome_code=(
+            "inbox_conversation_priority_unchanged"
+            if not outcome.changed
+            else "inbox_conversation_priority_set"
+        ),
+    )
+
+
+def _set_inbox_conversation_status(
+    db: Session, command: ExecuteAutomationActionCommand
+) -> AutomationActionOutcome:
+    from app.models.team_inbox import InboxConversationStatus
+    from app.services import team_inbox_commands
+
+    if command.target.entity_type != "inbox.conversation":
+        raise AutomationActionExecutorError(
+            "The Inbox status action received the wrong target type."
+        )
+    values = [item.value for item in command.inputs if item.key == "status"]
+    if len(values) != 1:
+        raise AutomationActionExecutorError(
+            "Automation action requires exactly one 'status' input."
+        )
+    try:
+        status = InboxConversationStatus(str(values[0]))
+    except ValueError as exc:
+        raise AutomationActionExecutorError(
+            "Automation action Inbox status is no longer supported."
+        ) from exc
+    if status not in {
+        InboxConversationStatus.open,
+        InboxConversationStatus.pending,
+    }:
+        raise AutomationActionExecutorError(
+            "Inbox automation may only set status to open or pending."
+        )
+    outcome = team_inbox_commands.set_conversation_status_from_automation(
+        db,
+        command=team_inbox_commands.SetConversationStatusFromAutomationCommand(
+            context=command.context,
+            conversation_id=command.target.entity_id,
+            status=status,
+            event_id=command.event_id,
+            rule_id=command.rule_id,
+            rule_version_id=command.rule_version_id,
+            step_index=command.step_index,
+        ),
+    )
+    return AutomationActionOutcome(
+        disposition=AutomationActionDisposition.succeeded,
+        outcome_code=(
+            "inbox_conversation_status_set"
+            if outcome.changed
+            else "inbox_conversation_status_unchanged"
+        ),
     )
 
 
@@ -665,6 +803,9 @@ _ACTION_EXECUTORS: Mapping[str, AutomationActionExecutor] = MappingProxyType(
     {
         "support.ticket.assign_service_team": _assign_support_ticket_service_team,
         "support.ticket.set_priority": _set_support_ticket_priority,
+        "inbox.conversation.apply_label": _apply_inbox_conversation_label,
+        "inbox.conversation.set_priority": _set_inbox_conversation_priority,
+        "inbox.conversation.set_status": _set_inbox_conversation_status,
         "support.ticket.suspend_unique_active_service": (
             _suspend_support_ticket_service_for_sla_breach
         ),

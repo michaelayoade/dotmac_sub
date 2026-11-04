@@ -190,6 +190,10 @@ class InboxAgentPerformanceAnalyticsRow:
     active_assignment_count: int
     average_resolution_seconds: float | None
     average_first_response_seconds: float | None
+    average_reply_seconds: float | None = None
+    reply_observation_count: int = 0
+    inbound_message_count: int = 0
+    outbound_message_count: int = 0
     resolution_observation_count: int = 0
     first_response_observation_count: int = 0
     first_response_sla_seconds: int | None = None
@@ -211,6 +215,10 @@ class InboxAgentPerformanceSummary:
     active_assignment_count: int
     average_resolution_seconds: float | None
     average_first_response_seconds: float | None
+    average_reply_seconds: float | None = None
+    reply_observation_count: int = 0
+    inbound_message_count: int = 0
+    outbound_message_count: int = 0
     activity_agent_count: int = 0
     first_response_observation_count: int = 0
     resolution_observation_count: int = 0
@@ -2289,6 +2297,169 @@ def agent_performance_analytics(
         .cte("agent_first_responses")
     )
 
+    last_inbound_at = func.max(
+        case(
+            (
+                InboxMessage.direction == InboxMessageDirection.inbound.value,
+                message_time,
+            ),
+            else_=None,
+        )
+    ).over(
+        partition_by=InboxMessage.conversation_id,
+        order_by=(message_time.asc(), InboxMessage.id.asc()),
+        rows=(None, 0),
+    )
+    message_stream = (
+        select(
+            InboxMessage.id.label("message_id"),
+            InboxMessage.conversation_id,
+            InboxMessage.direction,
+            sender_value.label("sender_person_id"),
+            message_time.label("message_at"),
+            last_inbound_at.label("last_inbound_at"),
+        )
+        .where(message_time < end_at)
+        .cte("agent_message_stream")
+    )
+    reply_ranked = (
+        select(
+            message_stream,
+            func.row_number()
+            .over(
+                partition_by=(
+                    message_stream.c.conversation_id,
+                    message_stream.c.last_inbound_at,
+                ),
+                order_by=(
+                    message_stream.c.message_at.asc(),
+                    message_stream.c.message_id.asc(),
+                ),
+            )
+            .label("reply_rank"),
+        )
+        .where(
+            message_stream.c.direction == InboxMessageDirection.outbound.value,
+            message_stream.c.sender_person_id.is_not(None),
+            message_stream.c.last_inbound_at.is_not(None),
+            message_stream.c.message_at >= start_at,
+        )
+        .cte("agent_reply_ranked")
+    )
+    reply_duration = _analytics_duration_seconds(
+        db,
+        started_at=reply_ranked.c.last_inbound_at,
+        ended_at=reply_ranked.c.message_at,
+    )
+    reply_facts = (
+        select(
+            reply_ranked.c.message_id,
+            InboxConversationAssignment.service_team_id,
+            InboxConversationAssignment.person_id,
+            reply_duration.label("duration_seconds"),
+        )
+        .join(
+            InboxConversationAssignment,
+            and_(
+                InboxConversationAssignment.conversation_id
+                == reply_ranked.c.conversation_id,
+                func.replace(
+                    cast(InboxConversationAssignment.person_id, String), "-", ""
+                )
+                == func.replace(reply_ranked.c.sender_person_id, "-", ""),
+                InboxConversationAssignment.assigned_at <= reply_ranked.c.message_at,
+                or_(
+                    InboxConversationAssignment.ended_at.is_(None),
+                    InboxConversationAssignment.ended_at >= reply_ranked.c.message_at,
+                ),
+            ),
+        )
+        .where(reply_ranked.c.reply_rank == 1)
+        .distinct()
+        .cte("agent_reply_facts")
+    )
+    replies = (
+        select(
+            reply_facts.c.service_team_id,
+            reply_facts.c.person_id,
+            func.count(reply_facts.c.duration_seconds).label("reply_count"),
+            func.coalesce(func.sum(reply_facts.c.duration_seconds), 0.0).label(
+                "reply_seconds_sum"
+            ),
+        )
+        .group_by(reply_facts.c.service_team_id, reply_facts.c.person_id)
+        .cte("agent_replies")
+    )
+
+    message_sender_text = func.replace(sender_value, "-", "")
+    attributed_messages = (
+        select(
+            InboxMessage.id.label("message_id"),
+            InboxConversationAssignment.service_team_id,
+            InboxConversationAssignment.person_id,
+            InboxMessage.direction,
+        )
+        .join(
+            InboxConversationAssignment,
+            and_(
+                InboxConversationAssignment.conversation_id
+                == InboxMessage.conversation_id,
+                InboxConversationAssignment.assigned_at <= message_time,
+                or_(
+                    InboxConversationAssignment.ended_at.is_(None),
+                    InboxConversationAssignment.ended_at >= message_time,
+                ),
+            ),
+        )
+        .where(
+            message_time >= start_at,
+            message_time < end_at,
+            or_(
+                InboxMessage.direction == InboxMessageDirection.inbound.value,
+                and_(
+                    InboxMessage.direction == InboxMessageDirection.outbound.value,
+                    message_sender_text
+                    == func.replace(
+                        cast(InboxConversationAssignment.person_id, String), "-", ""
+                    ),
+                ),
+            ),
+        )
+        .distinct()
+        .cte("agent_attributed_messages")
+    )
+    message_counts = (
+        select(
+            attributed_messages.c.service_team_id,
+            attributed_messages.c.person_id,
+            func.sum(
+                case(
+                    (
+                        attributed_messages.c.direction
+                        == InboxMessageDirection.inbound.value,
+                        1,
+                    ),
+                    else_=0,
+                )
+            ).label("inbound_count"),
+            func.sum(
+                case(
+                    (
+                        attributed_messages.c.direction
+                        == InboxMessageDirection.outbound.value,
+                        1,
+                    ),
+                    else_=0,
+                )
+            ).label("outbound_count"),
+        )
+        .group_by(
+            attributed_messages.c.service_team_id,
+            attributed_messages.c.person_id,
+        )
+        .cte("agent_message_counts")
+    )
+
     assigned_count = func.coalesce(assigned.c.assigned_count, 0)
     resolved_count = func.coalesce(resolution.c.resolved_count, 0)
     active_count = func.coalesce(active.c.active_count, 0)
@@ -2305,6 +2476,10 @@ def agent_performance_analytics(
     response_sla_breached_count = func.coalesce(
         responses.c.response_sla_breached_count, 0
     )
+    inbound_message_count = func.coalesce(message_counts.c.inbound_count, 0)
+    outbound_message_count = func.coalesce(message_counts.c.outbound_count, 0)
+    reply_count = func.coalesce(replies.c.reply_count, 0)
+    reply_seconds_sum = func.coalesce(replies.c.reply_seconds_sum, 0.0)
     performance = (
         select(
             members.c.person_id,
@@ -2323,6 +2498,10 @@ def agent_performance_analytics(
             response_seconds_sum.label("response_seconds_sum"),
             response_sla_met_count.label("response_sla_met_count"),
             response_sla_breached_count.label("response_sla_breached_count"),
+            inbound_message_count.label("inbound_message_count"),
+            outbound_message_count.label("outbound_message_count"),
+            reply_count.label("reply_count"),
+            reply_seconds_sum.label("reply_seconds_sum"),
             case(
                 (
                     resolution_timed_count > 0,
@@ -2337,6 +2516,10 @@ def agent_performance_analytics(
                 ),
                 else_=None,
             ).label("average_first_response_seconds"),
+            case(
+                (reply_count > 0, reply_seconds_sum / reply_count),
+                else_=None,
+            ).label("average_reply_seconds"),
         )
         .outerjoin(
             assigned,
@@ -2364,6 +2547,20 @@ def agent_performance_analytics(
             and_(
                 responses.c.service_team_id == members.c.service_team_id,
                 responses.c.person_id == members.c.person_id,
+            ),
+        )
+        .outerjoin(
+            message_counts,
+            and_(
+                message_counts.c.service_team_id == members.c.service_team_id,
+                message_counts.c.person_id == members.c.person_id,
+            ),
+        )
+        .outerjoin(
+            replies,
+            and_(
+                replies.c.service_team_id == members.c.service_team_id,
+                replies.c.person_id == members.c.person_id,
             ),
         )
         .cte("agent_performance")
@@ -2418,6 +2615,9 @@ def agent_performance_analytics(
                                 performance.c.assigned_count > 0,
                                 performance.c.resolved_count > 0,
                                 performance.c.response_count > 0,
+                                performance.c.reply_count > 0,
+                                performance.c.inbound_message_count > 0,
+                                performance.c.outbound_message_count > 0,
                             ),
                             performance.c.person_id,
                         ),
@@ -2434,6 +2634,12 @@ def agent_performance_analytics(
             func.coalesce(func.sum(performance.c.active_count), 0).label(
                 "summary_active_count"
             ),
+            func.coalesce(func.sum(performance.c.inbound_message_count), 0).label(
+                "summary_inbound_message_count"
+            ),
+            func.coalesce(func.sum(performance.c.outbound_message_count), 0).label(
+                "summary_outbound_message_count"
+            ),
             func.coalesce(func.sum(performance.c.resolution_timed_count), 0).label(
                 "summary_resolution_timed_count"
             ),
@@ -2445,6 +2651,12 @@ def agent_performance_analytics(
             ),
             func.coalesce(func.sum(performance.c.response_seconds_sum), 0.0).label(
                 "summary_response_seconds_sum"
+            ),
+            func.coalesce(func.sum(performance.c.reply_count), 0).label(
+                "summary_reply_count"
+            ),
+            func.coalesce(func.sum(performance.c.reply_seconds_sum), 0.0).label(
+                "summary_reply_seconds_sum"
             ),
             func.coalesce(func.sum(performance.c.response_sla_met_count), 0).label(
                 "summary_response_sla_met_count"
@@ -2486,6 +2698,7 @@ def agent_performance_analytics(
 
     resolution_timed_total = int(summary_row["summary_resolution_timed_count"] or 0)
     response_total = int(summary_row["summary_response_count"] or 0)
+    reply_total = int(summary_row["summary_reply_count"] or 0)
     response_sla_met_total = int(summary_row["summary_response_sla_met_count"] or 0)
     response_sla_breached_total = int(
         summary_row["summary_response_sla_breached_count"] or 0
@@ -2504,6 +2717,8 @@ def agent_performance_analytics(
         assigned_conversation_count=int(summary_row["summary_assigned_count"] or 0),
         resolved_conversation_count=int(summary_row["summary_resolved_count"] or 0),
         active_assignment_count=int(summary_row["summary_active_count"] or 0),
+        inbound_message_count=int(summary_row["summary_inbound_message_count"] or 0),
+        outbound_message_count=int(summary_row["summary_outbound_message_count"] or 0),
         average_resolution_seconds=(
             round(
                 float(summary_row["summary_resolution_seconds_sum"])
@@ -2521,6 +2736,12 @@ def agent_performance_analytics(
             if response_total
             else None
         ),
+        average_reply_seconds=(
+            round(float(summary_row["summary_reply_seconds_sum"]) / reply_total, 3)
+            if reply_total
+            else None
+        ),
+        reply_observation_count=reply_total,
         first_response_observation_count=response_total,
         resolution_observation_count=resolution_timed_total,
         first_response_sla_met_count=response_sla_met_total,
@@ -2566,6 +2787,14 @@ def agent_performance_analytics(
                 if row["average_first_response_seconds"] is not None
                 else None
             ),
+            average_reply_seconds=(
+                round(float(row["average_reply_seconds"]), 3)
+                if row["average_reply_seconds"] is not None
+                else None
+            ),
+            reply_observation_count=int(row["reply_count"] or 0),
+            inbound_message_count=int(row["inbound_message_count"] or 0),
+            outbound_message_count=int(row["outbound_message_count"] or 0),
             resolution_observation_count=int(row["resolution_timed_count"] or 0),
             first_response_observation_count=int(row["response_count"] or 0),
             first_response_sla_seconds=response_slas.get(row["service_team_id"]),

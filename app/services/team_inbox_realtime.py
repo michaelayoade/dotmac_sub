@@ -113,6 +113,41 @@ def publish_queue_event(
     run_after_commit(db, publish)
 
 
+def publish_agent_presence_changed(
+    db: Session,
+    *,
+    person_id: str,
+    effective_status: str,
+    selected_status: str,
+    auto_offline: bool,
+    observed_at: datetime,
+    reason: str,
+) -> None:
+    """Publish the bounded staff presence projection after owner commit."""
+
+    payload = {
+        "person_id": str(person_id)[:64],
+        "effective_status": str(effective_status)[:40],
+        "selected_status": str(selected_status)[:40],
+        "auto_offline": bool(auto_offline),
+        "observed_at": observed_at.isoformat(),
+        "reason": str(reason)[:120],
+    }
+
+    def publish(_callback_db: Session) -> None:
+        try:
+            publish_topic_event(
+                STAFF_AUDIENCE_TOPIC,
+                event_type=EventType.AGENT_PRESENCE_CHANGED,
+                payload=payload,
+                refresh_required=True,
+            )
+        except Exception:
+            logger.debug("team_inbox_presence_publish_failed", exc_info=True)
+
+    run_after_commit(db, publish)
+
+
 def rebuild_conversation_projection(db: Session, conversation_id: str) -> bool:
     """Idempotently replace the best-effort topic with current durable state."""
 

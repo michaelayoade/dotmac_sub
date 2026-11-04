@@ -19,6 +19,7 @@ TARGETS = {
     "lead": "/admin/sales/leads/{target_id}",
     "quote": "/admin/sales/quotes/{target_id}",
     "sales_order": "/admin/sales/sales-order/{target_id}",
+    "inbox.conversation": "/admin/inbox?c={target_id}",
 }
 
 SURFACES = (
@@ -48,6 +49,11 @@ SURFACES = (
         "sales_order",
         "app/web/admin/sales.py",
         "templates/admin/sales/sales_orders/detail.html",
+    ),
+    (
+        "inbox.conversation",
+        "app/web/admin/inbox.py",
+        "templates/admin/inbox/_contact_drawer.html",
     ),
 )
 

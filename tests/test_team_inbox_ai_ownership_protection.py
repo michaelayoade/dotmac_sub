@@ -35,6 +35,7 @@ from app.services.owner_commands import CommandContext
 from app.services.workqueue.permissions import WorkqueuePrincipal
 from app.tasks import notifications as notification_tasks
 from tests.staff_identity_fixtures import add_bound_staff_user
+from tests.team_inbox_presence_fixtures import add_active_presence_lease
 
 TAKEOVER_PERMISSIONS = frozenset({"support:ticket:update", "support:inbox:self_assign"})
 
@@ -68,6 +69,7 @@ def _owned_conversation(db_session, *, state: str = "collecting_intent"):
             ),
         )
     )
+    add_active_presence_lease(db_session, system_user_id=user.id)
     conversation = InboxConversation(
         channel_type="whatsapp",
         subject="AI-owned conversation",

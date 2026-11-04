@@ -12,10 +12,12 @@ from app.models.team_inbox import (
     InboxMessage,
 )
 from app.services.team_inbox_agent_introduction import (
+    preference_for_agent,
     rendered_introduction,
     update_preference,
 )
 from app.services.team_inbox_assignment import assign_conversation_to_agent
+from tests.team_inbox_presence_fixtures import add_active_presence_lease
 
 
 def _agent_and_team(db_session):
@@ -45,6 +47,7 @@ def _agent_and_team(db_session):
             last_seen_at=datetime.now(UTC),
         )
     )
+    add_active_presence_lease(db_session, system_user_id=user.id)
     db_session.flush()
     return user, team
 
@@ -66,6 +69,25 @@ def test_manual_insertion_uses_rendered_per_agent_template(db_session):
     javascript = Path("static/js/admin-inbox.js").read_text()
     assert "agent_introduction_text" in template
     assert "this.insertQuickResponse(this.introductionText)" in javascript
+
+
+def test_personal_inbox_settings_store_independent_assignment_channels(db_session):
+    user, _team = _agent_and_team(db_session)
+    update_preference(
+        db_session,
+        person_id=user.id,
+        template="Hello from {agent_name}.",
+        auto_send_chat_widget=False,
+        assignment_in_app_notifications=False,
+        assignment_email_notifications=True,
+    )
+
+    preference = preference_for_agent(db_session, user.id)
+    assert preference.assignment_in_app_notifications is False
+    assert preference.assignment_email_notifications is True
+    template = Path("templates/admin/inbox/email_routes.html").read_text()
+    assert 'name="assignment_in_app_notifications"' in template
+    assert 'name="assignment_email_notifications"' in template
 
 
 def test_first_chat_widget_pickup_auto_sends_once(db_session):

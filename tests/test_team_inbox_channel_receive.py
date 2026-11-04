@@ -13,11 +13,16 @@ from app.models.team_inbox import (
     InboxChannelType,
     InboxConversation,
     InboxConversationParticipant,
+    InboxConversationStatus,
     InboxMediaAsset,
     InboxMessage,
     InboxMessageDirection,
 )
-from app.services import team_inbox_channel_receive
+from app.services import (
+    team_inbox_channel_receive,
+    team_inbox_commands,
+    team_inbox_read,
+)
 
 
 def _team(db_session) -> ServiceTeam:
@@ -65,6 +70,91 @@ def _subscriber(
     db_session.add(subscriber)
     db_session.flush()
     return subscriber
+
+
+def test_continuous_thread_keeps_separate_service_episodes(db_session):
+    team = _team(db_session)
+    team_inbox_commands.create_channel_route(
+        db_session,
+        channel_type="whatsapp",
+        provider="meta_cloud_api",
+        account_scope="phone-1",
+        service_team_id=team.id,
+        conversation_mode="continuous",
+    )
+    route_metadata = {
+        "provider": "meta_cloud_api",
+        "provider_account_scope": "phone-1",
+    }
+    first = team_inbox_channel_receive.receive_inbound_channel(
+        db_session,
+        team_inbox_channel_receive.InboundChannelPayload(
+            channel_type="whatsapp",
+            contact_address="+2348035550114",
+            body="First issue",
+            external_message_id="continuous-1",
+            metadata=route_metadata,
+        ),
+    )
+    first_conversation = db_session.get(InboxConversation, first.conversation_id)
+    first_conversation.status = InboxConversationStatus.resolved.value
+    db_session.commit()
+
+    second = team_inbox_channel_receive.receive_inbound_channel(
+        db_session,
+        team_inbox_channel_receive.InboundChannelPayload(
+            channel_type="whatsapp",
+            contact_address="+2348035550114",
+            body="Second issue",
+            external_message_id="continuous-2",
+            metadata=route_metadata,
+        ),
+    )
+    db_session.commit()
+
+    second_conversation = db_session.get(InboxConversation, second.conversation_id)
+    db_session.refresh(first_conversation)
+    assert second_conversation.id != first_conversation.id
+    assert second_conversation.continued_from_conversation_id == first_conversation.id
+    assert first_conversation.status == InboxConversationStatus.resolved.value
+    assert second_conversation.status != InboxConversationStatus.resolved.value
+
+    page = team_inbox_read.get_conversation_message_page(
+        db_session,
+        conversation_id=second_conversation.id,
+        page=team_inbox_read.InboxTimelineMessagePageRequest(limit=10),
+    )
+    assert page is not None
+    assert [message.body for message in page.messages] == [
+        "First issue",
+        "Second issue",
+    ]
+
+    team_inbox_commands.create_channel_route(
+        db_session,
+        channel_type="whatsapp",
+        provider="meta_cloud_api",
+        account_scope="phone-2",
+        service_team_id=team.id,
+        conversation_mode="continuous",
+    )
+    other_account = team_inbox_channel_receive.receive_inbound_channel(
+        db_session,
+        team_inbox_channel_receive.InboundChannelPayload(
+            channel_type="whatsapp",
+            contact_address="+2348035550114",
+            body="Different provider account",
+            external_message_id="continuous-other-account",
+            metadata={
+                "provider": "meta_cloud_api",
+                "provider_account_scope": "phone-2",
+            },
+        ),
+    )
+    other_conversation = db_session.get(
+        InboxConversation, other_account.conversation_id
+    )
+    assert other_conversation.continued_from_conversation_id is None
 
 
 def test_receive_whatsapp_links_single_active_subscriber_and_reseller(db_session):

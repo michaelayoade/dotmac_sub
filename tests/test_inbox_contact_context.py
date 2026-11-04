@@ -12,11 +12,14 @@ from app.models.team_inbox import (
     InboxContactLink,
     InboxConversation,
     InboxConversationParticipant,
+    InboxMessage,
+    InboxMessageDirection,
     InboxParticipantAdmissionSource,
 )
 from app.services import (
     conversation_lead_relationships,
     inbox_lead_actions,
+    team_inbox_analysis_projection,
     team_inbox_contact_context,
     team_inbox_contact_links,
     team_inbox_customer_completion,
@@ -162,6 +165,361 @@ def _link_direct_lead(
         ),
     )
     return lead
+
+
+def test_customer_history_summary_projection_reuses_reviewed_identity_and_public_messages(
+    db_session,
+):
+    current = _conversation(
+        db_session,
+        address=f"current-{uuid4()}@example.com",
+        last_message_at=datetime(2026, 10, 2, tzinfo=UTC),
+    )
+    party = _bind_party(db_session, current)
+    previous = _conversation(
+        db_session,
+        address=f"previous-{uuid4()}@example.com",
+        last_message_at=datetime(2026, 10, 1, tzinfo=UTC),
+    )
+    _bind_existing_party(db_session, previous, party)
+    db_session.add_all(
+        [
+            InboxMessage(
+                conversation_id=previous.id,
+                channel_type="email",
+                direction=InboxMessageDirection.inbound.value,
+                body="The earlier public issue",
+                received_at=datetime(2026, 10, 1, 9, tzinfo=UTC),
+            ),
+            InboxMessage(
+                conversation_id=previous.id,
+                channel_type="email",
+                direction=InboxMessageDirection.internal.value,
+                body="Private staff note",
+                created_at=datetime(2026, 10, 1, 10, tzinfo=UTC),
+            ),
+            InboxMessage(
+                conversation_id=current.id,
+                channel_type="email",
+                direction=InboxMessageDirection.outbound.value,
+                body="The current public reply",
+                sent_at=datetime(2026, 10, 2, 9, tzinfo=UTC),
+            ),
+        ]
+    )
+    db_session.commit()
+
+    first = team_inbox_analysis_projection.build_customer_history_summary_projection(
+        db_session,
+        team_inbox_analysis_projection.CustomerHistorySummaryRequest(
+            conversation_id=current.id,
+            permitted=True,
+        ),
+    )
+
+    assert first is not None
+    assert (
+        first.availability is team_inbox_contact_context.ContextAvailability.available
+    )
+    assert set(first.conversation_ids) == {current.id, previous.id}
+    assert tuple(message.body for message in first.messages) == (
+        "The earlier public issue",
+        "The current public reply",
+    )
+    assert first.source_watermark
+
+    brief = team_inbox_analysis_projection.build_customer_history_brief(
+        db_session,
+        team_inbox_analysis_projection.CustomerHistorySummaryRequest(
+            conversation_id=current.id,
+            permitted=True,
+        ),
+    )
+    assert brief is not None
+    assert (
+        brief.availability is team_inbox_contact_context.ContextAvailability.available
+    )
+    assert brief.previous_conversation_count == 1
+    assert brief.customer_message_count == 1
+    assert brief.agent_message_count == 1
+    assert tuple(message.body for message in brief.recent_messages) == (
+        "The earlier public issue",
+        "The current public reply",
+    )
+    assert all("Private staff note" not in item.body for item in brief.recent_messages)
+
+    restricted = (
+        team_inbox_analysis_projection.build_customer_history_summary_projection(
+            db_session,
+            team_inbox_analysis_projection.CustomerHistorySummaryRequest(
+                conversation_id=current.id,
+                permitted=False,
+            ),
+        )
+    )
+    assert restricted is not None
+    assert restricted.availability is (
+        team_inbox_contact_context.ContextAvailability.restricted
+    )
+    assert restricted.conversation_ids == ()
+    assert restricted.messages == ()
+    assert restricted.source_watermark is None
+
+    db_session.add(
+        InboxMessage(
+            conversation_id=current.id,
+            channel_type="email",
+            direction=InboxMessageDirection.inbound.value,
+            body="A newer public message",
+            received_at=datetime(2026, 10, 2, 11, tzinfo=UTC),
+        )
+    )
+    db_session.commit()
+    refreshed = (
+        team_inbox_analysis_projection.build_customer_history_summary_projection(
+            db_session,
+            team_inbox_analysis_projection.CustomerHistorySummaryRequest(
+                conversation_id=current.id,
+                permitted=True,
+            ),
+        )
+    )
+
+    assert refreshed is not None
+    assert refreshed.source_watermark != first.source_watermark
+
+
+def test_customer_history_summary_projection_refuses_ambiguous_identity(db_session):
+    conversation = _conversation(
+        db_session,
+        address=f"ambiguous-{uuid4()}@example.com",
+    )
+    conversation.metadata_ = {
+        "contact_resolution": {
+            "status": "ambiguous",
+            "normalized_contact": conversation.contact_address,
+        }
+    }
+    db_session.commit()
+
+    result = team_inbox_analysis_projection.build_customer_history_summary_projection(
+        db_session,
+        team_inbox_analysis_projection.CustomerHistorySummaryRequest(
+            conversation_id=conversation.id,
+            permitted=True,
+        ),
+    )
+
+    assert result is not None
+    assert result.availability is (
+        team_inbox_contact_context.ContextAvailability.not_calculated
+    )
+    assert result.conversation_ids == ()
+    assert result.messages == ()
+    assert result.source_watermark is None
+
+    brief = team_inbox_analysis_projection.build_customer_history_brief(
+        db_session,
+        team_inbox_analysis_projection.CustomerHistorySummaryRequest(
+            conversation_id=conversation.id,
+            permitted=True,
+        ),
+    )
+    assert brief is not None
+    assert brief.availability is (
+        team_inbox_contact_context.ContextAvailability.not_calculated
+    )
+    assert brief.recent_messages == ()
+
+
+def test_customer_history_brief_uses_bounded_newest_message_evidence(db_session):
+    conversation = _conversation(
+        db_session,
+        address=f"bounded-{uuid4()}@example.com",
+        last_message_at=datetime(2026, 10, 2, tzinfo=UTC),
+    )
+    _bind_party(db_session, conversation)
+    db_session.add_all(
+        [
+            InboxMessage(
+                conversation_id=conversation.id,
+                channel_type="email",
+                direction=(
+                    InboxMessageDirection.inbound.value
+                    if index % 2 == 0
+                    else InboxMessageDirection.outbound.value
+                ),
+                body=f"Public message {index:02d}",
+                received_at=datetime(2026, 10, 2, tzinfo=UTC)
+                + timedelta(minutes=index),
+                created_at=datetime(2026, 10, 2, tzinfo=UTC) + timedelta(minutes=index),
+            )
+            for index in range(60)
+        ]
+    )
+    db_session.commit()
+
+    projection = (
+        team_inbox_analysis_projection.build_customer_history_summary_projection(
+            db_session,
+            team_inbox_analysis_projection.CustomerHistorySummaryRequest(
+                conversation_id=conversation.id,
+                permitted=True,
+            ),
+        )
+    )
+    brief = team_inbox_analysis_projection.build_customer_history_brief(
+        db_session,
+        team_inbox_analysis_projection.CustomerHistorySummaryRequest(
+            conversation_id=conversation.id,
+            permitted=True,
+        ),
+    )
+
+    assert projection is not None
+    assert len(projection.messages) == 24
+    assert projection.inspected_message_count == 24
+    assert projection.evidence_is_truncated is True
+    assert projection.messages[0].body == "Public message 36"
+    assert projection.messages[-1].body == "Public message 59"
+    assert brief is not None
+    assert brief.evidence_message_count == 24
+    assert brief.inspected_message_count == 24
+    assert brief.customer_message_count == 12
+    assert brief.agent_message_count == 12
+    assert brief.evidence_is_truncated is True
+    assert tuple(item.body for item in brief.recent_messages) == (
+        "Public message 56",
+        "Public message 57",
+        "Public message 58",
+        "Public message 59",
+    )
+
+
+def test_customer_history_brief_reserves_prior_conversation_evidence(db_session):
+    current = _conversation(
+        db_session,
+        address=f"current-busy-{uuid4()}@example.com",
+        last_message_at=datetime(2026, 10, 3, tzinfo=UTC),
+    )
+    party = _bind_party(db_session, current)
+    previous = _conversation(
+        db_session,
+        address=f"previous-evidence-{uuid4()}@example.com",
+        last_message_at=datetime(2026, 10, 1, tzinfo=UTC),
+    )
+    _bind_existing_party(db_session, previous, party)
+    current_messages = [
+        InboxMessage(
+            conversation_id=current.id,
+            channel_type="email",
+            direction=InboxMessageDirection.inbound.value,
+            body=f"Current message {index:02d}",
+            received_at=datetime(2026, 10, 3, tzinfo=UTC) + timedelta(minutes=index),
+            created_at=datetime(2026, 10, 3, tzinfo=UTC) + timedelta(minutes=index),
+        )
+        for index in range(30)
+    ]
+    previous_messages = [
+        InboxMessage(
+            conversation_id=previous.id,
+            channel_type="email",
+            direction=InboxMessageDirection.outbound.value,
+            body=f"Previous reply {index:02d}",
+            sent_at=datetime(2026, 10, 1, tzinfo=UTC) + timedelta(minutes=index),
+            created_at=datetime(2026, 10, 1, tzinfo=UTC) + timedelta(minutes=index),
+        )
+        for index in range(5)
+    ]
+    db_session.add_all([*current_messages, *previous_messages])
+    db_session.commit()
+
+    brief = team_inbox_analysis_projection.build_customer_history_brief(
+        db_session,
+        team_inbox_analysis_projection.CustomerHistorySummaryRequest(
+            conversation_id=current.id,
+            permitted=True,
+        ),
+    )
+
+    assert brief is not None
+    assert brief.evidence_conversation_count == 2
+    assert brief.evidence_message_count == 26
+    assert brief.inspected_message_count == 26
+    projection = (
+        team_inbox_analysis_projection.build_customer_history_summary_projection(
+            db_session,
+            team_inbox_analysis_projection.CustomerHistorySummaryRequest(
+                conversation_id=current.id,
+                permitted=True,
+            ),
+        )
+    )
+    assert projection is not None
+    assert {message.conversation_id for message in projection.messages} == {
+        current.id,
+        previous.id,
+    }
+    assert tuple(
+        message.body
+        for message in projection.messages
+        if message.conversation_id == previous.id
+    ) == ("Previous reply 03", "Previous reply 04")
+
+
+def test_customer_history_brief_does_not_claim_empty_when_private_rows_starve_window(
+    db_session,
+):
+    conversation = _conversation(
+        db_session,
+        address=f"private-window-{uuid4()}@example.com",
+        last_message_at=datetime(2026, 10, 4, tzinfo=UTC),
+    )
+    _bind_party(db_session, conversation)
+    older_public = InboxMessage(
+        conversation_id=conversation.id,
+        channel_type="email",
+        direction=InboxMessageDirection.inbound.value,
+        body="Older public issue outside the bounded window",
+        received_at=datetime(2026, 10, 3, tzinfo=UTC),
+        created_at=datetime(2026, 10, 3, tzinfo=UTC),
+    )
+    newer_private = [
+        InboxMessage(
+            conversation_id=conversation.id,
+            channel_type="email",
+            direction=InboxMessageDirection.internal.value,
+            body=f"Private note {index:02d}",
+            created_at=datetime(2026, 10, 4, tzinfo=UTC) + timedelta(minutes=index),
+        )
+        for index in range(26)
+    ]
+    db_session.add_all([older_public, *newer_private])
+    db_session.commit()
+
+    brief = team_inbox_analysis_projection.build_customer_history_brief(
+        db_session,
+        team_inbox_analysis_projection.CustomerHistorySummaryRequest(
+            conversation_id=conversation.id,
+            permitted=True,
+        ),
+    )
+
+    assert brief is not None
+    assert brief.availability is (
+        team_inbox_contact_context.ContextAvailability.unavailable
+    )
+    assert brief.evidence_is_truncated is True
+    assert brief.customer_message_count == 0
+    assert brief.agent_message_count == 0
+    assert brief.evidence_message_count == 0
+    assert brief.inspected_message_count == 0
+    assert brief.recent_messages == ()
+    assert brief.message == (
+        "No public messages were found in the bounded recent window. "
+        "Older records were not scanned."
+    )
+    assert "private" not in brief.message.lower()
 
 
 def test_structural_fiber_lead_is_visible_without_contact_point(db_session):

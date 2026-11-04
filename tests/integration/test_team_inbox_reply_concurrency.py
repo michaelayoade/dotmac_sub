@@ -22,6 +22,7 @@ from app.models.team_inbox import (
 )
 from app.services import team_inbox_commands, team_inbox_outbound
 from tests.staff_identity_fixtures import add_bound_staff_user
+from tests.team_inbox_presence_fixtures import add_active_presence_lease
 
 
 def _session_factory(engine):
@@ -57,6 +58,7 @@ def test_locked_conversation_fails_fast_and_same_key_retries_once(engine, monkey
                 conversation,
             ]
         )
+        add_active_presence_lease(setup, system_user_id=agent.id)
         setup.commit()
         conversation_id = conversation.id
         agent_id = agent.id
@@ -177,6 +179,8 @@ def test_two_agents_replying_simultaneously_only_one_claims_and_sends(
             is_active=True,
         )
         setup.add_all([*rows, conversation])
+        for agent_id in agents:
+            add_active_presence_lease(setup, system_user_id=agent_id)
         setup.commit()
         conversation_id = conversation.id
         agent_ids = tuple(agents)

@@ -25,6 +25,7 @@ from app.models.team_inbox import (
 )
 from app.services import team_inbox_commands, team_inbox_projection, team_inbox_read
 from tests.staff_identity_fixtures import add_bound_staff_user
+from tests.team_inbox_presence_fixtures import add_active_presence_lease
 
 CONVERSATION = Path("templates/admin/inbox/_conversation.html").read_text()
 JAVASCRIPT = Path("static/js/admin-inbox.js").read_text()
@@ -60,6 +61,7 @@ def _team(db_session, name="Support", *, member_id=None):
                 last_seen_at=datetime.now(UTC),
             )
         )
+        add_active_presence_lease(db_session, system_user_id=_user.id)
     db_session.commit()
     return captured
 

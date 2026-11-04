@@ -8,6 +8,8 @@ from types import SimpleNamespace
 import pytest
 from jinja2 import Environment, FileSystemLoader
 
+from app.models.auth import Session as AuthSession
+from app.models.auth import SessionStatus
 from app.models.notification import Notification
 from app.models.party import Party, PartyType
 from app.models.sales import Lead, LeadOriginCapture, LeadStatus
@@ -15,6 +17,7 @@ from app.models.service_team import ServiceTeam, ServiceTeamMember, ServiceTeamT
 from app.models.subscriber import Subscriber, SubscriberStatus
 from app.models.team_inbox import (
     InboxAgentPresence,
+    InboxAgentPresenceSessionLease,
     InboxAgentPresenceStatus,
     InboxConversation,
     InboxConversationAssignment,
@@ -37,6 +40,7 @@ from app.services import (
 from app.services.list_query import PageMeta
 from app.services.workqueue.permissions import WorkqueuePrincipal
 from tests.staff_identity_fixtures import add_bound_staff_user
+from tests.team_inbox_presence_fixtures import add_active_presence_lease
 
 
 def _conversation(db_session) -> uuid.UUID:
@@ -75,6 +79,7 @@ def _eligible_reply_actor(db_session, conversation_id: uuid.UUID) -> uuid.UUID:
         ]
     )
     conversation.primary_service_team_id = team.id
+    add_active_presence_lease(db_session, system_user_id=user.id)
     db_session.flush()
     return user.id
 
@@ -342,8 +347,8 @@ def test_workspace_exposes_responsive_realtime_and_accessible_controls():
         not in sidebar
     )
     assert (
-        "Only online agents with recent presence evidence receive auto-assigned "
-        "inbox conversations." in sidebar
+        "Only effectively online agents with recent session activity receive "
+        "auto-assigned Inbox conversations." in sidebar
     )
     assert "conversation_id" in sidebar
     assert "Advanced team conditions" in sidebar
@@ -374,10 +379,10 @@ def test_workspace_exposes_responsive_realtime_and_accessible_controls():
     assert 'name="cc"' in conversation
     assert 'name="bcc"' in conversation
     assert (
-        'hx-get="/admin/inbox/{{ row.id }}?view=20260910b"'
+        'hx-get="/admin/inbox/{{ row.id }}?view=20261103a"'
         in Path("templates/admin/inbox/_queue_macros.html").read_text()
     )
-    assert 'const INBOX_FRAGMENT_VERSION = "20260910b"' in javascript
+    assert 'const INBOX_FRAGMENT_VERSION = "20261103a"' in javascript
     assert "import message_bubble with context" in conversation
     triage = Path("templates/components/ui/triage.html").read_text()
     assert "att.mime_type.startswith('video/')" in triage
@@ -467,6 +472,10 @@ def test_projection_supplies_live_agent_and_assignment_options(db_session):
     )
     assert projection.agent_presence is not None
     assert projection.agent_presence.status == InboxAgentPresenceStatus.offline.value
+    assert projection.agent_presence.selected_status == (
+        InboxAgentPresenceStatus.offline.value
+    )
+    assert projection.agent_presence.auto_offline is True
     assert projection.assignment_counts.all == 1
     assert projection.assignment_counts.unassigned == 1
 
@@ -551,6 +560,7 @@ def test_projection_reads_current_agent_presence(db_session):
             person_id=user.id,
             status=InboxAgentPresenceStatus.online.value,
             manual_override_status=InboxAgentPresenceStatus.away.value,
+            auto_offline=False,
         )
     )
     db_session.commit()
@@ -562,6 +572,56 @@ def test_projection_reads_current_agent_presence(db_session):
 
     assert projection.agent_presence is not None
     assert projection.agent_presence.status == InboxAgentPresenceStatus.away.value
+    assert (
+        projection.agent_presence.selected_status == InboxAgentPresenceStatus.away.value
+    )
+    assert projection.agent_presence.auto_offline is False
+
+
+def test_presence_projection_uses_the_routing_owners_session_lease_evidence(
+    db_session,
+):
+    user, _person = add_bound_staff_user(db_session)
+    observed_at = datetime.now(UTC)
+    auth_session = AuthSession(
+        system_user_id=user.id,
+        party_id=user.person_party_id,
+        status=SessionStatus.active,
+        token_hash=f"presence-projection:{uuid.uuid4()}",
+        created_at=observed_at,
+        last_seen_at=observed_at,
+        expires_at=observed_at + timedelta(days=1),
+    )
+    db_session.add(auth_session)
+    db_session.flush()
+    db_session.add(
+        InboxAgentPresence(
+            person_id=user.id,
+            status=InboxAgentPresenceStatus.online.value,
+            last_seen_at=observed_at,
+            auto_offline=True,
+        )
+    )
+    lease = InboxAgentPresenceSessionLease(
+        person_id=user.id,
+        auth_session_id=auth_session.id,
+        last_seen_at=observed_at,
+    )
+    db_session.add(lease)
+    db_session.commit()
+
+    fresh = team_inbox_projection.get_agent_presence(db_session, user.id)
+    lease.last_seen_at = observed_at - timedelta(minutes=5)
+    db_session.commit()
+    stale = team_inbox_projection.get_agent_presence(db_session, user.id)
+
+    assert fresh is not None
+    assert fresh.status == InboxAgentPresenceStatus.online.value
+    assert fresh.last_seen_at is not None
+    assert fresh.last_seen_at.replace(tzinfo=UTC) == observed_at
+    assert stale is not None
+    assert stale.status == InboxAgentPresenceStatus.offline.value
+    assert stale.last_seen_at is None
 
 
 def test_assignment_agent_options_show_team_and_presence_status(db_session):
@@ -583,6 +643,7 @@ def test_assignment_agent_options_show_team_and_presence_status(db_session):
             last_seen_at=datetime.now(UTC),
         )
     )
+    add_active_presence_lease(db_session, system_user_id=user.id)
     db_session.commit()
 
     projection = team_inbox_projection.build_queue_projection(
@@ -992,12 +1053,29 @@ def test_manager_dashboard_projects_presence_load_status_and_channels(db_session
     )
     db_session.add_all([assigned, pending, resolved])
     db_session.flush()
+    observed_at = datetime.now(UTC)
+    auth_session = AuthSession(
+        system_user_id=user.id,
+        party_id=user.person_party_id,
+        status=SessionStatus.active,
+        token_hash=f"manager-presence:{uuid.uuid4()}",
+        created_at=observed_at,
+        last_seen_at=observed_at,
+        expires_at=observed_at + timedelta(days=1),
+    )
+    db_session.add(auth_session)
+    db_session.flush()
     db_session.add_all(
         [
             InboxAgentPresence(
                 person_id=user.id,
                 status="online",
-                last_seen_at=datetime.now(UTC),
+                last_seen_at=observed_at,
+            ),
+            InboxAgentPresenceSessionLease(
+                person_id=user.id,
+                auth_session_id=auth_session.id,
+                last_seen_at=observed_at,
             ),
             InboxConversationAssignment(
                 conversation_id=assigned.id,

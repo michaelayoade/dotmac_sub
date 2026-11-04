@@ -6,7 +6,8 @@ import pytest
 from sqlalchemy import select
 
 from app.models.custom_fields import CustomFieldDefinition, CustomFieldValue
-from app.services import custom_field_capabilities, custom_fields
+from app.models.team_inbox import InboxConversation
+from app.services import custom_field_capabilities, custom_field_targets, custom_fields
 from app.services.owner_commands import CommandContext
 
 TENANT_ID = UUID("8c7ae830-51fc-52ae-9818-d84b2a35e568")
@@ -54,6 +55,40 @@ def test_subscriber_is_the_initial_registered_target() -> None:
     assert target.read_permission == "customer:read"
     assert target.write_permission == "customer:update"
     assert "{target_id}" in target.detail_path_template
+
+
+def test_inbox_conversation_reuses_the_registered_custom_field_engine() -> None:
+    assert custom_field_targets.runtime_registry_errors() == ()
+    target = custom_field_capabilities.target_capability("inbox.conversation")
+    assert target.read_permission == "support:ticket:read"
+    assert target.write_permission == "support:ticket:update"
+    assert target.detail_path_template == "/admin/inbox?c={target_id}"
+
+
+def test_inbox_conversation_runtime_adapter_uses_the_canonical_record(
+    db_session,
+) -> None:
+    conversation = InboxConversation(
+        channel_type="email",
+        subject="Custom field target",
+        contact_address="customer@example.com",
+    )
+    db_session.add(conversation)
+    db_session.flush()
+
+    assert custom_field_targets.target_exists(
+        db_session,
+        target_type="inbox.conversation",
+        target_id=conversation.id,
+    )
+    assert (
+        custom_field_targets.target_detail_path(
+            db_session,
+            target_type="inbox.conversation",
+            target_id=conversation.id,
+        )
+        == f"/admin/inbox?c={conversation.id}"
+    )
 
 
 def test_definition_lifecycle_and_typed_value_are_owned_atomically(

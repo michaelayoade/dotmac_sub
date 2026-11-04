@@ -1,14 +1,50 @@
 from __future__ import annotations
 
 from fastapi import WebSocket
+from sqlalchemy.orm import Session
 
 from app.models.system_user import SystemUser
 from app.services.auth_dependencies import claims_for_principal
-from app.services.auth_flow import decode_access_token
+from app.services.auth_flow import decode_access_token, validate_active_session
 from app.services.db_session_adapter import db_session_adapter
 from app.services.team_inbox_widget import decode_widget_token
 
 WEBSOCKET_AUTH_SUBPROTOCOL = "dotmac-auth"
+
+
+def _validated_access_identity(
+    db: Session, token: str
+) -> tuple[dict, str, str, str] | None:
+    """Decode a JWT and bind it to its current backing session and principal."""
+
+    payload = decode_access_token(db, token)
+    principal_id = str(payload.get("principal_id") or payload.get("sub") or "")
+    principal_type = str(payload.get("principal_type") or "subscriber")
+    session_id = str(payload.get("session_id") or "")
+    if not principal_id or not session_id:
+        return None
+    validated = validate_active_session(db, session_id, principal_id)
+    if validated is None:
+        return None
+    _session, _principal, validated_principal_type = validated
+    if str(validated_principal_type) != principal_type:
+        return None
+    return payload, principal_id, principal_type, session_id
+
+
+def websocket_auth_session_is_active(auth: dict) -> bool:
+    """Re-check a connected JWT principal against its live AuthSession row."""
+
+    if auth.get("principal_type") == "chat_widget":
+        return True
+    principal_id = str(auth.get("principal_id") or "")
+    principal_type = str(auth.get("principal_type") or "")
+    session_id = str(auth.get("session_id") or "")
+    if not principal_id or not principal_type or not session_id:
+        return False
+    with db_session_adapter.read_session() as db:
+        validated = validate_active_session(db, session_id, principal_id)
+        return validated is not None and str(validated[2]) == principal_type
 
 
 def _requested_subprotocols(websocket: WebSocket) -> tuple[str, ...]:
@@ -60,21 +96,17 @@ async def authenticate_staff_websocket(websocket: WebSocket) -> dict | None:
 
     db = db_session_adapter.create_session()
     try:
-        payload = decode_access_token(db, token)
-        principal_id = payload.get("principal_id") or payload.get("sub")
-        if not principal_id:
+        identity = _validated_access_identity(db, token)
+        if identity is None:
             await websocket.close(code=4001, reason="Invalid token")
             return None
-
-        principal_type = payload.get("principal_type") or "subscriber"
-        roles, scopes = claims_for_principal(
-            db, str(principal_id), str(principal_type), payload
-        )
+        payload, principal_id, principal_type, session_id = identity
+        roles, scopes = claims_for_principal(db, principal_id, principal_type, payload)
         return {
-            "principal_id": str(principal_id),
-            "person_id": str(principal_id),
-            "principal_type": str(principal_type),
-            "session_id": payload.get("session_id"),
+            "principal_id": principal_id,
+            "person_id": principal_id,
+            "principal_type": principal_type,
+            "session_id": session_id,
             "roles": roles,
             "scopes": scopes,
         }
@@ -116,18 +148,12 @@ async def authenticate_websocket(websocket: WebSocket) -> dict | None:
         except Exception:
             pass
 
-        payload = decode_access_token(db, token)
-        subscriber_id = payload.get("principal_id") or payload.get("sub")
-        session_id = payload.get("session_id")
-
-        if not subscriber_id:
+        identity = _validated_access_identity(db, token)
+        if identity is None:
             await websocket.close(code=4001, reason="Invalid token")
             return None
-
-        principal_type = str(payload.get("principal_type") or "subscriber")
-        roles, scopes = claims_for_principal(
-            db, str(subscriber_id), principal_type, payload
-        )
+        payload, subscriber_id, principal_type, session_id = identity
+        roles, scopes = claims_for_principal(db, subscriber_id, principal_type, payload)
         display_name = None
         if principal_type == "system_user":
             user = db.get(SystemUser, subscriber_id)

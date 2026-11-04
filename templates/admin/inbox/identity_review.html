@@ -37,6 +37,8 @@
                     <input type="hidden" name="target_type" value="subscriber">
                     <input type="hidden" name="subscriber_id" value="{{ match.customer_id }}">
                     <input type="hidden" name="expected_identity_evidence_digest" value="{{ review.evidence_digest }}">
+                    <input type="hidden" name="check_expected_active_link" value="true">
+                    <input type="hidden" name="expected_active_link_id" value="{{ expected_active_contact_link_id or '' }}">
                     <button class="min-h-11 rounded-lg bg-cyan-700 px-3 text-xs font-semibold text-white hover:bg-cyan-600">Link this Customer</button>
                 </form>
                 {% endif %}

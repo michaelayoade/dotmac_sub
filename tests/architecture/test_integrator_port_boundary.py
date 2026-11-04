@@ -194,6 +194,40 @@ def test_the_channel_allowlist_still_bites():
     assert InboxChannelType.field_job in uncovered
 
 
+def test_connector_discovery_reuses_the_fail_closed_channel_allowlist():
+    from app.models.team_inbox import InboxChannelType
+    from app.services.sot_relationships import service_relationship
+    from app.services.team_inbox_integrator_envelope import (
+        PROVIDER_CHANNELS,
+        provider_channel_catalog,
+    )
+
+    catalog = provider_channel_catalog()
+    observed = {(item.provider, item.channel) for item in catalog.capabilities}
+    expected = {
+        (provider, channel)
+        for provider, channels in PROVIDER_CHANNELS.items()
+        for channel in channels
+    }
+
+    assert observed == expected
+    assert all(
+        item.channel not in {InboxChannelType.note, InboxChannelType.field_job}
+        for item in catalog.capabilities
+    )
+    assert catalog.capabilities == tuple(
+        sorted(
+            catalog.capabilities,
+            key=lambda item: (item.provider.value, item.channel.value),
+        )
+    )
+    service = service_relationship("communications.team_inbox_integrator_envelope")
+    assert "Integrator provider/channel capability discovery" in service.owns
+    assert service.contract is not None
+    inputs = {item.name: item.owner for item in service.contract.authoritative_inputs}
+    assert inputs["provider/channel admission allowlist"] == service.name
+
+
 def test_the_legacy_receivers_defects_are_still_present_and_still_owed():
     """A two-directional ratchet on the debt this migration exists to retire.
 
