@@ -1001,7 +1001,7 @@ def _activation_at(
     candidates = [_utc(value) for value in lifecycle_times if value is not None]
 
     # An operator can activate the account itself without a subscription.
-    for row in db.scalars(
+    for audit_record in db.scalars(
         select(AuditEvent)
         .where(AuditEvent.action == "customer.account_status_changed")
         .where(AuditEvent.entity_type == "subscriber")
@@ -1009,15 +1009,15 @@ def _activation_at(
         .where(func.coalesce(AuditEvent.created_at, AuditEvent.occurred_at) >= created)
         .where(func.coalesce(AuditEvent.created_at, AuditEvent.occurred_at) <= deadline)
     ):
-        details = row.details or row.metadata_ or {}
+        details = audit_record.details or audit_record.metadata_ or {}
         if (
             details.get("status") == "active"
             and details.get("prior_status") != "active"
         ):
-            candidates.append(_utc(row.created_at or row.occurred_at))
+            candidates.append(_utc(audit_record.created_at or audit_record.occurred_at))
 
     # Legacy and other activation paths may have only an event-store record.
-    for row in db.scalars(
+    for event_record in db.scalars(
         select(EventStore)
         .where(EventStore.is_active.is_(True))
         .where(
@@ -1038,14 +1038,14 @@ def _activation_at(
         .where(EventStore.created_at >= created)
         .where(EventStore.created_at <= deadline)
     ):
-        if row.event_type == EventType.subscriber_updated.value:
-            payload = row.payload or {}
+        if event_record.event_type == EventType.subscriber_updated.value:
+            payload = event_record.payload or {}
             if (
                 payload.get("status") != "active"
                 or payload.get("prior_status") == "active"
             ):
                 continue
-        candidates.append(_utc(row.created_at))
+        candidates.append(_utc(event_record.created_at))
     return min(candidates) if candidates else None
 
 

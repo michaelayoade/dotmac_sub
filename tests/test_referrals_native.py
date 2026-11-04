@@ -506,7 +506,10 @@ def test_pending_referrals_reconcile_activation_history_and_expiry(
     assert db_session.get(Referral, overdue.id).status == "expired"
     assert db_session.get(Referral, recent.id).status == "pending"
     assert db_session.get(Referral, activated.id).status == "qualified"
-    assert db_session.get(Referral, activated.id).qualified_at == activated_at
+    assert (
+        db_session.get(Referral, activated.id).qualified_at.replace(tzinfo=UTC)
+        == activated_at
+    )
     assert db_session.get(Referral, no_evidence.id).status == "expired"
     assert sweep().processed == 0
     assert (
@@ -539,7 +542,7 @@ def test_delayed_qualification_uses_in_window_activation_event(db_session):
     result = qualify_for_subscriber(db_session, prospect)
     assert result is not None
     assert result.status == "qualified"
-    assert result.qualified_at == activated_at
+    assert result.qualified_at.replace(tzinfo=UTC) == activated_at
 
 
 def test_qualify_attaches_only_a_reviewed_matching_party(db_session):
