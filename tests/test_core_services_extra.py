@@ -71,7 +71,7 @@ def test_rbac_role_permission_link(db_session, person):
             context=CommandContext(
                 command_id=assignment_command_id,
                 correlation_id=assignment_command_id,
-                actor="user:core-service-test",
+                actor="service:core-service-test",
                 scope=subscriber_assignments.ASSIGNMENT_SCOPE,
                 reason="Core service subscriber role fixture",
             ),

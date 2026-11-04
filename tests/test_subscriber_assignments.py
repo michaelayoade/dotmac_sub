@@ -24,7 +24,7 @@ def _context(
     return CommandContext(
         command_id=command_id,
         correlation_id=command_id,
-        actor="user:subscriber-assignment-test",
+        actor="service:subscriber-assignment-test",
         scope=scope,
         reason="Verify canonical subscriber assignment semantics",
         idempotency_key=f"{key}:{command_id}",
