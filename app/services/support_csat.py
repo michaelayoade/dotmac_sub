@@ -3,12 +3,12 @@
 from __future__ import annotations
 
 import logging
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 from decimal import Decimal
 from uuid import UUID, uuid4
 
-from sqlalchemy import func, or_
+from sqlalchemy import Integer, func, or_
 from sqlalchemy.orm import Session
 
 from app.models.csat import CsatRequestStatus, CsatSourceType, SupportCsatRequest
@@ -20,6 +20,7 @@ from app.models.team_inbox import (
     InboxConversation,
     InboxConversationAssignment,
     InboxConversationStatus,
+    TeamInboxChannelRoute,
 )
 from app.services.common import apply_pagination
 from app.services.domain_errors import DomainError
@@ -47,7 +48,8 @@ class CsatReportQuery:
     source_type: CsatSourceType | None = None
     agent_person_id: UUID | None = None
     service_team_id: UUID | None = None
-    status: CsatRequestStatus = CsatRequestStatus.submitted
+    source_channel: str | None = None
+    status: CsatRequestStatus | None = CsatRequestStatus.submitted
     page: int = 1
     per_page: int | None = 50
 
@@ -58,6 +60,75 @@ class CsatReportSummary:
     submitted: int
     average_rating: Decimal | None
     rating_counts: dict[int, int]
+    positive_count: int
+    positive_percentage: Decimal | None
+    response_rate: Decimal | None
+
+
+@dataclass(frozen=True, slots=True)
+class CsatTrendPoint:
+    period: str
+    requested: int
+    submitted: int
+    positive: int
+    average_rating: Decimal | None
+
+
+@dataclass(frozen=True, slots=True)
+class CsatFilterOption:
+    id: UUID
+    name: str
+
+
+@dataclass(frozen=True, slots=True)
+class InboxCsatPolicy:
+    enabled: bool = True
+    style: str = "stars"
+    message: str = "How would you rate this conversation?"
+
+
+def inbox_survey_policy(
+    db: Session, conversation: InboxConversation
+) -> InboxCsatPolicy:
+    route = (
+        db.query(TeamInboxChannelRoute)
+        .filter(
+            TeamInboxChannelRoute.is_active.is_(True),
+            TeamInboxChannelRoute.channel_type == conversation.channel_type,
+            TeamInboxChannelRoute.service_team_id
+            == conversation.primary_service_team_id,
+        )
+        .order_by(TeamInboxChannelRoute.priority.asc(), TeamInboxChannelRoute.id.asc())
+        .first()
+    )
+    metadata = dict(route.metadata_ or {}) if route is not None else {}
+    tags = {
+        str(value).strip().casefold()
+        for value in ((conversation.metadata_ or {}).get("tags") or [])
+        if str(value).strip()
+    }
+    include = {
+        str(value).strip().casefold()
+        for value in (metadata.get("csat_include_labels") or [])
+        if str(value).strip()
+    }
+    exclude = {
+        str(value).strip().casefold()
+        for value in (metadata.get("csat_exclude_labels") or [])
+        if str(value).strip()
+    }
+    enabled = bool(metadata.get("csat_enabled", True))
+    if include and not tags.intersection(include):
+        enabled = False
+    if exclude and tags.intersection(exclude):
+        enabled = False
+    return InboxCsatPolicy(
+        enabled=enabled,
+        style="emoji" if metadata.get("csat_style") == "emoji" else "stars",
+        message=str(
+            metadata.get("csat_message") or "How would you rate this conversation?"
+        )[:200],
+    )
 
 
 @dataclass(frozen=True, slots=True)
@@ -210,6 +281,7 @@ def _create_request(
     customer: CustomerCsatSnapshot,
     agent_person_id: UUID | None,
     service_team_id: UUID | None,
+    source_channel: str | None = None,
 ) -> SupportCsatRequest:
     existing = _existing_request(
         db,
@@ -234,6 +306,7 @@ def _create_request(
         agent_display_name=_agent_name(db, agent_person_id),
         service_team_id=service_team_id,
         service_team_name=_team_name(db, service_team_id),
+        source_channel=(str(source_channel or "").strip() or None),
         status=CsatRequestStatus.pending.value,
         requested_at=_now(),
         created_at=_now(),
@@ -330,6 +403,8 @@ def ensure_inbox_request(
         return None
     if conversation.subscriber_id is None:
         return None
+    if not inbox_survey_policy(db, conversation).enabled:
+        return None
     assignment = _latest_active_assignment(db, conversation.id)
     agent_person_id = (
         assignment.person_id if assignment is not None else actor_person_id
@@ -354,6 +429,7 @@ def ensure_inbox_request(
         ),
         agent_person_id=agent_person_id,
         service_team_id=service_team_id,
+        source_channel=conversation.channel_type,
     )
 
 
@@ -448,6 +524,7 @@ def submit_inbox_rating(
             ),
             agent_person_id=None,
             service_team_id=conversation.primary_service_team_id,
+            source_channel=conversation.channel_type,
         )
     return submit_request(
         db,
@@ -512,12 +589,12 @@ def submit_request(
 
 
 def report_summary(db: Session, query: CsatReportQuery) -> CsatReportSummary:
-    filtered = _filtered_query(db, query).order_by(None)
-    total = int(filtered.count())
-    submitted_filter = (
-        filtered.filter(SupportCsatRequest.status == CsatRequestStatus.submitted.value)
-        if query.status is not CsatRequestStatus.submitted
-        else filtered
+    scoped = _filtered_query(
+        db, replace(query, rating=None, status=None, page=1, per_page=None)
+    ).order_by(None)
+    total = int(scoped.count())
+    submitted_filter = scoped.filter(
+        SupportCsatRequest.status == CsatRequestStatus.submitted.value
     )
     submitted = int(submitted_filter.count())
     average_value = submitted_filter.with_entities(
@@ -533,6 +610,7 @@ def report_summary(db: Session, query: CsatReportQuery) -> CsatReportSummary:
         .group_by(SupportCsatRequest.rating)
         .all()
     }
+    positive_count = counts.get(4, 0) + counts.get(5, 0)
     return CsatReportSummary(
         total=total,
         submitted=submitted,
@@ -540,7 +618,92 @@ def report_summary(db: Session, query: CsatReportQuery) -> CsatReportSummary:
         if average_value is not None
         else None,
         rating_counts={score: counts.get(score, 0) for score in range(1, 6)},
+        positive_count=positive_count,
+        positive_percentage=(
+            Decimal(positive_count * 100) / Decimal(submitted) if submitted else None
+        ),
+        response_rate=(Decimal(submitted * 100) / Decimal(total) if total else None),
     )
+
+
+def report_trend(db: Session, query: CsatReportQuery) -> tuple[CsatTrendPoint, ...]:
+    """Return daily request, response, positive-score, and average-rating points."""
+
+    scoped = _filtered_query(
+        db, replace(query, rating=None, status=None, page=1, per_page=None)
+    ).order_by(None)
+    period = func.date(SupportCsatRequest.resolution_at)
+    rows = (
+        scoped.with_entities(
+            period.label("period"),
+            func.count(SupportCsatRequest.id).label("requested"),
+            func.sum(
+                func.cast(
+                    SupportCsatRequest.status == CsatRequestStatus.submitted.value,
+                    Integer,
+                )
+            ).label("submitted"),
+            func.sum(func.cast(SupportCsatRequest.rating.in_((4, 5)), Integer)).label(
+                "positive"
+            ),
+            func.avg(SupportCsatRequest.rating).label("average_rating"),
+        )
+        .group_by(period)
+        .order_by(period)
+        .all()
+    )
+    return tuple(
+        CsatTrendPoint(
+            period=str(row.period),
+            requested=int(row.requested or 0),
+            submitted=int(row.submitted or 0),
+            positive=int(row.positive or 0),
+            average_rating=(
+                Decimal(str(row.average_rating))
+                if row.average_rating is not None
+                else None
+            ),
+        )
+        for row in rows
+    )
+
+
+def report_filter_options(
+    db: Session,
+) -> tuple[tuple[CsatFilterOption, ...], tuple[CsatFilterOption, ...], tuple[str, ...]]:
+    """Return human-readable selectors from immutable CSAT snapshots."""
+
+    agents = tuple(
+        CsatFilterOption(id=person_id, name=str(name or person_id))
+        for person_id, name in db.query(
+            SupportCsatRequest.agent_person_id,
+            func.max(SupportCsatRequest.agent_display_name),
+        )
+        .filter(SupportCsatRequest.agent_person_id.isnot(None))
+        .group_by(SupportCsatRequest.agent_person_id)
+        .order_by(func.max(SupportCsatRequest.agent_display_name).asc())
+        .all()
+    )
+    teams = tuple(
+        CsatFilterOption(id=team_id, name=str(name or team_id))
+        for team_id, name in db.query(
+            SupportCsatRequest.service_team_id,
+            func.max(SupportCsatRequest.service_team_name),
+        )
+        .filter(SupportCsatRequest.service_team_id.isnot(None))
+        .group_by(SupportCsatRequest.service_team_id)
+        .order_by(func.max(SupportCsatRequest.service_team_name).asc())
+        .all()
+    )
+    channels = tuple(
+        str(value)
+        for (value,) in db.query(SupportCsatRequest.source_channel)
+        .filter(SupportCsatRequest.source_channel.isnot(None))
+        .distinct()
+        .order_by(SupportCsatRequest.source_channel.asc())
+        .all()
+    )
+    return agents, teams, channels
 
 
 def report_rows(db: Session, query: CsatReportQuery) -> list[SupportCsatRequest]:
@@ -576,4 +739,6 @@ def _filtered_query(db: Session, query: CsatReportQuery):
         rows = rows.filter(SupportCsatRequest.agent_person_id == query.agent_person_id)
     if query.service_team_id is not None:
         rows = rows.filter(SupportCsatRequest.service_team_id == query.service_team_id)
+    if query.source_channel:
+        rows = rows.filter(SupportCsatRequest.source_channel == query.source_channel)
     return rows

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from pathlib import Path
 from typing import cast
 
 from starlette.requests import Request
@@ -89,3 +90,12 @@ def test_help_center_loads_permissions_before_selecting_guides(
     assert captured["grouped_articles"]
     assert "Customers" in categories
     assert "Billing" not in categories
+
+
+def test_help_center_consumes_the_permission_filtered_knowledge_projection() -> None:
+    source = Path("app/web/admin/help_center.py").read_text(encoding="utf-8")
+
+    assert "build_knowledge_projection(" in source
+    assert "AdminKnowledgeProjectionQuery(" in source
+    assert "HELP_GUIDE_VIEW_PERMISSIONS" not in source
+    assert "can(request" not in source

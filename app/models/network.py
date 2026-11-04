@@ -730,7 +730,14 @@ class SubscriberAdditionalRoute(Base):
 
 class IpPool(Base):
     __tablename__ = "ip_pools"
-    __table_args__ = (UniqueConstraint("name", name="uq_ip_pools_name"),)
+    __table_args__ = (
+        UniqueConstraint("name", name="uq_ip_pools_name"),
+        CheckConstraint(
+            "purpose IS NULL OR purpose IN "
+            "('customer', 'customer_nat', 'infrastructure', 'management')",
+            name="ck_ip_pools_purpose",
+        ),
+    )
 
     id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
@@ -760,6 +767,11 @@ class IpPool(Base):
         index=True,
     )
     notes: Mapped[str | None] = mapped_column(Text)
+    # Phase A labels (NULL = unlabelled). Same name/type as Starter dotmac-ipam
+    # so the values copy across. ``site_ref`` is opaque (no FK): it holds a
+    # Sub POP site id today.
+    purpose: Mapped[str | None] = mapped_column(String(20))
+    site_ref: Mapped[uuid.UUID | None] = mapped_column(UUID(as_uuid=True))
 
     # Cached allocation tracking for faster IP allocation
     next_available_ip: Mapped[str | None] = mapped_column(String(64))

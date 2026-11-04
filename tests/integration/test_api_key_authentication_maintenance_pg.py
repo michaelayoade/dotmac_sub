@@ -16,6 +16,7 @@ from app.models.auth import ApiKey
 from app.schemas.auth import ApiKeyUpdate
 from app.services import api_key_administration as owner
 from app.services import staff_provisioning as staff
+from tests.api_key_actor_fixtures import persist_admin_actor
 from tests.api_key_update_fixtures import update_command
 from tests.integration import test_api_key_revocation_concurrency as revocations
 from tests.integration import test_oidc_atomic_session_concurrency as races
@@ -27,6 +28,7 @@ from tests.web_api_key_fixtures import mutate_command
 engine = races.engine
 RAW = "inert-authentication-key"
 LEGACY = "inert-authentication-legacy-digest"
+ADMIN_ACTOR_ID = "00000000-0000-4000-8000-000000000a11"
 PREFERRED = "hmac256:inert-authentication-preferred-digest"
 ROTATED = "hmac256:inert-rotated-digest"
 
@@ -45,6 +47,9 @@ def inert_hashes(monkeypatch):
 def target(engine: Engine) -> tuple[UUID, UUID]:
     with Session(engine) as db:
         user_id, key_id = staff_fixture(db)
+        # SUB-1: committed before any worker starts, so the raced scope update
+        # resolves its acting principal without a second Session construction.
+        persist_admin_actor(db, ADMIN_ACTOR_ID)
         db.execute(
             sql_update(ApiKey)
             .where(ApiKey.id == key_id)
@@ -98,10 +103,12 @@ def mutation_worker(
         if operation == "revoke":
             return owner.revoke(db, command=revocations.command(key_id))
         if operation == "scope":
-            return owner.update(
-                db,
-                command=update_command(key_id, ApiKeyUpdate(scopes=["billing:read"])),
+            command = update_command(
+                key_id,
+                ApiKeyUpdate(scopes=["billing:read"]),
+                actor_id=ADMIN_ACTOR_ID,
             )
+            return owner.update(db, command=command)
         return staff.delete_staff_account(db, command=delete_staff_command(target[0]))
 
 

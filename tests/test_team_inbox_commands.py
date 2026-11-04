@@ -19,6 +19,7 @@ from app.models.team_inbox import (
 from app.services import team_inbox_commands, team_inbox_outbound
 from app.services.workqueue.permissions import WorkqueuePrincipal
 from tests.staff_identity_fixtures import add_bound_staff_user
+from tests.team_inbox_presence_fixtures import add_active_presence_lease
 
 
 def _conversation(db_session, *, contact_address: str | None = "ada@example.com"):
@@ -71,6 +72,11 @@ def _eligible_actor(
         ]
     )
     conversation.primary_service_team_id = team.id
+    add_active_presence_lease(
+        db_session,
+        system_user_id=user.id,
+        observed_at=last_seen_at or datetime.now(UTC),
+    )
     db_session.flush()
     return user.id
 
@@ -406,13 +412,13 @@ def test_reply_reassigns_conversation_from_offline_owner(
 
 
 def test_successful_reply_refreshes_online_actor_presence(monkeypatch, db_session):
-    stale_seen_at = datetime.now(UTC) - timedelta(minutes=20)
+    prior_seen_at = datetime.now(UTC) - timedelta(seconds=20)
     conversation = _conversation(db_session)
     conversation_id = conversation.id
     actor_id = _eligible_actor(
         db_session,
         conversation,
-        last_seen_at=stale_seen_at,
+        last_seen_at=prior_seen_at,
     )
     db_session.commit()
     presence = db_session.query(InboxAgentPresence).filter_by(person_id=actor_id).one()
@@ -451,7 +457,7 @@ def test_successful_reply_refreshes_online_actor_presence(monkeypatch, db_sessio
     assert refreshed_seen_at is not None
     if refreshed_seen_at.tzinfo is None:
         refreshed_seen_at = refreshed_seen_at.replace(tzinfo=UTC)
-    assert refreshed_seen_at > stale_seen_at
+    assert refreshed_seen_at > prior_seen_at
 
 
 @pytest.mark.parametrize(

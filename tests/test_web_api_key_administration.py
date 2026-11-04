@@ -22,6 +22,10 @@ from app.services.auth import hash_api_key
 from app.services.db_session_adapter import db_session_adapter
 from app.services.owner_commands import OwnerCommandError
 from app.web.admin import system
+from tests.api_key_actor_fixtures import (
+    persist_admin_actor,
+    persist_wildcard_api_key_actor,
+)
 from tests.support.tx_trace import assert_protected_tx, trace_transactions
 from tests.web_api_key_fixtures import create_command, mutate_command
 
@@ -72,6 +76,11 @@ def test_state_and_canonical_audit_share_root(db_session, action, api_actor):
             actor=actor,
             context=replace(command.context, actor=f"api_key:{actor.actor_id}"),
         )
+    if action == "create":
+        if api_actor:
+            persist_wildcard_api_key_actor(db_session, command.actor.actor_id)
+        else:
+            persist_admin_actor(db_session, command.actor.actor_id)
     with trace_transactions(db_session.get_bind().engine) as trace:
         outcome = execute(db_session, command=command)
     assert_protected_tx(trace.result, protected_tables=frozenset({"api_keys"}))
@@ -309,6 +318,7 @@ def test_web_adapter_fresh_session_and_composed_one_time_render(
     import app.web.admin as admin
 
     request = request_fixture()
+    persist_admin_actor(db_session, request.state.actor_id)
     caller = {"person_id": "", "name": "Staff"}
     monkeypatch.setattr(admin, "get_current_user", lambda request: caller)
     monkeypatch.setattr(admin, "get_sidebar_stats", lambda db: {})

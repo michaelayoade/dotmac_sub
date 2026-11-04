@@ -93,6 +93,35 @@ def test_public_fiber_widget_uses_native_team_inbox_contract() -> None:
     assert 'ws_url) + "?token="' not in js
 
 
+def test_public_fiber_widget_normalizes_presentation_configuration() -> None:
+    js = _read("static/js/fiber-chat-widget.js")
+
+    assert "function normalizeWidgetConfig(value)" in js
+    assert "/^#[0-9a-fA-F]{6}$/.test(value)" in js
+    assert 'raw.position === "left" ? "left" : "right"' in js
+    assert "Math.max(8, Math.min(96, normalized))" in js
+    assert 'title: boundedText(raw.title, "Chat with Dotmac", 80)' in js
+    assert "brandTextColor: contrastText(color)" in js
+    assert ".textContent = config.title" in js
+    assert ".textContent = config.subtitle" in js
+    assert ".textContent = config.intro" in js
+    assert ".textContent = config.startButtonText" in js
+    assert ".textContent = config.sendButtonText" in js
+    assert "innerHTML = config." not in js
+    assert 'fetch(apiUrl + "/widget/fiber/config", { credentials: "omit" })' in js
+    assert "Promise.race([managedConfigRequest, configTimeout])" in js
+    assert "Object.assign({}, managedConfig, embedConfig" in js
+
+
+def test_public_fiber_widget_config_endpoint_is_origin_scoped_and_read_only() -> None:
+    adapter = _read("app/api/chat_widget.py")
+
+    assert '@router.get("/fiber/config")' in adapter
+    assert "_fiber_origin(request)" in adapter
+    assert "fiber_widget_presentation(" in adapter
+    assert "apply_admin_settings_form_updates" not in adapter
+
+
 def test_public_fiber_widget_websocket_is_origin_scoped() -> None:
     router = _read("app/websocket/router.py")
 

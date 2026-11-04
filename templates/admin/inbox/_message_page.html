@@ -1,0 +1,9 @@
+{% from "components/ui/triage.html" import message_bubble with context %}
+{% if has_older_messages and oldest_message_id %}
+    {% include "admin/inbox/_older_messages_trigger.html" %}
+{% endif %}
+{% for message in messages %}
+<div data-inbox-message-id="{{ message.id }}">
+    {{ message_bubble(message) }}
+</div>
+{% endfor %}

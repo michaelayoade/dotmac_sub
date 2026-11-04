@@ -79,6 +79,22 @@ class ConversationHistoryScope:
 
 
 @dataclass(frozen=True, slots=True)
+class EligibleConversationHistoryQuery:
+    conversation_id: UUID
+    permitted: bool
+    evidence_limit: int | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class EligibleConversationHistory:
+    scope: ConversationHistoryScope
+    availability: ContextAvailability
+    conversation_ids: tuple[UUID, ...] = ()
+    total_conversation_count: int | None = None
+    message: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
 class ContextSection(Generic[T]):
     availability: ContextAvailability
     items: tuple[T, ...] = ()
@@ -162,6 +178,7 @@ class InboxContactContextPermissions:
     can_read_tickets: bool
     can_read_projects: bool
     can_read_project_tasks: bool
+    can_edit_sensitive_profile: bool = False
 
     def action_permissions(self) -> inbox_lead_actions.InboxActionPermissions:
         return inbox_lead_actions.InboxActionPermissions(
@@ -194,6 +211,8 @@ class InboxContactContext:
         team_inbox_customer_completion.CustomerProfileField, str | None
     ]
     can_edit_customer_profile: bool
+    can_edit_sensitive_customer_profile: bool
+    expected_active_contact_link_id: UUID | None
 
 
 def _not_applicable(message: str) -> ContextSection[T]:
@@ -690,6 +709,88 @@ def _history_filter(
     raise ValueError(f"Unsupported conversation history scope: {scope.kind}")
 
 
+def eligible_conversation_history(
+    db: Session,
+    query: EligibleConversationHistoryQuery,
+) -> EligibleConversationHistory | None:
+    """Resolve the reviewed identity cohort used by Inbox history consumers."""
+
+    conversation = db.get(InboxConversation, query.conversation_id)
+    if conversation is None or not conversation.is_active:
+        return None
+    identity_state, party_id, subscriber_id = _identity(db, conversation)
+    scope = _conversation_history_scope(
+        db,
+        conversation=conversation,
+        identity_state=identity_state,
+        party_id=party_id,
+        subscriber_id=subscriber_id,
+    )
+    if not query.permitted:
+        return EligibleConversationHistory(
+            scope=scope,
+            availability=ContextAvailability.restricted,
+            message="Restricted",
+        )
+    if scope.kind is ConversationHistoryMatchKind.ambiguous:
+        return EligibleConversationHistory(
+            scope=scope,
+            availability=ContextAvailability.not_calculated,
+            message=scope.reason or "Identity review is required.",
+        )
+    if scope.kind is ConversationHistoryMatchKind.unavailable:
+        return EligibleConversationHistory(
+            scope=scope,
+            availability=ContextAvailability.not_applicable,
+            message=scope.reason or "Conversation identity is unavailable.",
+        )
+    cohort = select(InboxConversation.id).where(
+        InboxConversation.is_active.is_(True),
+        _history_filter(scope),
+    )
+    total_count: int | None = None
+    if query.evidence_limit is None:
+        rows = tuple(
+            db.scalars(
+                cohort.order_by(
+                    func.coalesce(
+                        InboxConversation.first_message_at,
+                        InboxConversation.created_at,
+                    ),
+                    InboxConversation.id,
+                )
+            ).all()
+        )
+        if query.conversation_id not in rows:
+            rows = (*rows, query.conversation_id)
+    else:
+        limit = max(1, query.evidence_limit)
+        total_count = int(
+            db.scalar(select(func.count()).select_from(cohort.subquery())) or 0
+        )
+        recent_rows = tuple(
+            db.scalars(
+                cohort.where(InboxConversation.id != query.conversation_id)
+                .order_by(
+                    func.coalesce(
+                        InboxConversation.last_message_at,
+                        InboxConversation.created_at,
+                    ).desc(),
+                    InboxConversation.id.desc(),
+                )
+                .limit(limit - 1)
+            ).all()
+        )
+        rows = (query.conversation_id, *recent_rows)
+        total_count = max(total_count, 1)
+    return EligibleConversationHistory(
+        scope=scope,
+        availability=ContextAvailability.available,
+        conversation_ids=rows,
+        total_conversation_count=total_count,
+    )
+
+
 def _recent_conversations(
     db: Session,
     *,
@@ -997,4 +1098,8 @@ def build_contact_context(
             db, conversation
         ),
         can_edit_customer_profile=permissions.can_edit_profile,
+        can_edit_sensitive_customer_profile=permissions.can_edit_sensitive_profile,
+        expected_active_contact_link_id=team_inbox_contact_links.active_contact_link_id(
+            db, conversation
+        ),
     )

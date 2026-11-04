@@ -192,6 +192,29 @@ def test_a_foreign_model_blob_is_not_counted_sensitivity() -> None:
     ], "a foreign model's blob was counted as a subscriber fact"
 
 
+def test_a_sliced_foreign_query_collection_keeps_its_model_binding() -> None:
+    census = _parse(
+        "from app.models.team_inbox import InboxConversation\n"
+        "def handler(db) -> None:\n"
+        "    rows = db.query(InboxConversation).all()\n"
+        "    batch = rows[:100]\n"
+        "    for historical in batch:\n"
+        "        historical.metadata_.get('contact_resolution')\n"
+    )
+    assert not census.unclassified
+
+
+def test_a_sqlalchemy_alias_keeps_its_foreign_model_binding() -> None:
+    census = _parse(
+        "from sqlalchemy.orm import aliased\n"
+        "from app.models.team_inbox import InboxConversation\n"
+        "def handler() -> None:\n"
+        "    child = aliased(InboxConversation)\n"
+        "    child.metadata_['conversation_mode'].as_string()\n"
+    )
+    assert not census.unclassified
+
+
 def test_an_unresolvable_receiver_is_reported_not_skipped_sensitivity() -> None:
     census = _parse(
         "from app.models.subscriber import Subscriber\n"

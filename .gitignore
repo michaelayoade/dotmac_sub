@@ -130,6 +130,8 @@ deploy/shadow/.env
 # Local Docs for studying the application and its processes. These are not part of the codebase.
 /inbox-log-fixes.md
 Billing-summary.md
+/billing-details.local.md
+/inbox-log-fixes.local.md
 
 # Local overrides for development/testing (never committed)
 *.local

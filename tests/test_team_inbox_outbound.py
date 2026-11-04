@@ -40,6 +40,7 @@ from app.services import (
 from app.services.domain_settings import notification_settings
 from app.tasks import notifications as notification_tasks
 from tests.staff_identity_fixtures import add_bound_staff_user
+from tests.team_inbox_presence_fixtures import add_active_presence_lease
 
 
 def _smtp_sender(db_session, key: str, *, from_email: str) -> None:
@@ -101,6 +102,7 @@ def _eligible_reply_actor(db_session, conversation: InboxConversation):
             ),
         ]
     )
+    add_active_presence_lease(db_session, system_user_id=user.id)
     db_session.flush()
     return user.id
 

@@ -177,6 +177,7 @@ from app.models.catalog import (  # noqa: F401
     NasConnectionRule,
     NasDevice,
     NasDeviceStatus,
+    NasPoolBinding,
     NasVendor,
     OfferAddOn,
     OfferPrice,

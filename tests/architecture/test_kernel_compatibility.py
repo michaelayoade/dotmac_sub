@@ -60,9 +60,9 @@ PYPROJECT = PROJECT_ROOT / "pyproject.toml"
 
 #: The reviewed kernel pin. Changing it is a ledger amendment
 #: (docs/PLATFORM_ADOPTION_LEDGER.md), never a lockfile side effect.
-KERNEL_PIN = "0.1.0a105"
-KERNEL_WHEEL_SHA256 = "f8937e5525c3efd27e2030bf69ed0c37e137c345e376668a79e00ebf349b6ffa"
-KERNEL_SDIST_SHA256 = "76a3ccb7d0344befe565681b710edfd3a563e64127b801e43bb239d5bc5b80d2"
+KERNEL_PIN = "0.1.0a107"
+KERNEL_WHEEL_SHA256 = "887b4bccb0fe2760df9a8e6d627553da4a2dc82451f9fa501d9b1e0bc774e341"
+KERNEL_SDIST_SHA256 = "6f146c85faab91084c38f93fc6140dc9cbb54b6b665ee5f21ea816b11cc53144"
 
 #: The private index source name pyproject must route the kernel through.
 KERNEL_SOURCE = "forgejo"
@@ -101,7 +101,7 @@ KERNEL_SOURCE = "forgejo"
 #:
 #: a98 adds capability_composition and capability_contract via the package root.
 #: Their imports only reach the already-reviewed product_manifest contract.
-#: a105's public API documentation, auth, catalog and session-runtime imports
+#: a107's public API documentation, auth, catalog and session-runtime imports
 #: are captured below as an exact transitive snapshot. Loading
 #: session_runtime does not construct or bind a runtime; its reference factory
 #: and DatabaseRuntime construction remain excluded from Sub boot.
@@ -118,6 +118,14 @@ KERNEL_SOURCE = "forgejo"
 #: classifies savepoint conflicts inside the billing writer's own calls; Sub
 #: constructs no transaction owner from it.
 #:
+#: The a107 pin (SUB-3) widens the snapshot by four, all reached through
+#: already-admitted modules: `request_evidence` via `assembly` (TrustedProxyPolicy)
+#: and `platform_auth`; `logging` via `request_evidence` and `errors` (it only
+#: defines a context variable, a formatter and a `setup_logging` function, and
+#: nothing runs at import, so Sub's logging configuration is unchanged);
+#: `_identity_operation` and `_identity_persistence` via `external_identity`.
+#: Sub imports none of them and mounts no kernel middleware.
+#:
 #: Being LOADED is not being USED: a module in `sys.modules` creates no second
 #: authority, mounts no route, and answers no question Sub asks. The sibling
 #: test below proves that separately, on middleware and routes. But the cost of
@@ -130,6 +138,8 @@ KERNEL_SOURCE = "forgejo"
 #: of these — that list is `ALLOWED_KERNEL_MODULES`, and it is the boundary.
 TRANSITIVE_KERNEL_MODULES = frozenset(
     {
+        "dotmac_kernel._identity_operation",
+        "dotmac_kernel._identity_persistence",
         "dotmac_kernel._transactions",
         "dotmac_kernel.audit",
         "dotmac_kernel.audit_actions",
@@ -152,6 +162,7 @@ TRANSITIVE_KERNEL_MODULES = frozenset(
         "dotmac_kernel.idempotency",
         "dotmac_kernel.idempotency_models",
         "dotmac_kernel.identity",
+        "dotmac_kernel.logging",
         "dotmac_kernel.machine_auth",
         "dotmac_kernel.machine_models",
         "dotmac_kernel.machine_rotation",
@@ -177,6 +188,7 @@ TRANSITIVE_KERNEL_MODULES = frozenset(
         "dotmac_kernel.product_database_catalog",
         "dotmac_kernel.product_manifest",
         "dotmac_kernel.query",
+        "dotmac_kernel.request_evidence",
         "dotmac_kernel.route_metadata",
         "dotmac_kernel.semantic_encoding",
         "dotmac_kernel.security",
@@ -321,7 +333,7 @@ def test_pyproject_pins_kernel_exactly_from_the_named_index() -> None:
 
 
 def test_lock_carries_the_reviewed_kernel_release_bytes() -> None:
-    """The current pin resolves to the exact reviewed a105 lock artifacts."""
+    """The current pin resolves to the exact reviewed a107 lock artifacts."""
     import tomllib
 
     with (PROJECT_ROOT / "poetry.lock").open("rb") as lock_file:

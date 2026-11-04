@@ -93,6 +93,7 @@ _WRITE_TIER_VERBS = frozenset(
         "cancel",
         "commission",
         "configure",
+        "contact_link",  # Creates or replaces a reviewed Inbox contact link.
         "correct",  # Appends a reviewed customer-subledger opening correction.
         "create",
         "create_backdated_service",  # Creates a reviewed historical service document.

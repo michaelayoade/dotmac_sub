@@ -14,6 +14,7 @@ from app.models.project import Project
 from app.models.sales import Lead, Quote, SalesOrder
 from app.models.subscriber import Subscriber
 from app.models.support import Ticket
+from app.models.team_inbox import InboxConversation
 from app.models.work_order import WorkOrder
 from app.services import custom_field_capabilities
 
@@ -64,6 +65,10 @@ _ADAPTERS: tuple[TargetRuntimeAdapter, ...] = (
     TargetRuntimeAdapter(
         key="sales_order",
         exists=lambda db, target_id: _row_exists(db, target_id, SalesOrder.id),
+    ),
+    TargetRuntimeAdapter(
+        key="inbox.conversation",
+        exists=lambda db, target_id: _row_exists(db, target_id, InboxConversation.id),
     ),
 )
 

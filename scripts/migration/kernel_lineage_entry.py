@@ -21,13 +21,13 @@ from alembic.script import ScriptDirectory
 from sqlalchemy import text
 from sqlalchemy.engine import Connection
 
-KERNEL_VERSION = "0.1.0a105"
-KERNEL_SOURCE_COMMIT = "2f5abe9101c9aef48f23977cad81a3e499672287"
-KERNEL_HEAD = "0028_machine_attribution"
+KERNEL_VERSION = "0.1.0a107"
+KERNEL_SOURCE_COMMIT = "8c12998b57a31b5cf4a3e296d092460f97e638ba"
+KERNEL_HEAD = "0030_credential_tenant_key"
 KERNEL_VERSION_TABLE = "dotmac_kernel_alembic_version"
 ESCROW_SCHEMA = "sub_kernel_entry_fixture_escrow"
 
-# Git blob identities from the released a105 tag, not a mutable checkout.
+# Git blob identities from the released a107 tag, not a mutable checkout.
 # Source identities do not substitute for the locked wheel digest.
 KERNEL_MIGRATION_BLOBS: tuple[tuple[str, str], ...] = (
     (
@@ -102,6 +102,14 @@ KERNEL_MIGRATION_BLOBS: tuple[tuple[str, str], ...] = (
     (
         "20260824_0028_machine_attribution.py",
         "e9bfde751fc684a0313f39a21151f608ecf0a355",
+    ),
+    (
+        "20261017_0029_audit_history_shape.py",
+        "fd6001041ba20a8f021bb1580d9a07149b92df17",
+    ),
+    (
+        "20261017_0030_credential_tenant_key.py",
+        "684ee61ad81d197d64cf73ca9a313605708c5197",
     ),
 )
 
@@ -217,14 +225,14 @@ def _installed_versions() -> Path:
     installed = distribution("dotmac-kernel")
     if installed.version != KERNEL_VERSION:
         raise KernelEntryRefused(
-            "Installed Kernel differs from Sub's reviewed a105 pin"
+            "Installed Kernel differs from Sub's reviewed a107 pin"
         )
     versions = Path(installed.locate_file("dotmac_kernel/migrations/versions"))
     if {p.name for p in versions.glob("*.py")} != {
         n for n, _ in KERNEL_MIGRATION_BLOBS
     }:
         raise KernelEntryRefused(
-            "Installed Kernel migration file set differs from a105"
+            "Installed Kernel migration file set differs from a107"
         )
     for name, expected in KERNEL_MIGRATION_BLOBS:
         body = (versions / name).read_bytes()
@@ -438,7 +446,7 @@ def observe_fixture_plan(connection: Connection) -> KernelEntryFixturePlan:
             text("SELECT version_num FROM public.alembic_version ORDER BY version_num")
         )
     )
-    if "702_projection_secret_requests" not in heads:
+    if "707_inbox_contact_sensitive_permissions" not in heads:
         raise KernelEntryRefused("Fixture lacks the reviewed actual Sub source head")
     return KernelEntryFixturePlan(
         FixtureCatalog(

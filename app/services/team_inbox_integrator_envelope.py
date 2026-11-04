@@ -126,6 +126,41 @@ class NormalizedEnvelope:
         )
 
 
+@dataclass(frozen=True, slots=True)
+class IntegratorProviderChannelCapability:
+    """One provider/channel pair admitted by the messaging receive port."""
+
+    provider: InboxProvider
+    channel: InboxChannelType
+
+
+@dataclass(frozen=True, slots=True)
+class IntegratorProviderChannelCatalog:
+    """Typed, read-only discovery result for connector configuration."""
+
+    capabilities: tuple[IntegratorProviderChannelCapability, ...]
+
+
+def provider_channel_catalog() -> IntegratorProviderChannelCatalog:
+    """Return the exact fail-closed provider/channel admission allowlist.
+
+    Connector setup and readiness surfaces may consume this projection instead
+    of copying channel names. Adding a row still requires the provider,
+    observation, outbound, health, routing, and credential owners to be ready;
+    this query grants no runtime capability by itself.
+    """
+
+    return IntegratorProviderChannelCatalog(
+        capabilities=tuple(
+            IntegratorProviderChannelCapability(provider=provider, channel=channel)
+            for provider in sorted(PROVIDER_CHANNELS, key=lambda item: item.value)
+            for channel in sorted(
+                PROVIDER_CHANNELS[provider], key=lambda item: item.value
+            )
+        )
+    )
+
+
 def _error(suffix: str, message: str, **details: object) -> IntegratorEnvelopeError:
     return IntegratorEnvelopeError(
         code=f"{OWNER}.{suffix}", message=message, details=details

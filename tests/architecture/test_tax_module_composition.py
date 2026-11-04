@@ -83,7 +83,7 @@ def test_tax_release_and_kernel_are_exact_pins() -> None:
     project = tomllib.loads((ROOT / "pyproject.toml").read_text())
     dependencies = project["project"]["dependencies"]
     assert "dotmac-tax==0.1.0a4" in dependencies
-    assert "dotmac-kernel==0.1.0a105" in dependencies
+    assert "dotmac-kernel==0.1.0a107" in dependencies
     enriched = project["tool"]["poetry"]["dependencies"]
     assert enriched["dotmac-tax"] == {"version": "0.1.0a4", "source": "forgejo"}
     assert module.version == "0.1.0a4"
@@ -183,7 +183,7 @@ def test_installed_tax_public_api_really_requires_the_binding_kernel_floor() -> 
     # it requires the exact pinned kernel, above tax's a98 floor.
     assert floors["dotmac-billing"] == Version("0.1.0a105")
     assert max(floors.values()) == Version("0.1.0a105")
-    assert importlib.metadata.version("dotmac-kernel") == "0.1.0a105"
+    assert importlib.metadata.version("dotmac-kernel") == "0.1.0a107"
     assert "site-packages" in Path(dotmac_tax.service.__file__).parts
     tree = ast.parse(inspect.getsource(dotmac_tax.service))
     for name in (
