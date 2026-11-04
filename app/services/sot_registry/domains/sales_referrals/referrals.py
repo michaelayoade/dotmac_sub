@@ -190,7 +190,7 @@ SERVICES: tuple[SOTService, ...] = (
             transaction=TransactionContract(
                 mode=TransactionMode.COORDINATOR_MANAGED,
                 boundary=(
-                    "Each code, capture, qualification, rejection, or reward "
+                    "Each code, capture, qualification, expiry, rejection, or reward "
                     "command enters execute_owner_command on a transaction-free "
                     "adapter session. Referral state, collaborators, audit, and "
                     "events commit or roll back together."

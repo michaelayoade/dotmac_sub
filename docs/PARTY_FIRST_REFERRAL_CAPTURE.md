@@ -146,6 +146,9 @@ create a second intent.
 
 Program enablement, reward amount/currency, qualification window,
 auto-approval, and share-base URL resolve only through `control.settings_spec`.
+An hourly referral task expires still-pending, unactivated referrals after the
+same `referral_qualify_window_days` window. It stages the existing
+`referral.expired` event and audit evidence; no separate expiry setting exists.
 Their defaults and bounds are declared only in the settings registry;
 `referrals.program`, API/web adapters, and documentation do not repeat runtime
 fallbacks. The code alphabet/length, field-size limits, exact lifecycle

@@ -440,6 +440,41 @@ def test_qualify_expires_outside_window(db_session):
     assert result.reward_status == "none"
 
 
+def test_pending_referrals_expire_without_activation_event(db_session):
+    _program(db_session, window_days=30)
+    overdue, _ = _captured_referral(db_session)
+    recent, _ = _captured_referral(db_session)
+    active, _ = _captured_referral(db_session)
+    overdue.created_at = datetime.now(UTC) - timedelta(days=31)
+    active.created_at = datetime.now(UTC) - timedelta(days=31)
+    db_session.get(Subscriber, active.referred_subscriber_id).status = SubscriberStatus.active
+    db_session.commit()
+
+    def sweep():
+        return referral_program.expire_pending_referrals(
+            db_session,
+            referral_program.ExpirePendingReferralsCommand(
+                context=CommandContext.system(
+                    actor="test:referral-expiry",
+                    scope=referral_program.REFERRAL_PROGRAM_SCOPE,
+                    reason="Verify pending referral expiry",
+                )
+            ),
+        )
+
+    assert sweep() == 1
+    assert db_session.get(Referral, overdue.id).status == "expired"
+    assert db_session.get(Referral, recent.id).status == "pending"
+    assert db_session.get(Referral, active.id).status == "pending"
+    assert sweep() == 0
+    assert (
+        db_session.query(EventStore)
+        .filter(EventStore.event_type == "referral.expired")
+        .count()
+        == 1
+    )
+
+
 def test_qualify_attaches_only_a_reviewed_matching_party(db_session):
     _program(db_session)
     email = _unique_email()

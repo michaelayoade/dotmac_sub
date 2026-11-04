@@ -21,7 +21,7 @@ from typing import Literal, TypeVar
 from urllib.parse import urlsplit
 from uuid import UUID
 
-from sqlalchemy import select
+from sqlalchemy import exists, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -115,6 +115,11 @@ _QUALIFY_COMMAND = OwnerCommandDefinition(
     concern=_PROGRAM_TRANSITION_CONCERN,
     name="qualify_referral_for_subscriber",
 )
+_EXPIRE_PENDING_COMMAND = OwnerCommandDefinition(
+    owner="referrals.program",
+    concern=_PROGRAM_TRANSITION_CONCERN,
+    name="expire_pending_referrals",
+)
 _QUALIFY_OVERRIDE_COMMAND = OwnerCommandDefinition(
     owner="referrals.program",
     concern=_PROGRAM_TRANSITION_CONCERN,
@@ -177,6 +182,12 @@ class ReferFriendCommand:
 class QualifyReferralForSubscriberCommand:
     context: CommandContext
     subscriber_id: UUID
+
+
+@dataclass(frozen=True)
+class ExpirePendingReferralsCommand:
+    context: CommandContext
+    batch_limit: int = 200
 
 
 @dataclass(frozen=True)
@@ -1038,6 +1049,71 @@ def qualify_referral_for_subscriber(
     return _execute(
         db,
         definition=_QUALIFY_COMMAND,
+        context=command.context,
+        operation=operation,
+    )
+
+
+def expire_pending_referrals(
+    db: Session, command: ExpirePendingReferralsCommand
+) -> int:
+    """Expire unactivated referrals after the existing qualification window."""
+    _validate_context(command.context)
+    if not 1 <= command.batch_limit <= 1000:
+        raise _error("invalid_command", "batch_limit must be between 1 and 1000.")
+
+    def operation() -> int:
+        from app.models.catalog import Subscription, SubscriptionStatus
+
+        window_days = _program_policy(db).window_days
+        cutoff = datetime.now(UTC) - timedelta(days=window_days)
+        active_subscriber = exists(
+            select(Subscriber.id)
+            .where(Subscriber.id == Referral.referred_subscriber_id)
+            .where(Subscriber.status == SubscriberStatus.active)
+        )
+        active_subscription = exists(
+            select(Subscription.id)
+            .where(Subscription.subscriber_id == Referral.referred_subscriber_id)
+            .where(Subscription.status == SubscriptionStatus.active)
+        )
+        due = db.scalars(
+            select(Referral)
+            .where(Referral.is_active.is_(True))
+            .where(Referral.status == ReferralStatus.pending.value)
+            .where(Referral.created_at < cutoff)
+            .where(~active_subscriber, ~active_subscription)
+            .order_by(Referral.created_at, Referral.id)
+            .limit(command.batch_limit)
+            .with_for_update(skip_locked=True)
+        ).all()
+        expired = 0
+        for referral in due:
+            # Recheck after locking because activation can race this sweep.
+            if referral.referred_subscriber_id is not None:
+                subscriber = db.scalars(
+                    select(Subscriber)
+                    .where(Subscriber.id == referral.referred_subscriber_id)
+                    .with_for_update()
+                ).one_or_none()
+                if subscriber is not None and _subscriber_is_active(db, subscriber):
+                    continue
+            referral.status = ReferralStatus.expired.value
+            db.flush()
+            expired += 1
+            _stage_referral_evidence(
+                db,
+                referral=referral,
+                event_type=EventType.referral_expired,
+                action="referrals.expired",
+                outcome="expired",
+                context=command.context,
+            )
+        return expired
+
+    return _execute(
+        db,
+        definition=_EXPIRE_PENDING_COMMAND,
         context=command.context,
         operation=operation,
     )
