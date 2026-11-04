@@ -8,12 +8,10 @@ posture of ``outbox_dispatcher`` is proven by
 
 from __future__ import annotations
 
-from collections.abc import Iterator
-
 import pytest
 import sqlalchemy as sa
 from dotmac_kernel.messaging.relay import ClaimedEvent, RelayPolicy
-from sqlalchemy.engine import Connection, Engine
+from sqlalchemy.engine import Connection
 from sqlalchemy.orm import Session
 
 from app.outbox_relay.dispatcher import run_cycle
@@ -23,15 +21,6 @@ TENANT = "8c7ae830-51fc-52ae-9818-d84b2a35e568"
 PARKED = "51111111-1111-4111-8111-111111111111"
 SENT = "52222222-2222-4222-8222-222222222222"
 DEAD = "53333333-3333-4333-8333-333333333333"
-
-
-@pytest.fixture
-def connection(engine: Engine) -> Iterator[Connection]:
-    with engine.connect() as conn, conn.begin() as outer:
-        try:
-            yield conn
-        finally:
-            outer.rollback()
 
 
 def _status(conn: Connection, event_id: str) -> tuple[str, int, str | None]:
@@ -46,8 +35,9 @@ def _status(conn: Connection, event_id: str) -> tuple[str, int, str | None]:
 
 
 def test_park_deliver_and_dead_letter_against_the_real_functions(
-    connection: Connection,
+    db_session: Session,
 ) -> None:
+    connection = db_session.connection()
     connection.execute(
         sa.text(
             "INSERT INTO public.outbox_events "
@@ -66,9 +56,8 @@ def test_park_deliver_and_dead_letter_against_the_real_functions(
 
     registry.register("canary.boom", boom)
 
-    db = Session(bind=connection, join_transaction_mode="create_savepoint")
     result = run_cycle(
-        db,
+        db_session,
         registry=registry,
         policy=RelayPolicy(max_attempts=2),
         worker_id="canary-worker",
@@ -93,7 +82,7 @@ def test_park_deliver_and_dead_letter_against_the_real_functions(
     assert _status(connection, SENT)[0] == "sent"
     from app.services.outbox_backlog import read_outbox_backlog
 
-    backlog = read_outbox_backlog(Session(bind=connection))
+    backlog = read_outbox_backlog(db_session)
     assert (backlog.pending, backlog.dead) == (1, 1)
     assert backlog.oldest_pending_age_seconds >= 0.0
     assert _status(connection, DEAD) == ("dead", 2, "RuntimeError")
@@ -103,7 +92,7 @@ OTHER_TENANT_SCOPE = "33333333-3333-4333-8333-333333333333"
 
 
 def test_backlog_read_sees_operator_rows_under_the_runtime_role(
-    connection: Connection,
+    db_session: Session,
 ) -> None:
     """Runs as ``app_user`` (RLS applies, no SELECT on ``public.tenants``).
 
@@ -111,6 +100,7 @@ def test_backlog_read_sees_operator_rows_under_the_runtime_role(
     not install the operator scope itself would see zero rows."""
     from app.services.outbox_backlog import read_outbox_backlog
 
+    connection = db_session.connection()
     connection.execute(
         sa.text(
             "INSERT INTO public.outbox_events "
@@ -139,7 +129,9 @@ def test_backlog_read_sees_operator_rows_under_the_runtime_role(
     ).scalar()
     assert visible == 0
 
-    db = Session(bind=connection, join_transaction_mode="create_savepoint")
-    backlog = read_outbox_backlog(db)
+    # The Session's transaction is already begun, so the root after_begin hook
+    # cannot restore the operator scope: only read_outbox_backlog's own scoping
+    # can. Deleting it makes the read see 0 rows and this test fail.
+    backlog = read_outbox_backlog(db_session)
     assert backlog.pending >= 2 and backlog.dead >= 1
     assert backlog.oldest_pending_age_seconds >= 2 * 3600 - 60

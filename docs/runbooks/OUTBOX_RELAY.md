@@ -98,7 +98,9 @@ the kernel's, so handlers do not change.
 
 ## Operate
 
-Not created by a normal deploy. Start by name (OPS-4):
+Not created by a normal deploy. The first start ships with the change that sets
+`replicas = 1` in `deploy/product.toml` and removes `outbox-relay` from
+`OPT_IN_APP_SERVICES`. Start by name (OPS-4):
 `docker compose --profile outbox-relay up -d outbox-relay`. Rollback is
 `docker compose stop outbox-relay`; claimed rows past the stale-lease window are
 reclaimed by the next dispatcher (at-least-once). Handlers must be idempotent.

@@ -13,7 +13,7 @@ from dataclasses import dataclass
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 
-from app.services.operator_tenant import OPERATOR_TENANT_ID
+from app.services.operator_tenant import apply_operator_tenant_transaction_scope
 
 
 @dataclass(frozen=True, slots=True)
@@ -37,9 +37,6 @@ _BACKLOG = text(
 )
 
 
-_SCOPE = text("SELECT set_config('app.current_tenant', :tenant, true)")
-
-
 def read_outbox_backlog(db: Session) -> OutboxBacklog:
     """Count the operator tenant's backlog under the runtime role.
 
@@ -48,10 +45,17 @@ def read_outbox_backlog(db: Session) -> OutboxBacklog:
     (ADR-0009) and the runtime role cannot read ``public.tenants``, so the
     operator tenant is installed explicitly (transaction-local, discarded by
     the caller's rollback) rather than enumerated. No grant or function is
-    added. A second tenant is a defect under ADR-0009 and is not counted.
+    added. The scope is installed by ``apply_operator_tenant_transaction_scope``,
+    the single owner, which reads the value back.
+
+    A second tenant is a defect under ADR-0009 and would be invisible to all of
+    Sub through the root ``after_begin`` hook, not only to this read. The
+    relay's own counters (``OutboxRelayDeadLettered``, ``OldestPendingAgeHigh``)
+    come from the cross-tenant claim and would still see it; only
+    ``OutboxDeadEventsPresent`` and ``OutboxEventsQueuedRelayNotRunning`` would
+    go blind.
     """
-    if db.get_bind().dialect.name == "postgresql":
-        db.execute(_SCOPE, {"tenant": str(OPERATOR_TENANT_ID)})
+    apply_operator_tenant_transaction_scope(db.connection())
     row = db.execute(_BACKLOG).one()
     return OutboxBacklog(
         pending=int(row.pending),

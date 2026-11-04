@@ -311,12 +311,9 @@ BASELINE = Path("tests/architecture/session_construction_baseline.txt")
 #: one disposable migrated-clone engine and one sessionmaker permit independent
 #: restore, allocation and inventory transactions to prove address serialization.
 #: These are test-only fixture sites; production allowances remain unchanged.
-#: +4 test-only `Session(bind=connection, ...)` sites in
-#: tests/integration/test_outbox_relay_dispatcher_postgres.py (SUB-2): the
-#: dispatcher session, the tenant-plane session factory and the two backlog
-#: reads, all joined to one rolled-back outer transaction. Production baseline
-#: change for the relay entry point is recorded separately.
-TEST_FIXTURE_BASELINE_TOTAL = 810
+#: +1 test-only tenant-session factory Session in
+#: tests/integration/test_outbox_relay_dispatcher_postgres.py (SUB-2).
+TEST_FIXTURE_BASELINE_TOTAL = 807
 
 
 def _baseline() -> dict[str, int]:
