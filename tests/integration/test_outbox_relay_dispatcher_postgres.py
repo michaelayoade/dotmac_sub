@@ -60,6 +60,9 @@ def test_park_deliver_and_dead_letter_against_the_real_functions(
         ).scalar()
         == 0
     )
+    from app.services.outbox_backlog import read_outbox_backlog
+
+    before = read_outbox_backlog(db_session)
     connection.execute(
         sa.text(
             "INSERT INTO public.outbox_events "
@@ -102,11 +105,9 @@ def test_park_deliver_and_dead_letter_against_the_real_functions(
         {"i": PARKED},
     ).scalar()
     assert _status(connection, SENT)[0] == "sent"
-    from app.services.outbox_backlog import read_outbox_backlog
-
-    backlog = read_outbox_backlog(db_session)
-    assert (backlog.pending, backlog.dead) == (1, 1)
-    assert backlog.oldest_pending_age_seconds >= 0.0
+    after = read_outbox_backlog(db_session)
+    assert (after.pending - before.pending, after.dead - before.dead) == (1, 1)
+    assert after.oldest_pending_age_seconds >= 0.0
     assert _status(connection, DEAD) == ("dead", 2, "RuntimeError")
 
 
