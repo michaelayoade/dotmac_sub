@@ -447,7 +447,9 @@ def test_pending_referrals_expire_without_activation_event(db_session):
     active, _ = _captured_referral(db_session)
     overdue.created_at = datetime.now(UTC) - timedelta(days=31)
     active.created_at = datetime.now(UTC) - timedelta(days=31)
-    db_session.get(Subscriber, active.referred_subscriber_id).status = SubscriberStatus.active
+    db_session.get(
+        Subscriber, active.referred_subscriber_id
+    ).status = SubscriberStatus.active
     db_session.commit()
 
     def sweep():

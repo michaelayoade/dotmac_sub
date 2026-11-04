@@ -17,8 +17,10 @@ logger = logging.getLogger(__name__)
 def expire_pending_referrals() -> dict[str, int]:
     from app.services.owner_commands import CommandContext
     from app.services.referrals import (
-        ExpirePendingReferralsCommand,
         REFERRAL_PROGRAM_SCOPE,
+        ExpirePendingReferralsCommand,
+    )
+    from app.services.referrals import (
         expire_pending_referrals as expire_pending,
     )
 
