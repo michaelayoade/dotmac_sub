@@ -173,8 +173,9 @@ SERVICES: tuple[SOTService, ...] = (
                     owner="access.subscription_lifecycle",
                     kind=AuthorityKind.AUTHORITATIVE_RECORD,
                     source=(
-                        "derived active Subscriber status or an exact active "
-                        "Subscription observed from lifecycle events"
+                        "exact Subscriber activation evidence from immutable "
+                        "Subscription lifecycle history, account-status audit, "
+                        "or retained lifecycle events"
                     ),
                 ),
                 AuthorityInput(

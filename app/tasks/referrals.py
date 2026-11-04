@@ -24,19 +24,33 @@ def expire_pending_referrals() -> dict[str, int]:
         expire_pending_referrals as expire_pending,
     )
 
-    with db_session_adapter.owner_command_session() as db:
-        count = expire_pending(
-            db,
-            ExpirePendingReferralsCommand(
-                context=CommandContext.system(
-                    actor="task:referral-expiry",
-                    scope=REFERRAL_PROGRAM_SCOPE,
-                    reason="Expire pending referrals beyond the qualification window",
+    batch_limit = 200
+    expired = qualified = 0
+    for _ in range(20):
+        with db_session_adapter.owner_command_session() as db:
+            outcome = expire_pending(
+                db,
+                ExpirePendingReferralsCommand(
+                    context=CommandContext.system(
+                        actor="task:referral-expiry",
+                        scope=REFERRAL_PROGRAM_SCOPE,
+                        reason="Reconcile referrals beyond the qualification window",
+                    ),
+                    batch_limit=batch_limit,
                 ),
-            ),
-        )
-    logger.info("pending_referrals_expired", extra={"expired": count})
-    return {"expired": count}
+            )
+        expired += outcome.expired
+        qualified += outcome.qualified
+        if outcome.processed < batch_limit:
+            break
+    else:
+        # Continue a large backlog without exceeding the worker's soft limit.
+        expire_pending_referrals.apply_async(countdown=60)
+    logger.info(
+        "pending_referrals_reconciled",
+        extra={"expired": expired, "qualified": qualified},
+    )
+    return {"expired": expired, "qualified": qualified}
 
 
 @celery_app.task(name="app.tasks.referrals.reconcile_referral_mirror")

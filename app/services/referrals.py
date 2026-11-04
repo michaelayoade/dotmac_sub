@@ -21,12 +21,15 @@ from typing import Literal, TypeVar
 from urllib.parse import urlsplit
 from uuid import UUID
 
-from sqlalchemy import exists, select
+from sqlalchemy import func, or_, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
-from app.models.audit import AuditActorType
+from app.models.audit import AuditActorType, AuditEvent
+from app.models.catalog import Subscription, SubscriptionStatus
 from app.models.domain_settings import SettingDomain
+from app.models.event_store import EventStore
+from app.models.lifecycle import SubscriptionLifecycleEvent
 from app.models.party import Party, PartyContactPoint, PartyContactPointType, PartyType
 from app.models.referral_native import (
     Referral,
@@ -188,6 +191,13 @@ class QualifyReferralForSubscriberCommand:
 class ExpirePendingReferralsCommand:
     context: CommandContext
     batch_limit: int = 200
+
+
+@dataclass(frozen=True)
+class ExpirePendingReferralsOutcome:
+    processed: int
+    expired: int
+    qualified: int
 
 
 @dataclass(frozen=True)
@@ -954,6 +964,119 @@ def _find_referral_for_subscriber(
     return referral_id
 
 
+def _utc(value: datetime) -> datetime:
+    return value if value.tzinfo is not None else value.replace(tzinfo=UTC)
+
+
+def _activation_at(
+    db: Session, referral: Referral, deadline: datetime
+) -> datetime | None:
+    """Find the exact account's recorded activation inside the referral window."""
+    subscriber_id = referral.referred_subscriber_id
+    if subscriber_id is None:
+        return None
+    created = _utc(referral.created_at)
+    # This immutable lifecycle ledger outlives the 30-day event-store cleanup.
+    lifecycle_times = db.scalars(
+        select(SubscriptionLifecycleEvent.recorded_at)
+        .join(
+            Subscription, Subscription.id == SubscriptionLifecycleEvent.subscription_id
+        )
+        .where(Subscription.subscriber_id == subscriber_id)
+        .where(SubscriptionLifecycleEvent.to_status == SubscriptionStatus.active)
+        .where(SubscriptionLifecycleEvent.evidence_grade == "transition_evidence")
+        .where(
+            SubscriptionLifecycleEvent.evidence_source.in_(
+                ("lifecycle_command", "subscription_creation")
+            )
+        )
+        .where(SubscriptionLifecycleEvent.source_id.is_not(None))
+        .where(SubscriptionLifecycleEvent.evidence_fingerprint.is_not(None))
+        .where(SubscriptionLifecycleEvent.effective_at.is_not(None))
+        .where(SubscriptionLifecycleEvent.recorded_at.is_not(None))
+        .where(SubscriptionLifecycleEvent.recorded_at >= created)
+        .where(SubscriptionLifecycleEvent.recorded_at <= deadline)
+        .order_by(SubscriptionLifecycleEvent.recorded_at)
+    ).all()
+    candidates = [_utc(value) for value in lifecycle_times if value is not None]
+
+    # An operator can activate the account itself without a subscription.
+    for row in db.scalars(
+        select(AuditEvent)
+        .where(AuditEvent.action == "customer.account_status_changed")
+        .where(AuditEvent.entity_type == "subscriber")
+        .where(AuditEvent.entity_id == str(subscriber_id))
+        .where(func.coalesce(AuditEvent.created_at, AuditEvent.occurred_at) >= created)
+        .where(func.coalesce(AuditEvent.created_at, AuditEvent.occurred_at) <= deadline)
+    ):
+        details = row.details or row.metadata_ or {}
+        if (
+            details.get("status") == "active"
+            and details.get("prior_status") != "active"
+        ):
+            candidates.append(_utc(row.created_at or row.occurred_at))
+
+    # Legacy and other activation paths may have only an event-store record.
+    for row in db.scalars(
+        select(EventStore)
+        .where(EventStore.is_active.is_(True))
+        .where(
+            or_(
+                EventStore.subscriber_id == subscriber_id,
+                EventStore.account_id == subscriber_id,
+            )
+        )
+        .where(
+            EventStore.event_type.in_(
+                (
+                    EventType.subscription_activated.value,
+                    EventType.subscriber_reactivated.value,
+                    EventType.subscriber_updated.value,
+                )
+            )
+        )
+        .where(EventStore.created_at >= created)
+        .where(EventStore.created_at <= deadline)
+    ):
+        if row.event_type == EventType.subscriber_updated.value:
+            payload = row.payload or {}
+            if (
+                payload.get("status") != "active"
+                or payload.get("prior_status") == "active"
+            ):
+                continue
+        candidates.append(_utc(row.created_at))
+    return min(candidates) if candidates else None
+
+
+def _qualify_pending(
+    db: Session,
+    referral: Referral,
+    policy: _ProgramPolicy,
+    context: CommandContext,
+    qualified_at: datetime,
+) -> None:
+    referral.status = ReferralStatus.qualified.value
+    referral.qualified_at = qualified_at
+    referral.reward_amount = policy.amount
+    referral.reward_currency = policy.currency
+    referral.reward_status = (
+        ReferralRewardStatus.approved.value
+        if policy.auto_approve
+        else ReferralRewardStatus.pending.value
+    )
+    db.flush()
+    _stage_referral_evidence(
+        db,
+        referral=referral,
+        event_type=EventType.referral_qualified,
+        action="referrals.qualified",
+        outcome="qualified",
+        context=context,
+        extra={"amount": str(policy.amount), "currency": policy.currency},
+    )
+
+
 def qualify_referral_for_subscriber(
     db: Session, command: QualifyReferralForSubscriberCommand
 ) -> ReferralTransitionResult:
@@ -1008,7 +1131,13 @@ def qualify_referral_for_subscriber(
         created = referral.created_at
         if created is not None and created.tzinfo is None:
             created = created.replace(tzinfo=UTC)
-        if created is not None and now - created > timedelta(days=policy.window_days):
+        deadline = created + timedelta(days=policy.window_days) if created else None
+        activation_at = (
+            _activation_at(db, referral, deadline)
+            if deadline and now > deadline
+            else None
+        )
+        if deadline and now > deadline and activation_at is None:
             referral.status = ReferralStatus.expired.value
             db.flush()
             _stage_referral_evidence(
@@ -1023,25 +1152,7 @@ def qualify_referral_for_subscriber(
                 referral, outcome="expired", context=command.context
             )
 
-        referral.status = ReferralStatus.qualified.value
-        referral.qualified_at = now
-        referral.reward_amount = policy.amount
-        referral.reward_currency = policy.currency
-        referral.reward_status = (
-            ReferralRewardStatus.approved.value
-            if policy.auto_approve
-            else ReferralRewardStatus.pending.value
-        )
-        db.flush()
-        _stage_referral_evidence(
-            db,
-            referral=referral,
-            event_type=EventType.referral_qualified,
-            action="referrals.qualified",
-            outcome="qualified",
-            context=command.context,
-            extra={"amount": str(policy.amount), "currency": policy.currency},
-        )
+        _qualify_pending(db, referral, policy, command.context, activation_at or now)
         return _transition_result(
             referral, outcome="qualified", context=command.context
         )
@@ -1056,48 +1167,37 @@ def qualify_referral_for_subscriber(
 
 def expire_pending_referrals(
     db: Session, command: ExpirePendingReferralsCommand
-) -> int:
+) -> ExpirePendingReferralsOutcome:
     """Expire unactivated referrals after the existing qualification window."""
     _validate_context(command.context)
     if not 1 <= command.batch_limit <= 1000:
         raise _error("invalid_command", "batch_limit must be between 1 and 1000.")
 
-    def operation() -> int:
-        from app.models.catalog import Subscription, SubscriptionStatus
-
-        window_days = _program_policy(db).window_days
+    def operation() -> ExpirePendingReferralsOutcome:
+        policy = _program_policy(db)
+        window_days = policy.window_days
         cutoff = datetime.now(UTC) - timedelta(days=window_days)
-        active_subscriber = exists(
-            select(Subscriber.id)
-            .where(Subscriber.id == Referral.referred_subscriber_id)
-            .where(Subscriber.status == SubscriberStatus.active)
-        )
-        active_subscription = exists(
-            select(Subscription.id)
-            .where(Subscription.subscriber_id == Referral.referred_subscriber_id)
-            .where(Subscription.status == SubscriptionStatus.active)
-        )
         due = db.scalars(
             select(Referral)
             .where(Referral.is_active.is_(True))
             .where(Referral.status == ReferralStatus.pending.value)
             .where(Referral.created_at < cutoff)
-            .where(~active_subscriber, ~active_subscription)
             .order_by(Referral.created_at, Referral.id)
             .limit(command.batch_limit)
             .with_for_update(skip_locked=True)
         ).all()
         expired = 0
+        qualified = 0
         for referral in due:
-            # Recheck after locking because activation can race this sweep.
             if referral.referred_subscriber_id is not None:
-                subscriber = db.scalars(
-                    select(Subscriber)
-                    .where(Subscriber.id == referral.referred_subscriber_id)
-                    .with_for_update()
-                ).one_or_none()
-                if subscriber is not None and _subscriber_is_active(db, subscriber):
-                    continue
+                # Serialize with account activation while checking its evidence.
+                _lock_subscriber(db, referral.referred_subscriber_id)
+            deadline = _utc(referral.created_at) + timedelta(days=window_days)
+            activation_at = _activation_at(db, referral, deadline)
+            if activation_at is not None:
+                _qualify_pending(db, referral, policy, command.context, activation_at)
+                qualified += 1
+                continue
             referral.status = ReferralStatus.expired.value
             db.flush()
             expired += 1
@@ -1109,7 +1209,9 @@ def expire_pending_referrals(
                 outcome="expired",
                 context=command.context,
             )
-        return expired
+        return ExpirePendingReferralsOutcome(
+            processed=len(due), expired=expired, qualified=qualified
+        )
 
     return _execute(
         db,
