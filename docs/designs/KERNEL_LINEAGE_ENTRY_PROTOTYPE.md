@@ -17,18 +17,25 @@ caller-owned transaction; the participant never completes it.
 The source checkpoint is Sub
 `e119f08f720779fcb9c46797f568f140bad88168`; its own current head is
 `690_backdated_invoice_permissions`, alongside genuinely composed module heads.
-Its unchanged pyproject and lock file pin Kernel `0.1.0a105`.
+Its pyproject and lock file pin Kernel `0.1.0a107` (re-measured 2026-11-03,
+SUB-3; the original measurement was against Kernel `0.1.0a105`).
 The locked wheel digest is
-`f8937e5525c3efd27e2030bf69ed0c37e137c345e376668a79e00ebf349b6ffa`.
+`887b4bccb0fe2760df9a8e6d627553da4a2dc82451f9fa501d9b1e0bc774e341`.
 
-Kernel's annotated a105 tag `bd5f252b936efb3ee61aeb871b915f2e41bab754`
-peels to `2f5abe9101c9aef48f23977cad81a3e499672287`. The released versions
-directory contains 28 revision files and ends at `0028_machine_attribution`.
-All 28 tag Git blob identities are embedded in the participant. Hosted execution
+Kernel's annotated a107 tag `eda92ec62a8b0aa3f90727b1a1a15740465483ae`
+peels to `8c12998b57a31b5cf4a3e296d092460f97e638ba`. The released versions
+directory contains 30 revision files and ends at `0030_credential_tenant_key`.
+The first 28 revision files (through `0028_machine_attribution`) are
+byte-identical (equal Git blob identities) to the a105 tag; 0029
+(`audit_history_shape`: widens `audit_events.entity_type` to 160 characters and
+makes `created_at` nullable) and 0030 (adds unique constraint
+`uq_user_credentials_tenant_id_id` on `user_credentials`) are new. Neither
+changes grants, roles or RLS policies. All 30 tag Git blob identities are
+embedded in the participant. Hosted execution
 first checks installed distribution metadata, the exact file set and each
 installed file's Git blob identity. It then loads the installed revisions through
 Alembic. There is no copied migration implementation, stamp, existence-skip,
-DDL interception, lower dependency floor or proposed audit revision 0029.
+DDL interception or lower dependency floor.
 
 The GitHub tag listing and source-byte comparison are static source evidence.
 They do not prove the local a97 environment is the pinned installation, verify

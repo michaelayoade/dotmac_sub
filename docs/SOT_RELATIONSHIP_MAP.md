@@ -34,7 +34,7 @@ The [Kernel entry prototype](designs/KERNEL_LINEAGE_ENTRY_PROTOTYPE.md) is a
 disposable-fixture migration participant with caller-owned rollback, rather
 than a new runtime service or business command. It relocates the reviewed
 fifteen collisions and four old relay functions before executing the complete
-unchanged installed a105 chain with independent history. It transfers no Party,
+unchanged installed a107 chain with independent history. It transfers no Party,
 credential, RBAC, audit, business-capacity or runtime writer authority. Canonical
 imports, the separate post-Kernel adoption lineage, durable maintenance/recovery,
 ordinary future composition and full reference acceptance remain required.
