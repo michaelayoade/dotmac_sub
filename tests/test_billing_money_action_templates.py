@@ -53,6 +53,36 @@ def test_credit_and_collection_forms_seed_currency_from_default_setting_context(
     assert 'value="NGN"' not in collection_accounts
 
 
+def test_locked_account_fields_require_vat_context_only_for_invoice_forms():
+    template = Jinja2Templates(directory="templates").env.get_template(
+        "admin/billing/_customer_account_fields.html"
+    )
+    context = {
+        "account_locked": True,
+        "account_label": "Example Account",
+        "account_number": "ACC-001",
+        "selected_account_id": "account-id",
+    }
+
+    payment_or_credit_html = template.render(**context)
+    assert 'name="account_id" value="account-id"' in payment_or_credit_html
+    assert "data-vat-locked" not in payment_or_credit_html
+
+    invoice_html = template.render(
+        **context,
+        invoice_config={
+            "accountVatLocked": True,
+            "accountVatRateId": "vat-id",
+            "accountVatName": "VAT",
+            "accountVatPercent": 7.5,
+        },
+    )
+    assert 'data-vat-locked="true"' in invoice_html
+    assert 'data-vat-rate-id="vat-id"' in invoice_html
+    assert 'data-vat-name="VAT"' in invoice_html
+    assert 'data-vat-percent="7.5"' in invoice_html
+
+
 def test_dunning_and_routing_actions_confirm_before_state_changes():
     dunning = _template("templates/admin/billing/dunning.html")
     dunning_detail = _template("templates/admin/billing/dunning_detail.html")
