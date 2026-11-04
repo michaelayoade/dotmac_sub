@@ -511,6 +511,7 @@ def test_pending_referrals_reconcile_activation_history_and_expiry(
         == activated_at
     )
     assert db_session.get(Referral, no_evidence.id).status == "expired"
+    db_session.rollback()  # End the read transaction before the next owner command.
     assert sweep().processed == 0
     assert (
         db_session.query(EventStore)
