@@ -17,6 +17,7 @@ Example usage:
 from __future__ import annotations
 
 import logging
+import re
 from collections.abc import Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass
@@ -155,6 +156,7 @@ class OltSession:
     channel: Channel
     prompt_regex: str
     current_mode: CliMode = CliMode.USER
+    _usable: bool = True
 
     def run_command(
         self,
@@ -169,7 +171,8 @@ class OltSession:
         Args:
             command: CLI command to execute.
             timeout_sec: Timeout for command response.
-            require_mode: If set, ensure we're in this mode before running command.
+            require_mode: Required mode; CONFIG includes GPON interface mode for
+                generated configuration batches. ENABLE unwinds both modes.
             slow_send: If True (default), pace after the command line per the
                 OLT's command profile. The line itself is always written
                 atomically — see ``send_ont_command``, the single owner.
@@ -178,16 +181,36 @@ class OltSession:
             CommandResult with success/error classification.
         """
         from app.services.network.olt_ssh import (
+            _derive_prompt_regex,
             _read_paged_response,
             _strip_pager,
         )
 
         try:
-            # Mode transitions if needed
-            if require_mode == CliMode.CONFIG and self.current_mode != CliMode.CONFIG:
+            if not self._usable:
+                raise RuntimeError(
+                    "OLT session is unusable after an incomplete command"
+                )
+            # CONFIG means the configuration tree for existing generated batches:
+            # their interface-scoped commands also request CONFIG on each call.
+            if require_mode == CliMode.CONFIG and self.current_mode not in (
+                CliMode.CONFIG,
+                CliMode.INTERFACE,
+            ):
                 self._enter_config_mode()
-            elif require_mode == CliMode.ENABLE and self.current_mode == CliMode.USER:
+            elif require_mode == CliMode.ENABLE and self.current_mode != CliMode.ENABLE:
                 self._enter_enable_mode()
+            elif require_mode not in (
+                None,
+                CliMode.CONFIG,
+                CliMode.ENABLE,
+                self.current_mode,
+            ):
+                raise ValueError("Unsupported OLT mode requirement")
+
+            target = self._navigation_target(command)
+            expected = self.prompt_regex if target is None else target[1]
+            pending = expected if target is None else f"{expected}|{self.prompt_regex}"
 
             logger.debug("OLT command: %r (paced=%s)", command, slow_send)
             _send(self.olt, self.channel, command, paced=slow_send)
@@ -197,16 +220,31 @@ class OltSession:
             output = _strip_pager(
                 _read_paged_response(
                     self.channel,
-                    self.prompt_regex,
+                    pending,
                     timeout_sec=max(120.0, timeout_sec),
                     read_timeout_sec=timeout_sec,
                     answer_optional_args=True,
                 )
             )
 
-            return parse_command_result(output)
+            result = parse_command_result(output)
+            if target is not None:
+                if not result.success or not re.search(expected, output):
+                    self._usable = False
+                    return CommandResult(
+                        success=False,
+                        output=output,
+                        error_code=result.error_code
+                        if not result.success
+                        else ErrorCode.CONNECTION_ERROR,
+                        message="OLT navigation did not reach the requested mode",
+                    )
+                self.prompt_regex = _derive_prompt_regex(output, expected)
+                self.current_mode = target[0]
+            return result
 
         except Exception as exc:
+            self._usable = False
             logger.error("Error executing command on OLT %s: %s", self.olt.name, exc)
             return CommandResult(
                 success=False,
@@ -222,6 +260,10 @@ class OltSession:
         timeout_sec: float = 12.0,
     ) -> CommandResult:
         """Execute a command in config mode."""
+        if self.current_mode == CliMode.INTERFACE:
+            navigation = self.run_command("quit", timeout_sec=timeout_sec)
+            if not navigation.success:
+                return navigation
         return self.run_command(
             command, timeout_sec=timeout_sec, require_mode=CliMode.CONFIG
         )
@@ -262,33 +304,87 @@ class OltSession:
 
         return results
 
-    def _enter_enable_mode(self) -> None:
-        """Enter enable/privileged mode."""
-        from app.services.network.olt_ssh import _read_until_prompt
+    def _prompt_with_suffix(self, suffix: str) -> str:
+        """Keep the exact host anchor when changing the expected CLI mode."""
+        pattern = self.prompt_regex
+        if pattern.endswith(r"\)\#\s*$") and r"\(config" in pattern:
+            stem = pattern.split(r"\(config", 1)[0]
+        else:
+            for ending in (r"\#\s*$", r"#\s*$", r">\s*$"):
+                if pattern.endswith(ending):
+                    stem = pattern.removesuffix(ending)
+                    break
+            else:
+                raise ValueError("Cannot derive an exact OLT navigation prompt")
+        return stem + re.escape(suffix) + r"\s*$"
 
-        _send(self.olt, self.channel, "enable")
-        _read_until_prompt(self.channel, r"#\s*$", timeout_sec=5)
-        self.current_mode = CliMode.ENABLE
+    def _navigation_target(self, command: str) -> tuple[CliMode, str] | None:
+        """Describe supported navigation before sending it to the shelf."""
+        command = command.strip()
+        interface = re.fullmatch(r"interface gpon (\d{1,2})/(\d{1,2})", command)
+        if interface:
+            if self.current_mode != CliMode.CONFIG:
+                raise ValueError("GPON interface entry requires global config mode")
+            suffix = f"(config-if-gpon-{interface[1]}/{interface[2]})#"
+            return CliMode.INTERFACE, self._prompt_with_suffix(suffix)
+        if command.startswith("interface "):
+            raise ValueError("Unsupported OLT interface navigation")
+        if command == "config":
+            if self.current_mode != CliMode.ENABLE:
+                raise ValueError("Config entry requires privileged mode")
+            return CliMode.CONFIG, self._prompt_with_suffix("(config)#")
+        if command == "enable":
+            return CliMode.ENABLE, self._prompt_with_suffix("#")
+        if command == "return":
+            return CliMode.ENABLE, self._prompt_with_suffix("#")
+        if command == "quit":
+            if self.current_mode == CliMode.INTERFACE:
+                return CliMode.CONFIG, self._prompt_with_suffix("(config)#")
+            if self.current_mode == CliMode.CONFIG:
+                return CliMode.ENABLE, self._prompt_with_suffix("#")
+            raise ValueError("Session logout is not a command-mode transition")
+        return None
+
+    def _enter_enable_mode(self) -> None:
+        """Enter privileged mode, unwinding known configuration modes first."""
+        from app.services.network.olt_ssh import _prepare_huawei_read_shell
+
+        if not self._usable:
+            raise RuntimeError("OLT session is unusable after an incomplete command")
+        if self.current_mode == CliMode.INTERFACE:
+            self._require_navigation("quit")
+        if self.current_mode == CliMode.CONFIG:
+            self.exit_config_mode()
+        if self.current_mode == CliMode.USER:
+            try:
+                self.prompt_regex = _prepare_huawei_read_shell(
+                    self.channel, self.prompt_regex
+                )
+                self.current_mode = CliMode.ENABLE
+            except Exception:
+                self._usable = False
+                raise
+
+    def _require_navigation(self, command: str) -> None:
+        result = self.run_command(command, timeout_sec=5)
+        if not result.success:
+            raise RuntimeError(result.message)
 
     def _enter_config_mode(self) -> None:
-        """Enter global config mode."""
-        from app.services.network.olt_ssh import _read_until_prompt
-
+        """Enter global config mode through the same navigation reader."""
         if self.current_mode == CliMode.USER:
             self._enter_enable_mode()
-
-        _send(self.olt, self.channel, "config")
-        _read_until_prompt(self.channel, r"[#)]\s*$", timeout_sec=5)
-        self.current_mode = CliMode.CONFIG
+        if self.current_mode == CliMode.INTERFACE:
+            self._require_navigation("quit")
+        elif self.current_mode != CliMode.CONFIG:
+            self._require_navigation("config")
 
     def exit_config_mode(self) -> None:
-        """Exit from config mode back to enable mode."""
-        from app.services.network.olt_ssh import _read_until_prompt
-
+        """Return to privileged mode using verified interface/config exits."""
+        if self.current_mode == CliMode.INTERFACE:
+            self._require_navigation("quit")
         if self.current_mode == CliMode.CONFIG:
-            _send(self.olt, self.channel, "quit")
-            _read_until_prompt(self.channel, r"#\s*$", timeout_sec=5)
-            self.current_mode = CliMode.ENABLE
+            self._require_navigation("quit")
 
 
 @contextmanager
@@ -315,8 +411,8 @@ def olt_session(olt: OLTDevice) -> Iterator[OltSession]:
     """
     require(Effect.device_ssh)
     from app.services.network.olt_ssh import (
-        _apply_paging_off,
         _open_shell,
+        _prepare_huawei_read_shell,
     )
 
     transport: Transport | None = None
@@ -324,17 +420,18 @@ def olt_session(olt: OLTDevice) -> Iterator[OltSession]:
     try:
         transport, channel, policy = _open_shell(olt)
 
+        prompt = _prepare_huawei_read_shell(
+            channel,
+            policy.prompt_regex,
+            paging_off_command=policy.paging_off_command,
+        )
         session = OltSession(
             olt=olt,
             transport=transport,
             channel=channel,
-            prompt_regex=policy.prompt_regex,
-            current_mode=CliMode.USER,
+            prompt_regex=prompt,
+            current_mode=CliMode.ENABLE,
         )
-
-        # Enter enable mode and set terminal length
-        session._enter_enable_mode()
-        _apply_paging_off(channel, policy, r"#\s*$")
 
         yield session
 
