@@ -12,6 +12,19 @@ TENANT_URL_VAR = "OUTBOX_RELAY_TENANT_DATABASE_URL"
 DEFAULT_HEARTBEAT_PATH = Path(tempfile.gettempdir()) / "outbox_relay.heartbeat"
 
 
+HEARTBEAT_VAR = "OUTBOX_RELAY_HEARTBEAT_PATH"
+
+
+def heartbeat_path_from_env(env: Mapping[str, str]) -> Path:
+    """The heartbeat file path, read from a mapping the caller supplies.
+
+    The liveness probe needs only this one value and must not demand the
+    database credentials that ``RelayConfig.from_env`` requires.
+    """
+    override = env.get(HEARTBEAT_VAR, "").strip()
+    return Path(override) if override else DEFAULT_HEARTBEAT_PATH
+
+
 class RelayConfigError(ValueError):
     """Configuration refused. Never carries a URL or credential value."""
 
@@ -64,7 +77,6 @@ class RelayConfig:
                 f"{TENANT_URL_VAR} must differ from {URL_VAR}: the dispatcher "
                 "credential never performs tenant reads"
             )
-        heartbeat = env.get("OUTBOX_RELAY_HEARTBEAT_PATH", "").strip()
         return cls(
             database_url=url,
             tenant_database_url=tenant_url,
@@ -78,5 +90,5 @@ class RelayConfig:
                 env, "OUTBOX_RELAY_POLL_INTERVAL_SECONDS", 2, minimum=1
             ),
             metrics_port=_int(env, "OUTBOX_RELAY_METRICS_PORT", 9108, minimum=1),
-            heartbeat_path=Path(heartbeat) if heartbeat else DEFAULT_HEARTBEAT_PATH,
+            heartbeat_path=heartbeat_path_from_env(env),
         )

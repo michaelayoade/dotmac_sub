@@ -187,6 +187,14 @@ table or list that follows.
   constructed inside the `after_commit` hook itself, to run deferred
   callbacks on a fresh session after the triggering transaction has
   already closed.
+- `app/outbox_relay/__main__.py` (4) — the SUB-2 outbox relay process entry
+  point: two `create_engine` and two `sessionmaker` sites, one pair for the
+  EXECUTE-only `outbox_dispatcher` credential and one for the optional
+  `app_user`-class tenant credential. It deliberately does not import
+  `app.db` or `app.config`, so the process cannot pick up `DATABASE_URL` or
+  any application credential; routing it through `SessionLocal` would remove
+  that security property. A shared `DatabaseRuntime` must keep it out of scope
+  or account for its two-credential split.
 - `alembic/env.py` (1) — `engine_from_config` (`:153`), `NullPool`, its own
   `lock_timeout` (`:135-147`), no ORM `Session` at all — Alembic owns the
   deployed schema and is not part of application runtime authority.
