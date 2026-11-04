@@ -8,10 +8,12 @@ channels. This module is Sub's declaration, and importing it is what makes
 channel at all.
 
 Nothing under `app/` imports this module at runtime yet, and that is
-deliberate. Sub's `public.inbox_*` tables remain the authority for every
-conversation, message and read cursor; composing the module's schema and
-declaring its traits are the two reversible halves of the adoption seam, and
-the writer switch is a separate, separately-approved slice ruled by
+deliberate. The a3 package's bounded reverse-pagination reader is re-exported
+here only as a compatibility seam; no live Sub read calls it until the module
+data is backfilled and the product's continuous-thread hydration contract is
+designed. Sub's `public.inbox_*` tables remain the authority for every
+conversation, message and read cursor; the writer switch remains a separate,
+separately-approved slice ruled by
 `docs/adr/0013-inbox-conversation-authority.md`.
 
 Every trait below is transcribed from behaviour Sub already has. Each comment
@@ -35,6 +37,9 @@ from dotmac_inbox.channels import (
     ThreadIdentity,
     Transport,
     register_channels,
+)
+from dotmac_inbox.read_service import (
+    list_recent_messages as list_module_recent_messages,
 )
 
 from app.models.team_inbox import InboxChannelType
@@ -234,4 +239,5 @@ __all__ = [
     "INTERNAL_TRANSPORT_CHANNELS",
     "SUB_CHANNELS",
     "UNDECLARED_CHANNELS",
+    "list_module_recent_messages",
 ]

@@ -283,19 +283,39 @@ commercial domain.
 `public.inbox_conversation_read_states` remain the only authority for every
 conversation, message and read cursor. `app/services/inbox_channels.py`
 declares Sub's channel traits against `dotmac_inbox.channels` and is imported
-by nothing under `app/`; `tests/architecture/test_inbox_module_composition.py`
-allows exactly one importer of the package, allows it only the declaration
-surface, and fails the moment a second module or a service import appears. No
+by nothing under `app/`; at a1,
+`tests/architecture/test_inbox_module_composition.py` allowed exactly one
+importer of the package and only the declaration surface. No
 route, job, webhook, reader, writer, backfill or dual write is added, and the
 runtime import graph is unchanged.
 
 The authority move is ruled by `docs/adr/0013-inbox-conversation-authority.md`
 and designed in `docs/designs/INBOX_MODULE_ADOPTION.md`. It is gated on a
 production-shaped census that has not been run, on four named module gaps that
-are not yet released, and on `dotmac-inbox 0.1.0a2` — which carries the
-identity-preserving history seam the backfill requires and is recorded
-`declared-unpublished` in the Starter baseline. `dotmac-inbox-operations` is a
-separate package and a separate decision; nothing here authorises it.
+are not yet released, and on the documented backfill/shadow/cutover evidence.
+`dotmac-inbox-operations` is a separate package and a separate decision;
+nothing here authorises it.
+
+**2026-11-04 — `dotmac-inbox` 0.1.0a1 → 0.1.0a3 composition upgrade;
+authority unchanged.** The governed Starter release run `41806448567`
+published and installed back the exact a3 wheel and sdist, then the automatic
+release-record PR #977 merged at Starter commit
+`707dc09af900b4245676e848a43d2f5e5ec729b2`. The annotated tag
+`dotmac-inbox-v0.1.0a3` object
+`2770300973d9d5c3a1a1fa24d63d15bc92fec9a3` peels to source commit
+`2e67b5dd258560280de74d2987b04a142e55da33`.
+
+| distribution | version | wheel SHA256 | sdist SHA256 |
+| --- | --- | --- | --- |
+| `dotmac-inbox` | 0.1.0a3 | `19f0f14bc7bf8fe804eb7674e3340ba0a4c5f2414abe788eb0d93a6f7d911bd1` | `dc9fc5259717ee1b80b32633647195a2bbe6a0df60e691ce59de74c6f3e7ed60` |
+
+The composed `ib` head advances through `ib_0003_transport_refs`, and the one
+existing Sub adapter directly re-exports a3's bounded
+`list_recent_messages` reader as compatibility evidence. Nothing imports that
+adapter at runtime: module data is not backfilled, Sub's continuous-thread
+pagination and product hydration contracts differ, and every live read and
+write remains Sub-owned. The census, backfill, shadow, one-writer switch and
+retirement gates in ADR-0013 remain mandatory.
 
 **2026-08-25 — `dotmac-subscriptions==0.1.0a3` tenant storage composed,
 shadow only.** Sub exact-pins the tagged Subscriptions a3 artifacts recorded in

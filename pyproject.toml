@@ -55,7 +55,7 @@ dependencies = [
     "dotmac-billing==0.1.0a8",
     "dotmac-collections==0.1.0a1",
     "dotmac-device-cli==0.1.0a1",
-    "dotmac-inbox==0.1.0a1",
+    "dotmac-inbox==0.1.0a3",
     "dotmac-numbering==0.1.0a3",
     "dotmac-payments==0.1.0a3",
     "dotmac-service-orders==0.1.0a1",
@@ -117,7 +117,7 @@ dotmac-tax = { version = "0.1.0a4", source = "forgejo" }
 # is gated on evidence that does not exist yet. a1 is the published release;
 # the identity-preserving history seam lands in a2, which the backfill slice
 # needs and which is not published.
-dotmac-inbox = { version = "0.1.0a1", source = "forgejo" }
+dotmac-inbox = { version = "0.1.0a3", source = "forgejo" }
 
 # The shared presentation contract. Pinned exactly for the same reason as the
 # kernel: a token vocabulary change is reviewed deliberately, never pulled in
