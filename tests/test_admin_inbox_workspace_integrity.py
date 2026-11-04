@@ -905,6 +905,22 @@ def test_bulk_toolbar_is_horizontal_and_uses_live_action_fields():
     )
 
 
+def test_bulk_submission_materializes_the_complete_remembered_selection():
+    marker = SIDEBAR.index('id="inbox-bulk-form"')
+    form = SIDEBAR[marker : marker + 2500]
+    assert 'x-for="conversationId in selectedIds"' in form
+    assert 'type="hidden" name="conversation_ids"' in form
+    assert ':value="conversationId"' in form
+
+    checkbox = QUEUE[QUEUE.index('type="checkbox"') :][:1200]
+    assert "data-inbox-conversation-select" in checkbox
+    assert 'name="conversation_ids"' not in checkbox
+    assert 'form="inbox-bulk-form"' not in checkbox
+    assert JAVASCRIPT.count(
+        '#inbox-bulk-form [data-inbox-conversation-select]'
+    ) == 2
+
+
 def test_inbox_queue_row_has_exact_structure_states_and_channel_colours():
     for contract in (
         "border-b border-l-[3px] border-slate-200",

@@ -1220,7 +1220,7 @@
       clearSelection() {
         this.selectedIds = [];
         document
-          .querySelectorAll('#inbox-bulk-form input[name="conversation_ids"]')
+          .querySelectorAll("#inbox-bulk-form [data-inbox-conversation-select]")
           .forEach((input) => {
             input.checked = false;
           });
@@ -1228,7 +1228,7 @@
 
       syncSelectedCheckboxes() {
         document
-          .querySelectorAll('#inbox-bulk-form input[name="conversation_ids"]')
+          .querySelectorAll("#inbox-bulk-form [data-inbox-conversation-select]")
           .forEach((input) => {
             input.checked = this.selectedIds.includes(input.value);
           });
