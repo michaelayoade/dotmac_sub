@@ -19,17 +19,22 @@ def _client(db_session):
 
 def test_valid_link_renders_capture_and_signup_flow(db_session):
     with (
-        patch("app.web.public.referrals.referrals.get_by_code", return_value=SimpleNamespace(code="BWQF67MN")),
-        patch("app.web.public.referrals.referrals.program", return_value={"enabled": True}),
+        patch(
+            "app.web.public.referrals.referrals.get_by_code",
+            return_value=SimpleNamespace(code="BWQF67MN"),
+        ),
+        patch(
+            "app.web.public.referrals.referrals.program", return_value={"enabled": True}
+        ),
     ):
         response = _client(db_session).get("/r/bwqf67mn")
 
     assert response.status_code == 200
     assert response.headers["cache-control"] == "no-store"
     assert response.headers["referrer-policy"] == "no-referrer"
-    assert '/api/v1/referrals/capture' in response.text
-    assert '/api/v1/referrals/signup' in response.text
-    assert 'BWQF67MN' in response.text
+    assert "/api/v1/referrals/capture" in response.text
+    assert "/api/v1/referrals/signup" in response.text
+    assert "BWQF67MN" in response.text
 
 
 def test_unknown_link_is_unavailable(db_session):

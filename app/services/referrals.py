@@ -48,9 +48,9 @@ from app.services.customer_identity_normalization import (
 )
 from app.services.customer_identity_resolution import resolve_customer_identity
 from app.services.domain_errors import DomainError
+from app.services.email import _get_app_url
 from app.services.events import emit_event
 from app.services.events.types import EventType
-from app.services.email import _get_app_url
 from app.services.owner_commands import (
     CommandContext,
     OwnerCommandDefinition,
