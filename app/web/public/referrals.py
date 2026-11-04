@@ -19,10 +19,14 @@ def referral_signup_page(
     db: Session = Depends(get_db),
 ):
     referral_code = referrals.get_by_code(db, code)
-    available = referral_code is not None and referrals.program(db)["enabled"]
+    signup_code = (
+        referral_code.code
+        if referral_code is not None and referrals.program(db)["enabled"]
+        else None
+    )
     return templates.TemplateResponse(
         "public/referrals/signup.html",
-        {"request": request, "code": referral_code.code if available else None},
-        status_code=200 if available else 404,
+        {"request": request, "code": signup_code},
+        status_code=200 if signup_code is not None else 404,
         headers=_PRIVATE_HEADERS,
     )
