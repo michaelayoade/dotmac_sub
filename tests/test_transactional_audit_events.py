@@ -9,8 +9,10 @@ from sqlalchemy import text
 from app.models.audit import AuditActorType, AuditEvent
 from app.models.event_store import EventHandlerAttempt, EventStatus, EventStore
 from app.models.subscriber import Subscriber
+from app.models.system_user import SystemUser, SystemUserType
 from app.schemas.audit import AuditEventCreate
 from app.services import audit as audit_service
+from app.services.audit_helpers import resolve_actor_name
 from app.services.events.dispatcher import emit_event
 from app.services.events.types import EventType
 
@@ -253,6 +255,185 @@ def test_audit_request_payload_redacts_sensitive_query_params():
     assert payload.metadata_["query"]["token"] == "<redacted>"
     assert payload.metadata_["query"]["password"] == "<redacted>"
     assert payload.metadata_["query"]["visible"] == "value"
+
+
+@pytest.mark.parametrize(
+    ("method", "first_name", "last_name"),
+    (
+        ("POST", "Aisha", "Ibrahim"),
+        ("PATCH", "Chibuzor", "Nnamani"),
+    ),
+)
+def test_request_audit_snapshots_each_canonical_staff_actor(
+    db_session,
+    method,
+    first_name,
+    last_name,
+):
+    from fastapi import Request, Response
+
+    user = SystemUser(
+        first_name=first_name,
+        last_name=last_name,
+        email=f"{first_name.lower()}-{last_name.lower()}@example.com",
+        user_type=SystemUserType.system_user,
+        is_active=True,
+    )
+    db_session.add(user)
+    db_session.commit()
+
+    request = Request(
+        {
+            "type": "http",
+            "method": method,
+            "path": "/admin/system/settings",
+            "query_string": b"",
+            "headers": [],
+            "client": ("127.0.0.1", 12345),
+            "scheme": "http",
+            "server": ("testserver", 80),
+        }
+    )
+    request.state.actor_id = str(user.id)
+    request.state.actor_type = "system_user"
+    request.state.auth = {
+        "principal_id": str(user.id),
+        "principal_type": "system_user",
+    }
+
+    audit_service.audit_events.log_request(
+        db_session,
+        request,
+        Response(status_code=200),
+    )
+
+    event = (
+        db_session.query(AuditEvent)
+        .filter(AuditEvent.entity_type == "/admin/system/settings")
+        .filter(AuditEvent.action == method)
+        .one()
+    )
+    expected_name = f"{first_name} {last_name}"
+    assert event.actor_type is AuditActorType.user
+    assert event.actor_id == str(user.id)
+    assert event.actor_label == expected_name
+    assert event.metadata_ is not None
+    assert event.metadata_["actor_name"] == expected_name
+
+    user.display_name = "Renamed After Audit"
+    db_session.commit()
+
+    assert resolve_actor_name(event, {str(user.id): user}) == expected_name
+
+
+def test_request_audit_ignores_caller_controlled_actor_headers(db_session):
+    from fastapi import Request, Response
+
+    user = SystemUser(
+        first_name="Canonical",
+        last_name="Operator",
+        email="canonical-operator@example.com",
+        user_type=SystemUserType.system_user,
+        is_active=True,
+    )
+    db_session.add(user)
+    db_session.commit()
+    spoofed_id = uuid.uuid4()
+    request = Request(
+        {
+            "type": "http",
+            "method": "POST",
+            "path": "/admin/system/settings",
+            "query_string": b"",
+            "headers": [
+                (b"x-actor-id", str(spoofed_id).encode()),
+                (b"x-actor-type", b"system"),
+            ],
+            "client": ("127.0.0.1", 12345),
+            "scheme": "http",
+            "server": ("testserver", 80),
+        }
+    )
+    request.state.actor_id = str(user.id)
+    request.state.actor_type = "system_user"
+    request.state.user = user
+
+    payload = audit_service.audit_events.build_request_payload(
+        request,
+        Response(status_code=200),
+    )
+
+    assert payload.actor_type is AuditActorType.user
+    assert payload.actor_id == str(user.id)
+    assert payload.actor_id != str(spoofed_id)
+    assert payload.actor_label == "Canonical Operator"
+
+
+def test_request_audit_preserves_explicit_system_actor():
+    from fastapi import Request, Response
+
+    request = Request(
+        {
+            "type": "http",
+            "method": "POST",
+            "path": "/internal/maintenance",
+            "query_string": b"",
+            "headers": [],
+            "client": ("127.0.0.1", 12345),
+            "scheme": "http",
+            "server": ("testserver", 80),
+        }
+    )
+    request.state.actor_id = "system:audit-maintenance"
+    request.state.actor_type = "system"
+
+    payload = audit_service.audit_events.build_request_payload(
+        request,
+        Response(status_code=200),
+    )
+
+    assert payload.actor_type is AuditActorType.system
+    assert payload.actor_id == "system:audit-maintenance"
+
+
+def test_request_audit_prefers_authenticated_principal_over_legacy_state_alias():
+    from fastapi import Request, Response
+
+    principal_id = uuid.uuid4()
+    legacy_alias = uuid.uuid4()
+    request = Request(
+        {
+            "type": "http",
+            "method": "PATCH",
+            "path": "/admin/system/settings",
+            "query_string": b"",
+            "headers": [],
+            "client": ("127.0.0.1", 12345),
+            "scheme": "http",
+            "server": ("testserver", 80),
+        }
+    )
+    request.state.auth = {
+        "principal_id": str(principal_id),
+        "principal_type": "system_user",
+    }
+    request.state.actor_id = str(legacy_alias)
+    request.state.actor_type = "system"
+    request.state.user = {
+        "first_name": "Canonical",
+        "last_name": "Principal",
+        "email": "canonical-principal@example.com",
+    }
+
+    payload = audit_service.audit_events.build_request_payload(
+        request,
+        Response(status_code=200),
+    )
+
+    assert payload.actor_type is AuditActorType.user
+    assert payload.actor_id == str(principal_id)
+    assert payload.actor_id != str(legacy_alias)
+    assert payload.actor_label == "Canonical Principal"
 
 
 @patch("app.services.events.dispatcher._dispatcher", None)
