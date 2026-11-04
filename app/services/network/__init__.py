@@ -39,6 +39,7 @@ from app.services.network.fiber_services import (
     fiber_termination_points,
 )
 from app.services.network.ip import (
+    IPAssignmentError,
     IPAssignments,
     IpBlocks,
     IpPools,
@@ -153,6 +154,7 @@ __all__ = [
     "IPv6Addresses",
     "ipv6_addresses",
     "IPAssignments",
+    "IPAssignmentError",
     "ip_assignments",
     # OLT services
     "OLTDevices",

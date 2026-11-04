@@ -27,6 +27,7 @@ from app.schemas.network import (
 from app.services import settings_spec
 from app.services.common import coerce_uuid
 from app.services.crud import CRUDManager
+from app.services.domain_errors import DomainError
 from app.services.network._common import (
     _apply_ordering,
     _apply_pagination,
@@ -38,6 +39,19 @@ from app.validators import network as network_validators
 logger = logging.getLogger(__name__)
 ACTIVE_SUBSCRIPTION_STATUS = "active"
 SERVICE_ALLOCATION_TYPES = frozenset({"wan", "static"})
+
+
+class IPAssignmentError(DomainError):
+    """Stable refusal contract for IP-assignment commands."""
+
+
+def _ip_assignment_error(suffix: str, message: str) -> IPAssignmentError:
+    return IPAssignmentError(
+        code=f"network.ip_assignment_lifecycle.{suffix}",
+        message=message,
+        details={},
+        retryable=False,
+    )
 
 
 def _subscription_model() -> type[Any]:
@@ -184,12 +198,10 @@ class IPAssignments(CRUDManager[IPAssignment]):
             data.get("ip_version") == IPVersion.ipv4
             and data.get("subscription_id") is None
         ):
-            raise HTTPException(
-                status_code=400,
-                detail=(
-                    "An IPv4 assignment requires subscription_id. Device and "
-                    "management IPs belong on the device record."
-                ),
+            raise _ip_assignment_error(
+                "subscription_required",
+                "An IPv4 assignment requires subscription_id. Device and "
+                "management IPs belong on the device record.",
             )
         if data.get("subscriber_id") is not None:
             network_validators.validate_ip_assignment_links(
@@ -279,9 +291,9 @@ class IPAssignments(CRUDManager[IPAssignment]):
             and assignment.subscription_id is not None
             and assignment.ipv4_address_id is not None
         ):
-            raise HTTPException(
-                status_code=400,
-                detail=("An IPv4 assignment cannot have its subscription_id cleared."),
+            raise _ip_assignment_error(
+                "subscription_clear_refused",
+                "An IPv4 assignment cannot have its subscription_id cleared.",
             )
         IPAssignments._resolve_owner(db, data)
         resolved_subscriber_id = data.get("subscriber_id", assignment.subscriber_id)

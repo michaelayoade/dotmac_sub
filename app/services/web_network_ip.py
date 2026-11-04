@@ -11,7 +11,6 @@ import re
 from collections import defaultdict
 from uuid import UUID
 
-from fastapi import HTTPException
 from pydantic import ValidationError
 from sqlalchemy import delete as sa_delete
 from sqlalchemy import or_, select
@@ -1448,7 +1447,12 @@ def assign_ipv4_for_import(
     if not normalized_subscriber_id:
         raise ValueError("subscriber_id is required.")
     if not str(subscription_id or "").strip():
-        raise ValueError(IPV4_SUBSCRIPTION_REQUIRED_MESSAGE)
+        raise network_service.IPAssignmentError(
+            code="network.ip_assignment_lifecycle.subscription_required",
+            message=IPV4_SUBSCRIPTION_REQUIRED_MESSAGE,
+            details={},
+            retryable=False,
+        )
     state = build_ipv4_assignment_form_data(
         db, pool_id=str(pool_id), ip_address=str(ip_address)
     )
@@ -1482,20 +1486,29 @@ def assign_ipv4_for_import(
         address_record.pool_id = pool.id
         db.flush()
 
-    from app.validators import network as network_validators
-
-    # Refuse a subscription the subscriber does not own (HTTPException from the
-    # shared validator is surfaced as a row-level import error).
     try:
-        network_validators.validate_ip_assignment_links(
-            db, normalized_subscriber_id, None, str(subscription_id)
+        normalized_subscription_id = UUID(str(subscription_id))
+    except ValueError as exc:
+        raise network_service.IPAssignmentError(
+            code="network.ip_assignment_lifecycle.subscription_invalid",
+            message="The selected subscription is invalid.",
+            details={},
+            retryable=False,
+        ) from exc
+    subscription = db.get(Subscription, normalized_subscription_id)
+    if subscription is None or str(subscription.subscriber_id) != str(
+        normalized_subscriber_id
+    ):
+        raise network_service.IPAssignmentError(
+            code="network.ip_assignment_lifecycle.subscription_account_mismatch",
+            message="The selected subscription does not belong to the subscriber.",
+            details={},
+            retryable=False,
         )
-    except HTTPException as exc:
-        raise ValueError(str(exc.detail)) from exc
 
     assignment = IPAssignment(
         subscriber_id=coerce_uuid(normalized_subscriber_id),
-        subscription_id=coerce_uuid(str(subscription_id)),
+        subscription_id=normalized_subscription_id,
         ip_version=IPVersion.ipv4,
         ipv4_address_id=address_record.id,
         is_active=True,
@@ -1533,7 +1546,12 @@ def assign_ipv4_address(
         raise ValueError("Subscriber is required.")
     normalized_subscription_id = str(subscription_id or "").strip() or None
     if normalized_subscription_id is None:
-        raise ValueError(IPV4_SUBSCRIPTION_REQUIRED_MESSAGE)
+        raise network_service.IPAssignmentError(
+            code="network.ip_assignment_lifecycle.subscription_required",
+            message=IPV4_SUBSCRIPTION_REQUIRED_MESSAGE,
+            details={},
+            retryable=False,
+        )
 
     pool = state["pool"]
     address_record = state["address_record"]

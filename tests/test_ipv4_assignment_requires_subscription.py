@@ -10,7 +10,6 @@ from __future__ import annotations
 import uuid
 
 import pytest
-from fastapi import HTTPException
 from pydantic import ValidationError
 
 from app.models.catalog import (
@@ -102,7 +101,7 @@ def test_create_refuses_ipv4_without_subscription(db_session):
     address = _address(db_session, pool, "198.51.100.10")
     subscriber = _subscriber(db_session)
 
-    with pytest.raises(HTTPException) as exc:
+    with pytest.raises(network_service.IPAssignmentError) as exc:
         network_service.ip_assignments.create(
             db_session,
             IPAssignmentCreate(
@@ -112,9 +111,9 @@ def test_create_refuses_ipv4_without_subscription(db_session):
             ),
         )
 
-    assert exc.value.status_code == 400
-    assert "subscription_id" in str(exc.value.detail)
-    assert "device record" in str(exc.value.detail)
+    assert exc.value.code == "network.ip_assignment_lifecycle.subscription_required"
+    assert "subscription_id" in exc.value.message
+    assert "device record" in exc.value.message
     assert _unbound_rows(db_session, address) == 0
 
 
@@ -122,13 +121,13 @@ def test_create_refuses_ipv4_with_no_owner_at_all(db_session):
     pool = _pool(db_session, "198.51.100.0/24")
     address = _address(db_session, pool, "198.51.100.11")
 
-    with pytest.raises(HTTPException) as exc:
+    with pytest.raises(network_service.IPAssignmentError) as exc:
         network_service.ip_assignments.create(
             db_session,
             IPAssignmentCreate(ip_version=IPVersion.ipv4, ipv4_address_id=address.id),
         )
 
-    assert exc.value.status_code == 400
+    assert exc.value.code == "network.ip_assignment_lifecycle.subscription_required"
     assert _unbound_rows(db_session, address) == 0
 
 
@@ -188,7 +187,9 @@ def test_assign_ipv4_address_refuses_missing_subscription_without_writes(db_sess
     pool = _pool(db_session, "198.51.100.0/24")
     subscriber = _subscriber(db_session)
 
-    with pytest.raises(ValueError, match="subscription is required"):
+    with pytest.raises(
+        network_service.IPAssignmentError, match="subscription is required"
+    ):
         ip_service.assign_ipv4_address(
             db_session,
             pool_id=str(pool.id),
@@ -209,7 +210,9 @@ def test_assign_ipv4_address_refuses_blank_subscription(db_session):
     pool = _pool(db_session, "198.51.100.0/24")
     subscriber = _subscriber(db_session)
 
-    with pytest.raises(ValueError, match="subscription is required"):
+    with pytest.raises(
+        network_service.IPAssignmentError, match="subscription is required"
+    ):
         ip_service.assign_ipv4_address(
             db_session,
             pool_id=str(pool.id),
@@ -338,7 +341,9 @@ def test_reassign_without_subscription_is_refused_and_keeps_link(db_session):
         subscription_id=str(subscription.id),
     )
 
-    with pytest.raises(ValueError, match="subscription is required"):
+    with pytest.raises(
+        network_service.IPAssignmentError, match="subscription is required"
+    ):
         ip_service.assign_ipv4_address(
             db_session,
             pool_id=str(pool.id),
@@ -441,7 +446,9 @@ def test_import_assign_requires_subscription(db_session):
     pool = _pool(db_session, "198.51.100.0/24")
     subscriber = _subscriber(db_session)
 
-    with pytest.raises(ValueError, match="subscription is required"):
+    with pytest.raises(
+        network_service.IPAssignmentError, match="subscription is required"
+    ):
         ip_service.assign_ipv4_for_import(
             db_session,
             pool_id=str(pool.id),
@@ -503,14 +510,16 @@ def test_update_explicit_null_subscription_is_refused_for_bound_ipv4(db_session)
         ),
     )
 
-    with pytest.raises(HTTPException) as exc:
+    with pytest.raises(network_service.IPAssignmentError) as exc:
         network_service.ip_assignments.update(
             db=db_session,
             assignment_id=str(assignment.id),
             payload=IPAssignmentUpdate.model_validate({"subscription_id": None}),
         )
 
-    assert exc.value.status_code == 400
+    assert (
+        exc.value.code == "network.ip_assignment_lifecycle.subscription_clear_refused"
+    )
     db_session.refresh(assignment)
     assert assignment.subscription_id == subscription.id
 
@@ -546,7 +555,7 @@ def test_import_assign_refuses_subscription_owned_by_another_subscriber(db_sessi
     other = _subscriber(db_session)
     foreign_sub = _subscription(db_session, other)
 
-    with pytest.raises(ValueError):
+    with pytest.raises(network_service.IPAssignmentError) as exc:
         ip_service.assign_ipv4_for_import(
             db_session,
             pool_id=str(pool.id),
@@ -554,6 +563,10 @@ def test_import_assign_refuses_subscription_owned_by_another_subscriber(db_sessi
             subscriber_id=str(importer_target.id),
             subscription_id=str(foreign_sub.id),
         )
+    assert (
+        exc.value.code
+        == "network.ip_assignment_lifecycle.subscription_account_mismatch"
+    )
     assert db_session.query(IPAssignment).count() == 0
 
 
@@ -571,7 +584,7 @@ def test_update_null_ip_version_and_null_subscription_cannot_bypass_guard(db_ses
         ),
     )
 
-    with pytest.raises(HTTPException) as exc:
+    with pytest.raises(network_service.IPAssignmentError) as exc:
         network_service.ip_assignments.update(
             db=db_session,
             assignment_id=str(assignment.id),
@@ -580,6 +593,8 @@ def test_update_null_ip_version_and_null_subscription_cannot_bypass_guard(db_ses
             ),
         )
 
-    assert exc.value.status_code == 400
+    assert (
+        exc.value.code == "network.ip_assignment_lifecycle.subscription_clear_refused"
+    )
     db_session.refresh(assignment)
     assert assignment.subscription_id == subscription.id

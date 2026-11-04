@@ -206,6 +206,17 @@ def test_network_guidance_explains_map_layer_visibility_controls() -> None:
     assert "do not modify canonical network data" in content
 
 
+def test_network_guidance_explains_ipv4_subscription_requirement() -> None:
+    guide = guidance_for_path("/admin/network/ip-management/ipv4-assign")
+
+    assert guide is not None
+    assert guide.id == "network-access"
+    content = " ".join((*guide.steps, *guide.notes)).lower()
+    assert "select the exact customer and subscription" in content
+    assert "subscriber-only ipv4 assignment is refused" in content
+    assert "device record" in content
+
+
 def test_specific_workflow_routes_override_or_reject_broad_sections() -> None:
     expected = {
         "/admin/dashboard": "admin-workspace",
