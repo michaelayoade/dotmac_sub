@@ -8,7 +8,6 @@ posture of ``outbox_dispatcher`` is proven by
 
 from __future__ import annotations
 
-import pytest
 import sqlalchemy as sa
 from dotmac_kernel.messaging.relay import ClaimedEvent, RelayPolicy
 from sqlalchemy.engine import Connection
