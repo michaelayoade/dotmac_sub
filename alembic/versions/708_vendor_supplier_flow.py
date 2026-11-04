@@ -58,16 +58,5 @@ def downgrade() -> None:
     ownership = sa.table(
         "sync_flow_ownership",
         sa.column("flow", sa.String()),
-        sa.column("owner", sa.String()),
-        sa.column("updated_at", sa.DateTime(timezone=True)),
-        sa.column("updated_by", sa.String()),
     )
-    op.execute(
-        ownership.update()
-        .where(ownership.c.flow == "vendor_supplier")
-        .values(
-            owner="crm",
-            updated_at=datetime.now(UTC),
-            updated_by="migration:708_vendor_supplier_flow:downgrade",
-        )
-    )
+    op.execute(ownership.delete().where(ownership.c.flow == "vendor_supplier"))
