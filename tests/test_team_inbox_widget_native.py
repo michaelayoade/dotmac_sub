@@ -54,6 +54,36 @@ def _subscriber(db_session) -> Subscriber:
     return sub
 
 
+def test_public_widget_presentation_is_bounded_and_non_secret(monkeypatch) -> None:
+    configured = {
+        "inbox_widget_title": "  Fibre help  ",
+        "inbox_widget_brand_color": "javascript:alert(1)",
+        "inbox_widget_position": "centre",
+        "inbox_widget_offset_x": 500,
+        "inbox_widget_offset_y": -1,
+        "inbox_widget_intro": "x" * 400,
+    }
+    monkeypatch.setattr(
+        team_inbox_widget.settings_spec,
+        "resolve_values_atomic",
+        lambda _db, _domain, _keys: configured,
+    )
+
+    result = team_inbox_widget.fiber_widget_presentation(
+        object(), team_inbox_widget.FiberWidgetPresentationQuery()
+    )
+    payload = result.as_response()
+
+    assert payload["title"] == "Fibre help"
+    assert len(payload["intro"]) == 240
+    assert payload["brandColor"] == "#0b7a45"
+    assert payload["position"] == "right"
+    assert payload["offsetX"] == 96
+    assert payload["offsetY"] == 8
+    assert "apiUrl" not in payload
+    assert "credential" not in payload
+
+
 def test_native_customer_chat_session_creates_team_inbox_conversation(db_session):
     sub = _subscriber(db_session)
 

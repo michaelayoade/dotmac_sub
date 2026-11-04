@@ -98,6 +98,10 @@ FIELD_LABELS: dict[CustomerProfileField, str] = {
     CustomerProfileField.nin: "NIN",
 }
 
+SENSITIVE_PROFILE_FIELDS = frozenset(
+    {CustomerProfileField.date_of_birth, CustomerProfileField.nin}
+)
+
 
 class InboxCustomerCompletionError(DomainError):
     pass
@@ -152,6 +156,7 @@ class CompleteInboxCustomerProfileCommand:
     actor_person_id: UUID | None
     actor_type: AuditActorType
     decision_source: str
+    actor_system_user_id: UUID | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -696,6 +701,8 @@ def complete_customer_profile(
                 raise _error(
                     "invalid_date_of_birth", "Enter DOB in YYYY-MM-DD format."
                 ) from None
+            if parsed_date_of_birth > date.today():
+                raise _error("future_date_of_birth", "DOB cannot be in the future.")
         parsed_gender: Gender | None = None
         if CustomerProfileField.gender in proposed:
             try:
@@ -859,7 +866,9 @@ def complete_customer_profile(
         audit_actor = AuditActor(
             actor_type=command.actor_type,
             actor_id=(
-                str(command.actor_person_id)
+                str(command.actor_system_user_id)
+                if command.actor_system_user_id
+                else str(command.actor_person_id)
                 if command.actor_person_id
                 else command.context.actor
             ),
@@ -892,8 +901,8 @@ def complete_customer_profile(
                     "customer_id": str(subscriber.id),
                     "party_id": str(canonical_party.id) if canonical_party else None,
                     "field": change.field.value,
-                    "previous_value": change.previous_value,
-                    "new_value": change.new_value,
+                    "value_changed": True,
+                    "sensitive": change.field in SENSITIVE_PROFILE_FIELDS,
                     "correlation_id": str(command.context.correlation_id),
                 },
             )

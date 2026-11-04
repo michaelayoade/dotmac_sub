@@ -8,7 +8,9 @@ from types import SimpleNamespace
 from sqlalchemy.dialects import postgresql
 from starlette.requests import Request
 
+from app.models.party import Party, PartyContactPoint, PartyType
 from app.models.service_team import ServiceTeam, ServiceTeamType
+from app.models.subscriber import Subscriber
 from app.models.team_inbox import (
     InboxConversation,
     InboxConversationAssignment,
@@ -183,6 +185,89 @@ def test_comments_are_first_class_and_searchable(db_session):
     assert timeline is not None
     assert timeline.comments[0].id == str(comment.id)
     assert timeline.comments[0].is_resolved is False
+
+
+def test_inbox_search_finds_message_content(db_session):
+    conversation = _conversation(db_session, subject="Connection problem")
+    _message(
+        db_session,
+        conversation,
+        body="The optical signal is unstable after the splitter change",
+    )
+
+    result = team_inbox_read.list_conversations(db_session, search="splitter change")
+
+    assert [item.id for item in result.items] == [str(conversation.id)]
+
+
+def test_inbox_search_finds_unlinked_provider_contact_name(db_session):
+    conversation = _conversation(db_session, subject="Social message")
+    _message(
+        db_session,
+        conversation,
+        body="Hello",
+        metadata={"from_name": "Chidi Okafor"},
+    )
+
+    result = team_inbox_read.list_conversations(db_session, search="Chidi Okafor")
+
+    assert [item.id for item in result.items] == [str(conversation.id)]
+
+
+def test_inbox_search_finds_linked_customer_contact_details(db_session):
+    party = Party(party_type=PartyType.person.value, display_name="Adaobi Nwosu")
+    db_session.add(party)
+    db_session.flush()
+    subscriber = Subscriber(
+        party_id=party.id,
+        party_bound_at=datetime.now(UTC),
+        party_binding_source="pytest",
+        party_binding_reason="Reviewed Inbox search fixture",
+        first_name="Legacy",
+        last_name="Customer",
+        display_name="Legacy Customer",
+        company_name="North Star Networks",
+        email="billing-contact@example.com",
+        phone="08035550114",
+        subscriber_number="SUB-1042",
+        account_number="ACC-7788",
+    )
+    db_session.add(subscriber)
+    db_session.flush()
+    db_session.add_all(
+        [
+            PartyContactPoint(
+                party_id=party.id,
+                channel_type="email",
+                normalized_value="adaobi@example.com",
+                display_value="adaobi@example.com",
+                is_primary=True,
+            ),
+            PartyContactPoint(
+                party_id=party.id,
+                channel_type="phone",
+                normalized_value="+2348035550114",
+                display_value="0803 555 0114",
+                is_primary=True,
+            ),
+        ]
+    )
+    conversation = _conversation(db_session, subject="Router replacement")
+    conversation.subscriber_id = subscriber.id
+    db_session.commit()
+
+    for search in (
+        "Adaobi",
+        "adaobi@example.com",
+        "+2348035550114",
+        "billing-contact@example.com",
+        "08035550114",
+        "North Star",
+        "SUB-1042",
+        "ACC-7788",
+    ):
+        result = team_inbox_read.list_conversations(db_session, search=search)
+        assert [item.id for item in result.items] == [str(conversation.id)]
 
 
 def test_admin_comment_resolve_updates_comment(db_session):

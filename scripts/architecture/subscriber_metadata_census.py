@@ -381,6 +381,20 @@ def _bound_model(value: ast.expr) -> str | None:
     if not isinstance(value, ast.Call):
         return None
     func = value.func
+    if (
+        isinstance(func, ast.Name)
+        and func.id == "aliased"
+        or isinstance(func, ast.Attribute)
+        and func.attr == "aliased"
+    ):
+        return next(
+            (
+                model
+                for argument in value.args
+                if (model := _named_model(argument)) is not None
+            ),
+            None,
+        )
     constructed = _named_model(func)
     if constructed is not None:
         return constructed
@@ -514,6 +528,12 @@ class _Census(ast.NodeVisitor):
 
     def visit_Assign(self, node: ast.Assign) -> None:
         bound = _bound_model(node.value)
+        if (
+            bound is None
+            and isinstance(node.value, ast.Subscript)
+            and isinstance(node.value.value, ast.Name)
+        ):
+            bound = self._bindings.get(node.value.value.id)
         if bound is not None:
             for target in node.targets:
                 if isinstance(target, ast.Name):

@@ -542,8 +542,10 @@ def test_inbox_save_updates_canonical_customer_and_refreshes_readiness(db_sessio
     assert saved_party.metadata_["address_line1"] == "10 Canonical Avenue"
     assert saved_party.display_name == "Canonical Party Name"
     assert outcome.readiness.can_agent_resolve is True
-    assert audit.metadata_["previous_value"] is None
-    assert audit.metadata_["new_value"] == "10 Canonical Avenue"
+    assert "previous_value" not in audit.metadata_
+    assert "new_value" not in audit.metadata_
+    assert audit.metadata_["value_changed"] is True
+    assert audit.metadata_["sensitive"] is False
     assert audit.metadata_["decision_source"] == "pytest_inbox"
 
 
@@ -585,6 +587,39 @@ def test_customer_value_replacement_requires_explicit_confirmation(db_session):
     assert captured.value.details["existing_value"] == original_phone
     assert captured.value.details["proposed_value"] == "08099999999"
     assert db_session.get(Subscriber, customer_id).phone == original_phone
+
+
+def test_customer_profile_rejects_future_date_of_birth(db_session):
+    conversation, customer = _customer_conversation(db_session)
+    conversation_id = conversation.id
+    customer_id = customer.id
+    db_session.commit()
+
+    with pytest.raises(DomainError) as captured:
+        team_inbox_customer_completion.complete_customer_profile(
+            db_session,
+            team_inbox_customer_completion.CompleteInboxCustomerProfileCommand(
+                context=CommandContext.system(
+                    actor="person:pytest",
+                    scope="team-inbox:customer-profile-completion",
+                    reason="pytest DOB validation",
+                ),
+                conversation_id=conversation_id,
+                customer_id=customer_id,
+                values=team_inbox_customer_completion.CustomerProfileValues(
+                    date_of_birth="2999-01-01"
+                ),
+                submitted_fields=frozenset(
+                    {team_inbox_customer_completion.CustomerProfileField.date_of_birth}
+                ),
+                confirmed_replacements=frozenset(),
+                actor_person_id=None,
+                actor_type=AuditActorType.service,
+                decision_source="pytest_inbox",
+            ),
+        )
+
+    assert captured.value.code.endswith("future_date_of_birth")
 
 
 def test_customer_replacement_still_passes_duplicate_identity_validation(db_session):

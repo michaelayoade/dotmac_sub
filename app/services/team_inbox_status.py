@@ -23,6 +23,8 @@ from app.services import (
     team_inbox_reply_window,
 )
 from app.services.domain_errors import DomainError
+from app.services.events import EventType, emit_event
+from app.services.operator_tenant import OPERATOR_TENANT_ID
 from app.services.owner_commands import execute_owner_savepoint, owner_command_active
 
 OWNER = "communications.team_inbox_status"
@@ -33,6 +35,7 @@ class InboxStatusReason(StrEnum):
     operator_change = "operator_change"
     bulk_change = "bulk_change"
     macro = "macro"
+    automation_rule = "automation_rule"
     auto_resolve = "auto_resolve"
     snooze = "snooze"
     snooze_expired = "snooze_expired"
@@ -384,6 +387,20 @@ def _apply_status_transition(
     conversation.metadata_ = metadata
     conversation.status = command.status.value
     db.flush()
+    emit_event(
+        db,
+        EventType.custom,
+        {
+            "name": "team_inbox.status_changed.v1",
+            "tenant_id": str(OPERATOR_TENANT_ID),
+            "conversation_id": str(conversation.id),
+            "previous_status": previous.value,
+            "status": command.status.value,
+            "reason": command.reason.value,
+            "channel": conversation.channel_type,
+        },
+        actor=str(command.actor_person_id) if command.actor_person_id else OWNER,
+    )
     if command.status is InboxConversationStatus.resolved:
         from app.services import team_inbox_assignment
 

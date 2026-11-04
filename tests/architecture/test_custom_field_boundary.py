@@ -39,6 +39,7 @@ def test_registry_is_code_owned_and_registered_targets_are_explicit() -> None:
         "lead",
         "quote",
         "sales_order",
+        "inbox.conversation",
     }
     assert (
         custom_field_capabilities.target_capability("subscriber").write_permission

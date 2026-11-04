@@ -90,6 +90,20 @@ def _page_origin(value: str) -> str:
     return f"{parsed.scheme}://{parsed.netloc}".rstrip("/")
 
 
+@router.get("/fiber/config")
+def fiber_widget_presentation_config(
+    request: Request,
+    db: Session = Depends(get_db),
+) -> dict[str, object]:
+    """Expose only bounded, non-secret widget presentation defaults."""
+
+    _fiber_origin(request)
+    return team_inbox_widget.fiber_widget_presentation(
+        db,
+        team_inbox_widget.FiberWidgetPresentationQuery(),
+    ).as_response()
+
+
 @router.post("/fiber/session", response_model=FiberChatSessionResponse)
 def fiber_widget_session_create(
     payload: FiberChatSessionCreate,

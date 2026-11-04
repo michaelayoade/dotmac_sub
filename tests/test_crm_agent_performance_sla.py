@@ -267,8 +267,9 @@ def test_agent_csv_includes_sla_and_status_fields(db_session, monkeypatch):
 
     header = crm_reporting.build_csv(report).splitlines()[0]
     assert header == (
-        "agent,team,assigned,resolved,active_now,avg_resolution,"
-        "avg_first_response,first_response_sla,first_response_sla_rate,"
+        "agent,team,assigned,resolved,active_now,inbound_messages,"
+        "outbound_messages,avg_resolution,avg_first_response,avg_reply,"
+        "first_response_sla,first_response_sla_rate,"
         "resolution_sla,resolution_sla_rate,status,score"
     )
     assert report.agent_rows[0].first_response_sla_met_count == 7
@@ -326,6 +327,9 @@ def test_operational_templates_compile_and_main_table_stays_compact():
         "Assigned",
         "Resolved",
         "Active now",
+        "Incoming",
+        "Outgoing",
         "Avg first response",
+        "Avg reply",
         "Status / score",
     ) in crm_reporting._agent_performance.__code__.co_consts

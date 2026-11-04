@@ -13,12 +13,15 @@ from sqlalchemy import func
 from sqlalchemy.orm import Session
 from sqlalchemy.sql.elements import ColumnElement
 
+from app.models.auth import Session as AuthSession
+from app.models.auth import SessionStatus
 from app.models.domain_settings import SettingDomain
 from app.models.service_team import ServiceTeam, ServiceTeamMember
 from app.models.system_user import SystemUser
 from app.models.team_inbox import (
     InboxAgentPresence,
     InboxAgentPresenceEvent,
+    InboxAgentPresenceSessionLease,
     InboxAgentPresenceStatus,
     InboxAuditEvidenceGrade,
     InboxAuditSource,
@@ -38,6 +41,7 @@ from app.models.team_inbox import (
 )
 from app.services import (
     ai_conversation_ownership,
+    staff_notifications,
     team_inbox_agent_introduction,
     team_inbox_queue_notifications,
     team_inbox_reply_window,
@@ -52,7 +56,7 @@ from app.services.session_hooks import run_after_commit
 from app.services.settings_spec import resolve_integer
 
 DEFAULT_MAX_CONCURRENT_CONVERSATIONS = 10
-AGENT_PRESENCE_FRESHNESS_SECONDS = 30 * 60
+AGENT_PRESENCE_FRESHNESS_SECONDS = 90
 COUNTABLE_CAPACITY_STATUSES = frozenset(
     {
         InboxConversationStatus.open.value,
@@ -115,6 +119,7 @@ class InboxPresenceReason(StrEnum):
     logout = "logout"
     connection_lost = "connection_lost"
     account_deactivated = "account_deactivated"
+    preference_change = "preference_change"
 
 
 class InboxAgentUnavailabilityReason(StrEnum):
@@ -153,12 +158,14 @@ class AgentPresenceHeartbeatDisposition(StrEnum):
     refreshed = "refreshed"
     explicit_unavailable = "explicit_unavailable"
     inactive_principal = "inactive_principal"
+    invalid_session = "invalid_session"
 
 
 @dataclass(frozen=True, slots=True)
 class AgentPresenceHeartbeatCommand:
     context: CommandContext
     system_user_id: UUID
+    auth_session_id: UUID
     observed_at: datetime
 
 
@@ -168,6 +175,22 @@ class AgentPresenceHeartbeatOutcome:
     status: InboxAgentPresenceStatus
     disposition: AgentPresenceHeartbeatDisposition
     last_seen_at: datetime | None
+
+
+@dataclass(frozen=True, slots=True)
+class AgentPresencePreferenceCommand:
+    context: CommandContext
+    system_user_id: UUID
+    auto_offline: bool
+    observed_at: datetime
+
+
+@dataclass(frozen=True, slots=True)
+class AgentPresencePreferenceOutcome:
+    system_user_id: UUID
+    auto_offline: bool
+    previous_status: InboxAgentPresenceStatus
+    status: InboxAgentPresenceStatus
 
 
 @dataclass(frozen=True)
@@ -425,10 +448,168 @@ def _coerce_uuid(value: str | UUID | None) -> UUID | None:
         return None
 
 
+def _as_utc(value: datetime) -> datetime:
+    return value.replace(tzinfo=UTC) if value.tzinfo is None else value
+
+
+def _active_staff_session(
+    db: Session,
+    *,
+    system_user_id: UUID,
+    auth_session_id: UUID,
+    observed_at: datetime,
+    for_update: bool = False,
+) -> AuthSession | None:
+    query = db.query(AuthSession).filter(
+        AuthSession.id == auth_session_id,
+        AuthSession.system_user_id == system_user_id,
+        AuthSession.status == SessionStatus.active,
+        AuthSession.revoked_at.is_(None),
+        AuthSession.expires_at > observed_at,
+    )
+    if for_update:
+        query = query.with_for_update()
+    return query.one_or_none()
+
+
+def _upsert_presence_session_lease(
+    db: Session,
+    *,
+    system_user_id: UUID,
+    auth_session_id: UUID,
+    observed_at: datetime,
+) -> InboxAgentPresenceSessionLease:
+    lease = (
+        db.query(InboxAgentPresenceSessionLease)
+        .filter(
+            InboxAgentPresenceSessionLease.auth_session_id == auth_session_id,
+        )
+        .with_for_update()
+        .one_or_none()
+    )
+    if lease is None:
+        lease = InboxAgentPresenceSessionLease(
+            person_id=system_user_id,
+            auth_session_id=auth_session_id,
+            last_seen_at=observed_at,
+        )
+        db.add(lease)
+    elif lease.person_id != system_user_id:
+        raise ValueError("auth_session_id is already bound to another staff user")
+    elif _as_utc(lease.last_seen_at) < _as_utc(observed_at):
+        lease.last_seen_at = observed_at
+    db.flush()
+    return lease
+
+
+def _presence_lease_observations(
+    db: Session,
+    *,
+    system_user_ids: Sequence[UUID],
+    observed_at: datetime,
+    fresh_only: bool,
+) -> dict[UUID, datetime]:
+    if not system_user_ids:
+        return {}
+    query = (
+        db.query(
+            InboxAgentPresenceSessionLease.person_id,
+            func.max(InboxAgentPresenceSessionLease.last_seen_at),
+        )
+        .join(
+            AuthSession,
+            AuthSession.id == InboxAgentPresenceSessionLease.auth_session_id,
+        )
+        .filter(InboxAgentPresenceSessionLease.person_id.in_(system_user_ids))
+        .filter(AuthSession.system_user_id == InboxAgentPresenceSessionLease.person_id)
+        .filter(AuthSession.status == SessionStatus.active)
+        .filter(AuthSession.revoked_at.is_(None))
+        .filter(AuthSession.expires_at > observed_at)
+    )
+    if fresh_only:
+        fresh_after = observed_at - timedelta(seconds=AGENT_PRESENCE_FRESHNESS_SECONDS)
+        query = query.filter(InboxAgentPresenceSessionLease.last_seen_at >= fresh_after)
+    rows = query.group_by(InboxAgentPresenceSessionLease.person_id).all()
+    return {person_id: last_seen_at for person_id, last_seen_at in rows}
+
+
+def _fresh_presence_lease_observations(
+    db: Session,
+    *,
+    system_user_ids: Sequence[UUID],
+    observed_at: datetime,
+) -> dict[UUID, datetime]:
+    return _presence_lease_observations(
+        db,
+        system_user_ids=system_user_ids,
+        observed_at=observed_at,
+        fresh_only=True,
+    )
+
+
+def _active_presence_lease_observations(
+    db: Session,
+    *,
+    system_user_ids: Sequence[UUID],
+    observed_at: datetime,
+) -> dict[UUID, datetime]:
+    return _presence_lease_observations(
+        db,
+        system_user_ids=system_user_ids,
+        observed_at=observed_at,
+        fresh_only=False,
+    )
+
+
+def schedule_agent_presence_changed_after_commit(
+    db: Session,
+    *,
+    presence: InboxAgentPresence,
+    observed_at: datetime,
+    reason: InboxPresenceReason,
+) -> None:
+    """Invalidate the staff presence projection after durable owner commit."""
+
+    fresh_lease = presence.person_id in _fresh_presence_lease_observations(
+        db,
+        system_user_ids=(presence.person_id,),
+        observed_at=observed_at,
+    )
+    active_lease = presence.person_id in _active_presence_lease_observations(
+        db,
+        system_user_ids=(presence.person_id,),
+        observed_at=observed_at,
+    )
+    effective_status = effective_presence_status(
+        presence,
+        now=observed_at,
+        has_active_session_lease=active_lease,
+        has_fresh_session_lease=fresh_lease,
+    )
+    selected_status = (
+        presence.manual_override_status
+        or presence.status
+        or InboxAgentPresenceStatus.offline.value
+    )
+    from app.services import team_inbox_realtime
+
+    team_inbox_realtime.publish_agent_presence_changed(
+        db,
+        person_id=str(presence.person_id),
+        effective_status=effective_status,
+        selected_status=selected_status,
+        auto_offline=presence.auto_offline,
+        observed_at=observed_at,
+        reason=reason.value,
+    )
+
+
 def effective_presence_status(
     presence: InboxAgentPresence,
     *,
     now: datetime | None = None,
+    has_active_session_lease: bool | None = None,
+    has_fresh_session_lease: bool | None = None,
 ) -> str:
     status = (
         presence.manual_override_status
@@ -437,6 +618,12 @@ def effective_presence_status(
     )
     if status != InboxAgentPresenceStatus.online.value:
         return status
+    if has_active_session_lease is False:
+        return InboxAgentPresenceStatus.offline.value
+    if presence.auto_offline is False:
+        return status
+    if has_fresh_session_lease is False:
+        return InboxAgentPresenceStatus.offline.value
     last_seen_at = presence.last_seen_at
     if last_seen_at is None:
         return InboxAgentPresenceStatus.offline.value
@@ -486,11 +673,24 @@ def refresh_agent_presence(
     """Record authenticated, visible Inbox activity without overriding absence."""
 
     def action() -> AgentPresenceHeartbeatOutcome:
+        session = _active_staff_session(
+            db,
+            system_user_id=command.system_user_id,
+            auth_session_id=command.auth_session_id,
+            observed_at=command.observed_at,
+            for_update=True,
+        )
+        if session is None:
+            return AgentPresenceHeartbeatOutcome(
+                system_user_id=command.system_user_id,
+                status=InboxAgentPresenceStatus.offline,
+                disposition=AgentPresenceHeartbeatDisposition.invalid_session,
+                last_seen_at=None,
+            )
         active_principal_id = (
             db.query(SystemUser.id)
             .filter(SystemUser.id == command.system_user_id)
             .filter(SystemUser.is_active.is_(True))
-            .with_for_update()
             .scalar()
         )
         if active_principal_id is None:
@@ -501,6 +701,12 @@ def refresh_agent_presence(
                 last_seen_at=None,
             )
 
+        _upsert_presence_session_lease(
+            db,
+            system_user_id=command.system_user_id,
+            auth_session_id=command.auth_session_id,
+            observed_at=command.observed_at,
+        )
         existing = (
             db.query(InboxAgentPresence)
             .filter(InboxAgentPresence.person_id == command.system_user_id)
@@ -549,6 +755,110 @@ def refresh_agent_presence(
     )
 
 
+def set_agent_presence_preference(
+    db: Session,
+    *,
+    command: AgentPresencePreferenceCommand,
+) -> AgentPresencePreferenceOutcome:
+    """Set auto-offline policy without creating a second presence writer."""
+
+    def action() -> AgentPresencePreferenceOutcome:
+        active_principal_id = (
+            db.query(SystemUser.id)
+            .filter(SystemUser.id == command.system_user_id)
+            .filter(SystemUser.is_active.is_(True))
+            .scalar()
+        )
+        if active_principal_id is None:
+            raise ValueError("system_user_id must reference an active staff user")
+        presence = (
+            db.query(InboxAgentPresence)
+            .filter(InboxAgentPresence.person_id == command.system_user_id)
+            .with_for_update()
+            .one_or_none()
+        )
+        if presence is None:
+            presence = InboxAgentPresence(person_id=command.system_user_id)
+            db.add(presence)
+            db.flush()
+        fresh_lease = bool(
+            _fresh_presence_lease_observations(
+                db,
+                system_user_ids=(command.system_user_id,),
+                observed_at=command.observed_at,
+            )
+        )
+        active_lease = bool(
+            _active_presence_lease_observations(
+                db,
+                system_user_ids=(command.system_user_id,),
+                observed_at=command.observed_at,
+            )
+        )
+        previous_status = InboxAgentPresenceStatus(
+            effective_presence_status(
+                presence,
+                now=command.observed_at,
+                has_active_session_lease=active_lease,
+                has_fresh_session_lease=fresh_lease,
+            )
+        )
+        previous_auto_offline = presence.auto_offline
+        presence.auto_offline = bool(command.auto_offline)
+        status = InboxAgentPresenceStatus(
+            effective_presence_status(
+                presence,
+                now=command.observed_at,
+                has_active_session_lease=active_lease,
+                has_fresh_session_lease=fresh_lease,
+            )
+        )
+        preference_changed = previous_auto_offline != presence.auto_offline
+        if status is not previous_status or preference_changed:
+            db.add(
+                InboxAgentPresenceEvent(
+                    person_id=command.system_user_id,
+                    previous_status=previous_status.value,
+                    status=status.value,
+                    actor_person_id=command.system_user_id,
+                    reason_code=InboxPresenceReason.preference_change.value,
+                    source=InboxAuditSource.presence_command,
+                    source_id=f"presence-preference:{command.context.command_id}",
+                    evidence_grade=InboxAuditEvidenceGrade.native,
+                    occurred_at=command.observed_at,
+                )
+            )
+        db.flush()
+        if (
+            status is InboxAgentPresenceStatus.online
+            and previous_status is not InboxAgentPresenceStatus.online
+        ):
+            schedule_queue_promotion_after_commit(
+                db,
+                reason="agent_disabled_auto_offline",
+            )
+        if status is not previous_status or preference_changed:
+            schedule_agent_presence_changed_after_commit(
+                db,
+                presence=presence,
+                observed_at=command.observed_at,
+                reason=InboxPresenceReason.preference_change,
+            )
+        return AgentPresencePreferenceOutcome(
+            system_user_id=command.system_user_id,
+            auto_offline=presence.auto_offline,
+            previous_status=previous_status,
+            status=status,
+        )
+
+    return _commit(
+        db,
+        action,
+        context=command.context,
+        definition=_PRESENCE_COMMAND,
+    )
+
+
 def agent_availability_snapshots(
     db: Session,
     system_user_ids: Sequence[str | UUID],
@@ -576,6 +886,16 @@ def agent_availability_snapshots(
         .filter(InboxAgentPresence.person_id.in_(person_ids))
         .all()
     }
+    fresh_lease_observations = _fresh_presence_lease_observations(
+        db,
+        system_user_ids=person_ids,
+        observed_at=observed_at,
+    )
+    active_lease_observations = _active_presence_lease_observations(
+        db,
+        system_user_ids=person_ids,
+        observed_at=observed_at,
+    )
     active_count_rows = (
         db.query(
             InboxConversationAssignment.person_id,
@@ -598,7 +918,12 @@ def agent_availability_snapshots(
     for person_id in person_ids:
         presence = presences.get(person_id)
         presence_status = InboxAgentPresenceStatus(
-            effective_presence_status(presence, now=observed_at)
+            effective_presence_status(
+                presence,
+                now=observed_at,
+                has_active_session_lease=person_id in active_lease_observations,
+                has_fresh_session_lease=person_id in fresh_lease_observations,
+            )
             if presence is not None
             else InboxAgentPresenceStatus.offline.value
         )
@@ -619,7 +944,11 @@ def agent_availability_snapshots(
             system_user_id=person_id,
             presence_status=presence_status,
             presence_observed_at=(
-                presence.last_seen_at if presence is not None else None
+                fresh_lease_observations.get(person_id)
+                if presence is not None and presence.auto_offline
+                else active_lease_observations.get(person_id)
+                if presence is not None
+                else None
             ),
             active_conversation_count=active_count,
             max_concurrent_conversations=max_concurrent,
@@ -701,6 +1030,12 @@ def set_agent_presence(
     )
     db.flush()
     presence.last_seen_at = observed_at
+    schedule_agent_presence_changed_after_commit(
+        db,
+        presence=presence,
+        observed_at=observed_at,
+        reason=reason_code,
+    )
     if (
         clean_status == InboxAgentPresenceStatus.online.value
         and previous_effective_status != InboxAgentPresenceStatus.online.value
@@ -737,6 +1072,22 @@ def record_agent_signed_in_presence(
     )
     if active_principal_id is None:
         raise ValueError("system_user_id must reference an active staff user")
+    if (
+        _active_staff_session(
+            db,
+            system_user_id=command.system_user_id,
+            auth_session_id=command.auth_session_id,
+            observed_at=command.signed_in_at,
+        )
+        is None
+    ):
+        raise ValueError("auth_session_id must reference the active staff session")
+    _upsert_presence_session_lease(
+        db,
+        system_user_id=command.system_user_id,
+        auth_session_id=command.auth_session_id,
+        observed_at=command.signed_in_at,
+    )
     existing = (
         db.query(InboxAgentPresence)
         .filter(InboxAgentPresence.person_id == command.system_user_id)
@@ -747,6 +1098,49 @@ def record_agent_signed_in_presence(
         if existing is not None
         else InboxAgentPresenceStatus.offline.value
     )
+    selected_status = (
+        existing.manual_override_status or existing.status
+        if existing is not None
+        else InboxAgentPresenceStatus.online.value
+    )
+    if selected_status in {
+        InboxAgentPresenceStatus.away.value,
+        InboxAgentPresenceStatus.on_break.value,
+        InboxAgentPresenceStatus.offline.value,
+    }:
+        assert existing is not None
+        schedule_agent_presence_changed_after_commit(
+            db,
+            presence=existing,
+            observed_at=command.signed_in_at,
+            reason=InboxPresenceReason.staff_sign_in,
+        )
+        return AgentSignedInPresenceOutcome(
+            system_user_id=command.system_user_id,
+            presence_id=existing.id,
+            status=InboxAgentPresenceStatus(selected_status),
+            transition_recorded=False,
+        )
+    if existing is not None:
+        # Signing in restores session freshness; it does not change an already
+        # selected ONLINE state. Refresh the routing evidence without emitting
+        # a false selected-state transition from a formerly stale timestamp.
+        existing.status = InboxAgentPresenceStatus.online.value
+        existing.manual_override_status = None
+        existing.last_seen_at = command.signed_in_at
+        db.flush()
+        schedule_agent_presence_changed_after_commit(
+            db,
+            presence=existing,
+            observed_at=command.signed_in_at,
+            reason=InboxPresenceReason.staff_sign_in,
+        )
+        return AgentSignedInPresenceOutcome(
+            system_user_id=command.system_user_id,
+            presence_id=existing.id,
+            status=InboxAgentPresenceStatus.online,
+            transition_recorded=False,
+        )
     presence = set_agent_presence(
         db,
         person_id=command.system_user_id,
@@ -993,7 +1387,24 @@ def _locked_effective_presence_status(
     )
     if presence is None:
         return InboxAgentPresenceStatus.offline
-    return InboxAgentPresenceStatus(effective_presence_status(presence, now=now))
+    active_lease = person_id in _active_presence_lease_observations(
+        db,
+        system_user_ids=(person_id,),
+        observed_at=now,
+    )
+    fresh_lease = person_id in _fresh_presence_lease_observations(
+        db,
+        system_user_ids=(person_id,),
+        observed_at=now,
+    )
+    return InboxAgentPresenceStatus(
+        effective_presence_status(
+            presence,
+            now=now,
+            has_active_session_lease=active_lease,
+            has_fresh_session_lease=fresh_lease,
+        )
+    )
 
 
 def _lock_active_conversation(
@@ -1586,7 +1997,7 @@ def assign_conversation_to_agent(
         service_team_id=team_uuid,
         source=source,
     )
-    _append_routing_event(
+    routing_event = _append_routing_event(
         db,
         conversation=conversation,
         event_type=(
@@ -1623,6 +2034,26 @@ def assign_conversation_to_agent(
         metadata_={"reason": reason, "source": source},
     )
     db.add(assignment)
+    notification_preference = team_inbox_agent_introduction.preference_for_agent(
+        db, person_uuid
+    )
+    staff_notifications.stage_staff_assignment_notifications(
+        db,
+        staff_notifications.StageStaffAssignmentNotifications(
+            system_user_ids=(person_uuid,),
+            source_event_id=routing_event.id,
+            source_entity_id=conversation.id,
+            event_type=(
+                staff_notifications.StaffAssignmentEventType.team_inbox_assignment
+            ),
+            subject="Inbox conversation assigned to you",
+            body="A Team Inbox conversation is ready for your attention.",
+            target_url=f"/admin/inbox?conversation_id={conversation.id}",
+            actor_identity_id=actor_uuid,
+            in_app_enabled=(notification_preference.assignment_in_app_notifications),
+            email_enabled=(notification_preference.assignment_email_notifications),
+        ),
+    )
     settled_entry = _settle_queue_entry(
         db,
         conversation_id=conversation.id,

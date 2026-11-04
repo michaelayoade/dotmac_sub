@@ -185,6 +185,7 @@
                 <button type="button" @click="open = !open" @click.outside="open = false" class="inline-flex h-10 w-10 items-center justify-center rounded-lg text-slate-600 hover:bg-slate-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-amber-500 dark:text-slate-300 dark:hover:bg-slate-800" aria-label="More conversation actions" :aria-expanded="open.toString()">•••</button>
                 <div x-show="open" x-cloak class="absolute right-0 z-30 mt-2 w-56 rounded-lg border border-slate-200 bg-white p-1 shadow-xl dark:border-slate-700 dark:bg-slate-900" role="menu">
                     <button type="button" @click="refreshThread('{{ timeline.id }}'); open = false" class="min-h-10 w-full rounded-md px-3 text-left text-xs hover:bg-amber-50 dark:hover:bg-slate-800" role="menuitem">Refresh thread</button>
+                    <button type="button" @click="copyConversationLink(); open = false" class="min-h-10 w-full rounded-md px-3 text-left text-xs hover:bg-amber-50 dark:hover:bg-slate-800" role="menuitem">Copy conversation link</button>
                     {% if action_eligibility.can_change_status %}<form method="post" action="/admin/inbox/{{ timeline.id }}/workflow">
                         {% include "components/forms/csrf_input.html" %}<input type="hidden" name="is_muted" value="{{ 'false' if timeline.is_muted else 'true' }}"><button type="submit" class="min-h-10 w-full rounded-md px-3 text-left text-xs hover:bg-amber-50 dark:hover:bg-slate-800" role="menuitem">{{ 'Unmute' if timeline.is_muted else 'Mute' }}</button></form>
                     {% endif %}
@@ -280,29 +281,34 @@
     <div class="min-h-0 flex-1 overflow-y-auto overscroll-contain px-4 py-5 sm:px-6" data-thread-scroll>
         <div class="mx-auto flex max-w-6xl flex-col gap-4" data-thread-content>
             <div id="inbox-message-list" class="flex flex-col gap-4" aria-live="polite">
-            {% if timeline_entries %}
-            {% for entry in timeline_entries %}
-                {% if entry.kind == 'system' and entry.event %}
-                    {% set event = entry.event %}
-                    <div class="flex items-center justify-center gap-2 py-1 text-center text-[11px] text-slate-500 dark:text-slate-400" role="note">
-                        <span class="h-px w-8 bg-slate-200 dark:bg-slate-800"></span>
-                        <span class="rounded-lg bg-slate-100 px-2.5 py-1 dark:bg-slate-900">
-                            <span class="font-semibold text-slate-700 dark:text-slate-200">{{ event.label }}</span>
-                            <span>by {{ event.actor_name }}</span>
-                            <time class="tabular-nums" datetime="{{ event.occurred_at.isoformat() }}">{{ event.occurred_at.strftime('%d %b %H:%M') }}</time>
-                        </span>
-                        <span class="h-px w-8 bg-slate-200 dark:bg-slate-800"></span>
-                    </div>
-                {% elif entry.message %}
-                    <div data-inbox-message-id="{{ entry.message.id }}">
-                        {{ message_bubble(entry.message) }}
-                    </div>
-                {% endif %}
+            {% if timeline.has_older_messages and timeline.oldest_message_id %}
+                {% set conversation_id = timeline.id %}
+                {% set oldest_message_id = timeline.oldest_message_id %}
+                {% include "admin/inbox/_older_messages_trigger.html" %}
+            {% endif %}
+            {% if timeline.messages %}
+            {% for message in timeline.messages %}
+                <div data-inbox-message-id="{{ message.id }}">
+                    {{ message_bubble(message) }}
+                </div>
             {% endfor %}
             {% else %}
                 <div data-inbox-empty-thread class="mx-auto mt-10 max-w-sm text-center"><p class="text-sm font-semibold text-slate-700 dark:text-slate-200">No messages yet</p><p class="mt-1 text-xs text-slate-500">Send the first reply to begin the timeline.</p></div>
             {% endif %}
             </div>
+            {% if activity_events %}
+            <details class="rounded-xl border border-slate-200 bg-slate-50/70 px-3 py-2 text-xs dark:border-slate-800 dark:bg-slate-900/70">
+                <summary class="cursor-pointer font-semibold text-slate-700 dark:text-slate-200">Recent activity</summary>
+                <div class="mt-2 space-y-2">
+                {% for event in activity_events %}
+                    <div class="flex flex-wrap items-center justify-between gap-2 text-slate-500 dark:text-slate-400" role="note">
+                        <span><strong class="text-slate-700 dark:text-slate-200">{{ event.label }}</strong> by {{ event.actor_name }}</span>
+                        <time class="tabular-nums" datetime="{{ event.occurred_at.isoformat() }}">{{ event.occurred_at.strftime('%d %b %H:%M') }}</time>
+                    </div>
+                {% endfor %}
+                </div>
+            </details>
+            {% endif %}
             <div x-show="presenceText" x-cloak class="flex items-center gap-2 text-xs font-medium text-slate-500">
                 <span class="flex gap-1 rounded-2xl bg-slate-200 px-3 py-2 dark:bg-slate-800" aria-label="Another agent is typing">
                     <span class="h-1.5 w-1.5 animate-bounce rounded-full bg-slate-500"></span>

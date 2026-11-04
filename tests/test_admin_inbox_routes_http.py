@@ -20,6 +20,7 @@ import uuid
 from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime
 from io import BytesIO
+from types import SimpleNamespace
 from unittest.mock import patch
 from urllib.parse import parse_qs, quote, urlsplit
 
@@ -29,8 +30,14 @@ from fastapi.testclient import TestClient
 from starlette.datastructures import UploadFile
 
 from app.db import get_db
-from app.models.team_inbox import InboxConversation
+from app.models.team_inbox import (
+    InboxAgentPresenceStatus,
+    InboxConversation,
+    InboxMessage,
+    InboxMessageDirection,
+)
 from app.services import (
+    team_inbox_assignment,
     team_inbox_commands,
     team_inbox_contact_links,
     team_inbox_filters,
@@ -119,6 +126,175 @@ def _client(db_session) -> TestClient:
             if dependency.dependency is not None:
                 app.dependency_overrides[dependency.dependency] = lambda: None
     return TestClient(app, raise_server_exceptions=False)
+
+
+def _presence_client(
+    db_session,
+    *,
+    actor_id: uuid.UUID,
+    session_id: object,
+) -> TestClient:
+    app = FastAPI()
+
+    @app.middleware("http")
+    async def bind_authenticated_state(request, call_next):
+        request.state.auth = {
+            "principal_id": str(actor_id),
+            "principal_type": "system_user",
+            "session_id": session_id,
+        }
+        request.state.user = SimpleNamespace(id=actor_id)
+        return await call_next(request)
+
+    app.include_router(router)
+    app.dependency_overrides[get_db] = lambda: db_session
+    for route in router.routes:
+        for dependency in getattr(route, "dependencies", ()):
+            if dependency.dependency is not None:
+                app.dependency_overrides[dependency.dependency] = lambda: None
+    return TestClient(app, raise_server_exceptions=False)
+
+
+def test_presence_heartbeat_uses_authenticated_session_identity(db_session):
+    actor_id = uuid.uuid4()
+    session_id = uuid.uuid4()
+    outcome = team_inbox_assignment.AgentPresenceHeartbeatOutcome(
+        system_user_id=actor_id,
+        status=InboxAgentPresenceStatus.online,
+        disposition=team_inbox_assignment.AgentPresenceHeartbeatDisposition.refreshed,
+        last_seen_at=datetime.now(UTC),
+    )
+    with (
+        patch("app.web.admin.inbox._prepare_mutation"),
+        patch(
+            "app.web.admin.inbox.team_inbox_commands.refresh_agent_presence",
+            return_value=outcome,
+        ) as refresh,
+    ):
+        response = _presence_client(
+            db_session,
+            actor_id=actor_id,
+            session_id=str(session_id),
+        ).post("/inbox/presence/heartbeat")
+
+    assert response.status_code == 200
+    assert response.json()["status"] == "online"
+    command = refresh.call_args.kwargs["command"]
+    assert command.system_user_id == actor_id
+    assert command.auth_session_id == session_id
+
+
+@pytest.mark.parametrize("session_id", [None, "not-a-uuid"])
+def test_presence_heartbeat_rejects_missing_or_invalid_session_state(
+    db_session, session_id
+):
+    actor_id = uuid.uuid4()
+    with patch(
+        "app.web.admin.inbox.team_inbox_commands.refresh_agent_presence"
+    ) as refresh:
+        response = _presence_client(
+            db_session,
+            actor_id=actor_id,
+            session_id=session_id,
+        ).post("/inbox/presence/heartbeat")
+
+    assert response.status_code == 403
+    refresh.assert_not_called()
+
+
+@pytest.mark.parametrize("submitted, expected", [("true", True), (None, False)])
+def test_presence_preference_route_delegates_typed_command(
+    db_session, submitted, expected
+):
+    actor_id = uuid.uuid4()
+    outcome = team_inbox_assignment.AgentPresencePreferenceOutcome(
+        system_user_id=actor_id,
+        auto_offline=expected,
+        previous_status=InboxAgentPresenceStatus.online,
+        status=InboxAgentPresenceStatus.online,
+    )
+    data = {"auto_offline": submitted} if submitted is not None else {}
+    with (
+        patch("app.web.admin.inbox._prepare_mutation"),
+        patch(
+            "app.web.admin.inbox.team_inbox_commands.set_agent_presence_preference",
+            return_value=outcome,
+        ) as update,
+    ):
+        response = _presence_client(
+            db_session,
+            actor_id=actor_id,
+            session_id=str(uuid.uuid4()),
+        ).post(
+            "/inbox/presence/preference",
+            data=data,
+            follow_redirects=False,
+        )
+
+    assert response.status_code == 303
+    command = update.call_args.kwargs["command"]
+    assert isinstance(command, team_inbox_assignment.AgentPresencePreferenceCommand)
+    assert command.system_user_id == actor_id
+    assert command.auto_offline is expected
+
+
+def test_older_messages_route_returns_scoped_private_fragment(db_session):
+    conversation = InboxConversation(
+        channel_type="email",
+        status="open",
+        contact_address="customer@example.test",
+    )
+    db_session.add(conversation)
+    db_session.flush()
+    older = InboxMessage(
+        conversation_id=conversation.id,
+        channel_type="email",
+        direction=InboxMessageDirection.inbound.value,
+        body="Older message",
+        received_at=datetime(2026, 11, 3, 8, 0, tzinfo=UTC),
+    )
+    cursor = InboxMessage(
+        conversation_id=conversation.id,
+        channel_type="email",
+        direction=InboxMessageDirection.inbound.value,
+        body="Current page",
+        received_at=datetime(2026, 11, 3, 8, 1, tzinfo=UTC),
+    )
+    db_session.add_all([older, cursor])
+    db_session.commit()
+
+    response = _client(db_session).get(
+        f"/inbox/{conversation.id}/messages/older",
+        params={"before": str(cursor.id)},
+    )
+
+    assert response.status_code == 200
+    assert response.headers["Cache-Control"] == "private, no-store"
+    assert "Older message" in response.text
+    assert "Current page" not in response.text
+
+
+def test_older_messages_route_rejects_foreign_cursor(db_session):
+    requested = InboxConversation(channel_type="email", status="open")
+    other = InboxConversation(channel_type="email", status="open")
+    db_session.add_all([requested, other])
+    db_session.flush()
+    foreign = InboxMessage(
+        conversation_id=other.id,
+        channel_type="email",
+        direction=InboxMessageDirection.inbound.value,
+        body="Other customer's message",
+        received_at=datetime(2026, 11, 3, 8, 0, tzinfo=UTC),
+    )
+    db_session.add(foreign)
+    db_session.commit()
+
+    response = _client(db_session).get(
+        f"/inbox/{requested.id}/messages/older",
+        params={"before": str(foreign.id)},
+    )
+
+    assert response.status_code == 404
 
 
 def test_start_conversation_passes_selected_subscriber_to_owner(db_session):
@@ -520,6 +696,25 @@ def test_contact_drawer_renders_previous_conversation_tab_and_route(
         is_active=True,
     )
     db_session.add_all((previous, current))
+    db_session.flush()
+    db_session.add_all(
+        (
+            InboxMessage(
+                conversation_id=previous.id,
+                channel_type="email",
+                direction="inbound",
+                body="Customer previously reported evening packet loss.",
+                received_at=datetime(2026, 8, 15, 9, 35, tzinfo=UTC),
+            ),
+            InboxMessage(
+                conversation_id=previous.id,
+                channel_type="email",
+                direction="internal",
+                body="Private escalation note must stay hidden.",
+                created_at=datetime(2026, 8, 15, 9, 40, tzinfo=UTC),
+            ),
+        )
+    )
     db_session.commit()
     client = _client(db_session)
 
@@ -535,6 +730,10 @@ def test_contact_drawer_renders_previous_conversation_tab_and_route(
     assert 'role="tablist"' in response.text
     assert "Conversations" in response.text
     assert "Previous installation chat" in response.text
+    assert "Customer history brief" in response.text
+    assert "Customer previously reported evening packet loss." in response.text
+    assert "Private escalation note must stay hidden." not in response.text
+    assert "Private team notes are excluded." in response.text
     assert f'href="/admin/inbox?c={previous.id}"' in response.text
     # The machine-readable value is the stable cross-database contract. Keep
     # the assertion scoped to this exact history row and compare instants:

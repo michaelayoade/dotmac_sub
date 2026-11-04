@@ -1202,14 +1202,14 @@ resolved_reference = "a4fe55f4ed704c556c4d1e3cc728ec4ef0dd8042"
 
 [[package]]
 name = "dotmac-kernel"
-version = "0.1.0a105"
+version = "0.1.0a107"
 description = "DotMac platform kernel — multi-tenant FastAPI foundation (config, RLS db, identity/tenancy models, security, platform auth, middleware, settings, features registry, audit)"
 optional = false
 python-versions = ">=3.11,<3.14"
 groups = ["main", "dev"]
 files = [
-    {file = "dotmac_kernel-0.1.0a105-py3-none-any.whl", hash = "sha256:f8937e5525c3efd27e2030bf69ed0c37e137c345e376668a79e00ebf349b6ffa"},
-    {file = "dotmac_kernel-0.1.0a105.tar.gz", hash = "sha256:76a3ccb7d0344befe565681b710edfd3a563e64127b801e43bb239d5bc5b80d2"},
+    {file = "dotmac_kernel-0.1.0a107-py3-none-any.whl", hash = "sha256:887b4bccb0fe2760df9a8e6d627553da4a2dc82451f9fa501d9b1e0bc774e341"},
+    {file = "dotmac_kernel-0.1.0a107.tar.gz", hash = "sha256:6f146c85faab91084c38f93fc6140dc9cbb54b6b665ee5f21ea816b11cc53144"},
 ]
 
 [package.dependencies]
@@ -6283,4 +6283,4 @@ cffi = ["cffi (>=1.17,<2.0) ; platform_python_implementation != \"PyPy\" and pyt
 [metadata]
 lock-version = "2.1"
 python-versions = ">=3.11,<3.13"
-content-hash = "b67951bbd4cb41b202874798535e8a7cd175e7d49cfb4f17fef3bb67399d51e1"
+content-hash = "399ee5a47d605f7ebfad2a5156bd8e864947b02c9a48d9e71963971b8ba9fec1"

@@ -1430,6 +1430,32 @@ class NasDevice(Base):
     )
 
 
+class NasPoolBinding(Base):
+    """Many-to-many link: an IP pool is served by (exclusive to) a NAS.
+
+    Owned by the network/access side, not the IPAM pool schema (IPAM must not
+    know NAS). Phase A records labels only; allocation, assignment and RADIUS
+    still read ``ip_pools.nas_device_id`` and NAS ``radius_pool:`` tags.
+    """
+
+    __tablename__ = "nas_pool_bindings"
+
+    nas_device_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("nas_devices.id", ondelete="CASCADE"),
+        primary_key=True,
+    )
+    pool_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("ip_pools.id", ondelete="CASCADE"),
+        primary_key=True,
+        index=True,
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(UTC), nullable=False
+    )
+
+
 class NasConnectionRule(Base):
     """Per-router connection rules for PPPoE/DHCP assignment and shaping."""
 

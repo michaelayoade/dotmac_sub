@@ -19,6 +19,7 @@ from app.models.team_inbox import (
 )
 from app.schemas.team_inbox import InboxConversationEscalateRequest
 from tests.staff_identity_fixtures import add_bound_staff_user
+from tests.team_inbox_presence_fixtures import add_active_presence_lease
 
 
 def _team(db_session, name: str = "Support") -> ServiceTeam:
@@ -45,6 +46,8 @@ def _member(
             last_seen_at=datetime.now(UTC) if status == "online" else None,
         )
     )
+    if status == InboxAgentPresenceStatus.online.value:
+        add_active_presence_lease(db_session, system_user_id=user.id)
     db_session.flush()
     return user.id
 

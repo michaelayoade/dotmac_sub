@@ -327,7 +327,7 @@ def test_projection_count_matches_needs_attention_filter(db_session):
     assert projection.list_query.filter_value("needs_attention") == "true"
 
 
-def test_attention_classification_hydrates_candidates_in_bounded_batches(
+def test_attention_classification_uses_bounded_evidence_batches(
     db_session,
     monkeypatch,
 ):
@@ -336,16 +336,20 @@ def test_attention_classification_hydrates_candidates_in_bounded_batches(
         _add_completed_exchange_with_follow_up(db_session, conversation)
     db_session.commit()
 
-    hydrated_batch_sizes: list[int] = []
-    original = team_inbox_read._messages_by_conversation
+    evidence_batch_sizes: list[int] = []
+    original = team_inbox_read._response_cohorts_by_conversation
 
-    def record_batch(db, conversation_ids):
-        hydrated_batch_sizes.append(len(conversation_ids))
-        return original(db, conversation_ids)
+    def record_batch(db, batch, *, ticketed_conversation_ids):
+        evidence_batch_sizes.append(len(batch))
+        return original(
+            db,
+            batch,
+            ticketed_conversation_ids=ticketed_conversation_ids,
+        )
 
     monkeypatch.setattr(
         team_inbox_read,
-        "_messages_by_conversation",
+        "_response_cohorts_by_conversation",
         record_batch,
     )
 
@@ -355,4 +359,24 @@ def test_attention_classification_hydrates_candidates_in_bounded_batches(
     )
 
     assert set(result) == {conversation.id for conversation in conversations}
-    assert hydrated_batch_sizes == [2, 2, 1]
+    assert evidence_batch_sizes == [2, 2, 1]
+
+
+def test_old_completed_exchange_remains_attention_with_long_history(db_session):
+    conversation = _conversation(db_session)
+    _add_completed_exchange_with_follow_up(db_session, conversation)
+    for minute in range(3, 18):
+        db_session.add(
+            _message(
+                conversation.id,
+                direction=InboxMessageDirection.inbound,
+                minute=minute,
+            )
+        )
+    conversation.last_message_at = START + timedelta(minutes=17)
+    db_session.commit()
+
+    result = team_inbox_read.list_conversations(db_session)
+
+    assert result.items[0].needs_attention is True
+    assert result.items[0].latest_message_body == "inbound at 17"

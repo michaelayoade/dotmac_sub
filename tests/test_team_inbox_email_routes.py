@@ -171,6 +171,16 @@ def test_ai_intake_meta_social_form_uses_connector_key():
     assert 'value="meta_social"' not in ROUTES_TEMPLATE
 
 
+def test_widget_profile_reuses_audited_settings_owner_and_typed_catalog():
+    assert 'action="/admin/crm/inbox/widget-presentation"' in ROUTES_TEMPLATE
+    assert 'name="inbox_widget_brand_color"' in ROUTES_TEMPLATE
+    assert 'name="inbox_widget_position"' in ROUTES_TEMPLATE
+    assert "provider_channel_catalog" in ROUTES_TEMPLATE
+    assert "web_system_settings_forms.upsert_settings_from_specs(" in ROUTES_MODULE
+    assert "domain_settings.ADMIN_SETTINGS_FORM_WRITE_SCOPE" in ROUTES_MODULE
+    assert "team_inbox_integrator_envelope.provider_channel_catalog()" in ROUTES_MODULE
+
+
 def _team(db_session, name):
     team = ServiceTeam(name=name, team_type=ServiceTeamType.support.value)
     db_session.add(team)
@@ -234,6 +244,37 @@ def test_channel_route_supplies_default_team_for_social_channel(db_session):
     assert decision.primary_service_team_id == str(team_id)
     assert decision.channel_service_team_id == str(team_id)
     assert decision.reason == "channel_route"
+
+
+def test_channel_route_thread_mode_is_opt_in_and_validated(db_session):
+    team_id = _team(db_session, "Threaded Support")
+    route_id = team_inbox_commands.create_channel_route(
+        db_session,
+        channel_type="whatsapp",
+        provider="meta_cloud_api",
+        account_scope="phone-thread",
+        service_team_id=team_id,
+        conversation_mode="continuous",
+    )
+
+    policy = team_inbox_routing.resolve_channel_thread_policy(
+        db_session,
+        channel_type="whatsapp",
+        provider="meta_cloud_api",
+        account_scope="phone-thread",
+    )
+    assert policy.channel_route_id == route_id
+    assert policy.conversation_mode == "continuous"
+
+    with pytest.raises(
+        team_inbox_routing.EmailRouteError,
+        match="separate conversations or one continuous thread",
+    ):
+        team_inbox_commands.update_channel_route(
+            db_session,
+            route_id=route_id,
+            conversation_mode="merge-everything",
+        )
 
 
 def test_ai_route_overrides_channel_default_when_allowed_and_confident(db_session):
@@ -667,3 +708,16 @@ def test_ai_polish_settings_are_editable_on_inbox_settings_page():
     assert 'name="inbox_ai_polish_business_voice"' in ROUTES_TEMPLATE
     assert 'name="inbox_ai_polish_channel_guidance"' in ROUTES_TEMPLATE
     assert "settings_api.upsert_integration_setting" in ROUTES_MODULE
+
+
+def test_inbox_settings_composes_existing_agent_operations_owners():
+    assert "Agent operations" in ROUTES_TEMPLATE
+    assert "active_email_routes" in ROUTES_TEMPLATE
+    assert "active_channel_routes" in ROUTES_TEMPLATE
+    assert "active_ai_routes" in ROUTES_TEMPLATE
+    assert "can(request, 'operations:service_team:read')" in ROUTES_TEMPLATE
+    assert 'href="/admin/system/service-teams"' in ROUTES_TEMPLATE
+    assert "can(request, 'system:settings:read')" in ROUTES_TEMPLATE
+    assert "domain=comms#inbox-agent-capacity" in ROUTES_TEMPLATE
+    assert 'href="/admin/integrations/connectors"' in ROUTES_TEMPLATE
+    assert "Membership stays owned by Service Teams" in ROUTES_TEMPLATE

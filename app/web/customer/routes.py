@@ -45,6 +45,7 @@ from app.services import (
     crm_portal,
     customer_portal,
     customer_profile_location,
+    display_format,
     location_capture,
     payment_intent_management,
     portal_ticket_deflection,
@@ -52,6 +53,8 @@ from app.services import (
     team_inbox_widget,
     web_support_tickets,
 )
+from app.services import customer_account_statement as statement_service
+from app.services import customer_account_statement_email as statement_email_service
 from app.services import customer_portal_bandwidth as customer_portal_bandwidth_service
 from app.services import customer_portal_contacts as customer_portal_contacts_service
 from app.services import customer_portal_flow_payment_methods as customer_cards
@@ -73,6 +76,7 @@ from app.services.customer_context import (
     optional_customer_account_id,
     optional_customer_subscriber_id,
     require_customer_account_id,
+    resolve_customer_context,
 )
 from app.services.customer_portal_context import (
     emit_customer_event,
@@ -709,6 +713,167 @@ def customer_billing(
             "now": datetime.now(UTC),
             "period_purchase_enabled": period_purchase_enabled,
         },
+    )
+
+
+def _customer_statement_account(
+    db: Session, customer: dict, requested_account_id: UUID | None
+) -> tuple[UUID, tuple[UUID, ...], str]:
+    context = resolve_customer_context(db, customer)
+    if context.is_impersonation:
+        raise HTTPException(status_code=403, detail="Statement access is unavailable")
+    selected = requested_account_id or UUID(context.require_account_id())
+    if not context.owns_account(selected):
+        raise HTTPException(status_code=404, detail="Account not found")
+    allowed = tuple(UUID(value) for value in context.allowed_account_ids)
+    return selected, allowed, context.principal_id or str(selected)
+
+
+@router.get("/billing/statement", response_class=HTMLResponse)
+def customer_statement_page(
+    request: Request,
+    account_id: UUID | None = None,
+    start_date: str | None = None,
+    end_date: str | None = None,
+    email_status: str | None = None,
+    db: Session = Depends(get_db),
+) -> Response:
+    customer = get_current_customer_from_request(request, db)
+    if not customer:
+        return RedirectResponse(
+            url="/portal/auth/login?next=/portal/billing/statement", status_code=303
+        )
+    selected, allowed, _ = _customer_statement_account(db, customer, account_id)
+    context = resolve_customer_context(db, customer)
+    try:
+        period = statement_service.statement_range(
+            start_date=start_date,
+            end_date=end_date,
+            timezone=display_format.display_timezone(db),
+        )
+    except statement_service.CustomerStatementError as exc:
+        raise HTTPException(status_code=400, detail=exc.message) from exc
+    return templates.TemplateResponse(
+        "customer/billing/statement.html",
+        {
+            "request": request,
+            "customer": customer,
+            "active_page": "billing",
+            "accounts": statement_service.list_statement_accounts(
+                db, allowed_account_ids=allowed
+            ),
+            "account_id": selected,
+            "start_date": period.start_date.isoformat(),
+            "end_date": period.end_date.isoformat(),
+            "email_status": email_status,
+            "email_available": bool(
+                context.subscriber is not None and context.subscriber.email_verified
+            ),
+            "idempotency_key": uuid4(),
+        },
+    )
+
+
+@router.get("/billing/statement/pdf")
+def customer_statement_pdf(
+    request: Request,
+    account_id: UUID | None = None,
+    start_date: str | None = None,
+    end_date: str | None = None,
+    db: Session = Depends(get_db),
+) -> Response:
+    customer = get_current_customer_from_request(request, db)
+    if not customer:
+        return RedirectResponse(
+            url="/portal/auth/login?next=/portal/billing/statement", status_code=303
+        )
+    selected, _, _ = _customer_statement_account(db, customer, account_id)
+    try:
+        statement = statement_service.read_customer_statement(
+            db,
+            query=statement_service.CustomerStatementQuery(
+                account_id=selected,
+                period=statement_service.statement_range(
+                    start_date=start_date,
+                    end_date=end_date,
+                    timezone=display_format.display_timezone(db),
+                ),
+            ),
+        )
+        content = statement_service.render_statement_pdf(statement)
+    except statement_service.CustomerStatementError as exc:
+        raise HTTPException(status_code=400, detail=exc.message) from exc
+    except Exception as exc:
+        logger.warning("Unable to render customer statement PDF", exc_info=True)
+        raise HTTPException(
+            status_code=503, detail="Unable to generate the statement PDF."
+        ) from exc
+    return Response(
+        content=content,
+        media_type="application/pdf",
+        headers={
+            "Content-Disposition": build_content_disposition(
+                statement_service.statement_filename(statement)
+            ),
+            "Cache-Control": "private, no-store",
+        },
+    )
+
+
+@router.post("/billing/statement/email")
+def customer_statement_email(
+    request: Request,
+    account_id: UUID = Form(...),
+    start_date: str = Form(...),
+    end_date: str = Form(...),
+    idempotency_key: UUID = Form(...),
+    db: Session = Depends(get_db),
+) -> Response:
+    customer = get_current_customer_from_request(request, db)
+    if not customer:
+        return RedirectResponse(url="/portal/auth/login", status_code=303)
+    selected, _, principal_id = _customer_statement_account(db, customer, account_id)
+    if resolve_customer_context(db, customer).read_only:
+        raise HTTPException(status_code=403, detail="Statement email is unavailable")
+    try:
+        period = statement_service.statement_range(
+            start_date=start_date,
+            end_date=end_date,
+            timezone=display_format.display_timezone(db),
+        )
+        finish_read_transaction(db)
+        statement_email_service.request_customer_statement_email(
+            db,
+            command=statement_email_service.CustomerStatementEmailCommand(
+                query=statement_service.CustomerStatementQuery(
+                    account_id=selected, period=period
+                ),
+                principal_id=UUID(principal_id),
+                idempotency_key=idempotency_key,
+                context=CommandContext.system(
+                    actor=f"customer:{principal_id}",
+                    scope=str(selected),
+                    reason="Customer requested account statement by email",
+                    idempotency_key=str(idempotency_key),
+                ),
+            ),
+        )
+    except statement_service.CustomerStatementError as exc:
+        raise HTTPException(status_code=400, detail=exc.message) from exc
+    except DomainError as exc:
+        raise HTTPException(status_code=503, detail=exc.message) from exc
+    except Exception as exc:
+        logger.warning("Unable to queue customer statement email", exc_info=True)
+        raise HTTPException(
+            status_code=503, detail="Unable to email the statement right now."
+        ) from exc
+    return RedirectResponse(
+        url=(
+            "/portal/billing/statement?"
+            f"account_id={selected}&start_date={period.start_date.isoformat()}"
+            f"&end_date={period.end_date.isoformat()}&email_status=queued"
+        ),
+        status_code=303,
     )
 
 

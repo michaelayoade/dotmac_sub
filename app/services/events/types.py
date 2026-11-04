@@ -21,6 +21,7 @@ class EventType(enum.Enum):
     """
 
     field_identity_changed = "field_identity.changed"
+    customer_account_statement_email_queued = "customer.account_statement.email_queued"
 
     customer_bulk_message_changed = "customer_bulk_message.changed"
 

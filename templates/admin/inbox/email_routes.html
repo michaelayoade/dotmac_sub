@@ -13,6 +13,7 @@
     x-data="{
         sections: {
             overview: true,
+            operations: false,
             customer: false,
             ai: false,
             testing: false,
@@ -36,7 +37,7 @@
         },
         dobFormats: [],
         jsonWarnings: {},
-        sectionOrder: ['overview', 'customer', 'ai', 'testing', 'routing', 'personal'],
+        sectionOrder: ['overview', 'operations', 'customer', 'ai', 'testing', 'routing', 'personal'],
         aiTabs: ['basics', 'conversation', 'intents', 'troubleshooting', 'messages', 'advanced'],
         openSection(name, updateHash = true) {
             if (this.aiTabs.includes(name)) { this.sections.ai = true; this.aiTab = name; name = `ai-${name}`; }
@@ -153,7 +154,7 @@
 
     <nav class="sticky top-0 z-30 -mx-4 overflow-x-auto border-y border-slate-200 bg-white/95 px-4 py-2 backdrop-blur sm:-mx-6 sm:px-6 dark:border-slate-700 dark:bg-slate-900/95" aria-label="Inbox settings sections">
         <div class="flex min-w-max items-center gap-1 text-xs font-semibold">
-            {% for key, label in [('overview', 'Overview'), ('customer', 'Customer resolution'), ('ai', 'AI intake policy'), ('testing', 'Testing & versions'), ('routing', 'Routing'), ('personal', 'My settings')] %}
+            {% for key, label in [('overview', 'Overview'), ('operations', 'Agent operations'), ('customer', 'Customer resolution'), ('ai', 'AI intake policy'), ('testing', 'Testing & versions'), ('routing', 'Routing'), ('personal', 'My settings')] %}
             <button type="button" @click="openSection('{{ key }}')" class="rounded-lg px-3 py-2 text-slate-600 hover:bg-amber-50 hover:text-amber-700 dark:text-slate-300 dark:hover:bg-slate-800 dark:hover:text-amber-300">{{ label }}</button>
             {% endfor %}
             <span class="mx-1 h-5 border-l border-slate-200 dark:border-slate-700"></span>
@@ -190,6 +191,84 @@
                 {% if ai_intake_active_version and ai_intake_draft_version %}<p class="border-t border-slate-100 px-5 py-3 text-xs text-slate-500 dark:border-slate-700 dark:text-slate-400">Activating replaces v{{ ai_intake_active_version.version_number }} with v{{ ai_intake_draft_version.version_number }} for new conversations.</p>{% endif %}
                 </div>
              </section>
+
+    <section id="inbox-settings-operations" data-settings-section="operations" class="scroll-mt-20 rounded-xl border border-slate-200 bg-white shadow-sm dark:border-slate-700 dark:bg-slate-800">
+        <button type="button" @click="toggleSection('operations')" :aria-expanded="sections.operations.toString()" aria-controls="inbox-settings-operations-body" class="flex min-h-16 w-full items-center justify-between gap-4 px-5 py-4 text-left hover:bg-slate-50 dark:hover:bg-slate-900">
+            <span><span class="block font-semibold text-slate-900 dark:text-white">Agent operations</span><span class="mt-1 block text-xs text-slate-500 dark:text-slate-400">Teams, workload capacity, channel connections, and active routing</span></span>
+            {{ chevron('sections.operations') }}
+        </button>
+        <div id="inbox-settings-operations-body" x-show="sections.operations" x-cloak class="border-t border-slate-100 p-5 dark:border-slate-700">
+            {% set active_email_routes = email_routes | selectattr('is_active') | list %}
+            {% set active_channel_routes = channel_routes | selectattr('is_active') | list %}
+            {% set active_ai_routes = ai_routes | selectattr('is_active') | list %}
+            <div class="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
+                <article class="rounded-xl border border-slate-200 p-4 dark:border-slate-700">
+                    <p class="text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">Routing</p>
+                    <p class="mt-2 text-2xl font-semibold text-slate-950 dark:text-white">{{ (active_email_routes | length) + (active_channel_routes | length) }}</p>
+                    <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">Active mailbox and channel routes. {{ active_ai_routes | length }} active AI route{% if active_ai_routes | length != 1 %}s{% endif %}.</p>
+                    <button type="button" @click="openSection('routing')" class="mt-4 text-sm font-semibold text-amber-700 hover:underline dark:text-amber-300">Manage routing</button>
+                </article>
+                {% if can(request, 'operations:service_team:read') %}
+                <article class="rounded-xl border border-slate-200 p-4 dark:border-slate-700">
+                    <p class="text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">Agent teams</p>
+                    <p class="mt-2 text-2xl font-semibold text-slate-950 dark:text-white">{{ service_team_options | length }}</p>
+                    <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">Active teams available to Inbox routing. Membership stays owned by Service Teams.</p>
+                    <a href="/admin/system/service-teams" class="mt-4 inline-block text-sm font-semibold text-amber-700 hover:underline dark:text-amber-300">Manage teams and members</a>
+                </article>
+                {% endif %}
+                {% if can(request, 'system:settings:read') %}
+                <article class="rounded-xl border border-slate-200 p-4 dark:border-slate-700">
+                    <p class="text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">Workload</p>
+                    <p class="mt-2 font-semibold text-slate-950 dark:text-white">Default capacity</p>
+                    <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">The shared communications setting controls automatic assignment capacity.</p>
+                    <a href="/admin/system/settings?domain=comms#inbox-agent-capacity" class="mt-4 inline-block text-sm font-semibold text-amber-700 hover:underline dark:text-amber-300">Configure agent capacity</a>
+                </article>
+                <article class="rounded-xl border border-slate-200 p-4 dark:border-slate-700">
+                    <p class="text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">Channel connections</p>
+                    <p class="mt-2 font-semibold text-slate-950 dark:text-white">Integration-owned</p>
+                    <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">Credentials and provider installations remain in the integration control plane.</p>
+                    <a href="/admin/integrations/connectors" class="mt-4 inline-block text-sm font-semibold text-amber-700 hover:underline dark:text-amber-300">Manage connections</a>
+                </article>
+                {% endif %}
+            </div>
+            <div class="mt-5 grid gap-5 xl:grid-cols-3">
+                <form method="post" action="/admin/crm/inbox/widget-presentation" class="space-y-4 rounded-xl border border-slate-200 p-4 dark:border-slate-700 xl:col-span-2">
+                    {% include "components/forms/csrf_input.html" %}
+                    <div>
+                        <h3 class="font-semibold text-slate-900 dark:text-white">Public widget appearance</h3>
+                        <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">Shared defaults for the Fiber website widget. An explicit value in that site's embed configuration takes precedence.</p>
+                    </div>
+                    {% set widget_disabled = not can(request, 'system:settings:write') %}
+                    <div class="grid gap-3 md:grid-cols-2">
+                        <label class="text-xs font-semibold text-slate-600 dark:text-slate-300">Title<input name="inbox_widget_title" required maxlength="80" value="{{ widget_presentation.title }}" {% if widget_disabled %}disabled{% endif %} class="mt-1 h-11 w-full rounded-lg border-slate-300 px-3 text-sm dark:border-slate-700 dark:bg-slate-950"></label>
+                        <label class="text-xs font-semibold text-slate-600 dark:text-slate-300">Subtitle<input name="inbox_widget_subtitle" required maxlength="120" value="{{ widget_presentation.subtitle }}" {% if widget_disabled %}disabled{% endif %} class="mt-1 h-11 w-full rounded-lg border-slate-300 px-3 text-sm dark:border-slate-700 dark:bg-slate-950"></label>
+                        <label class="text-xs font-semibold text-slate-600 dark:text-slate-300 md:col-span-2">Introduction<textarea name="inbox_widget_intro" required maxlength="240" rows="3" {% if widget_disabled %}disabled{% endif %} class="mt-1 w-full rounded-lg border-slate-300 px-3 py-2 text-sm dark:border-slate-700 dark:bg-slate-950">{{ widget_presentation.intro }}</textarea></label>
+                        <label class="text-xs font-semibold text-slate-600 dark:text-slate-300">Brand colour<input name="inbox_widget_brand_color" required pattern="#[0-9A-Fa-f]{6}" maxlength="7" value="{{ widget_presentation.brand_color }}" {% if widget_disabled %}disabled{% endif %} class="mt-1 h-11 w-full rounded-lg border-slate-300 px-3 font-mono text-sm dark:border-slate-700 dark:bg-slate-950"></label>
+                        <label class="text-xs font-semibold text-slate-600 dark:text-slate-300">Position<select name="inbox_widget_position" required {% if widget_disabled %}disabled{% endif %} class="mt-1 h-11 w-full rounded-lg border-slate-300 text-sm dark:border-slate-700 dark:bg-slate-950"><option value="right" {% if widget_presentation.position == 'right' %}selected{% endif %}>Right</option><option value="left" {% if widget_presentation.position == 'left' %}selected{% endif %}>Left</option></select></label>
+                        <label class="text-xs font-semibold text-slate-600 dark:text-slate-300">Horizontal offset<input name="inbox_widget_offset_x" type="number" min="8" max="96" required value="{{ widget_presentation.offset_x }}" {% if widget_disabled %}disabled{% endif %} class="mt-1 h-11 w-full rounded-lg border-slate-300 px-3 text-sm dark:border-slate-700 dark:bg-slate-950"></label>
+                        <label class="text-xs font-semibold text-slate-600 dark:text-slate-300">Vertical offset<input name="inbox_widget_offset_y" type="number" min="8" max="96" required value="{{ widget_presentation.offset_y }}" {% if widget_disabled %}disabled{% endif %} class="mt-1 h-11 w-full rounded-lg border-slate-300 px-3 text-sm dark:border-slate-700 dark:bg-slate-950"></label>
+                        <label class="text-xs font-semibold text-slate-600 dark:text-slate-300">Start button<input name="inbox_widget_start_button_text" required maxlength="60" value="{{ widget_presentation.start_button_text }}" {% if widget_disabled %}disabled{% endif %} class="mt-1 h-11 w-full rounded-lg border-slate-300 px-3 text-sm dark:border-slate-700 dark:bg-slate-950"></label>
+                        <label class="text-xs font-semibold text-slate-600 dark:text-slate-300">Send button<input name="inbox_widget_send_button_text" required maxlength="40" value="{{ widget_presentation.send_button_text }}" {% if widget_disabled %}disabled{% endif %} class="mt-1 h-11 w-full rounded-lg border-slate-300 px-3 text-sm dark:border-slate-700 dark:bg-slate-950"></label>
+                        <label class="text-xs font-semibold text-slate-600 dark:text-slate-300">Message placeholder<input name="inbox_widget_message_placeholder" required maxlength="120" value="{{ widget_presentation.message_placeholder }}" {% if widget_disabled %}disabled{% endif %} class="mt-1 h-11 w-full rounded-lg border-slate-300 px-3 text-sm dark:border-slate-700 dark:bg-slate-950"></label>
+                        <label class="text-xs font-semibold text-slate-600 dark:text-slate-300">Agent name<input name="inbox_widget_agent_name" required maxlength="80" value="{{ widget_presentation.agent_name }}" {% if widget_disabled %}disabled{% endif %} class="mt-1 h-11 w-full rounded-lg border-slate-300 px-3 text-sm dark:border-slate-700 dark:bg-slate-950"></label>
+                    </div>
+                    {% if not widget_disabled %}<button type="submit" class="min-h-11 rounded-lg bg-amber-500 px-5 text-sm font-semibold text-white hover:bg-amber-600">Save widget defaults</button>{% endif %}
+                </form>
+                <article class="rounded-xl border border-slate-200 p-4 dark:border-slate-700">
+                    <h3 class="font-semibold text-slate-900 dark:text-white">Connector readiness</h3>
+                    <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">Pairs accepted by the current typed receive contract. Credentials and installation status are managed by Integrations.</p>
+                    <ul class="mt-3 space-y-2 text-xs">
+                        {% for capability in provider_channel_catalog %}
+                        <li class="flex items-center justify-between gap-2 rounded-lg bg-slate-50 px-3 py-2 dark:bg-slate-900"><code>{{ capability.provider }}</code><span class="rounded-full bg-emerald-100 px-2 py-1 font-semibold text-emerald-800 dark:bg-emerald-900/40 dark:text-emerald-200">{{ capability.channel | replace('_', ' ') | title }}</span></li>
+                        {% else %}
+                        <li class="text-slate-500 dark:text-slate-400">No provider/channel contracts are registered.</li>
+                        {% endfor %}
+                    </ul>
+                    <p class="mt-3 text-xs text-slate-500 dark:text-slate-400">A listed pair is contract-ready, not proof that its external credentials are connected.</p>
+                </article>
+            </div>
+        </div>
+    </section>
 
     <section id="inbox-settings-customer" data-settings-section="customer" class="scroll-mt-20 rounded-xl border border-slate-200 bg-white shadow-sm dark:border-slate-700 dark:bg-slate-800">
         <button type="button" @click="toggleSection('customer')" :aria-expanded="sections.customer.toString()" aria-controls="inbox-settings-customer-body" class="flex min-h-16 w-full items-center justify-between gap-4 px-5 py-4 text-left">
@@ -629,10 +708,22 @@
             </select>
             <input name="display_name" maxlength="160" placeholder="Display name" class="h-11 rounded-lg border-slate-300 px-3 text-sm dark:border-slate-700 dark:bg-slate-950">
             <input name="priority" type="number" value="100" min="0" max="1000" class="h-11 rounded-lg border-slate-300 px-3 text-sm dark:border-slate-700 dark:bg-slate-950">
+            <label class="block text-xs font-semibold text-slate-600 dark:text-slate-300 md:col-span-2">Customer thread
+                <select name="conversation_mode" class="mt-1 h-11 w-full rounded-lg border-slate-300 text-sm dark:border-slate-700 dark:bg-slate-950">
+                    <option value="separate">Separate conversation after resolution</option>
+                    <option value="continuous">One continuous visible thread</option>
+                </select>
+                <span class="mt-1 block font-normal text-slate-500">Continuous view still starts a fresh service episode for routing, SLA, CSAT, and reports.</span>
+            </label>
             <label class="flex items-center gap-2 text-xs font-semibold text-slate-600 dark:text-slate-300 md:col-span-2">
                 <input type="checkbox" name="allow_ai_routing" value="true" checked class="rounded border-slate-300 text-amber-500 focus:ring-amber-500">
                 Allow AI intake to reroute this channel
             </label>
+            <label class="flex items-center gap-2 text-xs font-semibold text-slate-600 dark:text-slate-300 md:col-span-2"><input type="checkbox" name="csat_enabled" value="true" checked class="rounded border-slate-300 text-amber-500 focus:ring-amber-500">Ask for a rating after resolution</label>
+            <select name="csat_style" class="h-11 rounded-lg border-slate-300 text-sm dark:border-slate-700 dark:bg-slate-950"><option value="stars">Stars</option><option value="emoji">Emoji</option></select>
+            <input name="csat_message" maxlength="200" value="How would you rate this conversation?" aria-label="CSAT survey message" class="h-11 rounded-lg border-slate-300 px-3 text-sm dark:border-slate-700 dark:bg-slate-950">
+            <input name="csat_include_labels" maxlength="800" placeholder="Only labels (comma separated)" aria-label="Only send CSAT for labels" class="h-11 rounded-lg border-slate-300 px-3 text-sm dark:border-slate-700 dark:bg-slate-950">
+            <input name="csat_exclude_labels" maxlength="800" placeholder="Excluded labels (comma separated)" aria-label="Do not send CSAT for labels" class="h-11 rounded-lg border-slate-300 px-3 text-sm dark:border-slate-700 dark:bg-slate-950">
             <div class="md:col-span-4">
                 <button type="submit" class="min-h-11 rounded-lg bg-amber-500 px-5 text-sm font-semibold text-white hover:bg-amber-600">Add channel route</button>
             </div>
@@ -648,10 +739,21 @@
                         <td class="px-5 py-3"><div class="font-medium text-slate-800 dark:text-slate-100">{{ route.display_name or route.channel_type|replace("_", " ")|title }}</div><div class="text-xs text-slate-500">{{ route.channel_type|replace("_", " ")|title }}</div></td>
                         <td class="px-5 py-3 font-mono text-xs text-slate-700 dark:text-slate-300">{{ route.provider }} / {{ route.account_scope }}</td>
                         <td class="px-5 py-3 text-slate-700 dark:text-slate-300">{{ route.service_team_name or "Unknown team" }}</td>
-                        <td class="px-5 py-3 text-slate-600 dark:text-slate-400">{{ "Allowed" if route.allow_ai_routing else "Locked to default" }}</td>
+                        <td class="px-5 py-3 text-slate-600 dark:text-slate-400">{{ "Allowed" if route.allow_ai_routing else "Locked to default" }}<div class="mt-1 text-xs">CSAT: {{ route.csat_style if route.csat_enabled else "off" }}</div><div class="mt-1 text-xs">Thread: {{ "continuous" if route.conversation_mode == "continuous" else "separate episodes" }}</div></td>
                         <td class="px-5 py-3">{{ "Active" if route.is_active else "Inactive" }} / priority {{ route.priority }}</td>
                         <td class="px-5 py-3">
                             <div class="flex justify-end gap-1.5">
+                                <form method="post" action="/admin/crm/inbox/channel-routes/{{ route.id }}" class="flex items-center gap-1.5">
+                                    {% include "components/forms/csrf_input.html" %}
+                                    <input type="hidden" name="csat_enabled" value="false">
+                                    <select name="conversation_mode" aria-label="Customer thread mode" class="h-9 rounded-lg border-slate-300 text-xs dark:border-slate-700 dark:bg-slate-950"><option value="separate"{% if route.conversation_mode == "separate" %} selected{% endif %}>Separate</option><option value="continuous"{% if route.conversation_mode == "continuous" %} selected{% endif %}>Continuous</option></select>
+                                    <label class="flex items-center gap-1 text-xs"><input type="checkbox" name="csat_enabled" value="true"{% if route.csat_enabled %} checked{% endif %}> CSAT</label>
+                                    <select name="csat_style" aria-label="Survey style" class="h-9 rounded-lg border-slate-300 text-xs dark:border-slate-700 dark:bg-slate-950"><option value="stars"{% if route.csat_style == "stars" %} selected{% endif %}>Stars</option><option value="emoji"{% if route.csat_style == "emoji" %} selected{% endif %}>Emoji</option></select>
+                                    <input name="csat_message" aria-label="Survey message" maxlength="200" value="{{ route.csat_message }}" class="h-9 w-44 rounded-lg border-slate-300 px-2 text-xs dark:border-slate-700 dark:bg-slate-950">
+                                    <input name="csat_include_labels" aria-label="Only labels" maxlength="800" value="{{ route.csat_include_labels }}" placeholder="Only labels" class="h-9 w-32 rounded-lg border-slate-300 px-2 text-xs dark:border-slate-700 dark:bg-slate-950">
+                                    <input name="csat_exclude_labels" aria-label="Excluded labels" maxlength="800" value="{{ route.csat_exclude_labels }}" placeholder="Excluded labels" class="h-9 w-32 rounded-lg border-slate-300 px-2 text-xs dark:border-slate-700 dark:bg-slate-950">
+                                    <button class="min-h-9 rounded-lg border border-slate-300 px-2.5 text-xs font-semibold">Save settings</button>
+                                </form>
                                 <form method="post" action="/admin/crm/inbox/channel-routes/{{ route.id }}">
                                     {% include "components/forms/csrf_input.html" %}
                                     <input type="hidden" name="is_active" value="{{ 'false' if route.is_active else 'true' }}">
@@ -846,7 +948,7 @@
 
     <section id="inbox-settings-personal" data-settings-section="personal" class="scroll-mt-20 rounded-xl border border-slate-200 bg-white shadow-sm dark:border-slate-700 dark:bg-slate-800">
         <button type="button" @click="toggleSection('personal')" :aria-expanded="sections.personal.toString()" aria-controls="inbox-settings-personal-body" class="flex min-h-16 w-full items-center justify-between gap-4 px-5 py-4 text-left">
-            <span><span class="block font-semibold text-slate-900 dark:text-white">My settings</span><span class="mt-1 block text-xs text-slate-500 dark:text-slate-400">AI Polish and your chat introduction</span></span>
+            <span><span class="block font-semibold text-slate-900 dark:text-white">My settings</span><span class="mt-1 block text-xs text-slate-500 dark:text-slate-400">AI Polish, assignment notifications, and your chat introduction</span></span>
             {{ chevron('sections.personal') }}</button>
         <div id="inbox-settings-personal-body" x-show="sections.personal" x-cloak class="space-y-5 border-t border-slate-100 p-5 dark:border-slate-700">
     <section class="rounded-xl bg-white p-0 dark:bg-slate-800">
@@ -867,13 +969,20 @@
 
     {% if introduction_preference %}
     <section class="rounded-xl bg-white p-5 dark:bg-slate-800">
-        <h2 class="font-semibold text-slate-900 dark:text-white">My chat introduction</h2>
+        <h2 class="font-semibold text-slate-900 dark:text-white">My Inbox preferences</h2>
         <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">Use <code>{agent_name}</code> for your display name. Automatic introductions apply only to the native chat-widget channel.</p>
         <form method="post" action="/admin/crm/inbox/agent-introduction" class="mt-4 space-y-3">
             {% include "components/forms/csrf_input.html" %}
             <textarea name="template" required maxlength="500" rows="2" class="w-full rounded-lg border-slate-300 text-sm dark:border-slate-700 dark:bg-slate-950">{{ introduction_preference.template }}</textarea>
             <label class="flex items-center gap-2 text-sm text-slate-700 dark:text-slate-200"><input type="checkbox" name="auto_send_chat_widget" value="true" {% if introduction_preference.auto_send_chat_widget %}checked{% endif %}> Automatically send on my first pickup of a chat-widget conversation</label>
-            <button class="min-h-10 rounded-lg bg-amber-500 px-4 text-sm font-semibold text-white">Save introduction</button>
+            <fieldset class="space-y-2 rounded-lg border border-slate-200 p-3 dark:border-slate-700">
+                <legend class="px-1 text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">New assignment notifications</legend>
+                <input type="hidden" name="assignment_notification_preferences_present" value="true">
+                <label class="flex items-center gap-2 text-sm text-slate-700 dark:text-slate-200"><input type="checkbox" name="assignment_in_app_notifications" value="true" {% if introduction_preference.assignment_in_app_notifications %}checked{% endif %}> Show in-app and mobile push notifications</label>
+                <label class="flex items-center gap-2 text-sm text-slate-700 dark:text-slate-200"><input type="checkbox" name="assignment_email_notifications" value="true" {% if introduction_preference.assignment_email_notifications %}checked{% endif %}> Send email notifications</label>
+                <p class="text-xs text-slate-500 dark:text-slate-400">You can turn either channel on or off independently. Changes apply to future assignments.</p>
+            </fieldset>
+            <button class="min-h-10 rounded-lg bg-amber-500 px-4 text-sm font-semibold text-white">Save my settings</button>
         </form>
     </section>
     {% endif %}

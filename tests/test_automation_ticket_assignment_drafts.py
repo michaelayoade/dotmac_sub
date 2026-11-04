@@ -11,6 +11,7 @@ from app.services import (
     automation_actions,
     automation_capabilities,
     automation_rules,
+    team_inbox_commands,
     ticket_sla_service_automation,
 )
 from app.services.automation_actions import runtime_registry_errors
@@ -262,6 +263,168 @@ def test_priority_action_uses_typed_ticket_owner_command(monkeypatch) -> None:
     assert outcome.outcome_code == "support_ticket_priority_set"
     assert observed["command"].priority is TicketPriority.high
     assert observed["command"].step_index == 0
+
+
+def test_inbox_label_action_uses_typed_inbox_owner_command(monkeypatch) -> None:
+    observed = {}
+
+    def capture(_db, *, command):
+        observed["command"] = command
+
+    monkeypatch.setattr(
+        team_inbox_commands,
+        "apply_conversation_label_from_automation",
+        capture,
+    )
+    conversation_id = UUID("d7fac8aa-dce2-4447-91d8-94d46ab3c976")
+    label_id = UUID("9b602c90-518f-451d-bfa4-31c7eaa6436b")
+    command = automation_actions.ExecuteAutomationActionCommand(
+        tenant_id=UUID("182a8f9e-52aa-4eb0-9912-85f830002a94"),
+        event_id=UUID("76a79707-c896-4db8-a802-6bce97cb0981"),
+        rule_id=UUID("98ce8c4d-71ca-42fa-9bb0-6a76d35c95e1"),
+        rule_version_id=UUID("53c2d409-5f53-4c74-9b8c-2af4284bd731"),
+        step_index=2,
+        target=automation_actions.AutomationTargetReference(
+            entity_type="inbox.conversation",
+            entity_id=conversation_id,
+        ),
+        inputs=(automation_actions.AutomationActionInputValue("label_id", label_id),),
+        context=SimpleNamespace(),
+    )
+
+    outcome = automation_actions.action_executor("inbox.conversation.apply_label")(
+        SimpleNamespace(), command
+    )
+
+    typed = observed["command"]
+    assert outcome.outcome_code == "inbox_conversation_label_applied"
+    assert typed.conversation_id == conversation_id
+    assert typed.label_id == label_id
+    assert typed.event_id == command.event_id
+    assert typed.rule_version_id == command.rule_version_id
+    assert typed.step_index == 2
+
+
+def test_inbox_priority_action_uses_typed_inbox_owner_command(monkeypatch) -> None:
+    observed = {}
+
+    def capture(_db, *, command):
+        observed["command"] = command
+        return SimpleNamespace(changed=True)
+
+    monkeypatch.setattr(
+        team_inbox_commands,
+        "set_conversation_priority_from_automation",
+        capture,
+    )
+    conversation_id = UUID("d7fac8aa-dce2-4447-91d8-94d46ab3c976")
+    command = automation_actions.ExecuteAutomationActionCommand(
+        tenant_id=UUID("182a8f9e-52aa-4eb0-9912-85f830002a94"),
+        event_id=UUID("76a79707-c896-4db8-a802-6bce97cb0981"),
+        rule_id=UUID("98ce8c4d-71ca-42fa-9bb0-6a76d35c95e1"),
+        rule_version_id=UUID("53c2d409-5f53-4c74-9b8c-2af4284bd731"),
+        step_index=3,
+        target=automation_actions.AutomationTargetReference(
+            entity_type="inbox.conversation",
+            entity_id=conversation_id,
+        ),
+        inputs=(automation_actions.AutomationActionInputValue("priority", 25),),
+        context=SimpleNamespace(),
+    )
+
+    outcome = automation_actions.action_executor("inbox.conversation.set_priority")(
+        SimpleNamespace(), command
+    )
+
+    typed = observed["command"]
+    assert outcome.outcome_code == "inbox_conversation_priority_set"
+    assert typed.conversation_id == conversation_id
+    assert typed.priority == 25
+    assert typed.event_id == command.event_id
+    assert typed.rule_version_id == command.rule_version_id
+    assert typed.step_index == 3
+
+
+def test_inbox_priority_action_rejects_out_of_range_value() -> None:
+    command = automation_actions.ExecuteAutomationActionCommand(
+        tenant_id=UUID("182a8f9e-52aa-4eb0-9912-85f830002a94"),
+        event_id=UUID("76a79707-c896-4db8-a802-6bce97cb0981"),
+        rule_id=UUID("98ce8c4d-71ca-42fa-9bb0-6a76d35c95e1"),
+        rule_version_id=UUID("53c2d409-5f53-4c74-9b8c-2af4284bd731"),
+        step_index=3,
+        target=automation_actions.AutomationTargetReference(
+            entity_type="inbox.conversation",
+            entity_id=UUID("d7fac8aa-dce2-4447-91d8-94d46ab3c976"),
+        ),
+        inputs=(automation_actions.AutomationActionInputValue("priority", 1000),),
+        context=SimpleNamespace(),
+    )
+
+    with pytest.raises(automation_actions.AutomationActionExecutorError):
+        automation_actions.action_executor("inbox.conversation.set_priority")(
+            SimpleNamespace(), command
+        )
+
+
+def test_inbox_status_action_uses_typed_inbox_owner_command(monkeypatch) -> None:
+    observed = {}
+
+    def capture(_db, *, command):
+        observed["command"] = command
+        return SimpleNamespace(changed=True)
+
+    monkeypatch.setattr(
+        team_inbox_commands,
+        "set_conversation_status_from_automation",
+        capture,
+    )
+    conversation_id = UUID("d7fac8aa-dce2-4447-91d8-94d46ab3c976")
+    command = automation_actions.ExecuteAutomationActionCommand(
+        tenant_id=UUID("182a8f9e-52aa-4eb0-9912-85f830002a94"),
+        event_id=UUID("76a79707-c896-4db8-a802-6bce97cb0981"),
+        rule_id=UUID("98ce8c4d-71ca-42fa-9bb0-6a76d35c95e1"),
+        rule_version_id=UUID("53c2d409-5f53-4c74-9b8c-2af4284bd731"),
+        step_index=4,
+        target=automation_actions.AutomationTargetReference(
+            entity_type="inbox.conversation",
+            entity_id=conversation_id,
+        ),
+        inputs=(automation_actions.AutomationActionInputValue("status", "pending"),),
+        context=SimpleNamespace(),
+    )
+
+    outcome = automation_actions.action_executor("inbox.conversation.set_status")(
+        SimpleNamespace(), command
+    )
+
+    typed = observed["command"]
+    assert outcome.outcome_code == "inbox_conversation_status_set"
+    assert typed.conversation_id == conversation_id
+    assert typed.status.value == "pending"
+    assert typed.event_id == command.event_id
+    assert typed.rule_version_id == command.rule_version_id
+    assert typed.step_index == 4
+
+
+def test_inbox_status_action_rejects_resolution() -> None:
+    command = automation_actions.ExecuteAutomationActionCommand(
+        tenant_id=UUID("182a8f9e-52aa-4eb0-9912-85f830002a94"),
+        event_id=UUID("76a79707-c896-4db8-a802-6bce97cb0981"),
+        rule_id=UUID("98ce8c4d-71ca-42fa-9bb0-6a76d35c95e1"),
+        rule_version_id=UUID("53c2d409-5f53-4c74-9b8c-2af4284bd731"),
+        step_index=4,
+        target=automation_actions.AutomationTargetReference(
+            entity_type="inbox.conversation",
+            entity_id=UUID("d7fac8aa-dce2-4447-91d8-94d46ab3c976"),
+        ),
+        inputs=(automation_actions.AutomationActionInputValue("status", "resolved"),),
+        context=SimpleNamespace(),
+    )
+
+    with pytest.raises(automation_actions.AutomationActionExecutorError):
+        automation_actions.action_executor("inbox.conversation.set_status")(
+            SimpleNamespace(), command
+        )
 
 
 def test_historical_sla_suspend_key_executes_canonical_pause(monkeypatch) -> None:

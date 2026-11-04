@@ -205,6 +205,25 @@ That said, `Transport` is doing two jobs — "a third party operates this" and
 "identity arrives with the message" — and `chat_widget` is where they come
 apart. Recorded as an open question in § 6, not worked around.
 
+Connector discovery reads the typed
+`team_inbox_integrator_envelope.provider_channel_catalog()` projection. That
+projection is derived directly from the same fail-closed `PROVIDER_CHANNELS`
+allowlist used at admission, so setup surfaces cannot advertise a channel the
+receive port would refuse. It is discovery only: adding a provider/channel pair
+still requires the observation, outbound delivery, credential, health,
+routing, and retention owners to be ready in the same slice. It never grants a
+runtime capability or turns a provider into a conversation writer.
+
+Inbox settings displays this same catalog beside the public widget editor, so
+operators see only provider/channel pairs admitted by the current receive
+contract. It deliberately does not claim credential or installation health;
+those remain integration-owned. The public Fiber widget presentation profile
+reuses declared `comms` settings and the canonical audited settings-form writer.
+`team_inbox_widget.fiber_widget_presentation()` is a bounded, non-secret read
+projection consumed by the exact-origin `/widget/fiber/config` adapter. Embed
+values may override presentation defaults, but cannot change routing, identity,
+rate limits, transport, or conversation ownership.
+
 **`note` is `INTERNAL`.** No provider, nothing delivered, excluded from
 `SUPPORTED_EXTERNAL_CHANNELS` and unreachable from `PROVIDER_CHANNELS`.
 `DERIVED` + `NONE` are forced by the trait validation and correct: a note thread

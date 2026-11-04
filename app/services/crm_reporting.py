@@ -84,6 +84,10 @@ class AgentPerformancePeriodPreset(StrEnum):
     TODAY = "today"
     WEEK = "week"
     MONTH = "month"
+    LAST_30_DAYS = "30d"
+    THREE_MONTHS = "3m"
+    SIX_MONTHS = "6m"
+    YEAR = "1y"
     CUSTOM = "custom"
 
 
@@ -128,6 +132,14 @@ def resolve_agent_performance_period(
             else start_date.replace(month=start_date.month + 1)
         )
         end_date = next_month - timedelta(days=1)
+    elif preset is AgentPerformancePeriodPreset.LAST_30_DAYS:
+        start_date, end_date = today - timedelta(days=29), today
+    elif preset is AgentPerformancePeriodPreset.THREE_MONTHS:
+        start_date, end_date = today - timedelta(days=89), today
+    elif preset is AgentPerformancePeriodPreset.SIX_MONTHS:
+        start_date, end_date = today - timedelta(days=179), today
+    elif preset is AgentPerformancePeriodPreset.YEAR:
+        start_date, end_date = today - timedelta(days=364), today
     else:
         if date_from is None or date_to is None:
             raise CrmReportQueryError(
@@ -205,8 +217,12 @@ class CrmAgentPerformanceRow:
     assigned: int
     resolved: int
     active_now: int
+    inbound_messages: int
+    outbound_messages: int
     average_resolution_seconds: float | None
     average_first_response_seconds: float | None
+    average_reply_seconds: float | None
+    reply_observation_count: int
     first_response_sla_seconds: int | None
     first_response_sla_rate: float | None
     first_response_sla_met_count: int
@@ -229,6 +245,10 @@ class CrmAgentPerformanceRow:
     @property
     def average_first_response_label(self) -> str:
         return _duration_label(self.average_first_response_seconds)
+
+    @property
+    def average_reply_label(self) -> str:
+        return _duration_label(self.average_reply_seconds)
 
     @property
     def first_response_sla_label(self) -> str:
@@ -1553,8 +1573,12 @@ def _agent_view_row(
         assigned=item.assigned_conversation_count,
         resolved=item.resolved_conversation_count,
         active_now=item.active_assignment_count,
+        inbound_messages=item.inbound_message_count,
+        outbound_messages=item.outbound_message_count,
         average_resolution_seconds=item.average_resolution_seconds,
         average_first_response_seconds=item.average_first_response_seconds,
+        average_reply_seconds=item.average_reply_seconds,
+        reply_observation_count=item.reply_observation_count,
         first_response_sla_seconds=item.first_response_sla_seconds,
         first_response_sla_rate=item.first_response_sla_rate,
         first_response_sla_met_count=item.first_response_sla_met_count,
@@ -1709,7 +1733,10 @@ def _agent_performance(
             str(item.assigned),
             str(item.resolved),
             str(item.active_now),
+            str(item.inbound_messages),
+            str(item.outbound_messages),
             _duration_label(item.average_first_response_seconds),
+            _duration_label(item.average_reply_seconds),
             f"{item.status.value} / {item.score_label}",
         )
         for item in agent_rows
@@ -1758,8 +1785,11 @@ def _agent_performance(
         "assigned",
         "resolved",
         "active_now",
+        "inbound_messages",
+        "outbound_messages",
         "avg_resolution",
         "avg_first_response",
+        "avg_reply",
         "first_response_sla",
         "first_response_sla_rate",
         "resolution_sla",
@@ -1774,8 +1804,11 @@ def _agent_performance(
             str(item.assigned),
             str(item.resolved),
             str(item.active_now),
+            str(item.inbound_messages),
+            str(item.outbound_messages),
             _duration_label(item.average_resolution_seconds),
             _duration_label(item.average_first_response_seconds),
+            _duration_label(item.average_reply_seconds),
             str(item.first_response_sla_seconds or "-"),
             _sla_rate_label(item.first_response_sla_rate),
             str(item.resolution_sla_seconds or "-"),
@@ -1806,8 +1839,19 @@ def _agent_performance(
                 "Active now", str(analytics.summary.active_assignment_count)
             ),
             CrmReportMetric(
+                "Incoming messages", str(analytics.summary.inbound_message_count)
+            ),
+            CrmReportMetric(
+                "Outgoing messages", str(analytics.summary.outbound_message_count)
+            ),
+            CrmReportMetric(
                 "Avg first response",
                 _duration_label(analytics.summary.average_first_response_seconds),
+            ),
+            CrmReportMetric(
+                "Avg reply / customer wait",
+                _duration_label(analytics.summary.average_reply_seconds),
+                f"{analytics.summary.reply_observation_count} observed replies",
             ),
             CrmReportMetric(
                 "SLA adherence",
@@ -1825,7 +1869,10 @@ def _agent_performance(
             "Assigned",
             "Resolved",
             "Active now",
+            "Incoming",
+            "Outgoing",
             "Avg first response",
+            "Avg reply",
             "Status / score",
         ),
         rows=rows,
