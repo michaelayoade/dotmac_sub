@@ -126,6 +126,7 @@ def test_routing_owner_contracts_signed_in_agent_presence() -> None:
         item.name: item.owner for item in service.contract.authoritative_inputs
     }
     assert input_owners["successful staff session issuance"] == "app_sessions.auth"
+    assert input_owners["authenticated visible Inbox activity"] == "app_sessions.auth"
     assert input_owners["active staff principal"] == "auth.staff_provisioning"
 
     session_staging = (ROOT / "app/services/auth_session_staging.py").read_text(
@@ -134,10 +135,35 @@ def test_routing_owner_contracts_signed_in_agent_presence() -> None:
     projection = (ROOT / "app/services/team_inbox_projection.py").read_text(
         encoding="utf-8"
     )
+    assignment = (ROOT / "app/services/team_inbox_assignment.py").read_text(
+        encoding="utf-8"
+    )
     assert "AgentSignedInPresenceCommand(" in session_staging
     assert "record_agent_signed_in_presence(" in session_staging
     assert "InboxAgentPresence(" not in session_staging
     assert "agent_availability_snapshots(" in projection
+    assert "InboxAgentPresenceSessionLease" in assignment
+
+
+def test_routing_owner_reuses_staff_assignment_notifications() -> None:
+    service = service_relationship("communications.team_inbox_routing")
+    assert service.contract is not None
+    assert "communications.staff_notifications" in service.depends_on
+    input_owners = {
+        item.name: item.owner for item in service.contract.authoritative_inputs
+    }
+    assert input_owners["typed staff assignment notification participant"] == (
+        "communications.staff_notifications"
+    )
+
+    assignment = (ROOT / "app/services/team_inbox_assignment.py").read_text(
+        encoding="utf-8"
+    )
+    notifications = (ROOT / "app/services/staff_notifications.py").read_text(
+        encoding="utf-8"
+    )
+    assert "stage_staff_assignment_notifications(" in assignment
+    assert 'team_inbox_assignment = "team_inbox.assignment"' in notifications
 
 
 def test_queue_correctness_contracts_are_explicit_and_provider_preflighted() -> None:
@@ -294,6 +320,43 @@ def test_metrics_owner_is_bounded_set_based_and_registered() -> None:
     assert "def escalation_page(" in owner
     assert "team_capacity_snapshots(" in owner
     assert "db.query(InboxMessage)" not in owner
+
+
+def test_analysis_owner_contracts_the_customer_history_brief() -> None:
+    service = service_relationship("communications.team_inbox_analysis_projection")
+    assert service.contract is not None
+    assert "permission-filtered customer conversation history brief" in service.owns
+    assert "communications.team_inbox_contact_context" in service.depends_on
+    inputs = {item.name: item.owner for item in service.contract.authoritative_inputs}
+    assert inputs["reviewed customer conversation identity cohort"] == (
+        "communications.team_inbox_contact_context"
+    )
+    assert "bounded factual customer history brief from public messages only" in {
+        projection.name for projection in service.contract.projections
+    }
+    owner = (ROOT / "app/services/team_inbox_analysis_projection.py").read_text(
+        encoding="utf-8"
+    )
+    assert "_MAX_CUSTOMER_HISTORY_CONVERSATIONS = 13" in owner
+    assert "_MAX_CUSTOMER_HISTORY_MESSAGES = 48" in owner
+    assert ".limit(limit + 1)" in owner
+    assert "InboxMessage.created_at.desc()" in owner
+    assert "func.substr(InboxMessage.body" in owner
+    assert "evidence_limit=_MAX_CUSTOMER_HISTORY_CONVERSATIONS" in owner
+    assert 'digest.update(f"total-conversations:{total_conversation_count}' in owner
+    assert 'digest.update(f"evidence-truncated:{int(evidence_is_truncated)}' in owner
+
+
+def test_widget_owner_contracts_the_settings_backed_public_projection() -> None:
+    service = service_relationship("communications.team_inbox_widget")
+    assert service.contract is not None
+    assert "bounded public widget presentation projection" in service.owns
+    inputs = {item.name: item.owner for item in service.contract.authoritative_inputs}
+    assert inputs["declared widget presentation settings"] == "control.settings_spec"
+
+    owner = (ROOT / "app/services/team_inbox_widget.py").read_text(encoding="utf-8")
+    assert "def fiber_widget_presentation(" in owner
+    assert "settings_spec.resolve_values_atomic(" in owner
 
 
 def test_operator_unread_projection_is_set_based_and_indexed() -> None:

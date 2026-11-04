@@ -605,11 +605,18 @@ implementation.
   exists. The Inbox Manager Dashboard links authorized settings operators to
   that exact control, which explains that 10 is the default rather than the
   maximum and provides an adjacent **Save Inbox capacity** action.
-- While the authenticated Inbox workspace is visible, it supplies a
-  best-effort agent-presence heartbeat at five-minute intervals and immediately
-  when visibility resumes. The routing owner may use this only to refresh
-  selected online state; explicit away, on-break, and offline choices remain
-  authoritative.
+- The Inbox exposes Online, Away (the Busy-equivalent), On break, and Offline.
+  Only Online can receive automatic assignments. A successful sign-in or
+  heartbeat never erases an explicit unavailable selection.
+- While the authenticated Inbox workspace is visible, its WebSocket ping is the
+  primary agent-presence heartbeat and a permission-checked HTTP command is the
+  fallback. Both use the server-derived authentication session. With automatic
+  offline enabled, a fresh lease from any active session keeps the agent online;
+  closing or revoking one session cannot override another fresh session. With
+  automatic offline disabled, selected Online remains online until changed.
+- Realtime presence messages are invalidation hints only. They contain no
+  session token or customer data and cause staff surfaces to refetch the
+  routing owner's canonical projection.
 - Queue heartbeats are off by default. If enabled in AI intake policy they are
   clearly identified as reassurance, use different copy from a position
   update, and never repeat the current position.

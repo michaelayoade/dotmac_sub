@@ -56,6 +56,7 @@ from app.models.team_inbox import (
 from app.services import team_inbox_commands, team_inbox_projection, team_inbox_read
 from app.services.owner_commands import CommandContext
 from tests.staff_identity_fixtures import add_bound_staff_user
+from tests.team_inbox_presence_fixtures import add_active_presence_lease
 
 ROUTES_SOURCE = Path("app/web/admin/inbox.py").read_text()
 DRAWER = Path("templates/admin/inbox/_contact_drawer.html").read_text()
@@ -584,6 +585,7 @@ def test_an_assignment_records_who_assigned_it(db_session, actor):
             last_seen_at=datetime.now(UTC),
         )
     )
+    add_active_presence_lease(db_session, system_user_id=agent.id)
     team_id = team.id
     agent_id = agent.id
     db_session.commit()

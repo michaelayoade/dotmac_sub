@@ -12,6 +12,7 @@ from app.celery_app import celery_app
 from app.services import (
     ai_conversation_intake,
     team_inbox_assignment,
+    team_inbox_contact_links,
     team_inbox_maintenance,
     team_inbox_queue_notifications,
 )
@@ -19,6 +20,52 @@ from app.services.db_session_adapter import db_session_adapter
 from app.services.owner_commands import CommandContext
 
 logger = logging.getLogger(__name__)
+
+
+@celery_app.task(name="app.tasks.team_inbox.repair_contact_link_history")
+def repair_contact_link_history(
+    *,
+    contact_link_id: str,
+    source_conversation_id: str,
+    after_created_at: str,
+    after_conversation_id: str,
+    limit: int = 200,
+) -> dict[str, int | bool]:
+    """Repair historical contact links in bounded, resumable batches."""
+
+    cursor_time = datetime.fromisoformat(after_created_at)
+    with db_session_adapter.owner_command_session() as session:
+        result = team_inbox_contact_links.repair_contact_link_history_batch(
+            session,
+            team_inbox_contact_links.RepairContactLinkHistoryCommand(
+                context=CommandContext.system(
+                    actor="task:team-inbox-contact-history-repair",
+                    scope="team-inbox:contact-link",
+                    reason="repair linked Customer history in bounded batches",
+                ),
+                contact_link_id=UUID(contact_link_id),
+                source_conversation_id=UUID(source_conversation_id),
+                after_created_at=cursor_time,
+                after_conversation_id=UUID(after_conversation_id),
+                limit=limit,
+            ),
+        )
+    if result.has_more and result.next_created_at and result.next_conversation_id:
+        repair_contact_link_history.apply_async(
+            kwargs={
+                "contact_link_id": contact_link_id,
+                "source_conversation_id": source_conversation_id,
+                "after_created_at": result.next_created_at.isoformat(),
+                "after_conversation_id": str(result.next_conversation_id),
+                "limit": limit,
+            },
+            retry=False,
+        )
+    return {
+        "scanned": result.scanned,
+        "repaired": len(result.repaired_conversation_ids),
+        "has_more": result.has_more,
+    }
 
 
 @celery_app.task(name="app.tasks.team_inbox.expire_whatsapp_service_windows")

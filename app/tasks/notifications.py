@@ -1417,7 +1417,23 @@ def _deliver_notification_queue_stats(
                         metadata["provider_message_id"] = provider_reply_id
                         message.metadata_ = metadata
             elif notification.channel == NotificationChannel.push:
-                if notification.subscriber_id is None:
+                if notification.audience_type == "system_user":
+                    if (
+                        notification.audience_id is None
+                        or notification.recipient != str(notification.audience_id)
+                    ):
+                        success = False
+                        notification.last_error = "push_invalid_staff_identity"
+                    else:
+                        success = push_service.send_push_to_system_user(
+                            db=db,
+                            system_user_id=str(notification.audience_id),
+                            title=subject,
+                            body=body,
+                            intent=push_service.intent_for_notification(notification),
+                            notification_id=str(notification.id),
+                        )
+                elif notification.subscriber_id is None:
                     success = False
                     notification.last_error = "push_missing_subscriber"
                 else:

@@ -88,6 +88,50 @@ def test_publish_degrades_when_the_broker_call_fails(monkeypatch) -> None:
     assert realtime_platform.publish_event(event) is False
 
 
+def test_presence_projection_publishes_after_commit_to_staff_only(monkeypatch) -> None:
+    from datetime import UTC, datetime
+
+    from app.services import team_inbox_realtime
+
+    callbacks = []
+    published: list[dict] = []
+    monkeypatch.setattr(
+        team_inbox_realtime,
+        "run_after_commit",
+        lambda _db, callback: callbacks.append(callback),
+    )
+    monkeypatch.setattr(
+        team_inbox_realtime,
+        "publish_topic_event",
+        lambda topic, **kwargs: published.append({"topic": topic, **kwargs}),
+    )
+    observed_at = datetime(2026, 11, 3, 12, 30, tzinfo=UTC)
+
+    team_inbox_realtime.publish_agent_presence_changed(
+        object(),
+        person_id="person-1",
+        effective_status="online",
+        selected_status="online",
+        auto_offline=False,
+        observed_at=observed_at,
+        reason="authenticated_inbox_activity",
+    )
+
+    assert published == []
+    callbacks[0](object())
+    assert published[0]["topic"] == realtime_platform.STAFF_AUDIENCE_TOPIC
+    assert published[0]["event_type"] is EventType.AGENT_PRESENCE_CHANGED
+    assert published[0]["refresh_required"] is True
+    assert published[0]["payload"] == {
+        "person_id": "person-1",
+        "effective_status": "online",
+        "selected_status": "online",
+        "auto_offline": False,
+        "observed_at": "2026-11-03T12:30:00+00:00",
+        "reason": "authenticated_inbox_activity",
+    }
+
+
 def test_manager_scopes_topics_to_one_socket_per_principal() -> None:
     async def exercise() -> None:
         manager = ConnectionManager()

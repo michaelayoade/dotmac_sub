@@ -53,6 +53,17 @@ resolution-disputed events. These choices are declared by the owning SOT and
 their bounded event producers; operators cannot add arbitrary event names from
 the UI.
 
+Inbox workflows may use the owner-produced conversation status-change event.
+They may apply an existing Inbox label, set the numeric Inbox priority through
+the canonical workflow command, set status to Open or Pending through the
+canonical lifecycle command, or use the existing shared notification action.
+The Inbox status and workflow owners remain the only writers of conversation
+state. Automated resolution and snoozing remain unavailable because they need
+the existing customer-completion, resolution-reason, reply-window, and wake-time
+safeguards rather than a generic status mutation. Additional Inbox actions are
+unavailable until their canonical command owners expose the same
+event/rule/version/step provenance and idempotency contract.
+
 ## Rule shape
 
 Rules remain bounded by the closed capability registry:

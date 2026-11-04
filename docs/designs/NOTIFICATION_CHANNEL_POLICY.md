@@ -94,6 +94,15 @@ source-linked personal `AdminNotification` projection. Ticket and project
 owners must use the typed assignment request and supply an exact internal detail
 target; `/admin` is not an actionable assignment target.
 
+Team Inbox assignment delivery also reads the agent's canonical per-Inbox
+preference. In-app/mobile-push and email are independently selectable, default
+on when no preference exists, and affect future assignments only. The staged
+push row carries the closed `chat.message` intent with only the conversation
+identifier; the shared notification worker delivers its generic, content-free
+FCM envelope to the agent's registered devices. This personal choice is owned
+with the existing per-agent Inbox preference record; it does not change the
+customer channel policy or create a parallel notification queue.
+
 `communications.staff_notification_read_state` owns the user-scoped menu,
 unread count, and atomic mark-read transition. The bell loads that personal
 projection when an admin page opens and refreshes it every 30 seconds. Global

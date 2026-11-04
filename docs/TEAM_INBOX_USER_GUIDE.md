@@ -53,12 +53,18 @@ dragged and is remembered by the browser.
 Set your Inbox presence to the correct state:
 
 - **Online:** Eligible for automatic assignment.
-- **Away:** Temporarily unavailable.
+- **Away:** Busy or temporarily unavailable; existing work remains accessible.
 - **On break:** Not available for new automatic assignments.
 - **Offline:** Not working the Inbox queue.
 
 Presence affects routing. Keep it accurate so new conversations are not sent to
 an unavailable agent.
+
+**Automatically mark me offline** is enabled by default. While enabled, Dotmac
+keeps you Online only while at least one active browser or device session is
+showing recent Inbox activity. Another active device keeps you Online if one tab
+closes. Disable the option only when you intentionally want your selected Online
+state to remain active without recent Inbox activity.
 
 ### 2. Start with work requiring attention
 

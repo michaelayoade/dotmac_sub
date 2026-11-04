@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass, replace
+from dataclasses import dataclass
 
 from fastapi import APIRouter, Depends, Query, Request
 from fastapi.responses import HTMLResponse
@@ -10,8 +10,12 @@ from sqlalchemy.orm import Session
 
 from app.db import get_db
 from app.services import admin_workflow_guidance
-from app.services.admin_workflow_guidance import AdminHelpAction
-from app.services.auth_dependencies import can, load_permission_keys
+from app.services.admin_workflow_guidance import (
+    AdminHelpAction,
+    AdminKnowledgeDocument,
+    AdminKnowledgeProjectionQuery,
+)
+from app.services.auth_dependencies import load_permission_keys
 from app.web.auth.dependencies import WebAuthInfo, require_admin_web_auth
 from app.web.templates import templates
 
@@ -75,20 +79,31 @@ def _group_articles(
     return categories
 
 
-# The workflow-guidance registry is the authoritative Help Center content.
-# ``HelpArticle`` is the typed presentation shape consumed by the existing UI.
-ARTICLES = tuple(
-    HelpArticle(
-        id=guide.id,
-        category=guide.category,
-        title=guide.title,
-        summary=guide.purpose,
-        actions=admin_workflow_guidance.help_actions_for(guide),
-        audience=guide.audience,
-        notes=guide.notes,
+def _article_from_knowledge(document: AdminKnowledgeDocument) -> HelpArticle:
+    """Adapt one already permission-filtered knowledge document for the UI."""
+
+    return HelpArticle(
+        id=document.id,
+        category=document.category,
+        title=document.title,
+        summary=document.purpose,
+        actions=tuple(
+            AdminHelpAction(id=action.id, title=action.title, steps=action.steps)
+            for action in document.actions
+        ),
+        audience=document.audience,
+        notes=document.notes,
     )
-    for guide in admin_workflow_guidance.all_guidance()
-)
+
+
+# The workflow-guidance registry is the authoritative Help Center content. The
+# route consumes its permission-filtered knowledge projection rather than
+# rebuilding section, guide, and action authorization in this adapter.
+def _visible_articles(permission_keys: frozenset[str]) -> list[HelpArticle]:
+    projection = admin_workflow_guidance.build_knowledge_projection(
+        AdminKnowledgeProjectionQuery(permission_keys=permission_keys)
+    )
+    return [_article_from_knowledge(document) for document in projection.documents]
 
 
 @router.get(
@@ -110,42 +125,14 @@ def help_center(
     # still needs the same cached permissions as the contextual help control to
     # decide which registered guides and actions may be shown.
     request_auth = getattr(request.state, "auth", None)
-    if isinstance(request_auth, dict):
+    permission_keys = (
         load_permission_keys(request_auth, db)
+        if isinstance(request_auth, dict)
+        else frozenset()
+    )
     query = q.strip().casefold()
     selected = category.strip()
-    visible_sections = tuple(
-        section
-        for section in admin_workflow_guidance.help_navigation()
-        if (
-            (not section.permission and not section.any_permissions)
-            or (section.permission and can(request, section.permission))
-            or any(can(request, permission) for permission in section.any_permissions)
-        )
-    )
-    visible_guide_ids = {
-        guide_id
-        for section in visible_sections
-        for guide_id in section.guide_ids
-        if not (
-            required := admin_workflow_guidance.HELP_GUIDE_VIEW_PERMISSIONS.get(
-                guide_id, ()
-            )
-        )
-        or any(can(request, permission) for permission in required)
-    }
-    permission_filtered_articles = [
-        replace(
-            item,
-            actions=tuple(
-                action
-                for action in item.actions
-                if not action.permission or can(request, action.permission)
-            ),
-        )
-        for item in ARTICLES
-        if item.id in visible_guide_ids
-    ]
+    permission_filtered_articles = _visible_articles(permission_keys)
     visible_categories = tuple(
         category_name
         for category_name in admin_workflow_guidance.guidance_categories()
