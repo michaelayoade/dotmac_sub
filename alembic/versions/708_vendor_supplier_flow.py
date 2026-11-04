@@ -10,6 +10,7 @@ import uuid
 from datetime import UTC, datetime
 
 import sqlalchemy as sa
+from sqlalchemy.dialects import postgresql
 
 from alembic import op
 
@@ -20,27 +21,53 @@ depends_on = None
 
 
 def upgrade() -> None:
+    if op.get_bind().dialect.name == "sqlite":
+        return
+
     ownership = sa.table(
         "sync_flow_ownership",
-        sa.column("id", sa.Uuid()),
+        sa.column("id", postgresql.UUID(as_uuid=True)),
         sa.column("flow", sa.String()),
         sa.column("owner", sa.String()),
         sa.column("updated_at", sa.DateTime(timezone=True)),
         sa.column("updated_by", sa.String()),
     )
-    op.bulk_insert(
-        ownership,
-        [
-            {
-                "id": uuid.uuid4(),
-                "flow": "vendor_supplier",
+    now = datetime.now(UTC)
+    statement = postgresql.insert(ownership).values(
+        id=uuid.uuid4(),
+        flow="vendor_supplier",
+        owner="sub",
+        updated_at=now,
+        updated_by="migration:708_vendor_supplier_flow",
+    )
+    op.execute(
+        statement.on_conflict_do_update(
+            index_elements=[ownership.c.flow],
+            set_={
                 "owner": "sub",
-                "updated_at": datetime.now(UTC),
+                "updated_at": now,
                 "updated_by": "migration:708_vendor_supplier_flow",
-            }
-        ],
+            },
+        )
     )
 
 
 def downgrade() -> None:
-    op.execute("DELETE FROM sync_flow_ownership WHERE flow = 'vendor_supplier'")
+    if op.get_bind().dialect.name == "sqlite":
+        return
+    ownership = sa.table(
+        "sync_flow_ownership",
+        sa.column("flow", sa.String()),
+        sa.column("owner", sa.String()),
+        sa.column("updated_at", sa.DateTime(timezone=True)),
+        sa.column("updated_by", sa.String()),
+    )
+    op.execute(
+        ownership.update()
+        .where(ownership.c.flow == "vendor_supplier")
+        .values(
+            owner="crm",
+            updated_at=datetime.now(UTC),
+            updated_by="migration:708_vendor_supplier_flow:downgrade",
+        )
+    )

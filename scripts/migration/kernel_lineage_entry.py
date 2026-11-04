@@ -446,7 +446,7 @@ def observe_fixture_plan(connection: Connection) -> KernelEntryFixturePlan:
             text("SELECT version_num FROM public.alembic_version ORDER BY version_num")
         )
     )
-    if "707_inbox_contact_sensitive_permissions" not in heads:
+    if "708_vendor_supplier_flow" not in heads:
         raise KernelEntryRefused("Fixture lacks the reviewed actual Sub source head")
     return KernelEntryFixturePlan(
         FixtureCatalog(

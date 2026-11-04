@@ -2265,8 +2265,9 @@ _ACTION_SPECS: dict[str, tuple[_ActionSpec, ...]] = {
         _action(
             "manage-vendor", "Create or edit a vendor", 2, permission="inventory:write"
         ),
+        _action("check-supplier-setup", "Check ERP supplier setup", 3),
         _action(
-            "deactivate-vendor", "Deactivate a vendor", 3, permission="inventory:write"
+            "deactivate-vendor", "Deactivate a vendor", 4, permission="inventory:write"
         ),
     ),
     "vendor-reviews": (
