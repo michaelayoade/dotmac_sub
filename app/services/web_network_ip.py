@@ -11,6 +11,7 @@ import re
 from collections import defaultdict
 from uuid import UUID
 
+from fastapi import HTTPException
 from pydantic import ValidationError
 from sqlalchemy import delete as sa_delete
 from sqlalchemy import or_, select
@@ -1481,9 +1482,20 @@ def assign_ipv4_for_import(
         address_record.pool_id = pool.id
         db.flush()
 
+    from app.validators import network as network_validators
+
+    # Refuse a subscription the subscriber does not own (HTTPException from the
+    # shared validator is surfaced as a row-level import error).
+    try:
+        network_validators.validate_ip_assignment_links(
+            db, normalized_subscriber_id, None, str(subscription_id)
+        )
+    except HTTPException as exc:
+        raise ValueError(str(exc.detail)) from exc
+
     assignment = IPAssignment(
         subscriber_id=coerce_uuid(normalized_subscriber_id),
-        subscription_id=coerce_uuid(str(subscription_id)) if subscription_id else None,
+        subscription_id=coerce_uuid(str(subscription_id)),
         ip_version=IPVersion.ipv4,
         ipv4_address_id=address_record.id,
         is_active=True,

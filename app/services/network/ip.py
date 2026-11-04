@@ -271,6 +271,18 @@ class IPAssignments(CRUDManager[IPAssignment]):
                 )
             )
         data = payload.model_dump(exclude_unset=True)
+        # An explicit null must not strip the service link from an IPv4 row.
+        # Existing unbound rows stay patchable (they have no link to clear).
+        if (
+            "subscription_id" in data
+            and data["subscription_id"] is None
+            and assignment.subscription_id is not None
+            and data.get("ip_version", assignment.ip_version) == IPVersion.ipv4
+        ):
+            raise HTTPException(
+                status_code=400,
+                detail=("An IPv4 assignment cannot have its subscription_id cleared."),
+            )
         IPAssignments._resolve_owner(db, data)
         resolved_subscriber_id = data.get("subscriber_id", assignment.subscriber_id)
         resolved_subscription_id = data.get(

@@ -12,7 +12,7 @@ from app.models.catalog import (
 )
 from app.models.network import IPAssignment, IpPool, IPv4Address, IPVersion
 from app.models.subscriber import Subscriber
-from app.schemas.network import IPAssignmentCreate
+from app.schemas.network import IPAssignmentCreate, IPAssignmentUpdate
 from app.services import network as network_service
 from app.services import web_network_ip as ip_service
 
@@ -155,6 +155,14 @@ def test_subscriber_level_assignment_does_not_guess_with_multiple_active_service
         )
     )
     db_session.flush()
+    row = db_session.query(IPAssignment).filter_by(ipv4_address_id=address.id).one()
+
+    # Run the sync path (update -> _sync_subscription_ipv4) on the legacy row.
+    network_service.ip_assignments.update(
+        db_session,
+        str(row.id),
+        IPAssignmentUpdate(is_active=True),
+    )
 
     db_session.refresh(first)
     db_session.refresh(second)

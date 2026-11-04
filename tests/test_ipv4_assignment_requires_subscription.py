@@ -484,3 +484,74 @@ def test_form_template_marks_subscription_required():
     assert "Search subscription (optional)" not in html
     assert "device record" in html
     assert 'name="subscription_id" data-typeahead-hidden' in html
+
+
+# --- PATCH cannot strip the link; import validates ownership --------------------
+
+
+def test_update_explicit_null_subscription_is_refused_for_bound_ipv4(db_session):
+    pool = _pool(db_session, "198.51.100.0/24")
+    address = _address(db_session, pool, "198.51.100.60")
+    subscriber = _subscriber(db_session)
+    subscription = _subscription(db_session, subscriber)
+    assignment = network_service.ip_assignments.create(
+        db_session,
+        IPAssignmentCreate(
+            subscription_id=subscription.id,
+            ip_version=IPVersion.ipv4,
+            ipv4_address_id=address.id,
+        ),
+    )
+
+    with pytest.raises(HTTPException) as exc:
+        network_service.ip_assignments.update(
+            db=db_session,
+            assignment_id=str(assignment.id),
+            payload=IPAssignmentUpdate.model_validate({"subscription_id": None}),
+        )
+
+    assert exc.value.status_code == 400
+    db_session.refresh(assignment)
+    assert assignment.subscription_id == subscription.id
+
+
+def test_existing_unbound_row_stays_patchable(db_session):
+    pool = _pool(db_session, "198.51.100.0/24")
+    address = _address(db_session, pool, "198.51.100.61")
+    subscriber = _subscriber(db_session)
+    row = IPAssignment(
+        subscriber_id=subscriber.id,
+        ip_version=IPVersion.ipv4,
+        ipv4_address_id=address.id,
+        is_active=True,
+    )
+    db_session.add(row)
+    db_session.flush()
+
+    updated = network_service.ip_assignments.update(
+        db=db_session,
+        assignment_id=str(row.id),
+        payload=IPAssignmentUpdate.model_validate(
+            {"subscription_id": None, "gateway": "198.51.100.1"}
+        ),
+    )
+
+    assert updated.subscription_id is None
+    assert updated.gateway == "198.51.100.1"
+
+
+def test_import_assign_refuses_subscription_owned_by_another_subscriber(db_session):
+    pool = _pool(db_session, "198.51.100.0/24")
+    importer_target = _subscriber(db_session)
+    other = _subscriber(db_session)
+    foreign_sub = _subscription(db_session, other)
+
+    with pytest.raises(ValueError):
+        ip_service.assign_ipv4_for_import(
+            db_session,
+            pool_id=str(pool.id),
+            ip_address="198.51.100.62",
+            subscriber_id=str(importer_target.id),
+            subscription_id=str(foreign_sub.id),
+        )
+    assert db_session.query(IPAssignment).count() == 0
