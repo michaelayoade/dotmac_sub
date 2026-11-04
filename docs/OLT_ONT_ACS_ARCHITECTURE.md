@@ -486,3 +486,16 @@ app/services/olt_profile_adapter.py
 app/services/genieacs_service_intent.py
 app/services/network/provisioning_coordinator.py
 ```
+
+
+### Huawei SSH session prompt ownership
+
+`olt_ssh_session.OltSession` owns CLI navigation and exact prompt state. Session
+initialization uses `olt_ssh._prepare_huawei_read_shell` and the model-approved
+paging policy. Enable, config, GPON interface entry, and exits update mode only
+after the expected host-and-mode prompt is observed. `require_mode=CONFIG`
+includes the interface subtree for generated command batches; `ENABLE` unwinds
+interface and global config modes. A timeout, connection error, or failed
+navigation makes the session unusable: later calls transmit no further commands.
+Batched management and compensation stop on navigation failure. Ordinary device
+rejections at a verified prompt retain the existing per-step failure policy.

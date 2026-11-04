@@ -396,6 +396,29 @@ kind = "custom"
 ping_command = ["python", "-m", "app.syslog.health", "--timeout-seconds", "2"]
 
 [[roles]]
+code = "outbox-relay"
+command = ["python", "-m", "app.outbox_relay"]
+# docker-compose.yml gates this service behind the `outbox-relay` profile and
+# the operator starts it by name (OPS-4), so no host runs it until then. Zero
+# replicas keeps it out of drift comparison until it is first deployed; set to 1
+# in the change that records the first deployment.
+replicas = 0
+stop_grace_seconds = 30
+# The EXECUTE-only outbox_dispatcher credential (never DATABASE_URL), plus the
+# optional RLS tenant credential required once the first handler is registered.
+materials = ["OUTBOX_RELAY_DATABASE_URL", "OUTBOX_RELAY_TENANT_DATABASE_URL"]
+
+[roles.resources]
+cpus = "0.25"
+memory = "256m"
+pids = 64
+
+[roles.worker]
+kind = "custom"
+# Heartbeat file written by every dispatch-loop iteration, idle or not.
+ping_command = ["python", "-m", "app.outbox_relay.health", "--max-age-seconds", "60"]
+
+[[roles]]
 code = "team-inbox-smtp"
 command = ["python", "-m", "app.team_inbox_smtp", "serve"]
 # docker-compose.yml gates this service behind the `smtp-inbound` profile, and
