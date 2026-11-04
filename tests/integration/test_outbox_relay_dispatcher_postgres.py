@@ -99,51 +99,45 @@ def test_park_deliver_and_dead_letter_against_the_real_functions(
     assert _status(connection, DEAD) == ("dead", 2, "RuntimeError")
 
 
-SECOND_TENANT = "33333333-3333-4333-8333-333333333333"
+OTHER_TENANT_SCOPE = "33333333-3333-4333-8333-333333333333"
 
 
-def test_backlog_read_sees_every_tenant_under_the_runtime_role(
+def test_backlog_read_sees_operator_rows_under_the_runtime_role(
     connection: Connection,
 ) -> None:
-    """Runs as ``app_user`` (RLS applies), not the owner: an unscoped read would
-    see one tenant or none. Two tenants carry rows; the backlog must count both."""
+    """Runs as ``app_user`` (RLS applies, no SELECT on ``public.tenants``).
+
+    The transaction scope is first set to a foreign tenant, so a read that did
+    not install the operator scope itself would see zero rows."""
     from app.services.outbox_backlog import read_outbox_backlog
 
-    connection.execute(
-        sa.text(
-            "INSERT INTO public.tenants (id, slug, name, is_active) "
-            "VALUES (:id, 'backlog-canary', 'Backlog canary', true) "
-            "ON CONFLICT (id) DO NOTHING"
-        ),
-        {"id": SECOND_TENANT},
-    )
     connection.execute(
         sa.text(
             "INSERT INTO public.outbox_events "
             "(id, tenant_id, event_type, payload, status, created_at) VALUES "
             "(:a, :t1, 'canary.a', '{}', 'pending', now() - interval '1 hour'), "
-            "(:b, :t2, 'canary.b', '{}', 'pending', now() - interval '2 hours'), "
-            "(:c, :t2, 'canary.c', '{}', 'dead', now())"
+            "(:b, :t1, 'canary.b', '{}', 'pending', now() - interval '2 hours'), "
+            "(:c, :t1, 'canary.c', '{}', 'dead', now())"
         ),
         {
             "a": "61111111-1111-4111-8111-111111111111",
             "b": "62222222-2222-4222-8222-222222222222",
             "c": "63333333-3333-4333-8333-333333333333",
             "t1": TENANT,
-            "t2": SECOND_TENANT,
         },
     )
     connection.execute(sa.text("SET LOCAL ROLE app_user"))
     connection.execute(
-        sa.text("SELECT set_config('app.current_tenant', :t, true)"), {"t": TENANT}
+        sa.text("SELECT set_config('app.current_tenant', :t, true)"),
+        {"t": OTHER_TENANT_SCOPE},
     )
-    # Premise: the runtime role is genuinely scoped (sees only its own tenant).
+    # Premise: the runtime role is genuinely scoped (a foreign scope sees none).
     visible = connection.execute(
         sa.text(
             "SELECT count(*) FROM public.outbox_events WHERE event_type LIKE 'canary.%'"
         )
     ).scalar()
-    assert visible == 1
+    assert visible == 0
 
     db = Session(bind=connection, join_transaction_mode="create_savepoint")
     backlog = read_outbox_backlog(db)

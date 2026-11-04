@@ -13,6 +13,8 @@ from dataclasses import dataclass
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 
+from app.services.operator_tenant import OPERATOR_TENANT_ID
+
 
 @dataclass(frozen=True, slots=True)
 class OutboxBacklog:
@@ -35,34 +37,25 @@ _BACKLOG = text(
 )
 
 
-_TENANTS = text("SELECT id FROM public.tenants")
 _SCOPE = text("SELECT set_config('app.current_tenant', :tenant, true)")
 
 
 def read_outbox_backlog(db: Session) -> OutboxBacklog:
-    """Sum the backlog across every tenant.
+    """Count the operator tenant's backlog under the runtime role.
 
-    ``outbox_events`` is FORCE-RLS, so the runtime role sees only the row set of
-    the ``app.current_tenant`` in force. A single unscoped read would therefore
-    report the operator tenant only, or zero. The tenant context is set per
-    tenant (transaction-local, discarded by the caller's rollback) and the
-    counts are summed. No grant or function is added.
+    ``outbox_events`` is FORCE-RLS, so the runtime role sees only the rows of
+    the ``app.current_tenant`` in force. Sub is a single-operator deployment
+    (ADR-0009) and the runtime role cannot read ``public.tenants``, so the
+    operator tenant is installed explicitly (transaction-local, discarded by
+    the caller's rollback) rather than enumerated. No grant or function is
+    added. A second tenant is a defect under ADR-0009 and is not counted.
     """
-    pending = claimed = dead = 0
-    oldest = 0.0
-    tenant_ids = list(db.execute(_TENANTS).scalars())
-    scopes: list[str | None] = [str(t) for t in tenant_ids] or [None]
-    for tenant in scopes:
-        if tenant is not None:
-            db.execute(_SCOPE, {"tenant": tenant})
-        row = db.execute(_BACKLOG).one()
-        pending += int(row.pending)
-        claimed += int(row.claimed)
-        dead += int(row.dead)
-        oldest = max(oldest, float(row.oldest_age))
+    if db.get_bind().dialect.name == "postgresql":
+        db.execute(_SCOPE, {"tenant": str(OPERATOR_TENANT_ID)})
+    row = db.execute(_BACKLOG).one()
     return OutboxBacklog(
-        pending=pending,
-        claimed=claimed,
-        dead=dead,
-        oldest_pending_age_seconds=max(0.0, oldest),
+        pending=int(row.pending),
+        claimed=int(row.claimed),
+        dead=int(row.dead),
+        oldest_pending_age_seconds=max(0.0, float(row.oldest_age)),
     )
