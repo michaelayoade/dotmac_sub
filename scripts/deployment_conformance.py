@@ -37,6 +37,7 @@ CLASSIFICATIONS: Final[dict[str, tuple[str, str]]] = {
         "celery-worker-notifications-immediate",
     ),
     "celery-worker-tr069": ("role", "celery-worker-tr069"),
+    "outbox-relay": ("role", "outbox-relay"),
     "syslog-listener": ("role", "syslog-listener"),
     "team-inbox-smtp": ("role", "team-inbox-smtp"),
     "postgres-local": ("managed_dependency", "postgres-local"),
