@@ -146,7 +146,9 @@ create a second intent.
 
 Program enablement, reward amount/currency, qualification window, and
 auto-approval resolve only through `control.settings_spec`. Referral links use
-the customer portal origin resolved from `selfcare_domain` or `APP_URL`.
+the configured `APP_URL`, falling back to `selfcare_domain` when it is absent.
+An unconfigured URL omits the share link, while a malformed URL fails closed
+instead of producing a localhost or path-prefixed share link.
 Their defaults and bounds are declared only in the settings registry;
 `referrals.program`, API/web adapters, and documentation do not repeat runtime
 fallbacks. The code alphabet/length, field-size limits, exact lifecycle

@@ -18,6 +18,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal, InvalidOperation
 from typing import Literal, TypeVar
+from urllib.parse import urlsplit
 from uuid import UUID
 
 from sqlalchemy import select
@@ -48,7 +49,7 @@ from app.services.customer_identity_normalization import (
 )
 from app.services.customer_identity_resolution import resolve_customer_identity
 from app.services.domain_errors import DomainError
-from app.services.email import _get_app_url
+from app.services.email import customer_portal_origin
 from app.services.events import emit_event
 from app.services.events.types import EventType
 from app.services.owner_commands import (
@@ -346,9 +347,30 @@ def _program_policy(db: Session) -> _ProgramPolicy:
 
 
 def _share_base_url(db: Session) -> str:
-    # The public signup page is served by this app. Use the same configured
-    # customer portal origin as other customer-facing links.
-    return _get_app_url(db, next_login_path="/portal")
+    # APP_URL follows the deployed app origin even if an older selfcare_domain
+    # row was left behind after a domain change.
+    value = customer_portal_origin(db)
+    if not value:
+        logger.warning("referral_share_origin_missing")
+        return ""
+    try:
+        parsed = urlsplit(value)
+        invalid = (
+            parsed.scheme not in {"http", "https"}
+            or not parsed.hostname
+            or parsed.username is not None
+            or parsed.password is not None
+            or parsed.path not in {"", "/"}
+            or parsed.query
+            or parsed.fragment
+        )
+        _ = parsed.port  # Reject malformed ports before publishing the link.
+    except ValueError:
+        invalid = True
+    if invalid:
+        logger.warning("referral_share_origin_invalid")
+        return ""
+    return value.rstrip("/")
 
 
 def _normalize_capture(command: CaptureReferralCommand) -> _CaptureValues:
@@ -1534,9 +1556,10 @@ class Referrals:
                     ),
                 }
             )
+        base_url = _share_base_url(db)
         return {
             "code": code.code,
-            "share_url": f"{_share_base_url(db)}/r/{code.code}",
+            "share_url": f"{base_url}/r/{code.code}" if base_url else "",
             "program": {
                 "enabled": policy.enabled,
                 "reward_amount": str(policy.amount),

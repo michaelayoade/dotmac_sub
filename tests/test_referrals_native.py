@@ -745,7 +745,8 @@ def test_handler_ignores_unrelated_events_and_missing_subscriber(db_session):
 # ── read-shape compatibility ────────────────────────────────────────────
 
 
-def test_read_for_subscriber_matches_mirror_shape(db_session):
+def test_read_for_subscriber_matches_mirror_shape(db_session, monkeypatch):
+    monkeypatch.setenv("APP_URL", "https://selfcare.example.test")
     from app.schemas.portal import MyReferralsResponse
 
     referral, referrer = _qualified_referral(db_session)
@@ -799,12 +800,92 @@ def test_share_url_uses_the_customer_portal_origin(db_session, monkeypatch):
     configured_base = "https://selfcare.example.test"
     monkeypatch.setenv("APP_URL", configured_base)
     _program(db_session)
+    db_session.add(
+        DomainSetting(
+            domain=SettingDomain.auth,
+            key="selfcare_domain",
+            value_type=SettingValueType.string,
+            value_text="old-selfcare.example.test",
+            is_active=True,
+        )
+    )
+    db_session.commit()
     referrer = _subscriber(db_session)
     ensure_code(db_session, referrer.id)
 
     payload = referrals.read_for_subscriber(db_session, str(referrer.id))
 
     assert payload["share_url"] == f"{configured_base}/r/{payload['code']}"
+
+
+def test_share_url_is_not_generated_without_an_explicit_portal_origin(
+    db_session, monkeypatch
+):
+    monkeypatch.delenv("APP_URL", raising=False)
+    _program(db_session)
+    referrer = _subscriber(db_session)
+    ensure_code(db_session, referrer.id)
+
+    payload = referrals.read_for_subscriber(db_session, str(referrer.id))
+    assert payload["share_url"] == ""
+
+
+def test_share_url_uses_configured_selfcare_domain_when_app_url_is_unset(
+    db_session, monkeypatch
+):
+    monkeypatch.delenv("APP_URL", raising=False)
+    _program(db_session)
+    db_session.add(
+        DomainSetting(
+            domain=SettingDomain.auth,
+            key="selfcare_domain",
+            value_type=SettingValueType.string,
+            value_text="portal.example.test",
+            is_active=True,
+        )
+    )
+    db_session.commit()
+    referrer = _subscriber(db_session)
+    ensure_code(db_session, referrer.id)
+
+    payload = referrals.read_for_subscriber(db_session, str(referrer.id))
+    assert payload["share_url"] == f"https://portal.example.test/r/{payload['code']}"
+
+
+@pytest.mark.parametrize(
+    "invalid_url",
+    ["https://portal.example.test/customer", "https://portal.example.test:bad"],
+)
+def test_invalid_portal_origin_does_not_break_referral_page(
+    db_session, monkeypatch, invalid_url
+):
+    monkeypatch.setenv("APP_URL", invalid_url)
+    _program(db_session)
+    referrer = _subscriber(db_session)
+    ensure_code(db_session, referrer.id)
+
+    payload = referrals.read_for_subscriber(db_session, str(referrer.id))
+    assert payload["share_url"] == ""
+
+
+def test_admin_domain_is_not_used_for_customer_referral_links(db_session, monkeypatch):
+    monkeypatch.delenv("APP_URL", raising=False)
+    _program(db_session)
+    db_session.add(
+        DomainSetting(
+            domain=SettingDomain.auth,
+            key="admin_domain",
+            value_type=SettingValueType.string,
+            value_text="admin.example.test",
+            is_active=True,
+        )
+    )
+    db_session.commit()
+    referrer = _subscriber(db_session)
+    ensure_code(db_session, referrer.id)
+
+    payload = referrals.read_for_subscriber(db_session, str(referrer.id))
+    assert payload["share_url"] == ""
 
 
 def test_refer_a_friend_portal_shape(db_session):
