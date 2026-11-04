@@ -16,7 +16,12 @@ from sqlalchemy import delete as sa_delete
 from sqlalchemy import or_, select
 from sqlalchemy.orm import joinedload
 
-from app.models.catalog import NasDevice, NasPoolBinding, Subscription
+from app.models.catalog import (
+    NasDevice,
+    NasPoolBinding,
+    Subscription,
+    SubscriptionStatus,
+)
 from app.models.network import (
     IPAssignment,
     IpPool,
@@ -1381,6 +1386,49 @@ def build_ipv4_assignment_form_data(
     }
 
 
+IPV4_SUBSCRIPTION_REQUIRED_MESSAGE = (
+    "A subscription is required for an IPv4 assignment. Device and management "
+    "IPs belong on the device record, not here."
+)
+
+# Statuses that count as "the customer's service" when pre-selecting the single
+# subscription of a subscriber in the assignment form.
+_PRESELECT_SUBSCRIPTION_STATUSES = (
+    SubscriptionStatus.active,
+    SubscriptionStatus.blocked,
+)
+
+
+def default_subscription_for_subscriber(
+    db, subscriber_id: str | None
+) -> dict[str, str] | None:
+    """Return the subscriber's only active/blocked subscription, else None.
+
+    Read-only UI default: the form shows it as a visible pre-selection the
+    operator submits. Nothing is bound server-side from this.
+    """
+    normalized = str(subscriber_id or "").strip()
+    if not normalized:
+        return None
+    try:
+        subscriber_uuid = UUID(normalized)
+    except ValueError:
+        return None
+    rows = (
+        db.query(Subscription)
+        .filter(Subscription.subscriber_id == subscriber_uuid)
+        .filter(Subscription.status.in_(_PRESELECT_SUBSCRIPTION_STATUSES))
+        .limit(2)
+        .all()
+    )
+    if len(rows) != 1:
+        return None
+    return {
+        "id": str(rows[0].id),
+        "label": _subscription_display_name(rows[0]) or str(rows[0].id),
+    }
+
+
 def assign_ipv4_for_import(
     db,
     *,
@@ -1398,6 +1446,8 @@ def assign_ipv4_for_import(
     normalized_subscriber_id = str(subscriber_id or "").strip()
     if not normalized_subscriber_id:
         raise ValueError("subscriber_id is required.")
+    if not str(subscription_id or "").strip():
+        raise ValueError(IPV4_SUBSCRIPTION_REQUIRED_MESSAGE)
     state = build_ipv4_assignment_form_data(
         db, pool_id=str(pool_id), ip_address=str(ip_address)
     )
@@ -1470,6 +1520,8 @@ def assign_ipv4_address(
     if not normalized_subscriber_id:
         raise ValueError("Subscriber is required.")
     normalized_subscription_id = str(subscription_id or "").strip() or None
+    if normalized_subscription_id is None:
+        raise ValueError(IPV4_SUBSCRIPTION_REQUIRED_MESSAGE)
 
     pool = state["pool"]
     address_record = state["address_record"]
@@ -1542,9 +1594,7 @@ def assign_ipv4_address(
 
     assignment_payload = {
         "account_id": UUID(normalized_subscriber_id),
-        "subscription_id": UUID(normalized_subscription_id)
-        if normalized_subscription_id
-        else None,
+        "subscription_id": UUID(normalized_subscription_id),
         "ip_version": IPVersion.ipv4,
         "ipv4_address_id": address_record.id,
         "is_active": True,

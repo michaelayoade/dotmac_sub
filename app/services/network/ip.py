@@ -176,6 +176,21 @@ class IPAssignments(CRUDManager[IPAssignment]):
     ) -> IPAssignment:
         data = payload.model_dump()
         IPAssignments._resolve_owner(db, data)
+        # An IPv4 holding with no subscription is an UNBOUND row: nothing owns
+        # the address for service, billing or RADIUS purposes. Device and
+        # management IPs live on the device record (IPv4Address.ont_unit_id /
+        # NetworkDevice), not in ip_assignments, so no caller needs this.
+        if (
+            data.get("ip_version") == IPVersion.ipv4
+            and data.get("subscription_id") is None
+        ):
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    "An IPv4 assignment requires subscription_id. Device and "
+                    "management IPs belong on the device record."
+                ),
+            )
         if data.get("subscriber_id") is not None:
             network_validators.validate_ip_assignment_links(
                 db,

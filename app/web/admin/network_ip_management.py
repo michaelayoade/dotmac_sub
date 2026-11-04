@@ -574,6 +574,7 @@ def ipv4_assignment_form(
     ip: str,
     block_id: str | None = None,
     return_to: str | None = None,
+    subscriber_id: str | None = None,
     db: Session = Depends(get_db),
 ):
     state = web_network_ip_service.build_ipv4_assignment_form_data(
@@ -592,6 +593,15 @@ def ipv4_assignment_form(
     context = _base_context(
         request, db, active_page="ipv4-networks", active_menu="ip-address"
     )
+    # Visible default only: the form shows it and the operator submits it.
+    chosen_subscriber_id = subscriber_id or state.get("subscriber_id")
+    default_subscription = (
+        None
+        if state.get("subscription_id")
+        else web_network_ip_service.default_subscription_for_subscriber(
+            db, str(chosen_subscriber_id or "")
+        )
+    )
     context.update(
         {
             **state,
@@ -602,6 +612,11 @@ def ipv4_assignment_form(
             "error": None,
         }
     )
+    if subscriber_id and not state.get("subscriber_id"):
+        context["subscriber_id"] = subscriber_id
+    if default_subscription:
+        context["subscription_id"] = default_subscription["id"]
+        context["subscription_label"] = default_subscription["label"]
     return templates.TemplateResponse(
         "admin/network/ip-management/ipv4_assignment_form.html", context
     )
