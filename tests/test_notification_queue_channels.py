@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
+from uuid import uuid4
 
 from sqlalchemy.exc import OperationalError
 
@@ -371,6 +372,83 @@ def test_push_delivery_fails_closed_without_subscriber_identity(
     assert stats["retried"] == 1
     assert push.status == NotificationStatus.failed
     assert push.last_error == "push_missing_subscriber"
+
+
+def test_deliver_notification_queue_sends_typed_staff_push(db_session, monkeypatch):
+    system_user_id = uuid4()
+    conversation_id = uuid4()
+    push = _queued_notification(
+        channel=NotificationChannel.push,
+        recipient=str(system_user_id),
+        body="Content stays in Sub",
+    )
+    push.audience_type = "system_user"
+    push.audience_id = system_user_id
+    push.metadata_ = {
+        "push_intent": {
+            "intent_code": "chat.message",
+            "subject_kind": "conversation",
+            "subject_id": str(conversation_id),
+            "collapse_key": f"inbox-assignment:{conversation_id}",
+        }
+    }
+    db_session.add(push)
+    db_session.commit()
+    calls = []
+    monkeypatch.setattr(
+        "app.tasks.notifications.communication_eligibility.may_send",
+        lambda *_args, **_kwargs: True,
+    )
+    monkeypatch.setattr(
+        "app.tasks.notifications.push_service.send_push_to_system_user",
+        lambda **kwargs: calls.append(kwargs) or True,
+    )
+
+    stats = _deliver_notification_queue_stats(
+        db_session,
+        batch_size=1,
+        notification_id=push.id,
+    )
+
+    db_session.refresh(push)
+    assert stats["delivered"] == 1
+    assert push.status is NotificationStatus.delivered
+    assert calls[0]["system_user_id"] == str(system_user_id)
+    assert calls[0]["intent"].intent_code == "chat.message"
+    assert calls[0]["intent"].subject_id == str(conversation_id)
+
+
+def test_staff_push_fails_closed_on_recipient_identity_mismatch(
+    db_session, monkeypatch
+):
+    push = _queued_notification(
+        channel=NotificationChannel.push,
+        recipient=str(uuid4()),
+        body="Content stays in Sub",
+    )
+    push.audience_type = "system_user"
+    push.audience_id = uuid4()
+    db_session.add(push)
+    db_session.commit()
+    monkeypatch.setattr(
+        "app.tasks.notifications.communication_eligibility.may_send",
+        lambda *_args, **_kwargs: True,
+    )
+    monkeypatch.setattr(
+        "app.tasks.notifications.push_service.send_push_to_system_user",
+        lambda **_kwargs: (_ for _ in ()).throw(AssertionError("transport called")),
+    )
+
+    stats = _deliver_notification_queue_stats(
+        db_session,
+        batch_size=1,
+        notification_id=push.id,
+    )
+
+    db_session.refresh(push)
+    assert stats["retried"] == 1
+    assert push.status is NotificationStatus.failed
+    assert push.last_error == "push_invalid_staff_identity"
 
 
 def test_deliver_notification_queue_expires_stale_notifications(

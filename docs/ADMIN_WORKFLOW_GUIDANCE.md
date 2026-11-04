@@ -15,6 +15,15 @@ Help-only sidebar guides and contextual page guides are deliberately separate:
 adding a sidebar destination to the Help Center does not add a question-mark
 control to that destination.
 
+Future AI retrieval must call the typed knowledge projection with permission
+keys loaded for the authenticated staff principal. That projection reuses this
+registry, removes unauthorized guides and action steps, and publishes a source
+watermark. It is not a separate knowledge base and contains no customer data.
+The typed lexical retrieval query ranks only this filtered view, uses bounded
+terms and results, and persists nothing. The Help Center now consumes the same
+permission-filtered projection instead of duplicating its section, guide, and
+action checks in the route.
+
 When an Admin route or workflow changes, update its linked guidance contract in
 the same pull request. `scripts/architecture/workflow_guidance_gate.py` is run
 by the required **Workflow Guidance Gate** CI job and fails a PR that changes

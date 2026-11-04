@@ -6,11 +6,16 @@ from uuid import uuid4
 
 import pytest
 
+from app.models.admin_alert import AdminNotification
+from app.models.auth import Session as AuthSession
+from app.models.auth import SessionStatus
 from app.models.domain_settings import SettingDomain
+from app.models.notification import Notification, NotificationChannel
 from app.models.service_team import ServiceTeam, ServiceTeamMember, ServiceTeamType
 from app.models.team_inbox import (
     InboxAgentPresence,
     InboxAgentPresenceEvent,
+    InboxAgentPresenceSessionLease,
     InboxAgentPresenceStatus,
     InboxConversation,
     InboxConversationAssignment,
@@ -22,6 +27,7 @@ from app.models.team_inbox import (
 )
 from app.services import (
     settings_spec,
+    team_inbox_agent_introduction,
     team_inbox_assignment,
     team_inbox_commands,
     web_system_settings_forms,
@@ -57,8 +63,33 @@ def _member(
             max_concurrent_conversations=max_concurrent,
         )
     )
+    if status == InboxAgentPresenceStatus.online.value:
+        auth_session = _staff_session(db_session, user)
+        db_session.add(
+            InboxAgentPresenceSessionLease(
+                person_id=user.id,
+                auth_session_id=auth_session.id,
+                last_seen_at=datetime.now(UTC),
+            )
+        )
     db_session.flush()
     return person_id
+
+
+def _staff_session(db_session, system_user, *, now: datetime | None = None):
+    observed_at = now or datetime.now(UTC)
+    session = AuthSession(
+        system_user_id=system_user.id,
+        party_id=system_user.person_party_id,
+        status=SessionStatus.active,
+        token_hash=f"presence-test:{uuid4()}",
+        created_at=observed_at,
+        last_seen_at=observed_at,
+        expires_at=observed_at + timedelta(days=1),
+    )
+    db_session.add(session)
+    db_session.flush()
+    return session
 
 
 def _conversation(db_session) -> InboxConversation:
@@ -155,6 +186,117 @@ def test_assign_conversation_escalates_to_team_and_online_agent(db_session):
     assert event.presence_status == InboxAgentPresenceStatus.online.value
     assert event.active_conversation_count == 0
     assert event.max_concurrent_conversations == 10
+
+
+def test_new_assignment_stages_one_personal_notice_and_replay_is_quiet(db_session):
+    team = _team(db_session, "Notified Support")
+    agent = _member(db_session, team)
+    conversation = _conversation(db_session)
+    db_session.commit()
+
+    first = team_inbox_assignment.assign_conversation_to_agent(
+        db_session,
+        conversation=conversation,
+        service_team_id=team.id,
+        person_id=agent,
+    )
+    replay = team_inbox_assignment.assign_conversation_to_agent(
+        db_session,
+        conversation=conversation,
+        service_team_id=team.id,
+        person_id=agent,
+    )
+
+    assert first.kind == "assigned"
+    assert replay.reason == "already_assigned"
+    notifications = db_session.query(Notification).all()
+    assert len(notifications) == 2
+    assert {row.channel for row in notifications} == {
+        NotificationChannel.push,
+        NotificationChannel.email,
+    }
+    assert {row.event_type for row in notifications} == {"team_inbox.assignment"}
+    assert all(
+        (row.metadata_ or {}).get("source_entity_id") == str(conversation.id)
+        for row in notifications
+    )
+    personal_notice = db_session.query(AdminNotification).one()
+    assert personal_notice.system_user_id == agent
+    assert personal_notice.target_url == (
+        f"/admin/inbox?conversation_id={conversation.id}"
+    )
+
+
+def test_self_assignment_does_not_notify_the_assigning_agent(db_session):
+    team = _team(db_session, "Self-assigned Support")
+    agent = _member(db_session, team)
+    conversation = _conversation(db_session)
+    db_session.commit()
+
+    result = team_inbox_assignment.assign_conversation_to_agent(
+        db_session,
+        conversation=conversation,
+        service_team_id=team.id,
+        person_id=agent,
+        assigned_by_person_id=agent,
+    )
+
+    assert result.kind == "assigned"
+    assert db_session.query(Notification).count() == 0
+    assert db_session.query(AdminNotification).count() == 0
+
+
+def test_agent_can_choose_assignment_notification_channels(db_session):
+    team = _team(db_session, "Preference Support")
+    agent = _member(db_session, team)
+    conversation = _conversation(db_session)
+    team_inbox_agent_introduction.update_preference(
+        db_session,
+        person_id=agent,
+        template=team_inbox_agent_introduction.DEFAULT_TEMPLATE,
+        auto_send_chat_widget=True,
+        assignment_in_app_notifications=False,
+        assignment_email_notifications=True,
+    )
+    db_session.commit()
+
+    result = team_inbox_assignment.assign_conversation_to_agent(
+        db_session,
+        conversation=conversation,
+        service_team_id=team.id,
+        person_id=agent,
+    )
+
+    assert result.kind == "assigned"
+    assert db_session.query(AdminNotification).count() == 0
+    notifications = db_session.query(Notification).all()
+    assert [row.channel for row in notifications] == [NotificationChannel.email]
+
+
+def test_agent_can_opt_out_of_all_assignment_notifications(db_session):
+    team = _team(db_session, "Quiet Support")
+    agent = _member(db_session, team)
+    conversation = _conversation(db_session)
+    team_inbox_agent_introduction.update_preference(
+        db_session,
+        person_id=agent,
+        template=team_inbox_agent_introduction.DEFAULT_TEMPLATE,
+        auto_send_chat_widget=True,
+        assignment_in_app_notifications=False,
+        assignment_email_notifications=False,
+    )
+    db_session.commit()
+
+    result = team_inbox_assignment.assign_conversation_to_agent(
+        db_session,
+        conversation=conversation,
+        service_team_id=team.id,
+        person_id=agent,
+    )
+
+    assert result.kind == "assigned"
+    assert db_session.query(Notification).count() == 0
+    assert db_session.query(AdminNotification).count() == 0
 
 
 def test_auto_assignment_uses_durable_round_robin_cursor(db_session):
@@ -478,7 +620,11 @@ def test_stale_online_presence_is_not_available_for_auto_assignment(db_session):
         .filter(InboxAgentPresence.person_id == agent)
         .one()
     )
-    presence.last_seen_at = datetime.now(UTC) - timedelta(seconds=30 * 60 + 1)
+    stale_at = datetime.now(UTC) - timedelta(seconds=91)
+    presence.last_seen_at = stale_at
+    db_session.query(InboxAgentPresenceSessionLease).filter(
+        InboxAgentPresenceSessionLease.person_id == agent
+    ).one().last_seen_at = stale_at
     conversation = _conversation(db_session)
     db_session.commit()
 
@@ -503,13 +649,13 @@ def test_effective_online_presence_stays_online_until_freshness_expires(db_sessi
 
     assert (
         team_inbox_assignment.effective_presence_status(
-            presence, now=observed_at + timedelta(minutes=30)
+            presence, now=observed_at + timedelta(seconds=90)
         )
         == InboxAgentPresenceStatus.online.value
     )
     assert (
         team_inbox_assignment.effective_presence_status(
-            presence, now=observed_at + timedelta(minutes=30, seconds=1)
+            presence, now=observed_at + timedelta(seconds=91)
         )
         == InboxAgentPresenceStatus.offline.value
     )
@@ -546,7 +692,7 @@ def test_set_agent_presence_records_effective_transition_when_online_is_stale(
         person_id=person_id,
         status=InboxAgentPresenceStatus.online.value,
         manual_override_status=InboxAgentPresenceStatus.online.value,
-        last_seen_at=observed_at - timedelta(minutes=31),
+        last_seen_at=observed_at - timedelta(seconds=91),
     )
     db_session.add(presence)
     db_session.flush()
@@ -604,6 +750,7 @@ def test_reply_activity_refreshes_only_manually_online_presence(db_session):
 def _presence_heartbeat_command(
     system_user_id,
     *,
+    auth_session_id,
     observed_at: datetime,
 ) -> team_inbox_assignment.AgentPresenceHeartbeatCommand:
     return team_inbox_assignment.AgentPresenceHeartbeatCommand(
@@ -613,6 +760,7 @@ def _presence_heartbeat_command(
             reason="test authenticated visible Inbox activity",
         ),
         system_user_id=system_user_id,
+        auth_session_id=auth_session_id,
         observed_at=observed_at,
     )
 
@@ -621,12 +769,15 @@ def test_presence_heartbeat_creates_online_presence_for_active_staff(db_session)
     system_user, _person = add_bound_staff_user(db_session)
     system_user_id = system_user.id
     observed_at = datetime(2026, 9, 10, 12, 0, tzinfo=UTC)
+    auth_session = _staff_session(db_session, system_user, now=observed_at)
+    auth_session_id = auth_session.id
     db_session.commit()
 
     outcome = team_inbox_assignment.refresh_agent_presence(
         db_session,
         command=_presence_heartbeat_command(
             system_user_id,
+            auth_session_id=auth_session_id,
             observed_at=observed_at,
         ),
     )
@@ -652,6 +803,8 @@ def test_presence_heartbeat_revives_stale_selected_online_presence(db_session):
     system_user, _person = add_bound_staff_user(db_session)
     system_user_id = system_user.id
     observed_at = datetime(2026, 9, 10, 12, 0, tzinfo=UTC)
+    auth_session = _staff_session(db_session, system_user, now=observed_at)
+    auth_session_id = auth_session.id
     presence = InboxAgentPresence(
         person_id=system_user_id,
         status=InboxAgentPresenceStatus.online.value,
@@ -665,6 +818,7 @@ def test_presence_heartbeat_revives_stale_selected_online_presence(db_session):
         db_session,
         command=_presence_heartbeat_command(
             system_user_id,
+            auth_session_id=auth_session_id,
             observed_at=observed_at,
         ),
     )
@@ -694,6 +848,8 @@ def test_presence_heartbeat_preserves_explicit_unavailable_state(
     system_user_id = system_user.id
     original_seen_at = datetime(2026, 9, 10, 11, 0, tzinfo=UTC)
     observed_at = datetime(2026, 9, 10, 12, 0, tzinfo=UTC)
+    auth_session = _staff_session(db_session, system_user, now=observed_at)
+    auth_session_id = auth_session.id
     presence = InboxAgentPresence(
         person_id=system_user_id,
         status=selected_status.value,
@@ -707,6 +863,7 @@ def test_presence_heartbeat_preserves_explicit_unavailable_state(
         db_session,
         command=_presence_heartbeat_command(
             system_user_id,
+            auth_session_id=auth_session_id,
             observed_at=observed_at,
         ),
     )
@@ -724,14 +881,17 @@ def test_presence_heartbeat_preserves_explicit_unavailable_state(
 def test_presence_heartbeat_rejects_inactive_staff_without_writing(db_session):
     system_user, _person = add_bound_staff_user(db_session)
     system_user_id = system_user.id
-    system_user.is_active = False
     observed_at = datetime(2026, 9, 10, 12, 0, tzinfo=UTC)
+    auth_session = _staff_session(db_session, system_user, now=observed_at)
+    auth_session_id = auth_session.id
+    system_user.is_active = False
     db_session.commit()
 
     outcome = team_inbox_assignment.refresh_agent_presence(
         db_session,
         command=_presence_heartbeat_command(
             system_user_id,
+            auth_session_id=auth_session_id,
             observed_at=observed_at,
         ),
     )
@@ -743,6 +903,149 @@ def test_presence_heartbeat_rejects_inactive_staff_without_writing(db_session):
     )
     assert db_session.query(InboxAgentPresence).count() == 0
     assert db_session.query(InboxAgentPresenceEvent).count() == 0
+
+
+def test_presence_heartbeat_rejects_wrong_or_revoked_staff_session(db_session):
+    system_user, _person = add_bound_staff_user(db_session)
+    other_user, _other_person = add_bound_staff_user(db_session)
+    observed_at = datetime(2026, 9, 10, 12, 0, tzinfo=UTC)
+    wrong_session = _staff_session(db_session, other_user, now=observed_at)
+    revoked_session = _staff_session(db_session, system_user, now=observed_at)
+    revoked_session.status = SessionStatus.revoked
+    revoked_session.revoked_at = observed_at
+    system_user_id = system_user.id
+    session_ids = (wrong_session.id, revoked_session.id)
+    db_session.commit()
+
+    for auth_session_id in session_ids:
+        outcome = team_inbox_assignment.refresh_agent_presence(
+            db_session,
+            command=_presence_heartbeat_command(
+                system_user_id,
+                auth_session_id=auth_session_id,
+                observed_at=observed_at,
+            ),
+        )
+        assert (
+            outcome.disposition
+            is team_inbox_assignment.AgentPresenceHeartbeatDisposition.invalid_session
+        )
+
+    assert db_session.query(InboxAgentPresenceSessionLease).count() == 0
+    assert db_session.query(InboxAgentPresence).count() == 0
+
+
+def test_auto_offline_requires_a_fresh_active_session_lease(db_session):
+    system_user, _person = add_bound_staff_user(db_session)
+    observed_at = datetime(2026, 9, 10, 12, 0, tzinfo=UTC)
+    auth_session = _staff_session(db_session, system_user, now=observed_at)
+    db_session.add(
+        InboxAgentPresence(
+            person_id=system_user.id,
+            status=InboxAgentPresenceStatus.online.value,
+            last_seen_at=observed_at,
+            auto_offline=True,
+        )
+    )
+    db_session.add(
+        InboxAgentPresenceSessionLease(
+            person_id=system_user.id,
+            auth_session_id=auth_session.id,
+            last_seen_at=observed_at,
+        )
+    )
+    db_session.commit()
+
+    fresh = team_inbox_assignment.agent_availability_snapshots(
+        db_session,
+        (system_user.id,),
+        now=observed_at + timedelta(seconds=90),
+    )
+    stale = team_inbox_assignment.agent_availability_snapshots(
+        db_session,
+        (system_user.id,),
+        now=observed_at + timedelta(seconds=91),
+    )
+
+    assert fresh[system_user.id].presence_status is InboxAgentPresenceStatus.online
+    assert fresh[system_user.id].assignment_eligible is True
+    assert stale[system_user.id].presence_status is InboxAgentPresenceStatus.offline
+    assert stale[system_user.id].assignment_eligible is False
+
+
+@pytest.mark.parametrize("terminal_state", ["revoked", "expired"])
+def test_disabling_auto_offline_still_requires_a_live_bound_session(
+    db_session, terminal_state
+):
+    system_user, _person = add_bound_staff_user(db_session)
+    observed_at = datetime(2026, 9, 10, 12, 0, tzinfo=UTC)
+    auth_session = _staff_session(db_session, system_user, now=observed_at)
+    system_user_id = system_user.id
+    auth_session_id = auth_session.id
+    db_session.add(
+        InboxAgentPresence(
+            person_id=system_user_id,
+            status=InboxAgentPresenceStatus.online.value,
+            last_seen_at=observed_at - timedelta(minutes=5),
+            auto_offline=True,
+        )
+    )
+    db_session.add(
+        InboxAgentPresenceSessionLease(
+            person_id=system_user_id,
+            auth_session_id=auth_session_id,
+            last_seen_at=observed_at - timedelta(minutes=5),
+        )
+    )
+    db_session.commit()
+
+    outcome = team_inbox_commands.set_agent_presence_preference(
+        db_session,
+        command=team_inbox_assignment.AgentPresencePreferenceCommand(
+            context=CommandContext.system(
+                actor=f"system-user:{system_user_id}",
+                scope="test:team-inbox-presence-preference",
+                reason="test explicit auto-offline preference",
+            ),
+            system_user_id=system_user_id,
+            auto_offline=False,
+            observed_at=observed_at,
+        ),
+    )
+
+    presence = db_session.query(InboxAgentPresence).one()
+    event = db_session.query(InboxAgentPresenceEvent).one()
+    assert outcome.auto_offline is False
+    assert outcome.previous_status is InboxAgentPresenceStatus.offline
+    assert outcome.status is InboxAgentPresenceStatus.online
+    assert presence.auto_offline is False
+    assert (
+        event.reason_code == team_inbox_assignment.InboxPresenceReason.preference_change
+    )
+    available = team_inbox_assignment.agent_availability_snapshots(
+        db_session,
+        (system_user_id,),
+        now=observed_at,
+    )
+    assert available[system_user_id].presence_status is InboxAgentPresenceStatus.online
+    assert available[system_user_id].assignment_eligible is True
+
+    if terminal_state == "revoked":
+        auth_session.status = SessionStatus.revoked
+        auth_session.revoked_at = observed_at
+    else:
+        auth_session.expires_at = observed_at
+    db_session.commit()
+
+    unavailable = team_inbox_assignment.agent_availability_snapshots(
+        db_session,
+        (system_user_id,),
+        now=observed_at + timedelta(seconds=1),
+    )
+    assert (
+        unavailable[system_user_id].presence_status is InboxAgentPresenceStatus.offline
+    )
+    assert unavailable[system_user_id].assignment_eligible is False
 
 
 def test_set_agent_presence_creates_manual_override(db_session):
@@ -761,10 +1064,10 @@ def test_set_agent_presence_creates_manual_override(db_session):
     assert presence.last_seen_at is not None
 
 
-def test_staff_sign_in_defaults_presence_online_and_clears_prior_override(db_session):
+def test_staff_sign_in_preserves_explicit_unavailable_override(db_session):
     system_user, _person = add_bound_staff_user(db_session)
     signed_in_at = datetime(2026, 8, 30, 12, 0, tzinfo=UTC)
-    auth_session_id = uuid4()
+    auth_session = _staff_session(db_session, system_user, now=signed_in_at)
     db_session.add(
         InboxAgentPresence(
             person_id=system_user.id,
@@ -779,23 +1082,24 @@ def test_staff_sign_in_defaults_presence_online_and_clears_prior_override(db_ses
         db_session,
         command=team_inbox_assignment.AgentSignedInPresenceCommand(
             system_user_id=system_user.id,
-            auth_session_id=auth_session_id,
+            auth_session_id=auth_session.id,
             signed_in_at=signed_in_at,
         ),
     )
 
     presence = db_session.query(InboxAgentPresence).one()
-    event = db_session.query(InboxAgentPresenceEvent).one()
-    assert outcome.status is InboxAgentPresenceStatus.online
-    assert outcome.transition_recorded is True
-    assert presence.status == InboxAgentPresenceStatus.online.value
-    assert presence.manual_override_status is None
-    assert presence.last_seen_at == signed_in_at
-    assert event.previous_status == InboxAgentPresenceStatus.away.value
-    assert event.status == InboxAgentPresenceStatus.online.value
-    assert event.reason_code == team_inbox_assignment.InboxPresenceReason.staff_sign_in
-    assert event.source_id == f"auth-session:{auth_session_id}"
-    assert (presence.metadata_ or {}).get("manual_status_history") is None
+    lease = db_session.query(InboxAgentPresenceSessionLease).one()
+    assert outcome.status is InboxAgentPresenceStatus.away
+    assert outcome.transition_recorded is False
+    assert presence.status == InboxAgentPresenceStatus.away.value
+    assert presence.manual_override_status == InboxAgentPresenceStatus.away.value
+    assert presence.last_seen_at is not None
+    assert presence.last_seen_at.replace(tzinfo=UTC) == signed_in_at - timedelta(
+        minutes=5
+    )
+    assert lease.auth_session_id == auth_session.id
+    assert lease.last_seen_at.replace(tzinfo=UTC) == signed_in_at
+    assert db_session.query(InboxAgentPresenceEvent).count() == 0
 
 
 def test_staff_sign_in_locks_only_team_inbox_presence():
@@ -811,6 +1115,7 @@ def test_staff_sign_in_locks_only_team_inbox_presence():
 def test_staff_sign_in_refreshes_online_presence_without_false_transition(db_session):
     system_user, _person = add_bound_staff_user(db_session)
     signed_in_at = datetime(2026, 8, 30, 12, 0, tzinfo=UTC)
+    auth_session = _staff_session(db_session, system_user, now=signed_in_at)
     db_session.add(
         InboxAgentPresence(
             person_id=system_user.id,
@@ -825,7 +1130,7 @@ def test_staff_sign_in_refreshes_online_presence_without_false_transition(db_ses
         db_session,
         command=team_inbox_assignment.AgentSignedInPresenceCommand(
             system_user_id=system_user.id,
-            auth_session_id=uuid4(),
+            auth_session_id=auth_session.id,
             signed_in_at=signed_in_at,
         ),
     )
@@ -834,5 +1139,6 @@ def test_staff_sign_in_refreshes_online_presence_without_false_transition(db_ses
     assert outcome.transition_recorded is False
     assert presence.status == InboxAgentPresenceStatus.online.value
     assert presence.manual_override_status is None
-    assert presence.last_seen_at == signed_in_at
+    assert presence.last_seen_at is not None
+    assert presence.last_seen_at.replace(tzinfo=UTC) == signed_in_at
     assert db_session.query(InboxAgentPresenceEvent).count() == 0

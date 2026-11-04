@@ -91,6 +91,14 @@ REDRIVE = FailureVisibility.ADMIN_REDRIVE
 
 
 TASK_RELIABILITY_CONTRACTS: dict[str, TaskReliabilityContract] = {
+    "app.tasks.team_inbox.repair_contact_link_history": _c(
+        "team_inbox",
+        NONE,
+        IDEMP,
+        LOG,
+        "A bounded cursor batch updates only still-matching historical conversations; "
+        "replay converges, and a committed batch schedules the next cursor explicitly.",
+    ),
     "app.tasks.inbox_sla.evaluate_inbox_sla": _c(
         "support",
         SWEEP,

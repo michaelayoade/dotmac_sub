@@ -73,9 +73,8 @@
         <label class="flex h-11 w-4 shrink-0 items-center justify-center {% if row.ai_owned %}cursor-not-allowed opacity-40{% else %}cursor-pointer{% endif %}" @click.stop>
             <span class="sr-only">Select conversation with {{ contact_name }}</span>
             <input type="checkbox"
-                   name="conversation_ids"
+                   data-inbox-conversation-select
                    value="{{ row.id }}"
-                   form="inbox-bulk-form"
                    {% if row.ai_owned %}disabled title="Take over the conversation before using bulk actions"{% endif %}
                    @change="toggleSelection('{{ row.id }}', $event.target.checked)"
                    class="h-4 w-4 rounded border-slate-300 text-amber-600 focus:ring-amber-500">
@@ -98,7 +97,7 @@
         </button>
 
         <a href="{{ conversation_url }}"
-           hx-get="/admin/inbox/{{ row.id }}?view=20260910b"
+           hx-get="/admin/inbox/{{ row.id }}?view=20261103a"
            hx-target="#triage-detail"
            hx-swap="innerHTML"
            hx-push-url="{{ conversation_url }}"

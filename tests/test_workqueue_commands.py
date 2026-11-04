@@ -27,6 +27,7 @@ from app.services.workqueue.commands import (
 )
 from app.services.workqueue.types import ActionKind, ItemKind
 from tests.staff_identity_fixtures import add_bound_staff_user
+from tests.team_inbox_presence_fixtures import add_active_presence_lease
 
 
 def _principal(system_user_id: UUID) -> WorkqueuePrincipal:
@@ -68,6 +69,7 @@ def _team_member(db, system_user_id: UUID, *, name: str = "Support") -> ServiceT
             last_seen_at=datetime.now(UTC),
         )
     )
+    add_active_presence_lease(db, system_user_id=system_user_id)
     db.flush()
     return team
 

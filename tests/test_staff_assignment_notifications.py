@@ -7,7 +7,11 @@ import pytest
 from pydantic import ValidationError
 
 from app.models.admin_alert import AdminNotification
-from app.models.notification import Notification, NotificationChannel
+from app.models.notification import (
+    Notification,
+    NotificationChannel,
+    NotificationStatus,
+)
 from app.models.service_team import ServiceTeam, ServiceTeamMember
 from app.schemas.project import ProjectCreate
 from app.schemas.support import TicketCreate
@@ -111,6 +115,36 @@ def test_assignment_notification_rejects_dashboard_fallback(db_session) -> None:
                 target_url="/admin",
             ),
         )
+
+
+def test_team_inbox_assignment_stages_mobile_ready_push_intent(db_session) -> None:
+    user, _person = add_bound_staff_user(
+        db_session, email=f"inbox-assigned-{uuid4()}@example.com"
+    )
+    conversation_id = uuid4()
+    command = StageStaffAssignmentNotifications(
+        system_user_ids=(user.id,),
+        source_event_id=uuid4(),
+        source_entity_id=conversation_id,
+        event_type=StaffAssignmentEventType.team_inbox_assignment,
+        subject="Inbox conversation assigned to you",
+        body="A Team Inbox conversation is ready for your attention.",
+        target_url=f"/admin/inbox?conversation_id={conversation_id}",
+    )
+
+    outcome = stage_staff_assignment_notifications(db_session, command)
+
+    push = db_session.get(Notification, outcome.push_notification_ids[0])
+    assert push is not None
+    assert push.status is NotificationStatus.queued
+    assert push.audience_type == "system_user"
+    assert push.audience_id == user.id
+    assert push.metadata_["push_intent"] == {
+        "intent_code": "chat.message",
+        "subject_kind": "conversation",
+        "subject_id": str(conversation_id),
+        "collapse_key": f"inbox-assignment:{conversation_id}",
+    }
 
 
 @pytest.mark.parametrize(

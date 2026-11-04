@@ -5,9 +5,13 @@ from app.services.admin_workflow_guidance import (
     HELP_NAVIGATION,
     HELP_ONLY_GUIDANCE,
     WORKFLOW_GUIDANCE,
+    AdminKnowledgeProjectionQuery,
+    AdminKnowledgeRetrievalQuery,
+    build_knowledge_projection,
     guidance_categories,
     guidance_for_path,
     help_actions_for,
+    retrieve_knowledge,
     search_guidance,
 )
 from scripts.architecture.workflow_guidance_gate import validation_errors
@@ -76,6 +80,108 @@ def test_getting_started_is_the_first_help_category() -> None:
     categories = guidance_categories()
 
     assert categories[:2] == ("Getting started", "Administration")
+
+
+def test_ai_knowledge_projection_is_permission_filtered_and_deterministic() -> None:
+    customer_read = build_knowledge_projection(
+        AdminKnowledgeProjectionQuery(
+            permission_keys=frozenset({"customer:read"}),
+        )
+    )
+    repeated = build_knowledge_projection(
+        AdminKnowledgeProjectionQuery(
+            permission_keys=frozenset({"customer:read"}),
+        )
+    )
+
+    document_ids = {document.id for document in customer_read.documents}
+    assert "find-customer" in document_ids
+    assert "billing-overview" not in document_ids
+    assert "team-inbox" not in document_ids
+    assert customer_read.source_watermark == repeated.source_watermark
+    assert len(customer_read.source_watermark) == 64
+
+
+def test_ai_knowledge_projection_removes_unpermitted_action_steps() -> None:
+    read_only = build_knowledge_projection(
+        AdminKnowledgeProjectionQuery(
+            permission_keys=frozenset({"support:ticket:read"}),
+        )
+    )
+    writer = build_knowledge_projection(
+        AdminKnowledgeProjectionQuery(
+            permission_keys=frozenset({"support:ticket:read", "support:ticket:update"}),
+        )
+    )
+
+    read_inbox = next(
+        document for document in read_only.documents if document.id == "team-inbox"
+    )
+    write_inbox = next(
+        document for document in writer.documents if document.id == "team-inbox"
+    )
+    read_action_ids = {action.id for action in read_inbox.actions}
+    write_action_ids = {action.id for action in write_inbox.actions}
+    assert "take-over-conversation" not in read_action_ids
+    assert "claim-reply" not in read_action_ids
+    assert "take-over-conversation" in write_action_ids
+    assert "claim-reply" in write_action_ids
+    assert read_only.source_watermark != writer.source_watermark
+
+
+def test_ai_knowledge_retrieval_ranks_only_permitted_action_content() -> None:
+    read_only = retrieve_knowledge(
+        AdminKnowledgeRetrievalQuery(
+            permission_keys=frozenset({"support:ticket:read"}),
+            query="claim reply",
+        )
+    )
+    writer = retrieve_knowledge(
+        AdminKnowledgeRetrievalQuery(
+            permission_keys=frozenset({"support:ticket:read", "support:ticket:update"}),
+            query="claim reply",
+        )
+    )
+
+    assert writer.matches
+    assert writer.matches[0].document.id == "team-inbox"
+    assert writer.matches[0].score > 0
+    assert writer.matches[0].matched_terms == ("claim", "reply")
+    assert all(
+        action.id != "claim-reply"
+        for match in read_only.matches
+        for action in match.document.actions
+    )
+    assert any(
+        action.id == "claim-reply"
+        for match in writer.matches
+        for action in match.document.actions
+    )
+    assert writer.source_watermark != read_only.source_watermark
+
+
+def test_ai_knowledge_retrieval_is_bounded_deterministic_and_stateless() -> None:
+    query = AdminKnowledgeRetrievalQuery(
+        permission_keys=frozenset({"customer:read"}),
+        query="customer account service",
+        limit=2,
+    )
+
+    first = retrieve_knowledge(query)
+    repeated = retrieve_knowledge(query)
+    empty = retrieve_knowledge(
+        AdminKnowledgeRetrievalQuery(
+            permission_keys=query.permission_keys,
+            query="the and how",
+        )
+    )
+
+    assert first == repeated
+    assert len(first.matches) <= 2
+    assert first.query_terms == ("customer", "account", "service")
+    assert empty.query_terms == ()
+    assert empty.matches == ()
+    assert len(empty.source_watermark) == 64
 
 
 def test_network_guidance_explains_independent_map_proposal_review() -> None:

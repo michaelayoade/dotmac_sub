@@ -272,6 +272,15 @@ def test_rule_actions_report_typed_adapter_readiness_by_module() -> None:
     assert actions["operations.vendor.set_status"].runtime_enabled is True
     assert actions["communications.send_notification"].runtime_enabled is True
     assert actions["communications.send_notification"].target_types == ("*",)
+    assert actions["inbox.conversation.apply_label"].runtime_enabled is True
+    assert actions["inbox.conversation.apply_label"].inputs[0].key == "label_id"
+    assert actions["inbox.conversation.set_priority"].runtime_enabled is True
+    assert actions["inbox.conversation.set_priority"].inputs[0].key == "priority"
+    assert actions["inbox.conversation.set_status"].runtime_enabled is True
+    assert actions["inbox.conversation.set_status"].inputs[0].enum_values == (
+        "open",
+        "pending",
+    )
     assert actions["sales.lead.set_status"].inputs[0].enum_values
     assert actions["sales.quote.set_status"].inputs[0].enum_values == (
         "draft",
@@ -323,6 +332,12 @@ def test_support_and_communications_catalogue_shows_readiness_and_existing_owner
     assert items["communications.retired_stale_auto_resolution"].state is (
         AutomationCatalogState.retired
     )
+    assert items["inbox.conversation.status_notifications"].state is (
+        AutomationCatalogState.available
+    )
+    assert items["inbox.conversation.status_notifications"].trigger_keys == (
+        "inbox.conversation.status_changed",
+    )
     assert all(item.explanation.strip() for item in items.values())
 
 
@@ -345,6 +360,7 @@ def test_customer_and_support_workflows_expose_owner_produced_events() -> None:
         "support.ticket.resolution_requested",
         "support.ticket.resolution_confirmed",
         "support.ticket.resolution_disputed",
+        "inbox.conversation.status_changed",
     } <= triggers.keys()
     assert any(
         field.key == "status"
@@ -361,6 +377,9 @@ def test_customer_and_support_workflows_expose_owner_produced_events() -> None:
         field.key == "service_team_id"
         for field in triggers["support.ticket.assigned"].fields
     )
+    assert {
+        field.key for field in triggers["inbox.conversation.status_changed"].fields
+    } == {"previous_status", "status", "channel", "reason"}
 
     from pathlib import Path
 

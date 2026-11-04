@@ -52,6 +52,7 @@ from app.services.owner_commands import (
     execute_owner_savepoint,
     owner_command_active,
 )
+from app.services.session_hooks import run_after_commit
 from app.services.team_inbox_channel_receive import _normalize_contact
 
 logger = logging.getLogger(__name__)
@@ -110,7 +111,27 @@ class LinkConversationContactCommand:
     source: ContactLinkSource
     note: str | None = None
     expected_active_link_id: UUID | None = None
+    check_expected_active_link: bool = False
     expected_identity_evidence_digest: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class HistoricalContactRepairResult:
+    scanned: int
+    repaired_conversation_ids: tuple[UUID, ...]
+    next_created_at: datetime | None
+    next_conversation_id: UUID | None
+    has_more: bool
+
+
+@dataclass(frozen=True, slots=True)
+class RepairContactLinkHistoryCommand:
+    context: CommandContext
+    contact_link_id: UUID
+    source_conversation_id: UUID
+    after_created_at: datetime
+    after_conversation_id: UUID
+    limit: int = 200
 
 
 class CustomerLinkOptionSource(StrEnum):
@@ -2159,6 +2180,189 @@ def scoped_contact_link_clauses(
     return tuple(clauses)
 
 
+def active_contact_link_id(db: Session, conversation: InboxConversation) -> UUID | None:
+    """Return the reviewed route version used for optimistic concurrency."""
+
+    try:
+        identity = observed_inbound_identity(db, conversation)
+    except ContactLinkError:
+        return None
+    return db.scalar(
+        select(InboxContactLink.id).where(*scoped_contact_link_clauses(identity))
+    )
+
+
+def active_contact_link_id_for_conversation(
+    db: Session, conversation_id: UUID
+) -> UUID | None:
+    """Resolve active contact-link evidence without leaking ORM reads to adapters."""
+
+    conversation = db.get(InboxConversation, conversation_id)
+    if conversation is None or not conversation.is_active:
+        return None
+    return active_contact_link_id(db, conversation)
+
+
+def _repair_contact_history_batch(
+    db: Session,
+    *,
+    source_conversation: InboxConversation,
+    contact_link: InboxContactLink,
+    subscriber: Subscriber,
+    linked_reseller_id: UUID | None,
+    after_created_at: datetime | None = None,
+    after_conversation_id: UUID | None = None,
+    limit: int = 100,
+) -> HistoricalContactRepairResult:
+    identity = observed_inbound_identity(db, source_conversation)
+    query = (
+        db.query(InboxConversation)
+        .filter(InboxConversation.id != source_conversation.id)
+        .filter(InboxConversation.channel_type == source_conversation.channel_type)
+        .filter(InboxConversation.contact_address == identity.normalized_endpoint)
+        .filter(InboxConversation.subscriber_id.is_(None))
+        .filter(InboxConversation.is_active.is_(True))
+    )
+    if after_created_at is not None and after_conversation_id is not None:
+        query = query.filter(
+            or_(
+                InboxConversation.created_at > after_created_at,
+                and_(
+                    InboxConversation.created_at == after_created_at,
+                    InboxConversation.id > after_conversation_id,
+                ),
+            )
+        )
+    rows = (
+        query.order_by(InboxConversation.created_at, InboxConversation.id)
+        .with_for_update()
+        .limit(max(1, min(limit, 200)) + 1)
+        .all()
+    )
+    batch = rows[: max(1, min(limit, 200))]
+    repaired: list[UUID] = []
+    now = datetime.now(UTC)
+    for historical in batch:
+        if (
+            identity.channel_type in _PROVIDER_SCOPED_IDENTITY_CHANNELS
+            and observed_inbound_identity(db, historical) != identity
+        ):
+            continue
+        historical.subscriber_id = subscriber.id
+        metadata = dict(historical.metadata_ or {})
+        resolution = dict(metadata.get("contact_resolution") or {})
+        resolution.update(
+            {
+                "status": "linked_subscriber",
+                "normalized_contact": identity.normalized_endpoint,
+                "subscriber_id": str(subscriber.id),
+                "reseller_id": str(linked_reseller_id) if linked_reseller_id else None,
+                "manual_contact_link_id": str(contact_link.id),
+                "repair_source_conversation_id": str(source_conversation.id),
+            }
+        )
+        metadata["contact_resolution"] = resolution
+        metadata["subscriber_link_repaired_at"] = now.isoformat()
+        historical.metadata_ = metadata
+        repaired.append(historical.id)
+    if batch:
+        next_created_at = batch[-1].created_at
+        next_conversation_id = batch[-1].id
+    else:
+        next_created_at = None
+        next_conversation_id = None
+    db.flush()
+    return HistoricalContactRepairResult(
+        scanned=len(batch),
+        repaired_conversation_ids=tuple(repaired),
+        next_created_at=next_created_at,
+        next_conversation_id=next_conversation_id,
+        has_more=len(rows) > len(batch),
+    )
+
+
+def schedule_contact_history_repair_after_commit(
+    db: Session,
+    *,
+    contact_link_id: UUID,
+    source_conversation_id: UUID,
+    cursor: HistoricalContactRepairResult,
+) -> None:
+    next_created_at = cursor.next_created_at
+    next_conversation_id = cursor.next_conversation_id
+    if not cursor.has_more or next_created_at is None or next_conversation_id is None:
+        return
+
+    def enqueue(_callback_db: Session) -> None:
+        from app.tasks.team_inbox import repair_contact_link_history
+
+        repair_contact_link_history.apply_async(
+            kwargs={
+                "contact_link_id": str(contact_link_id),
+                "source_conversation_id": str(source_conversation_id),
+                "after_created_at": next_created_at.isoformat(),
+                "after_conversation_id": str(next_conversation_id),
+                "limit": 200,
+            },
+            retry=False,
+        )
+
+    run_after_commit(db, enqueue)
+
+
+def _repair_contact_link_history_batch(
+    db: Session,
+    *,
+    contact_link_id: UUID,
+    source_conversation_id: UUID,
+    after_created_at: datetime,
+    after_conversation_id: UUID,
+    limit: int = 200,
+) -> HistoricalContactRepairResult:
+    contact_link = db.scalar(
+        select(InboxContactLink)
+        .where(
+            InboxContactLink.id == contact_link_id,
+            InboxContactLink.is_active.is_(True),
+        )
+        .with_for_update()
+    )
+    source = db.get(InboxConversation, source_conversation_id)
+    if contact_link is None or source is None or contact_link.subscriber_id is None:
+        return HistoricalContactRepairResult(0, (), None, None, False)
+    subscriber = db.get(Subscriber, contact_link.subscriber_id)
+    if subscriber is None:
+        return HistoricalContactRepairResult(0, (), None, None, False)
+    return _repair_contact_history_batch(
+        db,
+        source_conversation=source,
+        contact_link=contact_link,
+        subscriber=subscriber,
+        linked_reseller_id=subscriber.reseller_id,
+        after_created_at=after_created_at,
+        after_conversation_id=after_conversation_id,
+        limit=limit,
+    )
+
+
+def repair_contact_link_history_batch(
+    db: Session, command: RepairContactLinkHistoryCommand
+) -> HistoricalContactRepairResult:
+    return execute_owner_command(
+        db,
+        definition=_CONTACT_LINK_COMMAND,
+        context=command.context,
+        operation=lambda: _repair_contact_link_history_batch(
+            db,
+            contact_link_id=command.contact_link_id,
+            source_conversation_id=command.source_conversation_id,
+            after_created_at=command.after_created_at,
+            after_conversation_id=command.after_conversation_id,
+            limit=command.limit,
+        ),
+    )
+
+
 def lock_conversation_contact_route(
     db: Session, *, conversation_id: UUID
 ) -> tuple[InboxConversation, str]:
@@ -2271,8 +2475,9 @@ def link_conversation_contact(
         .where(*scoped_contact_link_clauses(identity))
         .with_for_update()
     )
-    if command.expected_active_link_id is not None and (
-        active_link is None or active_link.id != command.expected_active_link_id
+    if command.check_expected_active_link and (
+        (active_link.id if active_link is not None else None)
+        != command.expected_active_link_id
     ):
         raise ContactLinkError(
             "The reviewed contact link changed. Refresh and try again.",
@@ -2364,45 +2569,21 @@ def link_conversation_contact(
 
     repaired_conversation_ids: list[UUID] = []
     if subscriber is not None:
-        historical_rows = (
-            db.query(InboxConversation)
-            .filter(InboxConversation.id != conversation.id)
-            .filter(InboxConversation.channel_type == conversation.channel_type)
-            .filter(InboxConversation.contact_address == normalized_contact)
-            .filter(InboxConversation.subscriber_id.is_(None))
-            .filter(InboxConversation.is_active.is_(True))
-            .order_by(InboxConversation.created_at.asc(), InboxConversation.id.asc())
-            .with_for_update()
-            .all()
+        repair = _repair_contact_history_batch(
+            db,
+            source_conversation=conversation,
+            contact_link=contact_link,
+            subscriber=subscriber,
+            linked_reseller_id=linked_reseller_id,
+            limit=100,
         )
-        for historical in historical_rows:
-            if (
-                identity.channel_type in _PROVIDER_SCOPED_IDENTITY_CHANNELS
-                and observed_inbound_identity(db, historical) != identity
-            ):
-                continue
-            historical.subscriber_id = subscriber.id
-            historical_metadata = dict(historical.metadata_ or {})
-            historical_resolution = dict(
-                historical_metadata.get("contact_resolution") or {}
-            )
-            historical_resolution.update(
-                {
-                    "status": "linked_subscriber",
-                    "normalized_contact": normalized_contact,
-                    "subscriber_id": str(subscriber.id),
-                    "reseller_id": str(linked_reseller_id)
-                    if linked_reseller_id
-                    else None,
-                    "manual_contact_link_id": str(contact_link.id),
-                    "repair_source_conversation_id": str(conversation.id),
-                }
-            )
-            historical_metadata["contact_resolution"] = historical_resolution
-            historical_metadata["subscriber_link_repaired_at"] = now.isoformat()
-            historical.metadata_ = historical_metadata
-            repaired_conversation_ids.append(historical.id)
-        db.flush()
+        repaired_conversation_ids.extend(repair.repaired_conversation_ids)
+        schedule_contact_history_repair_after_commit(
+            db,
+            contact_link_id=contact_link.id,
+            source_conversation_id=conversation.id,
+            cursor=repair,
+        )
 
     current_changed = (
         prior_subscriber_id != conversation.subscriber_id or prior_metadata != metadata

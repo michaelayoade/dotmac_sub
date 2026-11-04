@@ -1426,9 +1426,10 @@ def _csat_query(
     date_to: str | None,
     rating: int | None,
     source_type: str | None,
-    status: str,
+    status: str | None,
     agent_person_id: str | None,
     service_team_id: str | None,
+    source_channel: str | None,
     page: int,
     per_page: int | None,
 ) -> support_csat_service.CsatReportQuery:
@@ -1439,7 +1440,9 @@ def _csat_query(
     except ValueError:
         raise HTTPException(status_code=422, detail="Invalid source type") from None
     try:
-        parsed_status = support_csat_service.CsatRequestStatus(status)
+        parsed_status = (
+            support_csat_service.CsatRequestStatus(status) if status else None
+        )
     except ValueError:
         raise HTTPException(status_code=422, detail="Invalid CSAT status") from None
     return support_csat_service.CsatReportQuery(
@@ -1449,6 +1452,7 @@ def _csat_query(
         source_type=parsed_source,
         agent_person_id=_parse_optional_uuid(agent_person_id, field="agent"),
         service_team_id=_parse_optional_uuid(service_team_id, field="service team"),
+        source_channel=str(source_channel or "").strip() or None,
         status=parsed_status,
         page=page,
         per_page=per_page,
@@ -1472,6 +1476,7 @@ def _csat_report_rows(rows) -> list[dict[str, object]]:
                 ),
                 "agent": row.agent_display_name or "Unassigned",
                 "team": row.service_team_name or "Unassigned",
+                "channel": row.source_channel or "-",
                 "rating": row.rating or "",
                 "comment": row.comment or "",
                 "customer": row.customer_display_name
@@ -1499,6 +1504,7 @@ def reports_support_csat(
     status: str = support_csat_service.CsatRequestStatus.submitted.value,
     agent_person_id: str | None = None,
     service_team_id: str | None = None,
+    source_channel: str | None = None,
     page: int = Query(default=1, ge=1),
     per_page: int = Query(default=50, ge=10, le=200),
     db: Session = Depends(get_db),
@@ -1513,12 +1519,17 @@ def reports_support_csat(
         status=status,
         agent_person_id=agent_person_id,
         service_team_id=service_team_id,
+        source_channel=source_channel,
         page=page,
         per_page=per_page,
     )
     total = support_csat_service.report_total(db, query)
     rows = support_csat_service.report_rows(db, query)
     summary = support_csat_service.report_summary(db, query)
+    trend = support_csat_service.report_trend(db, query)
+    agent_options, team_options, channel_options = (
+        support_csat_service.report_filter_options(db)
+    )
     context = {
         "request": request,
         "active_page": "reports-support-csat",
@@ -1532,6 +1543,7 @@ def reports_support_csat(
         "status": status,
         "agent_person_id": agent_person_id or "",
         "service_team_id": service_team_id or "",
+        "source_channel": source_channel or "",
         "page": page,
         "per_page": per_page,
         "total": total,
@@ -1539,6 +1551,10 @@ def reports_support_csat(
         "has_next": (page * per_page) < total,
         "rows": _csat_report_rows(rows),
         "summary": summary,
+        "trend": trend,
+        "agent_options": agent_options,
+        "team_options": team_options,
+        "channel_options": channel_options,
         "recent_activities": recent_activity_for_paths(db, ["/admin/reports"]),
     }
     return templates.TemplateResponse("admin/reports/support_csat.html", context)
@@ -1556,6 +1572,7 @@ def reports_support_csat_export(
     status: str = support_csat_service.CsatRequestStatus.submitted.value,
     agent_person_id: str | None = None,
     service_team_id: str | None = None,
+    source_channel: str | None = None,
     db: Session = Depends(get_db),
 ):
     query = _csat_query(
@@ -1566,6 +1583,7 @@ def reports_support_csat_export(
         status=status,
         agent_person_id=agent_person_id,
         service_team_id=service_team_id,
+        source_channel=source_channel,
         page=1,
         per_page=None,
     )
@@ -1578,6 +1596,7 @@ def reports_support_csat_export(
             "source_url",
             "agent",
             "team",
+            "channel",
             "rating",
             "comment",
             "customer",
