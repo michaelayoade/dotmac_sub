@@ -341,6 +341,14 @@ def assign_ipv4_address_from_form(request: Request, db, form) -> IpWebActionResu
             block_id=block_id,
         )
     except Exception as exc:
+        # Re-render with a visible default when the chosen subscriber has
+        # exactly one active/blocked subscription. The operator still has to
+        # submit it; nothing is bound server-side.
+        default_subscription = (
+            None
+            if subscription_id
+            else ip_service.default_subscription_for_subscriber(db, subscriber_id)
+        )
         return IpWebActionResult(
             success=False,
             form_context={
@@ -349,7 +357,10 @@ def assign_ipv4_address_from_form(request: Request, db, form) -> IpWebActionResu
                 "action_url": "/admin/network/ip-management/ipv4-assign",
                 "error": str(exc),
                 "subscriber_id": subscriber_id or state.get("subscriber_id"),
-                "subscription_id": subscription_id or state.get("subscription_id"),
+                "subscription_id": subscription_id
+                or (default_subscription or {}).get("id")
+                or state.get("subscription_id"),
+                "subscription_label": (default_subscription or {}).get("label"),
             },
             error=str(exc),
         )
@@ -572,6 +583,17 @@ def bulk_assign_ipv4(db, rows: list[dict[str, str]]) -> dict[str, object]:
                     "ip": ip,
                     "subscriber": subscriber_ident,
                     "error": "No active IPv4 pool contains this address",
+                }
+            )
+            continue
+
+        if not subscription_ident:
+            errors.append(
+                {
+                    "line": index,
+                    "ip": ip,
+                    "subscriber": subscriber_ident,
+                    "error": ip_service.IPV4_SUBSCRIPTION_REQUIRED_MESSAGE,
                 }
             )
             continue
