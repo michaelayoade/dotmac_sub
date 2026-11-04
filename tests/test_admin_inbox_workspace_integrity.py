@@ -916,9 +916,7 @@ def test_bulk_submission_materializes_the_complete_remembered_selection():
     assert "data-inbox-conversation-select" in checkbox
     assert 'name="conversation_ids"' not in checkbox
     assert 'form="inbox-bulk-form"' not in checkbox
-    assert JAVASCRIPT.count(
-        '#inbox-bulk-form [data-inbox-conversation-select]'
-    ) == 2
+    assert JAVASCRIPT.count("#inbox-bulk-form [data-inbox-conversation-select]") == 2
 
 
 def test_inbox_queue_row_has_exact_structure_states_and_channel_colours():
