@@ -112,6 +112,22 @@ is `auth.system_user_assignments`: for a user actor it reads the reviewed
 that value to the audit owner. An absent binding remains absent rather than
 being guessed.
 
+Request audit attribution follows the same contract. Authentication supplies
+the product principal kind and `principal_id`; `observability.audit_log` maps
+interactive kinds such as `system_user`, `subscriber`, `reseller_user`, and
+`vendor_user` to the audit `user` kind, then snapshots the display label from
+the canonical account. `x-actor-id` and `x-actor-type` are caller-controlled
+transport values and are not accepted as authentication evidence. Unknown
+authenticated principal kinds fail closed instead of being downgraded to
+`system`.
+
+Rows written before this normalization may contain a staff UUID classified as
+`system`. The read projection may display a name only when that exact UUID
+still resolves to a canonical `SystemUser`; it does not change the stored actor
+type, backfill a guessed name, or mutate append-only evidence. Future request
+rows persist `actor_label`, so staff renames or later deletion do not erase the
+write-time attribution.
+
 The scalar `actor_type`/`actor_id`/`actor_party_id` facade remains a temporary
 compatibility path for the unmigrated callers. Its exact inventory is pinned by
 `tests/architecture/audit_actor_provenance_baseline.json`. Run the PII-free
