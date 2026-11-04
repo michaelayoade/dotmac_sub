@@ -1191,6 +1191,7 @@ HELP_ONLY_GUIDANCE: tuple[AdminWorkflowGuidance, ...] = (
         "Search the vendor list and open the exact supplier or contractor record.",
         "Review contacts, capabilities, projects, routes, quotes, invoices, and current status.",
         "Create or edit a vendor using verified business and contact information.",
+        "Creating a vendor queues supplier setup in ERP. A saved vendor does not confirm the ERP supplier is ready; ask Finance or integration operations to check an expected supplier that is still missing.",
         "Deactivate a vendor only after checking active work and financial dependencies.",
         excluded_route_prefixes=("/admin/vendors/operations", "/admin/vendors/routes"),
     ),
