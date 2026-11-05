@@ -15,6 +15,7 @@ logger = logging.getLogger(__name__)
 
 
 class EventType(enum.Enum):
+    vendor_created = "vendor.created"
     """All event types supported by the event system (~40 events).
 
     Event naming convention: {entity}.{action}

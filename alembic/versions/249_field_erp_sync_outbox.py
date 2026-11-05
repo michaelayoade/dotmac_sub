@@ -41,6 +41,7 @@ _SEED_FLOWS = (
     "material_request",
     "purchase_order",
     "purchase_invoice",
+    "vendor_supplier",
 )
 
 
