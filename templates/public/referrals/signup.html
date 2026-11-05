@@ -1,76 +1,95 @@
-<!doctype html>
-<html lang="en">
-<head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
+{% extends "base.html" %}
+
+{% block title %}Join {{ brand.name }} · Refer &amp; Earn{% endblock %}
+
+{% block head %}
   <meta name="referrer" content="no-referrer">
-  <title>Join Dotmac · Refer &amp; Earn</title>
   <style>
-    :root { font-family: system-ui, -apple-system, Segoe UI, sans-serif; color: #17231f; background: #f4f7f5; -webkit-font-smoothing: antialiased; -moz-osx-font-smoothing: grayscale; }
-    * { box-sizing: border-box; }
-    body { margin: 0; min-height: 100vh; }
-    main { max-width: 36rem; margin: 4rem auto; padding: 0 1.25rem; }
-    .brand-shell { display: flex; align-items: center; gap: .65rem; }
-    .brand-logo { width: 2.25rem; height: 2.25rem; border-radius: .6rem; object-fit: contain; outline: 1px solid rgba(0, 0, 0, .1); outline-offset: -1px; }
-    .brand { color: #11694d; font-size: .9rem; font-weight: 800; letter-spacing: .12em; text-transform: uppercase; }
-    .card { margin-top: 1rem; padding: clamp(1.5rem, 5vw, 2.5rem); background: white; border: 1px solid #dce7e0; border-radius: 1.25rem; box-shadow: 0 12px 40px #173d2610; }
-    h1 { margin: 0 0 .75rem; font-size: clamp(1.8rem, 5vw, 2.5rem); line-height: 1.15; text-wrap: balance; }
-    p { line-height: 1.55; color: #526159; text-wrap: pretty; }
-    form { display: grid; gap: 1rem; margin-top: 1.75rem; }
-    .field, .field-row { display: grid; gap: .35rem; }
-    .field-row { gap: 1rem; }
-    label { font-size: .9rem; font-weight: 650; }
-    input { width: 100%; min-height: 44px; padding: .8rem .9rem; border: 1px solid #b9c9bf; border-radius: .65rem; font: inherit; }
-    input:focus { outline: 2px solid #13835e; outline-offset: 2px; }
-    button { display: inline-flex; min-height: 44px; align-items: center; justify-content: center; gap: .55rem; padding: .9rem 1rem; border: 0; border-radius: .65rem; background: #11694d; color: white; font: inherit; font-weight: 700; cursor: pointer; transition: background-color 150ms ease-out, box-shadow 150ms ease-out, transform 150ms ease-out; }
-    button:hover { background: #0d543d; }
-    button:active:not(:disabled) { transform: scale(.98); }
-    button:disabled { opacity: .65; cursor: not-allowed; }
-    button[aria-busy="true"] { cursor: wait; }
-    button.secondary { background: #e7f2ed; color: #0d543d; border: 1px solid #b9d5c8; }
-    button.secondary:hover { background: #d8ebe2; }
-    button:focus-visible { outline: 2px solid #13835e; outline-offset: 2px; }
-    .location { display: grid; gap: .75rem; padding: 1rem; border: 1px solid #dce7e0; border-radius: .8rem; }
-    .location legend { padding: 0 .25rem; font-size: .9rem; font-weight: 700; }
-    .hint, .location-status, .field-error { margin: 0; font-size: .82rem; }
-    .location-status { padding: .65rem .75rem; border-radius: .55rem; font-weight: 650; }
-    .location-status[data-state="neutral"] { background: #f1f4f2; color: #4f5d56; }
-    .location-status[data-state="loading"] { background: #eef6ff; color: #244e78; }
-    .location-status[data-state="success"] { background: #e9f7ef; color: #145c39; }
-    .location-status[data-state="error"] { background: #fff0ef; color: #842c26; }
-    .field-error { color: #842c26; font-weight: 650; }
-    input[aria-invalid="true"] { border-color: #b33b33; }
-    .spinner { width: 1rem; height: 1rem; flex: 0 0 auto; border: 2px solid currentColor; border-right-color: transparent; border-radius: 50%; animation: spin .7s linear infinite; }
-    .message { margin-top: 1rem; padding: .85rem 1rem; border-radius: .65rem; }
-    .error { background: #fff0ef; color: #842c26; }
-    .success { background: #e9f7ef; color: #145c39; }
-    .support { margin: 1rem 0 0; text-align: center; font-size: .85rem; }
-    .support a { color: #11694d; font-weight: 700; text-underline-offset: 3px; }
+    .referral-page { max-width: 36rem; margin: 4rem auto; padding: 0 1.25rem; }
+    .referral-page .brand-shell { display: flex; align-items: center; gap: .65rem; }
+    .referral-page .brand-logo { width: 2.25rem; height: 2.25rem; border-radius: .6rem; object-fit: contain; outline: 1px solid rgba(0, 0, 0, .1); outline-offset: -1px; }
+    .referral-page .brand-fallback { display: grid; place-items: center; background: var(--color-brand-600); color: white; font-weight: 800; }
+    .referral-page .brand { color: var(--color-brand-700); font-size: .9rem; font-weight: 800; letter-spacing: .12em; text-transform: uppercase; }
+    .referral-page .card { margin-top: 1rem; padding: clamp(1.5rem, 5vw, 2.5rem); background: white; border: 1px solid var(--color-slate-200); border-radius: 1.25rem; box-shadow: 0 12px 40px rgb(15 23 42 / .07); }
+    .referral-page h1 { margin: 0 0 .75rem; font-size: clamp(1.8rem, 5vw, 2.5rem); line-height: 1.15; text-wrap: balance; }
+    .referral-page p { line-height: 1.55; color: var(--color-slate-600); text-wrap: pretty; }
+    .referral-page form { display: grid; gap: 1rem; margin-top: 1.75rem; }
+    .referral-page .field, .referral-page .field-row { display: grid; gap: .35rem; }
+    .referral-page .field-row { gap: 1rem; }
+    .referral-page label { font-size: .9rem; font-weight: 650; }
+    .referral-page input { width: 100%; min-height: 44px; padding: .8rem .9rem; border: 1px solid var(--color-slate-300); border-radius: .65rem; background: white; color: var(--color-slate-900); font: inherit; }
+    .referral-page input:focus { outline: 2px solid var(--color-brand-500); outline-offset: 2px; }
+    .referral-page button { display: inline-flex; min-height: 44px; align-items: center; justify-content: center; gap: .55rem; padding: .9rem 1rem; border: 0; border-radius: .65rem; background: var(--color-brand-600); color: white; font: inherit; font-weight: 700; cursor: pointer; transition: background-color 150ms ease-out, box-shadow 150ms ease-out, transform 150ms ease-out; }
+    .referral-page button:hover { background: var(--color-brand-700); }
+    .referral-page button:active:not(:disabled) { transform: scale(.98); }
+    .referral-page button:disabled { opacity: .65; cursor: not-allowed; }
+    .referral-page button[aria-busy="true"] { cursor: wait; }
+    .referral-page button.secondary { background: var(--color-brand-50); color: var(--color-brand-800); border: 1px solid var(--color-brand-200); }
+    .referral-page button.secondary:hover { background: var(--color-brand-100); }
+    .referral-page button:focus-visible { outline: 2px solid var(--color-brand-500); outline-offset: 2px; }
+    .referral-page .location { display: grid; gap: .75rem; padding: 1rem; border: 1px solid var(--color-slate-200); border-radius: .8rem; }
+    .referral-page .location legend { padding: 0 .25rem; font-size: .9rem; font-weight: 700; }
+    .referral-page .hint, .referral-page .location-status, .referral-page .field-error { margin: 0; font-size: .82rem; }
+    .referral-page .location-status { padding: .65rem .75rem; border-radius: .55rem; font-weight: 650; }
+    .referral-page .location-status[data-state="neutral"] { background: var(--color-slate-100); color: var(--color-slate-700); }
+    .referral-page .location-status[data-state="loading"] { background: var(--color-semantic-info-50); color: var(--color-semantic-info-800); }
+    .referral-page .location-status[data-state="success"] { background: var(--color-semantic-positive-50); color: var(--color-semantic-positive-800); }
+    .referral-page .location-status[data-state="error"] { background: var(--color-semantic-negative-50); color: var(--color-semantic-negative-800); }
+    .referral-page .field-error { color: var(--color-semantic-negative-700); font-weight: 650; }
+    .referral-page input[aria-invalid="true"] { border-color: var(--color-semantic-negative-600); }
+    .referral-page .spinner { width: 1rem; height: 1rem; flex: 0 0 auto; border: 2px solid currentColor; border-right-color: transparent; border-radius: 50%; animation: spin .7s linear infinite; }
+    .referral-page .message { margin-top: 1rem; padding: .85rem 1rem; border-radius: .65rem; }
+    .referral-page .error { background: var(--color-semantic-negative-50); color: var(--color-semantic-negative-800); }
+    .referral-page .success { background: var(--color-semantic-positive-50); color: var(--color-semantic-positive-800); }
+    .referral-page .support { margin: 1rem 0 0; text-align: center; font-size: .85rem; }
+    .referral-page .support a { color: var(--color-brand-700); font-weight: 700; text-underline-offset: 3px; }
+    .dark .referral-page .brand { color: var(--color-brand-300); }
+    .dark .referral-page .card { background: var(--color-slate-800); border-color: var(--color-slate-700); box-shadow: 0 12px 40px rgb(0 0 0 / .2); }
+    .dark .referral-page p { color: var(--color-slate-300); }
+    .dark .referral-page input { border-color: var(--color-slate-600); background: var(--color-slate-900); color: var(--color-slate-100); }
+    .dark .referral-page button.secondary { background: var(--color-brand-900); color: var(--color-brand-200); border-color: var(--color-brand-700); }
+    .dark .referral-page button.secondary:hover { background: var(--color-brand-800); }
+    .dark .referral-page .location { border-color: var(--color-slate-700); }
+    .dark .referral-page .location-status[data-state="neutral"] { background: var(--color-slate-700); color: var(--color-slate-200); }
+    .dark .referral-page .location-status[data-state="loading"] { background: var(--color-semantic-info-900); color: var(--color-semantic-info-200); }
+    .dark .referral-page .location-status[data-state="success"] { background: var(--color-semantic-positive-900); color: var(--color-semantic-positive-200); }
+    .dark .referral-page .location-status[data-state="error"], .dark .referral-page .error { background: var(--color-semantic-negative-900); color: var(--color-semantic-negative-200); }
+    .dark .referral-page .success { background: var(--color-semantic-positive-900); color: var(--color-semantic-positive-200); }
+    .dark .referral-page .field-error { color: var(--color-semantic-negative-300); }
+    .dark .referral-page .support a { color: var(--color-brand-300); }
     @keyframes spin { to { transform: rotate(360deg); } }
     [hidden] { display: none !important; }
     @media (min-width: 38rem) {
-      .field-row { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+      .referral-page .field-row { grid-template-columns: repeat(2, minmax(0, 1fr)); }
     }
     @media (max-width: 40rem) {
-      main { margin: 1.5rem auto; padding: 0 .9rem; }
-      .card { padding: 1.25rem; border-radius: 1rem; }
+      .referral-page { margin: 1.5rem auto; padding: 0 .9rem; }
+      .referral-page .card { padding: 1.25rem; border-radius: 1rem; }
     }
     @media (prefers-reduced-motion: reduce) {
-      button { transition: none; }
-      button:active:not(:disabled) { transform: none; }
-      .spinner { animation: none; }
+      .referral-page button { transition: none; }
+      .referral-page button:active:not(:disabled) { transform: none; }
+      .referral-page .spinner { animation: none; }
     }
   </style>
-</head>
-<body>
-  <main>
+{% endblock %}
+
+{% block body %}
+  <main class="referral-page">
     <div class="brand-shell">
-      <img class="brand-logo" src="/static/branding/favicon/icon-192.png" alt="Dotmac logo">
-      <div class="brand">Dotmac · Refer &amp; Earn</div>
+      {% if brand.logo_url %}
+      <img class="brand-logo{% if brand.dark_logo_url %} dark:hidden{% endif %}" src="{{ brand.logo_url }}" alt="{{ brand.name }} logo">
+      {% if brand.dark_logo_url %}
+      <img class="brand-logo hidden dark:block" src="{{ brand.dark_logo_url }}" alt="{{ brand.name }} logo">
+      {% endif %}
+      {% else %}
+      <span class="brand-logo brand-fallback" aria-hidden="true">{{ brand.name[:1] | upper }}</span>
+      {% endif %}
+      <div class="brand">{{ brand.name }} · Refer &amp; Earn</div>
     </div>
     <section class="card">
       {% if code %}
-      <h1>You've been invited to Dotmac</h1>
+      <h1 class="font-display">You've been invited to {{ brand.name }}</h1>
       <p>Sign up using your friend's referral link. We'll email you instructions to access your new customer account.</p>
       <form id="signup-form" novalidate>
         <div class="field-row">
@@ -120,8 +139,8 @@
       </form>
       <p id="message" class="message" role="status" aria-live="polite" hidden></p>
       {% else %}
-      <h1>This referral link is unavailable</h1>
-      <p>Ask your friend for a current link, or contact Dotmac for help.</p>
+      <h1 class="font-display">This referral link is unavailable</h1>
+      <p>Ask your friend for a current link, or contact {{ brand.name }} for help.</p>
       {% endif %}
     </section>
     <p class="support">Need help? <a href="mailto:{{ brand.support_email }}">Contact support</a></p>
@@ -130,6 +149,7 @@
   <script>
     (() => {
       const code = {{ code | tojson }};
+      const brandName = {{ brand.name | tojson }};
       const form = document.getElementById('signup-form');
       const message = document.getElementById('message');
       const submitButton = form.querySelector('button[type="submit"]');
@@ -321,7 +341,7 @@
             ? 'Your account was created. Check your email for access instructions.'
             : signup.enrollment_status === 'already_enrolled'
               ? 'Your account is ready. You can sign in to the customer portal.'
-              : 'Your account was created. Please contact Dotmac for access instructions.';
+              : `Your account was created. Please contact ${brandName} for access instructions.`;
         } catch (error) {
           const details = Array.isArray(error.details) ? error.details : [];
           const invalidFields = Object.keys(fieldRules).filter((fieldName) => (
@@ -350,5 +370,4 @@
     })();
   </script>
   {% endif %}
-</body>
-</html>
+{% endblock %}
