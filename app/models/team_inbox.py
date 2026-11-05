@@ -1159,6 +1159,16 @@ class InboxMessage(Base):
             postgresql_where=text("direction = 'inbound' AND received_at IS NOT NULL"),
         ),
         Index(
+            "ix_inbox_messages_latest_visible",
+            "conversation_id",
+            text("COALESCE(received_at, sent_at, created_at) DESC"),
+            text("created_at DESC"),
+            text("id DESC"),
+            postgresql_include=("direction",),
+            sqlite_where=text("direction <> 'internal'"),
+            postgresql_where=text("direction <> 'internal'"),
+        ),
+        Index(
             "uq_inbox_messages_inbound_external",
             "channel_type",
             "external_message_id",

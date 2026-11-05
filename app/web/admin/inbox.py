@@ -70,6 +70,7 @@ from app.services import (
     team_inbox_read,
     team_inbox_read_state,
     team_inbox_routing,
+    team_inbox_sidebar_metrics,
     team_inbox_status,
     team_inbox_widget,
     web_system_settings_forms,
@@ -380,6 +381,7 @@ def team_inbox_queue(
     db: Session = Depends(get_db),
 ):
     started_at = perf_counter()
+    team_inbox_sidebar_metrics.apply_read_budget(db)
     htmx_target = getattr(request, "headers", {}).get("hx-target")
     is_sidebar_request = htmx_target == "inbox-sidebar-content"
     is_queue_request = htmx_target == "inbox-conversation-queue"
@@ -667,11 +669,12 @@ def team_inbox_manager_dashboard(
     request: Request,
     db: Session = Depends(get_db),
 ):
-    queue_metrics = team_inbox_operations.queue_metrics(db)
+    team_inbox_sidebar_metrics.apply_read_budget(db)
+    sidebar_metrics = team_inbox_sidebar_metrics.get_sidebar_metrics(db)
     manager_dashboard = team_inbox_projection.build_manager_dashboard_projection(
         db,
-        queue_metrics=queue_metrics,
-        needs_attention=team_inbox_read.needs_attention_conversation_count(db),
+        queue_metrics=sidebar_metrics.queue_metrics,
+        needs_attention=sidebar_metrics.needs_attention,
     )
     context = _ctx(request, db)
     context.update(

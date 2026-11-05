@@ -614,9 +614,10 @@ implementation.
   offline enabled, a fresh lease from any active session keeps the agent online;
   closing or revoking one session cannot override another fresh session. With
   automatic offline disabled, selected Online remains online until changed.
-- Realtime presence messages are invalidation hints only. They contain no
-  session token or customer data and cause staff surfaces to refetch the
-  routing owner's canonical projection.
+- Realtime presence messages contain only the bounded routing-owner status
+  projection; they contain no session token or customer data. They must not
+  trigger a full conversation-sidebar or manager-dashboard rebuild. Those
+  shared metrics use their bounded cached projection and explicit refresh.
 - Queue heartbeats are off by default. If enabled in AI intake policy they are
   clearly identified as reassurance, use different copy from a position
   update, and never repeat the current position.

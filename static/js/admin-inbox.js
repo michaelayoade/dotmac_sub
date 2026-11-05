@@ -285,6 +285,8 @@
       listRequestSequence: 0,
       activeListRequest: null,
       pendingListRequest: null,
+      backgroundRefreshFailures: 0,
+      backgroundRefreshRetryAt: 0,
       listRequestError: "",
       lastSuccessfulListUrl: window.location.href,
       filteredCountLabel: "—",
@@ -1051,6 +1053,23 @@
         this.filterLoading = false;
         this.pendingStatusFilter = null;
         this.inboxRefreshFinished(failed);
+        if (["poll", "read_state", "realtime"].includes(request.intent)) {
+          if (failed) {
+            this.backgroundRefreshFailures = Math.min(
+              this.backgroundRefreshFailures + 1,
+              4,
+            );
+            const retryDelay = Math.min(
+              60000,
+              5000 * (2 ** (this.backgroundRefreshFailures - 1)),
+            );
+            this.backgroundRefreshRetryAt =
+              Date.now() + retryDelay + Math.floor(Math.random() * 1000);
+          } else {
+            this.backgroundRefreshFailures = 0;
+            this.backgroundRefreshRetryAt = 0;
+          }
+        }
         this.listRequestError = failed
           ? "Could not update conversations. Try again." : "";
         this.failedListNavigation = failed ? request.navigation : null;
@@ -1065,6 +1084,7 @@
         if (navigation) {
           this.requestInboxList(navigation.url, {
             ...navigation,
+            bypassBackoff: true,
             // A failed popstate restored the visible URL. Its retry must now
             // replace that entry when it succeeds, not leave old URL/new rows.
             historyMode: navigation.intent === "history"
@@ -1095,9 +1115,10 @@
         const failedOperator =
           this.failedListNavigation &&
           !backgroundIntents.includes(this.failedListNavigation.intent);
-        if (!operator && (
-          this.activeListRequest?.operator ||
-          this.pendingListRequest?.operator ||
+        if (!operator && !options.bypassBackoff && (
+          Date.now() < this.backgroundRefreshRetryAt ||
+          this.activeListRequest ||
+          this.pendingListRequest ||
           failedOperator
         )) return;
         const request = this.beginListRequest(intent, operator);
@@ -2216,10 +2237,12 @@
         const data = envelope.data || {};
         if (eventType === "heartbeat" || eventType === "connection_ack") return;
         if (eventType === "agent_presence_changed") {
-          // The stream is only an invalidation hint. Re-read both projections
-          // instead of treating the event payload as current presence state.
-          this.refreshSidebar("presence");
-          this.refreshOpenManagerDashboard();
+          // Presence is independent of the conversation queue. Rebuilding the
+          // shared sidebar and manager projections here makes one agent change
+          // fan out into one expensive database read per connected browser.
+          // The initiating presence command already renders its authoritative
+          // result; other views pick up the bounded projection on their next
+          // explicit refresh.
           return;
         }
         if (eventType === "user_typing") {

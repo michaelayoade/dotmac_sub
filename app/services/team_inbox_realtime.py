@@ -140,7 +140,7 @@ def publish_agent_presence_changed(
                 STAFF_AUDIENCE_TOPIC,
                 event_type=EventType.AGENT_PRESENCE_CHANGED,
                 payload=payload,
-                refresh_required=True,
+                refresh_required=False,
             )
         except Exception:
             logger.debug("team_inbox_presence_publish_failed", exc_info=True)

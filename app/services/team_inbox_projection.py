@@ -45,6 +45,7 @@ from app.services import (
     team_inbox_read,
     team_inbox_read_state,
     team_inbox_reply_window,
+    team_inbox_sidebar_metrics,
 )
 from app.services.catalog import plan_family_catalogues
 from app.services.integrations import whatsapp_capability
@@ -1011,6 +1012,7 @@ def _assignment_counts(
     *,
     actor_person_id: UUID | None,
     queue_metrics: team_inbox_operations.InboxQueueMetrics,
+    needs_attention: int,
 ) -> InboxAssignmentCounts:
     all_count = team_inbox_read.queue_conversation_count(db)
     assigned_to_me = team_inbox_read.assigned_conversation_count(
@@ -1060,7 +1062,7 @@ def _assignment_counts(
         my_team_ids=my_team_ids,
         unassigned=queue_metrics.unassigned_open,
         unreplied=queue_metrics.needs_response,
-        needs_attention=team_inbox_read.needs_attention_conversation_count(db),
+        needs_attention=needs_attention,
     )
 
 
@@ -2701,9 +2703,12 @@ def build_queue_projection(
     )
     include_sidebar = request.composition is not InboxQueueComposition.queue_only
     sidebar_started_at = perf_counter()
+    sidebar_metrics = (
+        team_inbox_sidebar_metrics.get_sidebar_metrics(db) if include_sidebar else None
+    )
     queue_metrics = (
-        team_inbox_operations.queue_metrics(db)
-        if include_sidebar
+        sidebar_metrics.queue_metrics
+        if sidebar_metrics is not None
         else team_inbox_operations.InboxQueueMetrics(
             total_open=0,
             needs_response=0,
@@ -2718,6 +2723,9 @@ def build_queue_projection(
             db,
             actor_person_id=request.actor_person_id,
             queue_metrics=queue_metrics,
+            needs_attention=(
+                sidebar_metrics.needs_attention if sidebar_metrics is not None else 0
+            ),
         )
         if include_sidebar
         else InboxAssignmentCounts(

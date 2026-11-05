@@ -121,7 +121,7 @@ def test_presence_projection_publishes_after_commit_to_staff_only(monkeypatch) -
     callbacks[0](object())
     assert published[0]["topic"] == realtime_platform.STAFF_AUDIENCE_TOPIC
     assert published[0]["event_type"] is EventType.AGENT_PRESENCE_CHANGED
-    assert published[0]["refresh_required"] is True
+    assert published[0]["refresh_required"] is False
     assert published[0]["payload"] == {
         "person_id": "person-1",
         "effective_status": "online",

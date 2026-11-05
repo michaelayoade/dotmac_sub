@@ -4811,6 +4811,14 @@ DOMAIN = DomainSOT(
                 "auth.staff_provisioning",
                 "ai.intake",
             ),
+            notes=(
+                "Shared Inbox sidebar metrics are a non-authoritative Redis "
+                "projection with a process-local fallback. Conversation, message, "
+                "routing, delivery, and operator-state owners remain authoritative. "
+                "The snapshot is fresh for 15 seconds, may be served stale for five "
+                "minutes, is rebuilt deterministically by this projection owner, and "
+                "uses one cross-process refresh lease to prevent request stampedes."
+            ),
             contract=_team_inbox_contract(
                 service_name="communications.team_inbox_projection",
                 concerns=(
@@ -4924,6 +4932,7 @@ DOMAIN = DomainSOT(
                 ),
                 projections=(
                     "Inbox queue detail metrics response cohorts actions and unread cohorts",
+                    "15-second shared Inbox sidebar metrics snapshot with five-minute stale fallback",
                     "Exact-message and filter-aware single-row Inbox UI fragments",
                     "Conversation-scoped bounded historical message page fragments",
                     "Outbound message sender display name initials and provenance source",
