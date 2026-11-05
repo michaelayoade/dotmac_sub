@@ -10,15 +10,19 @@
     * { box-sizing: border-box; }
     body { margin: 0; min-height: 100vh; }
     main { max-width: 36rem; margin: 4rem auto; padding: 0 1.25rem; }
+    .brand-shell { display: flex; align-items: center; gap: .65rem; }
+    .brand-logo { width: 2.25rem; height: 2.25rem; border-radius: .6rem; object-fit: contain; outline: 1px solid rgba(0, 0, 0, .1); outline-offset: -1px; }
     .brand { color: #11694d; font-size: .9rem; font-weight: 800; letter-spacing: .12em; text-transform: uppercase; }
     .card { margin-top: 1rem; padding: clamp(1.5rem, 5vw, 2.5rem); background: white; border: 1px solid #dce7e0; border-radius: 1.25rem; box-shadow: 0 12px 40px #173d2610; }
     h1 { margin: 0 0 .75rem; font-size: clamp(1.8rem, 5vw, 2.5rem); line-height: 1.15; text-wrap: balance; }
     p { line-height: 1.55; color: #526159; text-wrap: pretty; }
     form { display: grid; gap: 1rem; margin-top: 1.75rem; }
-    label { display: grid; gap: .35rem; font-size: .9rem; font-weight: 650; }
+    .field, .field-row { display: grid; gap: .35rem; }
+    .field-row { gap: 1rem; }
+    label { font-size: .9rem; font-weight: 650; }
     input { width: 100%; min-height: 44px; padding: .8rem .9rem; border: 1px solid #b9c9bf; border-radius: .65rem; font: inherit; }
     input:focus { outline: 2px solid #13835e; outline-offset: 2px; }
-    button { min-height: 44px; padding: .9rem 1rem; border: 0; border-radius: .65rem; background: #11694d; color: white; font: inherit; font-weight: 700; cursor: pointer; transition: background-color 150ms ease-out, box-shadow 150ms ease-out, transform 150ms ease-out; }
+    button { display: inline-flex; min-height: 44px; align-items: center; justify-content: center; gap: .55rem; padding: .9rem 1rem; border: 0; border-radius: .65rem; background: #11694d; color: white; font: inherit; font-weight: 700; cursor: pointer; transition: background-color 150ms ease-out, box-shadow 150ms ease-out, transform 150ms ease-out; }
     button:hover { background: #0d543d; }
     button:active:not(:disabled) { transform: scale(.98); }
     button:disabled { opacity: .65; cursor: not-allowed; }
@@ -36,10 +40,17 @@
     .location-status[data-state="error"] { background: #fff0ef; color: #842c26; }
     .field-error { color: #842c26; font-weight: 650; }
     input[aria-invalid="true"] { border-color: #b33b33; }
+    .spinner { width: 1rem; height: 1rem; flex: 0 0 auto; border: 2px solid currentColor; border-right-color: transparent; border-radius: 50%; animation: spin .7s linear infinite; }
     .message { margin-top: 1rem; padding: .85rem 1rem; border-radius: .65rem; }
     .error { background: #fff0ef; color: #842c26; }
     .success { background: #e9f7ef; color: #145c39; }
+    .support { margin: 1rem 0 0; text-align: center; font-size: .85rem; }
+    .support a { color: #11694d; font-weight: 700; text-underline-offset: 3px; }
+    @keyframes spin { to { transform: rotate(360deg); } }
     [hidden] { display: none !important; }
+    @media (min-width: 38rem) {
+      .field-row { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    }
     @media (max-width: 40rem) {
       main { margin: 1.5rem auto; padding: 0 .9rem; }
       .card { padding: 1.25rem; border-radius: 1rem; }
@@ -47,34 +58,65 @@
     @media (prefers-reduced-motion: reduce) {
       button { transition: none; }
       button:active:not(:disabled) { transform: none; }
+      .spinner { animation: none; }
     }
   </style>
 </head>
 <body>
   <main>
-    <div class="brand">Dotmac · Refer &amp; Earn</div>
+    <div class="brand-shell">
+      <img class="brand-logo" src="/static/branding/favicon/icon-192.png" alt="Dotmac logo">
+      <div class="brand">Dotmac · Refer &amp; Earn</div>
+    </div>
     <section class="card">
       {% if code %}
       <h1>You've been invited to Dotmac</h1>
       <p>Sign up using your friend's referral link. We'll email you instructions to access your new customer account.</p>
-      <form id="signup-form">
-        <label>First name <input name="first_name" autocomplete="given-name" maxlength="80" required></label>
-        <label>Last name <input name="last_name" autocomplete="family-name" maxlength="80" required></label>
-        <label>Email address <input name="email" type="email" autocomplete="email" maxlength="255" required></label>
-        <label>Phone number (optional) <input name="phone" type="tel" autocomplete="tel" maxlength="40"></label>
+      <form id="signup-form" novalidate>
+        <div class="field-row">
+          <div class="field">
+            <label for="first-name">First name</label>
+            <input id="first-name" name="first_name" autocomplete="given-name" maxlength="80" aria-describedby="first-name-error" required>
+            <p id="first-name-error" class="field-error" role="alert" hidden></p>
+          </div>
+          <div class="field">
+            <label for="last-name">Last name</label>
+            <input id="last-name" name="last_name" autocomplete="family-name" maxlength="80" aria-describedby="last-name-error" required>
+            <p id="last-name-error" class="field-error" role="alert" hidden></p>
+          </div>
+        </div>
+        <div class="field-row">
+          <div class="field">
+            <label for="email">Email address</label>
+            <input id="email" name="email" type="email" autocomplete="email" maxlength="255" aria-describedby="email-error" required>
+            <p id="email-error" class="field-error" role="alert" hidden></p>
+          </div>
+          <div class="field">
+            <label for="phone">Phone number (optional)</label>
+            <input id="phone" name="phone" type="tel" autocomplete="tel" maxlength="40" aria-describedby="phone-error">
+            <p id="phone-error" class="field-error" role="alert" hidden></p>
+          </div>
+        </div>
         <fieldset class="location">
           <legend>Service location (required)</legend>
           <p id="location-help" class="hint">Enter the service address and share your current location. Both are required so we can confirm where service is needed.</p>
-          <label>Service address
+          <div class="field">
+            <label for="service-address">Service address</label>
             <input id="service-address" name="address_line1" autocomplete="street-address" maxlength="120" placeholder="House number, street and area" aria-describedby="location-help address-error" required>
-          </label>
-          <p id="address-error" class="field-error" role="alert" hidden></p>
-          <button id="capture-location" class="secondary" type="button" aria-describedby="location-help location-status">Use my current location</button>
+            <p id="address-error" class="field-error" role="alert" hidden></p>
+          </div>
+          <button id="capture-location" class="secondary" type="button" aria-describedby="location-help location-status">
+            <span id="location-spinner" class="spinner" aria-hidden="true" hidden></span>
+            <span id="location-button-label">Use my current location</span>
+          </button>
           <p id="location-status" class="location-status" data-state="neutral" role="status" aria-live="polite">Location not captured.</p>
           <input id="latitude" name="latitude" type="hidden">
           <input id="longitude" name="longitude" type="hidden">
         </fieldset>
-        <button type="submit">Create my account</button>
+        <button type="submit">
+          <span id="submit-spinner" class="spinner" aria-hidden="true" hidden></span>
+          <span id="submit-button-label">Create my account</span>
+        </button>
       </form>
       <p id="message" class="message" role="status" aria-live="polite" hidden></p>
       {% else %}
@@ -82,6 +124,7 @@
       <p>Ask your friend for a current link, or contact Dotmac for help.</p>
       {% endif %}
     </section>
+    <p class="support">Need help? <a href="mailto:{{ brand.support_email }}">Contact support</a></p>
   </main>
   {% if code %}
   <script>
@@ -90,13 +133,46 @@
       const form = document.getElementById('signup-form');
       const message = document.getElementById('message');
       const submitButton = form.querySelector('button[type="submit"]');
+      const submitButtonLabel = document.getElementById('submit-button-label');
+      const submitSpinner = document.getElementById('submit-spinner');
       const locationButton = document.getElementById('capture-location');
+      const locationButtonLabel = document.getElementById('location-button-label');
+      const locationSpinner = document.getElementById('location-spinner');
       const locationStatus = document.getElementById('location-status');
       const latitude = document.getElementById('latitude');
       const longitude = document.getElementById('longitude');
-      const serviceAddress = document.getElementById('service-address');
-      const addressError = document.getElementById('address-error');
       const formControls = Array.from(form.elements);
+      const fieldRules = {
+        first_name: {
+          input: document.getElementById('first-name'),
+          error: document.getElementById('first-name-error'),
+          required: 'Enter your first name.',
+          invalid: 'Enter a valid first name.'
+        },
+        last_name: {
+          input: document.getElementById('last-name'),
+          error: document.getElementById('last-name-error'),
+          required: 'Enter your last name.',
+          invalid: 'Enter a valid last name.'
+        },
+        email: {
+          input: document.getElementById('email'),
+          error: document.getElementById('email-error'),
+          required: 'Enter your email address.',
+          invalid: 'Enter a valid email address.'
+        },
+        phone: {
+          input: document.getElementById('phone'),
+          error: document.getElementById('phone-error'),
+          invalid: 'Enter a valid phone number.'
+        },
+        address_line1: {
+          input: document.getElementById('service-address'),
+          error: document.getElementById('address-error'),
+          required: 'Enter the service address.',
+          invalid: 'Enter a valid service address.'
+        }
+      };
       function setLocationState(state, text) {
         locationStatus.dataset.state = state;
         locationStatus.setAttribute('role', state === 'error' ? 'alert' : 'status');
@@ -106,14 +182,36 @@
       function setFormBusy(busy) {
         form.setAttribute('aria-busy', String(busy));
         formControls.forEach((control) => { control.disabled = busy; });
-        submitButton.textContent = busy ? 'Creating account...' : 'Create my account';
+        submitSpinner.hidden = !busy;
+        submitButtonLabel.textContent = busy ? 'Creating account...' : 'Create my account';
       }
-      function clearAddressError() {
-        serviceAddress.removeAttribute('aria-invalid');
-        addressError.hidden = true;
-        addressError.textContent = '';
+      function clearFieldError(rule) {
+        rule.input.removeAttribute('aria-invalid');
+        rule.error.hidden = true;
+        rule.error.textContent = '';
       }
-      serviceAddress.addEventListener('input', clearAddressError);
+      function showFieldError(rule, text) {
+        rule.input.setAttribute('aria-invalid', 'true');
+        rule.error.textContent = text;
+        rule.error.hidden = false;
+      }
+      function validateField(rule) {
+        clearFieldError(rule);
+        const value = rule.input.value.trim();
+        if (rule.input.required && !value) {
+          showFieldError(rule, rule.required);
+          return false;
+        }
+        if (rule.input.validity.typeMismatch || rule.input.validity.tooLong) {
+          showFieldError(rule, rule.invalid);
+          return false;
+        }
+        return true;
+      }
+      Object.values(fieldRules).forEach((rule) => {
+        rule.input.addEventListener('input', () => clearFieldError(rule));
+        rule.input.addEventListener('blur', () => validateField(rule));
+      });
       async function post(path, payload) {
         const response = await fetch(path, {
           method: 'POST',
@@ -137,6 +235,7 @@
         }
         locationButton.disabled = true;
         submitButton.disabled = true;
+        locationSpinner.hidden = false;
         locationButton.setAttribute('aria-busy', 'true');
         setLocationState('loading', 'Getting your current location...');
         navigator.geolocation.getCurrentPosition(
@@ -146,7 +245,8 @@
             const accuracy = Math.max(1, Math.round(position.coords.accuracy));
             const accuracyUnit = accuracy === 1 ? 'metre' : 'metres';
             setLocationState('success', `Location captured within approximately ${accuracy} ${accuracyUnit}.`);
-            locationButton.textContent = 'Update my current location';
+            locationButtonLabel.textContent = 'Update my current location';
+            locationSpinner.hidden = true;
             locationButton.removeAttribute('aria-busy');
             locationButton.disabled = false;
             submitButton.disabled = false;
@@ -159,7 +259,8 @@
               : error.code === error.TIMEOUT
                 ? 'Location request timed out. Please try again.'
                 : 'Your location could not be found. Please try again.');
-            locationButton.textContent = 'Try location again';
+            locationButtonLabel.textContent = 'Try location again';
+            locationSpinner.hidden = true;
             locationButton.removeAttribute('aria-busy');
             locationButton.disabled = false;
             submitButton.disabled = false;
@@ -169,14 +270,22 @@
       });
       form.addEventListener('submit', async (event) => {
         event.preventDefault();
-        clearAddressError();
+        let firstInvalidField = null;
+        Object.values(fieldRules).forEach((rule) => {
+          if (!validateField(rule) && firstInvalidField === null) {
+            firstInvalidField = rule.input;
+          }
+        });
+        if (firstInvalidField !== null) {
+          message.hidden = true;
+          firstInvalidField.focus();
+          return;
+        }
         const values = Object.fromEntries(new FormData(form));
         const resolvedLatitude = Number(values.latitude);
         const resolvedLongitude = Number(values.longitude);
         if (!values.latitude || !values.longitude || !Number.isFinite(resolvedLatitude) || !Number.isFinite(resolvedLongitude)) {
-          message.hidden = false;
-          message.className = 'message error';
-          message.textContent = 'Use your current location before creating your account.';
+          message.hidden = true;
           setLocationState('error', 'Location is required. Select Use my current location, then try again.');
           locationButton.focus();
           return;
@@ -215,26 +324,27 @@
               : 'Your account was created. Please contact Dotmac for access instructions.';
         } catch (error) {
           const details = Array.isArray(error.details) ? error.details : [];
-          const invalidAddress = details.some((detail) => Array.isArray(detail.loc) && detail.loc.includes('address_line1'));
+          const invalidFields = Object.keys(fieldRules).filter((fieldName) => (
+            details.some((detail) => Array.isArray(detail.loc) && detail.loc.includes(fieldName))
+          ));
           const invalidLocation = details.some((detail) => Array.isArray(detail.loc) && (detail.loc.includes('latitude') || detail.loc.includes('longitude')));
-          if (invalidAddress) {
-            serviceAddress.setAttribute('aria-invalid', 'true');
-            addressError.textContent = 'Enter a valid service address.';
-            addressError.hidden = false;
-          }
+          invalidFields.forEach((fieldName) => showFieldError(fieldRules[fieldName], fieldRules[fieldName].invalid));
           if (invalidLocation) {
             latitude.value = '';
             longitude.value = '';
-            locationButton.textContent = 'Try location again';
+            locationButtonLabel.textContent = 'Try location again';
             setLocationState('error', 'The captured location was not accepted. Capture your current location again.');
           }
-          message.className = 'message error';
-          message.textContent = invalidAddress || invalidLocation
-            ? 'Please correct the highlighted details and try again.'
-            : error.message || 'We could not complete your signup. Please try again.';
           setFormBusy(false);
-          if (invalidAddress) serviceAddress.focus();
-          else if (invalidLocation) locationButton.focus();
+          if (invalidFields.length || invalidLocation) {
+            message.hidden = true;
+            if (invalidFields.length) fieldRules[invalidFields[0]].input.focus();
+            else locationButton.focus();
+          } else {
+            message.hidden = false;
+            message.className = 'message error';
+            message.textContent = error.message || 'We could not complete your signup. Please try again.';
+          }
         }
       });
     })();
