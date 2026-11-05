@@ -748,6 +748,14 @@ TASK_RELIABILITY_CONTRACTS: dict[str, TaskReliabilityContract] = {
         STATUS,
         "Permanent security projection repair from active staff device-login state.",
     ),
+    "app.tasks.referrals.expire_pending_referrals": _c(
+        "referrals",
+        SWEEP,
+        IDEMP,
+        LOG,
+        "Daily sweep and bounded continuation reprocess pending rows; "
+        "terminal referral status prevents duplicate transition.",
+    ),
     "app.tasks.referrals.reconcile_referral_mirror": _c(
         "referrals", NONE, IDEMP, LOG, "Retired CRM mirror task tombstone."
     ),

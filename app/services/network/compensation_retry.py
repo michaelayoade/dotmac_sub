@@ -180,10 +180,12 @@ def retry_compensation(
         with olt_session(olt) as session:
             # Enter interface mode if needed
             if failure.interface_path:
-                session.run_command(
+                navigation = session.run_command(
                     f"interface gpon {failure.interface_path}",
                     require_mode=CliMode.CONFIG,
                 )
+                if not navigation.success:
+                    raise RuntimeError(navigation.message)
 
             # Execute each undo command
             all_success = True

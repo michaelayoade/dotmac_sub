@@ -792,6 +792,13 @@ def _configured_app_url(db: Session | None) -> str:
     return _normalize_base_url(_env_value("APP_URL") or _setting_value(db, "app_url"))
 
 
+def customer_portal_origin(db: Session | None) -> str:
+    """Resolve the origin that serves public customer pages."""
+    return _normalize_base_url(_env_value("APP_URL")) or _configured_domain_url(
+        db, "selfcare_domain"
+    )
+
+
 def _get_app_url(db: Session | None, *, next_login_path: str | None = None) -> str:
     preferred_domain_keys = ["selfcare_domain"]
     fallback_domain_keys = ["selfcare_domain", "admin_domain", "reseller_domain"]

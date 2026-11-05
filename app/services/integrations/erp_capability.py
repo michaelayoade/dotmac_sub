@@ -134,6 +134,7 @@ class ErpCapabilityClient:
             "/api/v1/sync/sub/material-requests": "material_request",
             "/api/v1/sync/sub/purchase-orders": "purchase_order",
             "/api/v1/sync/sub/purchase-invoices": "purchase_invoice",
+            "/api/v1/sync/sub/suppliers": "vendor_supplier",
         }
         try:
             flow = flow_by_path[path]

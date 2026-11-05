@@ -366,7 +366,8 @@ def _native_referral(db, referrer):
     return referral
 
 
-def test_me_referrals_native_matches_mirror_golden_payload(db_session):
+def test_me_referrals_native_matches_mirror_golden_payload(db_session, monkeypatch):
+    monkeypatch.setenv("APP_URL", "https://selfcare.example.test")
     _program_settings(db_session)
 
     mirror_sub = _subscriber(db_session)

@@ -5,6 +5,16 @@ from __future__ import annotations
 import pytest
 
 from app.models.billing import LedgerEntry, Payment
+from app.models.catalog import (
+    AccessType,
+    BillingMode,
+    CatalogOffer,
+    OfferStatus,
+    PriceBasis,
+    ServiceType,
+    Subscription,
+    SubscriptionStatus,
+)
 from app.models.imports import ImportRowStatus, ImportRun, ImportRunStatus
 from app.models.network import IpPool
 from app.services import import_runs
@@ -173,8 +183,28 @@ def test_ipv4_assignments_import_dry_run_then_apply(db_session):
         first_name="A", last_name="L", email=f"{uuid.uuid4().hex[:8]}@e.com"
     )
     db_session.add_all([pool, sub])
+    offer = CatalogOffer(
+        name=f"Import Offer {uuid.uuid4().hex[:8]}",
+        service_type=ServiceType.residential,
+        access_type=AccessType.fiber,
+        price_basis=PriceBasis.flat,
+        status=OfferStatus.active,
+        is_active=True,
+    )
+    db_session.add(offer)
+    db_session.flush()
+    subscription = Subscription(
+        subscriber_id=sub.id,
+        offer_id=offer.id,
+        status=SubscriptionStatus.active,
+        billing_mode=BillingMode.postpaid,
+    )
+    db_session.add(subscription)
     db_session.commit()
-    csv = f"pool_id,ip_address,subscriber_id\n{pool.id},10.50.0.5,{sub.id}\n"
+    csv = (
+        "pool_id,ip_address,subscriber_id,subscription_id\n"
+        f"{pool.id},10.50.0.5,{sub.id},{subscription.id}\n"
+    )
 
     # Dry-run validates, assigns nothing.
     run = import_runs.create_import_run(

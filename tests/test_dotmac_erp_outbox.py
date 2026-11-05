@@ -223,6 +223,7 @@ def test_get_flow_ownership_surface(db_session):
         "material_request": "sub",
         "purchase_order": "crm",
         "purchase_invoice": "crm",
+        "vendor_supplier": "crm",
     }
 
 

@@ -11,6 +11,7 @@ from app.services.network.olt_batched_mgmt import (
     create_batched_mgmt_spec_from_config_pack,
     execute_batched_management_setup,
 )
+from app.services.network.olt_ssh_session import CommandResult
 
 
 class TestBatchedMgmtSpec:
@@ -416,7 +417,13 @@ class TestExecuteBatchedManagementSetup:
         mock_cmd_result = MagicMock()
         mock_cmd_result.success = False
         mock_cmd_result.output = "Service-port already exists"
-        mock_session.run_command.return_value = mock_cmd_result
+
+        def response(command, require_mode=None):
+            if command.startswith("interface ") or command == "quit":
+                return CommandResult(success=True, output="Test-OLT(config)#")
+            return mock_cmd_result
+
+        mock_session.run_command.side_effect = response
         mock_session_ctx.return_value.__enter__.return_value = mock_session
 
         result = execute_batched_management_setup(olt, spec)

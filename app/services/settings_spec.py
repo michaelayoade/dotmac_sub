@@ -3622,14 +3622,6 @@ SETTINGS_SPECS: list[SettingSpec] = [
     ),
     SettingSpec(
         domain=SettingDomain.subscriber,
-        key="referral_share_base_url",
-        env_var="PORTAL_REFERRAL_SHARE_BASE",
-        value_type=SettingValueType.string,
-        default="https://app.dotmac.io",
-        label="Referral Share Base URL",
-    ),
-    SettingSpec(
-        domain=SettingDomain.subscriber,
         key="referral_qualify_window_days",
         env_var="REFERRAL_QUALIFY_WINDOW_DAYS",
         value_type=SettingValueType.integer,

@@ -159,7 +159,7 @@ _ENTRIES: Final[tuple[ModuleEntry, ...]] = (
     _module(
         module="durable-timers",
         package="dotmac-durable-timers",
-        version="0.1.0a1",
+        version="0.1.0a3",
         revision=_STARTER,
         plane=PersistencePlane.DUAL,
         gate="every shadow timer fires exactly once at the same logical instant as runtime.durable_timers",

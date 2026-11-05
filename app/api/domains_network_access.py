@@ -457,7 +457,10 @@ def delete_port_vlan(link_id: str, db: Session = Depends(get_db)):
     dependencies=[Depends(require_permission("network:ip:write"))],
 )
 def create_ip_assignment(payload: IPAssignmentCreate, db: Session = Depends(get_db)):
-    return network_service.ip_assignments.create(db, payload)
+    try:
+        return network_service.ip_assignments.create(db, payload)
+    except network_service.IPAssignmentError as exc:
+        raise HTTPException(status_code=400, detail=exc.message) from exc
 
 
 @router.get(
@@ -510,7 +513,10 @@ def list_ip_assignments(
 def update_ip_assignment(
     assignment_id: str, payload: IPAssignmentUpdate, db: Session = Depends(get_db)
 ):
-    return network_service.ip_assignments.update(db, assignment_id, payload)
+    try:
+        return network_service.ip_assignments.update(db, assignment_id, payload)
+    except network_service.IPAssignmentError as exc:
+        raise HTTPException(status_code=400, detail=exc.message) from exc
 
 
 @router.delete(
