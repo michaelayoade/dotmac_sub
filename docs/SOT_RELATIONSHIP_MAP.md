@@ -449,6 +449,12 @@ legacy `metadata`, IP and user-agent columns while dual-populating the kernel
 owns expansion drift evidence. `AuditActor` is the typed provenance contract:
 the calling owner may enrich a user or API-key principal only from an explicit
 canonical Party binding, while system and service actors cannot carry a Party.
+Request auditing normalizes authenticated product principal kinds such as
+`system_user` into that closed taxonomy, persists the authenticated
+`principal_id`, and snapshots the canonical account display name. Transport
+actor headers are never identity evidence. A read-only exact `SystemUser`
+lookup restores the display name for recoverable legacy request rows that were
+misclassified as `system`; it does not rewrite append-only audit evidence.
 An exact two-directional source ratchet tracks the temporary scalar callers
 across application and operator entry points. Migration 526 is a Sub-owned
 additive mirror, not a kernel-lineage stamp or an authority cutover.
@@ -1340,6 +1346,8 @@ Edit the owning domain shard and regenerate; do not hand-edit these rows.
 | `operations.work_order_templates` | explicit work purpose and technology compatibility | `policy` | explicit work purpose and access technology ← `operations.work_order_templates`<br>approved field-scope recommendation catalog ← `operations.work_order_templates` | `not_applicable` | `native` | field operations | `docs/designs/WORK_ORDER_TEMPLATE_CATALOG.md`<br>`tests/test_work_order_templates.py`<br>`tests/architecture/test_work_order_template_ownership.py` |
 | `operations.work_order_templates` | approved field-scope template recommendations | `policy` | explicit work purpose and access technology ← `operations.work_order_templates`<br>approved field-scope recommendation catalog ← `operations.work_order_templates` | `not_applicable` | `native` | field operations | `docs/designs/WORK_ORDER_TEMPLATE_CATALOG.md`<br>`tests/test_work_order_templates.py`<br>`tests/architecture/test_work_order_template_ownership.py` |
 | `operations.work_order_assignment_records` | native work-order assignment persistence | `command_writer` | authorized assignment intent ← `operations.work_order_commands` | `participant` | `cutover_ready` | field operations | `docs/designs/VENDOR_WORK_ORDER_EXECUTION.md`<br>`tests/test_vendor_work_order_assignment.py`<br>`tests/architecture/test_fiber_field_verification_job_plan_boundary.py` |
+| `operations.vendor_creation` | native vendor creation and ERP supplier delivery intent | `command_writer` | staff vendor creation command ← `auth.permission_gate` | `owner_managed` | `native` | vendor operations | `docs/BACKOFFICE_INTEGRATION_BOUNDARY.md`<br>`tests/test_vendor_supplier_sync.py` |
+| `operations.vendor_creation` | ERP supplier identity response projection and repair | `reconciler` | canonical native vendor record ← `operations.vendor_creation`<br>ERP supplier identity response ← `external:dotmac_erp` | `owner_managed` | `native` | vendor operations | `docs/BACKOFFICE_INTEGRATION_BOUNDARY.md`<br>`tests/test_vendor_supplier_sync.py` |
 | `auth.vendor_user_provisioning` | vendor portal login provisioning and revocation | `command_writer` | vendor portal login command ← `auth.permission_gate` | `owner_managed` | `native` | vendor operations | `docs/SOT_RELATIONSHIP_MAP.md`<br>`tests/test_vendor_identity.py`<br>`tests/test_vendor_portal_auth.py` |
 | `auth.vendor_user_provisioning` | vendor organisation role assignment | `command_writer` | vendor portal login command ← `auth.permission_gate` | `owner_managed` | `native` | vendor operations | `docs/SOT_RELATIONSHIP_MAP.md`<br>`tests/test_vendor_identity.py`<br>`tests/test_vendor_portal_auth.py` |
 | `auth.vendor_user_provisioning` | vendor portal profile repair and CRM contact import | `command_writer` | vendor portal login command ← `auth.permission_gate` | `owner_managed` | `native` | vendor operations | `docs/SOT_RELATIONSHIP_MAP.md`<br>`tests/test_vendor_identity.py`<br>`tests/test_vendor_portal_auth.py` |
@@ -1935,8 +1943,8 @@ legacy-compatible referral reference, so existing credit evidence repairs the
 Referral link without paying twice. PII-free versioned events are staged with
 the transition. Reward notification is a deduplicated consequence resolved by
 the canonical notification template/channel policy, never an in-service push.
-Program settings, including the share-base URL, resolve only through
-`control.settings_spec`.
+Program settings resolve only through `control.settings_spec`. Referral links
+use the customer portal origin resolved from `selfcare_domain` or `APP_URL`.
 
 Referral customer reads/writes are permanently native. The prior referral
 read/write controls, CRM referral mutation, mirror write-through, and scheduled

@@ -5,6 +5,7 @@ from __future__ import annotations
 import uuid
 
 from app.models.audit import AuditActorType, AuditEvent
+from app.models.system_user import SystemUser, SystemUserType
 from app.services import audit as audit_service
 from app.services import web_system_audit
 
@@ -128,3 +129,29 @@ def test_stored_label_is_preferred_over_live_resolution(db_session):
     from app.services.audit_helpers import resolve_actor_name
 
     assert resolve_actor_name(event, {}) == "Stored Name"
+
+
+def test_legacy_system_request_row_resolves_exact_staff_account(db_session):
+    staff = SystemUser(
+        first_name="Legacy",
+        last_name="Operator",
+        email="legacy-operator@example.com",
+        user_type=SystemUserType.system_user,
+        is_active=True,
+    )
+    db_session.add(staff)
+    db_session.commit()
+    _event(
+        db_session,
+        actor_id=staff.id,
+        actor_type=AuditActorType.system,
+        actor_label=None,
+        action="POST",
+    )
+
+    page = web_system_audit.get_audit_page_data(
+        db_session,
+        web_system_audit.build_audit_list_query(page=1),
+    )
+
+    assert page["events"][0]["actor_name"] == "Legacy Operator"

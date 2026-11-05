@@ -40,6 +40,7 @@ _FLOW_ENDPOINTS = {
     "material_request": "/api/v1/sync/sub/material-requests",
     "purchase_order": "/api/v1/sync/sub/purchase-orders",
     "purchase_invoice": "/api/v1/sync/sub/purchase-invoices",
+    "vendor_supplier": "/api/v1/sync/sub/suppliers",
 }
 
 

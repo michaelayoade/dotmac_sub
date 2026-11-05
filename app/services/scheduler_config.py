@@ -2298,6 +2298,14 @@ def build_beat_schedule() -> dict:
             interval_seconds=3600,
         )
 
+        _sync_scheduled_task(
+            session,
+            name="outbox_backlog_snapshot",
+            task_name="app.tasks.outbox_backlog.publish_outbox_backlog",
+            enabled=True,
+            interval_seconds=300,
+        )
+
         # RADIUS sync - syncs NAS devices and users to FreeRADIUS
         radius_sync_enabled = _scheduler_setting_enabled(
             session,

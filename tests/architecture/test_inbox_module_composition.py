@@ -12,12 +12,11 @@ than promised. The generic composition gate
 the lineage and the prerequisite binding agree. What it cannot know is that the
 module is deliberately INERT here, which is what these checks add:
 
-* exactly one module under `app/` may name `dotmac_inbox` at all, and it may
-  reach only the declaration surface — never the service, the models or the
-  history seam;
+* exactly one named adapter under `app/` may name `dotmac_inbox` at all; it may
+  reach the declaration surface and the a3 bounded read seam, but never the
+  service, models or history seam;
 * nothing under `app/` imports that declaration module, so the runtime import
-  graph is unchanged and the composition is reversible by removing three
-  declarations.
+  graph is unchanged and no live read has moved;
 
 Both fail the moment the writer slice begins, which is correct: that slice
 changes this file in the same commit that changes the authority.
@@ -26,14 +25,15 @@ changes this file in the same commit that changes the authority.
 from __future__ import annotations
 
 import ast
+from importlib.metadata import distribution
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
 APP = ROOT / "app"
 
-#: The one module allowed to name the package, and the only surface it may use.
+#: The one adapter allowed to name the package, and the exact surfaces it may use.
 DECLARATION_MODULE = "app/services/inbox_channels.py"
-ALLOWED_SUBMODULES = frozenset({"dotmac_inbox.channels"})
+ALLOWED_SUBMODULES = frozenset({"dotmac_inbox.channels", "dotmac_inbox.read_service"})
 
 #: Dotted paths that reach the declaration module. Empty ON PURPOSE — see the
 #: docstring. The writer slice replaces this with its adapter and says so.
@@ -64,18 +64,18 @@ def test_only_the_declaration_module_names_the_inbox_package() -> None:
         if path.relative_to(ROOT).as_posix() != DECLARATION_MODULE
     ]
     assert not offenders, (
-        "dotmac-inbox is composed, not adopted: only "
-        f"{DECLARATION_MODULE} may import it until the writer cutover slice "
+        "dotmac-inbox is composed, not authoritative: only "
+        f"{DECLARATION_MODULE} may import it before the writer cutover slice "
         "lands.\n  " + "\n  ".join(offenders)
     )
 
 
-def test_the_declaration_module_reaches_only_the_declaration_surface() -> None:
-    """Importing the service or the models would be reaching for a writer.
+def test_the_adapter_reaches_only_the_reviewed_composition_surfaces() -> None:
+    """Importing the service, history or models would reach beyond composition.
 
-    `dotmac_inbox.channels` is pure declaration: no session, no models, no
-    kernel. Naming `dotmac_inbox.service`, `.history` or `.models` here is the
-    first line of the cutover, not part of composing it.
+    `dotmac_inbox.channels` is declaration and `read_service` supplies the
+    bounded reader compatibility seam. The adapter is not imported at runtime,
+    so this proves availability without changing live reads.
     """
 
     path = ROOT / DECLARATION_MODULE
@@ -91,8 +91,8 @@ def test_the_declaration_module_reaches_only_the_declaration_surface() -> None:
     )
 
 
-def test_nothing_under_app_imports_the_declaration_yet() -> None:
-    """The composition is inert, so removing it is still a three-line revert."""
+def test_nothing_under_app_imports_the_adapter_yet() -> None:
+    """The package reader is compatible but no live Sub read is routed to it."""
 
     target = DECLARATION_MODULE.removesuffix(".py").replace("/", ".")
     offenders = [
@@ -103,10 +103,10 @@ def test_nothing_under_app_imports_the_declaration_yet() -> None:
         if path.relative_to(ROOT).as_posix() not in ALLOWED_IMPORTERS_OF_THE_DECLARATION
     ]
     assert not offenders, (
-        "app now depends on the inbox channel declarations. That is the "
-        "writer slice; name the importer in ALLOWED_IMPORTERS_OF_THE_"
-        "DECLARATION and update ADR-0013 in the same change.\n  "
-        + "\n  ".join(offenders)
+        "app now depends on the inbox composition adapter. That requires an "
+        "approved read or writer slice; name the importer in "
+        "ALLOWED_IMPORTERS_OF_THE_DECLARATION and update ADR-0013 in the same "
+        "change.\n  " + "\n  ".join(offenders)
     )
 
 
@@ -121,4 +121,45 @@ def test_the_import_scan_would_actually_find_something() -> None:
     assert path.exists(), f"{DECLARATION_MODULE} is missing"
     modules = {module for _, module in _imported_modules(path)}
     assert "dotmac_inbox.channels" in modules
+    assert "dotmac_inbox.read_service" in modules
     assert "app.models.team_inbox" in modules
+
+
+def test_the_adapter_reexports_the_exact_a3_recent_message_reader() -> None:
+    """Availability is a direct alias, not a second pagination implementation."""
+
+    tree = ast.parse((ROOT / DECLARATION_MODULE).read_text(encoding="utf-8"))
+    imports = [
+        (alias.name, alias.asname)
+        for node in ast.walk(tree)
+        if isinstance(node, ast.ImportFrom)
+        if node.module == "dotmac_inbox.read_service"
+        for alias in node.names
+    ]
+    assert imports == [("list_recent_messages", "list_module_recent_messages")]
+
+
+def test_the_composed_inbox_lineage_reaches_the_a3_transport_head() -> None:
+    """The exact pinned package must expose every released Inbox migration."""
+
+    versions_dir = distribution("dotmac-inbox").locate_file(
+        "dotmac_inbox/migrations/versions"
+    )
+
+    revisions: dict[str, str | None] = {}
+    for path in versions_dir.glob("*.py"):
+        values: dict[str, str | None] = {}
+        for node in ast.parse(path.read_text(encoding="utf-8")).body:
+            if not isinstance(node, ast.Assign) or len(node.targets) != 1:
+                continue
+            target = node.targets[0]
+            if isinstance(target, ast.Name) and target.id in {
+                "revision",
+                "down_revision",
+            }:
+                values[target.id] = ast.literal_eval(node.value)
+        if "revision" in values:
+            revisions[str(values["revision"])] = values.get("down_revision")
+    parents = {parent for parent in revisions.values() if parent is not None}
+    heads = set(revisions) - parents
+    assert heads == {"ib_0003_transport_refs"}

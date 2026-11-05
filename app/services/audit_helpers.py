@@ -523,10 +523,13 @@ def load_audit_actor_subscribers(db: Session, events: list) -> dict[str, object]
 
     Covers user actors (Subscriber/SystemUser) and api_key actors (ApiKey), so
     historical events written before the label was snapshotted still display a
-    name at read time instead of a raw id.
+    name at read time instead of a raw id. It also resolves the narrow legacy
+    request-audit defect where a staff principal UUID was stored with actor type
+    ``system``; those UUIDs are checked only against canonical SystemUser rows.
     """
     user_ids: set[str] = set()
     api_key_ids: set[str] = set()
+    legacy_staff_ids: set[str] = set()
     for event in events:
         actor_id = getattr(event, "actor_id", None)
         if not actor_id:
@@ -540,6 +543,8 @@ def load_audit_actor_subscribers(db: Session, events: list) -> dict[str, object]
             user_ids.add(normalized)
         elif _is_api_key_actor(actor_type):
             api_key_ids.add(normalized)
+        elif actor_type in {AuditActorType.system, AuditActorType.system.value}:
+            legacy_staff_ids.add(normalized)
     actors: dict[str, object] = {}
     if user_ids:
         actors.update(
@@ -550,11 +555,13 @@ def load_audit_actor_subscribers(db: Session, events: list) -> dict[str, object]
                 .all()
             }
         )
+    staff_ids = user_ids | legacy_staff_ids
+    if staff_ids:
         actors.update(
             {
                 str(user.id): user
                 for user in db.query(SystemUser)
-                .filter(SystemUser.id.in_(user_ids))
+                .filter(SystemUser.id.in_(staff_ids))
                 .all()
             }
         )
@@ -804,6 +811,17 @@ def _resolve_actor_name(event, subscribers: dict[str, object]) -> str:
             or metadata.get("actor_email")
             or "Former or unknown user"
         )
+    if actor_id and actor_type in {
+        AuditActorType.system,
+        AuditActorType.system.value,
+    }:
+        # Compatibility projection for request-audit rows written before
+        # authenticated ``system_user`` principals were normalized to ``user``.
+        # An exact canonical SystemUser match is required; audit evidence is
+        # never mutated or inferred from a display name.
+        legacy_staff_label = _label_from_actor_object(subscribers.get(str(actor_id)))
+        if legacy_staff_label:
+            return legacy_staff_label
     metadata = getattr(event, "metadata_", None) or {}
     return (
         metadata.get("actor_name")

@@ -11,6 +11,7 @@ from app.services.sot_manifest import (
     EventContract,
     MigrationContract,
     OwnerRole,
+    ProjectionContract,
     ServiceContract,
     SOTService,
     TransactionContract,
@@ -18,6 +19,126 @@ from app.services.sot_manifest import (
 )
 
 SERVICES: tuple[SOTService, ...] = (
+    SOTService(
+        name="operations.vendor_creation",
+        module="app.services.vendor_creation",
+        implementation_modules=("app.services.dotmac_erp.vendor_supplier_sync",),
+        owns=(
+            "native vendor creation and ERP supplier delivery intent",
+            "ERP supplier identity response projection and repair",
+        ),
+        depends_on=("integration.backoffice_adapter",),
+        contract=ServiceContract(
+            concerns=(
+                ConcernContract(
+                    name="native vendor creation and ERP supplier delivery intent",
+                    role=OwnerRole.COMMAND_WRITER,
+                    input_names=("staff vendor creation command",),
+                    canonical_writer="operations.vendor_creation",
+                ),
+                ConcernContract(
+                    name="ERP supplier identity response projection and repair",
+                    role=OwnerRole.RECONCILER,
+                    input_names=(
+                        "canonical native vendor record",
+                        "ERP supplier identity response",
+                    ),
+                    canonical_writer="operations.vendor_creation",
+                ),
+            ),
+            authoritative_inputs=(
+                AuthorityInput(
+                    name="staff vendor creation command",
+                    owner="auth.permission_gate",
+                    kind=AuthorityKind.CONTROL_INPUT,
+                    source="authenticated staff vendor form and command context",
+                ),
+                AuthorityInput(
+                    name="canonical native vendor record",
+                    owner="operations.vendor_creation",
+                    kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                    source="the native Vendor identity and its current supplier binding",
+                ),
+                AuthorityInput(
+                    name="ERP supplier identity response",
+                    owner="external:dotmac_erp",
+                    kind=AuthorityKind.EXTERNAL_OBSERVATION,
+                    source=(
+                        "the validated source vendor UUID, supplier UUID, supplier code, "
+                        "and create-or-replay result returned by Dotmac ERP"
+                    ),
+                ),
+            ),
+            transaction=TransactionContract(
+                mode=TransactionMode.OWNER_MANAGED,
+                boundary=(
+                    "Native Vendor, FieldVendor bridge and ERP supplier outbox intent "
+                    "commit atomically; a validated delivery result updates only that "
+                    "vendor in the delivery worker's separate transaction."
+                ),
+                locking=(
+                    "New vendor ID is unique; code uniqueness is checked on native and "
+                    "portal tables, and a conflicting supplier binding fails closed."
+                ),
+                idempotency=(
+                    "One unique supplier outbox key per native vendor UUID; an accepted "
+                    "response may be replayed only for the same source and supplier UUIDs."
+                ),
+                retries=(
+                    "ERP delivery retries after the vendor transaction commits; accepted "
+                    "but unlinked results are repaired from durable outbox evidence."
+                ),
+            ),
+            errors=ErrorContract(
+                domain_codes=(
+                    "operations.vendor_creation.active_caller_transaction",
+                    "operations.vendor_creation.command_contract_violation",
+                    "operations.vendor_creation.invalid_command_context",
+                    "operations.vendor_creation.nested_owner_command",
+                    "operations.vendor_creation.nested_transaction_completion",
+                ),
+                mapping_owner="app.web.admin.vendors",
+            ),
+            events=EventContract(
+                event_types=("vendor.created",),
+                schema_version=1,
+                delivery_owner="events.dispatcher",
+                compatibility="The supplier payload is versioned and keyed by source Vendor UUID.",
+                replay="The ERP supplier endpoint returns the existing supplier for a repeated source UUID.",
+            ),
+            projections=(
+                ProjectionContract(
+                    name="ERP supplier identity response projection and repair",
+                    input_names=(
+                        "canonical native vendor record",
+                        "ERP supplier identity response",
+                    ),
+                    writer="operations.vendor_creation",
+                    freshness="Updated when a supplier delivery is accepted by ERP.",
+                    stale_behavior=(
+                        "An absent supplier reference remains explicitly pending; it never "
+                        "implies that ERP accepted or created a supplier."
+                    ),
+                    drift_signal=(
+                        "An accepted vendor-supplier outbox event whose native Vendor lacks "
+                        "the same Dotmac ERP supplier UUID."
+                    ),
+                    rebuild_operation=(
+                        "Replay repair_accepted over accepted vendor-supplier outbox events."
+                    ),
+                    repair_owner="operations.vendor_creation",
+                ),
+            ),
+            migration=MigrationContract(
+                state=AuthorityMigrationState.NATIVE,
+                new_owner="operations.vendor_creation",
+                verification="Vendor creation, atomic outbox, ERP delivery and repair tests.",
+            ),
+            steward="vendor operations",
+            design_refs=("docs/BACKOFFICE_INTEGRATION_BOUNDARY.md",),
+            test_refs=("tests/test_vendor_supplier_sync.py",),
+        ),
+    ),
     SOTService(
         name="auth.vendor_user_provisioning",
         module="app.services.vendor_user_provisioning",

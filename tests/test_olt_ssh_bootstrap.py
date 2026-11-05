@@ -176,7 +176,7 @@ def test_prepare_read_shell_tracks_privileged_prompt_and_paces_commands(
 
     assert prompt == r"(?:^|\r?\n)boi\-olt\#\s*$"
     assert "".join(channel.sent) == "enable\nscreen-length 0 temporary\n"
-    assert prompts[0] == r"(?:^|\r?\n)[^\r\n]*#\s*$"
+    assert prompts[0] == r"(?:^|\r?\n)[^\r\n]+#\s*$"
     assert prompts[1].startswith(prompt)
 
 

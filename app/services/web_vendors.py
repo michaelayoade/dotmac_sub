@@ -460,20 +460,35 @@ def create_vendor_from_form(
     service_area: str | None,
     notes: str | None,
     is_active: str | None,
+    actor_id: str | None = None,
 ) -> str:
-    vendor = vendor_admin.create_committed(
+    from app.services.vendor_creation import CreateVendorCommand, create_vendor
+
+    if not actor_id:
+        raise ValueError(
+            "Authenticated staff principal is required for vendor creation"
+        )
+    db_session_adapter.release_read_transaction(db)
+    outcome = create_vendor(
         db,
-        name=name,
-        code=code,
-        contact_name=contact_name,
-        contact_email=contact_email,
-        contact_phone=contact_phone,
-        license_number=license_number,
-        service_area=service_area,
-        notes=notes,
-        is_active=_as_bool(is_active) if is_active is not None else True,
+        CreateVendorCommand(
+            context=_admin_command_context(
+                actor_id=actor_id,
+                scope="vendor:create",
+                reason="Administrative vendor creation",
+            ),
+            name=name or "",
+            code=code,
+            contact_name=contact_name,
+            contact_email=contact_email,
+            contact_phone=contact_phone,
+            license_number=license_number,
+            service_area=service_area,
+            notes=notes,
+            is_active=_as_bool(is_active) if is_active is not None else True,
+        ),
     )
-    return str(vendor.id)
+    return str(outcome.vendor_id)
 
 
 def update_vendor_from_form(

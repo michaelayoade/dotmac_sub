@@ -4,12 +4,14 @@ import uuid
 from datetime import UTC, datetime, timedelta
 
 import pytest
-from fastapi import HTTPException
+from fastapi import FastAPI, HTTPException
 from fastapi.routing import APIRoute
+from fastapi.testclient import TestClient
 from jose import jwt
 from pydantic import ValidationError
 
 from app.api import crm_referrals as referral_api
+from app.db import get_db
 from app.models.domain_settings import DomainSetting, SettingDomain, SettingValueType
 from app.models.party import (
     Party,
@@ -25,6 +27,7 @@ from app.schemas.referral import (
     ReferralSelfServiceSignupRequest,
 )
 from app.services import referral_account_conversion
+from app.web.public.referrals import router as public_referral_router
 from tests.referral_program_testkit import ensure_code
 
 
@@ -85,6 +88,46 @@ def _account() -> ReferralSelfServiceAccountCreate:
         phone="0804 000 0043",
         city="Abuja",
     )
+
+
+def test_public_referral_link_capture_and_signup_create_the_exact_account(db_session):
+    _enable_program(db_session)
+    referrer = _subscriber(db_session)
+    code = ensure_code(db_session, referrer.id)
+    friend_email = _email("friend")
+    app = FastAPI()
+    app.include_router(public_referral_router)
+    app.include_router(referral_api.public_router, prefix="/api/v1")
+    app.dependency_overrides[get_db] = lambda: db_session
+    client = TestClient(app)
+
+    page = client.get(f"/r/{code.code}")
+    assert page.status_code == 200
+
+    captured = client.post(
+        "/api/v1/referrals/capture",
+        json={"code": code.code, "name": "Friend Customer", "email": friend_email},
+    )
+    assert captured.status_code == 201, captured.text
+    capture = captured.json()
+    signed_up = client.post(
+        "/api/v1/referrals/signup",
+        json={
+            "conversion_token": capture["conversion_token"],
+            "account": {
+                "first_name": "Friend",
+                "last_name": "Customer",
+                "email": friend_email,
+            },
+        },
+    )
+    assert signed_up.status_code == 201, signed_up.text
+    result = signed_up.json()
+    assert result["referral_id"] == capture["id"]
+    account = db_session.get(Subscriber, result["subscriber_id"])
+    assert account is not None
+    assert account.email == friend_email
+    assert account.status == SubscriberStatus.new
 
 
 def test_capture_returns_expiring_pii_free_signed_context(db_session):

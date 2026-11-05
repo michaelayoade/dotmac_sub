@@ -5107,7 +5107,9 @@ def test_build_ipv4_networks_data_filters_sorts_and_utilization(db_session):
     assert names == sorted(names, reverse=True)
 
 
-def test_build_ipv4_network_detail_data_exposes_assignment_rows(db_session, subscriber):
+def test_build_ipv4_network_detail_data_exposes_assignment_rows(
+    db_session, subscriber, subscription
+):
     pool, err = web_network_ip_service.create_ip_pool(
         db_session,
         {
@@ -5143,6 +5145,7 @@ def test_build_ipv4_network_detail_data_exposes_assignment_rows(db_session, subs
         db_session,
         IPAssignmentCreate(
             account_id=subscriber.id,
+            subscription_id=subscription.id,
             ip_version="ipv4",
             ipv4_address_id=ip_record.id,
             prefix_length=29,
@@ -5220,6 +5223,7 @@ def test_create_ipv6_network_from_dedicated_form_values(db_session):
 def test_build_dual_stack_data_groups_ipv4_and_ipv6_by_subscriber_location(
     db_session,
     subscriber,
+    subscription,
 ):
     address = Address(
         subscriber_id=subscriber.id,
@@ -5277,6 +5281,7 @@ def test_build_dual_stack_data_groups_ipv4_and_ipv6_by_subscriber_location(
         db_session,
         IPAssignmentCreate(
             account_id=subscriber.id,
+            subscription_id=subscription.id,
             service_address_id=address.id,
             ip_version="ipv4",
             ipv4_address_id=v4.id,

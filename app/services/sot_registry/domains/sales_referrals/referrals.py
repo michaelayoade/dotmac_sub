@@ -131,8 +131,8 @@ SERVICES: tuple[SOTService, ...] = (
                     kind=AuthorityKind.CONTROL_INPUT,
                     source=(
                         "database-authoritative enablement, reward amount and "
-                        "currency, qualification window, approval mode, and "
-                        "share-base settings in the subscriber domain"
+                        "currency, qualification window, and approval mode "
+                        "in the subscriber domain"
                     ),
                 ),
                 AuthorityInput(

@@ -107,8 +107,8 @@ def test_reward_and_runtime_policy_use_their_canonical_owners() -> None:
     notification = _source("app/services/events/handlers/notification.py")
     assert "CreditNotes.issue_referral_reward(" in owner
     assert "def issue_referral_reward(" in credit_notes
-    assert 'key="referral_share_base_url"' in settings
-    assert 'env_var="PORTAL_REFERRAL_SHARE_BASE"' in settings
+    assert 'key="referral_share_base_url"' not in settings
+    assert 'key="selfcare_domain"' in settings
     assert "EventType.referral_reward_issued" in notification
     assert "dedupe_key=" in notification
 

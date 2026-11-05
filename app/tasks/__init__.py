@@ -161,6 +161,7 @@ from app.tasks.ont_service_configuration import apply as apply_ont_service_confi
 from app.tasks.ont_signal_observations import record_ont_observations
 from app.tasks.operational_escalations import dispatch_operational_escalation_deliveries
 from app.tasks.outage_auto_notify import auto_dispatch_outage_notifications
+from app.tasks.outbox_backlog import publish_outbox_backlog_task
 from app.tasks.payment_reconciliation import reconcile_topups
 from app.tasks.profile_sync import (
     execute_due_profile_sync_tasks,
@@ -314,6 +315,7 @@ __all__ = [
     "run_scheduled_export",
     "run_export_job",
     "prune_field_location_history_task",
+    "publish_outbox_backlog_task",
     "retry_failed_events",
     "dispatch_pending_events",
     "mark_stale_processing_events",

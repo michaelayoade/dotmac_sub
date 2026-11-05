@@ -75,6 +75,7 @@ FLOW_ENDPOINTS: dict[str, str] = {
     FieldErpSyncFlow.material_request.value: "/api/v1/sync/sub/material-requests",
     FieldErpSyncFlow.purchase_order.value: "/api/v1/sync/sub/purchase-orders",
     FieldErpSyncFlow.purchase_invoice.value: "/api/v1/sync/sub/purchase-invoices",
+    FieldErpSyncFlow.vendor_supplier.value: "/api/v1/sync/sub/suppliers",
 }
 
 # Response signals that mean ERP made a terminal REJECT decision.
@@ -94,6 +95,7 @@ _ERP_ID_KEYS = (
     "material_request_id",
     "purchase_order_id",
     "purchase_invoice_id",
+    "supplier_id",
     "payment_intent_id",
 )
 
@@ -348,7 +350,11 @@ def deliver_pending(
                 db.commit()
                 continue
             except (DomainError, TypeError, ValueError):
-                error = "Expense delivery evidence failed validation"
+                error = (
+                    "ERP supplier delivery evidence failed validation"
+                    if row.flow == FieldErpSyncFlow.vendor_supplier.value
+                    else "Expense delivery evidence failed validation"
+                )
                 _mark_dead(row, error)
                 result.dead += 1
                 result.errors.append(f"{row.id}: {error}")
@@ -794,6 +800,17 @@ def _dispatch_flow_writeback(db: Session, row: FieldErpSyncEvent) -> None:
                 row.flow,
                 row.id,
             )
+    elif row.flow == FieldErpSyncFlow.vendor_supplier.value:
+        try:
+            from app.services.dotmac_erp.vendor_supplier_sync import apply_erp_response
+
+            apply_erp_response(db, row)
+        except Exception:  # noqa: BLE001 — accepted delivery retains repair evidence
+            logger.exception(
+                "field_erp_sync: write-back failed for %s event %s",
+                row.flow,
+                row.id,
+            )
 
 
 def unlinked_delivered_events(
@@ -981,6 +998,11 @@ def _source_reference_is_null(db: Session, row: FieldErpSyncEvent) -> bool | Non
         return (
             expense_request is not None and not expense_request.expense_claim_reference
         )
+    if row.flow == FieldErpSyncFlow.vendor_supplier.value:
+        from app.models.vendor_routes import Vendor
+
+        vendor = db.get(Vendor, row.entity_id)
+        return vendor is not None and not vendor.supplier_reference
     if row.flow == FieldErpSyncFlow.material_request.value:
         from app.models.field_material import FieldMaterialRequest
 
