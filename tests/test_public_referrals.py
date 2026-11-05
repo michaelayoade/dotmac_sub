@@ -35,6 +35,15 @@ def test_valid_link_renders_capture_and_signup_flow(db_session):
     assert "/api/v1/referrals/capture" in response.text
     assert "/api/v1/referrals/signup" in response.text
     assert "BWQF67MN" in response.text
+    assert 'name="address_line1"' in response.text
+    assert 'id="capture-location"' in response.text
+    assert "navigator.geolocation.getCurrentPosition" in response.text
+    assert "Both are required" in response.text
+    assert 'data-state="neutral"' in response.text
+    assert "position.coords.accuracy" in response.text
+    assert "Enable it in your browser settings" in response.text
+    assert "setFormBusy(true)" in response.text
+    assert 'id="address-error"' in response.text
 
 
 def test_unknown_link_is_unavailable(db_session):
