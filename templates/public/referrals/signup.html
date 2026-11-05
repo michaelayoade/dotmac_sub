@@ -6,25 +6,48 @@
   <meta name="referrer" content="no-referrer">
   <title>Join Dotmac · Refer &amp; Earn</title>
   <style>
-    :root { font-family: system-ui, -apple-system, Segoe UI, sans-serif; color: #17231f; background: #f4f7f5; }
+    :root { font-family: system-ui, -apple-system, Segoe UI, sans-serif; color: #17231f; background: #f4f7f5; -webkit-font-smoothing: antialiased; -moz-osx-font-smoothing: grayscale; }
     * { box-sizing: border-box; }
     body { margin: 0; min-height: 100vh; }
     main { max-width: 36rem; margin: 4rem auto; padding: 0 1.25rem; }
     .brand { color: #11694d; font-size: .9rem; font-weight: 800; letter-spacing: .12em; text-transform: uppercase; }
     .card { margin-top: 1rem; padding: clamp(1.5rem, 5vw, 2.5rem); background: white; border: 1px solid #dce7e0; border-radius: 1.25rem; box-shadow: 0 12px 40px #173d2610; }
-    h1 { margin: 0 0 .75rem; font-size: clamp(1.8rem, 5vw, 2.5rem); line-height: 1.15; }
-    p { line-height: 1.55; color: #526159; }
+    h1 { margin: 0 0 .75rem; font-size: clamp(1.8rem, 5vw, 2.5rem); line-height: 1.15; text-wrap: balance; }
+    p { line-height: 1.55; color: #526159; text-wrap: pretty; }
     form { display: grid; gap: 1rem; margin-top: 1.75rem; }
     label { display: grid; gap: .35rem; font-size: .9rem; font-weight: 650; }
-    input { width: 100%; padding: .8rem .9rem; border: 1px solid #b9c9bf; border-radius: .65rem; font: inherit; }
+    input { width: 100%; min-height: 44px; padding: .8rem .9rem; border: 1px solid #b9c9bf; border-radius: .65rem; font: inherit; }
     input:focus { outline: 2px solid #13835e; outline-offset: 2px; }
-    button { padding: .9rem 1rem; border: 0; border-radius: .65rem; background: #11694d; color: white; font: inherit; font-weight: 700; cursor: pointer; }
+    button { min-height: 44px; padding: .9rem 1rem; border: 0; border-radius: .65rem; background: #11694d; color: white; font: inherit; font-weight: 700; cursor: pointer; transition: background-color 150ms ease-out, box-shadow 150ms ease-out, transform 150ms ease-out; }
     button:hover { background: #0d543d; }
-    button:disabled { opacity: .65; cursor: wait; }
+    button:active:not(:disabled) { transform: scale(.98); }
+    button:disabled { opacity: .65; cursor: not-allowed; }
+    button[aria-busy="true"] { cursor: wait; }
+    button.secondary { background: #e7f2ed; color: #0d543d; border: 1px solid #b9d5c8; }
+    button.secondary:hover { background: #d8ebe2; }
+    button:focus-visible { outline: 2px solid #13835e; outline-offset: 2px; }
+    .location { display: grid; gap: .75rem; padding: 1rem; border: 1px solid #dce7e0; border-radius: .8rem; }
+    .location legend { padding: 0 .25rem; font-size: .9rem; font-weight: 700; }
+    .hint, .location-status, .field-error { margin: 0; font-size: .82rem; }
+    .location-status { padding: .65rem .75rem; border-radius: .55rem; font-weight: 650; }
+    .location-status[data-state="neutral"] { background: #f1f4f2; color: #4f5d56; }
+    .location-status[data-state="loading"] { background: #eef6ff; color: #244e78; }
+    .location-status[data-state="success"] { background: #e9f7ef; color: #145c39; }
+    .location-status[data-state="error"] { background: #fff0ef; color: #842c26; }
+    .field-error { color: #842c26; font-weight: 650; }
+    input[aria-invalid="true"] { border-color: #b33b33; }
     .message { margin-top: 1rem; padding: .85rem 1rem; border-radius: .65rem; }
     .error { background: #fff0ef; color: #842c26; }
     .success { background: #e9f7ef; color: #145c39; }
     [hidden] { display: none !important; }
+    @media (max-width: 40rem) {
+      main { margin: 1.5rem auto; padding: 0 .9rem; }
+      .card { padding: 1.25rem; border-radius: 1rem; }
+    }
+    @media (prefers-reduced-motion: reduce) {
+      button { transition: none; }
+      button:active:not(:disabled) { transform: none; }
+    }
   </style>
 </head>
 <body>
@@ -39,6 +62,18 @@
         <label>Last name <input name="last_name" autocomplete="family-name" maxlength="80" required></label>
         <label>Email address <input name="email" type="email" autocomplete="email" maxlength="255" required></label>
         <label>Phone number (optional) <input name="phone" type="tel" autocomplete="tel" maxlength="40"></label>
+        <fieldset class="location">
+          <legend>Service location (required)</legend>
+          <p id="location-help" class="hint">Enter the service address and share your current location. Both are required so we can confirm where service is needed.</p>
+          <label>Service address
+            <input id="service-address" name="address_line1" autocomplete="street-address" maxlength="120" placeholder="House number, street and area" aria-describedby="location-help address-error" required>
+          </label>
+          <p id="address-error" class="field-error" role="alert" hidden></p>
+          <button id="capture-location" class="secondary" type="button" aria-describedby="location-help location-status">Use my current location</button>
+          <p id="location-status" class="location-status" data-state="neutral" role="status" aria-live="polite">Location not captured.</p>
+          <input id="latitude" name="latitude" type="hidden">
+          <input id="longitude" name="longitude" type="hidden">
+        </fieldset>
         <button type="submit">Create my account</button>
       </form>
       <p id="message" class="message" role="status" aria-live="polite" hidden></p>
@@ -54,7 +89,31 @@
       const code = {{ code | tojson }};
       const form = document.getElementById('signup-form');
       const message = document.getElementById('message');
-      const button = form.querySelector('button');
+      const submitButton = form.querySelector('button[type="submit"]');
+      const locationButton = document.getElementById('capture-location');
+      const locationStatus = document.getElementById('location-status');
+      const latitude = document.getElementById('latitude');
+      const longitude = document.getElementById('longitude');
+      const serviceAddress = document.getElementById('service-address');
+      const addressError = document.getElementById('address-error');
+      const formControls = Array.from(form.elements);
+      function setLocationState(state, text) {
+        locationStatus.dataset.state = state;
+        locationStatus.setAttribute('role', state === 'error' ? 'alert' : 'status');
+        locationStatus.setAttribute('aria-live', state === 'error' ? 'assertive' : 'polite');
+        locationStatus.textContent = text;
+      }
+      function setFormBusy(busy) {
+        form.setAttribute('aria-busy', String(busy));
+        formControls.forEach((control) => { control.disabled = busy; });
+        submitButton.textContent = busy ? 'Creating account...' : 'Create my account';
+      }
+      function clearAddressError() {
+        serviceAddress.removeAttribute('aria-invalid');
+        addressError.hidden = true;
+        addressError.textContent = '';
+      }
+      serviceAddress.addEventListener('input', clearAddressError);
       async function post(path, payload) {
         const response = await fetch(path, {
           method: 'POST',
@@ -65,29 +124,83 @@
         });
         const data = await response.json().catch(() => ({}));
         if (!response.ok) {
-          throw new Error(typeof data.detail === 'string' ? data.detail : 'Please check your details and try again.');
+          const error = new Error(typeof data.detail === 'string' ? data.detail : 'Please check your details and try again.');
+          error.details = data.detail;
+          throw error;
         }
         return data;
       }
+      locationButton.addEventListener('click', () => {
+        if (!navigator.geolocation) {
+          setLocationState('error', 'This browser does not support location access. Use a supported browser to continue.');
+          return;
+        }
+        locationButton.disabled = true;
+        submitButton.disabled = true;
+        locationButton.setAttribute('aria-busy', 'true');
+        setLocationState('loading', 'Getting your current location...');
+        navigator.geolocation.getCurrentPosition(
+          (position) => {
+            latitude.value = position.coords.latitude.toFixed(7);
+            longitude.value = position.coords.longitude.toFixed(7);
+            const accuracy = Math.max(1, Math.round(position.coords.accuracy));
+            const accuracyUnit = accuracy === 1 ? 'metre' : 'metres';
+            setLocationState('success', `Location captured within approximately ${accuracy} ${accuracyUnit}.`);
+            locationButton.textContent = 'Update my current location';
+            locationButton.removeAttribute('aria-busy');
+            locationButton.disabled = false;
+            submitButton.disabled = false;
+          },
+          (error) => {
+            latitude.value = '';
+            longitude.value = '';
+            setLocationState('error', error.code === error.PERMISSION_DENIED
+              ? 'Location access was denied. Enable it in your browser settings, then try again.'
+              : error.code === error.TIMEOUT
+                ? 'Location request timed out. Please try again.'
+                : 'Your location could not be found. Please try again.');
+            locationButton.textContent = 'Try location again';
+            locationButton.removeAttribute('aria-busy');
+            locationButton.disabled = false;
+            submitButton.disabled = false;
+          },
+          { enableHighAccuracy: true, timeout: 15000, maximumAge: 0 }
+        );
+      });
       form.addEventListener('submit', async (event) => {
         event.preventDefault();
-        button.disabled = true;
+        clearAddressError();
+        const values = Object.fromEntries(new FormData(form));
+        const resolvedLatitude = Number(values.latitude);
+        const resolvedLongitude = Number(values.longitude);
+        if (!values.latitude || !values.longitude || !Number.isFinite(resolvedLatitude) || !Number.isFinite(resolvedLongitude)) {
+          message.hidden = false;
+          message.className = 'message error';
+          message.textContent = 'Use your current location before creating your account.';
+          setLocationState('error', 'Location is required. Select Use my current location, then try again.');
+          locationButton.focus();
+          return;
+        }
+        setFormBusy(true);
         message.hidden = false;
         message.className = 'message';
         message.textContent = 'Creating your account…';
-        const values = Object.fromEntries(new FormData(form));
         const account = {
           first_name: values.first_name.trim(),
           last_name: values.last_name.trim(),
           email: values.email.trim(),
-          phone: values.phone.trim() || null
+          phone: values.phone.trim() || null,
+          address_line1: values.address_line1.trim(),
+          latitude: resolvedLatitude,
+          longitude: resolvedLongitude
         };
         try {
           const capture = await post('/api/v1/referrals/capture', {
             code,
             name: `${account.first_name} ${account.last_name}`,
             email: account.email,
-            phone: account.phone
+            phone: account.phone,
+            address: account.address_line1
           });
           const signup = await post('/api/v1/referrals/signup', {
             conversion_token: capture.conversion_token,
@@ -101,9 +214,27 @@
               ? 'Your account is ready. You can sign in to the customer portal.'
               : 'Your account was created. Please contact Dotmac for access instructions.';
         } catch (error) {
+          const details = Array.isArray(error.details) ? error.details : [];
+          const invalidAddress = details.some((detail) => Array.isArray(detail.loc) && detail.loc.includes('address_line1'));
+          const invalidLocation = details.some((detail) => Array.isArray(detail.loc) && (detail.loc.includes('latitude') || detail.loc.includes('longitude')));
+          if (invalidAddress) {
+            serviceAddress.setAttribute('aria-invalid', 'true');
+            addressError.textContent = 'Enter a valid service address.';
+            addressError.hidden = false;
+          }
+          if (invalidLocation) {
+            latitude.value = '';
+            longitude.value = '';
+            locationButton.textContent = 'Try location again';
+            setLocationState('error', 'The captured location was not accepted. Capture your current location again.');
+          }
           message.className = 'message error';
-          message.textContent = error.message || 'We could not complete your signup. Please try again.';
-          button.disabled = false;
+          message.textContent = invalidAddress || invalidLocation
+            ? 'Please correct the highlighted details and try again.'
+            : error.message || 'We could not complete your signup. Please try again.';
+          setFormBusy(false);
+          if (invalidAddress) serviceAddress.focus();
+          else if (invalidLocation) locationButton.focus();
         }
       });
     })();

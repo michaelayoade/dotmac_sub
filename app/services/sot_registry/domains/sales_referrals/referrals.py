@@ -433,7 +433,9 @@ SERVICES: tuple[SOTService, ...] = (
                     kind=AuthorityKind.AUTHORITATIVE_RECORD,
                     source=(
                         "transaction-neutral account initialization and the "
-                        "exact existing or newly prepared Subscriber"
+                        "exact existing or newly prepared Subscriber, including "
+                        "the required primary service address and location for "
+                        "public signup"
                     ),
                 ),
                 AuthorityInput(
@@ -462,8 +464,9 @@ SERVICES: tuple[SOTService, ...] = (
                     "Each create or attach command enters "
                     "execute_owner_command on a transaction-free adapter "
                     "session. Subscriber preparation, Party binding, Lead "
-                    "and Referral attachment, audit, subscriber.created, and "
-                    "referral_account.converted commit or roll back together."
+                    "and Referral attachment, public-signup service address, "
+                    "audit, subscriber.created, and referral_account.converted "
+                    "commit or roll back together."
                 ),
                 locking=(
                     "The exact Referral, Party, Lead, and any existing "

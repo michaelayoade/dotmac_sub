@@ -20,7 +20,7 @@ from app.models.party import (
     PartyIdentityStatus,
 )
 from app.models.referral_native import Referral
-from app.models.subscriber import Subscriber, SubscriberStatus
+from app.models.subscriber import Address, AddressType, Subscriber, SubscriberStatus
 from app.schemas.referral import (
     ReferralCaptureRequest,
     ReferralSelfServiceAccountCreate,
@@ -86,7 +86,10 @@ def _account() -> ReferralSelfServiceAccountCreate:
         last_name="Customer",
         email=_email("signup"),
         phone="0804 000 0043",
+        address_line1="12 Referral Close",
         city="Abuja",
+        latitude=9.0765,
+        longitude=7.3986,
     )
 
 
@@ -118,6 +121,9 @@ def test_public_referral_link_capture_and_signup_create_the_exact_account(db_ses
                 "first_name": "Friend",
                 "last_name": "Customer",
                 "email": friend_email,
+                "address_line1": "12 Referral Close",
+                "latitude": 9.0765,
+                "longitude": 7.3986,
             },
         },
     )
@@ -128,6 +134,14 @@ def test_public_referral_link_capture_and_signup_create_the_exact_account(db_ses
     assert account is not None
     assert account.email == friend_email
     assert account.status == SubscriberStatus.new
+    address = (
+        db_session.query(Address).filter(Address.subscriber_id == account.id).one()
+    )
+    assert address.address_type == AddressType.service
+    assert address.address_line1 == "12 Referral Close"
+    assert address.latitude == pytest.approx(9.0765)
+    assert address.longitude == pytest.approx(7.3986)
+    assert address.is_primary is True
 
 
 def test_capture_returns_expiring_pii_free_signed_context(db_session):
@@ -258,6 +272,9 @@ def test_public_signup_schema_forbids_privileged_account_controls():
         "first_name": "Narrow",
         "last_name": "Payload",
         "email": _email("narrow"),
+        "address_line1": "12 Referral Close",
+        "latitude": 9.0765,
+        "longitude": 7.3986,
     }
     for field, value in (
         ("status", "active"),
@@ -269,6 +286,28 @@ def test_public_signup_schema_forbids_privileged_account_controls():
     ):
         with pytest.raises(ValidationError):
             ReferralSelfServiceAccountCreate.model_validate({**base, field: value})
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    (
+        ("address_line1", "   "),
+        ("latitude", 91),
+        ("longitude", 181),
+    ),
+)
+def test_public_signup_requires_valid_service_location(field, value):
+    payload = {
+        "first_name": "Location",
+        "last_name": "Required",
+        "email": _email("location"),
+        "address_line1": "12 Referral Close",
+        "latitude": 9.0765,
+        "longitude": 7.3986,
+    }
+
+    with pytest.raises(ValidationError):
+        ReferralSelfServiceAccountCreate.model_validate({**payload, field: value})
 
 
 def test_signup_route_is_public_and_registered_on_the_public_router():
