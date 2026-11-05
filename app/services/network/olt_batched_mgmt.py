@@ -19,6 +19,8 @@ import logging
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
+from app.services.network.huawei_cli_response import HuaweiCliErrorCode
+
 if TYPE_CHECKING:
     from app.models.network import OLTDevice
 
@@ -327,6 +329,7 @@ def execute_batched_management_setup(
         len(commands),
     )
 
+    terminal_failure = False
     try:
         with olt_session(olt) as session:
             for cmd, description in commands:
@@ -340,6 +343,14 @@ def execute_batched_management_setup(
                 result.raw_output[description] = cmd_result.output
 
                 if not cmd_result.success:
+                    if (
+                        is_navigation
+                        or cmd_result.error_code == HuaweiCliErrorCode.CONNECTION_ERROR
+                    ):
+                        terminal_failure = True
+                        result.error_message = f"{description}: {cmd_result.message}"
+                        result.steps_failed.append(description)
+                        break
                     # Check for idempotent cases (already exists, etc.)
                     output_lower = cmd_result.output.lower()
                     is_idempotent = (
@@ -381,7 +392,13 @@ def execute_batched_management_setup(
         # service-port is required for the ONT to reach ACS over the management
         # VLAN; accepting that failure can leave IPHOST/TR-069 configured but
         # unreachable.
-        critical_steps = {"create_mgmt_service_port", "configure_iphost", "bind_tr069"}
+        critical_steps = {
+            "create_mgmt_service_port",
+            "configure_iphost",
+            "bind_tr069",
+            "enter_interface_mode",
+            "exit_interface_mode",
+        }
         failed_critical = set(result.steps_failed) & critical_steps
 
         if not result.steps_failed:
@@ -393,7 +410,7 @@ def execute_batched_management_setup(
                 spec.fsp,
                 len(result.steps_completed),
             )
-        elif not failed_critical:
+        elif not failed_critical and not terminal_failure:
             # Non-critical failures (internet-config, wan-config can fail on some ONTs)
             result.success = True
             logger.warning(

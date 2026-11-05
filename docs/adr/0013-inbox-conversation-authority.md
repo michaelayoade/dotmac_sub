@@ -11,7 +11,7 @@ Affected systems and domains: `app/models/team_inbox.py`, the
 `app/services/sot_registry/domains/notifications_communications.py`,
 `alembic.ini`, `app/commercial_module_prereqs.py`,
 `docs/PLATFORM_ADOPTION_LEDGER.md`, `docs/SOT_RELATIONSHIP_MAP.md`, and the
-composed distribution `dotmac-inbox 0.1.0a1`.
+composed distribution `dotmac-inbox 0.1.0a3`.
 
 The full design — field-by-field reconciliation, channel traits, backfill
 ladder, projection split, realtime boundary — is
@@ -22,8 +22,8 @@ This ADR rules; the design explains.
 
 `dotmac-inbox` is a product-first extraction whose single qualifying source is
 Sub's own Team Inbox (starter `docs/inventories/inbox-sources.md`, starter
-ADR-0052, which names Sub cutover 1). The package is published as `0.1.0a1` and
-has **zero consumers**. Publication is supply, not adoption: an extraction
+ADR-0052, which names Sub cutover 1). The package is published as `0.1.0a3` and
+has no authoritative Sub runtime consumer. Publication is supply, not adoption: an extraction
 nobody consumes has never been tested against the product it was taken from.
 
 Sub owns the conversation aggregate today in `public.inbox_conversations`,
@@ -74,13 +74,13 @@ approval against the gates below.
 
 ### 2. Composition is not adoption, and this change claims only composition
 
-Sub pins `dotmac-inbox==0.1.0a1`, composes the `ib` lineage so `mod_inbox`
-exists, and declares its channel traits. No `app/` module imports the module's
-service, models or history seam; nothing writes a `mod_inbox` row; no runtime
-path changes. `tests/architecture/test_inbox_module_composition.py` makes that
-sentence checkable rather than promised, and it fails on the first line of the
-writer slice — which is correct, because that slice amends this ADR in the same
-commit.
+Sub pins `dotmac-inbox==0.1.0a3`, composes the `ib` lineage through
+`ib_0003_transport_refs`, and declares its channel traits. The single named
+adapter also exposes a3's bounded recent-message reader for compatibility
+testing, but nothing imports that adapter at runtime. No live read moves, no
+service, models or history writer is imported, and nothing writes a
+`mod_inbox` row. `tests/architecture/test_inbox_module_composition.py` makes
+those boundaries checkable.
 
 ### 3. The module row keeps Sub's UUID
 
@@ -138,8 +138,9 @@ implicitly authorised to move.
   nowhere else. No SQL expression, no second Python implementation.
 - The backfill refuses rather than defaults. An underivable `account_scope` or
   a duplicate `thread_key` fails the run with the offending ids.
-- Exactly one `app/` module names `dotmac_inbox`, and until the writer slice it
-  may name only `dotmac_inbox.channels`.
+- Exactly one `app/` module names `dotmac_inbox`, and until an approved runtime
+  slice it may name only `dotmac_inbox.channels` and the bounded
+  `dotmac_inbox.read_service` compatibility seam.
 - No Sub service, task, route or migration writes a projected column after the
   switch; the reconciler is the only writer and a ratchet enumerates it.
 - The reconciler is idempotent and total: run it twice and nothing changes;
@@ -222,8 +223,9 @@ every work order for one subscriber. See § 5.
   adapter package; a reconciler owns the projected columns.
 - **Backfill/repair:** `dotmac_inbox.history` under the identity rule.
   Restartable, re-runnable to convergence, refusing rather than defaulting.
-  Repair is the same code path as backfill. **Blocked on `dotmac-inbox 0.1.0a2`
-  being published** — the history seam does not exist in `0.1.0a1`.
+  Repair is the same code path as backfill. The history seam is published in
+  a3, but execution remains blocked on the census, collision/refusal review and
+  explicit backfill approval.
 - **Shadow or verification phase:** dual write behind a sealed switch plus a
   per-field comparator. Account-scoped message-identity differences are
   pre-classified and counted; anything unclassified is drift. The Integrator

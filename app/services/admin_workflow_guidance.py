@@ -475,6 +475,7 @@ WORKFLOW_GUIDANCE: tuple[AdminWorkflowGuidance, ...] = (
         "On the fiber map, submit supported FDH and closure moves for review; the canonical map position changes only after approval.",
         "On Fiber Change Requests, review pending Map V2 proposals in their separate queue. Only an independent reviewer with network:fiber:review can approve or reject; approval applies the proposed canonical asset change.",
         "On the FDH cabinet ledger, use the active-cabinet list and page controls to find a cabinet, then use its editor for non-location details.",
+        "When assigning a customer IPv4 address in IP Management, select the exact customer and subscription before saving. A subscriber-only IPv4 assignment is refused; device and management addresses belong on the device record.",
         notes=(
             "Billing locks and lifecycle state can also affect access; check Service and Billing as well.",
             "Map imports accept optional asset IDs when available and keep unsupported or sensitive features blocked for review.",
@@ -484,6 +485,7 @@ WORKFLOW_GUIDANCE: tuple[AdminWorkflowGuidance, ...] = (
             "/admin/network/fiber-change-requests",
             "/admin/network",
             "/admin/network/map",
+            "/admin/network/ip-management/ipv4-assign",
         ),
     ),
     _guide(
@@ -1691,6 +1693,12 @@ _ACTION_SPECS: dict[str, tuple[_ActionSpec, ...]] = {
             "Find an FDH cabinet",
             10,
             permission="network:fiber:read",
+        ),
+        _action(
+            "assign-customer-ipv4",
+            "Assign a customer IPv4 address",
+            11,
+            permission="network:ip:write",
         ),
     ),
     "router-health": (

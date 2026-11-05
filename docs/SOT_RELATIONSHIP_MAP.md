@@ -449,6 +449,12 @@ legacy `metadata`, IP and user-agent columns while dual-populating the kernel
 owns expansion drift evidence. `AuditActor` is the typed provenance contract:
 the calling owner may enrich a user or API-key principal only from an explicit
 canonical Party binding, while system and service actors cannot carry a Party.
+Request auditing normalizes authenticated product principal kinds such as
+`system_user` into that closed taxonomy, persists the authenticated
+`principal_id`, and snapshots the canonical account display name. Transport
+actor headers are never identity evidence. A read-only exact `SystemUser`
+lookup restores the display name for recoverable legacy request rows that were
+misclassified as `system`; it does not rewrite append-only audit evidence.
 An exact two-directional source ratchet tracks the temporary scalar callers
 across application and operator entry points. Migration 526 is a Sub-owned
 additive mirror, not a kernel-lineage stamp or an authority cutover.
