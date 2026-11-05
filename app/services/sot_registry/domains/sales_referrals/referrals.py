@@ -173,8 +173,9 @@ SERVICES: tuple[SOTService, ...] = (
                     owner="access.subscription_lifecycle",
                     kind=AuthorityKind.AUTHORITATIVE_RECORD,
                     source=(
-                        "derived active Subscriber status or an exact active "
-                        "Subscription observed from lifecycle events"
+                        "exact Subscriber activation evidence from immutable "
+                        "Subscription lifecycle history, account-status audit, "
+                        "or retained lifecycle events"
                     ),
                 ),
                 AuthorityInput(
@@ -190,7 +191,7 @@ SERVICES: tuple[SOTService, ...] = (
             transaction=TransactionContract(
                 mode=TransactionMode.COORDINATOR_MANAGED,
                 boundary=(
-                    "Each code, capture, qualification, rejection, or reward "
+                    "Each code, capture, qualification, expiry, rejection, or reward "
                     "command enters execute_owner_command on a transaction-free "
                     "adapter session. Referral state, collaborators, audit, and "
                     "events commit or roll back together."

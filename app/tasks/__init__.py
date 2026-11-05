@@ -176,7 +176,7 @@ from app.tasks.quotes import reconcile_quote_mirror
 from app.tasks.radius import run_radius_sync_job
 from app.tasks.radius_health import run_radius_health_check
 from app.tasks.radius_population import refresh_radius_from_subs, sync_device_login
-from app.tasks.referrals import reconcile_referral_mirror
+from app.tasks.referrals import expire_pending_referrals, reconcile_referral_mirror
 from app.tasks.reports import send_scheduled_ncc_report
 from app.tasks.router_health import (
     observe_router_runtime,
@@ -437,6 +437,7 @@ __all__ = [
     "sync_all_system_info",
     "run_scheduled_credential_rotation",
     "reconcile_quote_mirror",
+    "expire_pending_referrals",
     "reconcile_referral_mirror",
     "send_scheduled_ncc_report",
 ]

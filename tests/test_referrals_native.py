@@ -13,8 +13,10 @@ import pytest
 
 from app.models.audit import AuditEvent
 from app.models.billing import CreditNote
+from app.models.catalog import Subscription, SubscriptionStatus
 from app.models.domain_settings import DomainSetting, SettingDomain, SettingValueType
 from app.models.event_store import EventStore
+from app.models.lifecycle import SubscriptionLifecycleEvent
 from app.models.notification import CommunicationIntentRecord, Notification
 from app.models.party import (
     Party,
@@ -438,6 +440,110 @@ def test_qualify_expires_outside_window(db_session):
     assert result is not None
     assert result.status == "expired"
     assert result.reward_status == "none"
+
+
+def test_pending_referrals_reconcile_activation_history_and_expiry(
+    db_session, catalog_offer
+):
+    _program(db_session, window_days=30)
+    overdue, _ = _captured_referral(db_session)
+    recent, _ = _captured_referral(db_session)
+    activated, _ = _captured_referral(db_session)
+    no_evidence, _ = _captured_referral(db_session)
+    overdue.created_at = datetime.now(UTC) - timedelta(days=31)
+    activated.created_at = datetime.now(UTC) - timedelta(days=31)
+    no_evidence.created_at = datetime.now(UTC) - timedelta(days=31)
+    # The account was activated in time, then disabled; completed EventStore
+    # rows may already have been purged by their shorter retention task.
+    subscription = Subscription(
+        subscriber_id=activated.referred_subscriber_id,
+        offer_id=catalog_offer.id,
+        status=SubscriptionStatus.disabled,
+    )
+    db_session.add(subscription)
+    db_session.flush()
+    activated_at = activated.created_at + timedelta(days=10)
+    subscription.created_at = activated.created_at + timedelta(days=5)
+    db_session.get(Subscriber, activated.referred_subscriber_id).created_at = (
+        activated.created_at + timedelta(days=5)
+    )
+    db_session.add(
+        SubscriptionLifecycleEvent(
+            subscription_id=subscription.id,
+            to_status=SubscriptionStatus.active,
+            evidence_grade="transition_evidence",
+            evidence_source="lifecycle_command",
+            source_id=f"test:{subscription.id}",
+            evidence_fingerprint="sha256:test",
+            effective_at=activated_at,
+            recorded_at=activated_at,
+            created_at=activated_at,
+        )
+    )
+    db_session.get(
+        Subscriber, no_evidence.referred_subscriber_id
+    ).status = SubscriberStatus.active
+    db_session.commit()
+
+    def sweep(batch_limit=200):
+        return referral_program.expire_pending_referrals(
+            db_session,
+            referral_program.ExpirePendingReferralsCommand(
+                context=CommandContext.system(
+                    actor="test:referral-expiry",
+                    scope=referral_program.REFERRAL_PROGRAM_SCOPE,
+                    reason="Verify pending referral expiry",
+                ),
+                batch_limit=batch_limit,
+            ),
+        )
+
+    first = sweep(batch_limit=1)
+    assert first.processed == 1
+    next_results = [sweep(batch_limit=1) for _ in range(3)]
+    assert sum(item.expired for item in [first, *next_results]) == 2
+    assert sum(item.qualified for item in [first, *next_results]) == 1
+    assert db_session.get(Referral, overdue.id).status == "expired"
+    assert db_session.get(Referral, recent.id).status == "pending"
+    assert db_session.get(Referral, activated.id).status == "qualified"
+    assert (
+        db_session.get(Referral, activated.id).qualified_at.replace(tzinfo=UTC)
+        == activated_at
+    )
+    assert db_session.get(Referral, no_evidence.id).status == "expired"
+    db_session.rollback()  # End the read transaction before the next owner command.
+    assert sweep().processed == 0
+    assert (
+        db_session.query(EventStore)
+        .filter(EventStore.event_type == "referral.expired")
+        .count()
+        == 2
+    )
+
+
+def test_delayed_qualification_uses_in_window_activation_event(db_session):
+    _program(db_session, window_days=30)
+    referral, _ = _captured_referral(db_session)
+    referral.created_at = datetime.now(UTC) - timedelta(days=31)
+    activated_at = referral.created_at + timedelta(days=10)
+    prospect = db_session.get(Subscriber, referral.referred_subscriber_id)
+    prospect.created_at = referral.created_at + timedelta(days=5)
+    prospect.status = SubscriberStatus.active
+    db_session.add(
+        EventStore(
+            event_id=uuid.uuid4(),
+            event_type="subscriber.updated",
+            subscriber_id=prospect.id,
+            payload={"status": "active", "prior_status": "new"},
+            created_at=activated_at,
+        )
+    )
+    db_session.commit()
+
+    result = qualify_for_subscriber(db_session, prospect)
+    assert result is not None
+    assert result.status == "qualified"
+    assert result.qualified_at.replace(tzinfo=UTC) == activated_at
 
 
 def test_qualify_attaches_only_a_reviewed_matching_party(db_session):

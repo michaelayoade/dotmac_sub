@@ -120,6 +120,15 @@ Subscriber activation may reconcile an unattached pending referral only when
 the activated Subscriber already has the exact referred Party. It never falls
 back to name, email, phone, metadata, or a newly created account.
 
+A daily referral task reconciles pending referrals after the same
+`referral_qualify_window_days` window. A documented in-window activation
+qualifies the referral even if the account is now inactive; otherwise it
+expires the referral and stages `referral.expired` audit/event evidence. The
+sweep reads durable subscription lifecycle evidence and account-status audit
+rows, with event-store evidence for legacy paths. It drains due rows in batches
+and schedules its own continuation for a large backlog. No separate expiry
+setting exists.
+
 An admin qualification override may bypass activation/window policy, but it
 cannot bypass Party-first account conversion. The reviewed Subscriber must be
 attached first; reward qualification cannot turn an unconverted contact into a
