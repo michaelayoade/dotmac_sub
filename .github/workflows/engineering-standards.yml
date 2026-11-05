@@ -24,15 +24,15 @@ jobs:
   standards:
     name: Dotmac engineering standards
     runs-on: ubuntu-latest
-    # Schema 9 derives reachability across Sub's 6,000+ tracked files before
-    # classifying the connector surface. Five minutes is below the measured
-    # clean-run time and would turn a valid adoption into timeout noise.
+    # The Governance checker derives reachability across Sub's 6,000+ tracked
+    # files before classifying the connector surface. Five minutes is below the
+    # measured clean-run time and would turn a valid adoption into timeout noise.
     timeout-minutes: 10
     steps:
       - name: Check out the evaluated product revision
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Enforce the accepted Dotmac engineering standards
-        uses: michaelayoade/dotmac_governance/.github/actions/standards-check@a19259b10568d29dc0a9617347498fea7f1e7a97
+        uses: michaelayoade/dotmac_governance/.github/actions/standards-check@4f80bd164137d34ff41f1866d7e748f2e664dee3
         with:
           default-branch: ${{ github.event.repository.default_branch }}

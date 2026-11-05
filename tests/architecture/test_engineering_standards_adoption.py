@@ -1,7 +1,7 @@
-"""Sub's product-owned review surface for Governance schema 9.
+"""Sub's product-owned review surface for Governance schema 10.
 
-The connector detector remains Governance-owned. These tests guard the exact
-pin, declared baselines, and conservation evidence without copying it.
+The connector and deployment detectors remain Governance-owned. These tests
+guard the exact pin and Sub-owned declarations without copying either detector.
 """
 
 from __future__ import annotations
@@ -14,7 +14,7 @@ ROOT = Path(__file__).resolve().parents[2]
 PROFILE = ROOT / ".dotmac" / "standards-profile.json"
 WORKFLOW = ROOT / ".github" / "workflows" / "engineering-standards.yml"
 EVIDENCE = ROOT / "docs" / "external-connector-surface.md"
-ACCEPTED_GOVERNANCE_SHA = "a19259b10568d29dc0a9617347498fea7f1e7a97"
+ACCEPTED_GOVERNANCE_SHA = "4f80bd164137d34ff41f1866d7e748f2e664dee3"
 CATEGORIES = {
     "outbound_transport",
     "webhook_surface",
@@ -43,9 +43,9 @@ def _action_refs(text: str) -> list[str]:
     return _ACTION_REF.findall(text)
 
 
-def test_the_profile_declares_the_accepted_schema_nine_surface() -> None:
+def test_the_profile_declares_the_accepted_schema_ten_surface() -> None:
     profile = _profile()
-    assert profile["schema_version"] == 9
+    assert profile["schema_version"] == 10
     assert profile["enforcement_mode"] == "required"
     surface = profile["external_connector_surface"]
     assert set(surface) == {"baselines", "conserved_exclusions"}
@@ -54,6 +54,49 @@ def test_the_profile_declares_the_accepted_schema_nine_surface() -> None:
         isinstance(value, int) and not isinstance(value, bool) and value >= 0
         for value in surface["baselines"].values()
     )
+
+
+def test_the_profile_declares_every_shipped_deployment_surface() -> None:
+    surfaces = _profile()["deployment_artefact_surfaces"]
+    assert surfaces == [
+        {
+            "surface_id": "sub-product-deployment",
+            "subject": (
+                "Sub's evidence descriptor and the deterministic architecture checks "
+                "that keep it aligned with the current deployment topology."
+            ),
+            "declaration_paths": ["deploy/product.toml"],
+            "rendered_paths": [],
+            "render_check_workflow": ".github/workflows/ci.yml",
+            "render_check_command": "make test-architecture",
+            "acknowledged_non_deployments": [
+                {
+                    "path": "docker-compose.yml",
+                    "reason": (
+                        "The legacy production Compose consumed by scripts/deploy.sh. "
+                        "It remains outside the descriptor until the blockers in "
+                        "deploy/README.md are closed; declaring it conformant would be "
+                        "false because it resolves the application image at deployment "
+                        "time."
+                    ),
+                },
+                {
+                    "path": "docker-compose.dev.yml",
+                    "reason": (
+                        "An explicit local-development overlay that bind-mounts the "
+                        "working tree and is prohibited in production."
+                    ),
+                },
+                {
+                    "path": "deploy/shadow/docker-compose.shadow.yml",
+                    "reason": (
+                        "A disposable, egress-denied synthetic-data rehearsal stack, "
+                        "not a deployment of the Sub product."
+                    ),
+                },
+            ],
+        }
+    ]
 
 
 def test_the_review_record_equals_the_declared_baselines() -> None:

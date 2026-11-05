@@ -514,14 +514,14 @@ app_direct_shipping = false
 deployment_annotations = true
 
 [egress]
-hosts = ["75.119.128.247"]
+hosts = ["observability.dotmac.io"]
 
 [[external_dependencies]]
 code = "redis-local"
 kind = "redis"
 required_for = ["boot", "ready"]
 material = "REDIS_LOCAL_PASSWORD"
-image = "redis:7-alpine"
+image = "redis@sha256:e7723ff73d963f5cc6d9c4643ea3d989527a402a319239054e9472a7fb9219a2"
 command = ["sh", "-c", "redis-server --appendonly yes --maxmemory 768mb --maxmemory-policy noeviction --requirepass \"$${REDIS_LOCAL_PASSWORD}\""]
 materials = ["REDIS_LOCAL_PASSWORD"]
 health_probe = ["redis-cli", "-a", "${REDIS_LOCAL_PASSWORD}", "ping"]
@@ -537,7 +537,7 @@ code = "postgres-local"
 kind = "postgres"
 required_for = ["boot", "ready", "migrate", "backup"]
 material = "POSTGRES_PASSWORD"
-image = "postgis/postgis:16-3.4-alpine"
+image = "postgis/postgis@sha256:681931a625df344215e9b8998bf34daf146b6a395ceacee4439eb9c85869239f"
 command = ["postgres", "-c", "shared_buffers=2GB", "-c", "effective_cache_size=6GB", "-c", "work_mem=32MB", "-c", "maintenance_work_mem=512MB", "-c", "statement_timeout=120000", "-c", "lock_timeout=10000", "-c", "idle_in_transaction_session_timeout=120000", "-c", "wal_level=replica", "-c", "max_wal_senders=5"]
 materials = ["POSTGRES_PASSWORD"]
 health_probe = ["pg_isready", "-U", "postgres"]
