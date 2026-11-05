@@ -1039,7 +1039,7 @@ WORKFLOW_GUIDANCE: tuple[AdminWorkflowGuidance, ...] = (
         "On Channel routing, save and validate an AI intake draft before activation; review the exact channel scope, allowed tools, playbook, tone, follow-up limits, and customer-wait handoff interval. When editing an existing AI route, review its team, confidence, priority, and active state; Keep current preserves an inactive team unless you explicitly choose an active replacement. Use Disable or Reactivate for state changes; if the route changed since the page loaded, reload before trying again.",
         "In Queue messaging, keep heartbeats off unless reassurance is explicitly required; when enabled, use different non-position wording and a longer interval than position checks.",
         notes=(
-            "Inbox overview counts reflect the last full page load. Choose Refresh counts when you need current totals; the filtered list updates separately.",
+            "Inbox overview counts refresh from a shared projection every 15 seconds. During cache or database recovery, the last successful counts may remain visible for up to five minutes; choose Refresh counts when you need the newest available totals.",
             "Historical inbox views load bounded pages and may show that more results are available before an exact final total is known.",
             "A displayed queue position is the customer's current rank in that team, not the durable admission sequence; position messages are sent only when that rank moves forward.",
             "Normal self-assignment and manager assignment cannot skip an older queued conversation or exceed the selected agent's active-conversation capacity.",

@@ -1102,13 +1102,12 @@ def test_presence_controls_cover_all_states_and_auto_offline_preference():
     assert "min-h-11" in SIDEBAR
 
 
-def test_presence_realtime_event_invalidates_server_projections():
+def test_presence_realtime_event_does_not_refresh_shared_server_projections():
     marker = JAVASCRIPT.index('eventType === "agent_presence_changed"')
     body = JAVASCRIPT[marker : marker + 500]
-    assert 'this.refreshSidebar("presence")' in body
-    assert "this.refreshOpenManagerDashboard()" in body
+    assert 'this.refreshSidebar("presence")' not in body
+    assert "this.refreshOpenManagerDashboard()" not in body
     assert 'window.htmx.ajax("GET", "/admin/inbox/manager-dashboard"' in JAVASCRIPT
-    assert "data.status" not in body
 
 
 def test_manager_capacity_links_to_an_explicit_bounded_save_control():
