@@ -396,6 +396,29 @@ kind = "custom"
 ping_command = ["python", "-m", "app.syslog.health", "--timeout-seconds", "2"]
 
 [[roles]]
+code = "outbox-relay"
+command = ["python", "-m", "app.outbox_relay"]
+# docker-compose.yml gates this service behind the `outbox-relay` profile and
+# the operator starts it by name (OPS-4), so no host runs it until then. Zero
+# replicas keeps it out of drift comparison until it is first deployed; set to 1
+# in the change that records the first deployment.
+replicas = 0
+stop_grace_seconds = 30
+# The EXECUTE-only outbox_dispatcher credential (never DATABASE_URL), plus the
+# optional RLS tenant credential required once the first handler is registered.
+materials = ["OUTBOX_RELAY_DATABASE_URL", "OUTBOX_RELAY_TENANT_DATABASE_URL"]
+
+[roles.resources]
+cpus = "0.25"
+memory = "256m"
+pids = 64
+
+[roles.worker]
+kind = "custom"
+# Heartbeat file written by every dispatch-loop iteration, idle or not.
+ping_command = ["python", "-m", "app.outbox_relay.health", "--max-age-seconds", "60"]
+
+[[roles]]
 code = "team-inbox-smtp"
 command = ["python", "-m", "app.team_inbox_smtp", "serve"]
 # docker-compose.yml gates this service behind the `smtp-inbound` profile, and
@@ -430,10 +453,10 @@ owner_material = "MIGRATION_DATABASE_URL"
 # local lineage plus the nine pinned module migration trees (2026-10-16);
 # tests/architecture/test_deployment_descriptor.py re-derives this set in CI.
 expected_heads = [
-    "707_inbox_contact_sensitive_permissions",
+    "708_vendor_supplier_flow",
     "bi_0011_settlement_earmarks",
     "cl_0001_collections",
-    "ib_0001_conversations",
+    "ib_0003_transport_refs",
     "nu_0001_numbering",
     "pm_0006_cash_qualification",
     "so_0001_service_delivery_orders",

@@ -92,6 +92,24 @@ def test_system_actor_with_no_id_is_labelled_system():
     )
 
 
+def test_legacy_request_system_actor_resolves_exact_staff_account():
+    """Old request rows remain readable without rewriting append-only evidence."""
+    staff_id = uuid.uuid4()
+    staff = SimpleNamespace(
+        id=staff_id,
+        display_name="Aisha Ibrahim",
+        first_name="",
+        last_name="",
+    )
+
+    name = audit_helpers.resolve_actor_name(
+        _event(staff_id, AuditActorType.system),
+        {str(staff_id): staff},
+    )
+
+    assert name == "Aisha Ibrahim"
+
+
 def test_uuid_shaped_service_identity_is_not_exposed():
     actor_id = uuid.uuid4()
 

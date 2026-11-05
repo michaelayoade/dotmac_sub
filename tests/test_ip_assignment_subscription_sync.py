@@ -12,7 +12,7 @@ from app.models.catalog import (
 )
 from app.models.network import IPAssignment, IpPool, IPv4Address, IPVersion
 from app.models.subscriber import Subscriber
-from app.schemas.network import IPAssignmentCreate
+from app.schemas.network import IPAssignmentCreate, IPAssignmentUpdate
 from app.services import network as network_service
 from app.services import web_network_ip as ip_service
 
@@ -144,13 +144,24 @@ def test_subscriber_level_assignment_does_not_guess_with_multiple_active_service
     second = _make_subscription(db_session, subscriber)
     address = _make_ipv4(db_session, "100.64.10.7")
 
-    network_service.ip_assignments.create(
-        db_session,
-        IPAssignmentCreate(
+    # Legacy subscriber-only rows can no longer be created (UNBOUND guard); the
+    # no-guess rule still applies to rows that already exist, so seed one directly.
+    db_session.add(
+        IPAssignment(
             subscriber_id=subscriber.id,
             ip_version=IPVersion.ipv4,
             ipv4_address_id=address.id,
-        ),
+            is_active=True,
+        )
+    )
+    db_session.flush()
+    row = db_session.query(IPAssignment).filter_by(ipv4_address_id=address.id).one()
+
+    # Run the sync path (update -> _sync_subscription_ipv4) on the legacy row.
+    network_service.ip_assignments.update(
+        db_session,
+        str(row.id),
+        IPAssignmentUpdate(is_active=True),
     )
 
     db_session.refresh(first)
@@ -164,6 +175,7 @@ def test_assign_ipv4_address_reports_previous_owner_on_reassign(db_session):
     old = _make_subscriber(db_session)
     old_sub = _make_subscription(db_session, old)
     new = _make_subscriber(db_session)
+    new_sub = _make_subscription(db_session, new)
     address = _make_ipv4(db_session, "100.64.20.5")
     address.pool_id = pool.id
     db_session.flush()
@@ -181,6 +193,7 @@ def test_assign_ipv4_address_reports_previous_owner_on_reassign(db_session):
         pool_id=str(pool.id),
         ip_address="100.64.20.5",
         subscriber_id=str(new.id),
+        subscription_id=str(new_sub.id),
     )
 
     assert result["reassigned"] is True
@@ -196,7 +209,9 @@ def test_reassign_after_release_reactivates_same_row(db_session):
     # colliding row. Guards the Release/Unassign flow against a wedge.
     pool = _make_pool(db_session, "100.64.21.0/24")
     old = _make_subscriber(db_session)
+    old_sub = _make_subscription(db_session, old)
     new = _make_subscriber(db_session)
+    new_sub = _make_subscription(db_session, new)
     address = _make_ipv4(db_session, "100.64.21.9")
     address.pool_id = pool.id
     db_session.flush()
@@ -206,6 +221,7 @@ def test_reassign_after_release_reactivates_same_row(db_session):
         pool_id=str(pool.id),
         ip_address="100.64.21.9",
         subscriber_id=str(old.id),
+        subscription_id=str(old_sub.id),
     )
     first_id = first["assignment"].id
 
@@ -216,6 +232,7 @@ def test_reassign_after_release_reactivates_same_row(db_session):
         pool_id=str(pool.id),
         ip_address="100.64.21.9",
         subscriber_id=str(new.id),
+        subscription_id=str(new_sub.id),
     )
 
     assert second["assignment"].id == first_id
@@ -238,6 +255,9 @@ def test_bulk_assign_ipv4_resolves_owner_and_pool(db_session):
     by_account = _make_subscriber(db_session)
     by_account.account_number = "ACC-BULK-1"
     by_email = _make_subscriber(db_session)
+    subs = {
+        s.id: _make_subscription(db_session, s) for s in (by_id, by_account, by_email)
+    }
     db_session.flush()
     for octet in (10, 11, 12):
         ip = IPv4Address(address=f"100.64.30.{octet}", pool_id=pool.id)
@@ -245,9 +265,21 @@ def test_bulk_assign_ipv4_resolves_owner_and_pool(db_session):
     db_session.flush()
 
     rows = [
-        {"ip_address": "100.64.30.10", "subscriber": str(by_id.id)},
-        {"ip_address": "100.64.30.11", "subscriber": "ACC-BULK-1"},
-        {"ip_address": "100.64.30.12", "subscriber": by_email.email.upper()},
+        {
+            "ip_address": "100.64.30.10",
+            "subscriber": str(by_id.id),
+            "subscription": str(subs[by_id.id].id),
+        },
+        {
+            "ip_address": "100.64.30.11",
+            "subscriber": "ACC-BULK-1",
+            "subscription": str(subs[by_account.id].id),
+        },
+        {
+            "ip_address": "100.64.30.12",
+            "subscriber": by_email.email.upper(),
+            "subscription": str(subs[by_email.id].id),
+        },
     ]
     summary = actions.bulk_assign_ipv4(db_session, rows)
 
@@ -262,11 +294,16 @@ def test_bulk_assign_ipv4_isolates_bad_rows(db_session):
 
     pool = _make_pool(db_session, "100.64.31.0/24")
     good = _make_subscriber(db_session)
+    good_sub = _make_subscription(db_session, good)
     db_session.add(IPv4Address(address="100.64.31.5", pool_id=pool.id))
     db_session.flush()
 
     rows = [
-        {"ip_address": "100.64.31.5", "subscriber": str(good.id)},  # ok
+        {
+            "ip_address": "100.64.31.5",
+            "subscriber": str(good.id),
+            "subscription": str(good_sub.id),
+        },  # ok
         {"ip_address": "100.64.31.6", "subscriber": "nobody@nowhere"},  # bad subscriber
         {"ip_address": "10.255.255.1", "subscriber": str(good.id)},  # no pool
         {"ip_address": "", "subscriber": str(good.id)},  # missing ip
@@ -301,6 +338,7 @@ def test_ip_pool_utilization_snapshot_counts(db_session):
             db_session,
             IPAssignmentCreate(
                 subscriber_id=subscriber.id,
+                subscription_id=_make_subscription(db_session, subscriber).id,
                 ip_version=IPVersion.ipv4,
                 ipv4_address_id=address.id,
             ),

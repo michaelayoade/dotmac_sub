@@ -55,6 +55,7 @@ ALLOWED_KERNEL_MODULES = frozenset(
         "dotmac_kernel.features",
         "dotmac_kernel.machine_auth",
         "dotmac_kernel.machine_models",
+        "dotmac_kernel.messaging.relay",
         "dotmac_kernel.models",
         "dotmac_kernel.money",
         "dotmac_kernel.namespaces",
@@ -132,6 +133,9 @@ RESTRICTED_MODULE_NAMES: dict[str, frozenset[str]] = {
     "dotmac_kernel.cache": frozenset({"Scope", "TenantScope"}),
     "dotmac_kernel.exceptions": frozenset(
         {"BadRequestError", "NotFoundError", "ConflictError"}
+    ),
+    "dotmac_kernel.messaging.relay": frozenset(
+        {"ClaimedEvent", "RelayPolicy", "record_failure", "record_success"}
     ),
     "dotmac_kernel.migrations.verify": frozenset({"require_prerequisites"}),
     "dotmac_kernel.models": frozenset({"Tenant", "TenantDomain"}),

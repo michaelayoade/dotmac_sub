@@ -56,6 +56,15 @@ REQUIRED_APP_SERVICES: tuple[str, ...] = (
 )
 
 
+#: App-image services that are profile-gated AND started by name by an operator:
+#: a deploy must never create them (see `recreate_set`), and product.toml
+#: declares zero replicas until the change that records their first deployment.
+#: This is the only carve-out from the "every app-image service is required and
+#: has a running replica" guards in tests/test_deploy_app_services_cover_compose.py.
+#: Adding a name here is a deliberate, reviewed act, never a convenience.
+OPT_IN_APP_SERVICES: tuple[str, ...] = ("outbox-relay",)
+
+
 def recreate_set(
     declared_app_image: Sequence[str],
     existing: Sequence[str],
