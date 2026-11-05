@@ -44,6 +44,18 @@ def test_valid_link_renders_capture_and_signup_flow(db_session):
     assert "Enable it in your browser settings" in response.text
     assert "setFormBusy(true)" in response.text
     assert 'id="address-error"' in response.text
+    assert 'id="first-name-error"' in response.text
+    assert 'id="last-name-error"' in response.text
+    assert 'id="email-error"' in response.text
+    assert 'id="phone-error"' in response.text
+    assert 'class="field-row"' in response.text
+    assert 'id="location-spinner"' in response.text
+    assert 'id="submit-spinner"' in response.text
+    assert "/static/branding/favicon/icon-192.png" in response.text
+    assert "Contact support" in response.text
+    assert (
+        "Use your current location before creating your account." not in response.text
+    )
 
 
 def test_unknown_link_is_unavailable(db_session):
