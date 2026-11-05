@@ -134,8 +134,8 @@ canonical records, makes exact replays idempotent, and commits Referral state,
 PII-free audit evidence, and versioned events together. Reward accounting is
 delegated to `financial.credit_notes`; customer notification is an idempotent
 event consequence. Program enablement, reward amount and currency,
-qualification window, automatic approval, and share base URL resolve only from
-`control.settings_spec`. HTTP errors, adapter transactions, direct CRM credit
+qualification window, and automatic approval resolve only from
+`control.settings_spec`; referral links use the customer portal origin. HTTP errors, adapter transactions, direct CRM credit
 calls, direct push delivery, environment reads, and legacy keyword mutation
 entry points are retired from the owner boundary.
 

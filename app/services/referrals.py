@@ -49,6 +49,7 @@ from app.services.customer_identity_normalization import (
 )
 from app.services.customer_identity_resolution import resolve_customer_identity
 from app.services.domain_errors import DomainError
+from app.services.email import customer_portal_origin
 from app.services.events import emit_event
 from app.services.events.types import EventType
 from app.services.owner_commands import (
@@ -92,7 +93,6 @@ _PROGRAM_POLICY_KEYS = (
     "referral_qualify_window_days",
     "referral_auto_approve_reward",
 )
-_SHARE_BASE_URL_KEY = "referral_share_base_url"
 
 _PROGRAM_TRANSITION_CONCERN = "atomic referral program transition orchestration"
 _ENSURE_CODE_COMMAND = OwnerCommandDefinition(
@@ -347,12 +347,30 @@ def _program_policy(db: Session) -> _ProgramPolicy:
 
 
 def _share_base_url(db: Session) -> str:
-    value = settings_spec.resolve_value(db, _DOMAIN, _SHARE_BASE_URL_KEY)
-    share_base_url = str(value or "").strip().rstrip("/")
-    parsed_share_url = urlsplit(share_base_url)
-    if parsed_share_url.scheme not in {"http", "https"} or not parsed_share_url.netloc:
-        raise _error("invalid_configuration", "Referral share URL policy is invalid.")
-    return share_base_url
+    # APP_URL follows the deployed app origin even if an older selfcare_domain
+    # row was left behind after a domain change.
+    value = customer_portal_origin(db)
+    if not value:
+        logger.warning("referral_share_origin_missing")
+        return ""
+    try:
+        parsed = urlsplit(value)
+        invalid = (
+            parsed.scheme not in {"http", "https"}
+            or not parsed.hostname
+            or parsed.username is not None
+            or parsed.password is not None
+            or parsed.path not in {"", "/"}
+            or parsed.query
+            or parsed.fragment
+        )
+        _ = parsed.port  # Reject malformed ports before publishing the link.
+    except ValueError:
+        invalid = True
+    if invalid:
+        logger.warning("referral_share_origin_invalid")
+        return ""
+    return value.rstrip("/")
 
 
 def _normalize_capture(command: CaptureReferralCommand) -> _CaptureValues:
@@ -1538,9 +1556,10 @@ class Referrals:
                     ),
                 }
             )
+        base_url = _share_base_url(db)
         return {
             "code": code.code,
-            "share_url": f"{_share_base_url(db)}/r/{code.code}",
+            "share_url": f"{base_url}/r/{code.code}" if base_url else "",
             "program": {
                 "enabled": policy.enabled,
                 "reward_amount": str(policy.amount),
