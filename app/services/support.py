@@ -95,6 +95,7 @@ from app.services.owner_commands import (
     CommandContext,
     OwnerCommandDefinition,
     current_command_context,
+    current_command_definition,
     execute_owner_command,
     execute_owner_savepoint,
     owner_command_active,
@@ -324,6 +325,12 @@ def ticket_owner_command(name: str):
             )
             if name == "create" and isinstance(result, Ticket):
                 _notify_workqueue(result, "added")
+            elif (
+                name == "create_infrastructure_manual"
+                and isinstance(result, ManualInfrastructureTicketCreateResult)
+                and not result.replayed
+            ):
+                _notify_workqueue(result.ticket, "added")
             elif name in {
                 "update",
                 "assign_ticket_service_team_from_automation",
@@ -1989,6 +1996,21 @@ def _notify_workqueue(
         logger.debug("workqueue_notify_failed ticket_id=%s", ticket.id, exc_info=True)
 
 
+@dataclass(frozen=True, slots=True)
+class ManualInfrastructureTicketCreateCommand:
+    payload: TicketCreate
+    name: str
+    actor_id: UUID
+    permissions: frozenset[str]
+    context: CommandContext
+
+
+@dataclass(frozen=True, slots=True)
+class ManualInfrastructureTicketCreateResult:
+    ticket: Ticket
+    replayed: bool
+
+
 class Tickets:
     @staticmethod
     def list_response(
@@ -3089,6 +3111,18 @@ class Tickets:
                 "invalid_ticket_creation_mode",
                 "Silent internal tickets cannot request customer acknowledgement.",
             )
+        from app.services.infrastructure_ticket_selection import allowed_kinds
+
+        if allowed_kinds(payload.ticket_type):
+            definition = current_command_definition(db)
+            if (definition.owner, definition.name) not in {
+                ("network.outage_work_order_handoff", "create_infrastructure_ticket"),
+                ("support.ticket_lifecycle", "create_infrastructure_manual"),
+            }:
+                raise _ticket_error(
+                    "infrastructure_selection_required",
+                    "Create this infrastructure ticket through a selected asset or manual entry.",
+                )
         ticket_validation.validate_ticket_creation(db, payload)
         data = payload.model_dump()
         data["status"] = parse_ticket_status(
@@ -3235,6 +3269,99 @@ class Tickets:
         db.flush()
         db.refresh(ticket)
         return ticket
+
+    @staticmethod
+    @ticket_owner_command("create_infrastructure_manual")
+    def create_infrastructure_manual(
+        db: Session, *, command: ManualInfrastructureTicketCreateCommand
+    ) -> ManualInfrastructureTicketCreateResult:
+        """Record an operator-named infrastructure ticket without inventing inventory."""
+        from app.services.infrastructure_ticket_selection import allowed_kinds
+
+        payload = command.payload.model_copy(deep=True)
+        name = command.name.strip()
+        if (
+            command.context.scope != "support.ticket:infrastructure_manual"
+            or {"support:ticket:create", "monitoring:write"} - command.permissions
+        ):
+            raise _ticket_error(
+                "infrastructure_permission_required",
+                "Infrastructure ticket permission is required.",
+            )
+        if not allowed_kinds(payload.ticket_type) or not 3 <= len(name) <= 255:
+            raise _ticket_error(
+                "infrastructure_selection_required",
+                "Enter an affected infrastructure name.",
+            )
+        if any(
+            (
+                payload.subscriber_id,
+                payload.customer_account_id,
+                payload.customer_person_id,
+                payload.lead_id,
+                payload.related_outage_ticket_id,
+            )
+        ):
+            raise _ticket_error(
+                "infrastructure_customer_not_allowed",
+                "Infrastructure tickets cannot target one customer.",
+            )
+        if not (payload.description or "").strip():
+            raise _ticket_error(
+                "infrastructure_description_required", "Description is required."
+            )
+        key = str(command.context.idempotency_key or "").strip()
+        if not key:
+            raise _ticket_error(
+                "infrastructure_idempotency_key_required", "Request key is required."
+            )
+        payload.metadata_ = {
+            "base_station_details": name,
+            "infrastructure_selection": {
+                "mode": "manual",
+                "name": name,
+                "ticket_type": payload.ticket_type,
+            },
+        }
+        fingerprint = hashlib.sha256(
+            json.dumps(payload.model_dump(mode="json"), sort_keys=True).encode("utf-8")
+        ).hexdigest()
+        if db.get_bind().dialect.name == "postgresql":
+            lock_key = int.from_bytes(
+                hashlib.sha256(key.encode("utf-8")).digest()[:8],
+                "big",
+                signed=True,
+            )
+            db.execute(select(func.pg_advisory_xact_lock(lock_key)))
+        existing = db.scalar(
+            select(Ticket)
+            .where(
+                Ticket.metadata_["infrastructure_request_key"].as_string() == key,
+                Ticket.metadata_["infrastructure_selection"]["mode"].as_string()
+                == "manual",
+            )
+            .with_for_update()
+        )
+        if existing is not None:
+            if (existing.metadata_ or {}).get(
+                "infrastructure_fingerprint"
+            ) != fingerprint:
+                raise _ticket_error(
+                    "infrastructure_idempotency_conflict",
+                    "Request key was already used with different details.",
+                )
+            return ManualInfrastructureTicketCreateResult(
+                ticket=existing, replayed=True
+            )
+        payload.metadata_["infrastructure_request_key"] = key
+        payload.metadata_["infrastructure_fingerprint"] = fingerprint
+        ticket = Tickets._stage_create(
+            db,
+            payload,
+            actor_id=str(command.actor_id),
+            acknowledgement_mode=TicketCreationAcknowledgementMode.none,
+        )
+        return ManualInfrastructureTicketCreateResult(ticket=ticket, replayed=False)
 
     @staticmethod
     @ticket_owner_command("create")

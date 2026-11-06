@@ -67,13 +67,15 @@ def test_base_station_required_ticket_type_accepts_metadata_details(db_session):
 
 def test_admin_form_payload_maps_base_station_details_to_ticket_metadata():
     payload = web_support_tickets.build_ticket_create_payload(
-        title="Access point offline",
-        description="Customers cannot connect",
-        ticket_type="Access Point Outage",
-        base_station_details="  Garki AP sector 2  ",
-        priority="normal",
-        channel="web",
-        status="open",
+        web_support_tickets.TicketFormValues(
+            title="Access point offline",
+            description="Customers cannot connect",
+            ticket_type="Access Point Outage",
+            base_station_details="  Garki AP sector 2  ",
+            priority="normal",
+            channel="web",
+            status="open",
+        )
     )
 
     assert payload.metadata_ == {"base_station_details": "Garki AP sector 2"}

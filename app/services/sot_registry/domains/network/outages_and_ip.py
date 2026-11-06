@@ -21,6 +21,65 @@ from app.services.sot_manifest import (
 
 SERVICES: tuple[SOTService, ...] = (
     SOTService(
+        name="network.infrastructure_ticket_selection",
+        module="app.services.infrastructure_ticket_selection",
+        owns=("ticket-category infrastructure eligibility and count-only preview",),
+        depends_on=("network.infrastructure_catalogue", "network.outage_impact"),
+        contract=ServiceContract(
+            concerns=(
+                ConcernContract(
+                    name="ticket-category infrastructure eligibility and count-only preview",
+                    role=OwnerRole.RESOLVER,
+                    input_names=("native inventory options", "outage impact count"),
+                ),
+            ),
+            authoritative_inputs=(
+                AuthorityInput(
+                    name="native inventory options",
+                    owner="network.infrastructure_catalogue",
+                    kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                    source="active typed BTS, FDH, AP, and network-node references",
+                ),
+                AuthorityInput(
+                    name="outage impact count",
+                    owner="network.outage_impact",
+                    kind=AuthorityKind.DERIVED_PROJECTION,
+                    source="live scope resolver affected_count only; no audience identities are returned",
+                ),
+            ),
+            transaction=TransactionContract(
+                mode=TransactionMode.READ_ONLY,
+                boundary="Typed search and preview are direct reads; the issuance command rechecks and locks the reference.",
+                locking="No read lock; issuance locks and revalidates the chosen native reference.",
+                idempotency="The same live inventory and scope produce the same ordered options and count.",
+                retries="A stale or removed option is rejected by issuance; the operator may search again.",
+            ),
+            errors=ErrorContract(
+                domain_codes=(),
+                mapping_owner="app.web.admin.support_tickets",
+                fail_closed_on=(
+                    "incompatible ticket category",
+                    "inactive or missing inventory reference",
+                ),
+            ),
+            migration=MigrationContract(
+                state=AuthorityMigrationState.NATIVE,
+                new_owner="network.infrastructure_ticket_selection",
+                verification="Typed category, inventory delegation, count-only, and stale-selection tests.",
+                cutover_gate="Staff picker and issuance share this category policy.",
+                fallback_retirement="Legacy base_station_details cannot create these infrastructure categories through generic ticket creation.",
+            ),
+            steward="network operations",
+            design_refs=(
+                "docs/designs/OUTAGE_WORK_ORDER_HANDOFF_SOT.md",
+                "docs/SOT_RELATIONSHIP_MAP.md",
+            ),
+            test_refs=(
+                "tests/services/topology/test_infrastructure_ticket_selection.py",
+            ),
+        ),
+    ),
+    SOTService(
         name="network.outage_impact",
         module="app.services.network.outage_impact",
         owns=(
@@ -1025,6 +1084,8 @@ SERVICES: tuple[SOTService, ...] = (
         depends_on=(
             "network.outage_lifecycle",
             "network.outage_impact",
+            "network.infrastructure_catalogue",
+            "network.infrastructure_ticket_selection",
             "support.ticket_lifecycle",
             "operations.work_order_commands",
             "observability.audit_log",
@@ -1035,7 +1096,10 @@ SERVICES: tuple[SOTService, ...] = (
             "for an open or confirmed shared outage. The immutable outage "
             "scope revision remains the audience authority; this service "
             "records only the outage, ticket, target, and revision provenance. "
-            "Issuance never creates customer work orders or closes tickets."
+            "Issuance never creates customer work orders or closes tickets. "
+            "The support form can resolve a BTS, FDH cabinet, or network node "
+            "to an incident and its count-only impact preview. Explicit manual "
+            "infrastructure evidence creates an unlinked support ticket."
         ),
         contract=ServiceContract(
             concerns=(
@@ -1044,6 +1108,7 @@ SERVICES: tuple[SOTService, ...] = (
                     role=OwnerRole.APPLICATION_COORDINATOR,
                     input_names=(
                         "locked outage incident and scope revision",
+                        "locked native infrastructure reference",
                         "outage-response routing team",
                         "typed infrastructure ticket create input",
                     ),
@@ -1069,6 +1134,12 @@ SERVICES: tuple[SOTService, ...] = (
                 ),
             ),
             authoritative_inputs=(
+                AuthorityInput(
+                    name="locked native infrastructure reference",
+                    owner="network.infrastructure_catalogue",
+                    kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                    source="typed native target revalidated under catalogue lock before declaring or reusing an outage",
+                ),
                 AuthorityInput(
                     name="locked outage incident and scope revision",
                     owner="network.outage_lifecycle",
@@ -1140,8 +1211,13 @@ SERVICES: tuple[SOTService, ...] = (
                     "network.outage_work_order_handoff.linked_work_order_missing",
                     "network.outage_work_order_handoff.invalid_command_scope",
                     "network.outage_work_order_handoff.outage_team_missing",
+                    "network.outage_work_order_handoff.description_required",
+                    "network.outage_work_order_handoff.infrastructure_ticket_type_conflict",
+                    "network.outage_work_order_handoff.invalid_asset_kind",
+                    "network.outage_work_order_handoff.asset_not_found",
+                    "network.outage_work_order_handoff.customerless_ticket_required",
                 ),
-                mapping_owner="app.web.admin.network_monitoring",
+                mapping_owner="app.web.admin.network_monitoring and app.web.admin.support_tickets",
                 fail_closed_on=(
                     "unresolved outage target",
                     "missing canonical infrastructure ticket",

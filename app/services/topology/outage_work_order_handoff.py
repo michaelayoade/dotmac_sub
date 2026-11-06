@@ -32,6 +32,7 @@ from app.services.audit_adapter import AuditActor, stage_audit_event
 from app.services.common import coerce_uuid
 from app.services.domain_errors import DomainError
 from app.services.events import EventType, emit_event
+from app.services.infrastructure_ticket_selection import InfrastructureKind
 from app.services.owner_commands import (
     CommandContext,
     OwnerCommandDefinition,
@@ -86,6 +87,159 @@ class OutageInfrastructureTicketIssueCommand:
     permissions: frozenset[str]
     context: CommandContext
     request_id: str | None = None
+    ticket_payload: TicketCreate | None = None
+    source: str = "outage_console"
+
+
+@dataclass(frozen=True)
+class InfrastructureAssetTicketIssueCommand:
+    ticket_type: str
+    asset_kind: InfrastructureKind
+    asset_id: UUID
+    ticket_payload: TicketCreate
+    actor_id: UUID
+    permissions: frozenset[str]
+    context: CommandContext
+
+
+def create_ticket_for_infrastructure_asset(
+    db: Session, command: InfrastructureAssetTicketIssueCommand
+) -> OutageInfrastructureTicketIssueResult:
+    """Declare or reuse an asset outage and issue its one ticket atomically."""
+    from app.services.db_session_adapter import db_session_adapter
+
+    db_session_adapter.release_read_transaction(db)
+    return execute_owner_command(
+        db,
+        definition=_TICKET_DEFINITION,
+        context=command.context,
+        operation=lambda: _create_ticket_for_infrastructure_asset(db, command),
+    )
+
+
+def _create_ticket_for_infrastructure_asset(
+    db: Session, command: InfrastructureAssetTicketIssueCommand
+) -> OutageInfrastructureTicketIssueResult:
+    from sqlalchemy import select
+
+    from app.models.network import FdhCabinet
+    from app.models.network_monitoring import (
+        NetworkDevice,
+        PopSite,
+    )
+    from app.schemas.infrastructure import InfrastructureReference
+    from app.services import infrastructure_catalogue
+    from app.services.infrastructure_ticket_selection import (
+        allowed_kinds,
+        catalogue_type,
+    )
+    from app.services.topology.outage import declare_outage
+
+    if command.context.scope != TICKET_CREATE_SCOPE:
+        raise OutageWorkOrderHandoffError(
+            "invalid_command_scope",
+            "Infrastructure ticket scope is invalid",
+            kind="forbidden",
+        )
+    if TICKET_CREATE_PERMISSIONS - command.permissions:
+        raise OutageWorkOrderHandoffError(
+            "permission_required",
+            "Monitoring and ticket create permissions are required",
+            kind="forbidden",
+        )
+    kind = command.asset_kind
+    if (
+        kind not in allowed_kinds(command.ticket_type)
+        or kind is InfrastructureKind.manual
+    ):
+        raise OutageWorkOrderHandoffError(
+            "invalid_asset_kind",
+            "Ticket type does not support this outage target",
+            kind="invalid",
+        )
+    if command.ticket_payload.ticket_type != command.ticket_type or any(
+        (
+            command.ticket_payload.subscriber_id,
+            command.ticket_payload.customer_account_id,
+            command.ticket_payload.customer_person_id,
+            command.ticket_payload.lead_id,
+            command.ticket_payload.related_outage_ticket_id,
+        )
+    ):
+        raise OutageWorkOrderHandoffError(
+            "customerless_ticket_required",
+            "Infrastructure tickets cannot target one customer",
+            kind="invalid",
+        )
+    if not (command.ticket_payload.description or "").strip():
+        raise OutageWorkOrderHandoffError(
+            "description_required", "Description is required", kind="invalid"
+        )
+    inventory_type = catalogue_type(kind, command.ticket_type)
+    if inventory_type is None:
+        infrastructure_catalogue.lock_network_node(
+            db,
+            reference=infrastructure_catalogue.NetworkNodeReference(command.asset_id),
+        )
+    else:
+        infrastructure_catalogue.lock_reference(
+            db,
+            reference=InfrastructureReference(type=inventory_type, id=command.asset_id),
+        )
+    basestation = (
+        db.get(PopSite, command.asset_id)
+        if kind is InfrastructureKind.basestation
+        else None
+    )
+    cabinet = (
+        db.get(FdhCabinet, command.asset_id)
+        if kind is InfrastructureKind.cabinet
+        else None
+    )
+    node = (
+        db.get(NetworkDevice, command.asset_id)
+        if kind is InfrastructureKind.node
+        else None
+    )
+    if not any((basestation, cabinet, node)):
+        raise OutageWorkOrderHandoffError(
+            "asset_not_found", "Infrastructure asset is unavailable", kind="not_found"
+        )
+    target_column = {
+        InfrastructureKind.basestation: OutageIncident.basestation_id,
+        InfrastructureKind.cabinet: OutageIncident.fdh_cabinet_id,
+        InfrastructureKind.node: OutageIncident.root_node_id,
+    }[kind]
+    incident = db.scalar(
+        select(OutageIncident)
+        .where(
+            target_column == command.asset_id,
+            OutageIncident.status.in_(tuple(_ISSUABLE_STATUSES)),
+        )
+        .order_by(OutageIncident.started_at.desc())
+        .limit(1)
+        .with_for_update()
+    )
+    if incident is None:
+        incident = declare_outage(
+            db,
+            basestation=basestation,
+            fdh=cabinet,
+            node=node,
+            declared_by=str(command.actor_id),
+            note=command.ticket_payload.description,
+        )
+    return _create_infrastructure_ticket(
+        db,
+        OutageInfrastructureTicketIssueCommand(
+            incident_id=incident.id,
+            actor_id=command.actor_id,
+            permissions=command.permissions,
+            context=command.context,
+            ticket_payload=command.ticket_payload,
+            source="support_ticket_form",
+        ),
+    )
 
 
 class OutageWorkOrderHandoffError(DomainError):
@@ -514,6 +668,15 @@ def _create_infrastructure_ticket(
                 "The outage link points to a missing ticket",
                 kind="conflict",
             )
+        if (
+            command.ticket_payload is not None
+            and ticket.ticket_type != command.ticket_payload.ticket_type
+        ):
+            raise OutageWorkOrderHandoffError(
+                "infrastructure_ticket_type_conflict",
+                "The active outage already has a ticket with a different type",
+                kind="conflict",
+            )
         return OutageInfrastructureTicketIssueResult(
             ticket=ticket, link=existing, replayed=True
         )
@@ -535,9 +698,10 @@ def _create_infrastructure_ticket(
     target = _incident_target_label(db, incident)
     from app.services import support as support_service
 
-    ticket = support_service.Tickets.create(
-        db,
-        TicketCreate(
+    ticket_payload = (
+        command.ticket_payload.model_copy(deep=True)
+        if command.ticket_payload
+        else TicketCreate(
             title=f"Infrastructure outage — {target}"[:255],
             description=incident.note or f"Shared outage affecting {target}.",
             ticket_type="outage",
@@ -550,7 +714,23 @@ def _create_infrastructure_ticket(
                 "outage_incident_id": str(incident.id),
                 "ticket_role": "infrastructure",
             },
-        ),
+        )
+    )
+    ticket_payload.service_team_id = routing.team_id
+    ticket_payload.status = TicketStatus.open
+    ticket_payload.tags = list(
+        dict.fromkeys([*ticket_payload.tags, "infrastructure", "shared-outage"])
+    )
+    ticket_payload.metadata_ = {
+        **(ticket_payload.metadata_ or {}),
+        "outage_incident_id": str(incident.id),
+        "ticket_role": "infrastructure",
+    }
+    if command.ticket_payload is not None:
+        ticket_payload.metadata_["base_station_details"] = target
+    ticket = support_service.Tickets.create(
+        db,
+        ticket_payload,
         actor_id=str(command.actor_id),
         routing_mode=support_service.TicketCreationRoutingMode.preserve_requested_team,
     )
@@ -559,7 +739,7 @@ def _create_infrastructure_ticket(
         incident,
         ticket.id,
         linked_by=str(command.actor_id),
-        source="outage_console",
+        source=command.source,
     )
     stage_audit_event(
         db,
