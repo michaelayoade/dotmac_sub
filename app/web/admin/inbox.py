@@ -3900,6 +3900,12 @@ def _routes_redirect(*, status: str, message: str) -> RedirectResponse:
     )
 
 
+def _mailbox_routes_redirect(*, status: str, message: str) -> RedirectResponse:
+    response = _routes_redirect(status=status, message=message)
+    response.headers["location"] += "#inbox-settings-routing-mailbox"
+    return response
+
+
 @settings_router.post(
     "/ai-intake-policy/draft",
     dependencies=[Depends(require_permission("support:ticket:update"))],
@@ -4785,6 +4791,53 @@ def team_inbox_email_route_update(
     except (team_inbox_routing.EmailRouteError, ValueError) as exc:
         return _routes_redirect(status="error", message=str(exc))
     return _routes_redirect(status="success", message="Mailbox route updated.")
+
+
+@settings_router.post(
+    "/email-routes/{route_id}/edit",
+    dependencies=[Depends(require_permission("support:ticket:update"))],
+)
+def team_inbox_email_route_edit(
+    request: Request,
+    route_id: UUID,
+    email_address: str = Form(...),
+    service_team_id: UUID = Form(...),
+    priority: int = Form(...),
+    is_primary: bool = Form(default=False),
+    outbound_email_sender_key: str | None = Form(default=None),
+    expected_updated_at: datetime = Form(...),
+    db: Session = Depends(get_db),
+):
+    _prepare_mutation(db)
+    actor_id = _actor_id_from_request(request)
+    if actor_id is None:
+        return _mailbox_routes_redirect(
+            status="error", message="An authenticated staff actor is required."
+        )
+    try:
+        team_inbox_commands.edit_mailbox_route(
+            db,
+            command=team_inbox_commands.EditMailboxRouteCommand(
+                context=CommandContext.system(
+                    actor=f"person:{actor_id}",
+                    scope="team-inbox:mailbox-route-edit",
+                    reason="staff edited an existing Inbox mailbox route",
+                ),
+                actor=AuditActor.user(actor_id),
+                edit=team_inbox_routing.MailboxRouteEdit(
+                    route_id=route_id,
+                    expected_updated_at=expected_updated_at,
+                    email_address=email_address,
+                    service_team_id=service_team_id,
+                    priority=priority,
+                    is_primary=is_primary,
+                    outbound_email_sender_key=outbound_email_sender_key,
+                ),
+            ),
+        )
+    except (team_inbox_routing.EmailRouteError, ValueError) as exc:
+        return _mailbox_routes_redirect(status="error", message=str(exc))
+    return _mailbox_routes_redirect(status="success", message="Mailbox route edited.")
 
 
 @router.post(

@@ -3341,6 +3341,7 @@ DOMAIN = DomainSOT(
                 "immutable agent presence transition evidence",
                 "expired WhatsApp assignment and FIFO release",
                 "AI intake route configuration",
+                "inbound mailbox route configuration",
             ),
             depends_on=(
                 "ai.intake",
@@ -3356,6 +3357,7 @@ DOMAIN = DomainSOT(
                 service_name="communications.team_inbox_routing",
                 concerns=(
                     ("AI intake route configuration", OwnerRole.COMMAND_WRITER),
+                    ("inbound mailbox route configuration", OwnerRole.COMMAND_WRITER),
                     ("routing assignment and escalation policy", OwnerRole.POLICY),
                     (
                         "routing assignment and escalation transitions",

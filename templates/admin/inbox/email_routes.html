@@ -116,6 +116,7 @@
         },
         openFromHash() {
             const name = (window.location.hash || '').replace('#inbox-settings-', '');
+            if (name === 'routing-mailbox') { this.routingTab = 'mailbox'; this.openSection('routing', false); return; }
             if (name.startsWith('ai-') && this.aiTabs.includes(name.slice(3))) this.openAiTab(name.slice(3), false);
             else if (this.sectionOrder.includes(name)) this.openSection(name, false);
         },
@@ -810,6 +811,26 @@
                         </td>
                         <td class="px-5 py-3">
                             <div class="flex items-center justify-end gap-1.5">
+                                <details class="relative text-left">
+                                    <summary class="min-h-9 cursor-pointer rounded-lg border border-slate-300 px-2.5 py-2 text-xs font-semibold text-slate-700 dark:border-slate-700 dark:text-slate-200">Edit route</summary>
+                                    <form method="post" action="/admin/crm/inbox/email-routes/{{ route.id }}/edit" class="mt-3 w-72 space-y-3 rounded-lg border border-slate-200 bg-white p-3 dark:border-slate-700 dark:bg-slate-900 sm:w-80">
+                                        {% include "components/forms/csrf_input.html" %}
+                                        <input type="hidden" name="expected_updated_at" value="{{ route.updated_at.isoformat() }}">
+                                        <p class="text-xs text-slate-500">Changes to address or team affect future inbound messages. Existing conversations keep their routing.</p>
+                                        <label class="block text-xs font-semibold text-slate-700 dark:text-slate-200">Mailbox address<input name="email_address" type="email" required maxlength="255" value="{{ route.email_address }}" class="mt-1 h-10 w-full rounded-lg border-slate-300 text-xs dark:border-slate-700 dark:bg-slate-950"></label>
+                                        <label class="block text-xs font-semibold text-slate-700 dark:text-slate-200">Service team<select name="service_team_id" required class="mt-1 h-10 w-full rounded-lg border-slate-300 text-xs dark:border-slate-700 dark:bg-slate-950">
+                                            {% if route.service_team_id not in service_team_options|map(attribute='id')|map('string')|list %}<option value="{{ route.service_team_id }}" selected disabled>Current inactive team: {{ route.service_team_name or route.service_team_id }}</option>{% endif %}
+                                            {% for team in service_team_options %}<option value="{{ team.id }}" {% if team.id|string == route.service_team_id %}selected{% endif %}>{{ team.name }}</option>{% endfor %}
+                                        </select></label>
+                                        <label class="block text-xs font-semibold text-slate-700 dark:text-slate-200">Priority<input name="priority" type="number" min="0" max="1000" required value="{{ route.priority }}" class="mt-1 h-10 w-full rounded-lg border-slate-300 text-xs dark:border-slate-700 dark:bg-slate-950"></label>
+                                        <label class="flex items-center gap-2 text-xs font-semibold text-slate-700 dark:text-slate-200"><input name="is_primary" type="checkbox" value="true" {% if route.is_primary %}checked{% endif %}> Primary mailbox for this team</label>
+                                        <label class="block text-xs font-semibold text-slate-700 dark:text-slate-200">Reply sender<select name="outbound_email_sender_key" class="mt-1 h-10 w-full rounded-lg border-slate-300 text-xs dark:border-slate-700 dark:bg-slate-950">
+                                            <option value="">Default SMTP profile</option>
+                                            {% for sender in smtp_sender_options %}<option value="{{ sender.sender_key }}" {% if route.outbound_email_sender_key == sender.sender_key %}selected{% endif %}>{{ sender.sender_key }} - {{ sender.from_email }}</option>{% endfor %}
+                                        </select></label>
+                                        <button type="submit" class="min-h-9 rounded-lg bg-amber-500 px-3 text-xs font-semibold text-white">Save route</button>
+                                    </form>
+                                </details>
                                 {% if route.is_active and not route.is_primary %}
                                 <form method="post" action="/admin/crm/inbox/email-routes/{{ route.id }}">
                                     {% include "components/forms/csrf_input.html" %}

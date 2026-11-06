@@ -375,6 +375,14 @@ team through `TeamInboxChannelRoute`. AI intake may then override that default
 through `TeamInboxAiRoute` when the inbound metadata carries a supported intent
 and confidence at or above the configured threshold.
 
+The Inbox settings Mailbox routes editor changes an existing route's address,
+active service team, priority, primary flag, and reply sender through a typed
+`communications.team_inbox_routing` command. The command locks the route and
+checks the version shown to the operator, rejects duplicate team/address pairs,
+and retains the route identity. A changed address or team applies to future
+inbound routing; historical conversation ownership remains recorded as it was.
+Deactivation and reactivation are separate actions.
+
 The channel route decides whether AI routing is allowed for that account. When
 AI routing is disabled, or when no confident AI result is present, the channel
 default or configured fallback team remains the primary team. The route rows

@@ -49,6 +49,29 @@ class AiRouteUpdateOutcome:
     is_active: bool
 
 
+@dataclass(frozen=True, slots=True)
+class MailboxRouteEdit:
+    route_id: UUID
+    expected_updated_at: datetime
+    email_address: str
+    service_team_id: UUID
+    priority: int
+    is_primary: bool
+    outbound_email_sender_key: str | None
+
+    def __post_init__(self) -> None:
+        if not 0 <= self.priority <= 1000:
+            raise EmailRouteError("Priority must be between 0 and 1000.")
+
+
+@dataclass(frozen=True, slots=True)
+class MailboxRouteEditOutcome:
+    route_id: UUID
+    service_team_id: UUID
+    email_address: str
+    is_primary: bool
+
+
 def _route_time(value: datetime) -> datetime:
     return value.replace(tzinfo=UTC) if value.tzinfo is None else value.astimezone(UTC)
 
@@ -369,6 +392,7 @@ class EmailRouteRow:
     priority: int
     is_active: bool
     outbound_email_sender_key: str | None
+    updated_at: datetime
 
 
 @dataclass(frozen=True)
@@ -450,6 +474,7 @@ def list_email_routes(
                 or ""
             ).strip()
             or None,
+            updated_at=route.updated_at,
         )
         for route, team in query.all()
     ]
@@ -1003,6 +1028,73 @@ def update_email_route(
         route.is_primary = False
     db.flush()
     return route
+
+
+def edit_mailbox_route(
+    db: Session, *, edit: MailboxRouteEdit
+) -> MailboxRouteEditOutcome:
+    from app.models.service_team import ServiceTeam
+    from app.services.email import list_smtp_sender_options
+
+    route = (
+        db.query(TeamInboxEmailRoute)
+        .filter(TeamInboxEmailRoute.id == edit.route_id)
+        .with_for_update()
+        .populate_existing()
+        .one_or_none()
+    )
+    if route is None:
+        raise EmailRouteError("Mailbox route not found.")
+    if _route_time(route.updated_at) != _route_time(edit.expected_updated_at):
+        raise EmailRouteError(
+            "This mailbox route changed. Reload settings before editing it."
+        )
+    normalized = normalize_email_address(edit.email_address)
+    if (
+        normalized is None
+        or normalized.count("@") != 1
+        or any(char.isspace() for char in normalized)
+        or not all(normalized.split("@"))
+    ):
+        raise EmailRouteError("Enter a valid mailbox address.")
+    team = db.get(ServiceTeam, edit.service_team_id)
+    if team is None or not team.is_active:
+        raise EmailRouteError("Choose an active service team.")
+    duplicate = (
+        db.query(TeamInboxEmailRoute.id)
+        .filter(TeamInboxEmailRoute.service_team_id == edit.service_team_id)
+        .filter(TeamInboxEmailRoute.email_address == normalized)
+        .filter(TeamInboxEmailRoute.id != edit.route_id)
+        .first()
+    )
+    if duplicate is not None:
+        raise EmailRouteError(f"{normalized} is already routed to this team.")
+    sender_key = str(edit.outbound_email_sender_key or "").strip().lower()
+    if sender_key and sender_key not in {
+        option.sender_key for option in list_smtp_sender_options(db)
+    }:
+        raise EmailRouteError("Choose an active SMTP sender profile.")
+    metadata = dict(route.metadata_ or {})
+    if sender_key:
+        metadata[team_outbound.OUTBOUND_EMAIL_SENDER_METADATA_KEY] = sender_key
+    else:
+        metadata.pop(team_outbound.OUTBOUND_EMAIL_SENDER_METADATA_KEY, None)
+    route.metadata_ = metadata or None
+    route.email_address = normalized
+    route.service_team_id = edit.service_team_id
+    route.priority = edit.priority
+    route.is_primary = edit.is_primary and route.is_active
+    if route.is_primary:
+        _demote_other_primaries(
+            db, service_team_id=edit.service_team_id, keep_id=route.id
+        )
+    db.flush()
+    return MailboxRouteEditOutcome(
+        route_id=route.id,
+        service_team_id=route.service_team_id,
+        email_address=route.email_address,
+        is_primary=route.is_primary,
+    )
 
 
 def delete_email_route(db: Session, route_id: str | UUID) -> None:

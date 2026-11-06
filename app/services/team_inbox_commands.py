@@ -3444,6 +3444,38 @@ def update_email_route(
     _commit(db, action)
 
 
+@dataclass(frozen=True, slots=True)
+class EditMailboxRouteCommand:
+    context: CommandContext
+    actor: AuditActor
+    edit: team_inbox_routing.MailboxRouteEdit
+
+
+def edit_mailbox_route(
+    db: Session, *, command: EditMailboxRouteCommand
+) -> team_inbox_routing.MailboxRouteEditOutcome:
+    def action() -> team_inbox_routing.MailboxRouteEditOutcome:
+        outcome = team_inbox_routing.edit_mailbox_route(db, edit=command.edit)
+        stage_audit_event(
+            db,
+            action="team_inbox.mailbox_route_edited",
+            entity_type="team_inbox_email_route",
+            entity_id=str(outcome.route_id),
+            actor=command.actor,
+            request_id=str(command.context.command_id),
+            metadata={
+                "service_team_id": str(outcome.service_team_id),
+                "email_address": outcome.email_address,
+                "is_primary": outcome.is_primary,
+            },
+        )
+        return outcome
+
+    return execute_owner_command(
+        db, definition=_ADMIN_MUTATION, context=command.context, operation=action
+    )
+
+
 def delete_email_route(db: Session, *, route_id: str | UUID) -> None:
     def action() -> None:
         team_inbox_routing.delete_email_route(db, route_id)
