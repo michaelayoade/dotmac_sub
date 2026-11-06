@@ -35,6 +35,9 @@ activated by adding these files.
   (read-only root, non-root user, cap-drop ALL) apply except where a role
   declares a transcribed exception (`app` and `bandwidth-poller` NET_ADMIN,
   privileged mode, WireGuard bind mount, Docker socket, IP-forward sysctl).
+  Redis and PostGIS use the same reviewed immutable digests as the disposable
+  thin-shadow stack; the legacy production Compose remains tag-based until its
+  separately authorized image-pin bootstrap completes.
 - Excluded from rendering: FreeRADIUS, GenieACS + its MongoDB, Nominatim,
   VictoriaMetrics, Promtail, and vmagent (7 services) — third-party or host
   observability concerns with host networking/config bind mounts that a
