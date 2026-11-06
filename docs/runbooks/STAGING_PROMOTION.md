@@ -17,6 +17,11 @@ What was removed is the merge, not the proof.
 
 ## Release sequence
 
+Before starting a production release, follow the deploy coordination rule in
+[PRODUCTION_DEPLOYMENT.md](PRODUCTION_DEPLOYMENT.md#deploy-coordination-one-deploy-at-a-time):
+one deploy at a time with an open/closed register line, pipeline only, and
+the current green `main` tip as the release.
+
 1. Open the feature pull request against `main` with the appropriate
    `version:major`, `version:minor`, `version:patch`, or `version:none` label.
    Do not edit `VERSION` in the source pull request; the version-bump workflow
