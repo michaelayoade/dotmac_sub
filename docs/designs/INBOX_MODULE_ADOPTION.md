@@ -205,6 +205,25 @@ That said, `Transport` is doing two jobs — "a third party operates this" and
 "identity arrives with the message" — and `chat_widget` is where they come
 apart. Recorded as an open question in § 6, not worked around.
 
+Connector discovery reads the typed
+`team_inbox_integrator_envelope.provider_channel_catalog()` projection. That
+projection is derived directly from the same fail-closed `PROVIDER_CHANNELS`
+allowlist used at admission, so setup surfaces cannot advertise a channel the
+receive port would refuse. It is discovery only: adding a provider/channel pair
+still requires the observation, outbound delivery, credential, health,
+routing, and retention owners to be ready in the same slice. It never grants a
+runtime capability or turns a provider into a conversation writer.
+
+Inbox settings displays this same catalog beside the public widget editor, so
+operators see only provider/channel pairs admitted by the current receive
+contract. It deliberately does not claim credential or installation health;
+those remain integration-owned. The public Fiber widget presentation profile
+reuses declared `comms` settings and the canonical audited settings-form writer.
+`team_inbox_widget.fiber_widget_presentation()` is a bounded, non-secret read
+projection consumed by the exact-origin `/widget/fiber/config` adapter. Embed
+values may override presentation defaults, but cannot change routing, identity,
+rate limits, transport, or conversation ownership.
+
 **`note` is `INTERNAL`.** No provider, nothing delivered, excluded from
 `SUPPORTED_EXTERNAL_CHANNELS` and unreachable from `PROVIDER_CHANNELS`.
 `DERIVED` + `NONE` are forced by the trait validation and correct: a note thread
@@ -256,20 +275,18 @@ preserves source UUIDs and timestamps, validates the same channel, lifecycle,
 threading and identity contracts, replays an exact existing row idempotently,
 and fails closed on same-id/different-fact and natural-identity collisions.
 
-**`history` ships in `dotmac-inbox 0.1.0a2`, which is NOT PUBLISHED.** The
-starter's `declared-publication-baseline.json` records it as
-`declared-unpublished` with the reason naming this adoption, and says Sub must
-not pin it until the protected release installs it back and tags the exact
-revision. **Publishing a2 is a hard prerequisite for the backfill slice**, and
-the alternative — Sub writing the module's mapped classes directly — is a
-temporary bridge ADR-0052's amendment permits only while a2 is unpublished, and
-is not something to choose when publishing is available.
+The identity-preserving `history` seam and the bounded
+`read_service.list_recent_messages` reader are published in governed
+`dotmac-inbox 0.1.0a3`. Publication removes the supply blocker; it does not
+authorise backfill or a live-read switch. The production-shaped census,
+collision/refusal review, backfill, shadow and one-writer gates below still
+rule activation. Sub must not write the module's mapped classes directly.
 
 ### 3.2 Expand / contract sequence
 
 | Phase | What happens | Reversible |
 | --- | --- | --- |
-| **P0 compose** (this change) | pin, lock, `ib` lineage in `alembic.ini`, `mod_inbox` in the schema prerequisite contract, channel declarations | yes — revert three declarations; `mod_inbox` is empty |
+| **P0 compose** (current) | exact a3 pin and lock, `ib` lineage through `ib_0003_transport_refs`, schema prerequisite contract, channel declarations, unused bounded-reader compatibility alias | yes — no live read or write depends on it; `mod_inbox` remains unbackfilled |
 | **P1 census** | derive `account_scope` and `thread_key` for every historical conversation against a production-shaped restore; count refusals and collisions; write nothing | yes, nothing written |
 | **P2 satellite schema** | additive Sub-owned tables the projection needs, if the census says any are needed | yes |
 | **P3 backfill** | `history.import_*` under the identity rule; restartable, re-runnable to convergence | yes — `mod_inbox` rows are additive and Sub is still authoritative |
@@ -387,9 +404,9 @@ failing on a different shape of mistake:
 
 1. **The import guard, already landed in this change** —
    `tests/architecture/test_inbox_module_composition.py` allows exactly one
-   `app/` module to name `dotmac_inbox`, and allows it only
-   `dotmac_inbox.channels`. Naming `dotmac_inbox.service` from a second file
-   fails immediately.
+   `app/` module to name `dotmac_inbox`, and allows only channel declarations
+   plus the unused bounded-reader compatibility seam. Naming service, history
+   or models, or importing the adapter into a live path, fails immediately.
 2. **A projected-column writer ratchet** (P4): an AST census of every
    assignment to a projected column and every `InboxConversation(...)` /
    `InboxMessage(...)` construction outside the reconciler, with a two-
@@ -450,9 +467,10 @@ The rules:
 - **Historical `note` conversations.** Whether any rows carry
   `channel_type='note'` is unknown without a database. The declaration covers
   them if they exist.
-- **`dotmac-inbox 0.1.0a2` publication.** The backfill cannot start until it is
-  published and pinned. Whether it will also carry the four gaps above is a
-  starter-side decision.
+- **The a3 release is available but the four activation gaps remain.** The
+  exact published package supplies history, transport references and bounded
+  reverse pagination. None of that resolves the four product-contract gaps
+  above or substitutes for the census and shadow evidence.
 - **Read surface.** The projection strategy assumes the read surface is large
   enough that repointing it is a separate project. That was measured at ~51
   files on an earlier revision and has not been re-measured here.

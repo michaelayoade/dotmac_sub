@@ -161,6 +161,7 @@ from app.tasks.ont_service_configuration import apply as apply_ont_service_confi
 from app.tasks.ont_signal_observations import record_ont_observations
 from app.tasks.operational_escalations import dispatch_operational_escalation_deliveries
 from app.tasks.outage_auto_notify import auto_dispatch_outage_notifications
+from app.tasks.outbox_backlog import publish_outbox_backlog_task
 from app.tasks.payment_reconciliation import reconcile_topups
 from app.tasks.profile_sync import (
     execute_due_profile_sync_tasks,
@@ -175,7 +176,7 @@ from app.tasks.quotes import reconcile_quote_mirror
 from app.tasks.radius import run_radius_sync_job
 from app.tasks.radius_health import run_radius_health_check
 from app.tasks.radius_population import refresh_radius_from_subs, sync_device_login
-from app.tasks.referrals import reconcile_referral_mirror
+from app.tasks.referrals import expire_pending_referrals, reconcile_referral_mirror
 from app.tasks.reports import send_scheduled_ncc_report
 from app.tasks.router_health import (
     observe_router_runtime,
@@ -314,6 +315,7 @@ __all__ = [
     "run_scheduled_export",
     "run_export_job",
     "prune_field_location_history_task",
+    "publish_outbox_backlog_task",
     "retry_failed_events",
     "dispatch_pending_events",
     "mark_stale_processing_events",
@@ -435,6 +437,7 @@ __all__ = [
     "sync_all_system_info",
     "run_scheduled_credential_rotation",
     "reconcile_quote_mirror",
+    "expire_pending_referrals",
     "reconcile_referral_mirror",
     "send_scheduled_ncc_report",
 ]

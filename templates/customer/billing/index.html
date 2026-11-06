@@ -16,6 +16,9 @@
             <p class="mt-1 text-base text-stone-500 dark:text-stone-400">Manage invoices and payment history</p>
         </div>
         <div class="flex flex-col gap-3 sm:flex-row">
+            <a href="/portal/billing/statement" class="inline-flex items-center justify-center rounded-xl border border-stone-300 bg-white px-5 py-2.5 text-sm font-semibold text-stone-800 hover:bg-stone-50 dark:border-stone-600 dark:bg-stone-800 dark:text-white">
+                Account statement
+            </a>
             {% if not (customer and customer.read_only) %}
             <button type="button" onclick="document.getElementById('payment-choice').showModal()" class="inline-flex items-center gap-2 rounded-xl bg-emerald-600 px-5 py-2.5 text-sm font-semibold text-white shadow-sm transition-all hover:bg-emerald-700 hover:-translate-y-0.5">
                 <svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">

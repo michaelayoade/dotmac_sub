@@ -47,7 +47,7 @@ def _error_detail(exc: Exception) -> str:
 
 def _actor_id(request: Request) -> str | None:
     auth = getattr(request.state, "auth", {}) or {}
-    actor = auth.get("principal_id") or auth.get("person_id")
+    actor = auth.get("principal_id")
     return str(actor) if actor else None
 
 
@@ -115,7 +115,9 @@ def vendor_create(
         "is_active": is_active,
     }
     try:
-        vendor_id = web_vendors_service.create_vendor_from_form(db, **fields)
+        vendor_id = web_vendors_service.create_vendor_from_form(
+            db, **fields, actor_id=_actor_id(request)
+        )
         return RedirectResponse(url=f"/admin/vendors/{vendor_id}", status_code=303)
     except ValueError as exc:
         db.rollback()

@@ -1162,14 +1162,14 @@ reference = "forgejo"
 
 [[package]]
 name = "dotmac-inbox"
-version = "0.1.0a1"
+version = "0.1.0a3"
 description = "Dotmac Inbox — tenant-scoped conversation, message, lifecycle, threading, and read-state ownership"
 optional = false
 python-versions = ">=3.11,<3.14"
 groups = ["main"]
 files = [
-    {file = "dotmac_inbox-0.1.0a1-py3-none-any.whl", hash = "sha256:d6f006e24c9639ac3938f24bc373432ee9809e1cdcd8f70959be73dbbe5df873"},
-    {file = "dotmac_inbox-0.1.0a1.tar.gz", hash = "sha256:d80f0b6e0a138289d7728cd8db975eab5312a464af129e9ac5e0245fc74b246e"},
+    {file = "dotmac_inbox-0.1.0a3-py3-none-any.whl", hash = "sha256:19f0f14bc7bf8fe804eb7674e3340ba0a4c5f2414abe788eb0d93a6f7d911bd1"},
+    {file = "dotmac_inbox-0.1.0a3.tar.gz", hash = "sha256:dc9fc5259717ee1b80b32633647195a2bbe6a0df60e691ce59de74c6f3e7ed60"},
 ]
 
 [package.dependencies]
@@ -1202,14 +1202,14 @@ resolved_reference = "a4fe55f4ed704c556c4d1e3cc728ec4ef0dd8042"
 
 [[package]]
 name = "dotmac-kernel"
-version = "0.1.0a105"
+version = "0.1.0a107"
 description = "DotMac platform kernel — multi-tenant FastAPI foundation (config, RLS db, identity/tenancy models, security, platform auth, middleware, settings, features registry, audit)"
 optional = false
 python-versions = ">=3.11,<3.14"
 groups = ["main", "dev"]
 files = [
-    {file = "dotmac_kernel-0.1.0a105-py3-none-any.whl", hash = "sha256:f8937e5525c3efd27e2030bf69ed0c37e137c345e376668a79e00ebf349b6ffa"},
-    {file = "dotmac_kernel-0.1.0a105.tar.gz", hash = "sha256:76a3ccb7d0344befe565681b710edfd3a563e64127b801e43bb239d5bc5b80d2"},
+    {file = "dotmac_kernel-0.1.0a107-py3-none-any.whl", hash = "sha256:887b4bccb0fe2760df9a8e6d627553da4a2dc82451f9fa501d9b1e0bc774e341"},
+    {file = "dotmac_kernel-0.1.0a107.tar.gz", hash = "sha256:6f146c85faab91084c38f93fc6140dc9cbb54b6b665ee5f21ea816b11cc53144"},
 ]
 
 [package.dependencies]
@@ -6283,4 +6283,4 @@ cffi = ["cffi (>=1.17,<2.0) ; platform_python_implementation != \"PyPy\" and pyt
 [metadata]
 lock-version = "2.1"
 python-versions = ">=3.11,<3.13"
-content-hash = "b67951bbd4cb41b202874798535e8a7cd175e7d49cfb4f17fef3bb67399d51e1"
+content-hash = "dc1c02197f9b7b1354c17ba190425b7457b0ec507027f3f72a280aa509420260"

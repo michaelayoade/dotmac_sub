@@ -212,6 +212,11 @@ def test_other_permissions_are_unaffected_for_non_admins(db_session) -> None:
     db_session.add(other)
     db_session.commit()
     actor, target = _user(db_session), _user(db_session)
+    # SUB-1: a non-admin may only grant what it holds itself.
+    db_session.add(
+        SystemUserPermission(system_user_id=actor.id, permission_id=other.id)
+    )
+    db_session.commit()
     _assign(db_session, actor, target, [other.id])
     assert _refusals(db_session) == []
 

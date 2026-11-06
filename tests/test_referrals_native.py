@@ -13,8 +13,10 @@ import pytest
 
 from app.models.audit import AuditEvent
 from app.models.billing import CreditNote
+from app.models.catalog import Subscription, SubscriptionStatus
 from app.models.domain_settings import DomainSetting, SettingDomain, SettingValueType
 from app.models.event_store import EventStore
+from app.models.lifecycle import SubscriptionLifecycleEvent
 from app.models.notification import CommunicationIntentRecord, Notification
 from app.models.party import (
     Party,
@@ -440,6 +442,110 @@ def test_qualify_expires_outside_window(db_session):
     assert result.reward_status == "none"
 
 
+def test_pending_referrals_reconcile_activation_history_and_expiry(
+    db_session, catalog_offer
+):
+    _program(db_session, window_days=30)
+    overdue, _ = _captured_referral(db_session)
+    recent, _ = _captured_referral(db_session)
+    activated, _ = _captured_referral(db_session)
+    no_evidence, _ = _captured_referral(db_session)
+    overdue.created_at = datetime.now(UTC) - timedelta(days=31)
+    activated.created_at = datetime.now(UTC) - timedelta(days=31)
+    no_evidence.created_at = datetime.now(UTC) - timedelta(days=31)
+    # The account was activated in time, then disabled; completed EventStore
+    # rows may already have been purged by their shorter retention task.
+    subscription = Subscription(
+        subscriber_id=activated.referred_subscriber_id,
+        offer_id=catalog_offer.id,
+        status=SubscriptionStatus.disabled,
+    )
+    db_session.add(subscription)
+    db_session.flush()
+    activated_at = activated.created_at + timedelta(days=10)
+    subscription.created_at = activated.created_at + timedelta(days=5)
+    db_session.get(Subscriber, activated.referred_subscriber_id).created_at = (
+        activated.created_at + timedelta(days=5)
+    )
+    db_session.add(
+        SubscriptionLifecycleEvent(
+            subscription_id=subscription.id,
+            to_status=SubscriptionStatus.active,
+            evidence_grade="transition_evidence",
+            evidence_source="lifecycle_command",
+            source_id=f"test:{subscription.id}",
+            evidence_fingerprint="sha256:test",
+            effective_at=activated_at,
+            recorded_at=activated_at,
+            created_at=activated_at,
+        )
+    )
+    db_session.get(
+        Subscriber, no_evidence.referred_subscriber_id
+    ).status = SubscriberStatus.active
+    db_session.commit()
+
+    def sweep(batch_limit=200):
+        return referral_program.expire_pending_referrals(
+            db_session,
+            referral_program.ExpirePendingReferralsCommand(
+                context=CommandContext.system(
+                    actor="test:referral-expiry",
+                    scope=referral_program.REFERRAL_PROGRAM_SCOPE,
+                    reason="Verify pending referral expiry",
+                ),
+                batch_limit=batch_limit,
+            ),
+        )
+
+    first = sweep(batch_limit=1)
+    assert first.processed == 1
+    next_results = [sweep(batch_limit=1) for _ in range(3)]
+    assert sum(item.expired for item in [first, *next_results]) == 2
+    assert sum(item.qualified for item in [first, *next_results]) == 1
+    assert db_session.get(Referral, overdue.id).status == "expired"
+    assert db_session.get(Referral, recent.id).status == "pending"
+    assert db_session.get(Referral, activated.id).status == "qualified"
+    assert (
+        db_session.get(Referral, activated.id).qualified_at.replace(tzinfo=UTC)
+        == activated_at
+    )
+    assert db_session.get(Referral, no_evidence.id).status == "expired"
+    db_session.rollback()  # End the read transaction before the next owner command.
+    assert sweep().processed == 0
+    assert (
+        db_session.query(EventStore)
+        .filter(EventStore.event_type == "referral.expired")
+        .count()
+        == 2
+    )
+
+
+def test_delayed_qualification_uses_in_window_activation_event(db_session):
+    _program(db_session, window_days=30)
+    referral, _ = _captured_referral(db_session)
+    referral.created_at = datetime.now(UTC) - timedelta(days=31)
+    activated_at = referral.created_at + timedelta(days=10)
+    prospect = db_session.get(Subscriber, referral.referred_subscriber_id)
+    prospect.created_at = referral.created_at + timedelta(days=5)
+    prospect.status = SubscriberStatus.active
+    db_session.add(
+        EventStore(
+            event_id=uuid.uuid4(),
+            event_type="subscriber.updated",
+            subscriber_id=prospect.id,
+            payload={"status": "active", "prior_status": "new"},
+            created_at=activated_at,
+        )
+    )
+    db_session.commit()
+
+    result = qualify_for_subscriber(db_session, prospect)
+    assert result is not None
+    assert result.status == "qualified"
+    assert result.qualified_at.replace(tzinfo=UTC) == activated_at
+
+
 def test_qualify_attaches_only_a_reviewed_matching_party(db_session):
     _program(db_session)
     email = _unique_email()
@@ -745,7 +851,8 @@ def test_handler_ignores_unrelated_events_and_missing_subscriber(db_session):
 # ── read-shape compatibility ────────────────────────────────────────────
 
 
-def test_read_for_subscriber_matches_mirror_shape(db_session):
+def test_read_for_subscriber_matches_mirror_shape(db_session, monkeypatch):
+    monkeypatch.setenv("APP_URL", "https://selfcare.example.test")
     from app.schemas.portal import MyReferralsResponse
 
     referral, referrer = _qualified_referral(db_session)
@@ -795,15 +902,16 @@ def test_read_for_subscriber_matches_mirror_shape(db_session):
     assert Decimal(payload["program"]["reward_amount"]) == Decimal("2500")
 
 
-def test_share_url_uses_the_canonical_configured_base(db_session):
-    configured_base = "https://referrals.example.test/customer"
+def test_share_url_uses_the_customer_portal_origin(db_session, monkeypatch):
+    configured_base = "https://selfcare.example.test"
+    monkeypatch.setenv("APP_URL", configured_base)
     _program(db_session)
     db_session.add(
         DomainSetting(
-            domain=SettingDomain.subscriber,
-            key="referral_share_base_url",
+            domain=SettingDomain.auth,
+            key="selfcare_domain",
             value_type=SettingValueType.string,
-            value_text=configured_base,
+            value_text="old-selfcare.example.test",
             is_active=True,
         )
     )
@@ -813,7 +921,77 @@ def test_share_url_uses_the_canonical_configured_base(db_session):
 
     payload = referrals.read_for_subscriber(db_session, str(referrer.id))
 
-    assert payload["share_url"].startswith(f"{configured_base}/r/")
+    assert payload["share_url"] == f"{configured_base}/r/{payload['code']}"
+
+
+def test_share_url_is_not_generated_without_an_explicit_portal_origin(
+    db_session, monkeypatch
+):
+    monkeypatch.delenv("APP_URL", raising=False)
+    _program(db_session)
+    referrer = _subscriber(db_session)
+    ensure_code(db_session, referrer.id)
+
+    payload = referrals.read_for_subscriber(db_session, str(referrer.id))
+    assert payload["share_url"] == ""
+
+
+def test_share_url_uses_configured_selfcare_domain_when_app_url_is_unset(
+    db_session, monkeypatch
+):
+    monkeypatch.delenv("APP_URL", raising=False)
+    _program(db_session)
+    db_session.add(
+        DomainSetting(
+            domain=SettingDomain.auth,
+            key="selfcare_domain",
+            value_type=SettingValueType.string,
+            value_text="portal.example.test",
+            is_active=True,
+        )
+    )
+    db_session.commit()
+    referrer = _subscriber(db_session)
+    ensure_code(db_session, referrer.id)
+
+    payload = referrals.read_for_subscriber(db_session, str(referrer.id))
+    assert payload["share_url"] == f"https://portal.example.test/r/{payload['code']}"
+
+
+@pytest.mark.parametrize(
+    "invalid_url",
+    ["https://portal.example.test/customer", "https://portal.example.test:bad"],
+)
+def test_invalid_portal_origin_does_not_break_referral_page(
+    db_session, monkeypatch, invalid_url
+):
+    monkeypatch.setenv("APP_URL", invalid_url)
+    _program(db_session)
+    referrer = _subscriber(db_session)
+    ensure_code(db_session, referrer.id)
+
+    payload = referrals.read_for_subscriber(db_session, str(referrer.id))
+    assert payload["share_url"] == ""
+
+
+def test_admin_domain_is_not_used_for_customer_referral_links(db_session, monkeypatch):
+    monkeypatch.delenv("APP_URL", raising=False)
+    _program(db_session)
+    db_session.add(
+        DomainSetting(
+            domain=SettingDomain.auth,
+            key="admin_domain",
+            value_type=SettingValueType.string,
+            value_text="admin.example.test",
+            is_active=True,
+        )
+    )
+    db_session.commit()
+    referrer = _subscriber(db_session)
+    ensure_code(db_session, referrer.id)
+
+    payload = referrals.read_for_subscriber(db_session, str(referrer.id))
+    assert payload["share_url"] == ""
 
 
 def test_refer_a_friend_portal_shape(db_session):

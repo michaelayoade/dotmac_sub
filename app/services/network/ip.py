@@ -27,6 +27,7 @@ from app.schemas.network import (
 from app.services import settings_spec
 from app.services.common import coerce_uuid
 from app.services.crud import CRUDManager
+from app.services.domain_errors import DomainError
 from app.services.network._common import (
     _apply_ordering,
     _apply_pagination,
@@ -38,6 +39,19 @@ from app.validators import network as network_validators
 logger = logging.getLogger(__name__)
 ACTIVE_SUBSCRIPTION_STATUS = "active"
 SERVICE_ALLOCATION_TYPES = frozenset({"wan", "static"})
+
+
+class IPAssignmentError(DomainError):
+    """Stable refusal contract for IP-assignment commands."""
+
+
+def _ip_assignment_error(suffix: str, message: str) -> IPAssignmentError:
+    return IPAssignmentError(
+        code=f"network.ip_assignment_lifecycle.{suffix}",
+        message=message,
+        details={},
+        retryable=False,
+    )
 
 
 def _subscription_model() -> type[Any]:
@@ -176,6 +190,19 @@ class IPAssignments(CRUDManager[IPAssignment]):
     ) -> IPAssignment:
         data = payload.model_dump()
         IPAssignments._resolve_owner(db, data)
+        # An IPv4 holding with no subscription is an UNBOUND row: nothing owns
+        # the address for service, billing or RADIUS purposes. Device and
+        # management IPs live on the device record (IPv4Address.ont_unit_id /
+        # NetworkDevice), not in ip_assignments, so no caller needs this.
+        if (
+            data.get("ip_version") == IPVersion.ipv4
+            and data.get("subscription_id") is None
+        ):
+            raise _ip_assignment_error(
+                "subscription_required",
+                "An IPv4 assignment requires subscription_id. Device and "
+                "management IPs belong on the device record.",
+            )
         if data.get("subscriber_id") is not None:
             network_validators.validate_ip_assignment_links(
                 db,
@@ -256,6 +283,18 @@ class IPAssignments(CRUDManager[IPAssignment]):
                 )
             )
         data = payload.model_dump(exclude_unset=True)
+        # An explicit null must not strip the service link from an IPv4 row.
+        # Existing unbound rows stay patchable (they have no link to clear).
+        if (
+            "subscription_id" in data
+            and data["subscription_id"] is None
+            and assignment.subscription_id is not None
+            and assignment.ipv4_address_id is not None
+        ):
+            raise _ip_assignment_error(
+                "subscription_clear_refused",
+                "An IPv4 assignment cannot have its subscription_id cleared.",
+            )
         IPAssignments._resolve_owner(db, data)
         resolved_subscriber_id = data.get("subscriber_id", assignment.subscriber_id)
         resolved_subscription_id = data.get(
@@ -344,10 +383,14 @@ class IpPools(CRUDManager[IpPool]):
         order_dir: str,
         limit: int,
         offset: int,
+        *,
+        include_inactive: bool = False,
     ):
         query = db.query(IpPool)
         query = apply_optional_equals(query, {IpPool.ip_version: ip_version})
-        query = apply_active_state(query, IpPool.is_active, is_active)
+        query = apply_active_state(
+            query, IpPool.is_active, is_active, default_active=not include_inactive
+        )
         query = _apply_ordering(
             query,
             order_by,
@@ -357,8 +400,31 @@ class IpPools(CRUDManager[IpPool]):
         return _apply_pagination(query, limit, offset).all()
 
     @classmethod
-    def update(cls, db: Session, pool_id: str, payload: IpPoolUpdate):
-        return super().update(db, pool_id, payload)
+    def get_including_inactive(cls, db: Session, pool_id: str):
+        return cls._get_or_404(db, coerce_uuid(pool_id), include_inactive=True)
+
+    @classmethod
+    def update(
+        cls,
+        db: Session,
+        pool_id: str,
+        payload: IpPoolUpdate,
+        *,
+        include_inactive: bool = False,
+        commit: bool = True,
+    ):
+        if not include_inactive:
+            return super().update(db, pool_id, payload, commit=commit)
+        # Admin pool edit must reach inactive pools so they can be labelled.
+        entity = cls._get_or_404(db, coerce_uuid(pool_id), include_inactive=True)
+        for key, value in cls._payload_dict(payload, exclude_unset=True).items():
+            setattr(entity, key, value)
+        if commit:
+            db.commit()
+        else:
+            db.flush()
+        db.refresh(entity)
+        return entity
 
     @classmethod
     def delete(cls, db: Session, pool_id: str):

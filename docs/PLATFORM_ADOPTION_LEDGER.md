@@ -10,7 +10,7 @@ day, to `dotmac-kernel==0.1.0a94` on 2026-08-25, and to
 `dotmac-kernel==0.1.0a97` for the proposed Template Studio shadow composition
 on 2026-09-30, followed by the source-only `0.1.0a98` / Tax a4 candidate
 on 2026-10-13, followed by the source-only `0.1.0a105` candidate
-on 2026-10-15 — see "Pin history".
+on 2026-10-15, followed by the published `0.1.0a107` pin on 2026-11-03 — see "Pin history".
 Supersedes the
 2026-07-19 Phase-0 draft, which was surveyed before the kernel was released and
 against `origin/main` 7807afcd. No code, schema, or dependency change is
@@ -283,19 +283,39 @@ commercial domain.
 `public.inbox_conversation_read_states` remain the only authority for every
 conversation, message and read cursor. `app/services/inbox_channels.py`
 declares Sub's channel traits against `dotmac_inbox.channels` and is imported
-by nothing under `app/`; `tests/architecture/test_inbox_module_composition.py`
-allows exactly one importer of the package, allows it only the declaration
-surface, and fails the moment a second module or a service import appears. No
+by nothing under `app/`; at a1,
+`tests/architecture/test_inbox_module_composition.py` allowed exactly one
+importer of the package and only the declaration surface. No
 route, job, webhook, reader, writer, backfill or dual write is added, and the
 runtime import graph is unchanged.
 
 The authority move is ruled by `docs/adr/0013-inbox-conversation-authority.md`
 and designed in `docs/designs/INBOX_MODULE_ADOPTION.md`. It is gated on a
 production-shaped census that has not been run, on four named module gaps that
-are not yet released, and on `dotmac-inbox 0.1.0a2` — which carries the
-identity-preserving history seam the backfill requires and is recorded
-`declared-unpublished` in the Starter baseline. `dotmac-inbox-operations` is a
-separate package and a separate decision; nothing here authorises it.
+are not yet released, and on the documented backfill/shadow/cutover evidence.
+`dotmac-inbox-operations` is a separate package and a separate decision;
+nothing here authorises it.
+
+**2026-11-04 — `dotmac-inbox` 0.1.0a1 → 0.1.0a3 composition upgrade;
+authority unchanged.** The governed Starter release run `41806448567`
+published and installed back the exact a3 wheel and sdist, then the automatic
+release-record PR #977 merged at Starter commit
+`707dc09af900b4245676e848a43d2f5e5ec729b2`. The annotated tag
+`dotmac-inbox-v0.1.0a3` object
+`2770300973d9d5c3a1a1fa24d63d15bc92fec9a3` peels to source commit
+`2e67b5dd258560280de74d2987b04a142e55da33`.
+
+| distribution | version | wheel SHA256 | sdist SHA256 |
+| --- | --- | --- | --- |
+| `dotmac-inbox` | 0.1.0a3 | `19f0f14bc7bf8fe804eb7674e3340ba0a4c5f2414abe788eb0d93a6f7d911bd1` | `dc9fc5259717ee1b80b32633647195a2bbe6a0df60e691ce59de74c6f3e7ed60` |
+
+The composed `ib` head advances through `ib_0003_transport_refs`, and the one
+existing Sub adapter directly re-exports a3's bounded
+`list_recent_messages` reader as compatibility evidence. Nothing imports that
+adapter at runtime: module data is not backfilled, Sub's continuous-thread
+pagination and product hydration contracts differ, and every live read and
+write remains Sub-owned. The census, backfill, shadow, one-writer switch and
+retirement gates in ADR-0013 remain mandatory.
 
 **2026-08-25 — `dotmac-subscriptions==0.1.0a3` tenant storage composed,
 shadow only.** Sub exact-pins the tagged Subscriptions a3 artifacts recorded in
@@ -1059,6 +1079,9 @@ and the settings cutover all import from this list.
 - `dotmac_kernel.machine_auth`
 - `dotmac_kernel.machine_models` — `MachineCredential` only, for the read-only
   deployment requirement query. The 2026-10-13 amendment below narrows its use.
+- `dotmac_kernel.messaging.relay` — `ClaimedEvent`, `RelayPolicy`,
+  `record_failure` and `record_success` only, for the outbox relay dispatcher
+  (2026-11-03 amendment below).
 - `dotmac_kernel.models`
 - `dotmac_kernel.money`
 - `dotmac_kernel.namespaces`
@@ -1075,6 +1098,21 @@ and the settings cutover all import from this list.
 - `dotmac_kernel.settings_models`
 - `dotmac_kernel.settings_resolver`
 - `dotmac_kernel.transactions`
+
+`dotmac_kernel.messaging.relay` is narrowed to `ClaimedEvent`, `RelayPolicy`,
+`record_failure` and `record_success`, added 2026-11-03 (SUB-2) for the
+separate `python -m app.outbox_relay` dispatcher process. The kernel owns the
+retry, backoff and dead-letter policy; reimplementing it in Sub would create a
+second, divergent policy over the same `outbox_events` rows. The claim and park
+statements are Sub's own thin calls to the same SECURITY DEFINER functions
+(they also read `created_at`). `claim_batch`, `dotmac_kernel.messaging.worker`
+(which requires a second, tenant-scoped database credential Sub does not
+supply), the platform plane and `enqueue_*` stay outside the admitted surface.
+Deviation D6 (named, pending Michael's decision, built as recommended): the Sub-local
+loop duplicates `messaging.worker.run_forever` until the kernel gains a park
+outcome and `ClaimedEvent.created_at`; it is deleted at the first kernel bump
+that provides both (`docs/runbooks/OUTBOX_RELAY.md`). The relay is not imported by the web app, Celery or any boot path, so the
+"no relay constructed at Sub boot" boundary is unchanged.
 
 `dotmac_kernel.exceptions` is narrowed to `BadRequestError`,
 `NotFoundError` and `ConflictError` for payment-template adoption and versioned
@@ -1788,3 +1826,28 @@ only: no caller switch, backfill, opening-balance import or authority change is
 included, and Sub's incumbent billing/payment writers remain authoritative until
 the sealed cutover. Hosted CI must prove install-from-lock, the composition
 canaries at the new heads, and unchanged runtime authority before acceptance.
+
+**2026-11-03 — `0.1.0a105` → `0.1.0a107` (SUB-3; pin move only, not deployed).**
+Sub moves to the published Kernel a107 artifacts. The a107 source commit is
+`8c12998b57a31b5cf4a3e296d092460f97e638ba`; annotated tag object
+`eda92ec62a8b0aa3f90727b1a1a15740465483ae`. The authoritative published wheel
+SHA256 is `887b4bccb0fe2760df9a8e6d627553da4a2dc82451f9fa501d9b1e0bc774e341`; the
+sdist SHA256 is `6f146c85faab91084c38f93fc6140dc9cbb54b6b665ee5f21ea816b11cc53144`
+(Starter `docs/inventories/kernel-release-verifications/0.1.0a107.json`, state
+verified by the protected release workflow). The only `pyproject.toml` change in
+Kernel between a105 and a107 is the version string: direct dependencies, extras,
+Python bounds and backend are unchanged. a106 and a107 CHANGELOGs list Added and
+Fixed entries only; no removal is listed. Kernel migration revisions `0029_audit_history_shape`
+and `0030_credential_tenant_key` are new (0001-0028 byte-identical); neither
+changes grants, roles or RLS. Sub's reviewed lineage-entry participant
+(`scripts/migration/kernel_lineage_entry.py`, still not composed or run by any
+deployment path) is re-measured to the 30 a107 revisions. No source, schema,
+runtime composition or authority change is included.
+
+The guarded transitive kernel module snapshot grows by four at a107:
+`request_evidence` (reached via `assembly` and `platform_auth`), `logging`
+(reached via `request_evidence` and `errors`; import-time inert: it defines a
+context variable, a formatter and the `setup_logging` function and configures
+nothing, so Sub's logging is unchanged), and `_identity_operation` and
+`_identity_persistence` (reached via `external_identity`). They are loaded, not
+used: `app/` imports none of them and no kernel middleware is mounted.

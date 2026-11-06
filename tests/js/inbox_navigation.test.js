@@ -356,10 +356,23 @@ test("background refresh cannot erase a failed operator's retry intent", () => {
   f.workspace.refreshSidebar("poll"); assert.equal(f.requests.length, 3);
 });
 
-test("a failed background refresh may retry automatically", () => {
+test("background refreshes are single-flight", () => {
+  const f = fixture(); f.workspace.refreshSidebar("poll");
+  f.workspace.refreshSidebar("poll");
+  assert.equal(f.requests.length, 1); assert.equal(f.requests[0].xhr.aborted, false);
+  f.response(f.requests[0]); f.workspace.refreshSidebar("poll");
+  assert.equal(f.requests.length, 2);
+});
+
+test("a failed background refresh backs off but manual retry remains available", () => {
   const f = fixture(); f.workspace.refreshSidebar("poll"); f.failure(f.requests[0]);
-  f.workspace.refreshSidebar("poll"); assert.equal(f.requests.length, 2);
+  f.workspace.refreshSidebar("poll"); assert.equal(f.requests.length, 1);
+  assert.equal(f.workspace.backgroundRefreshFailures, 1);
+  assert.ok(f.workspace.backgroundRefreshRetryAt > Date.now());
+  f.workspace.retryListRequest(); assert.equal(f.requests.length, 2);
   f.response(f.requests[1]); assert.equal(f.workspace.listRequestError, "");
+  assert.equal(f.workspace.backgroundRefreshFailures, 0);
+  assert.equal(f.workspace.backgroundRefreshRetryAt, 0);
 });
 
 test("retrying failed Back navigation updates both the rendered page and restored URL", () => {

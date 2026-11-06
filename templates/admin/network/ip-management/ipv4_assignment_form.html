@@ -62,16 +62,16 @@
         </div>
 
         <div>
-            <label class="block text-sm font-medium text-slate-700 dark:text-slate-300">Subscription</label>
+            <label class="block text-sm font-medium text-slate-700 dark:text-slate-300">Subscription <span class="text-red-500">*</span></label>
             <div class="relative mt-1" data-typeahead-url="/api/v1/search/subscriptions" data-typeahead-min="2" data-typeahead-limit="8">
                 <input type="text" data-typeahead-input
-                       value="{{ current_subscription_label if assignment else '' }}"
-                       placeholder="Search subscription (optional)..."
+                       value="{{ subscription_label or (current_subscription_label if assignment else '') }}"
+                       placeholder="Search subscription..."
                        class="block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm shadow-sm focus:border-primary-500 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
-                <input type="hidden" name="subscription_id" data-typeahead-hidden value="{{ subscription_id or '' }}">
+                <input type="hidden" name="subscription_id" data-typeahead-hidden value="{{ subscription_id or '' }}" required>
                 <div data-typeahead-results></div>
             </div>
-            <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">Optional. If selected, the subscription's IPv4 field will be updated.</p>
+            <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">Required. The subscription's IPv4 field will be updated. Device and management IPs (routers, OLTs, ONTs) belong on the device record, not here.</p>
         </div>
 
         <div class="flex items-center justify-end gap-3">

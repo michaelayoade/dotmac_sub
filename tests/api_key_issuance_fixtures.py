@@ -11,6 +11,7 @@ from app.services import api_key_administration as owner
 from app.services import auth
 from app.services.audit_adapter import AuditActor
 from app.services.owner_commands import CommandContext
+from tests.api_key_actor_fixtures import persist_admin_actor
 
 
 def create_command(payload: ApiKeyCreate) -> owner.CreateApiKeyCommand:
@@ -49,6 +50,7 @@ def generate_command(payload: ApiKeyGenerateRequest) -> owner.GenerateApiKeyComm
 
 def create(db: Session, payload: ApiKeyCreate) -> ApiKey:
     command = create_command(payload)
+    persist_admin_actor(db, command.actor.actor_id)
     db.commit()  # Finish fixture setup/reads before invoking the owner.
     issued = owner.create(db, command=command)
     row = db.get(ApiKey, issued.id)
@@ -58,6 +60,7 @@ def create(db: Session, payload: ApiKeyCreate) -> ApiKey:
 
 def generate(db: Session, payload: ApiKeyGenerateRequest) -> tuple[ApiKey, str]:
     command = generate_command(payload)
+    persist_admin_actor(db, command.actor.actor_id)
     db.commit()
     outcome = owner.generate(db, command=command)
     row = db.get(ApiKey, outcome.api_key.id)
@@ -70,5 +73,6 @@ def generate_with_rate_limit(
 ) -> owner.ApiKeyGenerationOutcome:
     auth.api_keys.enforce_generation_rate_limit(db, request=request)
     command = generate_command(payload)
+    persist_admin_actor(db, command.actor.actor_id)
     db.commit()
     return owner.generate(db, command=command)

@@ -7,8 +7,15 @@ from app.services.automation_contracts import (
     AutomationActionInput,
     AutomationCatalogItem,
     AutomationCatalogState,
+    AutomationConditionField,
     AutomationDomainCapabilities,
+    AutomationOperator,
+    AutomationTriggerCapability,
     AutomationValueType,
+)
+from app.services.custom_field_contracts import (
+    CustomFieldDomainCapabilities,
+    CustomFieldTargetCapability,
 )
 from app.services.sot_manifest import (
     AuthorityInput,
@@ -1999,6 +2006,7 @@ DOMAIN = DomainSOT(
                 events=EventContract(
                     event_types=(
                         "team_inbox.private_note_mention",
+                        "team_inbox.assignment",
                         "ticket.assignment",
                         "project.assignment",
                     ),
@@ -2724,7 +2732,10 @@ DOMAIN = DomainSOT(
         SOTService(
             name="communications.team_inbox_integrator_envelope",
             module="app.services.team_inbox_integrator_envelope",
-            owns=("Integrator capability envelope normalization",),
+            owns=(
+                "Integrator capability envelope normalization",
+                "Integrator provider/channel capability discovery",
+            ),
             depends_on=("communications.team_inbox_observations",),
             notes=(
                 "Pure conversion of one provider-neutral Integrator envelope "
@@ -2736,7 +2747,9 @@ DOMAIN = DomainSOT(
                 "one upstream event land on one identity. It records the "
                 "provider family, never a transport, as the provider: a "
                 "transport recorded as a provider would give the same upstream "
-                "event two identities either side of a cutover."
+                "event two identities either side of a cutover. Connector "
+                "discovery derives its typed provider/channel catalog from the "
+                "same fail-closed admission allowlist."
             ),
             contract=ServiceContract(
                 concerns=(
@@ -2744,6 +2757,11 @@ DOMAIN = DomainSOT(
                         name="Integrator capability envelope normalization",
                         role=OwnerRole.TRANSPORT,
                         input_names=("Integrator capability envelope",),
+                    ),
+                    ConcernContract(
+                        name="Integrator provider/channel capability discovery",
+                        role=OwnerRole.RESOLVER,
+                        input_names=("provider/channel admission allowlist",),
                     ),
                 ),
                 authoritative_inputs=(
@@ -2758,6 +2776,15 @@ DOMAIN = DomainSOT(
                             "event identity, observed_at, a canonical-JSON "
                             "transport fingerprint, and the Integrator binding "
                             "scope as provenance."
+                        ),
+                    ),
+                    AuthorityInput(
+                        name="provider/channel admission allowlist",
+                        owner="communications.team_inbox_integrator_envelope",
+                        kind=AuthorityKind.CONTROL_INPUT,
+                        source=(
+                            "The code-owned PROVIDER_CHANNELS mapping used by "
+                            "normalization to reject unknown or mismatched pairs."
                         ),
                     ),
                 ),
@@ -3348,6 +3375,7 @@ DOMAIN = DomainSOT(
                 "app_sessions.auth",
                 "auth.staff_provisioning",
                 "communications.team_inbox_threads",
+                "communications.staff_notifications",
                 "operations.sla_escalation",
                 "auth.permission_gate",
                 "control.settings_spec",
@@ -3429,6 +3457,24 @@ DOMAIN = DomainSOT(
                         source="Granular assignment and escalation permission evidence.",
                     ),
                     AuthorityInput(
+                        name="typed staff assignment notification participant",
+                        owner="communications.staff_notifications",
+                        kind=AuthorityKind.CONTROL_INPUT,
+                        source=(
+                            "The routing event and newly assigned active staff principal "
+                            "used to stage one idempotent personal assignment notice."
+                        ),
+                    ),
+                    AuthorityInput(
+                        name="per-agent Inbox assignment notification preference",
+                        owner="communications.team_inbox_agent_introduction",
+                        kind=AuthorityKind.CONTROL_INPUT,
+                        source=(
+                            "The newly assigned agent's independently selected in-app "
+                            "and email choices, resolved by routing before notification."
+                        ),
+                    ),
+                    AuthorityInput(
                         name="validated AI intake destination metadata",
                         owner="ai.intake",
                         kind=AuthorityKind.DERIVED_PROJECTION,
@@ -3461,10 +3507,10 @@ DOMAIN = DomainSOT(
                         owner="app_sessions.auth",
                         kind=AuthorityKind.AUTHORITATIVE_RECORD,
                         source=(
-                            "A permission-checked SystemUser heartbeat emitted only "
-                            "while the Inbox workspace is visible; it refreshes "
-                            "selected online presence and never overrides explicit "
-                            "away, on-break, or offline state."
+                            "The exact active, unrevoked, unexpired staff AuthSession "
+                            "bound to a permission-checked visible Inbox heartbeat. "
+                            "The routing owner records one fresh lease per session; "
+                            "it never overrides explicit away, on-break, or offline."
                         ),
                     ),
                     AuthorityInput(
@@ -3500,10 +3546,12 @@ DOMAIN = DomainSOT(
                     "team_inbox.assignment_changed.v1",
                     "team_inbox.escalated.v1",
                     "team_inbox.queue_promoted.v1",
+                    "team_inbox.agent_presence_changed.v1",
                 ),
                 projections=(
                     "team admission sequence, current visible FIFO position, "
                     "agent capacity and notification due state",
+                    "session-scoped agent presence leases and effective availability",
                 ),
                 domain_error_codes=(
                     "communications.team_inbox_routing.invalid_route_threshold",
@@ -3586,10 +3634,10 @@ DOMAIN = DomainSOT(
             module="app.services.team_inbox_agent_introduction",
             owns=(
                 "per-agent introduction preference",
+                "per-agent Inbox assignment notification preference",
                 "chat-widget first-pickup introduction policy",
             ),
             depends_on=(
-                "communications.team_inbox_routing",
                 "communications.team_inbox_outbound_intents",
                 "auth.permission_gate",
             ),
@@ -3597,6 +3645,10 @@ DOMAIN = DomainSOT(
                 service_name="communications.team_inbox_agent_introduction",
                 concerns=(
                     ("per-agent introduction preference", OwnerRole.COMMAND_WRITER),
+                    (
+                        "per-agent Inbox assignment notification preference",
+                        OwnerRole.COMMAND_WRITER,
+                    ),
                     ("chat-widget first-pickup introduction policy", OwnerRole.POLICY),
                 ),
                 inputs=(
@@ -4265,7 +4317,10 @@ DOMAIN = DomainSOT(
         SOTService(
             name="communications.team_inbox_widget",
             module="app.services.team_inbox_widget",
-            owns=("visitor chat session, message, and read-state commands",),
+            owns=(
+                "visitor chat session, message, and read-state commands",
+                "bounded public widget presentation projection",
+            ),
             depends_on=(
                 "customer.identity_scope",
                 "communications.team_inbox_threads",
@@ -4275,6 +4330,7 @@ DOMAIN = DomainSOT(
                 "communications.conversation_lead_relationships",
                 "sales.capture",
                 "party.registry",
+                "control.settings_spec",
             ),
             notes=(
                 "The SOLE live-chat authority for every portal and public "
@@ -4289,7 +4345,10 @@ DOMAIN = DomainSOT(
                 "widget visitor message requests optional, exact-scope AI intake; "
                 "missing or inactive policy leaves the human Inbox path unchanged. "
                 "Visitor photo messages are stored by the same owner with "
-                "bounded image uploads and session-scoped private media reads."
+                "bounded image uploads and session-scoped private media reads. "
+                "Public presentation values are resolved from declared, audited "
+                "communications settings and exposed as a bounded, non-secret, "
+                "exact-origin projection; this adds no chat writer."
             ),
             contract=_team_inbox_contract(
                 service_name="communications.team_inbox_widget",
@@ -4298,8 +4357,21 @@ DOMAIN = DomainSOT(
                         "visitor chat session, message, and read-state commands",
                         OwnerRole.COMMAND_WRITER,
                     ),
+                    (
+                        "bounded public widget presentation projection",
+                        OwnerRole.RESOLVER,
+                    ),
                 ),
                 inputs=(
+                    AuthorityInput(
+                        name="declared widget presentation settings",
+                        owner="control.settings_spec",
+                        kind=AuthorityKind.CONTROL_INPUT,
+                        source=(
+                            "Audited comms-domain text, colour, placement, offset, "
+                            "button, placeholder, and agent-name defaults."
+                        ),
+                    ),
                     AuthorityInput(
                         name="authenticated visitor principal",
                         owner="customer.identity_scope",
@@ -4634,9 +4706,13 @@ DOMAIN = DomainSOT(
         SOTService(
             name="communications.team_inbox_analysis_projection",
             module="app.services.team_inbox_analysis_projection",
-            owns=("authorized bounded Manager AI conversation analysis projection",),
+            owns=(
+                "authorized bounded Manager AI conversation analysis projection",
+                "permission-filtered customer conversation history brief",
+            ),
             depends_on=(
                 "communications.team_inbox_threads",
+                "communications.team_inbox_contact_context",
                 "communications.team_inbox_routing",
                 "communications.team_inbox_status",
                 "operations.service_team_lifecycle",
@@ -4649,6 +4725,10 @@ DOMAIN = DomainSOT(
                         "authorized bounded Manager AI conversation analysis projection",
                         OwnerRole.RESOLVER,
                     ),
+                    (
+                        "permission-filtered customer conversation history brief",
+                        OwnerRole.RESOLVER,
+                    ),
                 ),
                 inputs=(
                     AuthorityInput(
@@ -4656,6 +4736,15 @@ DOMAIN = DomainSOT(
                         owner="communications.team_inbox_threads",
                         kind=AuthorityKind.AUTHORITATIVE_RECORD,
                         source="Messages and conversation identity with occurrence timestamps.",
+                    ),
+                    AuthorityInput(
+                        name="reviewed customer conversation identity cohort",
+                        owner="communications.team_inbox_contact_context",
+                        kind=AuthorityKind.DERIVED_PROJECTION,
+                        source=(
+                            "Reviewed Party, Subscriber, Reseller, or exact-endpoint "
+                            "history scope; ambiguous identity fails closed."
+                        ),
                     ),
                     AuthorityInput(
                         name="canonical Inbox lifecycle evidence",
@@ -4679,12 +4768,16 @@ DOMAIN = DomainSOT(
                         name="operator authorization",
                         owner="auth.permission_gate",
                         kind=AuthorityKind.CONTROL_INPUT,
-                        source="support:ticket:read is required alongside Manager AI permission.",
+                        source=(
+                            "support:ticket:read gates the customer brief; Manager AI "
+                            "analysis additionally requires its manager permission."
+                        ),
                     ),
                 ),
                 transaction_mode=TransactionMode.READ_ONLY,
                 projections=(
                     "bounded period conversation facts and authorized evidence for Manager AI",
+                    "bounded factual customer history brief from public messages only",
                 ),
                 design_refs=(
                     "docs/designs/TEAM_INBOX_SOURCE_OF_TRUTH.md",
@@ -4694,6 +4787,8 @@ DOMAIN = DomainSOT(
                 test_refs=(
                     "tests/test_team_inbox_manager_ai_projection.py",
                     "tests/test_team_inbox_readiness_gate.py",
+                    "tests/test_inbox_contact_context.py",
+                    "tests/test_admin_inbox_routes_http.py",
                 ),
             ),
         ),
@@ -4717,6 +4812,14 @@ DOMAIN = DomainSOT(
                 "operations.service_team_lifecycle",
                 "auth.staff_provisioning",
                 "ai.intake",
+            ),
+            notes=(
+                "Shared Inbox sidebar metrics are a non-authoritative Redis "
+                "projection with a process-local fallback. Conversation, message, "
+                "routing, delivery, and operator-state owners remain authoritative. "
+                "The snapshot is fresh for 15 seconds, may be served stale for five "
+                "minutes, is rebuilt deterministically by this projection owner, and "
+                "uses one cross-process refresh lease to prevent request stampedes."
             ),
             contract=_team_inbox_contract(
                 service_name="communications.team_inbox_projection",
@@ -4831,7 +4934,9 @@ DOMAIN = DomainSOT(
                 ),
                 projections=(
                     "Inbox queue detail metrics response cohorts actions and unread cohorts",
+                    "15-second shared Inbox sidebar metrics snapshot with five-minute stale fallback",
                     "Exact-message and filter-aware single-row Inbox UI fragments",
+                    "Conversation-scoped bounded historical message page fragments",
                     "Outbound message sender display name initials and provenance source",
                     "Permission-scoped email From To CC and BCC recipient presentation",
                     "MIME-allowlisted inline image or download-only attachment presentation",
@@ -5423,8 +5528,120 @@ DOMAIN = DomainSOT(
     "and response writes to communications.surveys. Admin inbox mutation "
     "routes delegate to the committed team-inbox command boundary.",
     automation=AutomationDomainCapabilities(
-        target_types=("automation.shared",),
+        target_types=("automation.shared", "inbox.conversation"),
+        triggers=(
+            AutomationTriggerCapability(
+                key="inbox.conversation.status_changed",
+                label="Inbox conversation status changed",
+                event_type="team_inbox.status_changed.v1",
+                event_schema_version=1,
+                entity_type="inbox.conversation",
+                tenant_id_field="tenant_id",
+                entity_id_field="conversation_id",
+                fields=(
+                    AutomationConditionField(
+                        key="previous_status",
+                        label="Previous status",
+                        value_type=AutomationValueType.enum,
+                        operators=(
+                            AutomationOperator.equals,
+                            AutomationOperator.not_equals,
+                        ),
+                        enum_values=("open", "pending", "snoozed", "resolved"),
+                    ),
+                    AutomationConditionField(
+                        key="status",
+                        label="New status",
+                        value_type=AutomationValueType.enum,
+                        operators=(
+                            AutomationOperator.equals,
+                            AutomationOperator.not_equals,
+                        ),
+                        enum_values=("open", "pending", "snoozed", "resolved"),
+                    ),
+                    AutomationConditionField(
+                        key="channel",
+                        label="Channel",
+                        value_type=AutomationValueType.string,
+                        operators=(
+                            AutomationOperator.equals,
+                            AutomationOperator.not_equals,
+                            AutomationOperator.contains,
+                        ),
+                    ),
+                    AutomationConditionField(
+                        key="reason",
+                        label="Change reason",
+                        value_type=AutomationValueType.string,
+                        operators=(
+                            AutomationOperator.equals,
+                            AutomationOperator.not_equals,
+                        ),
+                    ),
+                ),
+                author_permission="support:ticket:read",
+                runtime_enabled=True,
+            ),
+        ),
         actions=(
+            AutomationActionCapability(
+                key="inbox.conversation.apply_label",
+                label="Apply Inbox label",
+                entity_type="inbox.conversation",
+                command_owner="communications.team_inbox_commands",
+                command_name="apply_conversation_label_from_automation",
+                input_schema_version=1,
+                inputs=(
+                    AutomationActionInput(
+                        key="label_id",
+                        label="Label",
+                        value_type=AutomationValueType.uuid,
+                    ),
+                ),
+                author_permission="support:ticket:update",
+                runtime_scope="support:ticket:update",
+                idempotency="event, rule version, step, conversation, and label",
+                runtime_enabled=True,
+            ),
+            AutomationActionCapability(
+                key="inbox.conversation.set_priority",
+                label="Set Inbox priority",
+                entity_type="inbox.conversation",
+                command_owner="communications.team_inbox_commands",
+                command_name="set_conversation_priority_from_automation",
+                input_schema_version=1,
+                inputs=(
+                    AutomationActionInput(
+                        key="priority",
+                        label="Priority (0-999)",
+                        value_type=AutomationValueType.integer,
+                    ),
+                ),
+                author_permission="support:ticket:update",
+                runtime_scope="support:ticket:update",
+                idempotency="automation run ledger and locked target priority",
+                runtime_enabled=True,
+            ),
+            AutomationActionCapability(
+                key="inbox.conversation.set_status",
+                label="Set Inbox status",
+                entity_type="inbox.conversation",
+                command_owner="communications.team_inbox_commands",
+                command_name="set_conversation_status_from_automation",
+                input_schema_version=1,
+                inputs=(
+                    AutomationActionInput(
+                        key="status",
+                        label="Status",
+                        value_type=AutomationValueType.enum,
+                        enum_values=("open", "pending"),
+                    ),
+                ),
+                author_permission="support:ticket:update",
+                runtime_scope="support:ticket:update",
+                idempotency="automation run ledger and locked target status",
+                runtime_enabled=True,
+            ),
             AutomationActionCapability(
                 key="communications.send_notification",
                 label="Send notification",
@@ -5476,6 +5693,23 @@ DOMAIN = DomainSOT(
             ),
         ),
         catalog_items=(
+            AutomationCatalogItem(
+                key="inbox.conversation.status_notifications",
+                label="Inbox status workflows",
+                group="Inbox",
+                state=AutomationCatalogState.available,
+                explanation=(
+                    "Status-change rules reuse the Inbox label and workflow owners "
+                    "plus the shared notification action."
+                ),
+                trigger_keys=("inbox.conversation.status_changed",),
+                action_keys=(
+                    "inbox.conversation.apply_label",
+                    "inbox.conversation.set_priority",
+                    "inbox.conversation.set_status",
+                    "communications.send_notification",
+                ),
+            ),
             AutomationCatalogItem(
                 key="communications.event_notifications",
                 label="Event-based customer notifications",
@@ -5622,6 +5856,19 @@ DOMAIN = DomainSOT(
                 group="Reports and exports",
                 state=AutomationCatalogState.unavailable,
                 explanation="The report delivery owner controls its local-time schedule and duplicate-send protection; the Center cannot reschedule it yet.",
+            ),
+        ),
+    ),
+    custom_fields=CustomFieldDomainCapabilities(
+        targets=(
+            CustomFieldTargetCapability(
+                key="inbox.conversation",
+                label="Inbox conversations",
+                entity_id_type="uuid",
+                read_permission="support:ticket:read",
+                write_permission="support:ticket:update",
+                detail_path_template="/admin/inbox?c={target_id}",
+                maximum_active_fields=50,
             ),
         ),
     ),

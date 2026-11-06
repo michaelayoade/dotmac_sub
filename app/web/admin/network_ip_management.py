@@ -335,6 +335,7 @@ def ip_pool_edit(request: Request, pool_id: str, db: Session = Depends(get_db)):
             "olt_devices": web_network_ip_service.list_active_olts(db),
             "vlans": web_network_ip_service.list_active_vlans(db),
             "nas_devices": web_network_ip_service.list_active_nas_devices(db),
+            **web_network_ip_service.pool_label_form_context(db, pool_id=pool_id),
         }
     )
     return templates.TemplateResponse(
@@ -591,6 +592,15 @@ def ipv4_assignment_form(
     context = _base_context(
         request, db, active_page="ipv4-networks", active_menu="ip-address"
     )
+    # Visible default only: the form shows it and the operator submits it.
+    chosen_subscriber_id = state.get("subscriber_id")
+    default_subscription = (
+        None
+        if state.get("subscription_id")
+        else web_network_ip_service.default_subscription_for_subscriber(
+            db, str(chosen_subscriber_id or "")
+        )
+    )
     context.update(
         {
             **state,
@@ -601,6 +611,9 @@ def ipv4_assignment_form(
             "error": None,
         }
     )
+    if default_subscription:
+        context["subscription_id"] = default_subscription["id"]
+        context["subscription_label"] = default_subscription["label"]
     return templates.TemplateResponse(
         "admin/network/ip-management/ipv4_assignment_form.html", context
     )
@@ -887,10 +900,13 @@ def ipv6_network_create(request: Request, db: Session = Depends(get_db)):
 def ip_pools_list(
     request: Request,
     pool_type: str = "all",
+    labels: str = "all",
     db: Session = Depends(get_db),
 ):
     """List all IP pools and blocks."""
-    state = web_network_ip_service.build_ip_pools_data(db, pool_type=pool_type)
+    state = web_network_ip_service.build_ip_pools_data(
+        db, pool_type=pool_type, label_filter=labels
+    )
 
     context = _base_context(
         request, db, active_page="ip-pools", active_menu="ip-address"

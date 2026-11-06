@@ -601,16 +601,82 @@ def _find_open_conversation(
     *,
     channel_type: str,
     external_thread_id: str,
+    channel_route_id: str | None = None,
 ) -> InboxConversation | None:
-    return (
+    candidates = (
         db.query(InboxConversation)
         .filter(InboxConversation.channel_type == channel_type)
         .filter(InboxConversation.external_thread_id == external_thread_id)
         .filter(InboxConversation.status != InboxConversationStatus.resolved.value)
         .filter(InboxConversation.is_active.is_(True))
         .order_by(InboxConversation.last_message_at.desc().nullslast())
+        .limit(20)
         .with_for_update()
+        .all()
+    )
+    if channel_route_id is None:
+        return candidates[0] if candidates else None
+    return next(
+        (
+            candidate
+            for candidate in candidates
+            if _stored_channel_route_id(db, candidate) == channel_route_id
+        ),
+        None,
+    )
+
+
+def _stored_channel_route_id(
+    db: Session, conversation: InboxConversation
+) -> str | None:
+    metadata = (
+        conversation.metadata_ if isinstance(conversation.metadata_, dict) else {}
+    )
+    direct = str(metadata.get("channel_route_id") or "").strip()
+    if direct:
+        return direct
+    latest = (
+        db.query(InboxMessage.metadata_)
+        .filter(InboxMessage.conversation_id == conversation.id)
+        .order_by(InboxMessage.created_at.desc(), InboxMessage.id.desc())
         .first()
+    )
+    message_metadata = latest[0] if latest and isinstance(latest[0], dict) else {}
+    routing = message_metadata.get("routing")
+    if not isinstance(routing, dict):
+        return None
+    return str(routing.get("channel_route_id") or "").strip() or None
+
+
+def _find_resolved_predecessor(
+    db: Session,
+    *,
+    channel_type: str,
+    external_thread_id: str,
+    channel_route_id: str | None,
+) -> InboxConversation | None:
+    """Find an exact, resolved episode without merging provider accounts."""
+
+    if channel_route_id is None:
+        return None
+    candidates = (
+        db.query(InboxConversation)
+        .filter(InboxConversation.channel_type == channel_type)
+        .filter(InboxConversation.external_thread_id == external_thread_id)
+        .filter(InboxConversation.status == InboxConversationStatus.resolved.value)
+        .filter(InboxConversation.is_active.is_(True))
+        .order_by(InboxConversation.last_message_at.desc().nullslast())
+        .limit(20)
+        .with_for_update()
+        .all()
+    )
+    return next(
+        (
+            candidate
+            for candidate in candidates
+            if _stored_channel_route_id(db, candidate) == channel_route_id
+        ),
+        None,
     )
 
 
@@ -622,7 +688,11 @@ def _thread_lock_key(channel_type: str, external_thread_id: str) -> int:
 
 
 def _acquire_thread_lock(
-    db: Session, *, channel_type: str, external_thread_id: str
+    db: Session,
+    *,
+    channel_type: str,
+    external_thread_id: str,
+    route_scope: str = "default",
 ) -> None:
     """Serialize conversation lookup, intake state, and message creation."""
 
@@ -630,7 +700,7 @@ def _acquire_thread_lock(
         return
     db.execute(
         text("SELECT pg_advisory_xact_lock(:key)"),
-        {"key": _thread_lock_key(channel_type, external_thread_id)},
+        {"key": _thread_lock_key(channel_type, f"{route_scope}:{external_thread_id}")},
     )
 
 
@@ -988,6 +1058,22 @@ def receive_inbound_channel(
         raise ValueError("Unsupported inbox channel_type")
     body = _message_body(payload.body)
     metadata = dict(payload.metadata or {})
+    provider_key = str(metadata.get("provider") or "default")[:80]
+    account_scope_key = str(
+        metadata.get("provider_account_scope")
+        or metadata.get("provider_account_id")
+        or metadata.get("page_or_account_id")
+        or metadata.get("page_id")
+        or metadata.get("instagram_account_id")
+        or metadata.get("phone_number_id")
+        or "default"
+    )[:160]
+    thread_policy = team_inbox_routing.resolve_channel_thread_policy(
+        db,
+        channel_type=channel_type,
+        provider=provider_key,
+        account_scope=account_scope_key,
+    )
     attachments = metadata.get("attachments")
     has_attachment = isinstance(attachments, (list, tuple)) and any(
         isinstance(item, dict) for item in attachments
@@ -1044,6 +1130,9 @@ def receive_inbound_channel(
         db,
         channel_type=channel_type,
         external_thread_id=external_thread_id,
+        route_scope=(
+            thread_policy.channel_route_id or f"{provider_key}:{account_scope_key}"
+        ),
     )
     # The fast duplicate check above can race the first delivery. Recheck after
     # the transaction-scoped thread lock so the database winner is observed.
@@ -1067,7 +1156,16 @@ def receive_inbound_channel(
         db,
         channel_type=channel_type,
         external_thread_id=external_thread_id,
+        channel_route_id=thread_policy.channel_route_id,
     )
+    continued_from = None
+    if conversation is None and thread_policy.conversation_mode == "continuous":
+        continued_from = _find_resolved_predecessor(
+            db,
+            channel_type=channel_type,
+            external_thread_id=external_thread_id,
+            channel_route_id=thread_policy.channel_route_id,
+        )
     created_conversation = conversation is None
     if (
         conversation is not None
@@ -1091,7 +1189,9 @@ def receive_inbound_channel(
         )
     if conversation is None:
         conversation_metadata: dict[str, object] = {
-            "contact_resolution": resolution.as_metadata()
+            "contact_resolution": resolution.as_metadata(),
+            "channel_route_id": thread_policy.channel_route_id,
+            "conversation_mode": thread_policy.conversation_mode,
         }
         if contact_name := str(payload.contact_name or "").strip():
             conversation_metadata["contact_name"] = contact_name[:200]
@@ -1106,6 +1206,9 @@ def receive_inbound_channel(
             subject=payload.subject or payload.contact_name,
             contact_address=resolution.normalized_contact or payload.contact_address,
             external_thread_id=external_thread_id,
+            continued_from_conversation_id=(
+                continued_from.id if continued_from is not None else None
+            ),
             first_message_at=received_at,
             last_message_at=received_at,
             metadata_=conversation_metadata,
@@ -1190,6 +1293,13 @@ def receive_inbound_channel(
                 },
             )
         conversation_metadata = dict(conversation.metadata_ or {})
+        conversation_metadata.setdefault(
+            "conversation_mode", thread_policy.conversation_mode
+        )
+        if thread_policy.channel_route_id is not None:
+            conversation_metadata.setdefault(
+                "channel_route_id", thread_policy.channel_route_id
+            )
         conversation_metadata["contact_resolution"] = resolution.as_metadata()
         if contact_name := str(payload.contact_name or "").strip():
             conversation_metadata["contact_name"] = contact_name[:200]
@@ -1247,13 +1357,6 @@ def receive_inbound_channel(
             ),
         )
 
-    provider_key = str(metadata.get("provider") or "default")[:80]
-    account_scope_key = str(
-        metadata.get("provider_account_scope")
-        or metadata.get("page_or_account_id")
-        or metadata.get("phone_number_id")
-        or "default"
-    )[:160]
     media_first_policy = (
         ai_conversation_intake.resolve_media_first_handoff_policy(
             db,

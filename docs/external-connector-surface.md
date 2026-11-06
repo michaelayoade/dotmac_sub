@@ -1,8 +1,8 @@
 # Sub direct external-connector surface
 
-Sub adopts the Governance-owned schema-9 ratchet from accepted ADR 0011 at
+Sub adopts the Governance-owned connector ratchet through schema 10 at
 immutable canonical-main commit
-`a19259b10568d29dc0a9617347498fea7f1e7a97`.
+`4f80bd164137d34ff41f1866d7e748f2e664dee3`.
 
 The ratchet freezes measured legacy connector surface while providers move
 behind Dotmac Integrator. It is transitional defence in depth, not runtime

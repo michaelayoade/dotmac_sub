@@ -29,6 +29,7 @@ from app.models.subscriber import (
 )
 from app.models.team_inbox import (
     InboxAgentPresence,
+    InboxAgentPresenceSessionLease,
     InboxAgentPresenceStatus,
     InboxChannelType,
     InboxConversation,
@@ -62,6 +63,7 @@ from app.services.owner_commands import CommandContext
 from app.tasks import notifications as notification_tasks
 from app.tasks import team_inbox as team_inbox_tasks
 from tests.staff_identity_fixtures import add_bound_staff_user
+from tests.team_inbox_presence_fixtures import add_active_presence_lease
 
 
 @pytest.fixture(autouse=True)
@@ -451,6 +453,7 @@ def _available_member(db_session, team: ServiceTeam):
             last_seen_at=datetime.now(UTC),
         )
     )
+    add_active_presence_lease(db_session, system_user_id=user.id)
     db_session.flush()
     return user.id
 
@@ -1416,7 +1419,9 @@ def test_postgres_thread_lock_uses_stable_conversation_scope():
     [(statement, parameters)] = session.calls
     assert "pg_advisory_xact_lock" in statement
     assert parameters == {
-        "key": team_inbox_channel_receive._thread_lock_key("whatsapp", "wa-thread-1")
+        "key": team_inbox_channel_receive._thread_lock_key(
+            "whatsapp", "default:wa-thread-1"
+        )
     }
 
 
@@ -2768,10 +2773,22 @@ def test_customer_silence_assigns_available_agent_after_ten_minutes(
         .filter(AiIntakeSession.conversation_id == received.conversation_id)
         .one()
     )
-
-    outcome = _recover_ai_timeouts(
-        db_session, now=session.expires_at + timedelta(seconds=1)
+    handoff_at = session.expires_at + timedelta(seconds=1)
+    presence = (
+        db_session.query(InboxAgentPresence)
+        .filter(InboxAgentPresence.person_id == agent_id)
+        .one()
     )
+    lease = (
+        db_session.query(InboxAgentPresenceSessionLease)
+        .filter(InboxAgentPresenceSessionLease.person_id == agent_id)
+        .one()
+    )
+    presence.last_seen_at = handoff_at
+    lease.last_seen_at = handoff_at
+    db_session.flush()
+
+    outcome = _recover_ai_timeouts(db_session, now=handoff_at)
 
     assignment = (
         db_session.query(InboxConversationAssignment)

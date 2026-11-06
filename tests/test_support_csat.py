@@ -330,6 +330,29 @@ def test_csat_report_filters_and_summary(db_session, subscriber):
     assert rows[0].comment == "great"
     assert summary.submitted == 1
     assert summary.rating_counts[5] == 1
+    assert summary.total == 1
+    assert summary.response_rate == 100
+    assert summary.positive_percentage == 100
+
+
+def test_csat_summary_keeps_request_denominator_when_rows_filter_submitted(
+    db_session, subscriber
+):
+    rated = _close_ticket(db_session, _ticket(db_session, subscriber))
+    support.Tickets.set_satisfaction(db_session, rated, rating=4, comment="good")
+    _close_ticket(db_session, _ticket(db_session, subscriber))
+
+    query = support_csat.CsatReportQuery(
+        status=CsatRequestStatus.submitted,
+        rating=4,
+    )
+    summary = support_csat.report_summary(db_session, query)
+
+    assert summary.total == 2
+    assert summary.submitted == 1
+    assert summary.response_rate == 50
+    assert summary.positive_percentage == 100
+    assert len(support_csat.report_trend(db_session, query)) == 1
 
 
 def test_csat_report_hub_and_row_links(db_session, subscriber):

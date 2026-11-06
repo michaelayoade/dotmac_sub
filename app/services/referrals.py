@@ -21,12 +21,15 @@ from typing import Literal, TypeVar
 from urllib.parse import urlsplit
 from uuid import UUID
 
-from sqlalchemy import select
+from sqlalchemy import func, or_, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
-from app.models.audit import AuditActorType
+from app.models.audit import AuditActorType, AuditEvent
+from app.models.catalog import Subscription, SubscriptionStatus
 from app.models.domain_settings import SettingDomain
+from app.models.event_store import EventStore
+from app.models.lifecycle import SubscriptionLifecycleEvent
 from app.models.party import Party, PartyContactPoint, PartyContactPointType, PartyType
 from app.models.referral_native import (
     Referral,
@@ -49,6 +52,7 @@ from app.services.customer_identity_normalization import (
 )
 from app.services.customer_identity_resolution import resolve_customer_identity
 from app.services.domain_errors import DomainError
+from app.services.email import customer_portal_origin
 from app.services.events import emit_event
 from app.services.events.types import EventType
 from app.services.owner_commands import (
@@ -92,7 +96,6 @@ _PROGRAM_POLICY_KEYS = (
     "referral_qualify_window_days",
     "referral_auto_approve_reward",
 )
-_SHARE_BASE_URL_KEY = "referral_share_base_url"
 
 _PROGRAM_TRANSITION_CONCERN = "atomic referral program transition orchestration"
 _ENSURE_CODE_COMMAND = OwnerCommandDefinition(
@@ -114,6 +117,11 @@ _QUALIFY_COMMAND = OwnerCommandDefinition(
     owner="referrals.program",
     concern=_PROGRAM_TRANSITION_CONCERN,
     name="qualify_referral_for_subscriber",
+)
+_EXPIRE_PENDING_COMMAND = OwnerCommandDefinition(
+    owner="referrals.program",
+    concern=_PROGRAM_TRANSITION_CONCERN,
+    name="expire_pending_referrals",
 )
 _QUALIFY_OVERRIDE_COMMAND = OwnerCommandDefinition(
     owner="referrals.program",
@@ -177,6 +185,19 @@ class ReferFriendCommand:
 class QualifyReferralForSubscriberCommand:
     context: CommandContext
     subscriber_id: UUID
+
+
+@dataclass(frozen=True)
+class ExpirePendingReferralsCommand:
+    context: CommandContext
+    batch_limit: int = 200
+
+
+@dataclass(frozen=True)
+class ExpirePendingReferralsOutcome:
+    processed: int
+    expired: int
+    qualified: int
 
 
 @dataclass(frozen=True)
@@ -347,12 +368,30 @@ def _program_policy(db: Session) -> _ProgramPolicy:
 
 
 def _share_base_url(db: Session) -> str:
-    value = settings_spec.resolve_value(db, _DOMAIN, _SHARE_BASE_URL_KEY)
-    share_base_url = str(value or "").strip().rstrip("/")
-    parsed_share_url = urlsplit(share_base_url)
-    if parsed_share_url.scheme not in {"http", "https"} or not parsed_share_url.netloc:
-        raise _error("invalid_configuration", "Referral share URL policy is invalid.")
-    return share_base_url
+    # APP_URL follows the deployed app origin even if an older selfcare_domain
+    # row was left behind after a domain change.
+    value = customer_portal_origin(db)
+    if not value:
+        logger.warning("referral_share_origin_missing")
+        return ""
+    try:
+        parsed = urlsplit(value)
+        invalid = (
+            parsed.scheme not in {"http", "https"}
+            or not parsed.hostname
+            or parsed.username is not None
+            or parsed.password is not None
+            or parsed.path not in {"", "/"}
+            or parsed.query
+            or parsed.fragment
+        )
+        _ = parsed.port  # Reject malformed ports before publishing the link.
+    except ValueError:
+        invalid = True
+    if invalid:
+        logger.warning("referral_share_origin_invalid")
+        return ""
+    return value.rstrip("/")
 
 
 def _normalize_capture(command: CaptureReferralCommand) -> _CaptureValues:
@@ -943,6 +982,119 @@ def _find_referral_for_subscriber(
     return referral_id
 
 
+def _utc(value: datetime) -> datetime:
+    return value if value.tzinfo is not None else value.replace(tzinfo=UTC)
+
+
+def _activation_at(
+    db: Session, referral: Referral, deadline: datetime
+) -> datetime | None:
+    """Find the exact account's recorded activation inside the referral window."""
+    subscriber_id = referral.referred_subscriber_id
+    if subscriber_id is None:
+        return None
+    created = _utc(referral.created_at)
+    # This immutable lifecycle ledger outlives the 30-day event-store cleanup.
+    lifecycle_times = db.scalars(
+        select(SubscriptionLifecycleEvent.recorded_at)
+        .join(
+            Subscription, Subscription.id == SubscriptionLifecycleEvent.subscription_id
+        )
+        .where(Subscription.subscriber_id == subscriber_id)
+        .where(SubscriptionLifecycleEvent.to_status == SubscriptionStatus.active)
+        .where(SubscriptionLifecycleEvent.evidence_grade == "transition_evidence")
+        .where(
+            SubscriptionLifecycleEvent.evidence_source.in_(
+                ("lifecycle_command", "subscription_creation")
+            )
+        )
+        .where(SubscriptionLifecycleEvent.source_id.is_not(None))
+        .where(SubscriptionLifecycleEvent.evidence_fingerprint.is_not(None))
+        .where(SubscriptionLifecycleEvent.effective_at.is_not(None))
+        .where(SubscriptionLifecycleEvent.recorded_at.is_not(None))
+        .where(SubscriptionLifecycleEvent.recorded_at >= created)
+        .where(SubscriptionLifecycleEvent.recorded_at <= deadline)
+        .order_by(SubscriptionLifecycleEvent.recorded_at)
+    ).all()
+    candidates = [_utc(value) for value in lifecycle_times if value is not None]
+
+    # An operator can activate the account itself without a subscription.
+    for audit_record in db.scalars(
+        select(AuditEvent)
+        .where(AuditEvent.action == "customer.account_status_changed")
+        .where(AuditEvent.entity_type == "subscriber")
+        .where(AuditEvent.entity_id == str(subscriber_id))
+        .where(func.coalesce(AuditEvent.created_at, AuditEvent.occurred_at) >= created)
+        .where(func.coalesce(AuditEvent.created_at, AuditEvent.occurred_at) <= deadline)
+    ):
+        details = audit_record.details or audit_record.metadata_ or {}
+        if (
+            details.get("status") == "active"
+            and details.get("prior_status") != "active"
+        ):
+            candidates.append(_utc(audit_record.created_at or audit_record.occurred_at))
+
+    # Legacy and other activation paths may have only an event-store record.
+    for event_record in db.scalars(
+        select(EventStore)
+        .where(EventStore.is_active.is_(True))
+        .where(
+            or_(
+                EventStore.subscriber_id == subscriber_id,
+                EventStore.account_id == subscriber_id,
+            )
+        )
+        .where(
+            EventStore.event_type.in_(
+                (
+                    EventType.subscription_activated.value,
+                    EventType.subscriber_reactivated.value,
+                    EventType.subscriber_updated.value,
+                )
+            )
+        )
+        .where(EventStore.created_at >= created)
+        .where(EventStore.created_at <= deadline)
+    ):
+        if event_record.event_type == EventType.subscriber_updated.value:
+            payload = event_record.payload or {}
+            if (
+                payload.get("status") != "active"
+                or payload.get("prior_status") == "active"
+            ):
+                continue
+        candidates.append(_utc(event_record.created_at))
+    return min(candidates) if candidates else None
+
+
+def _qualify_pending(
+    db: Session,
+    referral: Referral,
+    policy: _ProgramPolicy,
+    context: CommandContext,
+    qualified_at: datetime,
+) -> None:
+    referral.status = ReferralStatus.qualified.value
+    referral.qualified_at = qualified_at
+    referral.reward_amount = policy.amount
+    referral.reward_currency = policy.currency
+    referral.reward_status = (
+        ReferralRewardStatus.approved.value
+        if policy.auto_approve
+        else ReferralRewardStatus.pending.value
+    )
+    db.flush()
+    _stage_referral_evidence(
+        db,
+        referral=referral,
+        event_type=EventType.referral_qualified,
+        action="referrals.qualified",
+        outcome="qualified",
+        context=context,
+        extra={"amount": str(policy.amount), "currency": policy.currency},
+    )
+
+
 def qualify_referral_for_subscriber(
     db: Session, command: QualifyReferralForSubscriberCommand
 ) -> ReferralTransitionResult:
@@ -997,7 +1149,13 @@ def qualify_referral_for_subscriber(
         created = referral.created_at
         if created is not None and created.tzinfo is None:
             created = created.replace(tzinfo=UTC)
-        if created is not None and now - created > timedelta(days=policy.window_days):
+        deadline = created + timedelta(days=policy.window_days) if created else None
+        activation_at = (
+            _activation_at(db, referral, deadline)
+            if deadline and now > deadline
+            else None
+        )
+        if deadline and now > deadline and activation_at is None:
             referral.status = ReferralStatus.expired.value
             db.flush()
             _stage_referral_evidence(
@@ -1012,25 +1170,7 @@ def qualify_referral_for_subscriber(
                 referral, outcome="expired", context=command.context
             )
 
-        referral.status = ReferralStatus.qualified.value
-        referral.qualified_at = now
-        referral.reward_amount = policy.amount
-        referral.reward_currency = policy.currency
-        referral.reward_status = (
-            ReferralRewardStatus.approved.value
-            if policy.auto_approve
-            else ReferralRewardStatus.pending.value
-        )
-        db.flush()
-        _stage_referral_evidence(
-            db,
-            referral=referral,
-            event_type=EventType.referral_qualified,
-            action="referrals.qualified",
-            outcome="qualified",
-            context=command.context,
-            extra={"amount": str(policy.amount), "currency": policy.currency},
-        )
+        _qualify_pending(db, referral, policy, command.context, activation_at or now)
         return _transition_result(
             referral, outcome="qualified", context=command.context
         )
@@ -1038,6 +1178,62 @@ def qualify_referral_for_subscriber(
     return _execute(
         db,
         definition=_QUALIFY_COMMAND,
+        context=command.context,
+        operation=operation,
+    )
+
+
+def expire_pending_referrals(
+    db: Session, command: ExpirePendingReferralsCommand
+) -> ExpirePendingReferralsOutcome:
+    """Expire unactivated referrals after the existing qualification window."""
+    _validate_context(command.context)
+    if not 1 <= command.batch_limit <= 1000:
+        raise _error("invalid_command", "batch_limit must be between 1 and 1000.")
+
+    def operation() -> ExpirePendingReferralsOutcome:
+        policy = _program_policy(db)
+        window_days = policy.window_days
+        cutoff = datetime.now(UTC) - timedelta(days=window_days)
+        due = db.scalars(
+            select(Referral)
+            .where(Referral.is_active.is_(True))
+            .where(Referral.status == ReferralStatus.pending.value)
+            .where(Referral.created_at < cutoff)
+            .order_by(Referral.created_at, Referral.id)
+            .limit(command.batch_limit)
+            .with_for_update(skip_locked=True)
+        ).all()
+        expired = 0
+        qualified = 0
+        for referral in due:
+            if referral.referred_subscriber_id is not None:
+                # Serialize with account activation while checking its evidence.
+                _lock_subscriber(db, referral.referred_subscriber_id)
+            deadline = _utc(referral.created_at) + timedelta(days=window_days)
+            activation_at = _activation_at(db, referral, deadline)
+            if activation_at is not None:
+                _qualify_pending(db, referral, policy, command.context, activation_at)
+                qualified += 1
+                continue
+            referral.status = ReferralStatus.expired.value
+            db.flush()
+            expired += 1
+            _stage_referral_evidence(
+                db,
+                referral=referral,
+                event_type=EventType.referral_expired,
+                action="referrals.expired",
+                outcome="expired",
+                context=command.context,
+            )
+        return ExpirePendingReferralsOutcome(
+            processed=len(due), expired=expired, qualified=qualified
+        )
+
+    return _execute(
+        db,
+        definition=_EXPIRE_PENDING_COMMAND,
         context=command.context,
         operation=operation,
     )
@@ -1538,9 +1734,10 @@ class Referrals:
                     ),
                 }
             )
+        base_url = _share_base_url(db)
         return {
             "code": code.code,
-            "share_url": f"{_share_base_url(db)}/r/{code.code}",
+            "share_url": f"{base_url}/r/{code.code}" if base_url else "",
             "program": {
                 "enabled": policy.enabled,
                 "reward_amount": str(policy.amount),

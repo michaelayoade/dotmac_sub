@@ -482,12 +482,23 @@ def _sync_automation_scheduled_rules_schedule(session) -> None:
     )
 
 
+def _sync_referral_expiry_schedule(session) -> None:
+    _sync_scheduled_task(
+        session,
+        name="expire_pending_referrals",
+        task_name="app.tasks.referrals.expire_pending_referrals",
+        enabled=True,
+        interval_seconds=86400,
+    )
+
+
 def build_beat_schedule() -> dict:
     schedule: dict[str, dict] = {}
     session = SessionLocal()
     try:
         _sync_billing_health_snapshot_schedule(session)
         _sync_automation_scheduled_rules_schedule(session)
+        _sync_referral_expiry_schedule(session)
         enabled = control_registry.is_enabled(session, "gis.sync")
         interval_minutes = resolve_integer(
             session, SettingDomain.gis, "sync_interval_minutes"
@@ -2285,6 +2296,14 @@ def build_beat_schedule() -> dict:
             ),
             enabled=True,
             interval_seconds=3600,
+        )
+
+        _sync_scheduled_task(
+            session,
+            name="outbox_backlog_snapshot",
+            task_name="app.tasks.outbox_backlog.publish_outbox_backlog",
+            enabled=True,
+            interval_seconds=300,
         )
 
         # RADIUS sync - syncs NAS devices and users to FreeRADIUS

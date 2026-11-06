@@ -14,3 +14,14 @@ scrape_configs:
       - source_labels: [__address__]
         target_label: instance
         replacement: 'dotmac-app'
+
+  # Outbox relay dispatcher (SUB-2). Profile-gated service: the target is down
+  # until the operator starts it, and no alert depends on `up` for it.
+  - job_name: 'dotmac-outbox-relay'
+    metrics_path: /metrics
+    static_configs:
+      - targets: ['outbox-relay:9108']
+    relabel_configs:
+      - source_labels: [__address__]
+        target_label: instance
+        replacement: 'dotmac-outbox-relay'

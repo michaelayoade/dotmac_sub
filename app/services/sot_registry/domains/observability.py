@@ -41,7 +41,12 @@ DOMAIN = DomainSOT(
                 "while every sanctioned writer dual-populates details. AuditActor "
                 "keeps principal identity and optional Party enrichment one typed "
                 "value; a two-directional caller ratchet retires the temporary "
-                "scalar compatibility surface owner by owner. Migration "
+                "scalar compatibility surface owner by owner. Request audit maps "
+                "authenticated product principal kinds such as system_user to the "
+                "closed audit taxonomy, snapshots the canonical account label, and "
+                "never treats caller-controlled actor headers as identity evidence. "
+                "A read-only exact SystemUser lookup keeps recoverable legacy request "
+                "rows readable without mutating append-only evidence. Migration "
                 "524 adds actor_party_id, details, and created_at without an "
                 "authority transfer or kernel-lineage stamp. The aggregate-only "
                 "r1_parity query owns drift detection during expansion. "
@@ -118,8 +123,9 @@ DOMAIN = DomainSOT(
                         owner="runtime.db_sessions",
                         kind=AuthorityKind.OBSERVATION,
                         source=(
-                            "authenticated request actor state, request id, response "
-                            "status, client address, user agent, path and redacted query"
+                            "authenticated request principal state and canonical account "
+                            "identity, request id, response status, client address, user "
+                            "agent, path and redacted query; actor headers are excluded"
                         ),
                     ),
                     AuthorityInput(
@@ -127,8 +133,10 @@ DOMAIN = DomainSOT(
                         owner="observability.audit_log",
                         kind=AuthorityKind.CONTROL_INPUT,
                         source=(
-                            "the closed system/user/api_key/service actor rules and "
-                            "the request sensitive-key allow/deny policy"
+                            "the closed system/user/api_key/service actor rules, product "
+                            "principal-kind normalization, canonical label snapshot, "
+                            "legacy exact-account read compatibility, and request "
+                            "sensitive-key allow/deny policy"
                         ),
                     ),
                 ),

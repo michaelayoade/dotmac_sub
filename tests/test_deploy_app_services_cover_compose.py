@@ -14,6 +14,7 @@ import re
 from pathlib import Path
 
 from scripts.deploy_app_image_services import (
+    OPT_IN_APP_SERVICES,
     REQUIRED_APP_SERVICES,
     app_image_services,
     recreate_set,
@@ -78,6 +79,8 @@ def test_every_app_image_service_has_a_running_replica_in_product_toml() -> None
     descriptor = tomllib.loads((ROOT / "deploy" / "product.toml").read_text())
     replicas = {role["code"]: role.get("replicas", 0) for role in descriptor["roles"]}
     for service in app_image_services(_resolved(_compose_services()), RELEASE):
+        if service in OPT_IN_APP_SERVICES:
+            continue
         assert replicas.get(service, 0) >= 1, (
             f"{service} runs the app image but product.toml declares "
             f"replicas={replicas.get(service)}; drift comparison would skip it"
@@ -107,7 +110,21 @@ def test_required_services_all_exist_on_the_app_image_in_compose() -> None:
     )
     # Every app-image service in the repo compose is required: a new one must be
     # added to REQUIRED_APP_SERVICES deliberately (or be excluded).
-    assert declared <= set(REQUIRED_APP_SERVICES)
+    assert declared - set(OPT_IN_APP_SERVICES) <= set(REQUIRED_APP_SERVICES)
+
+
+def test_opt_in_services_are_never_required_and_declare_zero_replicas() -> None:
+    """The carve-out is exact: an opt-in service is not required, exists in
+    compose, and is the only app-image role allowed to declare zero replicas."""
+    import tomllib
+
+    declared = set(app_image_services(_resolved(_compose_services()), RELEASE))
+    assert set(OPT_IN_APP_SERVICES) <= declared
+    assert not set(OPT_IN_APP_SERVICES) & set(REQUIRED_APP_SERVICES)
+    descriptor = tomllib.loads((ROOT / "deploy" / "product.toml").read_text())
+    replicas = {role["code"]: role.get("replicas", 0) for role in descriptor["roles"]}
+    for service in OPT_IN_APP_SERVICES:
+        assert replicas.get(service, 0) == 0
 
 
 def test_a_deploy_never_creates_an_override_only_service_nobody_ran() -> None:

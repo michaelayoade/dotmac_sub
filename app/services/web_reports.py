@@ -1164,7 +1164,12 @@ def build_revenue_export_csv(db: Session, days: int | None = None) -> str:
                 str(payment.amount or ""),
                 payment.currency or "",
                 payment.status.value if payment.status else "",
-                payment.payment_method.name if payment.payment_method else "",
+                (
+                    payment.payment_method.label
+                    or payment.payment_method.method_type.value
+                    if payment.payment_method
+                    else ""
+                ),
                 payment.provider.name if payment.provider else "",
             ]
         )

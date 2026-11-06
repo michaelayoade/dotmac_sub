@@ -32,9 +32,11 @@ from app.models.auth import (
 from app.models.auth import Session as AuthSession
 from app.models.dispatch import TechnicianProfile
 from app.models.party import PartyDataClassification, PartyType
+from app.models.rbac import SystemUserRole
 from app.models.subscriber import UserType
 from app.models.system_user import SystemUser
 from app.services import (
+    assignment_escalation,
     auth_cache,
     credential_party_binding,
     credential_recovery,
@@ -1013,13 +1015,72 @@ def _outcome(
     )
 
 
+def _enforce_role_no_escalation(
+    db: Session,
+    *,
+    actor_type: AuditActorType,
+    actor_id: str,
+    user_id: UUID | None,
+    role_ids: tuple[UUID, ...],
+) -> None:
+    """SUB-1; see ``assignment_escalation``.
+
+    Interactive (``user``) actors get the full rule. Machine callers (the ERP
+    HR sync ``api_key``, ``service``) are exempt from the subset rule only.
+    """
+
+    if actor_type is AuditActorType.system:
+        return
+    existing: set[UUID] = set()
+    if user_id is not None:
+        existing = set(
+            db.execute(
+                select(SystemUserRole.role_id).where(
+                    SystemUserRole.system_user_id == user_id,
+                    SystemUserRole.scope_type == "",
+                    SystemUserRole.scope_id == "",
+                )
+            ).scalars()
+        )
+    added = set(role_ids) - existing
+    if actor_type is not AuditActorType.user:
+        # Named widening: ERP HR sync key / service actors skip the subset rule;
+        # admin, admin-only roles and self-grants are still refused.
+        assignment_escalation.enforce_machine_role_grant(
+            db,
+            actor_type=actor_type,
+            actor_id=actor_id,
+            target_principal_ids=(user_id,) if user_id is not None else (),
+            role_ids=added,
+        )
+        return
+    assignment_escalation.enforce_grant(
+        db,
+        actor_type=actor_type,
+        actor_id=actor_id,
+        target_principal_ids=(user_id,) if user_id is not None else (),
+        role_ids=added,
+        check_self=bool(added),
+    )
+
+
 def _sync_roles(
     db: Session,
     *,
     user: SystemUser,
     role_names: tuple[str, ...],
+    actor_type: AuditActorType,
+    actor_id: str,
 ) -> assignment_service.SourceRoleSyncResult:
     try:
+        roles = assignment_service.active_roles_by_names(db, role_names)
+        _enforce_role_no_escalation(
+            db,
+            actor_type=actor_type,
+            actor_id=actor_id,
+            user_id=user.id,
+            role_ids=tuple(role.id for role in roles),
+        )
         return assignment_service.sync_source_roles_by_names(
             db,
             user_id=user.id,
@@ -1168,7 +1229,13 @@ def _provision(
                 },
             )
 
-    role_result = _sync_roles(db, user=user, role_names=desired_roles)
+    role_result = _sync_roles(
+        db,
+        user=user,
+        role_names=desired_roles,
+        actor_type=actor_type,
+        actor_id=actor_id,
+    )
     invite_requested = bool(created and command.send_invite)
     changed = bool(created or role_result.changed)
     _invalidate_auth_after_commit(db, user.id)
@@ -1273,6 +1340,13 @@ def create_local_staff_account(
                 "identity_conflict",
                 "Staff identity conflicts with an existing canonical record.",
             )
+        _enforce_role_no_escalation(
+            db,
+            actor_type=actor_type,
+            actor_id=actor_id,
+            user_id=None,
+            role_ids=(command.role_id,),
+        )
         user = _create_principal(
             db,
             email=email,
@@ -1354,6 +1428,8 @@ def sync_staff_account_roles(
             db,
             user=user,
             role_names=_role_names(command.role_names),
+            actor_type=actor_type,
+            actor_id=actor_id,
         )
         _invalidate_auth_after_commit(db, user.id)
         _stage_audit(

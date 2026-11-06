@@ -128,6 +128,10 @@ DEFAULT_PERMISSIONS = [
     ("customer:delete", "Delete customers and subscribers"),
     ("customer:impersonate", "Impersonate customer accounts"),
     ("customer:write", "Manage customers through compatibility endpoints"),
+    (
+        "customer:sensitive_profile:write",
+        "Change sensitive Customer identity fields such as DOB and NIN",
+    ),
     ("reseller:impersonate", "Impersonate reseller portal principals"),
     ("reseller:read", "View resellers"),
     ("reseller:write", "Manage resellers"),
@@ -356,6 +360,10 @@ DEFAULT_PERMISSIONS = [
     ("support:ticket:read", "View tickets"),
     ("support:ticket:create", "Create tickets"),
     ("support:ticket:update", "Update tickets"),
+    (
+        "support:inbox:contact_link",
+        "Create or replace a reusable Inbox contact-to-Customer link",
+    ),
     ("support:ticket:delete", "Delete tickets"),
     (
         "workqueue:audience:team",
@@ -615,6 +623,7 @@ ROLE_PERMISSIONS = {
         "operations:service_team:read",
         "support:ticket:create",
         "support:ticket:update",
+        "support:inbox:contact_link",
         "support:inbox:self_assign",
         "support:automation:read",
         "support:automation:write",
@@ -631,6 +640,7 @@ ROLE_PERMISSIONS = {
         "reseller:read",
         "support:ticket:read",
         "support:ticket:update",
+        "support:inbox:contact_link",
         "support:inbox:self_assign",
         "reports:ncc:read",
         "reports:ncc:export",

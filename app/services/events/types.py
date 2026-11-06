@@ -15,12 +15,14 @@ logger = logging.getLogger(__name__)
 
 
 class EventType(enum.Enum):
+    vendor_created = "vendor.created"
     """All event types supported by the event system (~40 events).
 
     Event naming convention: {entity}.{action}
     """
 
     field_identity_changed = "field_identity.changed"
+    customer_account_statement_email_queued = "customer.account_statement.email_queued"
 
     customer_bulk_message_changed = "customer_bulk_message.changed"
 

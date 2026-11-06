@@ -54,6 +54,7 @@ from app.services import customer_field_job_chat, team_inbox_field_job
 from app.services.auth_dependencies import require_user_auth
 from app.services.field.chat import field_job_chat
 from app.services.owner_commands import CommandContext
+from tests.team_inbox_presence_fixtures import add_active_presence_lease
 
 
 def _customer_send_command(
@@ -156,6 +157,7 @@ def _profile(
                 last_seen_at=datetime.now(UTC),
             )
         )
+        add_active_presence_lease(db_session, system_user_id=user.id)
     return profile
 
 

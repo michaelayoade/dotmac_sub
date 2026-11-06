@@ -91,6 +91,14 @@ REDRIVE = FailureVisibility.ADMIN_REDRIVE
 
 
 TASK_RELIABILITY_CONTRACTS: dict[str, TaskReliabilityContract] = {
+    "app.tasks.team_inbox.repair_contact_link_history": _c(
+        "team_inbox",
+        NONE,
+        IDEMP,
+        LOG,
+        "A bounded cursor batch updates only still-matching historical conversations; "
+        "replay converges, and a committed batch schedules the next cursor explicitly.",
+    ),
     "app.tasks.inbox_sla.evaluate_inbox_sla": _c(
         "support",
         SWEEP,
@@ -106,6 +114,13 @@ TASK_RELIABILITY_CONTRACTS: dict[str, TaskReliabilityContract] = {
         IDEMP,
         HEALTH,
         "Bounded retention sweep; locked batches converge safely on replay.",
+    ),
+    "app.tasks.outbox_backlog.publish_outbox_backlog": _c(
+        "platform",
+        AUTORETRY,
+        IDEMP,
+        HEALTH,
+        "Read-only snapshot of the composed-module outbox; replay is harmless.",
     ),
     "app.tasks.admin_alerts.evaluate_infrastructure_alerts": _c(
         "monitoring", SWEEP, IDEMP, HEALTH
@@ -732,6 +747,14 @@ TASK_RELIABILITY_CONTRACTS: dict[str, TaskReliabilityContract] = {
         IDEMP,
         STATUS,
         "Permanent security projection repair from active staff device-login state.",
+    ),
+    "app.tasks.referrals.expire_pending_referrals": _c(
+        "referrals",
+        SWEEP,
+        IDEMP,
+        LOG,
+        "Daily sweep and bounded continuation reprocess pending rows; "
+        "terminal referral status prevents duplicate transition.",
     ),
     "app.tasks.referrals.reconcile_referral_mirror": _c(
         "referrals", NONE, IDEMP, LOG, "Retired CRM mirror task tombstone."

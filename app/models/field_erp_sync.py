@@ -53,6 +53,7 @@ class FieldErpSyncFlow(enum.Enum):
     material_request = "material_request"
     purchase_order = "purchase_order"
     purchase_invoice = "purchase_invoice"
+    vendor_supplier = "vendor_supplier"
 
 
 class FieldErpSyncStatus(enum.Enum):

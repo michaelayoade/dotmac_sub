@@ -1,0 +1,113 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="referrer" content="no-referrer">
+  <title>Join Dotmac · Refer &amp; Earn</title>
+  <style>
+    :root { font-family: system-ui, -apple-system, Segoe UI, sans-serif; color: #17231f; background: #f4f7f5; }
+    * { box-sizing: border-box; }
+    body { margin: 0; min-height: 100vh; }
+    main { max-width: 36rem; margin: 4rem auto; padding: 0 1.25rem; }
+    .brand { color: #11694d; font-size: .9rem; font-weight: 800; letter-spacing: .12em; text-transform: uppercase; }
+    .card { margin-top: 1rem; padding: clamp(1.5rem, 5vw, 2.5rem); background: white; border: 1px solid #dce7e0; border-radius: 1.25rem; box-shadow: 0 12px 40px #173d2610; }
+    h1 { margin: 0 0 .75rem; font-size: clamp(1.8rem, 5vw, 2.5rem); line-height: 1.15; }
+    p { line-height: 1.55; color: #526159; }
+    form { display: grid; gap: 1rem; margin-top: 1.75rem; }
+    label { display: grid; gap: .35rem; font-size: .9rem; font-weight: 650; }
+    input { width: 100%; padding: .8rem .9rem; border: 1px solid #b9c9bf; border-radius: .65rem; font: inherit; }
+    input:focus { outline: 2px solid #13835e; outline-offset: 2px; }
+    button { padding: .9rem 1rem; border: 0; border-radius: .65rem; background: #11694d; color: white; font: inherit; font-weight: 700; cursor: pointer; }
+    button:hover { background: #0d543d; }
+    button:disabled { opacity: .65; cursor: wait; }
+    .message { margin-top: 1rem; padding: .85rem 1rem; border-radius: .65rem; }
+    .error { background: #fff0ef; color: #842c26; }
+    .success { background: #e9f7ef; color: #145c39; }
+    [hidden] { display: none !important; }
+  </style>
+</head>
+<body>
+  <main>
+    <div class="brand">Dotmac · Refer &amp; Earn</div>
+    <section class="card">
+      {% if code %}
+      <h1>You've been invited to Dotmac</h1>
+      <p>Sign up using your friend's referral link. We'll email you instructions to access your new customer account.</p>
+      <form id="signup-form">
+        <label>First name <input name="first_name" autocomplete="given-name" maxlength="80" required></label>
+        <label>Last name <input name="last_name" autocomplete="family-name" maxlength="80" required></label>
+        <label>Email address <input name="email" type="email" autocomplete="email" maxlength="255" required></label>
+        <label>Phone number (optional) <input name="phone" type="tel" autocomplete="tel" maxlength="40"></label>
+        <button type="submit">Create my account</button>
+      </form>
+      <p id="message" class="message" role="status" aria-live="polite" hidden></p>
+      {% else %}
+      <h1>This referral link is unavailable</h1>
+      <p>Ask your friend for a current link, or contact Dotmac for help.</p>
+      {% endif %}
+    </section>
+  </main>
+  {% if code %}
+  <script>
+    (() => {
+      const code = {{ code | tojson }};
+      const form = document.getElementById('signup-form');
+      const message = document.getElementById('message');
+      const button = form.querySelector('button');
+      async function post(path, payload) {
+        const response = await fetch(path, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          cache: 'no-store',
+          credentials: 'same-origin',
+          body: JSON.stringify(payload)
+        });
+        const data = await response.json().catch(() => ({}));
+        if (!response.ok) {
+          throw new Error(typeof data.detail === 'string' ? data.detail : 'Please check your details and try again.');
+        }
+        return data;
+      }
+      form.addEventListener('submit', async (event) => {
+        event.preventDefault();
+        button.disabled = true;
+        message.hidden = false;
+        message.className = 'message';
+        message.textContent = 'Creating your account…';
+        const values = Object.fromEntries(new FormData(form));
+        const account = {
+          first_name: values.first_name.trim(),
+          last_name: values.last_name.trim(),
+          email: values.email.trim(),
+          phone: values.phone.trim() || null
+        };
+        try {
+          const capture = await post('/api/v1/referrals/capture', {
+            code,
+            name: `${account.first_name} ${account.last_name}`,
+            email: account.email,
+            phone: account.phone
+          });
+          const signup = await post('/api/v1/referrals/signup', {
+            conversion_token: capture.conversion_token,
+            account
+          });
+          form.hidden = true;
+          message.className = 'message success';
+          message.textContent = signup.enrollment_status === 'queued'
+            ? 'Your account was created. Check your email for access instructions.'
+            : signup.enrollment_status === 'already_enrolled'
+              ? 'Your account is ready. You can sign in to the customer portal.'
+              : 'Your account was created. Please contact Dotmac for access instructions.';
+        } catch (error) {
+          message.className = 'message error';
+          message.textContent = error.message || 'We could not complete your signup. Please try again.';
+          button.disabled = false;
+        }
+      });
+    })();
+  </script>
+  {% endif %}
+</body>
+</html>

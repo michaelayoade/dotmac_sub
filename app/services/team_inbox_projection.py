@@ -45,6 +45,7 @@ from app.services import (
     team_inbox_read,
     team_inbox_read_state,
     team_inbox_reply_window,
+    team_inbox_sidebar_metrics,
 )
 from app.services.catalog import plan_family_catalogues
 from app.services.integrations import whatsapp_capability
@@ -379,6 +380,14 @@ class InboxMessageFragmentProjection:
 
 
 @dataclass(frozen=True, slots=True)
+class InboxMessagePageProjection:
+    conversation_id: UUID
+    messages: tuple[team_inbox_read.InboxTimelineMessage, ...]
+    has_older_messages: bool
+    oldest_message_id: UUID | None
+
+
+@dataclass(frozen=True, slots=True)
 class InboxServiceTeamOption:
     id: UUID
     name: str
@@ -438,6 +447,8 @@ class InboxManagerDashboardProjection:
 class InboxAgentPresenceProjection:
     person_id: UUID
     status: str
+    selected_status: str
+    auto_offline: bool
     last_seen_at: datetime | None
 
 
@@ -820,15 +831,29 @@ def get_agent_presence(
         .filter(InboxAgentPresence.person_id == person_id)
         .one_or_none()
     )
+    availability = team_inbox_assignment.agent_availability_snapshots(
+        db, (person_id,)
+    ).get(person_id)
     status = (
-        team_inbox_assignment.effective_presence_status(presence)
+        availability.presence_status.value
+        if availability is not None
+        else InboxAgentPresenceStatus.offline.value
+    )
+    selected_status = (
+        presence.manual_override_status
+        or presence.status
+        or InboxAgentPresenceStatus.offline.value
         if presence is not None
         else InboxAgentPresenceStatus.offline.value
     )
     return InboxAgentPresenceProjection(
         person_id=person_id,
         status=status,
-        last_seen_at=presence.last_seen_at if presence is not None else None,
+        selected_status=selected_status,
+        auto_offline=presence.auto_offline if presence is not None else True,
+        last_seen_at=(
+            availability.presence_observed_at if availability is not None else None
+        ),
     )
 
 
@@ -851,11 +876,15 @@ def build_manager_dashboard_projection(
     )
     presence_by_person = {row.person_id: row for row in presence_rows}
     observed_at = datetime.now(UTC)
+    availability_by_person = team_inbox_assignment.agent_availability_snapshots(
+        db,
+        person_ids,
+        now=observed_at,
+    )
     online_person_ids = {
-        row.person_id
-        for row in presence_rows
-        if team_inbox_assignment.effective_presence_status(row, now=observed_at)
-        == InboxAgentPresenceStatus.online.value
+        person_id
+        for person_id, availability in availability_by_person.items()
+        if availability.presence_status is InboxAgentPresenceStatus.online
     }
 
     active_assignments = (
@@ -880,16 +909,15 @@ def build_manager_dashboard_projection(
     agent_rows: list[InboxManagerAgent] = []
     for agent in agent_options:
         presence = presence_by_person.get(agent.id)
+        availability = availability_by_person.get(agent.id)
         agent_rows.append(
             InboxManagerAgent(
                 id=agent.id,
                 name=agent.name,
                 initials=agent.initials,
                 presence_status=(
-                    team_inbox_assignment.effective_presence_status(
-                        presence, now=observed_at
-                    )
-                    if presence is not None
+                    availability.presence_status.value
+                    if availability is not None
                     else "offline"
                 ),
                 active_chats=chat_counts[agent.id],
@@ -984,6 +1012,7 @@ def _assignment_counts(
     *,
     actor_person_id: UUID | None,
     queue_metrics: team_inbox_operations.InboxQueueMetrics,
+    needs_attention: int,
 ) -> InboxAssignmentCounts:
     all_count = team_inbox_read.queue_conversation_count(db)
     assigned_to_me = team_inbox_read.assigned_conversation_count(
@@ -1033,7 +1062,7 @@ def _assignment_counts(
         my_team_ids=my_team_ids,
         unassigned=queue_metrics.unassigned_open,
         unreplied=queue_metrics.needs_response,
-        needs_attention=team_inbox_read.needs_attention_conversation_count(db),
+        needs_attention=needs_attention,
     )
 
 
@@ -1304,12 +1333,17 @@ def get_conversation_projection(
     *,
     conversation_id: UUID,
     actor_person_id: UUID | None,
+    message_page: team_inbox_read.InboxTimelineMessagePageRequest | None = None,
     actor_permission_keys: frozenset[str] = frozenset(),
     include_contact_candidates: bool = True,
     include_catalogue_options: bool = True,
     include_label_usage_counts: bool = False,
 ) -> InboxConversationProjection | None:
-    timeline = team_inbox_read.get_conversation_timeline(db, conversation_id)
+    timeline = team_inbox_read.get_conversation_timeline(
+        db,
+        conversation_id,
+        message_page=message_page,
+    )
     if timeline is None:
         return None
     is_resolved = timeline.status == InboxConversationStatus.resolved.value
@@ -1464,6 +1498,31 @@ def get_message_fragment_projection(
         conversation_id=conversation_id,
         message_id=message_id,
         message=message,
+    )
+
+
+def get_message_page_projection(
+    db: Session,
+    *,
+    conversation_id: UUID,
+    before_message_id: UUID,
+) -> InboxMessagePageProjection | None:
+    """Return one typed historical page through the Inbox projection boundary."""
+
+    page = team_inbox_read.get_conversation_message_page(
+        db,
+        conversation_id=conversation_id,
+        page=team_inbox_read.InboxTimelineMessagePageRequest(
+            before_message_id=before_message_id
+        ),
+    )
+    if page is None:
+        return None
+    return InboxMessagePageProjection(
+        conversation_id=conversation_id,
+        messages=page.messages,
+        has_older_messages=page.has_older_messages,
+        oldest_message_id=page.oldest_message_id,
     )
 
 
@@ -2632,6 +2691,7 @@ def build_queue_projection(
             db,
             conversation_id=selected_id,
             actor_person_id=request.actor_person_id,
+            message_page=team_inbox_read.InboxTimelineMessagePageRequest(),
             actor_permission_keys=request.actor_permission_keys,
             include_contact_candidates=False,
         )
@@ -2643,9 +2703,12 @@ def build_queue_projection(
     )
     include_sidebar = request.composition is not InboxQueueComposition.queue_only
     sidebar_started_at = perf_counter()
+    sidebar_metrics = (
+        team_inbox_sidebar_metrics.get_sidebar_metrics(db) if include_sidebar else None
+    )
     queue_metrics = (
-        team_inbox_operations.queue_metrics(db)
-        if include_sidebar
+        sidebar_metrics.queue_metrics
+        if sidebar_metrics is not None
         else team_inbox_operations.InboxQueueMetrics(
             total_open=0,
             needs_response=0,
@@ -2660,6 +2723,9 @@ def build_queue_projection(
             db,
             actor_person_id=request.actor_person_id,
             queue_metrics=queue_metrics,
+            needs_attention=(
+                sidebar_metrics.needs_attention if sidebar_metrics is not None else 0
+            ),
         )
         if include_sidebar
         else InboxAssignmentCounts(

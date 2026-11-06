@@ -412,9 +412,9 @@ def _prepare_huawei_read_shell(
     read paths answer the pager instead of burning rejected attempts.
     """
     _send_huawei_command(channel, "enable", word_delay_sec=0)
-    output = _read_until_prompt(
+    output = read_until_prompt_strict(
         channel,
-        r"(?:^|\r?\n)[^\r\n]*#\s*$",
+        r"(?:^|\r?\n)[^\r\n]+#\s*$",
         timeout_sec=_setup_prompt_timeout(),
     )
     fallback_prompt = prompt_regex.replace(">", "#")
@@ -1174,7 +1174,7 @@ def _read_paged_response(
         remaining = deadline - time.monotonic()
         if remaining <= 0:
             raise TimeoutError(
-                f"Huawei command did not return a shell prompt within {timeout_sec}s"
+                f"Huawei command did not return a shell prompt within {timeout_sec:g}s total deadline"
             )
         if idle_timeout_sec is None:
             chunk = _read_until_prompt(
@@ -1208,8 +1208,24 @@ def _read_paged_response(
             channel.send("\n")
             continue
         else:
+            if getattr(channel, "closed", False) or getattr(
+                channel, "eof_received", False
+            ):
+                raise ConnectionError("Huawei channel closed before the shell prompt")
+            if time.monotonic() >= deadline:
+                raise TimeoutError(
+                    f"Huawei command did not return a shell prompt within {timeout_sec:g}s total deadline"
+                )
+            read_budget = (
+                remaining
+                if read_timeout_sec is None
+                else min(remaining, read_timeout_sec)
+            )
+            if idle_timeout_sec is not None:
+                read_budget = min(remaining, idle_timeout_sec)
             raise TimeoutError(
-                f"Huawei command output ended before the shell prompt within {timeout_sec}s"
+                f"Huawei command output ended before the shell prompt within "
+                f"{read_budget:g}s per-read budget (total cap {timeout_sec:g}s)"
             )
 
     return "".join(output_parts)

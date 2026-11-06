@@ -20,6 +20,10 @@ from app.services import auth
 from app.services.audit_adapter import AuditActor
 from app.services.db_session_adapter import db_session_adapter
 from app.services.owner_commands import OwnerCommandError
+from tests.api_key_actor_fixtures import (
+    persist_admin_actor,
+    persist_wildcard_api_key_actor,
+)
 from tests.api_key_issuance_fixtures import create_command, generate_command
 from tests.support.tx_trace import assert_protected_tx, trace_transactions
 
@@ -88,6 +92,7 @@ def test_create_preserves_all_legacy_fields(db_session: Session) -> None:
             expires_at=expires,
         )
     )
+    persist_admin_actor(db_session, command.actor.actor_id)
     issued = owner.create(db_session, command=command)
     assert issued.scopes == ("*", "customer:read", "custom")
     assert issued.last_used_at == past and issued.revoked_at == past
@@ -225,6 +230,10 @@ def test_routes_fresh_session_snapshot_and_masking(
     }
     monkeypatch.setattr(db_session_adapter, "owner_command_session", fresh)
     monkeypatch.setattr(auth.api_keys, "enforce_generation_rate_limit", limit)
+    if api_key_actor:
+        persist_wildcard_api_key_actor(db_session, actor_id)
+    else:
+        persist_admin_actor(db_session, auth_context["principal_id"])
     if generated:
         response = api.generate_api_key(
             ApiKeyGenerateRequest(scopes=["customer:read"]),

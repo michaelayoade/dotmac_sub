@@ -47,18 +47,21 @@ from app.services import (
     ai_intake_rollout_readiness,
     conversation_lead_relationships,
     conversation_ticket_handoff,
+    domain_settings,
     inbox_lead_actions,
     lead_intake_ai,
     settings_api,
     settings_spec,
     system_user_assignments,
     team_inbox_agent_introduction,
+    team_inbox_analysis_projection,
     team_inbox_assignment,
     team_inbox_commands,
     team_inbox_contact_links,
     team_inbox_customer_completion,
     team_inbox_customer_completion_policy,
     team_inbox_filters,
+    team_inbox_integrator_envelope,
     team_inbox_manager_ai_chat,
     team_inbox_media,
     team_inbox_metrics,
@@ -67,7 +70,10 @@ from app.services import (
     team_inbox_read,
     team_inbox_read_state,
     team_inbox_routing,
+    team_inbox_sidebar_metrics,
     team_inbox_status,
+    team_inbox_widget,
+    web_system_settings_forms,
 )
 from app.services import email as email_service
 from app.services import (
@@ -75,6 +81,9 @@ from app.services import (
 )
 from app.services import (
     team_inbox_contact_context as contact_context_service,
+)
+from app.services import (
+    web_custom_fields as web_custom_fields_service,
 )
 from app.services.ai.client import AIClientError
 from app.services.audit_adapter import AuditActor
@@ -201,8 +210,12 @@ def _json_mapping_list(value: str | None) -> tuple[dict[str, object], ...]:
     return tuple(dict(item) for item in parsed)
 
 
-def _uuid_form_value(value: str | None) -> UUID | None:
-    text = str(value or "").strip()
+def _uuid_form_value(value: object) -> UUID | None:
+    if isinstance(value, UUID):
+        return value
+    if not isinstance(value, str):
+        return None
+    text = value.strip()
     if not text:
         return None
     return UUID(text)
@@ -368,6 +381,7 @@ def team_inbox_queue(
     db: Session = Depends(get_db),
 ):
     started_at = perf_counter()
+    team_inbox_sidebar_metrics.apply_read_budget(db)
     htmx_target = getattr(request, "headers", {}).get("hx-target")
     is_sidebar_request = htmx_target == "inbox-sidebar-content"
     is_queue_request = htmx_target == "inbox-conversation-queue"
@@ -655,11 +669,12 @@ def team_inbox_manager_dashboard(
     request: Request,
     db: Session = Depends(get_db),
 ):
-    queue_metrics = team_inbox_operations.queue_metrics(db)
+    team_inbox_sidebar_metrics.apply_read_budget(db)
+    sidebar_metrics = team_inbox_sidebar_metrics.get_sidebar_metrics(db)
     manager_dashboard = team_inbox_projection.build_manager_dashboard_projection(
         db,
-        queue_metrics=queue_metrics,
-        needs_attention=team_inbox_read.needs_attention_conversation_count(db),
+        queue_metrics=sidebar_metrics.queue_metrics,
+        needs_attention=sidebar_metrics.needs_attention,
     )
     context = _ctx(request, db)
     context.update(
@@ -1000,6 +1015,44 @@ def team_inbox_manager_ai_ask(
 
 
 @router.get(
+    "/{conversation_id}/messages/older",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("support:ticket:read"))],
+)
+def team_inbox_older_messages(
+    conversation_id: UUID,
+    request: Request,
+    before_message_id: UUID = Query(alias="before"),
+    db: Session = Depends(get_db),
+):
+    page = team_inbox_projection.get_message_page_projection(
+        db,
+        conversation_id=conversation_id,
+        before_message_id=before_message_id,
+    )
+    if page is None:
+        raise HTTPException(
+            status_code=404, detail="Conversation message page not found"
+        )
+    return templates.TemplateResponse(
+        request=request,
+        name="admin/inbox/_message_page.html",
+        context={
+            "request": request,
+            "conversation_id": str(conversation_id),
+            "messages": page.messages,
+            "has_older_messages": page.has_older_messages,
+            "oldest_message_id": (
+                str(page.oldest_message_id)
+                if page.oldest_message_id is not None
+                else None
+            ),
+        },
+        headers={"Cache-Control": "private, no-store"},
+    )
+
+
+@router.get(
     "/{conversation_id}/messages/{message_id}",
     response_class=HTMLResponse,
     dependencies=[Depends(require_permission("support:ticket:read"))],
@@ -1145,6 +1198,7 @@ def team_inbox_detail(
         db,
         conversation_id=conversation_id,
         actor_person_id=actor_person_id,
+        message_page=team_inbox_read.InboxTimelineMessagePageRequest(),
         actor_permission_keys=_request_permission_keys(request, db),
         include_contact_candidates=False,
         include_label_usage_counts=False,
@@ -1220,6 +1274,7 @@ def team_inbox_contact_context(
         db,
         conversation_id=conversation_id,
         actor_person_id=_actor_uuid_from_request(request),
+        message_page=team_inbox_read.InboxTimelineMessagePageRequest(limit=1),
         include_contact_candidates=False,
     )
     if projection is None:
@@ -1238,9 +1293,30 @@ def team_inbox_contact_context(
             can_read_tickets=can(request, "support:ticket:read"),
             can_read_projects=can(request, "project:read"),
             can_read_project_tasks=can(request, "project:task:read"),
+            can_edit_sensitive_profile=can(request, "customer:sensitive_profile:write"),
         ),
     )
+    auth = getattr(request.state, "auth", None)
+    custom_field_context = web_custom_fields_service.build_target_value_context(
+        db,
+        target_type="inbox.conversation",
+        target_id=conversation_id,
+        permission_keys=load_permission_keys(auth, db)
+        if isinstance(auth, dict)
+        else frozenset(),
+        auth=auth if isinstance(auth, dict) else None,
+    )
+    customer_history_brief = (
+        team_inbox_analysis_projection.build_customer_history_brief(
+            db,
+            team_inbox_analysis_projection.CustomerHistorySummaryRequest(
+                conversation_id=conversation_id,
+                permitted=can(request, "support:ticket:read"),
+            ),
+        )
+    )
     context = _ctx(request, db)
+    context.update(custom_field_context)
     context.update(
         {
             "timeline": projection.timeline,
@@ -1256,8 +1332,10 @@ def team_inbox_contact_context(
             "can_view_financials": can(request, "billing:account:read"),
             "can_view_network_detail": can(request, "network:ip:read"),
             "can_manage_leads": can(request, "crm:lead:write"),
-            "can_link_customer": can(request, "support:ticket:update"),
+            "can_link_customer": can(request, "support:ticket:update")
+            and can(request, "support:inbox:contact_link"),
             "contact_context": contact_context,
+            "customer_history_brief": customer_history_brief,
             "lead_intake_invitations": lead_intake.invitation_for_conversation(
                 db, conversation_id
             ),
@@ -1297,7 +1375,13 @@ def team_inbox_identity_review(
             "review": review,
             "lead_action": lead_action,
             "can_link_customer": can(request, "support:ticket:update")
+            and can(request, "support:inbox:contact_link")
             and can(request, "customer:read"),
+            "expected_active_contact_link_id": (
+                team_inbox_contact_links.active_contact_link_id_for_conversation(
+                    db, conversation_id
+                )
+            ),
             "can_link_lead": can(request, "support:ticket:update")
             and can(request, "crm:lead:read")
             and can(request, "crm:lead:write"),
@@ -1562,6 +1646,14 @@ def team_inbox_customer_profile_update(
             ),
             status_code=303,
         )
+    if submitted & team_inbox_customer_completion.SENSITIVE_PROFILE_FIELDS and not can(
+        request, "customer:sensitive_profile:write"
+    ):
+        raise HTTPException(
+            status_code=403,
+            detail="Sensitive Customer fields require additional permission.",
+        )
+    actor_system_user_id = _system_user_uuid_from_request(request)
     _prepare_mutation(db)
     try:
         team_inbox_customer_completion.complete_customer_profile(
@@ -1569,7 +1661,9 @@ def team_inbox_customer_profile_update(
             team_inbox_customer_completion.CompleteInboxCustomerProfileCommand(
                 context=CommandContext.system(
                     actor=(
-                        f"person:{actor_person_id}"
+                        f"user:{actor_system_user_id}"
+                        if actor_system_user_id
+                        else f"person:{actor_person_id}"
                         if actor_person_id
                         else "service:team_inbox"
                     ),
@@ -1595,9 +1689,12 @@ def team_inbox_customer_profile_update(
                 confirmed_replacements=confirmed,
                 actor_person_id=actor_person_id,
                 actor_type=(
-                    AuditActorType.user if actor_person_id else AuditActorType.service
+                    AuditActorType.user
+                    if actor_system_user_id or actor_person_id
+                    else AuditActorType.service
                 ),
                 decision_source="inbox_customer_drawer",
+                actor_system_user_id=actor_system_user_id,
             ),
         )
     except DomainError as exc:
@@ -1807,6 +1904,20 @@ def _actor_uuid_from_request(request: Request) -> UUID | None:
         return UUID(actor_id) if actor_id else None
     except ValueError:
         return None
+
+
+def _auth_session_uuid_from_request(request: Request) -> UUID:
+    """Resolve heartbeat session identity only from authenticated server state."""
+
+    auth = getattr(request.state, "auth", None)
+    value = auth.get("session_id") if isinstance(auth, dict) else None
+    try:
+        return UUID(str(value))
+    except (TypeError, ValueError) as exc:
+        raise HTTPException(
+            status_code=403,
+            detail="An active authenticated staff session is required.",
+        ) from exc
 
 
 def _system_user_uuid_from_request(request: Request) -> UUID:
@@ -2937,6 +3048,43 @@ def team_inbox_presence_action(
 
 
 @router.post(
+    "/presence/preference",
+    dependencies=[Depends(require_permission("support:ticket:update"))],
+)
+def team_inbox_presence_preference_action(
+    request: Request,
+    auto_offline: bool = Form(default=False),
+    db: Session = Depends(get_db),
+):
+    actor_id = _actor_uuid_from_request(request)
+    if actor_id is None:
+        raise HTTPException(status_code=403, detail="Staff identity is required.")
+    _prepare_mutation(db)
+    outcome = team_inbox_commands.set_agent_presence_preference(
+        db,
+        command=team_inbox_assignment.AgentPresencePreferenceCommand(
+            context=CommandContext.system(
+                actor=f"system-user:{actor_id}",
+                scope="team-inbox:presence-preference",
+                reason="set the authenticated agent auto-offline preference",
+            ),
+            system_user_id=actor_id,
+            auto_offline=_form_flag(auto_offline),
+            observed_at=datetime.now(UTC),
+        ),
+    )
+    message = (
+        "Automatic offline enabled."
+        if outcome.auto_offline
+        else "Automatic offline disabled."
+    )
+    return RedirectResponse(
+        url=f"/admin/inbox?status=success&message={quote_plus(message)}",
+        status_code=303,
+    )
+
+
+@router.post(
     "/presence/heartbeat",
     dependencies=[Depends(require_permission("support:ticket:update"))],
 )
@@ -2947,6 +3095,7 @@ def team_inbox_presence_heartbeat(
     actor_id = _actor_uuid_from_request(request)
     if actor_id is None:
         raise HTTPException(status_code=403, detail="Staff identity is required.")
+    auth_session_id = _auth_session_uuid_from_request(request)
     observed_at = datetime.now(UTC)
     _prepare_mutation(db)
     outcome = team_inbox_commands.refresh_agent_presence(
@@ -2958,6 +3107,7 @@ def team_inbox_presence_heartbeat(
                 reason="record authenticated visible Inbox activity",
             ),
             system_user_id=actor_id,
+            auth_session_id=auth_session_id,
             observed_at=observed_at,
         ),
     )
@@ -2971,7 +3121,10 @@ def team_inbox_presence_heartbeat(
 
 @router.post(
     "/{conversation_id}/contact-link",
-    dependencies=[Depends(require_permission("support:ticket:update"))],
+    dependencies=[
+        Depends(require_permission("support:ticket:update")),
+        Depends(require_permission("support:inbox:contact_link")),
+    ],
 )
 def team_inbox_contact_link(
     conversation_id: UUID,
@@ -2982,6 +3135,8 @@ def team_inbox_contact_link(
     subscriber_id_manual: str | None = Form(default=None),
     reseller_id_manual: str | None = Form(default=None),
     note: str | None = Form(default=None),
+    expected_active_link_id: str | None = Form(default=None),
+    check_expected_active_link: bool = Form(default=False),
     expected_identity_evidence_digest: str | None = Form(default=None),
     db: Session = Depends(get_db),
 ):
@@ -3018,11 +3173,8 @@ def team_inbox_contact_link(
             raise team_inbox_contact_links.ContactLinkError(
                 "Choose the Customer or reseller to link."
             )
-        actor_system_user_id = (
-            _system_user_uuid_from_request(request)
-            if reviewed_digest is not None
-            else None
-        )
+        actor_system_user_id = _system_user_uuid_from_request(request)
+        reviewed_active_link_id = _uuid_form_value(expected_active_link_id)
         context = CommandContext.system(
             actor=(
                 f"user:{actor_system_user_id}"
@@ -3045,6 +3197,8 @@ def team_inbox_contact_link(
                 ),
                 actor_person_id=actor_person_id,
                 note=note,
+                expected_active_link_id=reviewed_active_link_id,
+                check_expected_active_link=_form_flag(check_expected_active_link),
                 expected_identity_evidence_digest=reviewed_digest,
                 actor_system_user_id=actor_system_user_id,
             ),
@@ -3718,6 +3872,7 @@ def _settings_context(
         include_testing_data=False,
     )
     customer_completion_policy = team_inbox_customer_completion_policy.active_policy(db)
+    provider_catalog = team_inbox_integrator_envelope.provider_channel_catalog()
     context.update(
         {
             "email_routes": team_inbox_routing.list_email_routes(db),
@@ -3758,11 +3913,83 @@ def _settings_context(
                 }
                 for field in team_inbox_customer_completion_policy.CustomerCompletionField
             ),
+            "provider_channel_catalog": tuple(
+                {
+                    "provider": capability.provider.value,
+                    "channel": capability.channel.value,
+                }
+                for capability in provider_catalog.capabilities
+            ),
+            "widget_presentation": team_inbox_widget.fiber_widget_presentation(
+                db, team_inbox_widget.FiberWidgetPresentationQuery()
+            ),
         }
     )
     context.update(ai_policy_context)
     context.update(_polish_settings_context(db))
     return context
+
+
+@settings_router.post(
+    "/widget-presentation",
+    dependencies=[Depends(require_permission("system:settings:write"))],
+)
+def team_inbox_widget_presentation_update(
+    request: Request,
+    inbox_widget_title: str = Form(..., min_length=1, max_length=80),
+    inbox_widget_subtitle: str = Form(..., min_length=1, max_length=120),
+    inbox_widget_intro: str = Form(..., min_length=1, max_length=240),
+    inbox_widget_brand_color: str = Form(
+        ..., min_length=7, max_length=7, pattern=r"^#[0-9A-Fa-f]{6}$"
+    ),
+    inbox_widget_position: Literal["left", "right"] = Form(...),
+    inbox_widget_offset_x: int = Form(..., ge=8, le=96),
+    inbox_widget_offset_y: int = Form(..., ge=8, le=96),
+    inbox_widget_start_button_text: str = Form(..., min_length=1, max_length=60),
+    inbox_widget_send_button_text: str = Form(..., min_length=1, max_length=40),
+    inbox_widget_message_placeholder: str = Form(..., min_length=1, max_length=120),
+    inbox_widget_agent_name: str = Form(..., min_length=1, max_length=80),
+    db: Session = Depends(get_db),
+):
+    """Save public widget defaults through the canonical audited owner."""
+
+    actor_person_id = _actor_uuid_from_request(request)
+    if actor_person_id is None:
+        return _routes_redirect(status="error", message="Agent identity is required.")
+    submitted = {
+        "inbox_widget_title": inbox_widget_title,
+        "inbox_widget_subtitle": inbox_widget_subtitle,
+        "inbox_widget_intro": inbox_widget_intro,
+        "inbox_widget_brand_color": inbox_widget_brand_color,
+        "inbox_widget_position": inbox_widget_position,
+        "inbox_widget_offset_x": inbox_widget_offset_x,
+        "inbox_widget_offset_y": inbox_widget_offset_y,
+        "inbox_widget_start_button_text": inbox_widget_start_button_text,
+        "inbox_widget_send_button_text": inbox_widget_send_button_text,
+        "inbox_widget_message_placeholder": inbox_widget_message_placeholder,
+        "inbox_widget_agent_name": inbox_widget_agent_name,
+    }
+    specs = tuple(
+        spec
+        for spec in settings_spec.list_specs(SettingDomain.comms)
+        if spec.key in team_inbox_widget.WIDGET_PRESENTATION_SETTING_KEYS
+    )
+    errors = web_system_settings_forms.upsert_settings_from_specs(
+        db=db,
+        form=submitted,
+        specs=specs,
+        service=domain_settings.DomainSettings(SettingDomain.comms),
+        context=CommandContext.system(
+            actor=f"user:{actor_person_id}",
+            scope=domain_settings.ADMIN_SETTINGS_FORM_WRITE_SCOPE,
+            reason="update public Team Inbox widget presentation",
+        ),
+    )
+    if errors:
+        return _routes_redirect(status="error", message=" ".join(errors))
+    return _routes_redirect(
+        status="success", message="Public Inbox widget defaults saved."
+    )
 
 
 @settings_router.post(
@@ -3827,6 +4054,9 @@ def team_inbox_agent_introduction_update(
     request: Request,
     template: str = Form(...),
     auto_send_chat_widget: bool = Form(default=False),
+    assignment_notification_preferences_present: bool = Form(default=False),
+    assignment_in_app_notifications: bool = Form(default=False),
+    assignment_email_notifications: bool = Form(default=False),
     db: Session = Depends(get_db),
 ):
     _prepare_mutation(db)
@@ -3834,6 +4064,9 @@ def team_inbox_agent_introduction_update(
     if actor_person_id is None:
         return _routes_redirect(status="error", message="Agent identity is required.")
     try:
+        existing_preference = team_inbox_agent_introduction.preference_for_agent(
+            db, actor_person_id
+        )
         team_inbox_agent_introduction.update_preference_committed(
             db,
             team_inbox_agent_introduction.UpdateAgentIntroductionCommand(
@@ -3845,11 +4078,21 @@ def team_inbox_agent_introduction_update(
                 person_id=actor_person_id,
                 template=template,
                 auto_send_chat_widget=auto_send_chat_widget,
+                assignment_in_app_notifications=(
+                    assignment_in_app_notifications
+                    if assignment_notification_preferences_present
+                    else existing_preference.assignment_in_app_notifications
+                ),
+                assignment_email_notifications=(
+                    assignment_email_notifications
+                    if assignment_notification_preferences_present
+                    else existing_preference.assignment_email_notifications
+                ),
             ),
         )
     except ValueError as exc:
         return _routes_redirect(status="error", message=str(exc))
-    return _routes_redirect(status="success", message="Introduction preference saved.")
+    return _routes_redirect(status="success", message="Personal Inbox settings saved.")
 
 
 @settings_router.get(
@@ -4872,6 +5115,12 @@ def team_inbox_channel_route_create(
     service_team_id: str = Form(..., alias="channel_service_team_id"),
     priority: int = Form(default=100),
     allow_ai_routing: bool = Form(default=False),
+    csat_enabled: bool = Form(default=False),
+    csat_style: str = Form(default="stars"),
+    csat_message: str | None = Form(default=None),
+    csat_include_labels: str | None = Form(default=None),
+    csat_exclude_labels: str | None = Form(default=None),
+    conversation_mode: str = Form(default="separate"),
     db: Session = Depends(get_db),
 ):
     _prepare_mutation(db)
@@ -4885,6 +5134,20 @@ def team_inbox_channel_route_create(
             service_team_id=service_team_id,
             allow_ai_routing=allow_ai_routing,
             priority=priority,
+            csat_enabled=csat_enabled,
+            csat_style=csat_style,
+            csat_message=csat_message,
+            csat_include_labels=tuple(
+                value.strip()[:80]
+                for value in str(csat_include_labels or "").split(",")[:20]
+                if value.strip()
+            ),
+            csat_exclude_labels=tuple(
+                value.strip()[:80]
+                for value in str(csat_exclude_labels or "").split(",")[:20]
+                if value.strip()
+            ),
+            conversation_mode=conversation_mode,
         )
     except (team_inbox_routing.EmailRouteError, ValueError) as exc:
         return _routes_redirect(status="error", message=str(exc))
@@ -4902,6 +5165,12 @@ def team_inbox_channel_route_update(
     priority: int | None = Form(default=None),
     allow_ai_routing: bool | None = Form(default=None),
     is_active: bool | None = Form(default=None),
+    csat_enabled: bool | None = Form(default=None),
+    csat_style: str | None = Form(default=None),
+    csat_message: str | None = Form(default=None),
+    csat_include_labels: str | None = Form(default=None),
+    csat_exclude_labels: str | None = Form(default=None),
+    conversation_mode: str | None = Form(default=None),
     db: Session = Depends(get_db),
 ):
     _prepare_mutation(db)
@@ -4914,6 +5183,28 @@ def team_inbox_channel_route_update(
             allow_ai_routing=allow_ai_routing,
             priority=priority,
             is_active=is_active,
+            csat_enabled=csat_enabled,
+            csat_style=csat_style,
+            csat_message=csat_message,
+            csat_include_labels=(
+                tuple(
+                    value.strip()[:80]
+                    for value in csat_include_labels.split(",")[:20]
+                    if value.strip()
+                )
+                if csat_include_labels is not None
+                else None
+            ),
+            csat_exclude_labels=(
+                tuple(
+                    value.strip()[:80]
+                    for value in csat_exclude_labels.split(",")[:20]
+                    if value.strip()
+                )
+                if csat_exclude_labels is not None
+                else None
+            ),
+            conversation_mode=conversation_mode,
         )
     except (team_inbox_routing.EmailRouteError, ValueError) as exc:
         return _routes_redirect(status="error", message=str(exc))

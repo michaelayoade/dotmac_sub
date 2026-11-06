@@ -346,6 +346,9 @@ class IPAssignmentRead(IPAssignmentBase):
     updated_at: datetime
 
 
+IpPoolPurpose = Literal["customer", "customer_nat", "infrastructure", "management"]
+
+
 class IpPoolBase(BaseModel):
     name: str = Field(min_length=1, max_length=120)
     ip_version: IPVersion = IPVersion.ipv4
@@ -360,6 +363,9 @@ class IpPoolBase(BaseModel):
     notes: str | None = None
     # IPv6 pools: per-customer prefix-delegation size carved from ``cidr``.
     delegation_prefix_length: int | None = Field(default=None, ge=1, le=128)
+    # Phase A labels (NULL = unlabelled).
+    purpose: IpPoolPurpose | None = None
+    site_ref: UUID | None = None
 
 
 class IpPoolCreate(IpPoolBase):
@@ -379,6 +385,8 @@ class IpPoolUpdate(BaseModel):
     vlan_id: UUID | None = None
     notes: str | None = None
     delegation_prefix_length: int | None = Field(default=None, ge=1, le=128)
+    purpose: IpPoolPurpose | None = None
+    site_ref: UUID | None = None
 
 
 class IpPoolRead(IpPoolBase):

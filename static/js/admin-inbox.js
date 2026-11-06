@@ -32,7 +32,7 @@
    * @property {boolean} applied
    * @property {boolean} settled
    */
-  const INBOX_FRAGMENT_VERSION = "20260910b";
+  const INBOX_FRAGMENT_VERSION = "20261103a";
   const clamp = (value, min, max) => Math.min(max, Math.max(min, value));
   const parseStoredBoolean = (key, fallback) => {
     const value = localStorage.getItem(key);
@@ -285,6 +285,8 @@
       listRequestSequence: 0,
       activeListRequest: null,
       pendingListRequest: null,
+      backgroundRefreshFailures: 0,
+      backgroundRefreshRetryAt: 0,
       listRequestError: "",
       lastSuccessfulListUrl: window.location.href,
       filteredCountLabel: "—",
@@ -328,6 +330,7 @@
         { id: "new", label: "New conversation", hint: "Start an outbound conversation", shortcut: "N" },
         { id: "reply", label: "Focus reply composer", hint: "Jump to the current thread reply", shortcut: "R" },
         { id: "resolve", label: "Resolve current conversation", hint: "Mark the selected conversation resolved", shortcut: "E" },
+        { id: "copy-link", label: "Copy conversation link", hint: "Copy a direct link to the selected conversation", shortcut: "L" },
         { id: "contact", label: "Toggle contact details", hint: "Show or hide customer context", shortcut: "" },
         { id: "ticket", label: "Create support ticket", hint: "Open the ticket split panel", shortcut: "" },
         { id: "unreplied", label: "Open unreplied", hint: "Filter conversations needing a reply", shortcut: "" },
@@ -599,6 +602,21 @@
         document.body.addEventListener("htmx:beforeRequest", (event) => {
           const path = event.detail?.requestConfig?.path || "";
           const target = event.detail?.target?.id || "";
+          const olderTrigger = event.detail?.elt?.closest(
+            "[data-inbox-load-older]",
+          );
+          if (olderTrigger) {
+            const scrollNode = olderTrigger.closest("[data-thread-scroll]");
+            event.detail.xhr.__inboxOlderConversationId =
+              olderTrigger
+                .closest("[data-conversation-thread]")
+                ?.dataset.conversationThread || "";
+            event.detail.xhr.__inboxOlderDetailSequence =
+              this.detailRequestSequence;
+            event.detail.xhr.__inboxOlderScrollNode = scrollNode;
+            event.detail.xhr.__inboxOlderScrollHeight =
+              scrollNode?.scrollHeight || 0;
+          }
           if (
             target === "inbox-sidebar-content" ||
             target === "inbox-conversation-queue"
@@ -827,10 +845,31 @@
           ) {
             event.detail.shouldSwap = false;
           }
+          const olderConversationId =
+            event.detail?.xhr?.__inboxOlderConversationId;
+          const olderDetailSequence =
+            event.detail?.xhr?.__inboxOlderDetailSequence;
+          if (
+            olderConversationId &&
+            (String(olderConversationId) !== String(this.selectedId || "") ||
+              olderDetailSequence !== this.detailRequestSequence)
+          ) {
+            event.detail.shouldSwap = false;
+          }
         });
         document.body.addEventListener("htmx:afterSwap", (event) => {
           const target = event.detail?.target;
           if (!target) return;
+          const olderScrollNode =
+            event.detail?.xhr?.__inboxOlderScrollNode;
+          if (olderScrollNode && document.contains(olderScrollNode)) {
+            const previousHeight =
+              event.detail?.xhr?.__inboxOlderScrollHeight || 0;
+            window.requestAnimationFrame(() => {
+              olderScrollNode.scrollTop +=
+                olderScrollNode.scrollHeight - previousHeight;
+            });
+          }
           if (target.id === "triage-detail") {
             this.mode = "detail";
             this.conversationOpening = false;
@@ -1014,6 +1053,23 @@
         this.filterLoading = false;
         this.pendingStatusFilter = null;
         this.inboxRefreshFinished(failed);
+        if (["poll", "read_state", "realtime"].includes(request.intent)) {
+          if (failed) {
+            this.backgroundRefreshFailures = Math.min(
+              this.backgroundRefreshFailures + 1,
+              4,
+            );
+            const retryDelay = Math.min(
+              60000,
+              5000 * (2 ** (this.backgroundRefreshFailures - 1)),
+            );
+            this.backgroundRefreshRetryAt =
+              Date.now() + retryDelay + Math.floor(Math.random() * 1000);
+          } else {
+            this.backgroundRefreshFailures = 0;
+            this.backgroundRefreshRetryAt = 0;
+          }
+        }
         this.listRequestError = failed
           ? "Could not update conversations. Try again." : "";
         this.failedListNavigation = failed ? request.navigation : null;
@@ -1028,6 +1084,7 @@
         if (navigation) {
           this.requestInboxList(navigation.url, {
             ...navigation,
+            bypassBackoff: true,
             // A failed popstate restored the visible URL. Its retry must now
             // replace that entry when it succeeds, not leave old URL/new rows.
             historyMode: navigation.intent === "history"
@@ -1058,9 +1115,10 @@
         const failedOperator =
           this.failedListNavigation &&
           !backgroundIntents.includes(this.failedListNavigation.intent);
-        if (!operator && (
-          this.activeListRequest?.operator ||
-          this.pendingListRequest?.operator ||
+        if (!operator && !options.bypassBackoff && (
+          Date.now() < this.backgroundRefreshRetryAt ||
+          this.activeListRequest ||
+          this.pendingListRequest ||
           failedOperator
         )) return;
         const request = this.beginListRequest(intent, operator);
@@ -1183,7 +1241,7 @@
       clearSelection() {
         this.selectedIds = [];
         document
-          .querySelectorAll('#inbox-bulk-form input[name="conversation_ids"]')
+          .querySelectorAll("#inbox-bulk-form [data-inbox-conversation-select]")
           .forEach((input) => {
             input.checked = false;
           });
@@ -1191,7 +1249,7 @@
 
       syncSelectedCheckboxes() {
         document
-          .querySelectorAll('#inbox-bulk-form input[name="conversation_ids"]')
+          .querySelectorAll("#inbox-bulk-form [data-inbox-conversation-select]")
           .forEach((input) => {
             input.checked = this.selectedIds.includes(input.value);
           });
@@ -2018,6 +2076,14 @@
         });
       },
 
+      refreshOpenManagerDashboard() {
+        if (!this.managerDashboardOpen) return;
+        window.htmx.ajax("GET", "/admin/inbox/manager-dashboard", {
+          target: "#inbox-manager-dashboard-slot",
+          swap: "innerHTML",
+        });
+      },
+
       refreshConversationList(intent = "manual_refresh") {
         const url = new URL(
           window.__inboxReturnUrl || window.location.href,
@@ -2170,6 +2236,15 @@
         const eventType = envelope.event || envelope.type;
         const data = envelope.data || {};
         if (eventType === "heartbeat" || eventType === "connection_ack") return;
+        if (eventType === "agent_presence_changed") {
+          // Presence is independent of the conversation queue. Rebuilding the
+          // shared sidebar and manager projections here makes one agent change
+          // fan out into one expensive database read per connected browser.
+          // The initiating presence command already renders its authoritative
+          // result; other views pick up the bounded projection on their next
+          // explicit refresh.
+          return;
+        }
         if (eventType === "user_typing") {
           if (
             data.conversation_id === this.selectedId &&
@@ -2316,7 +2391,7 @@
         this.refreshPresenceHeartbeat();
         this.presenceHeartbeatTimer = window.setInterval(() => {
           this.refreshPresenceHeartbeat();
-        }, 5 * 60 * 1000);
+        }, 60 * 1000);
         document.addEventListener("visibilitychange", () => {
           if (document.visibilityState === "visible") {
             this.refreshPresenceHeartbeat();
@@ -2331,6 +2406,14 @@
           this.presenceHeartbeatInFlight
         ) {
           return;
+        }
+        if (this.socket && this.socket.readyState === WebSocket.OPEN) {
+          try {
+            this.socket.send(JSON.stringify({ type: "ping" }));
+            return;
+          } catch (_error) {
+            // Fall through to the authenticated HTTP heartbeat.
+          }
         }
         this.presenceHeartbeatInFlight = true;
         try {
@@ -2359,6 +2442,7 @@
         if (id === "new") this.openNewConversation();
         if (id === "reply") this.focusReply();
         if (id === "resolve") this.resolveCurrent();
+        if (id === "copy-link") this.copyConversationLink();
         if (id === "contact") {
           this.contactOpen ? this.closeContact() : this.openContact(this.selectedId);
         }
@@ -2379,6 +2463,22 @@
           ),
         ).find((item) => item.querySelector('[name="status_value"]')?.value === "resolved");
         form?.requestSubmit();
+      },
+
+      async copyConversationLink() {
+        const conversationId = String(this.selectedId || "").trim();
+        if (!conversationId) {
+          this.showToast("Select a conversation before copying its link.");
+          return;
+        }
+        const url = new URL("/admin/inbox", window.location.origin);
+        url.searchParams.set("conversation_id", conversationId);
+        try {
+          await navigator.clipboard.writeText(url.toString());
+          this.showToast("Conversation link copied.");
+        } catch (_error) {
+          window.prompt("Copy conversation link", url.toString());
+        }
       },
 
       moveConversation(direction) {
@@ -2420,6 +2520,9 @@
         } else if (key === "e") {
           event.preventDefault();
           this.resolveCurrent();
+        } else if (key === "l") {
+          event.preventDefault();
+          this.copyConversationLink();
         } else if (key === "j") {
           event.preventDefault();
           this.moveConversation(1);

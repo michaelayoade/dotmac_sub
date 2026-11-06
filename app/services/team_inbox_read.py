@@ -7,11 +7,11 @@ from enum import StrEnum
 from urllib.parse import urlencode
 from uuid import UUID
 
-from sqlalchemy import and_, false, func, or_, select
-from sqlalchemy.orm import Session
+from sqlalchemy import and_, case, exists, false, func, literal, or_, select
+from sqlalchemy.orm import Session, aliased
 from sqlalchemy.sql.elements import ColumnElement
 
-from app.models.party import Party
+from app.models.party import Party, PartyContactPoint
 from app.models.service_team import ServiceTeam
 from app.models.subscriber import Subscriber
 from app.models.system_user import SystemUser
@@ -177,6 +177,25 @@ class InboxConversationTimeline:
     assignments: list[InboxTimelineAssignment]
     messages: list[InboxTimelineMessage]
     comments: list[InboxTimelineComment]
+    has_older_messages: bool = False
+    oldest_message_id: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class InboxTimelineMessagePageRequest:
+    limit: int = 10
+    before_message_id: UUID | None = None
+
+    def __post_init__(self) -> None:
+        if not 1 <= self.limit <= 50:
+            raise ValueError("message page limit must be between 1 and 50")
+
+
+@dataclass(frozen=True, slots=True)
+class InboxTimelineMessagePage:
+    messages: tuple[InboxTimelineMessage, ...]
+    has_older_messages: bool
+    oldest_message_id: UUID | None
 
 
 @dataclass(frozen=True)
@@ -488,6 +507,50 @@ def _messages_by_conversation(
     }
 
 
+def _latest_messages_by_conversation(
+    db: Session,
+    conversation_ids: list[UUID],
+    *,
+    direction: InboxMessageDirection | None = None,
+) -> dict[UUID, tuple[InboxMessage, ...]]:
+    """Load exactly one latest visible message per conversation."""
+
+    if not conversation_ids:
+        return {}
+    ranked_query = select(
+        InboxMessage.id.label("message_id"),
+        InboxMessage.conversation_id.label("conversation_id"),
+        func.row_number()
+        .over(
+            partition_by=InboxMessage.conversation_id,
+            order_by=(
+                _message_time_column().desc(),
+                InboxMessage.created_at.desc(),
+                InboxMessage.id.desc(),
+            ),
+        )
+        .label("message_rank"),
+    ).where(InboxMessage.conversation_id.in_(conversation_ids))
+    ranked_query = (
+        ranked_query.where(InboxMessage.direction == direction.value)
+        if direction is not None
+        else ranked_query.where(
+            InboxMessage.direction != InboxMessageDirection.internal.value
+        )
+    )
+    ranked = ranked_query.subquery()
+    messages = (
+        db.query(InboxMessage)
+        .join(ranked, ranked.c.message_id == InboxMessage.id)
+        .filter(ranked.c.message_rank == 1)
+        .all()
+    )
+    grouped: dict[UUID, list[InboxMessage]] = {}
+    for message in messages:
+        grouped.setdefault(message.conversation_id, []).append(message)
+    return {conversation_id: tuple(items) for conversation_id, items in grouped.items()}
+
+
 def _latest_external_message(
     messages: Sequence[InboxMessage],
 ) -> InboxMessage | None:
@@ -507,6 +570,15 @@ class InboxResponseCohort(StrEnum):
     none = "none"
     unreplied = "unreplied"
     needs_attention = "needs_attention"
+
+
+@dataclass(frozen=True, slots=True)
+class InboxResponseCohortEvidence:
+    first_inbound_rank: int | None
+    latest_inbound_rank: int | None
+    latest_valid_reply_rank: int | None
+    has_completed_exchange: bool
+    is_social_comment: bool
 
 
 _SUCCESSFUL_AGENT_DELIVERY_STATUSES = frozenset(
@@ -673,6 +745,138 @@ def _valid_agent_reply_clause() -> ColumnElement[bool]:
     )
 
 
+def _social_comment_message_clause() -> ColumnElement[bool]:
+    metadata = InboxMessage.metadata_
+
+    def normalized(key: str) -> ColumnElement[str]:
+        return func.lower(func.trim(func.coalesce(metadata[key].as_string(), "")))
+
+    return or_(
+        normalized("is_comment").in_(("1", "true", "yes")),
+        *(
+            normalized(key).in_(_SOCIAL_COMMENT_METADATA_VALUES)
+            for key in ("interaction_type", "message_type", "source_type", "surface")
+        ),
+    )
+
+
+def _response_cohorts_by_conversation(
+    db: Session,
+    conversations: Sequence[InboxConversation],
+    *,
+    ticketed_conversation_ids: set[UUID],
+) -> dict[UUID, InboxResponseCohort]:
+    """Derive exact response state without hydrating complete transcripts."""
+
+    conversation_ids = [conversation.id for conversation in conversations]
+    if not conversation_ids:
+        return {}
+    ranked = (
+        select(
+            InboxMessage.conversation_id.label("conversation_id"),
+            func.row_number()
+            .over(
+                partition_by=InboxMessage.conversation_id,
+                order_by=(
+                    _message_time_column().asc(),
+                    InboxMessage.created_at.asc(),
+                    InboxMessage.id.asc(),
+                ),
+            )
+            .label("message_rank"),
+            InboxMessage.direction.label("direction"),
+            case((_valid_agent_reply_clause(), 1), else_=0).label("is_valid_reply"),
+        )
+        .where(InboxMessage.conversation_id.in_(conversation_ids))
+        .where(InboxMessage.direction != InboxMessageDirection.internal.value)
+        .subquery()
+    )
+    bounds = (
+        select(
+            ranked.c.conversation_id,
+            func.min(
+                case(
+                    (
+                        ranked.c.direction == InboxMessageDirection.inbound.value,
+                        ranked.c.message_rank,
+                    )
+                )
+            ).label("first_inbound_rank"),
+            func.max(
+                case(
+                    (
+                        ranked.c.direction == InboxMessageDirection.inbound.value,
+                        ranked.c.message_rank,
+                    )
+                )
+            ).label("latest_inbound_rank"),
+            func.max(case((ranked.c.is_valid_reply == 1, ranked.c.message_rank))).label(
+                "latest_valid_reply_rank"
+            ),
+        )
+        .group_by(ranked.c.conversation_id)
+        .subquery()
+    )
+    bound_rows = db.execute(select(bounds)).all()
+    completed_exchange_ids = {
+        row[0]
+        for row in db.execute(
+            select(ranked.c.conversation_id)
+            .join(bounds, bounds.c.conversation_id == ranked.c.conversation_id)
+            .where(ranked.c.is_valid_reply == 1)
+            .where(ranked.c.message_rank > bounds.c.first_inbound_rank)
+            .where(ranked.c.message_rank < bounds.c.latest_inbound_rank)
+            .distinct()
+        ).all()
+    }
+    social_message_ids = {
+        row[0]
+        for row in db.query(InboxMessage.conversation_id)
+        .filter(InboxMessage.conversation_id.in_(conversation_ids))
+        .filter(_social_comment_message_clause())
+        .distinct()
+        .all()
+    }
+    evidence_by_id = {
+        row.conversation_id: InboxResponseCohortEvidence(
+            first_inbound_rank=row.first_inbound_rank,
+            latest_inbound_rank=row.latest_inbound_rank,
+            latest_valid_reply_rank=row.latest_valid_reply_rank,
+            has_completed_exchange=row.conversation_id in completed_exchange_ids,
+            is_social_comment=row.conversation_id in social_message_ids,
+        )
+        for row in bound_rows
+    }
+    result: dict[UUID, InboxResponseCohort] = {}
+    for conversation in conversations:
+        evidence = evidence_by_id.get(conversation.id)
+        if (
+            evidence is None
+            or evidence.latest_inbound_rank is None
+            or not conversation.is_active
+            or conversation.status == InboxConversationStatus.resolved.value
+        ):
+            result[conversation.id] = InboxResponseCohort.none
+        elif (
+            evidence.latest_valid_reply_rank is not None
+            and evidence.latest_valid_reply_rank > evidence.latest_inbound_rank
+        ):
+            result[conversation.id] = InboxResponseCohort.none
+        elif not evidence.has_completed_exchange:
+            result[conversation.id] = InboxResponseCohort.unreplied
+        elif (
+            conversation.status == InboxConversationStatus.snoozed.value
+            or conversation.snoozed_until is not None
+            or conversation.id in ticketed_conversation_ids
+            or _is_social_comment_conversation(conversation, ())
+            or evidence.is_social_comment
+        ):
+            result[conversation.id] = InboxResponseCohort.none
+        else:
+            result[conversation.id] = InboxResponseCohort.needs_attention
+    return result
+
+
 def needs_attention_conversation_ids(
     db: Session,
     *,
@@ -718,17 +922,16 @@ def needs_attention_conversation_ids(
         conversations = (
             db.query(InboxConversation).filter(InboxConversation.id.in_(ids)).all()
         )
-        messages = _messages_by_conversation(db, ids)
         ticketed = _ticketed_conversation_ids(db, ids)
+        cohorts = _response_cohorts_by_conversation(
+            db,
+            conversations,
+            ticketed_conversation_ids=ticketed,
+        )
         matches.extend(
             conversation.id
             for conversation in conversations
-            if response_cohort(
-                conversation,
-                messages.get(conversation.id, ()),
-                has_ticket_handoff=conversation.id in ticketed,
-            )
-            == InboxResponseCohort.needs_attention
+            if cohorts.get(conversation.id) == InboxResponseCohort.needs_attention
         )
 
     for offset in range(0, len(candidate_ids), batch_size):
@@ -862,10 +1065,58 @@ def _provider_message_name(messages: Sequence[InboxMessage]) -> str | None:
     return None
 
 
+def _latest_provider_names_by_conversation(
+    db: Session,
+    conversation_ids: Sequence[UUID],
+) -> dict[UUID, str]:
+    """Load one scalar provider name per conversation without hydrating messages."""
+
+    if not conversation_ids:
+        return {}
+    metadata = InboxMessage.metadata_
+    provider_name = func.coalesce(
+        *(
+            func.nullif(func.trim(metadata[key].as_string()), "")
+            for key in ("from_name", "contact_name", "sender_name", "profile_name")
+        )
+    )
+    ranked = (
+        select(
+            InboxMessage.conversation_id.label("conversation_id"),
+            provider_name.label("provider_name"),
+            func.row_number()
+            .over(
+                partition_by=InboxMessage.conversation_id,
+                order_by=(
+                    _message_time_column().desc(),
+                    InboxMessage.created_at.desc(),
+                    InboxMessage.id.desc(),
+                ),
+            )
+            .label("message_rank"),
+        )
+        .where(InboxMessage.conversation_id.in_(conversation_ids))
+        .where(InboxMessage.direction == InboxMessageDirection.inbound.value)
+        .where(provider_name.isnot(None))
+        .subquery()
+    )
+    return {
+        conversation_id: bounded
+        for conversation_id, name in db.execute(
+            select(ranked.c.conversation_id, ranked.c.provider_name).where(
+                ranked.c.message_rank == 1
+            )
+        ).all()
+        if (bounded := _bounded_name(name)) is not None
+    }
+
+
 def _contact_display_identities(
     db: Session,
     conversations: Sequence[InboxConversation],
     messages_by_conversation: Mapping[UUID, Sequence[InboxMessage]],
+    *,
+    provider_names_by_conversation: Mapping[UUID, str] | None = None,
 ) -> dict[UUID, InboxContactDisplayIdentity]:
     subscriber_ids = tuple(
         {row.subscriber_id for row in conversations if row.subscriber_id is not None}
@@ -901,9 +1152,11 @@ def _contact_display_identities(
             else None
         )
         metadata_name, metadata_source = _metadata_contact_name(conversation)
-        provider_name = _provider_message_name(
-            messages_by_conversation.get(conversation.id, [])
-        )
+        provider_name = (provider_names_by_conversation or {}).get(conversation.id)
+        if provider_name is None:
+            provider_name = _provider_message_name(
+                messages_by_conversation.get(conversation.id, [])
+            )
         if canonical is not None:
             display_name, source = canonical
         elif provider_name:
@@ -930,11 +1183,15 @@ def contact_display_identity(
     *,
     conversation: InboxConversation,
     messages: Sequence[InboxMessage],
+    provider_name: str | None = None,
 ) -> InboxContactDisplayIdentity:
     return _contact_display_identities(
         db,
         (conversation,),
         {conversation.id: list(messages)},
+        provider_names_by_conversation=(
+            {conversation.id: provider_name} if provider_name is not None else None
+        ),
     )[conversation.id]
 
 
@@ -1098,6 +1355,47 @@ def _asset_attachment(asset: InboxMediaAsset) -> InboxTimelineAttachment:
     )
 
 
+def _continuous_search_head_ids(
+    db: Session, conversation_ids: Sequence[UUID]
+) -> tuple[UUID, ...]:
+    """Map bounded historical hits to the current continuous episode."""
+
+    roots = tuple(dict.fromkeys(conversation_ids))
+    if not roots:
+        return ()
+    chain = (
+        select(
+            InboxConversation.id.label("root_id"),
+            InboxConversation.id.label("conversation_id"),
+            literal(0).label("depth"),
+        )
+        .where(InboxConversation.id.in_(roots))
+        .cte("inbox_search_continuous_chain", recursive=True)
+    )
+    child = aliased(InboxConversation)
+    chain = chain.union_all(
+        select(
+            chain.c.root_id,
+            child.id,
+            (chain.c.depth + 1).label("depth"),
+        ).where(
+            child.continued_from_conversation_id == chain.c.conversation_id,
+            child.is_active.is_(True),
+            child.metadata_["conversation_mode"].as_string() == "continuous",
+            chain.c.depth < 49,
+        )
+    )
+    rows = db.execute(
+        select(chain.c.root_id, chain.c.conversation_id, chain.c.depth).order_by(
+            chain.c.root_id, chain.c.depth.desc()
+        )
+    ).all()
+    heads: dict[UUID, UUID] = {}
+    for root_id, current_id, _depth in rows:
+        heads.setdefault(root_id, current_id)
+    return tuple(dict.fromkeys(heads.values()))
+
+
 def list_conversations(
     db: Session,
     *,
@@ -1167,6 +1465,35 @@ def list_conversations(
     clean_search = (search or "").strip()
     if clean_search:
         like = f"%{clean_search}%"
+        matching_party_ids = select(Party.id).where(
+            or_(
+                Party.display_name.ilike(like),
+                Party.id.in_(
+                    select(PartyContactPoint.party_id).where(
+                        PartyContactPoint.is_active.is_(True),
+                        or_(
+                            PartyContactPoint.display_value.ilike(like),
+                            PartyContactPoint.normalized_value.ilike(like),
+                        ),
+                    )
+                ),
+            )
+        )
+        matching_subscriber_ids = select(Subscriber.id).where(
+            or_(
+                Subscriber.display_name.ilike(like),
+                Subscriber.first_name.ilike(like),
+                Subscriber.last_name.ilike(like),
+                Subscriber.company_name.ilike(like),
+                Subscriber.legal_name.ilike(like),
+                Subscriber.billing_name.ilike(like),
+                Subscriber.email.ilike(like),
+                Subscriber.phone.ilike(like),
+                Subscriber.subscriber_number.ilike(like),
+                Subscriber.account_number.ilike(like),
+                Subscriber.party_id.in_(matching_party_ids),
+            )
+        )
         matching_message_conversation_ids = [
             row[0]
             for row in db.query(InboxMessage.conversation_id)
@@ -1175,6 +1502,10 @@ def list_conversations(
                     InboxMessage.subject.ilike(like),
                     InboxMessage.body.ilike(like),
                     InboxMessage.from_address.ilike(like),
+                    InboxMessage.metadata_["from_name"].as_string().ilike(like),
+                    InboxMessage.metadata_["contact_name"].as_string().ilike(like),
+                    InboxMessage.metadata_["sender_name"].as_string().ilike(like),
+                    InboxMessage.metadata_["profile_name"].as_string().ilike(like),
                 )
             )
             .distinct()
@@ -1189,15 +1520,36 @@ def list_conversations(
             .limit(500)
             .all()
         ]
+        content_match_ids = (
+            matching_message_conversation_ids + matching_comment_conversation_ids
+        )
+        continuous_content_head_ids = _continuous_search_head_ids(db, content_match_ids)
         query = query.filter(
             or_(
                 InboxConversation.subject.ilike(like),
                 InboxConversation.contact_address.ilike(like),
                 InboxConversation.external_thread_id.ilike(like),
-                InboxConversation.id.in_(
-                    matching_message_conversation_ids
-                    + matching_comment_conversation_ids
-                ),
+                InboxConversation.metadata_["contact_name"].as_string().ilike(like),
+                InboxConversation.metadata_["sender_name"].as_string().ilike(like),
+                InboxConversation.metadata_["profile_name"].as_string().ilike(like),
+                InboxConversation.subscriber_id.in_(matching_subscriber_ids),
+                InboxConversation.id.in_(continuous_content_head_ids),
+            )
+        )
+        # A continuous thread is one Inbox result even though reporting keeps
+        # each support episode as its own conversation row. Historical message
+        # hits are mapped to the newest linked episode above, and predecessors
+        # are removed here so contact-detail searches cannot return duplicates.
+        continuous_child = aliased(InboxConversation)
+        query = query.filter(
+            ~exists(
+                select(continuous_child.id).where(
+                    continuous_child.continued_from_conversation_id
+                    == InboxConversation.id,
+                    continuous_child.is_active.is_(True),
+                    continuous_child.metadata_["conversation_mode"].as_string()
+                    == "continuous",
+                )
             )
         )
     if status:
@@ -1490,7 +1842,10 @@ def list_conversations(
         if conversation_ids
         else {}
     )
-    messages_by_conversation = _messages_by_conversation(db, conversation_ids)
+    messages_by_conversation = _latest_messages_by_conversation(db, conversation_ids)
+    provider_names_by_conversation = _latest_provider_names_by_conversation(
+        db, conversation_ids
+    )
     latest_messages = {
         conversation_id: latest
         for conversation_id, messages in messages_by_conversation.items()
@@ -1499,9 +1854,15 @@ def list_conversations(
     contact_identities = _contact_display_identities(
         db,
         conversations,
-        messages_by_conversation,
+        {},
+        provider_names_by_conversation=provider_names_by_conversation,
     )
     ticketed_conversation_ids = _ticketed_conversation_ids(db, conversation_ids)
+    response_cohorts = _response_cohorts_by_conversation(
+        db,
+        conversations,
+        ticketed_conversation_ids=ticketed_conversation_ids,
+    )
     queue_entries = (
         db.query(InboxConversationQueueEntry)
         .filter(
@@ -1627,11 +1988,7 @@ def list_conversations(
         queue_projection = queue_by_conversation.get(conversation.id)
         ownership = ownership_by_conversation[conversation.id]
         resolution_status = _contact_resolution_status(conversation)
-        cohort = response_cohort(
-            conversation,
-            messages_by_conversation.get(conversation.id, ()),
-            has_ticket_handoff=conversation.id in ticketed_conversation_ids,
-        )
+        cohort = response_cohorts.get(conversation.id, InboxResponseCohort.none)
         row_needs_response = cohort == InboxResponseCohort.unreplied
         row_needs_attention = cohort == InboxResponseCohort.needs_attention
         if needs_response and not row_needs_response:
@@ -1796,13 +2153,135 @@ def _reply_window_statuses(
     return statuses
 
 
+def get_conversation_message_page(
+    db: Session,
+    *,
+    conversation_id: UUID,
+    page: InboxTimelineMessagePageRequest,
+) -> InboxTimelineMessagePage | None:
+    """Project one bounded, conversation-scoped page of timeline messages."""
+
+    conversation = (
+        db.query(InboxConversation)
+        .filter(InboxConversation.id == conversation_id)
+        .filter(InboxConversation.is_active.is_(True))
+        .one_or_none()
+    )
+    if conversation is None:
+        return None
+
+    thread_ids = _visible_thread_conversation_ids(db, conversation)
+    query = db.query(InboxMessage).filter(InboxMessage.conversation_id.in_(thread_ids))
+    if page.before_message_id is not None:
+        cursor = (
+            db.query(InboxMessage)
+            .filter(InboxMessage.conversation_id.in_(thread_ids))
+            .filter(InboxMessage.id == page.before_message_id)
+            .one_or_none()
+        )
+        if cursor is None:
+            return None
+        cursor_time = _message_time(cursor)
+        query = query.filter(
+            or_(
+                _message_time_column() < cursor_time,
+                and_(
+                    _message_time_column() == cursor_time,
+                    InboxMessage.created_at < cursor.created_at,
+                ),
+                and_(
+                    _message_time_column() == cursor_time,
+                    InboxMessage.created_at == cursor.created_at,
+                    InboxMessage.id < cursor.id,
+                ),
+            )
+        )
+
+    rows = (
+        query.order_by(
+            _message_time_column().desc(),
+            InboxMessage.created_at.desc(),
+            InboxMessage.id.desc(),
+        )
+        .limit(page.limit + 1)
+        .all()
+    )
+    has_older_messages = len(rows) > page.limit
+    messages = list(reversed(rows[: page.limit]))
+    outbound_sender_identities = _outbound_sender_identities(db, messages)
+    assets_by_message = team_inbox_media.assets_for_messages(
+        db,
+        [message.id for message in messages],
+    )
+    return InboxTimelineMessagePage(
+        messages=tuple(
+            _timeline_message_projection(
+                message,
+                assets=assets_by_message.get(message.id, []),
+                outbound_sender_identities=outbound_sender_identities,
+            )
+            for message in messages
+        ),
+        has_older_messages=has_older_messages,
+        oldest_message_id=messages[0].id if messages else None,
+    )
+
+
+def _visible_thread_conversation_ids(
+    db: Session, conversation: InboxConversation
+) -> tuple[UUID, ...]:
+    """Return a bounded linked history only for the opt-in continuous view.
+
+    Each id remains an independent service episode. This projection is the
+    only place where their messages are combined, preventing reporting and SLA
+    clocks from accidentally treating a customer's lifetime as one ticket.
+    """
+
+    metadata = (
+        conversation.metadata_ if isinstance(conversation.metadata_, dict) else {}
+    )
+    if metadata.get("conversation_mode") != "continuous":
+        return (conversation.id,)
+    candidates = (
+        db.query(InboxConversation)
+        .filter(InboxConversation.channel_type == conversation.channel_type)
+        .filter(InboxConversation.external_thread_id == conversation.external_thread_id)
+        .filter(InboxConversation.is_active.is_(True))
+        .order_by(InboxConversation.last_message_at.desc().nullslast())
+        .limit(50)
+        .all()
+    )
+    candidates_by_id = {candidate.id: candidate for candidate in candidates}
+    conversation_ids = [conversation.id]
+    seen = {conversation.id}
+    predecessor_id = conversation.continued_from_conversation_id
+    while predecessor_id is not None and len(conversation_ids) < 50:
+        if predecessor_id in seen:
+            break
+        predecessor = candidates_by_id.get(predecessor_id)
+        if predecessor is None or predecessor.channel_type != conversation.channel_type:
+            break
+        conversation_ids.append(predecessor.id)
+        seen.add(predecessor.id)
+        predecessor_id = predecessor.continued_from_conversation_id
+    return tuple(conversation_ids)
+
+
 def get_conversation_timeline(
     db: Session,
     conversation_id: str | UUID,
+    *,
+    message_page: InboxTimelineMessagePageRequest | None = None,
 ) -> InboxConversationTimeline | None:
-    conversation = db.get(InboxConversation, _conversation_id(conversation_id))
+    conversation_uuid = _conversation_id(conversation_id)
+    conversation = db.get(InboxConversation, conversation_uuid)
     if conversation is None or not conversation.is_active:
         return None
+    # The social-comments workspace still builds its public parent/reply tree
+    # from the complete message set. Keep that specialized read intact until it
+    # owns a tree-aware cursor contract.
+    if conversation.channel_type in _SOCIAL_COMMENT_CHANNELS:
+        message_page = None
 
     team_rows = (
         db.query(InboxConversationTeam, ServiceTeam)
@@ -1830,11 +2309,29 @@ def get_conversation_timeline(
         )
         .all()
     )
+    paged_messages = (
+        get_conversation_message_page(
+            db,
+            conversation_id=conversation_uuid,
+            page=message_page,
+        )
+        if message_page is not None
+        else None
+    )
+    if message_page is not None and paged_messages is None:
+        return None
     messages = (
-        db.query(InboxMessage)
-        .filter(InboxMessage.conversation_id == conversation.id)
+        []
+        if paged_messages is not None
+        else db.query(InboxMessage)
+        .filter(
+            InboxMessage.conversation_id.in_(
+                _visible_thread_conversation_ids(db, conversation)
+            )
+        )
         .order_by(
             _message_time_column().asc(),
+            InboxMessage.created_at.asc(),
             InboxMessage.id.asc(),
         )
         .all()
@@ -1850,10 +2347,19 @@ def get_conversation_timeline(
         .order_by(InboxComment.created_at.asc())
         .all()
     )
+    identity_messages = messages if paged_messages is None else []
+    provider_name = (
+        None
+        if paged_messages is None
+        else _latest_provider_names_by_conversation(db, [conversation.id]).get(
+            conversation.id
+        )
+    )
     contact_identity = contact_display_identity(
         db,
         conversation=conversation,
-        messages=messages,
+        messages=identity_messages,
+        provider_name=provider_name,
     )
     queue_entry = (
         db.query(InboxConversationQueueEntry)
@@ -1965,14 +2471,18 @@ def get_conversation_timeline(
             )
             for assignment, team in assignment_rows
         ],
-        messages=[
-            _timeline_message_projection(
-                message,
-                assets=assets_by_message.get(message.id, []),
-                outbound_sender_identities=outbound_sender_identities,
-            )
-            for message in messages
-        ],
+        messages=(
+            list(paged_messages.messages)
+            if paged_messages is not None
+            else [
+                _timeline_message_projection(
+                    message,
+                    assets=assets_by_message.get(message.id, []),
+                    outbound_sender_identities=outbound_sender_identities,
+                )
+                for message in messages
+            ]
+        ),
         comments=[
             InboxTimelineComment(
                 id=str(comment.id),
@@ -1992,6 +2502,15 @@ def get_conversation_timeline(
             )
             for comment in comments
         ],
+        has_older_messages=(
+            paged_messages.has_older_messages if paged_messages is not None else False
+        ),
+        oldest_message_id=(
+            str(paged_messages.oldest_message_id)
+            if paged_messages is not None
+            and paged_messages.oldest_message_id is not None
+            else None
+        ),
     )
 
 

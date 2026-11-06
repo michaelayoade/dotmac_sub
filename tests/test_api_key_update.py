@@ -22,6 +22,10 @@ from app.services.audit_adapter import AuditActor
 from app.services.auth import hash_api_key
 from app.services.db_session_adapter import db_session_adapter
 from app.services.owner_commands import OwnerCommandError
+from tests.api_key_actor_fixtures import (
+    persist_admin_actor,
+    persist_wildcard_api_key_actor,
+)
 from tests.api_key_update_fixtures import update_command
 from tests.support.tx_trace import assert_protected_tx, trace_transactions
 from tests.test_api_key_administration import key_fixture
@@ -46,7 +50,7 @@ def test_update_state_audit_and_safe_evidence(
         ApiKeyUpdate(
             label="excluded-new-label",
             key_hash="excluded-preimage",
-            scopes=["*", "unknown:*", "unknown:*"],
+            scopes=["unknown:*", "unknown:*"],
             is_active=False,
         ),
     )
@@ -55,12 +59,16 @@ def test_update_state_audit_and_safe_evidence(
         command = replace(
             command, actor=actor, context=replace(command.context, actor=actor.actor_id)
         )
+    if api_key_actor:
+        persist_wildcard_api_key_actor(db_session, command.actor.actor_id)
+    else:
+        persist_admin_actor(db_session, command.actor.actor_id)
     with trace_transactions(db_session.get_bind().engine) as trace:
         outcome = owner.update(db_session, command=command)
     assert_protected_tx(trace.result, protected_tables=frozenset({"api_keys"}))
     assert outcome.key_hash == hash_api_key("excluded-preimage")
     assert outcome.label == "excluded-new-label"
-    assert outcome.scopes == ("*", "unknown:*", "unknown:*")
+    assert outcome.scopes == ("unknown:*", "unknown:*")
     assert not outcome.is_active
     audit = audits(db_session, key_id)[0]
     assert audit.action == "auth.api_key.updated"
@@ -508,12 +516,11 @@ def test_reactivation_and_expiry_keep_existing_runtime_authority(
     db_session.flush()
     key_id = key.id
     db_session.commit()
-    owner.update(
-        db_session,
-        command=update_command(
-            key_id, ApiKeyUpdate(is_active=True, revoked_at=None, scopes=["audit:*"])
-        ),
+    command = update_command(
+        key_id, ApiKeyUpdate(is_active=True, revoked_at=None, scopes=["audit:*"])
     )
+    persist_admin_actor(db_session, command.actor.actor_id)
+    owner.update(db_session, command=command)
     with pytest.raises(HTTPException) as refusal:
         require_audit_auth(
             authorization=None, x_session_token=None, x_api_key=raw, db=db_session

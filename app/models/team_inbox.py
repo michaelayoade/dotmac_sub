@@ -1159,6 +1159,16 @@ class InboxMessage(Base):
             postgresql_where=text("direction = 'inbound' AND received_at IS NOT NULL"),
         ),
         Index(
+            "ix_inbox_messages_latest_visible",
+            "conversation_id",
+            text("COALESCE(received_at, sent_at, created_at) DESC"),
+            text("created_at DESC"),
+            text("id DESC"),
+            postgresql_include=("direction",),
+            sqlite_where=text("direction <> 'internal'"),
+            postgresql_where=text("direction <> 'internal'"),
+        ),
+        Index(
             "uq_inbox_messages_inbound_external",
             "channel_type",
             "external_message_id",
@@ -1487,6 +1497,9 @@ class InboxAgentPresence(Base):
         String(40), default=InboxAgentPresenceStatus.offline.value, nullable=False
     )
     manual_override_status: Mapped[str | None] = mapped_column(String(40))
+    auto_offline: Mapped[bool] = mapped_column(
+        Boolean, default=True, server_default="true", nullable=False
+    )
     max_concurrent_conversations: Mapped[int | None] = mapped_column(Integer)
     last_seen_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     metadata_: Mapped[dict | None] = mapped_column(
@@ -1503,6 +1516,44 @@ class InboxAgentPresence(Base):
     )
 
 
+class InboxAgentPresenceSessionLease(Base):
+    """Routing-owned evidence that one authenticated Inbox session is present."""
+
+    __tablename__ = "inbox_agent_presence_session_leases"
+    __table_args__ = (
+        UniqueConstraint(
+            "auth_session_id", name="uq_inbox_agent_presence_lease_auth_session"
+        ),
+        Index(
+            "ix_inbox_agent_presence_lease_person_seen",
+            "person_id",
+            "last_seen_at",
+        ),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    person_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("system_users.id"), nullable=False
+    )
+    auth_session_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("sessions.id"), nullable=False
+    )
+    last_seen_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=lambda: datetime.now(UTC), nullable=False
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        default=lambda: datetime.now(UTC),
+        onupdate=lambda: datetime.now(UTC),
+        nullable=False,
+    )
+
+
 class InboxAgentIntroductionPreference(Base):
     __tablename__ = "inbox_agent_introduction_preferences"
     __table_args__ = (
@@ -1516,6 +1567,12 @@ class InboxAgentIntroductionPreference(Base):
     template: Mapped[str] = mapped_column(Text, nullable=False)
     auto_send_chat_widget: Mapped[bool] = mapped_column(
         Boolean, default=True, nullable=False
+    )
+    assignment_in_app_notifications: Mapped[bool] = mapped_column(
+        Boolean, default=True, server_default="true", nullable=False
+    )
+    assignment_email_notifications: Mapped[bool] = mapped_column(
+        Boolean, default=True, server_default="true", nullable=False
     )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=lambda: datetime.now(UTC), nullable=False

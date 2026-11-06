@@ -13,6 +13,16 @@
 
     <form id="inbox-bulk-form" method="post" action="/admin/inbox/bulk" class="contents" x-data="{ bulkStatus: 'open' }">
         {% include "components/forms/csrf_input.html" %}
+        {#
+          Alpine's selectedIds is the selection source of truth. Conversation
+          rows can be replaced by pagination, filtering, or a live list refresh;
+          posting only the checkboxes still present in the DOM silently dropped
+          selections from the request. Materialize every remembered id here so
+          the submitted batch matches the count shown to the agent.
+        #}
+        <template x-for="conversationId in selectedIds" :key="conversationId">
+            <input type="hidden" name="conversation_ids" :value="conversationId">
+        </template>
         <div x-show="selectedIds.length" x-cloak class="shrink-0 border-b border-slate-200/60 bg-white/80 px-3 py-2 backdrop-blur-sm dark:border-slate-700/60 dark:bg-slate-900/70">
             <div class="flex items-center gap-2 overflow-x-auto whitespace-nowrap">
                 <span class="shrink-0 text-xs font-semibold text-slate-700 dark:text-slate-200"><span x-text="selectedIds.length"></span> selected</span>

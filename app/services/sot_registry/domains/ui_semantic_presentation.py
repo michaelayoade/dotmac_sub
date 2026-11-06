@@ -1943,18 +1943,31 @@ DOMAIN = DomainSOT(
         SOTService(
             name="ui.admin_workflow_guidance",
             module="app.services.admin_workflow_guidance",
-            owns=("Admin workflow guidance projection",),
+            owns=(
+                "Admin workflow guidance projection",
+                "permission-filtered AI knowledge retrieval",
+            ),
             notes=(
                 "One read-only, versioned-in-code projection supplies staff workflow "
                 "explanations, permission-linked action guides, and the Admin-sidebar "
-                "Help hierarchy. Contextual controls still use explicit prefix or "
-                "segment-template route selectors. Help-only pages never add a new "
-                "control. The projection never decides eligibility or writes state."
+                "Help hierarchy. Its typed AI-knowledge view applies the same section, "
+                "guide, and action permissions and publishes a deterministic source "
+                "watermark without adding storage. Its bounded lexical retrieval "
+                "ranks only those already-filtered documents and remains stateless. "
+                "Contextual controls still use "
+                "explicit prefix or segment-template route selectors. Help-only pages "
+                "never add a new control. The projection never decides eligibility or "
+                "writes state."
             ),
             contract=ServiceContract(
                 concerns=(
                     ConcernContract(
                         name="Admin workflow guidance projection",
+                        role=OwnerRole.POLICY,
+                        input_names=("Admin workflow guidance registry",),
+                    ),
+                    ConcernContract(
+                        name="permission-filtered AI knowledge retrieval",
                         role=OwnerRole.POLICY,
                         input_names=("Admin workflow guidance registry",),
                     ),
@@ -1971,7 +1984,7 @@ DOMAIN = DomainSOT(
                     mode=TransactionMode.NOT_APPLICABLE,
                     boundary="Immutable in-process guidance projection performs no persistence or external delivery.",
                     locking="Immutable module content requires no lock.",
-                    idempotency="The same path and query produce the same most-specific guidance projection.",
+                    idempotency="The same path, permission set, source registry, and normalized retrieval query produce the same ordered projection.",
                     retries="No side effect is performed; callers may safely retry reads.",
                 ),
                 errors=ErrorContract(
@@ -1994,6 +2007,7 @@ DOMAIN = DomainSOT(
                 ),
                 test_refs=(
                     "tests/test_admin_workflow_guidance.py",
+                    "tests/test_web_admin_help_center.py",
                     "tests/architecture/test_sot_registry_integrity.py",
                 ),
             ),

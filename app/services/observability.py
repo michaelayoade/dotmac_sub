@@ -68,6 +68,9 @@ _STATE_SNAPSHOT_SPECS = {
     # Per-OLT SSH session limiter (G4): held slots, oldest hold, open outcomes
     # and slot-wait totals for at most 14 OLTs at 14 signals each (196), plus 3
     # fleet-wide logout outcomes (199), plus the two host-key signals (201).
+    # Composed-module outbox backlog read from the database (SUB-2): pending,
+    # claimed, dead and oldest-pending age, one global scope each.
+    "outbox_backlog": {"max_observations": 8, "ttl_seconds": 86_400},
     "olt_ssh": {"max_observations": 202, "ttl_seconds": 86_400},
     # Prepaid enforcement + transitional coverage-repair counts published by
     # every prepaid_balance_sweep run; snapshot age doubles as its heartbeat.

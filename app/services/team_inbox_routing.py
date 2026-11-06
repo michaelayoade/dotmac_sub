@@ -407,6 +407,25 @@ class ChannelRouteRow:
     allow_ai_routing: bool
     priority: int
     is_active: bool
+    csat_enabled: bool
+    csat_style: str
+    csat_message: str
+    csat_include_labels: str
+    csat_exclude_labels: str
+    conversation_mode: str
+
+
+@dataclass(frozen=True, slots=True)
+class ChannelThreadPolicy:
+    """The exact inbox route's customer-thread presentation policy.
+
+    ``continuous`` changes presentation only. A newly received issue still
+    creates a new conversation record so assignment, SLA, CSAT and reporting
+    retain an independent service episode.
+    """
+
+    channel_route_id: str | None
+    conversation_mode: str
 
 
 @dataclass(frozen=True)
@@ -493,6 +512,63 @@ def _normalize_account_scope(value: str | None) -> str:
     return str(value or "default").strip()[:160] or "default"
 
 
+def _conversation_mode(value: str | None) -> str:
+    normalized = _normalize_key(value) or "separate"
+    if normalized not in {"separate", "continuous"}:
+        raise EmailRouteError("Choose separate conversations or one continuous thread.")
+    return normalized
+
+
+def _active_channel_route(
+    db: Session,
+    *,
+    channel_type: str,
+    provider: str | None,
+    account_scope: str | None,
+) -> TeamInboxChannelRoute | None:
+    channel = _valid_channel(channel_type)
+    return (
+        db.query(TeamInboxChannelRoute)
+        .filter(TeamInboxChannelRoute.is_active.is_(True))
+        .filter(TeamInboxChannelRoute.channel_type == channel)
+        .filter(TeamInboxChannelRoute.provider == _normalize_provider(provider))
+        .filter(
+            TeamInboxChannelRoute.account_scope
+            == _normalize_account_scope(account_scope)
+        )
+        .order_by(TeamInboxChannelRoute.priority.asc())
+        .first()
+    )
+
+
+def resolve_channel_thread_policy(
+    db: Session,
+    *,
+    channel_type: str,
+    provider: str | None = None,
+    account_scope: str | None = None,
+) -> ChannelThreadPolicy:
+    """Read the exact route policy; an absent route fails safe to separate."""
+
+    route = _active_channel_route(
+        db,
+        channel_type=channel_type,
+        provider=provider,
+        account_scope=account_scope,
+    )
+    if route is None:
+        return ChannelThreadPolicy(
+            channel_route_id=None,
+            conversation_mode="separate",
+        )
+    return ChannelThreadPolicy(
+        channel_route_id=str(route.id),
+        conversation_mode=_conversation_mode(
+            str((route.metadata_ or {}).get("conversation_mode") or "separate")
+        ),
+    )
+
+
 def _valid_channel(value: str | None, *, allow_any: bool = False) -> str:
     normalized = _normalize_key(value)
     if allow_any and normalized == "any":
@@ -546,6 +622,23 @@ def list_channel_routes(
             allow_ai_routing=bool(route.allow_ai_routing),
             priority=int(route.priority),
             is_active=bool(route.is_active),
+            csat_enabled=bool((route.metadata_ or {}).get("csat_enabled", True)),
+            csat_style=str((route.metadata_ or {}).get("csat_style") or "stars"),
+            csat_message=str(
+                (route.metadata_ or {}).get("csat_message")
+                or "How would you rate this conversation?"
+            ),
+            csat_include_labels=", ".join(
+                str(value)
+                for value in ((route.metadata_ or {}).get("csat_include_labels") or [])
+            ),
+            csat_exclude_labels=", ".join(
+                str(value)
+                for value in ((route.metadata_ or {}).get("csat_exclude_labels") or [])
+            ),
+            conversation_mode=_conversation_mode(
+                str((route.metadata_ or {}).get("conversation_mode") or "separate")
+            ),
         )
         for route, team in query.all()
     ]
@@ -561,8 +654,15 @@ def create_channel_route(
     display_name: str | None = None,
     allow_ai_routing: bool = True,
     priority: int = 100,
+    csat_enabled: bool = True,
+    csat_style: str = "stars",
+    csat_message: str | None = None,
+    csat_include_labels: tuple[str, ...] = (),
+    csat_exclude_labels: tuple[str, ...] = (),
+    conversation_mode: str = "separate",
 ) -> TeamInboxChannelRoute:
     channel = _valid_channel(channel_type)
+    normalized_conversation_mode = _conversation_mode(conversation_mode)
     provider_key = _normalize_provider(provider)
     scope = _normalize_account_scope(account_scope)
     team = _active_team(db, service_team_id)
@@ -584,6 +684,15 @@ def create_channel_route(
         allow_ai_routing=bool(allow_ai_routing),
         priority=int(priority),
         is_active=True,
+        metadata_={
+            "csat_enabled": bool(csat_enabled),
+            "csat_style": "emoji" if csat_style == "emoji" else "stars",
+            "csat_message": str(csat_message or "").strip()[:200]
+            or "How would you rate this conversation?",
+            "csat_include_labels": list(csat_include_labels),
+            "csat_exclude_labels": list(csat_exclude_labels),
+            "conversation_mode": normalized_conversation_mode,
+        },
     )
     db.add(route)
     db.flush()
@@ -599,7 +708,16 @@ def update_channel_route(
     allow_ai_routing: bool | None = None,
     priority: int | None = None,
     is_active: bool | None = None,
+    csat_enabled: bool | None = None,
+    csat_style: str | None = None,
+    csat_message: str | None = None,
+    csat_include_labels: tuple[str, ...] | None = None,
+    csat_exclude_labels: tuple[str, ...] | None = None,
+    conversation_mode: str | None = None,
 ) -> TeamInboxChannelRoute:
+    normalized_conversation_mode = (
+        _conversation_mode(conversation_mode) if conversation_mode is not None else None
+    )
     route_uuid = _coerce_uuid(route_id)
     route = db.get(TeamInboxChannelRoute, UUID(route_uuid)) if route_uuid else None
     if route is None:
@@ -614,6 +732,22 @@ def update_channel_route(
         route.priority = int(priority)
     if is_active is not None:
         route.is_active = bool(is_active)
+    metadata = dict(route.metadata_ or {})
+    if csat_enabled is not None:
+        metadata["csat_enabled"] = bool(csat_enabled)
+    if csat_style is not None:
+        metadata["csat_style"] = "emoji" if csat_style == "emoji" else "stars"
+    if csat_message is not None:
+        metadata["csat_message"] = str(csat_message).strip()[:200] or (
+            "How would you rate this conversation?"
+        )
+    if csat_include_labels is not None:
+        metadata["csat_include_labels"] = list(csat_include_labels)
+    if csat_exclude_labels is not None:
+        metadata["csat_exclude_labels"] = list(csat_exclude_labels)
+    if normalized_conversation_mode is not None:
+        metadata["conversation_mode"] = normalized_conversation_mode
+    route.metadata_ = metadata or None
     db.flush()
     return route
 
@@ -779,14 +913,11 @@ def resolve_channel_routing_decision(
     channel = _valid_channel(channel_type)
     provider_key = _normalize_provider(provider)
     scope = _normalize_account_scope(account_scope)
-    route = (
-        db.query(TeamInboxChannelRoute)
-        .filter(TeamInboxChannelRoute.is_active.is_(True))
-        .filter(TeamInboxChannelRoute.channel_type == channel)
-        .filter(TeamInboxChannelRoute.provider == provider_key)
-        .filter(TeamInboxChannelRoute.account_scope == scope)
-        .order_by(TeamInboxChannelRoute.priority.asc())
-        .first()
+    route = _active_channel_route(
+        db,
+        channel_type=channel,
+        provider=provider_key,
+        account_scope=scope,
     )
     channel_team_id = str(route.service_team_id) if route is not None else None
     ai_allowed = route.allow_ai_routing if route is not None else True
