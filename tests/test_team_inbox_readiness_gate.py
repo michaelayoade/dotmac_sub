@@ -646,7 +646,7 @@ def test_the_audit_trail_covers_egress_and_ownership_crossings_only() -> None:
     row metadata, not the audit log, which is the limitation the gate above
     describes.
 
-    Eight actions are audited, for eight distinct reasons:
+    Nine actions are audited, for nine distinct reasons:
 
     - the conversation → ticket handoff, because it crosses an ownership line
       into ``support.ticket_lifecycle``;
@@ -663,22 +663,25 @@ def test_the_audit_trail_covers_egress_and_ownership_crossings_only() -> None:
       relationship owner without changing the sender's identity.
     - editing an AI intake route, because it changes which team receives a
       classified customer conversation.
+    - editing a mailbox route, because it changes which team receives future
+      inbound email and which sender replies.
     - an explicit customer field-job message, because the customer message owner
       crosses into Team Inbox persistence with native WorkOrder/conversation
       lineage and an audited customer actor; it is not an ordinary staff reply.
 
-    A ninth entry here should be a decision, not drift.
+    A tenth entry here should be a decision, not drift.
     """
     commands = Path("app/services/team_inbox_commands.py").read_text()
     handoff = Path("app/services/conversation_ticket_handoff.py").read_text()
 
     assert "stage_audit_event" in handoff
-    assert commands.count("stage_audit_event(") == 8
+    assert commands.count("stage_audit_event(") == 9
     assert 'action="reply_comment"' in commands
     assert 'action="ai_conversation_human_takeover"' in commands
     assert 'action="inbox_represented_customer_selected"' in commands
     assert 'action="inbox_represented_lead_selected"' in commands
     assert 'action="team_inbox.ai_route_updated"' in commands
+    assert 'action="team_inbox.mailbox_route_edited"' in commands
     assert "TRANSCRIPT_AUDIT_ACTION" in commands
     assert 'action="field_job.customer_message_created"' in commands
     for command in ("def apply_label(", "def update_status("):
