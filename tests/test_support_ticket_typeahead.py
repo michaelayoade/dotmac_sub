@@ -211,7 +211,9 @@ def test_ticket_form_context_includes_authoritative_region_manager_preview(
     assert 'name="base_station_details"' in html
     assert 'x-model="selectedTicketType"' in html
     assert '"access point outage"' in html
-    assert ':required="requiresBaseStation"' in html
+    assert ':required="requiresBaseStation && !infrastructureKinds.length"' in html
+    assert 'name="infrastructure_mode"' in html
+    assert "Affected customers: Unable to determine" in html
 
     restricted_html = admin_support_tickets.templates.env.get_template(
         "admin/support/tickets/new.html"

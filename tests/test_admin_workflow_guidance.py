@@ -433,6 +433,9 @@ def test_support_ticket_guidance_separates_editing_from_assignment() -> None:
     assert "submit once" in content
     assert "button is disabled" in content
     assert "attachment or form validation" in content
+    assert "infrastructure tickets stay customerless" in content
+    assert "affected-customer count" in content
+    assert "core links manually" in content
 
 
 def test_ticket_sla_report_guidance_explains_current_scope_and_drilldowns() -> None:
