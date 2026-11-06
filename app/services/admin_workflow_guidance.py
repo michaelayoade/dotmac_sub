@@ -2157,9 +2157,15 @@ _ACTION_SPECS: dict[str, tuple[_ActionSpec, ...]] = {
             permission="system:settings:write",
         ),
         _action(
+            "edit-mailbox-route",
+            "Edit a mailbox route",
+            10,
+            permission="support:ticket:update",
+        ),
+        _action(
             "configure-queue-messaging",
             "Configure queue messaging",
-            10,
+            11,
             permission="system:settings:write",
         ),
     ),
