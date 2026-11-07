@@ -76,6 +76,20 @@ def test_subscription_lifecycle_guide_includes_plan_changes() -> None:
     assert "Subscriptions" in guidance_categories()
 
 
+def test_test_connection_guidance_explains_early_end() -> None:
+    guide = guidance_for_path(
+        "/admin/customers/person/customer-id/subscriptions/subscription-id/test-connection/end"
+    )
+    assert guide is not None
+    assert guide.id == "subscription-test-connection"
+    action = next(
+        item for item in help_actions_for(guide) if item.id == "end-test-connection"
+    )
+    assert action.permission == "subscription:test_connection"
+    assert "reason" in " ".join(action.steps).lower()
+    assert "network rules" in " ".join(action.steps).lower()
+
+
 def test_getting_started_is_the_first_help_category() -> None:
     categories = guidance_categories()
 

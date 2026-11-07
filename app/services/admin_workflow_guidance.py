@@ -367,7 +367,7 @@ WORKFLOW_GUIDANCE: tuple[AdminWorkflowGuidance, ...] = (
             "A successful deletion removes the customer account and its login records, releases active IP assignments, retires active customer equipment, and saves the audit record together. If any part fails, these changes are all undone. Retained equipment and network history remain, along with the underlying person or organization record.",
             "Deletion cannot be used to erase linked financial or retained history records. An individual customer with a remaining subscription is also blocked from deletion.",
             "An activation override only admits prepaid activation. The account stays funding-quarantined, excluded from balance-based suspension and restoration, and still counts in the quarantine alert until its opening is captured.",
-            "Authorized staff can open Test Connection below the Invoice icon in All Subscriptions to grant temporary full service access for troubleshooting; review the configured system-wide duration and expiry before activation.",
+            "Authorized staff can open Test Connection below the Invoice icon in All Subscriptions to grant temporary full service access for troubleshooting; review the configured system-wide duration and expiry before activation. If testing finishes early, use End Test Connection on that subscription with a reason and confirmation.",
             "Canceling a stale intent rejects its linked proof and cancels the intent together, allowing the customer to start a new payment. Verified or paid evidence cannot be canceled here.",
             "The action requires permission to cancel payment intents and review payment proofs.",
             "Customer pages use a short-lived notification-choice snapshot; use the bulk notification setup workflow when provider templates need to be refreshed.",
@@ -392,9 +392,11 @@ WORKFLOW_GUIDANCE: tuple[AdminWorkflowGuidance, ...] = (
         "Check the prerequisites and activate only for the displayed configured duration. The Test Connection permission is required.",
         "Check the delivery status: pending means network application is still underway; applied confirms delivery; failed requires investigation before treating service as restored.",
         "Test connectivity during the displayed interval. Outstanding bills, prolonged debt, and a missing billing baseline do not restrict this temporary access.",
-        "At expiry, current normal subscription and billing rules apply automatically. Review Timeline for the initiating user, activation time, duration, and expected expiry.",
+        "At expiry or after an early end, current normal subscription and billing rules apply again. Review Timeline for the initiating and ending staff, activation time, duration, expected expiry, end time, and reason.",
+        "If testing finishes early, select End Test Connection for the running grant, enter a reason, and confirm the impact. The grant ends immediately; network rules and live sessions may take a moment to update.",
         route_templates=(
             "/admin/customers/{customer_type}/{customer_id}/subscriptions/{subscription_id}/test-connection",
+            "/admin/customers/{customer_type}/{customer_id}/subscriptions/{subscription_id}/test-connection/end",
         ),
         notes=(
             "Test Connection does not pay invoices, change the billing baseline, or permanently change the subscription's commercial state.",
@@ -1600,6 +1602,12 @@ _ACTION_SPECS: dict[str, tuple[_ActionSpec, ...]] = {
             permission="subscription:test_connection",
         ),
         _action("review-test-expiry", "Review expiry and account history", 5),
+        _action(
+            "end-test-connection",
+            "End a running Test Connection early",
+            6,
+            permission="subscription:test_connection",
+        ),
     ),
     "new-subscription": (
         _action("select-service", "Select the customer service", 0),
