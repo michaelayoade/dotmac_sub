@@ -381,6 +381,7 @@ DOMAIN = DomainSOT(
                 "support.ticket_configuration",
                 "support.ticket_vocabulary",
                 "support.ticket_assignment_evaluation",
+                "network.infrastructure_ticket_selection",
                 "customer.identity_scope",
                 "auth.staff_provisioning",
                 "auth.staff_permission_admission",
@@ -440,6 +441,11 @@ DOMAIN = DomainSOT(
                                 "portal team-routing resolution",
                                 "customer identity evidence",
                                 "assignment policy proposal",
+                                *(
+                                    ("infrastructure category policy",)
+                                    if name == "ticket creation and identity"
+                                    else ()
+                                ),
                                 *(
                                     (
                                         "active assigned staff contact identity",
@@ -511,6 +517,12 @@ DOMAIN = DomainSOT(
                 ),
                 authoritative_inputs=(
                     AuthorityInput(
+                        name="infrastructure category policy",
+                        owner="network.infrastructure_ticket_selection",
+                        kind=AuthorityKind.CONTROL_INPUT,
+                        source="Configured infrastructure categories require the typed manual ticket command or the outage handoff; generic text-only creation fails closed.",
+                    ),
+                    AuthorityInput(
                         name="reviewed shared outage completion scope",
                         owner="network.outage_completion_evidence",
                         kind=AuthorityKind.AUTHORITATIVE_RECORD,
@@ -540,7 +552,7 @@ DOMAIN = DomainSOT(
                             "AttachmentMeta with private StoredFile UUID, bounded comment "
                             "attachment-reference repair, and bulk command inputs "
                             "with CommandContext plus the closed silent-internal creation "
-                            "consequence mode"
+                            "consequence mode and ManualInfrastructureTicketCreateCommand"
                         ),
                     ),
                     AuthorityInput(
@@ -656,7 +668,9 @@ DOMAIN = DomainSOT(
                         "idempotency UUID; the database uniquely arbitrates ticket/key; "
                         "comment edits lock the Ticket and TicketComment before applying an "
                         "exact mention-set delta; status guards and merge/confirmation state "
-                        "are rechecked before writing."
+                        "are rechecked before writing. Manual infrastructure creation takes "
+                        "a PostgreSQL transaction advisory lock on the request key before "
+                        "checking existing Ticket metadata."
                     ),
                     idempotency=(
                         "Public request_resolution returns SupportResolutionRequestOutcome with native request identity, expiry/deadline, pending status and replay flag, never raw token capability; exact actor and stable UUID intent are required. Immutable resolution request intent/fingerprint replays only an active original token with unchanged current basis and original deadline. Changed payload/basis conflicts; consumed tokens cannot be resurrected. Timer receipt records blocked_completion_basis atomically with immutable support attempt and audit. "
@@ -666,7 +680,9 @@ DOMAIN = DomainSOT(
                         "fingerprint replays exact commands and rejects conflicting reuse; "
                         "link identity, merge source state, access-token state, exact comment "
                         "mention uniqueness, mention-occurrence notification keys, and "
-                        "event/audit evidence make replay observable and bounded."
+                        "event/audit evidence make replay observable and bounded. Manual "
+                        "infrastructure creation stores the key and payload fingerprint; "
+                        "exact retries return the Ticket and changed input conflicts."
                     ),
                     retries=(
                         "Retry the complete command after rollback with the same typed input "
@@ -709,6 +725,12 @@ DOMAIN = DomainSOT(
                         "resolution_intent_required",
                         "ticket_inactive",
                         "invalid_command_scope",
+                        "infrastructure_selection_required",
+                        "infrastructure_permission_required",
+                        "infrastructure_customer_not_allowed",
+                        "infrastructure_description_required",
+                        "infrastructure_idempotency_key_required",
+                        "infrastructure_idempotency_conflict",
                         *owner_command_boundary_error_codes("support.ticket_lifecycle"),
                     ),
                     mapping_owner=(

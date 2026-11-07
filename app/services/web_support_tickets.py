@@ -11,7 +11,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from enum import Enum
 from typing import BinaryIO, Protocol, runtime_checkable
-from uuid import UUID
+from uuid import UUID, uuid4
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -50,6 +50,7 @@ from app.schemas.support import (
     TicketUpdate,
 )
 from app.services import (
+    infrastructure_ticket_selection,
     service_address,
     service_team_lifecycle,
     sla_assignment,
@@ -883,6 +884,15 @@ def build_ticket_form_context(
             if ticket
             else str(params.get("base_station_details", "") or "")
         ),
+        "infrastructure_mode": str(params.get("infrastructure_mode", "") or ""),
+        "infrastructure_kind": str(params.get("infrastructure_kind", "") or ""),
+        "infrastructure_id": str(params.get("infrastructure_id", "") or ""),
+        "manual_infrastructure_name": str(
+            params.get("manual_infrastructure_name", "") or ""
+        ),
+        "infrastructure_request_key": str(
+            params.get("infrastructure_request_key", "") or uuid4()
+        ),
         "priority": ticket.priority
         if ticket
         else str(
@@ -960,6 +970,7 @@ def build_ticket_form_context(
         "base_station_required_ticket_types": (
             ticket_validation.base_station_required_ticket_types()
         ),
+        "infrastructure_ticket_policy": infrastructure_ticket_selection.category_policy(),
         "service_team_options": service_team_options(db),
         "region_manager_routing": manager_routing_preview,
         "staff_options": staff,
@@ -999,31 +1010,50 @@ def build_ticket_edit_page_context(
     return context
 
 
-def build_ticket_create_payload(**kwargs) -> TicketCreate:
-    tags = kwargs.pop("tags", None)
-    assignee_person_ids = kwargs.pop("assignee_person_ids", [])
-    base_station_details = str(kwargs.pop("base_station_details", "") or "").strip()
+@dataclass(frozen=True, slots=True)
+class TicketFormValues:
+    title: str
+    description: str
+    priority: str
+    channel: str
+    status: str
+    publish_description: bool = False
+    subscriber_id: str | None = None
+    customer_account_id: str | None = None
+    customer_person_id: str | None = None
+    region: str | None = None
+    technician_person_id: str | None = None
+    ticket_manager_person_id: str | None = None
+    service_team_id: str | None = None
+    ticket_type: str | None = None
+    base_station_details: str | None = None
+    due_at: str | None = None
+    tags: str | None = None
+    related_outage_ticket_id: str | None = None
+    assignee_person_ids: tuple[str, ...] = ()
+
+
+def build_ticket_create_payload(values: TicketFormValues) -> TicketCreate:
+    base_station_details = (values.base_station_details or "").strip()
     return TicketCreate(
-        title=kwargs["title"],
-        description=kwargs["description"] or None,
-        description_is_internal=not bool(kwargs.get("publish_description")),
-        subscriber_id=parse_uuid_or_none(kwargs.get("subscriber_id")),
-        customer_account_id=parse_uuid_or_none(kwargs.get("customer_account_id")),
-        customer_person_id=parse_uuid_or_none(kwargs.get("customer_person_id")),
+        title=values.title,
+        description=values.description or None,
+        description_is_internal=not values.publish_description,
+        subscriber_id=parse_uuid_or_none(values.subscriber_id),
+        customer_account_id=parse_uuid_or_none(values.customer_account_id),
+        customer_person_id=parse_uuid_or_none(values.customer_person_id),
         created_by_person_id=None,
-        region=kwargs.get("region") or None,
-        technician_person_id=parse_uuid_or_none(kwargs.get("technician_person_id")),
-        ticket_manager_person_id=parse_uuid_or_none(
-            kwargs.get("ticket_manager_person_id")
-        ),
+        region=values.region or None,
+        technician_person_id=parse_uuid_or_none(values.technician_person_id),
+        ticket_manager_person_id=parse_uuid_or_none(values.ticket_manager_person_id),
         site_coordinator_person_id=None,
-        service_team_id=parse_uuid_or_none(kwargs.get("service_team_id")),
-        ticket_type=kwargs.get("ticket_type") or None,
-        priority=kwargs["priority"],
-        channel=kwargs["channel"],
-        status=kwargs["status"],
-        due_at=parse_dt_or_none(kwargs.get("due_at")),
-        tags=[item.strip() for item in (tags or "").split(",") if item.strip()],
+        service_team_id=parse_uuid_or_none(values.service_team_id),
+        ticket_type=values.ticket_type or None,
+        priority=values.priority,
+        channel=TicketChannel(values.channel),
+        status=parse_ticket_status(values.status),
+        due_at=parse_dt_or_none(values.due_at),
+        tags=[item.strip() for item in (values.tags or "").split(",") if item.strip()],
         metadata_=(
             {"base_station_details": base_station_details}
             if base_station_details
@@ -1031,12 +1061,10 @@ def build_ticket_create_payload(**kwargs) -> TicketCreate:
         ),
         assignee_person_ids=[
             uid
-            for uid in (parse_uuid_or_none(item) for item in assignee_person_ids)
+            for uid in (parse_uuid_or_none(item) for item in values.assignee_person_ids)
             if uid
         ],
-        related_outage_ticket_id=parse_uuid_or_none(
-            kwargs.get("related_outage_ticket_id")
-        ),
+        related_outage_ticket_id=parse_uuid_or_none(values.related_outage_ticket_id),
     )
 
 
@@ -1116,6 +1144,30 @@ class DuplicateTicketWarningError(Exception):
         self.result = result
 
 
+@dataclass(frozen=True, slots=True)
+class ExistingInfrastructureSelection:
+    kind: infrastructure_ticket_selection.InfrastructureKind
+    asset_id: UUID
+    request_key: UUID
+
+
+@dataclass(frozen=True, slots=True)
+class ManualInfrastructureSelection:
+    name: str
+    request_key: UUID
+
+
+@dataclass(frozen=True, slots=True)
+class TicketFormCreateCommand:
+    payload: TicketCreate
+    actor_id: str | None
+    infrastructure: (
+        ExistingInfrastructureSelection | ManualInfrastructureSelection | None
+    ) = None
+    infrastructure_permissions: frozenset[str] = frozenset()
+    duplicate_override: bool = False
+
+
 def _duplicate_input_from_payload(
     payload: TicketCreate,
 ) -> ticket_validation.TicketDuplicateInput:
@@ -1137,11 +1189,9 @@ def _duplicate_input_from_payload(
 def create_ticket_from_form(
     db: Session,
     *,
-    request,
-    actor_id: str | None,
-    attachments: list,
-    duplicate_override: bool = False,
-    **form,
+    command: TicketFormCreateCommand,
+    request: object | None,
+    attachments: Sequence[TicketAttachmentUpload],
 ) -> Ticket:
     """Create a support ticket from web form values and attach uploaded files.
 
@@ -1149,17 +1199,133 @@ def create_ticket_from_form(
     server-side on submit; without the operator's ``duplicate_override``
     confirmation a warning is raised so the route can re-render the form.
     """
-    form["status"] = _admin_status_value(
-        db,
-        str(form.get("status") or ""),
-        surface=support_ticket_settings_service.OperatorTicketStatusSurface.create,
+    payload = command.payload.model_copy(deep=True)
+    actor_id = command.actor_id
+    selection = command.infrastructure
+    kinds = infrastructure_ticket_selection.allowed_kinds(payload.ticket_type)
+    manual_only = kinds == (infrastructure_ticket_selection.InfrastructureKind.manual,)
+    if kinds:
+        if "monitoring:write" not in command.infrastructure_permissions or not actor_id:
+            raise ValueError(
+                "Monitoring write permission and an operator are required."
+            )
+        if any(
+            (
+                payload.subscriber_id,
+                payload.customer_account_id,
+                payload.customer_person_id,
+                payload.lead_id,
+                payload.related_outage_ticket_id,
+            )
+        ):
+            raise ValueError("Infrastructure tickets cannot be linked to one customer.")
+        if selection is None:
+            raise ValueError(
+                "Select an infrastructure record or confirm a manual entry."
+            )
+        if isinstance(selection, ManualInfrastructureSelection):
+            if len(selection.name.strip()) < 3:
+                raise ValueError("Enter an infrastructure name.")
+        elif manual_only or selection.kind not in kinds:
+            raise ValueError("Select one existing infrastructure result.")
+    elif selection is not None:
+        raise ValueError("Infrastructure selection does not match the ticket type.")
+    payload.status = parse_ticket_status(
+        _admin_status_value(
+            db,
+            str(payload.status.value if payload.status else ""),
+            surface=support_ticket_settings_service.OperatorTicketStatusSurface.create,
+        )
     )
-    payload = build_ticket_create_payload(actor_id=actor_id, **form)
+    if kinds and (not payload.description or not payload.description.strip()):
+        raise ValueError("Description is required for infrastructure tickets.")
+    if kinds and isinstance(selection, ManualInfrastructureSelection):
+        from app.services.owner_commands import CommandContext
+
+        try:
+            operator_id = UUID(str(actor_id))
+        except (ValueError, TypeError) as exc:
+            raise ValueError("A valid operator and request key are required.") from exc
+        db_session_adapter.release_read_transaction(db)
+        result = support_service.Tickets.create_infrastructure_manual(
+            db,
+            command=support_service.ManualInfrastructureTicketCreateCommand(
+                payload=payload,
+                name=selection.name,
+                actor_id=operator_id,
+                permissions=command.infrastructure_permissions,
+                context=CommandContext.system(
+                    actor=str(operator_id),
+                    scope="support.ticket:infrastructure_manual",
+                    reason="Create operator-named infrastructure ticket",
+                    idempotency_key=f"infrastructure-ticket:{selection.request_key}",
+                ),
+            ),
+        )
+        if attachments:
+            if result.replayed:
+                raise ValueError(
+                    "This request already created a ticket. Add attachments from its detail page."
+                )
+            uploaded = upload_ticket_attachments(
+                db,
+                ticket_id=result.ticket.id,
+                attachments=attachments,
+                entity_type=TicketAttachmentEntityType.ticket,
+                actor_id=operator_id,
+            )
+            support_service.tickets.add_attachments(db, str(result.ticket.id), uploaded)
+        return result.ticket
+    if kinds and isinstance(selection, ExistingInfrastructureSelection):
+        from app.services.owner_commands import CommandContext
+        from app.services.topology.outage_work_order_handoff import (
+            TICKET_CREATE_SCOPE,
+            InfrastructureAssetTicketIssueCommand,
+            create_ticket_for_infrastructure_asset,
+        )
+
+        try:
+            operator_id = UUID(str(actor_id))
+        except (ValueError, TypeError) as exc:
+            raise ValueError("Select an existing infrastructure result.") from exc
+        if not payload.priority:
+            raise ValueError("Priority is required for infrastructure tickets.")
+        result = create_ticket_for_infrastructure_asset(
+            db,
+            InfrastructureAssetTicketIssueCommand(
+                ticket_type=payload.ticket_type or "",
+                asset_kind=selection.kind,
+                asset_id=selection.asset_id,
+                ticket_payload=payload,
+                actor_id=operator_id,
+                permissions=command.infrastructure_permissions,
+                context=CommandContext.system(
+                    actor=str(operator_id),
+                    scope=TICKET_CREATE_SCOPE,
+                    reason="Create infrastructure ticket from support form",
+                    idempotency_key=f"infrastructure-ticket:{selection.request_key}",
+                ),
+            ),
+        )
+        if attachments:
+            if result.replayed:
+                raise ValueError(
+                    "This outage already has a ticket. Add attachments from its detail page."
+                )
+            uploaded = upload_ticket_attachments(
+                db,
+                ticket_id=result.ticket.id,
+                attachments=attachments,
+                entity_type=TicketAttachmentEntityType.ticket,
+                actor_id=operator_id,
+            )
+            support_service.tickets.add_attachments(db, str(result.ticket.id), uploaded)
+        return result.ticket
     duplicate_result = ticket_validation.find_duplicate_ticket_candidates(
         db, _duplicate_input_from_payload(payload)
     )
     if duplicate_result.has_warning:
-        if not duplicate_override:
+        if not command.duplicate_override:
             raise DuplicateTicketWarningError(duplicate_result)
         metadata = dict(payload.metadata_ or {})
         metadata["duplicate_override"] = True
@@ -1181,7 +1347,9 @@ def create_ticket_from_form(
         actor_id=actor_id,
         request=request,
         acknowledgement_mode=(
-            support_service.TicketCreationAcknowledgementMode.customer_email
+            support_service.TicketCreationAcknowledgementMode.none
+            if kinds
+            else support_service.TicketCreationAcknowledgementMode.customer_email
         ),
     )
     if attachments:

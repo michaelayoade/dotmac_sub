@@ -38,7 +38,6 @@ def _form_values(**overrides) -> dict:
         "region": None,
         "technician_person_id": None,
         "ticket_manager_person_id": None,
-        "site_coordinator_person_id": None,
         "service_team_id": None,
         "ticket_type": None,
         "priority": "normal",
@@ -58,7 +57,7 @@ def test_unassigned_status_alone_does_not_flag_duplicate(db_session):
         db_session,
         title="Karasana OLT 1 Port 1",
         description="Pon 1 customers affected",
-        ticket_type="Cabinet Disconnection",
+        ticket_type="Cabinet Link Fault",
     )
 
     result = ticket_validation.find_duplicate_ticket_candidates(
@@ -66,7 +65,7 @@ def test_unassigned_status_alone_does_not_flag_duplicate(db_session):
         ticket_validation.TicketDuplicateInput(
             title="GPON-JABI-3-pon-8 & 4",
             description="jabi",
-            ticket_type="Cabinet Disconnection",
+            ticket_type="Cabinet Link Fault",
         ),
     )
 
@@ -78,7 +77,7 @@ def test_unassigned_ticket_can_match_on_strong_issue_content(db_session):
         db_session,
         title="GPON JABI PON 8 and 4 outage",
         description="Customers on GPON JABI PON 8 and 4 are down",
-        ticket_type="Cabinet Disconnection",
+        ticket_type="Cabinet Link Fault",
     )
 
     result = ticket_validation.find_duplicate_ticket_candidates(
@@ -86,7 +85,7 @@ def test_unassigned_ticket_can_match_on_strong_issue_content(db_session):
         ticket_validation.TicketDuplicateInput(
             title="GPON JABI PON 8 and 4 outage",
             description="Customers on GPON JABI PON 8 and 4 are down",
-            ticket_type="Cabinet Disconnection",
+            ticket_type="Cabinet Link Fault",
         ),
     )
 
@@ -99,7 +98,7 @@ def test_different_base_stations_do_not_match_on_generic_cabinet_text(db_session
         db_session,
         title="Karasana OLT 1 Port 1",
         description="Cabinet link disconnection.",
-        ticket_type="Cabinet Disconnection",
+        ticket_type="Cabinet Link Fault",
         metadata={"base_station_details": "Karasana OLT 1 (Port 1)"},
     )
 
@@ -108,7 +107,7 @@ def test_different_base_stations_do_not_match_on_generic_cabinet_text(db_session
         ticket_validation.TicketDuplicateInput(
             title="SPDC OLT Port 5",
             description="Cabinet link disconnection.",
-            ticket_type="Cabinet Disconnection",
+            ticket_type="Cabinet Link Fault",
             base_station_details="SPDC OLT (PORT 5)",
         ),
     )
@@ -121,7 +120,7 @@ def test_same_base_station_is_duplicate_signal(db_session):
         db_session,
         title="SPDC OLT Port 5",
         description="Cabinet link disconnection.",
-        ticket_type="Cabinet Disconnection",
+        ticket_type="Cabinet Link Fault",
         metadata={"base_station_details": "SPDC OLT (PORT 5)"},
     )
 
@@ -130,7 +129,7 @@ def test_same_base_station_is_duplicate_signal(db_session):
         ticket_validation.TicketDuplicateInput(
             title="SPDC OLT Port 5",
             description="Cabinet link disconnection.",
-            ticket_type="Cabinet Disconnection",
+            ticket_type="Cabinet Link Fault",
             base_station_details="spdc olt port 5",
         ),
     )
@@ -288,15 +287,21 @@ def test_web_create_blocks_duplicate_without_override(db_session, subscriber):
     with pytest.raises(web_service.DuplicateTicketWarningError) as exc:
         web_service.create_ticket_from_form(
             db_session,
-            request=None,
-            actor_id=None,
-            attachments=[],
-            **_form_values(
-                title="Router keeps rebooting",
-                subscriber_id=str(subscriber.id),
-                customer_account_id=str(subscriber.id),
-                ticket_type="Router Troubleshooting",
+            command=web_service.TicketFormCreateCommand(
+                payload=web_service.build_ticket_create_payload(
+                    web_service.TicketFormValues(
+                        **_form_values(
+                            title="Router keeps rebooting",
+                            subscriber_id=str(subscriber.id),
+                            customer_account_id=str(subscriber.id),
+                            ticket_type="Router Troubleshooting",
+                        )
+                    )
+                ),
+                actor_id=None,
             ),
+            request=None,
+            attachments=[],
         )
 
     assert exc.value.result.has_warning
@@ -313,16 +318,22 @@ def test_web_create_override_records_duplicate_metadata(db_session, subscriber):
 
     ticket = web_service.create_ticket_from_form(
         db_session,
-        request=None,
-        actor_id=None,
-        attachments=[],
-        duplicate_override=True,
-        **_form_values(
-            title="Router keeps rebooting",
-            subscriber_id=str(subscriber.id),
-            customer_account_id=str(subscriber.id),
-            ticket_type="Router Troubleshooting",
+        command=web_service.TicketFormCreateCommand(
+            payload=web_service.build_ticket_create_payload(
+                web_service.TicketFormValues(
+                    **_form_values(
+                        title="Router keeps rebooting",
+                        subscriber_id=str(subscriber.id),
+                        customer_account_id=str(subscriber.id),
+                        ticket_type="Router Troubleshooting",
+                    )
+                )
+            ),
+            actor_id=None,
+            duplicate_override=True,
         ),
+        request=None,
+        attachments=[],
     )
 
     assert ticket.id is not None
