@@ -155,6 +155,8 @@ def test_pdf_uses_official_brand_template_and_escapes_customer_text() -> None:
 def test_statement_document_resolves_customer_brand_and_embeds_logo(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    from app.services import brand_profiles as brand_profiles_service
+
     account_id = uuid4()
     statement = statements.CustomerStatement(
         account_id=account_id,
@@ -170,7 +172,7 @@ def test_statement_document_resolves_customer_brand_and_embeds_logo(
         statements, "read_customer_statement", lambda *_a, **_k: statement
     )
     monkeypatch.setattr(
-        statements,
+        brand_profiles_service,
         "resolve_brand",
         lambda *_a, **_k: SimpleNamespace(
             legal_name="Example & Co",
@@ -199,7 +201,9 @@ def test_statement_document_resolves_customer_brand_and_embeds_logo(
         seen_logo.append(configured_logo)
         return "data:image/png;base64,example"
 
-    monkeypatch.setattr(statements, "resolve_brand_logo_source", logo_source)
+    monkeypatch.setattr(
+        brand_profiles_service, "resolve_brand_logo_source", logo_source
+    )
     document = statements.read_customer_statement_document(
         object(),  # type: ignore[arg-type]
         query=statements.CustomerStatementQuery(
