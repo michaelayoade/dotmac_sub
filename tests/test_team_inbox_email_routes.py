@@ -18,7 +18,11 @@ import pytest
 
 from app.models.audit import AuditActorType, AuditEvent
 from app.models.service_team import ServiceTeam, ServiceTeamType
-from app.models.team_inbox import TeamInboxAiRoute
+from app.models.team_inbox import (
+    InboxConversation,
+    TeamInboxAiRoute,
+    TeamInboxEmailRoute,
+)
 from app.services import email as email_service
 from app.services import team_inbox_commands, team_inbox_routing
 from app.services.audit_adapter import AuditActor
@@ -206,6 +210,139 @@ def test_routing_a_mailbox_makes_it_resolvable(db_session):
     assert rows[0].email_address == "support@dotmac.ng"
     assert rows[0].service_team_name == "Support"
     assert rows[0].is_primary is True
+
+
+def _edit_mailbox(db_session, route_id, *, address, team_id, timestamp, primary=False):
+    return team_inbox_commands.edit_mailbox_route(
+        db_session,
+        command=team_inbox_commands.EditMailboxRouteCommand(
+            context=CommandContext.system(
+                actor="test:staff", scope="inbox:mailbox-route-edit", reason="test edit"
+            ),
+            actor=AuditActor.service("test:staff"),
+            edit=team_inbox_routing.MailboxRouteEdit(
+                route_id=UUID(str(route_id)),
+                expected_updated_at=timestamp,
+                email_address=address,
+                service_team_id=UUID(str(team_id)),
+                priority=20,
+                is_primary=primary,
+                outbound_email_sender_key=None,
+            ),
+        ),
+    )
+
+
+def test_edit_mailbox_changes_future_routing_and_keeps_existing_owner(db_session):
+    support = _team(db_session, "Helpdesk")
+    sales = _team(db_session, "Sales")
+    route_id = team_inbox_commands.create_email_route(
+        db_session, service_team_id=support, email_address="help@dotmac.ng"
+    )
+    conversation = InboxConversation(
+        channel_type="email",
+        contact_address="customer@example.com",
+        primary_service_team_id=support,
+    )
+    db_session.add(conversation)
+    db_session.commit()
+    row = db_session.get(TeamInboxEmailRoute, UUID(route_id))
+    timestamp = row.updated_at
+    db_session.commit()
+
+    outcome = _edit_mailbox(
+        db_session,
+        route_id,
+        address="Sales@Dotmac.NG",
+        team_id=sales,
+        timestamp=timestamp,
+        primary=True,
+    )
+    assert outcome.email_address == "sales@dotmac.ng"
+    assert (
+        db_session.get(InboxConversation, conversation.id).primary_service_team_id
+        == support
+    )
+    assert team_inbox_routing.build_email_team_routing_plan(
+        db_session, to_addresses=["sales@dotmac.ng"]
+    ).primary_service_team_id == str(sales)
+    assert (
+        team_inbox_routing.build_email_team_routing_plan(
+            db_session, to_addresses=["help@dotmac.ng"]
+        ).primary_service_team_id
+        is None
+    )
+    assert team_inbox_routing.list_email_routes(db_session)[0].is_primary
+
+
+def test_edit_mailbox_rejects_duplicate_and_stale_form(db_session):
+    support = _team(db_session, "Helpdesk")
+    first = team_inbox_commands.create_email_route(
+        db_session, service_team_id=support, email_address="help@dotmac.ng"
+    )
+    team_inbox_commands.create_email_route(
+        db_session, service_team_id=support, email_address="sales@dotmac.ng"
+    )
+    timestamp = db_session.get(TeamInboxEmailRoute, UUID(first)).updated_at
+    db_session.commit()
+    with pytest.raises(team_inbox_routing.EmailRouteError, match="already routed"):
+        _edit_mailbox(
+            db_session,
+            first,
+            address="sales@dotmac.ng",
+            team_id=support,
+            timestamp=timestamp,
+        )
+    with pytest.raises(team_inbox_routing.EmailRouteError, match="Reload settings"):
+        _edit_mailbox(
+            db_session,
+            first,
+            address="new@dotmac.ng",
+            team_id=support,
+            timestamp=timestamp - timedelta(seconds=1),
+        )
+
+
+def test_edit_mailbox_primary_replaces_team_primary(db_session):
+    team_id = _team(db_session, "Helpdesk")
+    old_id = team_inbox_commands.create_email_route(
+        db_session,
+        service_team_id=team_id,
+        email_address="old@dotmac.ng",
+        is_primary=True,
+    )
+    new_id = team_inbox_commands.create_email_route(
+        db_session, service_team_id=team_id, email_address="new@dotmac.ng"
+    )
+    timestamp = db_session.get(TeamInboxEmailRoute, UUID(new_id)).updated_at
+    db_session.commit()
+    _edit_mailbox(
+        db_session,
+        new_id,
+        address="new@dotmac.ng",
+        team_id=team_id,
+        timestamp=timestamp,
+        primary=True,
+    )
+    assert not db_session.get(TeamInboxEmailRoute, UUID(old_id)).is_primary
+    assert db_session.get(TeamInboxEmailRoute, UUID(new_id)).is_primary
+
+
+def test_mailbox_edit_control_has_prefilled_fields_and_version():
+    source = ROUTES_TEMPLATE[
+        ROUTES_TEMPLATE.index('id="inbox-settings-routing-mailbox"') :
+    ]
+    assert ">Edit route</summary>" in source
+    assert "/email-routes/{{ route.id }}/edit" in source
+    for name in (
+        "email_address",
+        "service_team_id",
+        "priority",
+        "is_primary",
+        "outbound_email_sender_key",
+        "expected_updated_at",
+    ):
+        assert f'name="{name}"' in source
 
 
 def test_the_plan_builder_sees_the_new_route(db_session):

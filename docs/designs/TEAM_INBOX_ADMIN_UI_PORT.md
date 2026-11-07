@@ -383,6 +383,12 @@ dropped silently.
 model and a consumer but no writer outside direct SQL, which is why production
 ran six live mailboxes against zero rows.
 
+The Mailbox routes row editor changes an existing route's address, active
+destination team, priority, primary flag, and reply sender key. It submits the
+displayed route version and refuses stale edits. Existing conversations retain
+their recorded team; future inbound email uses the edited route. Deactivation
+remains a separate row action.
+
 The same surface now assigns an active, non-secret SMTP sender key to each
 mailbox route. `communications.team_inbox_commands` owns the committed update;
 `team_inbox_routing` validates the key against the notification service's typed
