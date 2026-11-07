@@ -13,7 +13,7 @@ from sqlalchemy.sql import Select
 
 from app.models.catalog import NasDevice
 from app.models.network import FdhCabinet, OLTDevice, PonPort
-from app.models.network_monitoring import DeviceType, NetworkDevice, PopSite
+from app.models.network_monitoring import DeviceRole, DeviceType, NetworkDevice, PopSite
 from app.schemas.infrastructure import (
     InfrastructureOption,
     InfrastructureOptions,
@@ -45,6 +45,8 @@ def _options(
         return query
     if kind in {InfrastructureType.location, InfrastructureType.base_station}:
         query = select(PopSite.id, PopSite.name, empty)
+        if active_only:
+            query = query.where(PopSite.is_active.is_(True))
         if kind is InfrastructureType.base_station:
             query = query.where(PopSite.zabbix_group_id.is_not(None))
         if pattern is not None:
@@ -54,8 +56,9 @@ def _options(
         query = (
             select(NetworkDevice.id, NetworkDevice.name, PopSite.name)
             .outerjoin(PopSite, PopSite.id == NetworkDevice.pop_site_id)
-            .where(NetworkDevice.device_type == DeviceType.access_point)
+            .where(NetworkDevice.role != DeviceRole.cpe)
         )
+        query = query.where(NetworkDevice.device_type == DeviceType.access_point)
         if active_only:
             query = query.where(NetworkDevice.is_active.is_(True))
         if pattern is not None:
@@ -128,6 +131,76 @@ def resolve(
     return (
         InfrastructureOption(id=row[0], label=row[1], context=row[2]) if row else None
     )
+
+
+@dataclass(frozen=True, slots=True)
+class NetworkNodeSearch:
+    term: str
+    limit: int = 20
+
+    def __post_init__(self) -> None:
+        if not 1 <= self.limit <= 20 or len(self.term) > 120:
+            raise ValueError("Network node search query is out of bounds")
+
+
+@dataclass(frozen=True, slots=True)
+class NetworkNodeReference:
+    id: UUID
+
+
+def search_network_nodes(
+    db: Session, *, query: NetworkNodeSearch
+) -> InfrastructureOptions:
+    """Find active non-CPE network nodes for shared-outage targeting."""
+    term = query.term.strip()
+    if len(term) < 2:
+        return InfrastructureOptions(results=())
+    rows = db.scalars(
+        select(NetworkDevice)
+        .where(
+            NetworkDevice.is_active.is_(True),
+            NetworkDevice.role != DeviceRole.cpe,
+            NetworkDevice.name.ilike(f"%{term}%"),
+        )
+        .order_by(NetworkDevice.name, NetworkDevice.id)
+        .limit(max(1, min(query.limit, 20)))
+    )
+    return InfrastructureOptions(
+        results=tuple(InfrastructureOption(id=row.id, label=row.name) for row in rows)
+    )
+
+
+def resolve_network_node(
+    db: Session, *, reference: NetworkNodeReference
+) -> InfrastructureOption | None:
+    row = db.scalar(
+        select(NetworkDevice).where(
+            NetworkDevice.id == reference.id,
+            NetworkDevice.is_active.is_(True),
+            NetworkDevice.role != DeviceRole.cpe,
+        )
+    )
+    return InfrastructureOption(id=row.id, label=row.name) if row else None
+
+
+def lock_network_node(
+    db: Session, *, reference: NetworkNodeReference
+) -> InfrastructureOption:
+    from app.services.domain_errors import DomainError
+
+    db.scalar(
+        select(NetworkDevice)
+        .where(NetworkDevice.id == reference.id)
+        .with_for_update()
+        .execution_options(populate_existing=True)
+    )
+    option = resolve_network_node(db, reference=reference)
+    if option is None:
+        raise DomainError(
+            code="network.infrastructure_catalogue.unavailable",
+            message="Network node is unavailable",
+        )
+    return option
 
 
 @dataclass(frozen=True, slots=True)

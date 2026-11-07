@@ -88,6 +88,70 @@ def _actor_id(request: Request) -> str | None:
     return str(value) if value else None
 
 
+def _infrastructure_actor_id(request: Request) -> str | None:
+    from app.web.admin import get_current_user
+
+    user = get_current_user(request)
+    value = user.get("id") if isinstance(user, dict) else getattr(user, "id", None)
+    try:
+        return str(UUID(str(value))) if value else None
+    except (TypeError, ValueError):
+        return None
+
+
+@router.get(
+    "/infrastructure/choices",
+    dependencies=[Depends(require_permission("monitoring:read"))],
+)
+def infrastructure_choices(
+    ticket_type: str, q: str = "", db: Session = Depends(get_db)
+) -> dict:
+    from app.services.infrastructure_ticket_selection import (
+        InfrastructureTicketSearch,
+        search,
+    )
+
+    if len(q) > 120:
+        raise HTTPException(status_code=400, detail="Search term is too long")
+    return {
+        "choices": [
+            {"kind": item.kind.value, "id": str(item.id), "label": item.label}
+            for item in search(db, query=InfrastructureTicketSearch(ticket_type, q))
+        ]
+    }
+
+
+@router.get(
+    "/infrastructure/preview",
+    dependencies=[Depends(require_permission("monitoring:read"))],
+)
+def infrastructure_preview(
+    ticket_type: str,
+    kind: str,
+    asset_id: UUID,
+    db: Session = Depends(get_db),
+) -> dict:
+    from app.services.infrastructure_ticket_selection import (
+        InfrastructureKind,
+        InfrastructureTicketReference,
+        preview,
+    )
+
+    try:
+        parsed_kind = InfrastructureKind(kind)
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=400, detail="Invalid infrastructure kind"
+        ) from exc
+    result = preview(
+        db,
+        query=InfrastructureTicketReference(ticket_type, parsed_kind, asset_id),
+    )
+    if result is None:
+        raise HTTPException(status_code=404, detail="Infrastructure unavailable")
+    return {"label": result.choice.label, "affected_count": result.affected_count}
+
+
 def _ticket_attachment_response(record: StoredFile) -> StreamingResponse:
     try:
         stream = file_uploads.stream_file(record)
@@ -371,6 +435,11 @@ async def ticket_create(
     service_team_id: str | None = Form(default=None),
     ticket_type: str | None = Form(default=None),
     base_station_details: str | None = Form(default=None),
+    infrastructure_mode: str | None = Form(default=None),
+    infrastructure_kind: str | None = Form(default=None),
+    infrastructure_id: str | None = Form(default=None),
+    manual_infrastructure_name: str | None = Form(default=None),
+    infrastructure_request_key: str | None = Form(default=None),
     priority: str = Form("normal"),
     channel: str = Form("web"),
     status: str = Form("open"),
@@ -383,7 +452,7 @@ async def ticket_create(
     db: Session = Depends(get_db),
 ):
     raw_form = await request.form()
-    actor_id = _actor_id(request)
+    actor_id = _infrastructure_actor_id(request)
     duplicate_confirmed = str(duplicate_override or "").strip().lower() in {
         "1",
         "true",
@@ -391,42 +460,84 @@ async def ticket_create(
         "on",
     }
     try:
+        if actor_id is None:
+            raise ValueError("An authenticated staff operator is required.")
+        selection = None
+        if infrastructure_mode == "manual":
+            if infrastructure_kind or infrastructure_id:
+                raise ValueError("Enter one manual infrastructure name.")
+            selection = support_web_service.ManualInfrastructureSelection(
+                name=manual_infrastructure_name or "",
+                request_key=UUID(infrastructure_request_key or ""),
+            )
+        elif infrastructure_mode == "existing":
+            if manual_infrastructure_name:
+                raise ValueError("Select one existing infrastructure result.")
+            selection = support_web_service.ExistingInfrastructureSelection(
+                kind=support_web_service.infrastructure_ticket_selection.InfrastructureKind(
+                    infrastructure_kind or ""
+                ),
+                asset_id=UUID(infrastructure_id or ""),
+                request_key=UUID(infrastructure_request_key or ""),
+            )
+        elif any(
+            (
+                infrastructure_mode,
+                infrastructure_kind,
+                infrastructure_id,
+                manual_infrastructure_name,
+            )
+        ):
+            raise ValueError("Select an infrastructure result or enter a manual name.")
+        payload = support_web_service.build_ticket_create_payload(
+            support_web_service.TicketFormValues(
+                title=title,
+                description=description,
+                publish_description=publish_description,
+                subscriber_id=subscriber_id,
+                customer_account_id=customer_account_id,
+                customer_person_id=customer_person_id,
+                region=region,
+                technician_person_id=technician_person_id,
+                ticket_manager_person_id=ticket_manager_person_id,
+                service_team_id=service_team_id,
+                ticket_type=ticket_type,
+                base_station_details=base_station_details,
+                priority=priority,
+                channel=channel,
+                status=status,
+                due_at=due_at,
+                tags=tags,
+                related_outage_ticket_id=related_outage_ticket_id,
+                assignee_person_ids=tuple(assignee_person_ids),
+            )
+        )
         ticket = support_web_service.create_ticket_from_form(
             db,
+            command=support_web_service.TicketFormCreateCommand(
+                payload=payload,
+                actor_id=actor_id,
+                infrastructure=selection,
+                infrastructure_permissions=(
+                    frozenset({"monitoring:write", "support:ticket:create"})
+                    if can(request, "monitoring:write")
+                    else frozenset({"support:ticket:create"})
+                ),
+                duplicate_override=duplicate_confirmed,
+            ),
             request=request,
-            actor_id=actor_id,
             attachments=attachments,
-            duplicate_override=duplicate_confirmed,
-            title=title,
-            description=description,
-            publish_description=publish_description,
-            subscriber_id=subscriber_id,
-            customer_account_id=customer_account_id,
-            customer_person_id=customer_person_id,
-            region=region,
-            technician_person_id=technician_person_id,
-            ticket_manager_person_id=ticket_manager_person_id,
-            site_coordinator_person_id=None,
-            service_team_id=service_team_id,
-            ticket_type=ticket_type,
-            base_station_details=base_station_details,
-            priority=priority,
-            channel=channel,
-            status=status,
-            due_at=due_at,
-            tags=tags,
-            related_outage_ticket_id=related_outage_ticket_id,
-            assignee_person_ids=assignee_person_ids,
         )
         auth = getattr(getattr(request, "state", None), "auth", None) or {}
-        web_custom_fields_service.apply_creation_values(
-            db,
-            target_type="support_ticket",
-            target_id=ticket.id,
-            form=raw_form,
-            permission_keys=load_permission_keys(auth, db) if auth else frozenset(),
-            actor=actor_id,
-        )
+        if infrastructure_mode != "existing":
+            web_custom_fields_service.apply_creation_values(
+                db,
+                target_type="support_ticket",
+                target_id=ticket.id,
+                form=raw_form,
+                permission_keys=load_permission_keys(auth, db) if auth else frozenset(),
+                actor=actor_id,
+            )
     except support_web_service.DuplicateTicketWarningError as exc:
         # Similar open tickets exist and the operator has not confirmed the
         # override — re-render the form with the duplicate warning (409, like
@@ -449,6 +560,11 @@ async def ticket_create(
                     "service_team_id": service_team_id or "",
                     "ticket_type": ticket_type or "",
                     "base_station_details": base_station_details or "",
+                    "infrastructure_mode": infrastructure_mode or "",
+                    "infrastructure_kind": infrastructure_kind or "",
+                    "infrastructure_id": infrastructure_id or "",
+                    "manual_infrastructure_name": manual_infrastructure_name or "",
+                    "infrastructure_request_key": infrastructure_request_key or "",
                     "priority": priority,
                     "channel": channel,
                     "status": status,
@@ -508,6 +624,11 @@ async def ticket_create(
                     "service_team_id": service_team_id or "",
                     "ticket_type": ticket_type or "",
                     "base_station_details": base_station_details or "",
+                    "infrastructure_mode": infrastructure_mode or "",
+                    "infrastructure_kind": infrastructure_kind or "",
+                    "infrastructure_id": infrastructure_id or "",
+                    "manual_infrastructure_name": manual_infrastructure_name or "",
+                    "infrastructure_request_key": infrastructure_request_key or "",
                     "priority": priority,
                     "channel": channel,
                     "status": status,
