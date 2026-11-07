@@ -142,6 +142,34 @@ OpenBao stays available after the snapshot or that every provider/device is
 ready. PostgreSQL schema/RLS/read-only evidence comes from the migrated hosted
 lane; SQLite metadata unit tests prove only reduction logic.
 
+## Deploy coordination (one deploy at a time)
+
+Ruled by Michael on 2026-11-06. Applies to every deployer: people, Claude and
+Codex sessions alike.
+
+1. **One production deploy at a time, with a visible owner.** Before
+   dispatching `Build release candidate once`, record an open deploy line in
+   the shared cutover register (Knowledge `dotmac-debt-register`):
+   `SUB PROD DEPLOY OPEN — owner <person or session>, target <full SHA>, start <UTC>`.
+   If you cannot write to the register, ask Michael to record it first. When
+   the deploy is verified (every Sub container on one revision, expected
+   alembic head, `/health` and `/api/v1/health/ready` 200), mark the line
+   `CLOSED` with that result. Do not dispatch a deploy, and do not start a
+   long-running production job (bulk applies, restores), while a line is open.
+2. **Pipeline only.** Production changes go through the release sequence
+   below: release candidate, staging, promotion (production environment
+   approval), `Deploy authorized digest to production`. Never recreate,
+   retag or roll back containers by hand on the host. A rollback is a
+   `production-deploy.yml` run with its `rollback_*` inputs.
+3. **Main is the release.** Each deploy ships the current green `main` tip.
+   Work that needs to reach production merges to `main` and rides the next
+   shared deploy; there are no side deploys of other revisions.
+
+Why: on 2026-11-05 a hand recreate moved only the app container to an older
+image, leaving app and workers on different revisions with the database ahead
+of the app, and killed an in-flight production job. On 2026-11-06 a pipeline
+deploy started unannounced while another lane was running production checks.
+
 ## Release sequence
 
 ### Shared candidate-material probe prerequisite
