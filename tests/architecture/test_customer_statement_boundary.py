@@ -21,6 +21,12 @@ def test_customer_statement_owners_are_separate_from_admin_projection() -> None:
     assert email_owner.contract is not None
     assert read_owner.contract.transaction.mode is TransactionMode.READ_ONLY
     assert email_owner.contract.transaction.mode is TransactionMode.OWNER_MANAGED
+    assert "customer.branding" in read_owner.depends_on
+    assert any(
+        item.name == "canonical customer-facing brand"
+        and item.owner == "customer.branding"
+        for item in read_owner.contract.authoritative_inputs
+    )
     assert admin_owner.module != read_owner.module
 
 
