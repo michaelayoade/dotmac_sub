@@ -33,6 +33,20 @@ class MonthlyChurnSeries:
 
 
 @dataclass(frozen=True, slots=True)
+class CustomerGrowthQuery:
+    start_at: datetime | None = None
+    end_at: datetime | None = None
+    status: AccountStatus | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class CustomerGrowthSeries:
+    labels: tuple[str, ...]
+    total: tuple[int, ...]
+    new: tuple[int, ...]
+
+
+@dataclass(frozen=True, slots=True)
 class ChurnSummary:
     total: int
     cancelled_count: int
@@ -287,6 +301,74 @@ def monthly_customer_growth_series(db: Session, *, months: int = 6) -> dict[str,
         totals.append(int(total))
         new_counts.append(int(new_count))
     return {"labels": labels, "total": totals, "new": new_counts}
+
+
+def customer_report_growth_series(
+    db: Session, *, query: CustomerGrowthQuery
+) -> CustomerGrowthSeries:
+    """Signup buckets and cumulative population for the selected report scope."""
+    now = datetime.now(UTC)
+    start = query.start_at or _month_starts(6)[0]
+    end = query.end_at or now
+    if query.start_at is None and query.end_at is not None:
+        start = end - timedelta(days=180)
+    if end <= start:
+        end = start + timedelta(days=1)
+
+    span_days = (end - start).total_seconds() / 86400
+    boundaries = [start]
+    if span_days <= 45:
+        step = timedelta(days=1)
+        while boundaries[-1] + step < end:
+            boundaries.append(boundaries[-1] + step)
+    elif span_days <= 180:
+        step = timedelta(days=7)
+        while boundaries[-1] + step < end:
+            boundaries.append(boundaries[-1] + step)
+    else:
+        month_count = (end.year - start.year) * 12 + end.month - start.month + 1
+        months_per_bucket = max(1, (month_count + 23) // 24)
+        cursor = _month_start(start)
+        for _ in range(months_per_bucket):
+            cursor = _next_month(cursor)
+        while cursor < end:
+            boundaries.append(cursor)
+            for _ in range(months_per_bucket):
+                cursor = _next_month(cursor)
+    boundaries.append(end)
+
+    scope = [subscriber_service.visible_subscriber_clause()]
+    if query.status is not None:
+        scope.append(Subscriber.status == query.status)
+    running_total = int(
+        db.scalar(
+            select(func.count(Subscriber.id)).where(
+                *scope, Subscriber.created_at < start
+            )
+        )
+        or 0
+    )
+    labels: list[str] = []
+    totals: list[int] = []
+    new_counts: list[int] = []
+    for bucket_start, bucket_end in zip(boundaries, boundaries[1:], strict=True):
+        signups = int(
+            db.scalar(
+                select(func.count(Subscriber.id)).where(
+                    *scope,
+                    Subscriber.created_at >= bucket_start,
+                    Subscriber.created_at < bucket_end,
+                )
+            )
+            or 0
+        )
+        running_total += signups
+        labels.append(bucket_start.strftime("%d %b %Y"))
+        totals.append(running_total)
+        new_counts.append(signups)
+    return CustomerGrowthSeries(
+        labels=tuple(labels), total=tuple(totals), new=tuple(new_counts)
+    )
 
 
 def monthly_churn_series(

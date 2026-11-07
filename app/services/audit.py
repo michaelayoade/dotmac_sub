@@ -225,6 +225,20 @@ class AuditEventPageQuery:
 
 
 @dataclass(frozen=True, slots=True)
+class RecentAuditPathQuery:
+    """Bounded recent successful events for exact report or module paths."""
+
+    paths: tuple[str, ...]
+    limit: int = 5
+
+    def __post_init__(self) -> None:
+        if not self.paths or any(not path.startswith("/") for path in self.paths):
+            raise ValueError("audit paths must be absolute")
+        if not 1 <= self.limit <= 200:
+            raise ValueError("audit path limit must be between 1 and 200")
+
+
+@dataclass(frozen=True, slots=True)
 class AuditEventPage:
     """Stable audit read model with a total from the identical filter scope."""
 
@@ -324,6 +338,22 @@ _AUDIT_R1_PARITY_QUERY = text(
 
 
 class AuditEvents(ListResponseMixin):
+    @staticmethod
+    def list_recent_for_paths(
+        db: Session, *, query: RecentAuditPathQuery
+    ) -> tuple[AuditEvent, ...]:
+        stmt = (
+            select(AuditEvent)
+            .where(
+                AuditEvent.is_active.is_(True),
+                AuditEvent.is_success.is_(True),
+                AuditEvent.entity_type.in_(query.paths),
+            )
+            .order_by(AuditEvent.occurred_at.desc())
+            .limit(query.limit)
+        )
+        return tuple(db.scalars(stmt).all())
+
     @staticmethod
     def _event_data(payload: AuditEventCreate) -> dict[str, object]:
         """Build the one persistence shape used by every audit writer.
