@@ -334,6 +334,7 @@ def customer_test_connection_form(
             "preview": preview,
             "form_state": TEST_CONNECTION_FORM.state(list(preview.prerequisites)),
             "command_id": str(uuid4()),
+            "end_command_id": str(uuid4()),
             "customer_url": f"/admin/customers/{customer_type}/{customer_id}",
         },
     )
@@ -397,6 +398,83 @@ def customer_test_connection_activate(
         ok=True,
         title="Test Connection requested",
         message=f"{outcome.duration_seconds // 3600} hour(s) granted. Expires {outcome.expires_at.strftime('%d %b %Y %H:%M UTC')}. Check the subscription for delivery status.",
+    )
+
+
+@router.post(
+    "/{customer_type}/{customer_id}/subscriptions/{subscription_id}/test-connection/end",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("subscription:test_connection"))],
+)
+def customer_test_connection_end(
+    request: Request,
+    customer_type: Literal["person", "business"],
+    customer_id: UUID,
+    subscription_id: UUID,
+    grant_id: UUID = Form(...),
+    command_id: UUID = Form(...),
+    reason: str = Form(...),
+    confirm_end: bool = Form(False),
+):
+    from app.services.test_connection import (
+        PERMISSION,
+        EndTestConnectionCommand,
+        end_test_connection,
+    )
+
+    auth = getattr(request.state, "auth", {})
+    if auth.get("principal_type") != "system_user" or not auth.get("principal_id"):
+        raise HTTPException(
+            status_code=403, detail="An authorized staff user is required."
+        )
+    redirect_url = f"/admin/customers/{customer_type}/{customer_id}"
+    if not confirm_end or not reason.strip():
+        return _toast_response(
+            request=request,
+            redirect_url=redirect_url,
+            ok=False,
+            title="Test Connection not ended",
+            message="Confirm the early end and enter a reason.",
+        )
+    actor_id = UUID(str(auth["principal_id"]))
+    context = CommandContext(
+        command_id=command_id,
+        correlation_id=command_id,
+        actor=str(actor_id),
+        scope=PERMISSION,
+        reason=reason.strip(),
+        idempotency_key=f"test-connection-end:{grant_id}:{command_id}",
+    )
+    try:
+        with db_session_adapter.owner_command_session() as db:
+            outcome = end_test_connection(
+                db,
+                command=EndTestConnectionCommand(
+                    context=context,
+                    grant_id=grant_id,
+                    subscriber_id=customer_id,
+                    subscription_id=subscription_id,
+                    actor_id=actor_id,
+                ),
+            )
+    except DomainError as exc:
+        return _toast_response(
+            request=request,
+            redirect_url=redirect_url,
+            ok=False,
+            title="Test Connection not ended",
+            message=exc.message,
+        )
+    return _toast_response(
+        request=request,
+        redirect_url=redirect_url,
+        ok=True,
+        title="Test Connection end requested",
+        message=(
+            "The grant has ended. Current network access rules are being reapplied."
+            if not outcome.replayed
+            else "This grant was already ended."
+        ),
     )
 
 

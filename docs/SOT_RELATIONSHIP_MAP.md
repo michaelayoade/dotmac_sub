@@ -1996,6 +1996,15 @@ detailed security and delivery boundary is
 
 ## Financial and Access
 
+`access.test_connection` owns each bounded grant and its early end. An
+authenticated staff command ends the exact grant under the subscription lock,
+records the canonical staff actor and reason in the audit, and stages a change
+event in the same transaction. Access readers stop selecting that grant as soon
+as its `ended_at` is set. The change event asks the network projection to
+reapply current access rules and refresh sessions; it does not decide the
+customer's ordinary commercial eligibility. A stale end request cannot end a
+replacement grant. See `docs/designs/SUBSCRIPTION_TEST_CONNECTION.md`.
+
 The lifecycle owner expires subscriptions under `FOR NO KEY UPDATE`, preserving
 exclusive status-writer serialization while allowing immutable bandwidth
 foreign-key observations. Its SELECT bypasses compiled caching because the
