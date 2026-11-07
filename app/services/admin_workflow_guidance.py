@@ -393,7 +393,7 @@ WORKFLOW_GUIDANCE: tuple[AdminWorkflowGuidance, ...] = (
         "Check the delivery status: pending means network application is still underway; applied confirms delivery; failed requires investigation before treating service as restored.",
         "Test connectivity during the displayed interval. Outstanding bills, prolonged debt, and a missing billing baseline do not restrict this temporary access.",
         "At expiry or after an early end, current normal subscription and billing rules apply again. Review Timeline for the initiating and ending staff, activation time, duration, expected expiry, end time, and reason.",
-        "If testing finishes early, select End Test Connection for the running grant, enter a reason, and confirm the impact. The grant ends immediately; network rules and live sessions may take a moment to update.",
+        "If testing finishes early, use End Test Connection on that subscription line, enter a reason, and confirm the impact. The grant ends immediately; network rules and live sessions may take a moment to update.",
         route_templates=(
             "/admin/customers/{customer_type}/{customer_id}/subscriptions/{subscription_id}/test-connection",
             "/admin/customers/{customer_type}/{customer_id}/subscriptions/{subscription_id}/test-connection/end",

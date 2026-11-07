@@ -152,9 +152,10 @@ prerequisites. The duration is read-only here; activating the displayed
 system-wide interval is the single primary action. The account timeline holds
 actor and interval evidence. The detail row links to the subscription's own account,
 including when a person/company detail aggregates multiple accounts.
-While a grant is running, a secondary End Test Connection form explains the
-network impact and requires a reason and confirmation. It submits the exact
-grant identity to the owner.
+The affected subscription line shows Test Connection when no grant is running
+and End Test Connection while its own grant is running. The end link opens the
+secondary confirmation form, which explains the network impact and requires a
+reason. It submits the exact grant identity to the owner.
 
 Unauthorized staff see no row action and all action routes refuse their request.
 Unavailable network capability and an already running test disable activation
