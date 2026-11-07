@@ -18,11 +18,6 @@ from sqlalchemy.orm import Session
 
 from app.models.subscriber import Subscriber
 from app.services import display_format
-from app.services.brand_profiles import (
-    resolve_brand,
-    resolve_brand_logo_source,
-)
-from app.services.brand_theme import generate_scale
 from app.services.customer_financial_ledger import list_customer_financial_events
 from app.services.customer_financial_position import (
     get_customer_receivable_summaries,
@@ -253,6 +248,12 @@ def read_customer_statement_document(
     db: Session, *, query: CustomerStatementQuery
 ) -> CustomerStatementDocument:
     """Compose canonical financial facts with the customer-facing brand."""
+    from app.services.brand_profiles import (
+        resolve_brand,
+        resolve_brand_logo_source,
+    )
+    from app.services.brand_theme import generate_scale
+
     statement = read_customer_statement(db, query=query)
     resolved = resolve_brand(db, subscriber_id=query.account_id)
     primary_scale = generate_scale(resolved.primary_color)
