@@ -25,10 +25,11 @@ from app.models.test_connection import TestConnectionGrant as ConnectionGrant
 from app.services import test_connection as owner
 from app.services.access_resolution import resolve_customer_access
 from app.services.events.types import EventType
-from app.services.owner_commands import CommandContext
+from app.services.owner_commands import CommandContext, OwnerCommandError
 from app.services.test_connection_policy import (
     ObservedRadiusAttribute,
     effective_radius_observation,
+    utc_datetime,
 )
 from app.services.test_connection_policy import TestConnectionAccess as ConnectionAccess
 
@@ -199,7 +200,7 @@ def test_staff_can_end_exact_grant_early_with_audit_and_network_event(
     assert ended_entry["actor_label"] == "Ada Engineer"
     details = {item["label"]: item["value"] for item in ended_entry["details"]}
     assert details["Reason"] == "Customer troubleshooting is complete"
-    assert details["Ended at"] == grant.ended_at.isoformat()
+    assert details["Ended at"] == utc_datetime(grant.ended_at).isoformat()
     assert owner.end_test_connection(db_session, command=end_command).replayed
     replacement = owner.activate_test_connection(
         db_session,
@@ -238,7 +239,7 @@ def test_early_end_rejects_other_subscription_and_missing_reason(
         owner.end_test_connection(
             db_session, command=replace(command, subscriber_id=uuid4())
         )
-    with pytest.raises(owner.TestConnectionError, match="reason is required"):
+    with pytest.raises(OwnerCommandError, match="Command reason cannot be empty"):
         owner.end_test_connection(
             db_session,
             command=replace(command, context=replace(command.context, reason=" ")),

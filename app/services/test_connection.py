@@ -657,7 +657,7 @@ def _finish(
     transition: Literal["expired", "ended"] = "expired",
 ) -> None:
     grant.ended_at = now
-    metadata: dict[str, str | int] = {
+    metadata: dict[str, object] = {
         "grant_id": str(grant.id),
         "duration_seconds": grant.duration_seconds,
         "activated_at": utc_datetime(grant.activated_at).isoformat(),
