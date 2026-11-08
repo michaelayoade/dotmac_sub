@@ -201,6 +201,7 @@ def test_staff_can_end_exact_grant_early_with_audit_and_network_event(
     details = {item["label"]: item["value"] for item in ended_entry["details"]}
     assert details["Reason"] == "Customer troubleshooting is complete"
     assert details["Ended at"] == utc_datetime(grant.ended_at).isoformat()
+    db_session.rollback()  # adapters hand public owners a transaction-free session
     assert owner.end_test_connection(db_session, command=end_command).replayed
     replacement = owner.activate_test_connection(
         db_session,
