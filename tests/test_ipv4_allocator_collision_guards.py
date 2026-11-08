@@ -393,3 +393,29 @@ def test_ipv6_unbound_row_is_bound_without_primary_marking(
 
     assert row.subscription_id == subscription.id
     assert calls == []
+
+
+def test_already_bound_non_primary_row_stays_non_primary(db_session, subscription):
+    pool = _pool(db_session)
+    (old,) = _rows(db_session, pool, 1)
+    row = _legacy_assignment(
+        db_session, subscription, old, is_active=True, subscription_id=subscription.id
+    )
+
+    _ensure_ip_assignment_for_version(db_session, subscription, IPVersion.ipv4, {})
+
+    assert row.is_primary is False
+
+
+def test_second_active_ipv4_row_means_no_primary_marking(db_session, subscription):
+    pool = _pool(db_session)
+    first, second = _rows(db_session, pool, 1, 2)
+    bound = _legacy_assignment(
+        db_session, subscription, first, is_active=True, subscription_id=subscription.id
+    )
+    legacy = _legacy_assignment(db_session, subscription, second, is_active=True)
+
+    _ensure_ip_assignment_for_version(db_session, subscription, IPVersion.ipv4, {})
+
+    assert bound.is_primary is False
+    assert legacy.is_primary is False

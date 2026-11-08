@@ -634,30 +634,31 @@ def _ensure_ip_assignment_for_version(
                 assignment.id,
                 subscription.id,
             )
-        if (
-            ip_version == IPVersion.ipv4
-            and assignment.is_active
-            and not assignment.is_primary
-            and assignment.ipv4_address_id is not None
-        ):
-            # Same rule as the generic CRUD path: with exactly one active IPv4
-            # holding there is one possible served address, so ask the single
-            # writer of is_primary to mark it.
-            # Flush the bind/reactivation so the count sees it (autoflush may be off).
-            db.flush()
-            active_ipv4 = (
-                db.query(IPAssignment)
-                .filter(IPAssignment.subscription_id == subscription.id)
-                .filter(IPAssignment.is_active.is_(True))
-                .filter(IPAssignment.ipv4_address_id.is_not(None))
-                .count()
-            )
-            if active_ipv4 == 1:
-                mark_primary_ipv4_assignment(
-                    db,
-                    subscription_id=subscription.id,
-                    ipv4_address_id=assignment.ipv4_address_id,
+            if (
+                ip_version == IPVersion.ipv4
+                and assignment.is_active
+                and not assignment.is_primary
+                and assignment.ipv4_address_id is not None
+            ):
+                # Same rule as the generic CRUD path: with exactly one active
+                # IPv4 holding there is one possible served address, so ask the
+                # single writer of is_primary to mark it. Only for the row just
+                # bound here; already-bound rows keep their existing behaviour.
+                # Flush so the count sees the bind (autoflush may be off).
+                db.flush()
+                active_ipv4 = (
+                    db.query(IPAssignment)
+                    .filter(IPAssignment.subscription_id == subscription.id)
+                    .filter(IPAssignment.is_active.is_(True))
+                    .filter(IPAssignment.ipv4_address_id.is_not(None))
+                    .count()
                 )
+                if active_ipv4 == 1:
+                    mark_primary_ipv4_assignment(
+                        db,
+                        subscription_id=subscription.id,
+                        ipv4_address_id=assignment.ipv4_address_id,
+                    )
         if address:
             setattr(subscription, f"{version_key}_address", address.address)
         return assignment, address
