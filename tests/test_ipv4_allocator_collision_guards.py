@@ -268,3 +268,65 @@ def test_reactivation_keeps_own_address_when_only_own_session_uses_it(
         db_session, subscription, IPVersion.ipv4, {}
     )
     assert address is not None and address.address == "10.94.0.1"
+
+
+def _legacy_assignment(db, subscription, address, *, is_active, subscription_id=None):
+    row = IPAssignment(
+        subscriber_id=subscription.subscriber_id,
+        subscription_id=subscription_id,
+        ip_version=IPVersion.ipv4,
+        ipv4_address_id=address.id,
+        is_active=is_active,
+    )
+    db.add(row)
+    db.flush()
+    return row
+
+
+def test_reactivating_unbound_legacy_assignment_binds_subscription(
+    db_session, subscription
+):
+    pool = _pool(db_session)
+    (old,) = _rows(db_session, pool, 1)
+    row = _legacy_assignment(db_session, subscription, old, is_active=False)
+
+    assignment, address = _ensure_ip_assignment_for_version(
+        db_session, subscription, IPVersion.ipv4, {}
+    )
+
+    assert assignment is row
+    assert row.is_active is True
+    assert row.subscription_id == subscription.id
+    assert row.subscriber_id == subscription.subscriber_id
+    assert address is not None and address.address == "10.94.0.1"
+
+
+def test_already_active_unbound_legacy_assignment_is_bound(db_session, subscription):
+    pool = _pool(db_session)
+    (old,) = _rows(db_session, pool, 1)
+    row = _legacy_assignment(db_session, subscription, old, is_active=True)
+
+    assignment, _ = _ensure_ip_assignment_for_version(
+        db_session, subscription, IPVersion.ipv4, {}
+    )
+
+    assert assignment is row
+    assert row.subscription_id == subscription.id
+
+
+def test_assignment_already_bound_to_subscription_is_unchanged(
+    db_session, subscription
+):
+    pool = _pool(db_session)
+    (old,) = _rows(db_session, pool, 1)
+    row = _legacy_assignment(
+        db_session, subscription, old, is_active=False, subscription_id=subscription.id
+    )
+
+    assignment, _ = _ensure_ip_assignment_for_version(
+        db_session, subscription, IPVersion.ipv4, {}
+    )
+
+    assert assignment is row
+    assert row.is_active is True
+    assert row.subscription_id == subscription.id

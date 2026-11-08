@@ -622,6 +622,15 @@ def _ensure_ip_assignment_for_version(
                 status_code=400,
                 detail=f"{version_key} address override does not match existing assignment.",
             )
+        if assignment.subscription_id is None:
+            # Adopted a legacy unbound row (see _exact_assignment_scope): bind it
+            # so it does not stay live with no owning subscription.
+            assignment.subscription_id = subscription.id
+            logger.info(
+                "Bound adopted IP assignment %s to subscription %s",
+                assignment.id,
+                subscription.id,
+            )
         if address:
             setattr(subscription, f"{version_key}_address", address.address)
         return assignment, address
