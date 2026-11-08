@@ -12,6 +12,16 @@
             {% if preview.current.delivery_state == 'applied' %}Test access applied{% elif preview.current.delivery_state == 'failed' %}Test access delivery failed; awaiting retry{% else %}Applying test access{% endif %}.
             Expires {{ preview.current.expires_at.strftime('%d %b %Y %H:%M UTC') }}.
         </div>
+        <form id="end-test-connection" method="POST" action="{{ request.url.path }}/end" class="mt-4 space-y-3 rounded-lg border border-amber-300 p-4 dark:border-amber-700">
+            {% include "components/forms/csrf_input.html" %}
+            <input type="hidden" name="grant_id" value="{{ preview.current.grant_id }}">
+            <input type="hidden" name="command_id" value="{{ end_command_id }}">
+            <p class="text-sm text-slate-700 dark:text-slate-200">End this test now? The grant will end immediately. Current network access rules will be reapplied, which may block the customer. Network delivery may take a moment.</p>
+            <label for="test-end-reason" class="block text-sm font-medium text-slate-700 dark:text-slate-200">Reason for ending early</label>
+            <textarea id="test-end-reason" name="reason" required maxlength="500" rows="2" class="w-full rounded-lg border border-slate-300 bg-white p-2 text-sm dark:border-slate-600 dark:bg-slate-900 dark:text-white"></textarea>
+            <label class="flex items-start gap-2 text-sm text-slate-700 dark:text-slate-200"><input type="checkbox" name="confirm_end" value="true" required class="mt-1">I confirm that this test should end now.</label>
+            <button type="submit" class="rounded-lg border border-amber-500 px-4 py-2 text-sm font-semibold text-amber-800 hover:bg-amber-50 dark:text-amber-200 dark:hover:bg-amber-900/30">End Test Connection</button>
+        </form>
         {% endif %}
         <div class="mt-5 rounded-lg bg-slate-50 p-4 text-sm dark:bg-slate-900/50 dark:text-slate-200">
             <p><strong>Configured test duration:</strong> {{ preview.duration_hours }} hour{% if preview.duration_hours != 1 %}s{% endif %}</p>

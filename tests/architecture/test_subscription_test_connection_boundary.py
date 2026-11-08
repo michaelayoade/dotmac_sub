@@ -30,6 +30,28 @@ def test_grant_owner_never_changes_commercial_or_funding_fields():
         assert forbidden not in source
 
 
+def test_early_end_is_owned_and_the_ui_submits_the_exact_grant():
+    owner = Path("app/services/test_connection.py").read_text(encoding="utf-8")
+    route = Path("app/web/admin/customers.py").read_text(encoding="utf-8")
+    template = Path("templates/admin/customers/test_connection.html").read_text(
+        encoding="utf-8"
+    )
+    customer_detail = Path("templates/admin/customers/detail.html").read_text(
+        encoding="utf-8"
+    )
+    assert "def end_test_connection(" in owner
+    assert "definition=_END" in owner
+    assert "end_test_connection(" in route
+    assert 'name="grant_id" value="{{ preview.current.grant_id }}"' in template
+    assert 'name="confirm_end"' in template
+    assert 'id="end-test-connection"' in template
+    assert (
+        "'End Test Connection' if test_grant else 'Test Connection'" in customer_detail
+    )
+    assert "subscription.id|string" in customer_detail
+    assert "#end-test-connection" in customer_detail
+
+
 def test_radius_sql_deadline_applies_to_check_reply_and_group_selection():
     source = Path("config/freeradius/mods-enabled/sql").read_text(encoding="utf-8")
     for key in (

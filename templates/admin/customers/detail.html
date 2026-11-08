@@ -1533,10 +1533,10 @@
                                 {% set sub_conn = (connection_by_subscription or {}).get(subscription.id|string, {}) %}
                                 {% endif %}
                                 {% if can_test_connection %}
-                                <a href="/admin/customers/{{ customer_type }}/{{ subscription.subscriber_id }}/subscriptions/{{ subscription.id }}/test-connection" class="w-24 rounded-lg border border-blue-200 bg-blue-50 px-2 py-1.5 text-center text-xs font-medium text-blue-700 hover:bg-blue-100 dark:border-blue-800 dark:bg-blue-900/20 dark:text-blue-300">Test Connection</a>
                                 {% set test_grant = (test_connection_by_subscription or {}).get(subscription.id|string) %}
+                                <a href="/admin/customers/{{ customer_type }}/{{ subscription.subscriber_id }}/subscriptions/{{ subscription.id }}/test-connection{% if test_grant %}#end-test-connection{% endif %}" class="w-28 rounded-lg border px-2 py-1.5 text-center text-xs font-medium {% if test_grant %}border-amber-300 bg-amber-50 text-amber-800 hover:bg-amber-100 dark:border-amber-700 dark:bg-amber-900/20 dark:text-amber-200{% else %}border-blue-200 bg-blue-50 text-blue-700 hover:bg-blue-100 dark:border-blue-800 dark:bg-blue-900/20 dark:text-blue-300{% endif %}">{{ 'End Test Connection' if test_grant else 'Test Connection' }}</a>
                                 {% if test_grant %}
-                                <div class="w-24 text-center text-xs text-blue-700 dark:text-blue-300" role="status">
+                                <div class="w-28 text-center text-xs text-blue-700 dark:text-blue-300" role="status">
                                     {% if test_grant.delivery_state == 'applied' %}Test access active{% elif test_grant.delivery_state == 'failed' %}Delivery failed{% else %}Applying test access{% endif %}
                                     <br>Until {{ test_grant.expires_at.strftime('%d %b %H:%M UTC') }}
                                 </div>

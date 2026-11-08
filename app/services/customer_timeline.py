@@ -253,12 +253,13 @@ def _audit_activity_items(
         if action in {
             "subscription.test_connection_activated",
             "subscription.test_connection_expired",
+            "subscription.test_connection_ended",
         }:
-            test_title = (
-                "Test Connection activated"
-                if action.endswith("_activated")
-                else "Test Connection expired"
-            )
+            test_title = {
+                "subscription.test_connection_activated": "Test Connection activated",
+                "subscription.test_connection_expired": "Test Connection expired",
+                "subscription.test_connection_ended": "Test Connection ended early",
+            }[action]
             duration = metadata.get("duration_seconds")
             if isinstance(duration, int):
                 hours = duration / 3600
@@ -268,6 +269,8 @@ def _audit_activity_items(
             for key, label in (
                 ("activated_at", "Activated at"),
                 ("expires_at", "Expected expiry"),
+                ("ended_at", "Ended at"),
+                ("reason", "Reason"),
             ):
                 value = metadata.get(key)
                 if isinstance(value, str):

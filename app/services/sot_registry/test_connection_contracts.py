@@ -126,10 +126,10 @@ SERVICE = SOTService(
         ),
         transaction=TransactionContract(
             mode=TransactionMode.OWNER_MANAGED,
-            boundary="Each public write enters execute_owner_command once; audit, event and required timer are flush-only participants.",
-            locking="Subscription FOR UPDATE serializes activation; account-key advisory lock serializes creation counts across subscriptions before timestamp selection. Grant FOR UPDATE serializes expiry/delivery; partial unique index permits one open grant.",
-            idempotency="command_id uniquely identifies an activation; repeat commands return its unchanged interval and mismatched replays fail closed.",
-            retries="At-least-once events recompute current network state; stale expiry cannot expire a newer grant; transport retries never extend the interval.",
+            boundary="Each public write enters execute_owner_command once; audit, event and required timer are flush-only participants. Early end records the authenticated staff actor and reason atomically with the ended grant.",
+            locking="Subscription FOR UPDATE serializes activation and manual end; account-key advisory lock serializes creation counts across subscriptions before timestamp selection. Grant FOR UPDATE serializes expiry/delivery/end; partial unique index permits one open grant.",
+            idempotency="command_id uniquely identifies an activation; repeat commands return its unchanged interval and mismatched replays fail closed. Ending the exact historical grant twice is an unchanged replay.",
+            retries="At-least-once events recompute current network state; stale expiry or manual end cannot expire a newer grant; transport retries never extend the interval.",
         ),
         errors=ErrorContract(
             domain_codes=owner_command_boundary_error_codes(OWNER)
@@ -147,6 +147,7 @@ SERVICE = SOTService(
                     "ambiguous_login",
                     "security_hold",
                     "not_due",
+                    "not_active",
                 )
             ),
             mapping_owner="permission-gated customer web adapters and test-connection event adapter",
@@ -165,7 +166,7 @@ SERVICE = SOTService(
             ),
             schema_version=1,
             delivery_owner="events.dispatcher",
-            compatibility="Existing changed-event v1 remains unchanged. Creation-event v1 freezes customer-specific seven-day count and bounded references with command provenance in the activation transaction.",
+            compatibility="Changed-event v1 adds the ended transition for staff early termination; creation-event v1 freezes customer-specific seven-day count and bounded references with command provenance in the activation transaction.",
             replay="Consequence always resolves current access; expiry consumes the exact grant identity, never a saved commercial-state snapshot.",
         ),
         projections=(

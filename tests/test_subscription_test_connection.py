@@ -19,14 +19,17 @@ from app.models.catalog import (
 )
 from app.models.durable_timer import DurableTimer
 from app.models.enforcement_lock import EnforcementLock, EnforcementReason
+from app.models.event_store import EventStore
 from app.models.system_user import SystemUser
 from app.models.test_connection import TestConnectionGrant as ConnectionGrant
 from app.services import test_connection as owner
 from app.services.access_resolution import resolve_customer_access
-from app.services.owner_commands import CommandContext
+from app.services.events.types import EventType
+from app.services.owner_commands import CommandContext, OwnerCommandError
 from app.services.test_connection_policy import (
     ObservedRadiusAttribute,
     effective_radius_observation,
+    utc_datetime,
 )
 from app.services.test_connection_policy import TestConnectionAccess as ConnectionAccess
 
@@ -138,6 +141,118 @@ def test_overlapping_activation_is_refused(db_session, test_service):
         owner.activate_test_connection(
             db_session, command=replace(test_service, context=context)
         )
+
+
+def test_staff_can_end_exact_grant_early_with_audit_and_network_event(
+    db_session, test_service
+):
+    activated = owner.activate_test_connection(db_session, command=test_service)
+    end_id = uuid4()
+    end_command = owner.EndTestConnectionCommand(
+        context=CommandContext(
+            command_id=end_id,
+            correlation_id=end_id,
+            actor=str(test_service.actor_id),
+            scope=owner.PERMISSION,
+            reason="Customer troubleshooting is complete",
+            idempotency_key=f"end:{end_id}",
+        ),
+        grant_id=activated.grant_id,
+        subscriber_id=test_service.subscriber_id,
+        subscription_id=test_service.subscription_id,
+        actor_id=test_service.actor_id,
+    )
+    outcome = owner.end_test_connection(db_session, command=end_command)
+    grant = db_session.get(ConnectionGrant, activated.grant_id)
+    assert grant.ended_at is not None
+    assert outcome.grant_id == activated.grant_id
+    assert (
+        owner.access_for_subscription(db_session, test_service.subscription_id) is None
+    )
+    audit = db_session.scalar(
+        select(AuditEvent).where(
+            AuditEvent.action == "subscription.test_connection_ended"
+        )
+    )
+    assert audit.actor_id == str(test_service.actor_id)
+    assert audit.metadata_["reason"] == "Customer troubleshooting is complete"
+    event = db_session.scalar(
+        select(EventStore).where(
+            EventStore.event_type
+            == EventType.subscription_test_connection_changed.value,
+            EventStore.payload["transition"].as_string() == "ended",
+        )
+    )
+    assert event is not None
+    assert event.payload["grant_id"] == str(activated.grant_id)
+    from app.services.customer_timeline import build_customer_timeline
+
+    subscription = db_session.get(owner.Subscription, test_service.subscription_id)
+    timeline = build_customer_timeline(
+        db_session,
+        customer_id=str(test_service.subscriber_id),
+        account_ids=[test_service.subscriber_id],
+        subscriptions=[subscription],
+    )
+    ended_entry = next(
+        item for item in timeline if item["title"] == "Test Connection ended early"
+    )
+    assert ended_entry["actor_label"] == "Ada Engineer"
+    details = {item["label"]: item["value"] for item in ended_entry["details"]}
+    assert details["Reason"] == "Customer troubleshooting is complete"
+    assert details["Ended at"] == utc_datetime(grant.ended_at).isoformat()
+    db_session.rollback()  # adapters hand public owners a transaction-free session
+    assert owner.end_test_connection(db_session, command=end_command).replayed
+    replacement = owner.activate_test_connection(
+        db_session,
+        command=replace(
+            test_service,
+            context=replace(test_service.context, command_id=uuid4()),
+        ),
+    )
+    assert owner.end_test_connection(db_session, command=end_command).replayed
+    assert (
+        owner.access_for_subscription(db_session, test_service.subscription_id).grant_id
+        == replacement.grant_id
+    )
+
+
+def test_early_end_rejects_other_subscription_and_missing_reason(
+    db_session, test_service
+):
+    activated = owner.activate_test_connection(db_session, command=test_service)
+    end_id = uuid4()
+    command = owner.EndTestConnectionCommand(
+        context=CommandContext(
+            command_id=end_id,
+            correlation_id=end_id,
+            actor=str(test_service.actor_id),
+            scope=owner.PERMISSION,
+            reason="Troubleshooting complete",
+            idempotency_key=f"end:{end_id}",
+        ),
+        grant_id=activated.grant_id,
+        subscriber_id=test_service.subscriber_id,
+        subscription_id=test_service.subscription_id,
+        actor_id=test_service.actor_id,
+    )
+    with pytest.raises(owner.TestConnectionError, match="does not belong"):
+        owner.end_test_connection(
+            db_session, command=replace(command, subscriber_id=uuid4())
+        )
+    with pytest.raises(OwnerCommandError, match="Command reason cannot be empty"):
+        owner.end_test_connection(
+            db_session,
+            command=replace(command, context=replace(command.context, reason=" ")),
+        )
+    with pytest.raises(owner.TestConnectionError, match="up to 500"):
+        owner.end_test_connection(
+            db_session,
+            command=replace(
+                command, context=replace(command.context, reason="a" * 501)
+            ),
+        )
+    assert owner.access_for_subscription(db_session, test_service.subscription_id)
 
 
 @pytest.mark.parametrize("hours", [1, 2, 3, 4, 12, 24])
