@@ -2715,6 +2715,7 @@ HELP_NAVIGATION: tuple[AdminHelpNavigationSection, ...] = (
         "Reports",
         (
             "reports-overview",
+            "customer-retention-report",
             "churn-report",
             "regional-performance-report",
             "ticket-sla-report",
