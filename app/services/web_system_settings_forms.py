@@ -86,7 +86,10 @@ def update_registered_settings(
             )
         if not spec.is_secret:
             desired, error = settings_spec.coerce_value(
-                spec, settings_spec.extract_db_value(update.payload)
+                spec,
+                update.payload.value_text
+                if update.payload.value_text is not None
+                else update.payload.value_json,
             )
             if error:
                 return HubSettingsUpdateResult(errors=(f"{spec.key}: {error}",))

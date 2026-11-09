@@ -298,8 +298,11 @@ def test_billing_config_saves_upcoming_charge_report_defaults(db_session):
     rows = _billing_rows(db_session)
     assert rows["upcoming_charges_postpaid_lead_days"].value_text == "21"
     assert rows["upcoming_charges_prepaid_lead_days"].value_text == "10"
+    assert "upcoming_charges_prepaid_amount_bands" not in rows
     assert (
-        rows["upcoming_charges_prepaid_amount_bands"].value_text
+        web_system_config_service.get_billing_config_context(db_session)["billing"][
+            "upcoming_charges_prepaid_amount_bands"
+        ]
         == "50000-100000,100000-500000,500000-"
     )
     assert rows["upcoming_charges_include_funded_prepaid_default"].value_json is True
@@ -437,8 +440,13 @@ def test_plan_change_save_roundtrips_and_applies_spec_types(db_session):
     assert rows["refund_policy"].value_type == SettingValueType.string
     assert rows["prepaid_rollover"].value_text == "true"
     assert rows["prepaid_rollover"].value_type == SettingValueType.boolean
-    assert rows["discount_transfer"].value_text == "false"
-    assert rows["discount_transfer"].value_type == SettingValueType.boolean
+    assert "discount_transfer" not in rows
+    assert (
+        web_system_config_service.get_plan_change_context(db_session)["plan_change"][
+            "discount_transfer"
+        ]
+        == "false"
+    )
     assert rows["upgrade_fee"].value_text == "5.00"
     assert rows["upgrade_fee"].value_type == SettingValueType.string
 

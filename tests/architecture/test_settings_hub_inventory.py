@@ -278,7 +278,7 @@ def test_mfa_editor_resolution_preserves_legacy_fallback(
 
     namespace = {
         "Session": object,
-        "SettingDomain": SimpleNamespace(auth="auth"),
+        "SettingDomain": SimpleNamespace(auth="auth", billing="billing"),
         "KernelSettingDomain": str,
         "get_spec": lambda *_args: object(),
         "operator_tenant_id": lambda: "operator-tenant",

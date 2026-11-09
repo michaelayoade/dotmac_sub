@@ -21,6 +21,8 @@ an unchecked field from an absent field; absent inputs are never changed.
 Validation errors preserve submitted non-secret values, including invalid JSON,
 while secret inputs remain blank. The MFA editor preserves the legacy `force_2fa`
 fallback until an explicit canonical value is saved, and labels that provenance.
+Billing payment terms likewise retain their existing legacy resolver fallback;
+saving an explicit canonical default can override the legacy term.
 
 The shared registered-form adapter is used by both the hub and specialised
 configuration pages. Monitoring submits its three domains as one registered batch.

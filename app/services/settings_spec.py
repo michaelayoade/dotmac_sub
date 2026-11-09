@@ -7091,6 +7091,16 @@ def resolve_with_source(
         key,
         tenant_id=operator_tenant_id(),
     )
+    if (
+        domain == SettingDomain.billing
+        and key == "payment_due_days"
+        and source == "default"
+    ):
+        from app.services.billing_settings import resolve_payment_due_days
+
+        effective = resolve_payment_due_days(db, default=int(str(value)))
+        if effective != value:
+            return effective, "legacy billing payment terms"
     # Auth still honors this retired alias until a canonical MFA value is stored.
     # Editors must compare against the same fallback so an explicit disable saves.
     if (

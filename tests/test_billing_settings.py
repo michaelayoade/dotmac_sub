@@ -165,3 +165,20 @@ def test_billing_settings_template_confirms_and_bounds_policy_save():
     assert 'name="send_billing_notifications"' not in template
     assert 'min="0"' in template
     assert 'max="3650"' in template
+
+
+def test_explicit_default_payment_terms_override_legacy_value(db_session):
+    db_session.add(
+        DomainSetting(
+            domain=SettingDomain.billing,
+            key="invoice_due_days",
+            value_type=SettingValueType.integer,
+            value_text="9",
+            is_active=True,
+        )
+    )
+    db_session.commit()
+    save_billing_config(
+        db_session, {"payment_due_days": "14"}, context=_settings_context()
+    )
+    assert resolve_payment_due_days(db_session) == 14
