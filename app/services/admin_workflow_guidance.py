@@ -1241,6 +1241,7 @@ HELP_ONLY_GUIDANCE: tuple[AdminWorkflowGuidance, ...] = (
         "Open linked records when a total or exception needs investigation.",
         "Export only the filtered scope you are authorized to use.",
         "For Upcoming Charges, choose the postpaid or prepaid view, narrow the cohort with the available filters, and use the optional month/year or summary view when you need a focused planning period.",
+        "For Network Usage, select both dates to limit ONT records by their last update. The infrastructure totals remain a current snapshot; clear the dates to see the latest available records.",
         route_templates=("/admin/reports",),
     ),
     _guide(
