@@ -9,7 +9,7 @@ the dates in the URL; Clear restores the default. The shell renders first and
 loads the period metrics and current billing-risk queue in separate requests.
 Each request has an independent loading and error state.
 
-The `ui.crm_operational_reports` owner accepts a typed
+The registered customer-retention report owner accepts a typed
 `CustomerRetentionMetricsQuery` and returns a typed outcome. Churn uses
 `subscriber_growth.churn_summary` and therefore has the same visible
 subscriber population, unique churn event count, and historical fallback as
@@ -26,7 +26,7 @@ The three metric cards are period based. Tracked Accounts, Revenue At Risk,
 segment focus, search, queue ordering, pagination, profile links, and the
 existing search-scoped queue CSV remain current-state billing-risk projections.
 The CSV is explicitly labeled as a current queue export. The metrics are not
-presented as CRM campaign attribution or outreach outcomes.
+presented as campaign attribution or outreach outcomes.
 
 Freshness: each fragment queries committed facts on demand. There is no
 authoritative report cache. A failed fragment read stays visibly unavailable;
