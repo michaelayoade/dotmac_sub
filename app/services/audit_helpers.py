@@ -849,6 +849,31 @@ def build_recent_activity_feed(db: Session, events: list, limit: int = 5) -> lis
         entity_label = humanize_entity(
             getattr(event, "entity_type", None), getattr(event, "entity_id", None)
         )
+        entity_type = getattr(event, "entity_type", None)
+        if entity_type in {
+            "/admin/reports/customers",
+            "/admin/reports/subscribers",
+            "/admin/reports/customers/export",
+            "/admin/reports/subscribers/export",
+        }:
+            selected = metadata.get("query") or {}
+            if not isinstance(selected, dict):
+                selected = {}
+            filters = [
+                f"From {selected['date_from']}" if selected.get("date_from") else "",
+                f"To {selected['date_to']}" if selected.get("date_to") else "",
+                f"Status: {selected['status']}" if selected.get("status") else "",
+            ]
+            detail = " · ".join(item for item in filters if item) or "All customers"
+            action_label = (
+                "Exported"
+                if str(entity_type).endswith("/export")
+                else "Filtered"
+                if any(filters)
+                else "Viewed"
+            )
+            entity_label = "Customer Report"
+            change_summary = detail
         actor_name = _resolve_actor_name(event, subscribers)
         time_str = format_audit_datetime(
             getattr(event, "occurred_at", None), "%b %d, %H:%M"
@@ -898,3 +923,20 @@ def recent_activity_for_paths(
             if len(filtered) >= limit:
                 break
     return build_recent_activity_feed(db, filtered, limit=limit)
+
+
+def recent_customer_report_activity(db: Session, *, limit: int = 5) -> list[dict]:
+    """Read report interactions before limiting, even on a busy audit log."""
+    events = audit_service.audit_events.list_recent_for_paths(
+        db,
+        query=audit_service.RecentAuditPathQuery(
+            paths=(
+                "/admin/reports/customers",
+                "/admin/reports/subscribers",
+                "/admin/reports/customers/export",
+                "/admin/reports/subscribers/export",
+            ),
+            limit=limit,
+        ),
+    )
+    return build_recent_activity_feed(db, list(events), limit=limit)

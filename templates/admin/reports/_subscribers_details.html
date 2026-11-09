@@ -1,0 +1,230 @@
+<div id="customer-report-details" class="space-y-8">
+{% from "components/ui/macros.html" import stats_card, card, status_badge, empty_state %}
+
+<div class="grid gap-4 sm:grid-cols-2 animate-fade-in-up" style="animation-delay: 75ms;">
+        {{ stats_card("Period Usage", (total_usage_gb ~ " GB") if usage_has_data else "No usage records", icon='<svg class="h-6 w-6 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M12 12v9m0-9l-3 3m3-3l3 3"/></svg>', color="cyan", color2="blue", value_size="24px") }}
+        {{ stats_card("Usage Window", (usage_date_from|default(date_from|default(''))) ~ " to " ~ (usage_date_to|default(date_to|default(''))), icon='<svg class="h-6 w-6 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 7V3m8 4V3M5 11h14M5 19h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 002 2v10a2 2 0 002 2z"/></svg>', color="indigo", color2="violet", value_size="24px") }}
+    </div>
+    {% if usage_includes_estimate %}<p class="text-xs text-slate-500 dark:text-slate-400">Period usage includes a bandwidth-sample estimate where recorded bytes were unavailable.</p>{% elif usage_has_data %}<p class="text-xs text-slate-500 dark:text-slate-400">Period usage uses recorded RADIUS or historical daily bytes.</p>{% endif %}
+
+    {# Growth Trend Chart #}
+    <div class="animate-fade-in-up" style="animation-delay: 100ms;">
+    {% call card("Customer Growth Trend", color="teal") %}
+        {% if growth_data and (growth_data.new|sum) > 0 %}
+        <div class="chart-container" style="height: 260px; min-height: 260px;">
+            <canvas id="subscriber-growth-chart"></canvas>
+        </div>
+        <script>
+        setTimeout(function() {
+            const ctx = document.getElementById('subscriber-growth-chart');
+            if (!ctx) return;
+            const chartData = {
+                labels: {{ growth_data["labels"] | tojson | safe }},
+                datasets: [
+                    {
+                        label: 'Total Customers',
+                        data: {{ growth_data["total"] | tojson | safe }},
+                        borderColor: '#14b8a6',
+                        backgroundColor: '#14b8a6',
+                        yAxisID: 'yTotal',
+                        fill: false,
+                        pointRadius: 3,
+                        tension: 0.2
+                    },
+                    {
+                        label: 'New Sign-ups',
+                        type: 'bar',
+                        data: {{ growth_data["new"] | tojson | safe }},
+                        backgroundColor: '#10b981',
+                        yAxisID: 'yNew'
+                    }
+                ]
+            };
+            const chart = DotmacCharts.createLineChart(ctx, chartData, {
+                interaction: { mode: 'index', intersect: false },
+                scales: {
+                    x: { ticks: { maxTicksLimit: 8 } },
+                    yTotal: {
+                        type: 'linear', position: 'left',
+                        title: { display: true, text: 'Total customers' },
+                        ticks: { precision: 0 }
+                    },
+                    yNew: {
+                        type: 'linear', position: 'right', beginAtZero: true,
+                        title: { display: true, text: 'New sign-ups' },
+                        grid: { drawOnChartArea: false },
+                        ticks: { precision: 0 }
+                    }
+                }
+            });
+            DotmacCharts.registerChart('subscriber-growth-chart', chart);
+        });
+        </script>
+        {% else %}
+        <p class="text-sm text-slate-500 dark:text-slate-400">No new sign-ups in the selected period.</p>
+        {% endif %}
+    {% endcall %}
+    </div>
+
+    <div class="grid grid-cols-1 items-start gap-6 lg:grid-cols-2">
+        <div class="rounded-xl border border-slate-200 bg-white p-6 shadow-sm dark:border-slate-700 dark:bg-slate-800">
+            <h2 class="mb-4 font-semibold text-slate-900 dark:text-white">Active Customers by Plan</h2>
+            <div class="space-y-3{% if plan_distribution|length > 15 %} pr-2{% endif %}"{% if plan_distribution|length > 15 %} style="max-height: 29.25rem; overflow-x: hidden; overflow-y: auto;"{% endif %}>
+                {% for plan, count in plan_distribution.items() %}
+                <div class="flex justify-between text-sm"><span class="text-slate-600 dark:text-slate-300">{{ plan }}</span><span class="font-semibold text-slate-900 dark:text-white">{{ count }}</span></div>
+                {% else %}<p class="text-sm text-slate-500">No active plan data for this cohort.</p>{% endfor %}
+            </div>
+        </div>
+        <div class="rounded-xl border border-slate-200 bg-white p-6 shadow-sm dark:border-slate-700 dark:bg-slate-800">
+            <h2 class="mb-4 font-semibold text-slate-900 dark:text-white">Regional Breakdown</h2>
+            <div class="space-y-3{% if regional_breakdown|length > 15 %} pr-2{% endif %}"{% if regional_breakdown|length > 15 %} style="max-height: 29.25rem; overflow-x: hidden; overflow-y: auto;"{% endif %}>
+                {% for item in regional_breakdown %}
+                <div class="flex justify-between gap-4 text-sm"><span class="text-slate-600 dark:text-slate-300">{{ item.region }}</span><span class="text-slate-900 dark:text-white">{{ item.subscribers }} customers · {{ item.tickets }} tickets</span></div>
+                {% else %}<p class="text-sm text-slate-500">No regional data for this cohort.</p>{% endfor %}
+            </div>
+        </div>
+    </div>
+
+    {% call card("Matching Customers", color="teal") %}
+        {% if customers %}
+        <div class="mb-4 flex justify-end">
+            <div class="w-full sm:max-w-xs">
+                <label for="matching-customers-search" class="sr-only">Search matching customers on this page</label>
+                <div class="relative">
+                    <svg class="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="m21 21-4.35-4.35m1.35-5.65a7 7 0 1 1-14 0 7 7 0 0 1 14 0Z"/></svg>
+                    <input id="matching-customers-search" type="search" placeholder="Search displayed customers..." autocomplete="off" class="w-full rounded-lg border border-slate-300 bg-white py-2 pl-9 pr-3 text-sm text-slate-900 placeholder-slate-400 outline-none transition focus:border-teal-500 focus:ring-2 focus:ring-teal-500/20 dark:border-slate-600 dark:bg-slate-700 dark:text-white dark:placeholder-slate-400">
+                </div>
+                <p id="matching-customers-search-status" class="sr-only" role="status" aria-live="polite"></p>
+            </div>
+        </div>
+        <div style="overflow-x: auto;{% if customers|length > 15 %} max-height: 48rem; overflow-y: auto;{% endif %}">
+            <table class="min-w-full divide-y divide-slate-200 dark:divide-slate-700">
+                <thead class="sticky top-0 z-10 bg-white dark:bg-slate-800">
+                    <tr class="text-left text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">
+                        <th class="px-4 py-3">Customer</th>
+                        <th class="px-4 py-3">Status</th>
+                        <th class="px-4 py-3 text-right">Usage GB</th>
+                        <th class="px-4 py-3 text-right">Avg Mbps</th>
+                        <th class="px-4 py-3">Email</th>
+                        <th class="px-4 py-3">Created</th>
+                    </tr>
+                </thead>
+                <tbody id="matching-customers-body" class="divide-y divide-slate-100 dark:divide-slate-700/50">
+                    {% for customer in customers %}
+                    <tr data-matching-customer-row class="hover:bg-slate-50 dark:hover:bg-slate-700/50">
+                        <td class="px-4 py-3 text-sm font-medium text-slate-900 dark:text-white">{{ customer.company_name or customer.display_name or (customer.first_name ~ ' ' ~ customer.last_name)|trim }}</td>
+                        <td class="px-4 py-3 text-sm text-slate-600 dark:text-slate-300">{{ customer.status.value|title if customer.status else 'Unknown' }}</td>
+                        <td class="px-4 py-3 text-right text-sm font-mono text-slate-700 dark:text-slate-300" title="{{ customer.period_usage_source|default('unavailable')|replace('_', ' ')|title }}">{{ customer.period_usage_gb if customer.period_usage_source|default('unavailable') != 'unavailable' else '—' }}</td>
+                        <td class="px-4 py-3 text-right text-sm font-mono text-slate-700 dark:text-slate-300">{{ customer.period_avg_mbps|default(0) }}</td>
+                        <td class="px-4 py-3 text-sm text-slate-600 dark:text-slate-300">{{ customer.email }}</td>
+                        <td class="px-4 py-3 text-sm text-slate-500 dark:text-slate-400">{{ customer.created_at | app_datetime('%Y-%m-%d', '-', include_tz=False) }}</td>
+                    </tr>
+                    {% endfor %}
+                    <tr id="matching-customers-no-results" hidden>
+                        <td colspan="6" class="px-4 py-8 text-center text-sm text-slate-500 dark:text-slate-400">No displayed customers match your search.</td>
+                    </tr>
+                </tbody>
+            </table>
+        </div>
+        <script>
+        setTimeout(function() {
+            const input = document.getElementById('matching-customers-search');
+            const body = document.getElementById('matching-customers-body');
+            const emptyRow = document.getElementById('matching-customers-no-results');
+            const status = document.getElementById('matching-customers-search-status');
+            if (!input || !body || !emptyRow || !status) return;
+            const rows = Array.from(body.querySelectorAll('[data-matching-customer-row]'));
+            input.addEventListener('input', function() {
+                const query = input.value.trim().toLocaleLowerCase();
+                let visibleCount = 0;
+                rows.forEach(function(row) {
+                    const matches = !query || row.textContent.toLocaleLowerCase().includes(query);
+                    row.hidden = !matches;
+                    if (matches) visibleCount += 1;
+                });
+                emptyRow.hidden = visibleCount !== 0;
+                status.textContent = `${visibleCount} displayed customer${visibleCount === 1 ? '' : 's'} found`;
+            });
+        });
+        </script>
+        {% else %}
+        {{ empty_state("No matching customers", "Adjust the date range or status filter.") }}
+        {% endif %}
+    {% endcall %}
+
+    {# Status Breakdown + Recent Sign-ups #}
+    <div class="grid items-start gap-6 lg:grid-cols-2 animate-fade-in-up" style="animation-delay: 150ms;">
+        {# Status Breakdown #}
+        <div class="[&>div]:h-full" style="height: 13.02rem; overflow: hidden;">
+        {% call card("By Status", color="teal", padding=False) %}
+            <div class="overflow-y-auto px-6 py-3" style="height: calc(13.02rem - 3.5625rem);">
+            <div class="chart-container mb-3" style="height: 63px; min-height: 63px; max-height: 63px; overflow: hidden;">
+                <canvas id="status-breakdown-chart"></canvas>
+            </div>
+            <div class="space-y-3">
+                {% for status_name, count in status_breakdown.items() %}
+                <div class="flex items-center justify-between">
+                    <div class="flex items-center gap-2">
+                        <span class="h-3 w-3 rounded-full {% if status_name == 'active' %}bg-emerald-500{% elif status_name == 'suspended' %}bg-amber-500{% elif status_name == 'cancelled' %}bg-rose-500{% else %}bg-blue-500{% endif %}"></span>
+                        <span class="text-sm text-slate-600 dark:text-slate-400">{{ status_name|title }}</span>
+                    </div>
+                    <span class="text-sm font-semibold text-slate-900 dark:text-white">{{ count }}</span>
+                </div>
+                {% else %}
+                <p class="text-sm text-slate-500 dark:text-slate-400">No status data available.</p>
+                {% endfor %}
+            </div>
+            </div>
+            <script>
+            setTimeout(function() {
+                const ctx = document.getElementById('status-breakdown-chart');
+                if (!ctx) return;
+                const chartData = {
+                    labels: [{% for status_name, count in status_breakdown.items() %}'{{ status_name|title }}'{% if not loop.last %}, {% endif %}{% endfor %}],
+                    values: [{% for status_name, count in status_breakdown.items() %}{{ count }}{% if not loop.last %}, {% endif %}{% endfor %}],
+                    colors: [{% for status_name, count in status_breakdown.items() %}{% if status_name == 'active' %}'#10b981'{% elif status_name == 'suspended' %}'#f59e0b'{% elif status_name == 'cancelled' %}'#f43f5e'{% else %}'#3b82f6'{% endif %}{% if not loop.last %}, {% endif %}{% endfor %}]
+                };
+                const chart = DotmacCharts.createDoughnutChart(ctx, chartData, { plugins: { legend: { display: false } } });
+                DotmacCharts.registerChart('status-breakdown-chart', chart);
+            });
+            </script>
+        {% endcall %}
+        </div>
+
+        {# Recent Sign-ups #}
+        <div class="[&>div]:h-full" style="height: 13.02rem; overflow: hidden;">
+        {% call card("Recent Sign-ups", color="teal", padding=False) %}
+            <div class="overflow-y-auto px-6 py-3" style="height: calc(13.02rem - 3.5625rem);">
+            {% if recent_subscribers %}
+            <div class="space-y-3 pr-2">
+                {% for sub in recent_subscribers %}
+                <div class="flex items-center justify-between py-2 border-b border-slate-100 dark:border-slate-700 last:border-0">
+                    <div>
+                        <p class="text-sm font-medium text-slate-900 dark:text-white">
+                            {{ sub.name if sub else 'Subscriber' }}
+                        </p>
+                        <p class="text-xs text-slate-500 dark:text-slate-400">{{ sub.created_at | app_datetime('%b %d, %Y', '-', include_tz=False) }}</p>
+                    </div>
+                    {{ status_badge(sub.derived_status.value|title if sub.derived_status else 'Active', 'active', size="sm") }}
+                </div>
+                {% endfor %}
+            </div>
+            {% else %}
+            <p class="text-sm text-slate-500 dark:text-slate-400">No recent sign-ups.</p>
+            {% endif %}
+            </div>
+        {% endcall %}
+        </div>
+    </div>
+
+    {% if has_previous or has_next %}
+    <nav class="flex justify-end gap-2" aria-label="Customer report pages">
+        {% if has_previous %}<a class="rounded-lg border border-slate-300 px-3 py-2 text-sm" href="?page={{ page - 1 }}&per_page={{ per_page }}&date_from={{ date_from }}&date_to={{ date_to }}&status={{ status_filter }}">Previous</a>{% endif %}
+        {% if has_next %}<a class="rounded-lg border border-slate-300 px-3 py-2 text-sm" href="?page={{ page + 1 }}&per_page={{ per_page }}&date_from={{ date_from }}&date_to={{ date_to }}&status={{ status_filter }}">Next</a>{% endif %}
+    </nav>
+    {% endif %}
+
+    {% set activity_title = "Reports Activity" %}
+    {% set activity_link = "/admin/system/audit" %}
+    {% include "components/data/recent_activity_panel.html" %}
+</div>

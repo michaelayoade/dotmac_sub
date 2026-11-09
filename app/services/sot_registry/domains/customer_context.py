@@ -3630,7 +3630,11 @@ DOMAIN = DomainSOT(
                 "customer usage headline totals",
                 "customer usage total provenance",
             ),
-            depends_on=("sessions.radius_reconciliation",),
+            depends_on=(
+                "sessions.radius_reconciliation",
+                "customer.accounts",
+                "access.subscription_lifecycle",
+            ),
             notes=(
                 "Authoritative zero is a valid total. Customer clients do "
                 "not replace server totals with loaded-session pages or "
@@ -3639,7 +3643,82 @@ DOMAIN = DomainSOT(
                 "Records total, download, upload, and daily average use the "
                 "complete filtered daily record set before pagination. The "
                 "CSV uses the same typed window and exports the full filtered "
-                "result rather than the visible page."
+                "result rather than the visible page. Admin report usage "
+                "prefers RADIUS session bytes over imported daily bytes on "
+                "overlapping days, with a labeled bandwidth estimate for "
+                "days without either recorded source."
+            ),
+            contract=ServiceContract(
+                concerns=tuple(
+                    ConcernContract(
+                        name=name,
+                        role=OwnerRole.RESOLVER,
+                        input_names=(
+                            "typed usage window and customer scope",
+                            "native RADIUS session bytes",
+                            "historical daily usage bytes",
+                            "bandwidth sample observations",
+                        ),
+                    )
+                    for name in (
+                        "customer usage window definitions",
+                        "customer usage headline totals",
+                        "customer usage total provenance",
+                    )
+                ),
+                authoritative_inputs=(
+                    AuthorityInput(
+                        name="typed usage window and customer scope",
+                        owner="customer.usage_summary",
+                        kind=AuthorityKind.CONTROL_INPUT,
+                        source="PeriodUsageQuery carries customer UUIDs and a half-open UTC interval.",
+                    ),
+                    AuthorityInput(
+                        name="native RADIUS session bytes",
+                        owner="sessions.radius_reconciliation",
+                        kind=AuthorityKind.OBSERVATION,
+                        source="Cumulative session octets attributed to session-start day.",
+                    ),
+                    AuthorityInput(
+                        name="historical daily usage bytes",
+                        owner="external:splynx_traffic_counter",
+                        kind=AuthorityKind.EXTERNAL_OBSERVATION,
+                        source="Imported SubscriberDailyUsage daily byte records.",
+                    ),
+                    AuthorityInput(
+                        name="bandwidth sample observations",
+                        owner="sessions.radius_reconciliation",
+                        kind=AuthorityKind.OBSERVATION,
+                        source="Retained BandwidthSample throughput rows for labeled fallback estimates.",
+                    ),
+                ),
+                transaction=TransactionContract(
+                    mode=TransactionMode.READ_ONLY,
+                    boundary="The adapter supplies a read session; usage queries never flush or commit.",
+                    locking="Committed usage observations require no mutation lock.",
+                    idempotency="The same recorded observations and typed window yield the same total and provenance.",
+                    retries="Read-only usage aggregation is safe to retry.",
+                ),
+                errors=ErrorContract(
+                    domain_codes=("usage_date_range_reversed",),
+                    mapping_owner="customer and admin usage adapters",
+                    fail_closed_on=("end at or before start",),
+                ),
+                migration=MigrationContract(
+                    state=AuthorityMigrationState.NATIVE,
+                    new_owner="customer.usage_summary",
+                    verification="Recorded-byte priority, estimate fallback, and filtered-period tests.",
+                ),
+                steward="customer operations",
+                design_refs=(
+                    "docs/designs/CUSTOMER_REPORT_PAGE.md",
+                    "docs/designs/CUSTOMER_SELF_SERVICE_LIFECYCLE.md",
+                    "docs/SOT_RELATIONSHIP_MAP.md",
+                ),
+                test_refs=(
+                    "tests/test_usage_summary.py",
+                    "tests/test_web_reports_customer_filters.py",
+                ),
             ),
         ),
         SOTService(
@@ -4186,13 +4265,77 @@ DOMAIN = DomainSOT(
             module="app.services.subscriber_growth",
             owns=(
                 "admin subscriber growth and churn report figures",
-                "monthly subscriber growth and churn series",
+                "period-aware subscriber growth and monthly churn series",
                 "derived subscriber-status report counts",
             ),
+            depends_on=("customer.accounts", "access.subscription_lifecycle"),
             notes=(
                 "Domain read owner for the admin /reports growth, churn, "
                 "and status figures. The web report layer composes these "
                 "reads and owns presentation only."
+            ),
+            contract=ServiceContract(
+                concerns=tuple(
+                    ConcernContract(
+                        name=name,
+                        role=OwnerRole.RESOLVER,
+                        input_names=(
+                            "visible customer signup and status facts",
+                            "report window and status scope",
+                            "trusted subscription lifecycle facts",
+                        ),
+                    )
+                    for name in (
+                        "admin subscriber growth and churn report figures",
+                        "period-aware subscriber growth and monthly churn series",
+                        "derived subscriber-status report counts",
+                    )
+                ),
+                authoritative_inputs=(
+                    AuthorityInput(
+                        name="visible customer signup and status facts",
+                        owner="customer.accounts",
+                        kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                        source="Visible Subscriber created_at and current AccountStatus.",
+                    ),
+                    AuthorityInput(
+                        name="report window and status scope",
+                        owner="subscriber.growth_reports",
+                        kind=AuthorityKind.CONTROL_INPUT,
+                        source="Typed CustomerGrowthQuery with optional inclusive report dates and AccountStatus.",
+                    ),
+                    AuthorityInput(
+                        name="trusted subscription lifecycle facts",
+                        owner="access.subscription_lifecycle",
+                        kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                        source="Trusted subscription lifecycle transitions for churn reporting.",
+                    ),
+                ),
+                transaction=TransactionContract(
+                    mode=TransactionMode.READ_ONLY,
+                    boundary="The adapter supplies a read session; report queries never flush or commit.",
+                    locking="Committed report facts require no mutation lock.",
+                    idempotency="The same committed facts, window, and status yield the same series.",
+                    retries="Read-only report aggregates are safe to retry.",
+                ),
+                errors=ErrorContract(
+                    domain_codes=(),
+                    mapping_owner="app.web.admin.reports customer-report adapter",
+                ),
+                migration=MigrationContract(
+                    state=AuthorityMigrationState.NATIVE,
+                    new_owner="subscriber.growth_reports",
+                    verification="Filtered growth buckets and status scope have focused report tests.",
+                ),
+                steward="customer operations",
+                design_refs=(
+                    "docs/designs/CUSTOMER_REPORT_PAGE.md",
+                    "docs/SOT_RELATIONSHIP_MAP.md",
+                ),
+                test_refs=(
+                    "tests/test_reports_contracts.py",
+                    "tests/test_web_reports_customer_filters.py",
+                ),
             ),
         ),
         SOTService(
