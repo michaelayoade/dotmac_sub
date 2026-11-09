@@ -530,6 +530,132 @@ class CustomerRetentionPageQuery:
             raise CrmReportQueryError("Customer retention page size must be 20.")
 
 
+@dataclass(frozen=True, slots=True)
+class CustomerRetentionMetricsQuery:
+    date_from: date
+    date_to: date
+
+    def __post_init__(self) -> None:
+        if self.date_from > self.date_to:
+            raise CrmReportQueryError("Start date must not follow end date.")
+
+
+@dataclass(frozen=True, slots=True)
+class CustomerRetentionMetrics:
+    date_from: date
+    date_to: date
+    churned_customers: int
+    churn_population: int
+    churn_rate: float | None
+    recovered_customers: int
+    eligible_recovery_customers: int
+    recovery_rate: float | None
+    evidence_note: str
+
+
+def get_customer_retention_metrics(
+    db: Session, *, query: CustomerRetentionMetricsQuery
+) -> CustomerRetentionMetrics:
+    """Period metrics over the churn owner and trusted lifecycle transitions."""
+
+    start, end = subscriber_growth.churn_window(
+        date_from=query.date_from.isoformat(), date_to=query.date_to.isoformat()
+    )
+    assert start is not None and end is not None
+    churn = subscriber_growth.churn_summary(
+        db=db,
+        date_from=query.date_from.isoformat(),
+        date_to=query.date_to.isoformat(),
+    )
+    inactive = (
+        SubscriptionStatus.suspended,
+        SubscriptionStatus.paused,
+        SubscriptionStatus.disabled,
+    )
+    transitions = (
+        select(
+            Subscription.subscriber_id.label("subscriber_id"),
+            SubscriptionLifecycleEvent.subscription_id.label("subscription_id"),
+            SubscriptionLifecycleEvent.id.label("event_id"),
+            SubscriptionLifecycleEvent.effective_at.label("effective_at"),
+            SubscriptionLifecycleEvent.to_status.label("to_status"),
+            SubscriptionLifecycleEvent.from_status.label("from_status"),
+        )
+        .join(
+            Subscription, Subscription.id == SubscriptionLifecycleEvent.subscription_id
+        )
+        .join(Subscriber, Subscriber.id == Subscription.subscriber_id)
+        .where(
+            subscriber_service.visible_subscriber_clause(),
+            subscriber_growth.trusted_lifecycle_transition_clause(),
+            SubscriptionLifecycleEvent.effective_at < end,
+        )
+        .subquery("retention_transitions")
+    )
+    before_ranked = (
+        select(
+            transitions.c.subscriber_id,
+            transitions.c.subscription_id,
+            transitions.c.to_status,
+            func.row_number()
+            .over(
+                partition_by=transitions.c.subscription_id,
+                order_by=(
+                    transitions.c.effective_at.desc(),
+                    transitions.c.event_id.desc(),
+                ),
+            )
+            .label("rank"),
+        )
+        .where(transitions.c.effective_at < start)
+        .subquery("retention_before_ranked")
+    )
+    eligible = union_all(
+        select(before_ranked.c.subscriber_id).where(
+            before_ranked.c.rank == 1, before_ranked.c.to_status.in_(inactive)
+        ),
+        select(transitions.c.subscriber_id).where(
+            transitions.c.effective_at >= start,
+            transitions.c.to_status.in_(inactive),
+        ),
+        select(transitions.c.subscriber_id).where(
+            transitions.c.effective_at >= start,
+            transitions.c.from_status.in_(inactive),
+            transitions.c.to_status == SubscriptionStatus.active,
+        ),
+    ).subquery("retention_eligible")
+    eligible_count = int(
+        db.scalar(select(func.count(func.distinct(eligible.c.subscriber_id)))) or 0
+    )
+    recovered_count = int(
+        db.scalar(
+            select(func.count(func.distinct(transitions.c.subscriber_id))).where(
+                transitions.c.effective_at >= start,
+                transitions.c.from_status.in_(inactive),
+                transitions.c.to_status == SubscriptionStatus.active,
+            )
+        )
+        or 0
+    )
+    return CustomerRetentionMetrics(
+        date_from=query.date_from,
+        date_to=query.date_to,
+        churned_customers=churn.churn_count,
+        churn_population=churn.total,
+        churn_rate=(churn.churn_count / churn.total * 100 if churn.total else None),
+        recovered_customers=recovered_count,
+        eligible_recovery_customers=eligible_count,
+        recovery_rate=(
+            recovered_count / eligible_count * 100 if eligible_count else None
+        ),
+        evidence_note=(
+            "Recovery uses verified subscription transitions. Historical events "
+            "before lifecycle evidence was introduced may be incomplete; the churn "
+            "figure follows the existing churn report's legacy fallback."
+        ),
+    )
+
+
 class CustomerRetentionRiskSegment(StrEnum):
     SUSPENDED = "Suspended"
     DUE_SOON = "Due Soon"
