@@ -2336,6 +2336,7 @@ _ACTION_SPECS: dict[str, tuple[_ActionSpec, ...]] = {
         _action(
             "export-report", "Export a report", 3, permission="reports:billing:export"
         ),
+        _action("review-customer-report", "Review customer report details", 5),
     ),
     "churn-report": (
         _action("choose-churn-window", "Choose the churn date range", 0),
