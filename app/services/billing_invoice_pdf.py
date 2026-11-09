@@ -30,17 +30,22 @@ from app.models.subscriber import Subscriber, SubscriberCategory
 from app.models.subscription_engine import SettingValueType
 from app.schemas.settings import DomainSettingUpdate
 from app.services import branding_storage as branding_storage_service
+from app.services import display_format, settings_spec
 from app.services import domain_settings as domain_settings_service
 from app.services import invoice_bank_details as invoice_bank_details_service
-from app.services import settings_spec
 from app.services import web_system_company_info as company_info_service
 from app.services.db_session_adapter import db_session_adapter
 from app.services.file_storage import file_uploads
+from app.services.invoice_withholding import (
+    InvoiceWithholdingQuery,
+    query_invoice_withholding,
+)
 from app.services.object_storage import (
     ObjectNotFoundError,
     StreamResult,
     get_s3_storage,
 )
+from app.services.status_presentation import withholding_tax_status_presentation
 
 if TYPE_CHECKING:
     from app.services.brand_profiles import ResolvedBrand
@@ -50,7 +55,7 @@ STALE_EXPORT_SECONDS = 20
 # fallback) includes the glyph; renderers without it use an "NGN " prefix.
 NAIRA_SIGN = "₦"
 INVOICE_PDF_CACHE_METRICS_KEY = "invoice_pdf_cache_metrics"
-INVOICE_PDF_TEMPLATE_REFRESHED_AT = datetime(2026, 9, 3, 12, 0, tzinfo=UTC)
+INVOICE_PDF_TEMPLATE_REFRESHED_AT = datetime(2026, 11, 8, 12, 0, tzinfo=UTC)
 INVOICE_PDF_PAYMENT_PRESENTMENT_KEY = "invoice_pdf_payment_presentment"
 CUSTOMER_PAYMENT_METHOD_PAYSTACK_VALUES = frozenset(
     {"paystack", "card", "cards", "online", "online_payment"}
@@ -111,14 +116,11 @@ def _truncate_text(value: str, max_chars: int) -> str:
 
 
 def _money(value: Decimal | None) -> str:
-    amount = Decimal(str(value or Decimal("0.00")))
-    return f"{amount:,.2f}"
+    return display_format.format_amount(value)
 
 
-def _format_date(value: datetime | None) -> str:
-    if not value:
-        return "N/A"
-    return value.strftime("%Y-%m-%d")
+def _format_date(value: datetime | None, db: Session | None = None) -> str:
+    return display_format.format_timestamp(value, db, fmt="%Y-%m-%d")
 
 
 def _company_lines(company_info: dict[str, str]) -> list[str]:
@@ -365,15 +367,80 @@ def _ensure_weasyprint_pydyf_compat() -> None:
     )
 
 
+def _invoice_withholding_rows(
+    db: Session, invoice: Invoice
+) -> tuple[tuple[str, str], ...]:
+    """Present the canonical WHT query without altering the invoice totals."""
+    summary = query_invoice_withholding(
+        db, InvoiceWithholdingQuery(invoice_id=invoice.id)
+    )
+    rows: list[tuple[str, str]] = []
+    if summary.eligible and summary.expected_net_amount is not None:
+        rows.extend(
+            (
+                (
+                    "Expected cash allocation",
+                    display_format.format_money(
+                        summary.expected_net_amount, db=db, currency=summary.currency
+                    ),
+                ),
+                (
+                    "Expected withholding tax",
+                    display_format.format_money(
+                        summary.expected_wht_amount, db=db, currency=summary.currency
+                    ),
+                ),
+            )
+        )
+    if summary.record_id is not None or summary.native_discharge_id is not None:
+        rows.extend(
+            (
+                (
+                    "Accepted cash",
+                    display_format.format_money(
+                        summary.accepted_cash_amount, db=db, currency=summary.currency
+                    ),
+                ),
+                (
+                    "Accepted withholding tax",
+                    display_format.format_money(
+                        summary.accepted_wht_amount, db=db, currency=summary.currency
+                    ),
+                ),
+                (
+                    "Certificate outstanding",
+                    display_format.format_money(
+                        summary.certificate_outstanding_amount,
+                        db=db,
+                        currency=summary.currency,
+                    ),
+                ),
+                (
+                    "Certificate status",
+                    withholding_tax_status_presentation(summary.status).label,
+                ),
+            )
+        )
+        if summary.certificate_reference:
+            rows.append(("Certificate reference", summary.certificate_reference))
+    return tuple(rows)
+
+
 def _render_invoice_html(invoice: Invoice, db: Session) -> str:
+    currency_symbol = display_format.currency_symbol(invoice.currency)
     lines = [line for line in (invoice.lines or []) if getattr(line, "is_active", True)]
+    withholding_rows = _invoice_withholding_rows(db, invoice)
+    withholding_html = "".join(
+        f'<tr><td>{html.escape(label)}</td><td class="num">{html.escape(value)}</td></tr>'
+        for label, value in withholding_rows
+    )
     rows = "".join(
         (
             "<tr>"
             f"<td>{html.escape(str(line.description or 'Line item'))}</td>"
             f"<td class='num'>{html.escape(str(line.quantity or Decimal('0')))}</td>"
-            f"<td class='num'>{NAIRA_SIGN}{_money(line.unit_price)}</td>"
-            f"<td class='num'>{NAIRA_SIGN}{_money(line.amount)}</td>"
+            f"<td class='num'>{currency_symbol}{_money(line.unit_price)}</td>"
+            f"<td class='num'>{currency_symbol}{_money(line.amount)}</td>"
             "</tr>"
         )
         for line in lines
@@ -510,8 +577,8 @@ def _render_invoice_html(invoice: Invoice, db: Session) -> str:
           <p class=\"eyebrow\">Invoice</p>
           <p class=\"invoice-title\">#{html.escape(str(accent_invoice_id))}</p>
           <div class=\"invoice-meta\">
-            <div>Issued: {_format_date(invoice.issued_at)}</div>
-            <div>Due: {_format_date(invoice.due_at)}</div>
+            <div>Issued: {_format_date(invoice.issued_at, db)}</div>
+            <div>Due: {_format_date(invoice.due_at, db)}</div>
             <div>Currency: {html.escape(invoice.currency or "NGN")}</div>
           </div>
           <div class=\"status-pill\">{status}</div>
@@ -532,7 +599,7 @@ def _render_invoice_html(invoice: Invoice, db: Session) -> str:
           <td style=\"width: 30%;\">
             <div class=\"card highlight-card\">
               <p class=\"card-title\">Balance Due</p>
-              <p class=\"highlight-value\">{NAIRA_SIGN}{_money(invoice.balance_due)}</p>
+              <p class=\"highlight-value\">{currency_symbol}{_money(invoice.balance_due)}</p>
             </div>
           </td>
           <td style=\"width: 30%;\">
@@ -563,10 +630,11 @@ def _render_invoice_html(invoice: Invoice, db: Session) -> str:
       <div class=\"totals-wrap\">
         <div class=\"totals-card\">
           <table>
-            <tr><td>Subtotal</td><td class=\"num\">{NAIRA_SIGN}{_money(invoice.subtotal)}</td></tr>
-            {f'<tr><td>Discount</td><td class="num">-{NAIRA_SIGN}{_money(invoice.discount_amount)}</td></tr>' if invoice.discount_amount else ""}
-            <tr><td>{tax_label}</td><td class=\"num\">{NAIRA_SIGN}{_money(invoice.tax_total)}</td></tr>
-            <tr class=\"grand-total\"><td>Total</td><td class=\"num\">{NAIRA_SIGN}{_money(invoice.total)}</td></tr>
+            <tr><td>Subtotal</td><td class=\"num\">{currency_symbol}{_money(invoice.subtotal)}</td></tr>
+            {f'<tr><td>Discount</td><td class="num">-{currency_symbol}{_money(invoice.discount_amount)}</td></tr>' if invoice.discount_amount else ""}
+            <tr><td>{tax_label}</td><td class=\"num\">{currency_symbol}{_money(invoice.tax_total)}</td></tr>
+            <tr class=\"grand-total\"><td>Total</td><td class=\"num\">{currency_symbol}{_money(invoice.total)}</td></tr>
+            {withholding_html}
           </table>
         </div>
       </div>
@@ -658,7 +726,7 @@ def _render_invoice_text_lines(
     out = [
         f"Invoice {invoice.invoice_number or invoice.id}",
         f"Status: {invoice.status.value if invoice.status else 'draft'}",
-        f"Issued: {_format_date(invoice.issued_at)}    Due: {_format_date(invoice.due_at)}",
+        f"Issued: {_format_date(invoice.issued_at, db)}    Due: {_format_date(invoice.due_at, db)}",
         f"Billed To: {_display_account_name(invoice)}",
         f"Email: {(getattr(invoice.account, 'email', None) or '').strip() or 'N/A'}",
         "",
@@ -672,24 +740,30 @@ def _render_invoice_text_lines(
             unit = _money(item.unit_price)
             amount = _money(item.amount)
             desc = str(item.description or "Line item")
-            out.append(f"- {desc} | qty {qty} | unit NGN {unit} | amount NGN {amount}")
+            out.append(
+                f"- {desc} | qty {qty} | unit {invoice.currency} {unit} | amount {invoice.currency} {amount}"
+            )
         if len(lines) > _TEXT_FALLBACK_MAX_ITEMS:
             out.append(f"- {_truncation_marker(len(lines) - _TEXT_FALLBACK_MAX_ITEMS)}")
     out.extend(
         [
             "",
-            f"Subtotal: NGN {_money(invoice.subtotal)}",
+            f"Subtotal: {invoice.currency} {_money(invoice.subtotal)}",
             *(
-                [f"Discount: -NGN {_money(invoice.discount_amount)}"]
+                [f"Discount: -{invoice.currency} {_money(invoice.discount_amount)}"]
                 if invoice.discount_amount
                 else []
             ),
-            f"Tax: NGN {_money(invoice.tax_total)}",
-            f"Total: NGN {_money(invoice.total)}",
-            f"Balance Due: NGN {_money(invoice.balance_due)}",
+            f"Tax: {invoice.currency} {_money(invoice.tax_total)}",
+            f"Total: {invoice.currency} {_money(invoice.total)}",
+            f"Balance Due: {invoice.currency} {_money(invoice.balance_due)}",
         ]
     )
     if db is not None:
+        out.extend(
+            f"{label}: {value}"
+            for label, value in _invoice_withholding_rows(db, invoice)
+        )
         from app.services.brand_profiles import resolve_brand
 
         brand = resolve_brand(db, subscriber_id=invoice.account_id)
@@ -740,7 +814,11 @@ def _build_branded_fallback_pdf(db: Session, invoice: Invoice) -> bytes:
         return ImageFont.load_default()
 
     # DejaVu Sans carries the naira glyph; the PIL bitmap default does not.
-    naira = NAIRA_SIGN if _font_path(False) else "NGN "
+    naira = (
+        display_format.currency_symbol(invoice.currency)
+        if _font_path(False)
+        else invoice.currency + " "
+    )
 
     width, height = 1240, 1754
     margin_x = 72
@@ -812,13 +890,13 @@ def _build_branded_fallback_pdf(db: Session, invoice: Invoice) -> bytes:
     )
     draw.text(
         (panel_x + 28, 188),
-        f"Issued: {_format_date(invoice.issued_at)}",
+        f"Issued: {_format_date(invoice.issued_at, db)}",
         font=small_font,
         fill=slate_700,
     )
     draw.text(
         (panel_x + 28, 214),
-        f"Due: {_format_date(invoice.due_at)}",
+        f"Due: {_format_date(invoice.due_at, db)}",
         font=small_font,
         fill=slate_700,
     )
@@ -1055,6 +1133,14 @@ def _build_branded_fallback_pdf(db: Session, invoice: Invoice) -> bytes:
         fill=slate_900,
     )
 
+    for index, (label, value) in enumerate(_invoice_withholding_rows(db, invoice)):
+        draw.text(
+            (margin_x, 1400 + index * 25),
+            f"{label}: {value}",
+            font=small_font,
+            fill=slate_700,
+        )
+
     footer_y = 1612
     draw.text(
         (margin_x, footer_y),
@@ -1095,6 +1181,12 @@ def _is_export_fresh(
     if completed_at < INVOICE_PDF_TEMPLATE_REFRESHED_AT:
         return False
     if db is not None:
+        withholding = query_invoice_withholding(
+            db, InvoiceWithholdingQuery(invoice_id=invoice.id)
+        )
+        withholding_updated_at = _as_utc(withholding.source_updated_at)
+        if withholding_updated_at and completed_at < withholding_updated_at:
+            return False
         presentment_updated_at = _as_utc(
             settings_spec.active_setting_updated_at(
                 db, SettingDomain.billing, INVOICE_PDF_PAYMENT_PRESENTMENT_KEY

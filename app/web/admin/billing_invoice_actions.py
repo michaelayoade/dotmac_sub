@@ -20,7 +20,7 @@ from app.services import (
 from app.services import (
     web_prepaid_draft_reconciliation as web_prepaid_draft_reconciliation_service,
 )
-from app.services.auth_dependencies import require_permission
+from app.services.auth_dependencies import has_permission, require_permission
 from app.services.domain_errors import DomainError
 
 templates = Jinja2Templates(directory="templates")
@@ -136,6 +136,7 @@ def invoice_detail(
     pdf_notice: str | None = Query(None),
     notice: str | None = Query(None),
     error: str | None = Query(None),
+    auth: dict | None = Depends(require_permission("billing:invoice:read")),
     db: Session = Depends(get_db),
 ):
     detail_data = web_billing_invoices_service.load_invoice_detail_data(
@@ -156,6 +157,18 @@ def invoice_detail(
         {
             "request": request,
             **detail_data,
+            "can_select_invoice_withholding": has_permission(
+                auth if isinstance(auth, dict) else {}, db, "billing:invoice:update"
+            ),
+            "can_accept_invoice_withholding": has_permission(
+                auth if isinstance(auth, dict) else {}, db, "billing:payment:create"
+            ),
+            "can_issue_invoice_withholding": has_permission(
+                auth if isinstance(auth, dict) else {}, db, "billing:payment:create"
+            )
+            and has_permission(
+                auth if isinstance(auth, dict) else {}, db, "billing:invoice:update"
+            ),
             "pdf_notice": pdf_notice,
             "notice": notice,
             "error": error,
@@ -171,20 +184,113 @@ def invoice_detail(
 )
 def invoice_issue_from_detail(
     invoice_id: UUID,
+    request: Request,
+    preview_fingerprint: str | None = Form(None),
+    confirmed: str | None = Form(None),
+    evidence_reference: str | None = Form(None),
+    idempotency_token: str | None = Form(None),
     auth: dict | None = Depends(require_permission("billing:invoice:update")),
     db: Session = Depends(get_db),
 ):
     try:
-        if isinstance(auth, dict):
+        from app.services import (
+            invoice_withholding,
+            invoice_withholding_issuance,
+            web_invoice_withholding,
+        )
+        from app.services.db_session_adapter import db_session_adapter
+        from app.services.owner_commands import CommandContext
+
+        selection = invoice_withholding.query_invoice_withholding_selection(
+            db, invoice_withholding.InvoiceWithholdingQuery(invoice_id)
+        )
+        if selection.selected:
+            if not isinstance(auth, dict) or not has_permission(
+                auth, db, "billing:payment:create"
+            ):
+                raise HTTPException(
+                    status_code=403,
+                    detail="Payment permission is required to accept withholding.",
+                )
+            if isinstance(preview_fingerprint, str) and preview_fingerprint:
+                if confirmed != "yes":
+                    raise HTTPException(
+                        status_code=422,
+                        detail="Review and confirm the invoice financial effects before issuing.",
+                    )
+                if (
+                    not isinstance(evidence_reference, str)
+                    or not isinstance(idempotency_token, str)
+                    or not 8 <= len(idempotency_token) <= 120
+                ):
+                    raise HTTPException(
+                        status_code=422,
+                        detail="Withholding confirmation evidence is incomplete.",
+                    )
+                context = CommandContext.system(
+                    actor=_principal_actor(auth),
+                    scope="billing:invoice:update",
+                    reason="Issue the selected withholding draft using verified account cash.",
+                    idempotency_key=f"issue-wht:{invoice_id}:{idempotency_token}",
+                )
+                db_session_adapter.release_read_transaction(db)
+                invoice_withholding_issuance.confirm_invoice_withholding_issue(
+                    db,
+                    invoice_withholding_issuance.InvoiceWithholdingIssueConfirm(
+                        invoice_id,
+                        preview_fingerprint,
+                        evidence_reference,
+                    ),
+                    context=context,
+                )
+            else:
+                preview = (
+                    invoice_withholding_issuance.preview_invoice_withholding_issue(
+                        db,
+                        invoice_withholding.InvoiceWithholdingQuery(invoice_id),
+                    )
+                )
+                identity = web_invoice_withholding.invoice_identity(
+                    db, invoice_withholding.InvoiceWithholdingQuery(invoice_id)
+                )
+                from app.web.admin import get_current_user, get_sidebar_stats
+
+                token = secrets.token_urlsafe(24)
+                action = web_invoice_withholding.issue_action_form(
+                    db, invoice_id=invoice_id, preview=preview, idempotency_token=token
+                )
+                return templates.TemplateResponse(
+                    "admin/billing/withholding_issue.html",
+                    {
+                        "request": request,
+                        "invoice_id": invoice_id,
+                        "invoice_label": identity.invoice_label,
+                        "account_label": identity.account_label,
+                        "preview": preview,
+                        "issue_action_form": action,
+                        "error": None,
+                        "idempotency_token": token,
+                        "current_user": get_current_user(request),
+                        "sidebar_stats": get_sidebar_stats(db),
+                        "active_page": "invoices",
+                        "active_menu": "billing",
+                    },
+                )
+        elif isinstance(preview_fingerprint, str) and preview_fingerprint:
+            raise HTTPException(
+                status_code=409,
+                detail="The withholding selection changed; review this invoice again.",
+            )
+        elif isinstance(auth, dict):
             web_billing_invoices_service.issue_invoice_from_detail(
                 db,
                 invoice_id=invoice_id,
                 actor_ref=_principal_actor(auth),
             )
         else:
-            web_billing_invoices_service.issue_invoice_from_detail(
-                db,
-                invoice_id=invoice_id,
+            raise HTTPException(
+                status_code=403,
+                detail="Authenticated staff identity is required to issue an invoice.",
             )
     except (HTTPException, DomainError) as exc:
         message = exc.message if isinstance(exc, DomainError) else str(exc.detail)
@@ -345,44 +451,10 @@ def invoice_prepaid_coverage_reconciliation_confirm(
     response_class=HTMLResponse,
     dependencies=[Depends(require_permission("billing:invoice:update"))],
 )
-def invoice_line_create(
-    request: Request,
-    invoice_id: UUID,
-    description: str = Form(...),
-    quantity: str = Form("1"),
-    unit_price: str = Form("0"),
-    tax_rate_id: str | None = Form(None),
-    db: Session = Depends(get_db),
-):
-    try:
-        web_billing_invoices_service.create_invoice_line_from_form(
-            db,
-            invoice_id=str(invoice_id),
-            description=description,
-            quantity=quantity,
-            unit_price=unit_price,
-            tax_rate_id=tax_rate_id,
-        )
-    except Exception as exc:
-        detail_data = web_billing_invoices_service.load_invoice_detail_data(
-            db,
-            invoice_id=str(invoice_id),
-        )
-        from app.web.admin import get_current_user, get_sidebar_stats
-
-        return templates.TemplateResponse(
-            "admin/billing/invoice_detail.html",
-            {
-                "request": request,
-                **(detail_data or {}),
-                "error": str(exc),
-                "current_user": get_current_user(request),
-                "sidebar_stats": get_sidebar_stats(db),
-            },
-            status_code=400,
-        )
-    return RedirectResponse(
-        url=f"/admin/billing/invoices/{invoice_id}", status_code=303
+def invoice_line_create(invoice_id: UUID):
+    raise HTTPException(
+        status_code=409,
+        detail=f"Incremental invoice line creation is retired. Edit the complete catalogue draft at /admin/billing/invoices/{invoice_id}/edit.",
     )
 
 
@@ -741,13 +813,18 @@ def invoice_send_and_return(
     dependencies=[Depends(require_permission("billing:invoice:delete"))],
 )
 def invoice_void(request: Request, invoice_id: UUID, db: Session = Depends(get_db)):
-    web_billing_invoices_service.void_invoice_web(
-        db,
-        request=request,
-        actor_id=_actor_id(request),
-        invoice_id=str(invoice_id),
-    )
-    return HTMLResponse(web_billing_invoice_actions_service.void_message(invoice_id))
+    try:
+        web_billing_invoices_service.void_invoice_web(
+            db,
+            request=request,
+            actor_id=_actor_id(request),
+            invoice_id=str(invoice_id),
+        )
+        return HTMLResponse(
+            web_billing_invoice_actions_service.void_message(invoice_id)
+        )
+    except DomainError as exc:
+        raise HTTPException(status_code=409, detail=exc.message) from exc
 
 
 @router.post(
@@ -758,22 +835,25 @@ def invoice_void(request: Request, invoice_id: UUID, db: Session = Depends(get_d
 def invoice_void_preview(
     request: Request, invoice_id: UUID, db: Session = Depends(get_db)
 ):
-    preview = web_billing_invoices_service.preview_invoice_void_web(
-        db, invoice_id=str(invoice_id)
-    )
-    return templates.TemplateResponse(
-        "admin/billing/invoice_closure_confirm.html",
-        {
-            "request": request,
-            "preview": preview,
-            "action_label": "Void invoice",
-            "action_explanation": (
-                "Use void only when the invoice should never have existed."
-            ),
-            "confirm_url": f"/admin/billing/invoices/{invoice_id}/void/confirm",
-            "idempotency_key": secrets.token_urlsafe(24),
-        },
-    )
+    try:
+        preview = web_billing_invoices_service.preview_invoice_void_web(
+            db, invoice_id=str(invoice_id)
+        )
+        return templates.TemplateResponse(
+            "admin/billing/invoice_closure_confirm.html",
+            {
+                "request": request,
+                "preview": preview,
+                "action_label": "Void invoice",
+                "action_explanation": (
+                    "Use void only when the invoice should never have existed."
+                ),
+                "confirm_url": f"/admin/billing/invoices/{invoice_id}/void/confirm",
+                "idempotency_key": secrets.token_urlsafe(24),
+            },
+        )
+    except DomainError as exc:
+        raise HTTPException(status_code=409, detail=exc.message) from exc
 
 
 @router.post(
@@ -788,18 +868,21 @@ def invoice_void_confirm(
     memo: str | None = Form(None),
     db: Session = Depends(get_db),
 ):
-    web_billing_invoices_service.confirm_invoice_void_web(
-        db,
-        request=request,
-        actor_id=_actor_id(request),
-        invoice_id=str(invoice_id),
-        preview_fingerprint=preview_fingerprint,
-        idempotency_key=idempotency_key,
-        memo=memo,
-    )
-    return RedirectResponse(
-        url=f"/admin/billing/invoices/{invoice_id}", status_code=303
-    )
+    try:
+        web_billing_invoices_service.confirm_invoice_void_web(
+            db,
+            request=request,
+            actor_id=_actor_id(request),
+            invoice_id=str(invoice_id),
+            preview_fingerprint=preview_fingerprint,
+            idempotency_key=idempotency_key,
+            memo=memo,
+        )
+        return RedirectResponse(
+            url=f"/admin/billing/invoices/{invoice_id}", status_code=303
+        )
+    except DomainError as exc:
+        raise HTTPException(status_code=409, detail=exc.message) from exc
 
 
 @router.post(
@@ -810,23 +893,26 @@ def invoice_void_confirm(
 def invoice_write_off_preview(
     request: Request, invoice_id: UUID, db: Session = Depends(get_db)
 ):
-    preview = web_billing_invoices_service.preview_invoice_write_off_web(
-        db, invoice_id=str(invoice_id)
-    )
-    return templates.TemplateResponse(
-        "admin/billing/invoice_closure_confirm.html",
-        {
-            "request": request,
-            "preview": preview,
-            "action_label": "Write off receivable",
-            "action_explanation": (
-                "Use write-off for collectible postpaid debt that will not be "
-                "collected; it is not payment and not invoice void."
-            ),
-            "confirm_url": f"/admin/billing/invoices/{invoice_id}/write-off/confirm",
-            "idempotency_key": secrets.token_urlsafe(24),
-        },
-    )
+    try:
+        preview = web_billing_invoices_service.preview_invoice_write_off_web(
+            db, invoice_id=str(invoice_id)
+        )
+        return templates.TemplateResponse(
+            "admin/billing/invoice_closure_confirm.html",
+            {
+                "request": request,
+                "preview": preview,
+                "action_label": "Write off receivable",
+                "action_explanation": (
+                    "Use write-off for collectible postpaid debt that will not be "
+                    "collected; it is not payment and not invoice void."
+                ),
+                "confirm_url": f"/admin/billing/invoices/{invoice_id}/write-off/confirm",
+                "idempotency_key": secrets.token_urlsafe(24),
+            },
+        )
+    except DomainError as exc:
+        raise HTTPException(status_code=409, detail=exc.message) from exc
 
 
 @router.post(
@@ -841,18 +927,21 @@ def invoice_write_off_confirm(
     memo: str | None = Form(None),
     db: Session = Depends(get_db),
 ):
-    web_billing_invoices_service.confirm_invoice_write_off_web(
-        db,
-        request=request,
-        actor_id=_actor_id(request),
-        invoice_id=str(invoice_id),
-        preview_fingerprint=preview_fingerprint,
-        idempotency_key=idempotency_key,
-        memo=memo,
-    )
-    return RedirectResponse(
-        url=f"/admin/billing/invoices/{invoice_id}", status_code=303
-    )
+    try:
+        web_billing_invoices_service.confirm_invoice_write_off_web(
+            db,
+            request=request,
+            actor_id=_actor_id(request),
+            invoice_id=str(invoice_id),
+            preview_fingerprint=preview_fingerprint,
+            idempotency_key=idempotency_key,
+            memo=memo,
+        )
+        return RedirectResponse(
+            url=f"/admin/billing/invoices/{invoice_id}", status_code=303
+        )
+    except DomainError as exc:
+        raise HTTPException(status_code=409, detail=exc.message) from exc
 
 
 @router.post(

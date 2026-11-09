@@ -157,3 +157,9 @@ class TestConvergedWrappers:
         assert web_billing_collection_accounts._default_currency(db_session) == "KES"
         assert web_billing_credits._default_currency(db_session) == "KES"
         assert billing_consolidated._default_currency(db_session) == "KES"
+
+
+def test_currency_labelled_export_amount_uses_shared_numeric_formatter():
+    assert display_format.format_amount(Decimal("1234.50")) == "1,234.50"
+    assert display_format.format_amount(None) == "—"
+    assert display_format.format_amount(Decimal("NaN")) == "—"

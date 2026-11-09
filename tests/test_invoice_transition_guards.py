@@ -19,6 +19,7 @@ from app.services.billing._common import (
     _recalculate_invoice_totals,
     assert_legal_invoice_transition,
 )
+from app.services.billing.invoices import InvoicePeriodReservationError
 
 
 def _invoice(db, subscriber, status, *, total="100.00", balance="0.00"):
@@ -86,8 +87,8 @@ def test_allocatable_guard_rejects_terminal_and_draft(db_session, subscriber):
 
 def test_update_rejects_void_to_issued(db_session, subscriber):
     inv = _invoice(db_session, subscriber, InvoiceStatus.void)
-    with pytest.raises(HTTPException) as e:
+    with pytest.raises(InvoicePeriodReservationError) as e:
         billing_service.invoices.update(
             db_session, str(inv.id), InvoiceUpdate(status=InvoiceStatus.issued)
         )
-    assert e.value.status_code == 409
+    assert e.value.code.endswith("catalogue_draft_owner_required")

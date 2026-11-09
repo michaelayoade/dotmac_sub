@@ -2226,6 +2226,7 @@ or invent NGN/Africa-Lagos defaults.
 | Type | Owner-provided projection | Example |
 |------|---------------------------|---------|
 | Single-currency money | `display_format.format_money(amount, currency=code)` | `₦5,000.00` |
+| Currency-labelled numeric export cell | `display_format.format_amount(amount)` | `5,000.00` |
 | Mixed-currency total | `display_format.format_currency_groups(amounts)` | `NGN 5,000.00, USD 25.00` |
 | Timestamp | `display_format.format_timestamp(value, db)` | `2026-07-14 15:30 WAT` |
 | Missing scalar fact | Owner-provided missing state | `—` |
@@ -2327,3 +2328,29 @@ templates/
 7. **Use branding/theme tokens** — `primary-*`/`accent-*` for identity and
    `status-*` roles for state; do not add literal module or status colors
 8. **Test with HTMX** — partials return fragments, not full pages
+
+
+### Catalogue invoice and withholding UI composition
+
+The catalogue invoice editor reuses `static/js/typeahead.js`,
+`components/overlays/modal.html` and the shared action-form renderer. The existing
+picker accepts optional `data-typeahead-query-param` and JSON
+`data-typeahead-params`; a context change invalidates old suggestions. Catalogue
+choices retain typed source identities and receive server-projected labels.
+There is no separate catalogue combobox or confirmation implementation.
+
+A review POST returns `_future_invoice_review.html` into the shared modal body;
+a non-HTMX request uses `future_invoice_review.html`. Its `ActionForm` owns the
+required confirmation, canonical line selections and replay token. Final saves
+revalidate those same owner sources. The editor cannot save while existing
+lines are loading or unresolved. Failed lines remain visible until explicitly
+removed or successfully retried; a failed restore never silently removes a line.
+
+`web_billing_invoice_forms` projects formatted catalogue prices, actual service
+timestamps and currency choices. `web_invoice_withholding` and
+`web_billing_payment_forms` project withholding and payment reviews through
+`ActionForm`; the shared checkbox field supports explicit duplicate-risk
+acknowledgement. WHT selection remains a reversible draft checkbox beside VAT;
+its editable/locked state comes from the typed financial owner. Issue remains
+the existing action. All money/status strings consume `display_format` and
+`status_presentation`, including invoice PDF renderers.

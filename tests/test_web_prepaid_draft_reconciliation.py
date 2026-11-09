@@ -388,7 +388,8 @@ def test_invoice_issue_conflict_redirects_with_helpful_reconciliation_notice(
 
     response = billing_invoice_actions.invoice_issue_from_detail(
         INVOICE_ID,
-        db=object(),
+        request=None,
+        db=type("IssueReadSession", (), {"get": lambda *args: None})(),
     )
 
     location = unquote_plus(response.headers["location"])

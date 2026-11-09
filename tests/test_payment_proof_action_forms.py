@@ -310,3 +310,17 @@ def test_review_readiness_panel_absent_for_unauthorized_or_terminal_proof() -> N
         )
         is None
     )
+
+
+def test_invoice_withholding_review_distinguishes_cash_and_tax() -> None:
+    proof = _proof()
+    proof.gross_amount = Decimal("5500.00")
+    proof.wht_amount = Decimal("500.00")
+    proof.wht_rate = Decimal("10.00")
+    verify = web_payment_proofs._review_actions(
+        proof, [], can_review=True, submission=None
+    )[0]
+    assert verify.field("amount").label == "Confirmed net cash (NGN)"
+    assert "snapshot" in str(verify.field("amount").help_text)
+    assert "separately" in str(verify.impact)
+    assert "certificate" in str(verify.impact)

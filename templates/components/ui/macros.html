@@ -161,7 +161,10 @@
 } %}
 {% set icon_sizes = {'sm': 'h-3.5 w-3.5', 'md': 'h-4 w-4', 'lg': 'h-5 w-5'} %}
 
-{% if variant == "primary" %}
+{% if type in ['button', 'submit'] %}
+<button type="{{ type }}" class="inline-flex items-center {{ sizes[size] }} rounded-lg px-4 py-2 text-sm font-medium {% if variant == 'ghost' %}text-primary-700 dark:text-primary-300{% else %}bg-primary-600 text-white{% endif %} disabled:opacity-50"
+        {% for key, val in hx_attrs.items() %}{{ key }}="{{ val }}"{% endfor %}>{{ label }}</button>
+{% elif variant == "primary" %}
 <a href="{{ href }}"
    class="group inline-flex items-center {{ sizes[size] }} rounded-xl bg-gradient-to-r from-{{ color }}-500 to-{{ c2 }}-600 font-semibold text-white shadow-lg shadow-{{ color }}-500/25 transition-all hover:shadow-xl hover:shadow-{{ color }}-500/30 hover:-translate-y-0.5 focus:outline-none focus:ring-2 focus:ring-{{ color }}-500 focus:ring-offset-2 dark:focus:ring-offset-slate-900"
    {% for key, val in hx_attrs.items() %}{{ key }}="{{ val }}"{% endfor %}>
@@ -1028,12 +1031,12 @@
    SUBMIT BUTTON WITH LOADING STATE
    Button with Alpine.js loading state for forms
    ============================================ #}
-{% macro submit_button(label, loading_label="Saving...", icon="check", color="primary", size="md") %}
+{% macro submit_button(label, loading_label="Saving...", icon="check", color="primary", size="md", compact=False) %}
 {% set sizes = {'sm': 'px-3 py-1.5 text-xs gap-1.5', 'md': 'px-4 py-2.5 text-sm gap-2', 'lg': 'px-5 py-3 text-base gap-2'} %}
 <button type="submit"
         :disabled="submitting"
         :class="{ 'opacity-50 cursor-wait': submitting }"
-        class="inline-flex items-center {{ sizes[size] }} rounded-xl bg-gradient-to-r from-{{ color }}-500 to-{{ color }}-600 font-semibold text-white shadow-lg shadow-{{ color }}-500/25 transition-all hover:shadow-xl hover:shadow-{{ color }}-500/30 hover:-translate-y-0.5 focus:outline-none focus:ring-2 focus:ring-{{ color }}-500 focus:ring-offset-2 disabled:hover:translate-y-0 disabled:hover:shadow-lg dark:focus:ring-offset-slate-900">
+        class="inline-flex items-center {{ sizes[size] }} {% if compact %}rounded-lg bg-primary-600 font-medium text-white focus:ring-2 focus:ring-primary-500{% else %}rounded-xl bg-gradient-to-r from-{{ color }}-500 to-{{ color }}-600 font-semibold text-white shadow-lg shadow-{{ color }}-500/25 transition-all hover:shadow-xl hover:shadow-{{ color }}-500/30 hover:-translate-y-0.5 focus:outline-none focus:ring-2 focus:ring-{{ color }}-500 focus:ring-offset-2 disabled:hover:translate-y-0 disabled:hover:shadow-lg dark:focus:ring-offset-slate-900{% endif %}">
     <span x-show="!submitting" class="flex items-center gap-2">
         {% if icon == "check" %}
         <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"/></svg>

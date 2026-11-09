@@ -148,13 +148,15 @@ def test_wht_policy_and_basis_stay_server_owned() -> None:
     reseller_template = _read("templates/reseller/billing/index.html")
     customer_template = _read("templates/customer/billing/topup_transfer.html")
 
-    assert "customer_tax_policies.get_customer_withholding_tax_policy" in (
-        direct_transfer_source
-    )
-    assert "subtotal * rate_percent" in direct_transfer_source
-    assert "wht_amount = round_money(total * rate_percent" not in (
-        direct_transfer_source
-    )
+    native_owner = _read("app/services/invoice_withholding.py")
+    assert "snapshot_invoice_withholding_for_transfer(" in direct_transfer_source
+    assert "subtotal * rate_percent" not in direct_transfer_source
+    assert "preview_tax_policy(" in native_owner
+    assert "determine_tax_set(" in native_owner
+    assert 'transaction_side="withholding"' in native_owner
+    assert "accept_withholding_discharge(" in native_owner
+    assert "WithholdingTaxRecord(" not in native_owner
+    assert "LedgerEntry(" not in native_owner
     assert "withholding_tax_basis_unavailable" in proof_source
     assert "allow_server_wht_snapshot=True" in proof_source
     assert 'name="wht_rate"' not in reseller_template
@@ -162,7 +164,7 @@ def test_wht_policy_and_basis_stay_server_owned() -> None:
     assert "wht_rate: str | None = Form" not in reseller_route
     assert "gross_amount: str | None = Form" not in reseller_route
     assert "WHT rate" in customer_template
-    assert "Certificate amount outstanding" in customer_template
+    assert "Expected certificate amount" in customer_template
 
 
 def test_credit_note_owner_persists_tax_point_for_issuance_adapters() -> None:

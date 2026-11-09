@@ -26,8 +26,6 @@ from app.schemas.billing import (
     CreditNoteApplicationReversalRequest,
     CreditNoteApplyRequest,
     InvoiceClosureConfirm,
-    InvoiceLineCreate,
-    InvoiceLineUpdate,
 )
 from app.services import audit as audit_service
 from app.services import billing as billing_service
@@ -48,14 +46,21 @@ from app.services.audit_helpers import (
     log_audit_event,
     resolve_actor_name,
 )
-from app.services.billing import starter_issuance as starter_issuance_service
 from app.services.billing.credit_notes import (
     CreditApplicationReversalOption,
     CreditApplicationReversalPreview,
 )
-from app.services.billing.invoices import verified_draft_issuance
 from app.services.db_session_adapter import db_session_adapter
 from app.services.domain_errors import DomainError
+from app.services.future_invoice_authoring import (
+    FutureInvoiceLineSelection,
+    selection_from_wire,
+)
+from app.services.invoice_withholding import (
+    InvoiceWithholdingQuery,
+    query_invoice_withholding,
+    query_invoice_withholding_selection,
+)
 from app.services.owner_commands import CommandContext
 from app.services.status_presentation import invoice_status_presentation
 from app.validators.forms import parse_datetime, parse_decimal, parse_uuid
@@ -88,6 +93,7 @@ class SendInvoiceFromDetailResult:
 
 
 class InvoiceLineItem(TypedDict):
+    catalogue_selection: FutureInvoiceLineSelection | None
     line_id: UUID | None
     subscription_id: UUID | None
     description: str
@@ -187,30 +193,6 @@ def convert_proforma_to_final(
     return billing_service.invoices.get(db=db, invoice_id=str(result.invoice_id))
 
 
-def build_invoice_payload_data(
-    *,
-    account_id,
-    invoice_number: str | None,
-    status: str | None,
-    currency: str,
-    issued_at,
-    due_at,
-    memo: str | None,
-    is_proforma: bool = False,
-) -> dict[str, object]:
-    """Build invoice create/update payload dictionary."""
-    return {
-        "account_id": account_id,
-        "invoice_number": invoice_number.strip() if invoice_number else None,
-        "status": status or "draft",
-        "currency": currency.strip().upper(),
-        "issued_at": issued_at,
-        "due_at": due_at,
-        "memo": memo.strip() if memo else None,
-        "is_proforma": is_proforma,
-    }
-
-
 def parse_create_line_items(
     *,
     line_items_json: str | None,
@@ -241,6 +223,11 @@ def parse_create_line_items(
                 )
                 line_items.append(
                     {
+                        "catalogue_selection": selection_from_wire(
+                            item["catalogue_selection"]
+                        )
+                        if item.get("catalogue_selection")
+                        else None,
                         "line_id": UUID(str(raw_line_id)) if raw_line_id else None,
                         "subscription_id": (
                             UUID(str(raw_subscription_id))
@@ -271,6 +258,7 @@ def parse_create_line_items(
         tax_rate_raw = line_tax_rate_id[idx] if idx < len(line_tax_rate_id) else ""
         line_items.append(
             {
+                "catalogue_selection": None,
                 "line_id": None,
                 "subscription_id": None,
                 "description": description.strip(),
@@ -286,24 +274,6 @@ def parse_create_line_items(
     return line_items
 
 
-def create_invoice_lines(
-    db: Session, *, invoice_id: UUID, line_items: list[InvoiceLineItem]
-) -> None:
-    """Create invoice lines from parsed line item dictionaries."""
-    for item in line_items:
-        billing_service.invoice_lines.create(
-            db,
-            InvoiceLineCreate(
-                invoice_id=invoice_id,
-                description=item["description"],
-                quantity=item["quantity"],
-                unit_price=item["unit_price"],
-                subscription_id=item["subscription_id"],
-                tax_rate_id=item["tax_rate_id"],
-            ),
-        )
-
-
 def _draft_issue_time(invoice: Invoice) -> datetime:
     """Preserve an explicitly authored draft issue date; default only when absent."""
     if invoice.issued_at is None:
@@ -313,29 +283,6 @@ def _draft_issue_time(invoice: Invoice) -> datetime:
     return invoice.issued_at.astimezone(UTC)
 
 
-def maybe_issue_invoice(db: Session, *, invoice_id, issue_immediately: str | None):
-    """Issue invoice when requested."""
-    if not issue_immediately:
-        return None
-    invoice = billing_service.invoices.get(db=db, invoice_id=str(invoice_id))
-    if invoice is None:
-        return None
-    if invoice.status != InvoiceStatus.draft:
-        return invoice
-    transition = billing_service.invoices.issue_draft_system(
-        db,
-        str(invoice_id),
-        issuance=verified_draft_issuance(
-            invoice,
-            issued_at=_draft_issue_time(invoice),
-            reason="admin_invoice_create",
-        ),
-        announce=False,
-        commit=True,
-    )
-    return transition.invoice
-
-
 def issue_invoice_from_detail(
     db: Session,
     *,
@@ -343,53 +290,30 @@ def issue_invoice_from_detail(
     announce: bool = False,
     actor_ref: str = "admin:invoice-detail",
 ) -> Invoice:
-    """Issue a draft invoice from the admin detail page."""
-    invoice_id_text = str(invoice_id)
-    invoice = billing_service.invoices.get(db=db, invoice_id=invoice_id_text)
-    if invoice is None:
-        raise HTTPException(status_code=404, detail="Invoice not found")
-    if invoice.status != InvoiceStatus.draft:
-        raise HTTPException(status_code=409, detail="Only draft invoices can be issued")
-    prepaid_preview = (
-        web_prepaid_draft_reconciliation_service.preview_for_invoice_detail(
+    """Transport the existing Issue action to its atomic application owner."""
+    db_session_adapter.release_read_transaction(db)
+    try:
+        issued_id = invoice_draft_authoring.issue_administrative_invoice(
             db,
-            invoice_id=invoice_id,
+            invoice_draft_authoring.IssueAdministrativeInvoiceCommand(
+                invoice_id, announce
+            ),
+            context=CommandContext.system(
+                actor=actor_ref,
+                scope="billing:invoice:update",
+                reason="Issue administrative invoice using existing account credit",
+                idempotency_key=f"admin-invoice-issue:{invoice_id}",
+            ),
         )
-    )
-    if prepaid_preview is not None and prepaid_preview.invoice_issue_notice is not None:
+    except invoice_draft_authoring.InvoiceDraftAuthoringError as exc:
+        if exc.code.endswith("invoice_not_found"):
+            raise HTTPException(status_code=404, detail=exc.message) from exc
         raise InvoiceIssueFromDetailError(
-            code="admin.invoice.prepaid_coverage_conflict",
-            message=prepaid_preview.invoice_issue_notice,
-            details={
-                "invoice_id": str(invoice_id),
-                "reconciliation_actionable": prepaid_preview.actionable,
-                "reconciliation_reason": prepaid_preview.reason,
-            },
-        )
-    # Thin-client lane (ADR 0031, Slice 6a): eligible drafts are issued by
-    # Starter as sole ledger writer. Eligibility is decided before any
-    # write; a Starter refusal propagates and never falls back here.
-    if starter_issuance_service.eligibility_reason(db, invoice) is None:
-        starter_issuance_service.issue_admin_invoice_via_starter(
-            db, invoice=invoice, actor_ref=actor_ref, announce=announce
-        )
-        db.commit()
-        db.refresh(invoice)
-        return invoice
-    transition = billing_service.invoices.issue_draft_system(
-        db,
-        invoice_id_text,
-        issuance=verified_draft_issuance(
-            invoice,
-            issued_at=_draft_issue_time(invoice),
-            reason="admin_invoice_detail_issue",
-        ),
-        announce=announce,
-        apply_available_credit=True,
-        require_full_available_credit=True,
-        commit=True,
-    )
-    return transition.invoice
+            code="admin.invoice." + exc.code.rsplit(".", 1)[-1],
+            message=exc.message,
+            details=exc.details,
+        ) from exc
+    return billing_service.invoices.get(db=db, invoice_id=str(issued_id))
 
 
 def send_invoice_from_detail(
@@ -528,6 +452,7 @@ def create_invoice_from_form(
         invoice_draft_authoring.CreateInvoiceDraftCommand(
             account_id=resolved_account_uuid,
             actor_system_user_id=UUID(actor_id) if actor_id else None,
+            require_catalogue=True,
             invoice_number=invoice_number,
             currency=currency,
             issued_at=parse_datetime(issued_at),
@@ -537,6 +462,7 @@ def create_invoice_from_form(
             lines=tuple(
                 invoice_draft_authoring.DraftLineCommand(
                     line_id=item["line_id"],
+                    catalogue_selection=item["catalogue_selection"],
                     description=item["description"],
                     quantity=item["quantity"],
                     unit_price=item["unit_price"],
@@ -620,6 +546,7 @@ def update_invoice_from_form(
             lines=tuple(
                 invoice_draft_authoring.DraftLineCommand(
                     line_id=item["line_id"],
+                    catalogue_selection=item["catalogue_selection"],
                     description=item["description"],
                     quantity=item["quantity"],
                     unit_price=item["unit_price"],
@@ -770,83 +697,6 @@ def apply_credit_note_to_invoice(
     return billing_service.credit_notes.apply_with_evidence(
         db, credit_note_id, payload, stage_audit=False
     )
-
-
-def create_invoice_line_from_form(
-    db: Session,
-    *,
-    invoice_id: str,
-    description: str,
-    quantity: str,
-    unit_price: str,
-    tax_rate_id: str | None,
-    parse_uuid=parse_uuid,
-    parse_decimal=parse_decimal,
-) -> None:
-    """Create invoice line from raw web form values."""
-    payload = InvoiceLineCreate(
-        invoice_id=parse_uuid(invoice_id, "invoice_id"),
-        description=description.strip(),
-        quantity=parse_decimal(quantity, "quantity"),
-        unit_price=parse_decimal(unit_price, "unit_price"),
-        tax_rate_id=UUID(tax_rate_id) if tax_rate_id else None,
-    )
-    billing_service.invoice_lines.create(db, payload)
-
-
-def apply_line_items_json_update(
-    db: Session, *, invoice_id, before_invoice, line_items_json: str | None
-) -> None:
-    """Apply line item create/update/delete mutations from JSON payload."""
-    if not line_items_json or not line_items_json.strip():
-        return
-    try:
-        items_data = json.loads(line_items_json)
-    except json.JSONDecodeError:
-        return
-    if items_data is None:
-        return
-
-    existing_lines = {
-        str(line.id): line
-        for line in (before_invoice.lines or [])
-        if getattr(line, "is_active", True)
-    }
-    seen_ids: set[str] = set()
-    for item in items_data:
-        description = str(item.get("description", "")).strip()
-        if not description:
-            continue
-        quantity = Decimal(str(item.get("quantity", 1)))
-        unit_price = Decimal(str(item.get("unitPrice", 0)))
-        tax_rate_id = item.get("taxRateId") or item.get("tax_rate_id")
-        line_id = item.get("id") or item.get("lineId") or item.get("line_id")
-        if line_id and str(line_id) in existing_lines:
-            seen_ids.add(str(line_id))
-            billing_service.invoice_lines.update(
-                db,
-                str(line_id),
-                InvoiceLineUpdate(
-                    description=description,
-                    quantity=quantity,
-                    unit_price=unit_price,
-                    tax_rate_id=UUID(tax_rate_id) if tax_rate_id else None,
-                ),
-            )
-        else:
-            billing_service.invoice_lines.create(
-                db,
-                InvoiceLineCreate(
-                    invoice_id=invoice_id,
-                    description=description,
-                    quantity=quantity,
-                    unit_price=unit_price,
-                    tax_rate_id=UUID(tax_rate_id) if tax_rate_id else None,
-                ),
-            )
-    for line_id in existing_lines:
-        if line_id not in seen_ids:
-            billing_service.invoice_lines.delete(db, line_id)
 
 
 def load_tax_rates(db: Session):
@@ -1030,8 +880,22 @@ def load_invoice_detail_data(
             db, invoice_id=UUID(invoice_id)
         )
     )
+    from app.services.web_invoice_withholding import (
+        invoice_tax_display,
+        withholding_display,
+    )
+
+    withholding = query_invoice_withholding(
+        db, InvoiceWithholdingQuery(invoice_id=invoice.id)
+    )
     return {
         "invoice": invoice,
+        "invoice_tax_display": invoice_tax_display(db, invoice=invoice),
+        "invoice_withholding_display": withholding_display(db, summary=withholding),
+        "invoice_withholding_selection": query_invoice_withholding_selection(
+            db, InvoiceWithholdingQuery(invoice_id=invoice.id)
+        ),
+        "invoice_withholding": withholding,
         "invoice_financial_summary": billing_service.invoices.financial_summary(
             db, invoice_id
         ),
