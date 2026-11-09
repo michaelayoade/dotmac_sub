@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "source_base_revision": "7c52f50e3c74be098df11a442a8c79e7a1d1ea1a",
+  "source_base_revision": "793d9194f832d070341cfc4ac5fc9bbfd2f81553",
   "scope": "Source census; stored deployment-only keys require a separate read-only database reconciliation.",
   "settings": [
     {
@@ -8480,7 +8480,7 @@
         "app/services/provisioning_adapters.py:377",
         "app/services/provisioning_adapters.py:378",
         "app/services/provisioning_adapters.py:80",
-        "app/services/provisioning_helpers.py:71",
+        "app/services/provisioning_helpers.py:74",
         "app/services/web_integrations.py:132",
         "app/services/web_network_tr069.py:245",
         "app/services/web_network_tr069.py:266",
@@ -9506,7 +9506,7 @@
         "app/services/provisioning_adapters.py:149",
         "app/services/provisioning_adapters.py:387",
         "app/services/provisioning_adapters.py:94",
-        "app/services/provisioning_helpers.py:73",
+        "app/services/provisioning_helpers.py:76",
         "app/services/web_integrations.py:133",
         "app/services/web_network_ont_actions/config_setters.py:400",
         "app/services/web_network_ont_actions/config_setters.py:521",
@@ -17293,7 +17293,7 @@
       },
       "disposition": "Mapped to hub; preserve registered type, validation, tenant scope and owner-command writes",
       "source_references": [
-        "app/services/provisioning_helpers.py:859",
+        "app/services/provisioning_helpers.py:896",
         "app/services/provisioning_managers.py:649"
       ]
     },
@@ -17318,7 +17318,7 @@
       },
       "disposition": "Mapped to hub; preserve registered type, validation, tenant scope and owner-command writes",
       "source_references": [
-        "app/services/provisioning_helpers.py:840"
+        "app/services/provisioning_helpers.py:877"
       ]
     },
     {

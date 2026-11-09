@@ -1,6 +1,6 @@
 # Settings Hub consolidation
 
-Source baseline: `origin/main` at `7c52f50e3c74be098df11a442a8c79e7a1d1ea1a`.
+Source baseline: `origin/main` at `793d9194f832d070341cfc4ac5fc9bbfd2f81553`.
 Branch: `codex/settings-hub-migration`. Local implementation only; no push,
 release, data migration, or deployment is authorised by this change.
 

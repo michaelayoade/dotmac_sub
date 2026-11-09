@@ -48,7 +48,7 @@ class ActionEntry:
 @dataclass(slots=True)
 class MigrationRegister:
     schema_version: int = 1
-    source_base_revision: str = "7c52f50e3c74be098df11a442a8c79e7a1d1ea1a"
+    source_base_revision: str = "793d9194f832d070341cfc4ac5fc9bbfd2f81553"
     scope: str = "Source census; stored deployment-only keys require a separate read-only database reconciliation."
     settings: list[SettingEntry] = field(default_factory=list)
     actions: list[ActionEntry] = field(default_factory=list)
