@@ -1,17 +1,20 @@
-{% from "components/ui/macros.html" import page_header, stats_card, data_table, table_row, empty_state, status_badge %}
+{% from "components/ui/macros.html" import stats_card, data_table, table_row, empty_state, status_badge %}
 <div class="space-y-6">
     {% if can(request, "reports:billing:export") %}<div class="flex justify-end"><a href="/admin/customer-retention/export{% if search %}?search={{ search | urlencode }}{% endif %}" class="rounded-lg border border-slate-300 px-4 py-2 text-sm font-medium text-slate-700 dark:border-slate-600 dark:text-slate-200">Export current queue CSV</a></div>{% endif %}
-    {% call page_header("Customer Retention Tracker", "Retention queue for accounts surfaced by authoritative Selfcare billing facts, ordered by recovery urgency and balance exposure.", color="rose", color2="pink") %}
+    <div class="flex flex-wrap items-center justify-between gap-3">
+        <div>
+            <h2 class="text-lg font-semibold text-slate-900 dark:text-white">Current billing risk</h2>
+            <p class="text-sm text-slate-500 dark:text-slate-400">Live accounts ordered by recovery urgency and balance exposure.</p>
+        </div>
         <a href="/admin/reports/operational/billing-risk" class="inline-flex h-10 items-center gap-2 rounded-xl border border-slate-200 bg-white px-4 text-sm font-semibold text-slate-700 shadow-sm hover:bg-slate-50 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-200 dark:hover:bg-slate-700">
             <span aria-hidden="true">&larr;</span> Back to Billing Risk
         </a>
-    {% endcall %}
+    </div>
 
     <div class="rounded-xl border border-blue-200 bg-blue-50 px-4 py-3 text-sm text-blue-900 dark:border-blue-800 dark:bg-blue-950/30 dark:text-blue-200">
         Current billing-risk facts are a live snapshot. CRM engagement history, follow-up state, and outreach remain managed in Dotmac CRM.
     </div>
 
-    <div class="text-sm text-slate-500 dark:text-slate-400">Current billing risk Â&middot; live snapshot</div>
     <div class="grid gap-4 sm:grid-cols-2">
         {{ stats_card("Tracked Accounts", tracked_count, color="rose", color2="pink") }}
         {{ stats_card("Revenue At Risk", "NGN " ~ "{:,.2f}".format(revenue_at_risk), color="slate", color2="gray") }}

@@ -1,6 +1,6 @@
 {% from "components/ui/macros.html" import stats_card %}
 <div class="space-y-3">
-    <div><h2 class="text-lg font-semibold text-slate-900 dark:text-white">Retention performance</h2><p class="text-sm text-slate-500 dark:text-slate-400">{{ metrics.date_from }} to {{ metrics.date_to }} Â&middot; period metrics</p></div>
+    <div><h2 class="text-lg font-semibold text-slate-900 dark:text-white">Retention performance</h2><p class="text-sm text-slate-500 dark:text-slate-400">{{ metrics.date_from }} to {{ metrics.date_to }} &middot; period metrics</p></div>
     <div class="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
         {{ stats_card("Churn Rate", "{:.1f}%".format(metrics.churn_rate) if metrics.churn_rate is not none else "N/A", color="amber", color2="orange") }}
         {{ stats_card("Recovered Customers", metrics.recovered_customers, color="emerald", color2="green") }}
