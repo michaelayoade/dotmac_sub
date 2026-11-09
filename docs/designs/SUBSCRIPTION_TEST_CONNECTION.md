@@ -59,6 +59,14 @@ and expected expiry. It also records expiry. `pending`, `applied` and `failed`
 delivery states are separate from the authoritative interval; the UI never
 treats a queued network request as verified delivery.
 
+Authorized staff can end the exact running grant early with a reason and
+explicit confirmation. The owner locks the subscription and grant and records
+the canonical staff actor, end time, reason, and `ended` change event in one
+transaction. A repeated request for an already ended grant is harmless; a
+stale form cannot end a later grant. The existing timer can later observe the
+ended grant. The change event rebuilds normal RADIUS rows and refreshes live
+sessions; the UI reports the request while network delivery completes.
+
 ## Effective access and network deadline
 
 All application readers check the absolute interval against current UTC time.
@@ -144,8 +152,12 @@ prerequisites. The duration is read-only here; activating the displayed
 system-wide interval is the single primary action. The account timeline holds
 actor and interval evidence. The detail row links to the subscription's own account,
 including when a person/company detail aggregates multiple accounts.
+The affected subscription line shows Test Connection when no grant is running
+and End Test Connection while its own grant is running. The end link opens the
+secondary confirmation form, which explains the network impact and requires a
+reason. It submits the exact grant identity to the owner.
 
-Unauthorized staff see no row action and both routes refuse their request.
+Unauthorized staff see no row action and all action routes refuse their request.
 Unavailable network capability and an already running test disable activation
 with an explanation. Pending/applied/failed delivery is shown separately from
 normal billing status. The editor stacks controls on mobile and uses the

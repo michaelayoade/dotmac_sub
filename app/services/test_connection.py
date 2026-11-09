@@ -5,6 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from enum import Enum
+from typing import Literal
 from uuid import NAMESPACE_URL, UUID, uuid5
 
 from sqlalchemy import func, select
@@ -46,6 +47,7 @@ _ACTIVATE = OwnerCommandDefinition(
 _EXPIRE = OwnerCommandDefinition(
     owner=OWNER, concern=CONCERN, name="expire_test_connection"
 )
+_END = OwnerCommandDefinition(owner=OWNER, concern=CONCERN, name="end_test_connection")
 _DELIVERY = OwnerCommandDefinition(
     owner=OWNER, concern=CONCERN, name="record_test_connection_delivery"
 )
@@ -646,22 +648,33 @@ def activate_test_connection(
 
 
 def _finish(
-    db: Session, grant: TestConnectionGrant, *, context: CommandContext, now: datetime
+    db: Session,
+    grant: TestConnectionGrant,
+    *,
+    context: CommandContext,
+    now: datetime,
+    actor: AuditActor | None = None,
+    transition: Literal["expired", "ended"] = "expired",
 ) -> None:
     grant.ended_at = now
+    metadata: dict[str, object] = {
+        "grant_id": str(grant.id),
+        "duration_seconds": grant.duration_seconds,
+        "activated_at": utc_datetime(grant.activated_at).isoformat(),
+        "expires_at": utc_datetime(grant.expires_at).isoformat(),
+    }
+    if transition == "ended":
+        metadata["ended_at"] = now.isoformat()
+        metadata["reason"] = context.reason.strip()
     stage_audit_event(
         db,
-        action="subscription.test_connection_expired",
+        action=f"subscription.test_connection_{transition}",
         entity_type="subscription",
         entity_id=str(grant.subscription_id),
-        actor=AuditActor.system(OWNER),
-        metadata={
-            "grant_id": str(grant.id),
-            "duration_seconds": grant.duration_seconds,
-            "activated_at": utc_datetime(grant.activated_at).isoformat(),
-            "expires_at": utc_datetime(grant.expires_at).isoformat(),
-        },
+        actor=actor or AuditActor.system(OWNER),
+        metadata=metadata,
         occurred_at=now,
+        request_id=str(context.correlation_id),
     )
     emit_event(
         db,
@@ -670,7 +683,7 @@ def _finish(
             "schema_version": 1,
             "grant_id": str(grant.id),
             "subscription_id": str(grant.subscription_id),
-            "transition": "expired",
+            "transition": transition,
         },
         actor=context.actor,
         subscription_id=grant.subscription_id,
@@ -705,6 +718,88 @@ def expire_test_connection(
 
     return execute_owner_command(
         db, definition=_EXPIRE, context=command.context, operation=operation
+    )
+
+
+@dataclass(frozen=True, slots=True)
+class EndTestConnectionCommand:
+    context: CommandContext
+    grant_id: UUID
+    subscriber_id: UUID
+    subscription_id: UUID
+    actor_id: UUID
+
+
+def end_test_connection(
+    db: Session, *, command: EndTestConnectionCommand
+) -> TestConnectionOutcome:
+    """End one exact live grant and request ordinary network access again."""
+
+    def operation() -> TestConnectionOutcome:
+        if (
+            command.context.scope != PERMISSION
+            or command.context.actor != str(command.actor_id)
+            or not command.context.reason.strip()
+            or len(command.context.reason.strip()) > 500
+        ):
+            raise _error(
+                "permission_denied",
+                "An authorized staff reason is required (up to 500 characters).",
+            )
+        actor = db.get(SystemUser, command.actor_id)
+        if actor is None or not actor.is_active:
+            raise _error(
+                "permission_denied", "The staff principal is inactive or missing."
+            )
+        subscription = db.scalar(
+            select(Subscription)
+            .where(
+                Subscription.id == command.subscription_id,
+                Subscription.subscriber_id == command.subscriber_id,
+            )
+            .with_for_update()
+        )
+        if subscription is None:
+            raise _error(
+                "subscription_not_found",
+                "Subscription does not belong to this customer.",
+            )
+        grant = db.scalar(
+            select(TestConnectionGrant)
+            .where(
+                TestConnectionGrant.id == command.grant_id,
+                TestConnectionGrant.subscription_id == subscription.id,
+                TestConnectionGrant.subscriber_id == command.subscriber_id,
+            )
+            .with_for_update()
+        )
+        if grant is None:
+            raise _error(
+                "grant_not_found",
+                "Test Connection grant was not found for this subscription.",
+            )
+        if grant.ended_at is not None:
+            return _outcome(grant, replayed=True)
+        now = datetime.now(UTC)
+        if now >= utc_datetime(grant.expires_at):
+            raise _error("not_active", "This Test Connection has already expired.")
+        actor_label = (
+            actor.display_name or f"{actor.first_name} {actor.last_name}".strip()
+        )
+        _finish(
+            db,
+            grant,
+            context=command.context,
+            now=now,
+            actor=AuditActor.user(
+                str(actor.id), label=actor_label, party_id=actor.person_party_id
+            ),
+            transition="ended",
+        )
+        return _outcome(grant)
+
+    return execute_owner_command(
+        db, definition=_END, context=command.context, operation=operation
     )
 
 
