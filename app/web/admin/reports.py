@@ -1168,15 +1168,36 @@ def reports_churn_export(
     )
 
 
+def _network_report_query(
+    *, date_from: str | None, date_to: str | None
+) -> web_reports_service.NetworkReportQuery:
+    if bool(date_from) != bool(date_to):
+        raise HTTPException(status_code=422, detail="Select both network report dates")
+    start = _parse_report_date(date_from)
+    end = _parse_report_date(date_to)
+    if start and end:
+        if start > end:
+            raise HTTPException(
+                status_code=422, detail="Start date must be on or before end date"
+            )
+    return web_reports_service.NetworkReportQuery(date_from=start, date_to=end)
+
+
 @router.get(
     "/network",
     response_class=HTMLResponse,
     dependencies=[Depends(require_permission("reports:network:read"))],
 )
-def reports_network(request: Request, db: Session = Depends(get_db)):
+def reports_network(
+    request: Request,
+    db: Session = Depends(get_db),
+    date_from: str | None = None,
+    date_to: str | None = None,
+):
     from app.web.admin import get_current_user, get_sidebar_stats
 
-    report_data = web_reports_service.get_network_report_data(db=db)
+    query = _network_report_query(date_from=date_from, date_to=date_to)
+    report_data = web_reports_service.get_network_report_data(db=db, query=query)
 
     context = {
         "request": request,
@@ -1201,6 +1222,11 @@ def reports_network(request: Request, db: Session = Depends(get_db)):
         "olts": report_data.olts,
         "ip_pools": report_data.pool_data,
         "recent_ont_activity": report_data.recent_ont_activity,
+        "activity_total": report_data.activity_total,
+        "activity_online": report_data.activity_online,
+        "date_from": query.date_from.isoformat() if query.date_from else "",
+        "date_to": query.date_to.isoformat() if query.date_to else "",
+        "network_as_of": report_data.as_of,
         "device_health_chart": report_data.device_health_chart,
         "ip_pool_chart": report_data.ip_pool_chart,
         "recent_activities": recent_activity_for_paths(db, ["/admin/reports"]),
@@ -1212,11 +1238,14 @@ def reports_network(request: Request, db: Session = Depends(get_db)):
     "/network/export",
     dependencies=[Depends(require_permission("reports:network:export"))],
 )
-def reports_network_export(hours: int | None = None, db: Session = Depends(get_db)):
-    report_data = web_reports_service.get_network_report_data(db=db, hours=hours)
-    content = web_reports_service.build_network_export_csv(
-        data=report_data, hours=hours
-    )
+def reports_network_export(
+    date_from: str | None = None,
+    date_to: str | None = None,
+    db: Session = Depends(get_db),
+):
+    query = _network_report_query(date_from=date_from, date_to=date_to)
+    report_data = web_reports_service.get_network_report_data(db=db, query=query)
+    content = web_reports_service.build_network_export_csv(data=report_data)
     return Response(
         content,
         media_type="text/csv",

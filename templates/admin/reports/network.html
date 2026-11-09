@@ -15,22 +15,27 @@
             <h1 class="text-2xl font-bold text-slate-900 dark:text-white">Network Usage</h1>
             <p class="mt-1 text-sm text-slate-500 dark:text-slate-400">Review network utilization and infrastructure status</p>
         </div>
-        {% if can(request, "reports:network:export") %}
-        <form method="GET" action="/admin/reports/network/export" class="flex items-center gap-2">
-            <label for="hours" class="sr-only">Export period</label>
-            <select id="hours" name="hours" class="rounded-lg border border-slate-300 px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
-                <option value="24">Last 24 Hours</option>
-                <option value="168">Last 7 Days</option>
-                <option value="720">Last 30 Days</option>
-            </select>
-            <button type="submit" class="inline-flex items-center gap-2 rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50 dark:hover:bg-slate-700 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-300">
+        <div class="flex flex-col gap-3">
+            <form method="GET" action="/admin/reports/network" class="flex flex-wrap items-end gap-2">
+                <div><label for="network-date-from" class="block text-sm font-medium text-slate-700 dark:text-slate-300">Start date</label><input id="network-date-from" name="date_from" type="date" value="{{ date_from }}" required class="mt-1 rounded-lg border border-slate-300 px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white"></div>
+                <div><label for="network-date-to" class="block text-sm font-medium text-slate-700 dark:text-slate-300">End date</label><input id="network-date-to" name="date_to" type="date" value="{{ date_to }}" required class="mt-1 rounded-lg border border-slate-300 px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white"></div>
+                <button type="submit" class="rounded-lg bg-teal-600 px-4 py-2 text-sm font-medium text-white hover:bg-teal-700">Apply</button>
+                <a href="/admin/reports/network" class="rounded-lg border border-slate-300 px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50 dark:border-slate-600 dark:text-slate-300 dark:hover:bg-slate-700">Clear</a>
+            </form>
+            {% if can(request, "reports:network:export") %}
+            <form method="GET" action="/admin/reports/network/export" class="flex justify-end">
+                <input type="hidden" name="date_from" value="{{ date_from }}">
+                <input type="hidden" name="date_to" value="{{ date_to }}">
+                <button type="submit" class="inline-flex items-center gap-2 rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50 dark:hover:bg-slate-700 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-300">
                 <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"/></svg>
                 Export
-            </button>
-        </form>
-        {% endif %}
+                </button>
+            </form>
+            {% endif %}
+        </div>
     </div>
 
+    <p class="text-sm text-slate-500 dark:text-slate-400">Current infrastructure snapshot{% if network_as_of %} as of {{ network_as_of | app_datetime('%b %d, %Y %H:%M') }}{% endif %}. The date range below applies to ONT records by last update.</p>
     <div class="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
         <div class="rounded-xl border border-slate-200 bg-white p-5 shadow-sm dark:border-slate-700 dark:bg-slate-800">
             <p class="text-sm text-slate-500 dark:text-slate-400">PON Capacity</p>
@@ -183,9 +188,10 @@
     <!-- Recent Network Events -->
     <div class="rounded-xl border border-slate-200 bg-white shadow-sm dark:border-slate-700 dark:bg-slate-800">
         <div class="border-b border-slate-200 px-6 py-4 dark:border-slate-700">
-            <h2 class="font-semibold text-slate-900 dark:text-white">Recent ONT Activity</h2>
+            <h2 class="font-semibold text-slate-900 dark:text-white">{% if date_from %}ONT Records Updated in Selected Range{% else %}Recent ONT Records{% endif %}</h2>
         </div>
         <div class="p-6">
+            <p class="mb-3 text-sm text-slate-600 dark:text-slate-300">{% if date_from %}{{ activity_total }} records last updated from {{ date_from }} to {{ date_to }}; {{ activity_online }} currently online.{% else %}{{ activity_total }} ONT records; {{ activity_online }} currently online.{% endif %} Showing the latest 10.</p>
             {% if recent_ont_activity %}
             <div class="overflow-x-auto">
                 <table class="min-w-full divide-y divide-slate-200 dark:divide-slate-700">
@@ -195,6 +201,7 @@
                             <th class="px-4 py-2 text-left text-xs font-semibold text-slate-500 dark:text-slate-400">Serial</th>
                             <th class="px-4 py-2 text-left text-xs font-semibold text-slate-500 dark:text-slate-400">OLT</th>
                             <th class="px-4 py-2 text-left text-xs font-semibold text-slate-500 dark:text-slate-400">Status</th>
+                            <th class="px-4 py-2 text-left text-xs font-semibold text-slate-500 dark:text-slate-400">Last updated</th>
                         </tr>
                     </thead>
                     <tbody class="divide-y divide-slate-200 dark:divide-slate-700">
@@ -210,13 +217,14 @@
                                 {{ status_badge("Offline", "offline", size="sm") }}
                                 {% endif %}
                             </td>
+                            <td class="px-4 py-3 text-sm text-slate-500 dark:text-slate-400">{{ ont.updated_at | app_datetime('%b %d, %Y %H:%M') }}</td>
                         </tr>
                         {% endfor %}
                     </tbody>
                 </table>
             </div>
             {% else %}
-            <p class="text-sm text-slate-500 dark:text-slate-400">No recent ONT activity.</p>
+            <p class="text-sm text-slate-500 dark:text-slate-400">{% if date_from %}No ONT records were updated in this range.{% else %}No ONT records are available.{% endif %}</p>
             {% endif %}
         </div>
     </div>

@@ -75,6 +75,12 @@ class NetworkPoolReportRow:
 
 
 @dataclass(frozen=True, slots=True)
+class NetworkReportQuery:
+    date_from: date | None = None
+    date_to: date | None = None
+
+
+@dataclass(frozen=True, slots=True)
 class NetworkReportData:
     olts: tuple[crm_reporting_service.NetworkOltFacts, ...]
     total_olts: int
@@ -96,6 +102,11 @@ class NetworkReportData:
     splitter_capacity: int
     device_health_chart: ChartProjection
     ip_pool_chart: ChartProjection
+    date_from: date | None = None
+    date_to: date | None = None
+    as_of: datetime | None = None
+    activity_total: int = 0
+    activity_online: int = 0
 
 
 @dataclass(frozen=True, slots=True)
@@ -272,8 +283,22 @@ def _ensure_aware_datetime(value: datetime | None) -> datetime | None:
     return value
 
 
-def get_network_report_data(db: Session, hours: int | None = None) -> NetworkReportData:
-    facts = crm_reporting_service.network_infrastructure_facts(db=db, hours=hours)
+def get_network_report_data(
+    db: Session, *, query: NetworkReportQuery = NetworkReportQuery()
+) -> NetworkReportData:
+    start_at = (
+        datetime.combine(query.date_from, datetime.min.time(), UTC)
+        if query.date_from
+        else None
+    )
+    end_at = (
+        datetime.combine(query.date_to + timedelta(days=1), datetime.min.time(), UTC)
+        if query.date_to
+        else None
+    )
+    facts = crm_reporting_service.network_infrastructure_facts(
+        db=db, activity_start_at=start_at, activity_end_at=end_at
+    )
     as_of = datetime.now(UTC)
     pool_data = tuple(
         NetworkPoolReportRow(
@@ -356,10 +381,15 @@ def get_network_report_data(db: Session, hours: int | None = None) -> NetworkRep
         splitter_capacity=facts.splitter_capacity,
         device_health_chart=device_health_chart,
         ip_pool_chart=ip_pool_chart,
+        date_from=query.date_from,
+        date_to=query.date_to,
+        as_of=as_of,
+        activity_total=facts.activity_total,
+        activity_online=facts.activity_online,
     )
 
 
-def build_network_export_csv(data: NetworkReportData, hours: int | None = None) -> str:
+def build_network_export_csv(*, data: NetworkReportData) -> str:
     output = io.StringIO()
     writer = csv.writer(output)
     writer.writerow(["metric", "value"])
@@ -377,7 +407,11 @@ def build_network_export_csv(data: NetworkReportData, hours: int | None = None) 
     writer.writerow(["available_fiber_strands", data.available_fiber_strands])
     writer.writerow(["active_fdh", data.total_fdh])
     writer.writerow(["splitter_output_capacity", data.splitter_capacity])
-    writer.writerow(["report_window_hours", hours or ""])
+    writer.writerow(["date_from", data.date_from.isoformat() if data.date_from else ""])
+    writer.writerow(["date_to", data.date_to.isoformat() if data.date_to else ""])
+    writer.writerow(["data_as_of", data.as_of.isoformat() if data.as_of else ""])
+    writer.writerow(["ont_records_updated_in_range", data.activity_total])
+    writer.writerow(["currently_online_in_range", data.activity_online])
     writer.writerow([])
     writer.writerow(["pool_name", "cidr", "used_count", "total_count", "usage_percent"])
     for pool in data.pool_data:
@@ -389,6 +423,20 @@ def build_network_export_csv(data: NetworkReportData, hours: int | None = None) 
                 pool.used_count,
                 pool.total_count,
                 f"{usage:.2f}",
+            ]
+        )
+    writer.writerow([])
+    writer.writerow(
+        ["ont_model", "serial_number", "olt_name", "current_status", "last_updated_at"]
+    )
+    for ont in data.recent_ont_activity:
+        writer.writerow(
+            [
+                ont.model or "",
+                ont.serial_number,
+                ont.olt_name or "",
+                "online" if ont.is_online else "offline",
+                ont.updated_at.isoformat() if ont.updated_at else "",
             ]
         )
     content = output.getvalue()

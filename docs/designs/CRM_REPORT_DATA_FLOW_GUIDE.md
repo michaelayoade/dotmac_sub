@@ -42,10 +42,10 @@ Plain-English flow: Self-Care combines its regulatory records with explicitly ow
 REPORT: Network Infrastructure
 Data source: OLTDevice, OntUnit, IpPool, IpBlock, Vlan, PonPort, FiberStrand, FdhCabinet, and Splitter records.
 Backend query/service: `crm_reporting.network_infrastructure_facts`, composed by `web_reports.get_network_report_data`; IP utilization comes from `ip_pool_utilization_snapshot.live_pool_counts`.
-Transformation/calculation: Counts active/total OLTs, observed-online ONTs, IP usage, VLANs, PON capacity/utilization, available fibre, FDHs, and splitter outputs; selects ten recent ONT observations.
+Transformation/calculation: Counts active/total OLTs, observed-online ONTs, IP usage, VLANs, PON capacity/utilization, available fibre, FDHs, and splitter outputs from the current inventory. An optional inclusive UTC date range selects ONT records by `updated_at`, counts that cohort, and displays its ten most recently updated records. The range does not rewrite current infrastructure capacity or status.
 Route/API: `/admin/reports/network`; CSV `/admin/reports/network/export`.
 UI component/template: `templates/admin/reports/network.html`.
-Displayed as: Infrastructure/capacity cards, device-health and IP-pool charts, OLT/pool lists, and recent ONT observations. Each chart receives a typed `ChartProjection`; missing inventory or pools render an explicit empty state instead of a blank plotting surface.
+Displayed as: Infrastructure/capacity cards, device-health and IP-pool charts, OLT/pool lists, and recent ONT records. Start/end date controls, Apply, and Clear govern the ONT record cohort; CSV export uses the same dates and identifies the report snapshot time. Each chart receives a typed `ChartProjection`; missing inventory or pools render an explicit empty state instead of a blank plotting surface.
 Permission: `reports:network:read`; CSV requires `reports:network:export`.
 Ownership: Network observations are projected/synchronized into Self-Care; the persisted projection is the report source.
 Data freshness/synchronization: Live report query over the latest collector/synchronizer results.
