@@ -1,3 +1,5 @@
+from tests.settings_hub_fixtures import settings_context as _settings_context
+
 """Tests for network monitoring service."""
 
 import json
@@ -1022,6 +1024,7 @@ def test_save_monitoring_config_writes_runtime_health_keys(db_session):
             "network_health_crit_pct": "65",
             "cpu_warn_pct": "10",
         },
+        context=_settings_context(),
     )
 
     rows = {
@@ -1049,6 +1052,7 @@ def test_save_monitoring_config_uses_typed_settings_for_spec_keys(db_session):
             "network_health_warn_pct": "88",
             "network_health_crit_pct": "65",
         },
+        context=_settings_context(),
     )
 
     rows = {
@@ -1081,6 +1085,7 @@ def test_save_monitoring_config_persists_the_spec_setting(db_session):
         {
             "server_health_mem_warn_pct": "75",
         },
+        context=_settings_context(),
     )
 
     stored = settings_spec.resolve_value(
@@ -1098,6 +1103,7 @@ def test_save_monitoring_config_invalid_spec_value_is_rejected(db_session):
             {
                 "server_health_mem_warn_pct": "150",
             },
+            context=_settings_context(),
         )
 
     assert (

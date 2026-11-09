@@ -3809,84 +3809,135 @@ def scheduler_task_delete(
     return RedirectResponse(url="/admin/system/scheduler", status_code=303)
 
 
+def _hub_editor_context(
+    request: Request,
+    db: Session,
+    *,
+    section_id: str,
+    errors: tuple[str, ...] = (),
+    saved: bool = False,
+    submitted_values: dict[str, object] | None = None,
+) -> dict:
+    try:
+        view = web_system_settings_hub_service.read_section(
+            db,
+            query=web_system_settings_hub_service.HubSectionQuery(
+                section_id=section_id
+            ),
+        )
+    except KeyError as exc:
+        raise HTTPException(
+            status_code=404, detail="Settings section not found"
+        ) from exc
+    if not view.rows:
+        raise HTTPException(
+            status_code=404, detail="No registered settings in this section"
+        )
+    return _config_context(
+        request,
+        db,
+        {
+            "active_page": "settings-hub",
+            "hub_view": view,
+            "selected_category": view.section.tab.value,
+            "categories": web_system_settings_hub_service.build_settings_hub_context(
+                db
+            )["categories"],
+            "errors": errors,
+            "saved": saved,
+            "submitted_values": submitted_values,
+        },
+    )
+
+
 @router.get(
-    "/settings",
+    "/settings-hub/edit/{section_id}",
     response_class=HTMLResponse,
     dependencies=[Depends(require_permission("system:settings:read"))],
 )
-def settings_overview(
-    request: Request,
-    domain: str | None = None,
-    db: Session = Depends(get_db),
-):
-    """System settings management."""
-    if domain == web_system_settings_views_service.BRANDING_DOMAIN:
-        return RedirectResponse(url="/admin/system/branding", status_code=303)
-    if domain == "notification":
-        return RedirectResponse(url="/admin/system/email", status_code=303)
-
-    settings_context = web_system_settings_views_service.build_settings_context(
-        db, domain
-    )
-    context = web_system_settings_views_service.build_settings_page_context(
-        request,
-        db,
-        settings_context=settings_context,
-    )
+def settings_overview(request: Request, section_id: str, db: Session = Depends(get_db)):
+    specialised = {
+        "branding-values": "/admin/system/branding",
+        "notification": "/admin/system/email",
+        "company": "/admin/system/company-info",
+    }
+    if section_id in specialised:
+        return RedirectResponse(url=specialised[section_id], status_code=303)
     return templates.TemplateResponse(
-        "admin/system/settings.html",
-        context,
+        "admin/system/settings_hub_editor.html",
+        _hub_editor_context(request, db, section_id=section_id),
     )
 
 
 @router.post(
-    "/settings",
+    "/settings-hub/edit/{section_id}",
     response_class=HTMLResponse,
     dependencies=[Depends(require_permission("system:settings:write"))],
 )
 def settings_update(
     request: Request,
-    domain: str | None = Form(None),
+    section_id: str,
     form=Depends(parse_form_data),
     db: Session = Depends(get_db),
 ):
-    """Update system settings for a domain."""
-    domain_value = domain or form.get("domain")
-    result = web_system_settings_forms_service.process_settings_update(
-        db=db,
-        domain_value=domain_value,
-        form=form,
-        context=_system_command_context(
-            request,
-            reason="Update admin system settings",
-            idempotency_key=f"system-settings:{domain_value or 'unknown'}:{uuid4()}",
-            scope=domain_settings_service.ADMIN_SETTINGS_FORM_WRITE_SCOPE,
-        ),
+    try:
+        result = web_system_settings_forms_service.update_hub_section(
+            db,
+            command=web_system_settings_forms_service.HubSettingsUpdateCommand(
+                section_id=section_id,
+                values=dict(form),
+            ),
+            context=_system_command_context(
+                request,
+                reason="Update settings hub section",
+                idempotency_key=f"settings-hub:{section_id}:{uuid4()}",
+                scope=domain_settings_service.ADMIN_SETTINGS_FORM_WRITE_SCOPE,
+            ),
+        )
+    except KeyError as exc:
+        raise HTTPException(
+            status_code=404, detail="Settings section not found"
+        ) from exc
+    submitted_values = (
+        web_system_settings_forms_service.safe_submitted_values(
+            specs=web_system_settings_hub_service.section_specs(
+                query=web_system_settings_hub_service.HubSectionQuery(
+                    section_id=section_id
+                )
+            ),
+            values=dict(form),
+        )
+        if result.errors
+        else None
     )
-    errors = result.errors
-    if domain_value == "notification":
-        if not errors:
+    if section_id == "notification":
+        if not result.errors:
             return RedirectResponse(url="/admin/system/email?saved=1", status_code=303)
         return templates.TemplateResponse(
             "admin/system/email.html",
-            _smtp_page_context(request, db, {"errors": errors}),
+            _smtp_page_context(
+                request,
+                db,
+                {"errors": result.errors, "submitted_values": submitted_values},
+            ),
             status_code=400,
         )
-    context = web_system_settings_views_service.build_settings_page_context(
-        request,
-        db,
-        settings_context=result.settings_context,
-        extra={"errors": errors, "saved": not errors},
-    )
     return templates.TemplateResponse(
-        "admin/system/settings.html",
-        context,
-        status_code=400 if errors else 200,
+        "admin/system/settings_hub_editor.html",
+        _hub_editor_context(
+            request,
+            db,
+            section_id=section_id,
+            errors=result.errors,
+            submitted_values=submitted_values,
+            saved=not result.errors,
+        ),
+        status_code=400 if result.errors else 200,
     )
 
 
 @router.post(
-    "/settings/starter-ledger-live",
+    "/settings-hub/actions/starter-ledger-live",
     response_class=HTMLResponse,
     dependencies=[Depends(require_permission("system:settings:write"))],
 )
@@ -3910,23 +3961,19 @@ def settings_starter_ledger_live_update(
     )
     if not errors:
         return RedirectResponse(
-            url="/admin/system/settings?domain=billing", status_code=303
+            url="/admin/system/settings-hub/edit/starter-accounting", status_code=303
         )
-    context = web_system_settings_views_service.build_settings_page_context(
-        request,
-        db,
-        settings_context=web_system_settings_views_service.build_settings_context(
-            db, "billing"
-        ),
-        extra={"errors": list(errors), "saved": False},
-    )
     return templates.TemplateResponse(
-        "admin/system/settings.html", context, status_code=403
+        "admin/system/settings_hub_editor.html",
+        _hub_editor_context(
+            request, db, section_id="starter-accounting", errors=errors
+        ),
+        status_code=403,
     )
 
 
 @router.post(
-    "/settings/branding",
+    "/branding",
     response_class=HTMLResponse,
     dependencies=[Depends(require_permission("system:settings:write"))],
 )
@@ -4268,7 +4315,7 @@ def _smtp_page_context(
 
 
 @router.post(
-    "/settings/smtp-senders",
+    "/email/smtp-senders",
     response_class=HTMLResponse,
     dependencies=[Depends(require_permission("system:settings:write"))],
 )
@@ -4317,7 +4364,7 @@ def settings_smtp_sender_upsert(
 
 
 @router.post(
-    "/settings/smtp-senders/default",
+    "/email/smtp-senders/default",
     response_class=HTMLResponse,
     dependencies=[Depends(require_permission("system:settings:write"))],
 )
@@ -4330,7 +4377,7 @@ def settings_smtp_sender_set_default(
 
 
 @router.post(
-    "/settings/smtp-senders/{sender_key}/delete",
+    "/email/smtp-senders/{sender_key}/delete",
     response_class=HTMLResponse,
     dependencies=[Depends(require_permission("system:settings:write"))],
 )
@@ -4350,7 +4397,7 @@ def settings_smtp_sender_delete(sender_key: str, db: Session = Depends(get_db)):
 
 
 @router.post(
-    "/settings/smtp-senders/{sender_key}/test",
+    "/email/smtp-senders/{sender_key}/test",
     response_class=HTMLResponse,
     dependencies=[Depends(require_permission("system:settings:write"))],
 )
@@ -4380,7 +4427,7 @@ def settings_smtp_sender_test(
 
 
 @router.post(
-    "/settings/smtp-senders/activities",
+    "/email/smtp-senders/activities",
     response_class=HTMLResponse,
     dependencies=[Depends(require_permission("system:settings:write"))],
 )
@@ -4395,8 +4442,63 @@ def settings_smtp_sender_activities(
     return RedirectResponse(url="/admin/system/email#smtp-senders", status_code=303)
 
 
+@router.get(
+    "/settings-hub/bank-accounts",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("system:settings:read"))],
+)
+def settings_bank_accounts_page(
+    request: Request,
+    account_id: UUID | None = None,
+    offset: int = Query(0, ge=0),
+    is_active: bool = True,
+    db: Session = Depends(get_db),
+):
+    return templates.TemplateResponse(
+        "admin/system/settings_hub_bank_accounts.html",
+        _hub_bank_accounts_context(
+            request, db, account_id=account_id, offset=offset, is_active=is_active
+        ),
+    )
+
+
+def _hub_bank_accounts_context(
+    request: Request,
+    db: Session,
+    *,
+    account_id: UUID | None = None,
+    offset: int = 0,
+    error: str | None = None,
+    is_active: bool = True,
+) -> dict:
+    rows = web_system_settings_hub_service.read_bank_accounts(
+        db,
+        query=web_system_settings_hub_service.HubBankAccountsQuery(
+            account_id=account_id,
+            offset=offset,
+            is_active=is_active,
+        ),
+    )
+    return _config_context(
+        request,
+        db,
+        {
+            "active_page": "settings-hub",
+            "selected_category": "billing",
+            "categories": web_system_settings_hub_service.build_settings_hub_context(
+                db
+            )["categories"],
+            "bank_accounts": rows,
+            "bank_account_error": error,
+            "account_id": account_id,
+            "offset": offset,
+            "is_active": is_active,
+        },
+    )
+
+
 @router.post(
-    "/settings/bank-accounts",
+    "/settings-hub/bank-accounts",
     response_class=HTMLResponse,
     dependencies=[Depends(require_permission("system:settings:write"))],
 )
@@ -4411,25 +4513,20 @@ def settings_bank_account_create(
         )
         billing_service.bank_accounts.create(db, payload)
         return RedirectResponse(
-            url="/admin/system/settings?domain=billing#bank-accounts", status_code=303
+            url="/admin/system/settings-hub/bank-accounts", status_code=303
         )
     except Exception as exc:
         error = exc.detail if hasattr(exc, "detail") else str(exc)
-        context = web_system_billing_forms_service.build_bank_account_error_context(
-            request,
-            db,
-            error=error,
-            message="Unable to create bank account.",
-        )
+        context = _hub_bank_accounts_context(request, db, error=error)
         return templates.TemplateResponse(
-            "admin/system/settings.html",
+            "admin/system/settings_hub_bank_accounts.html",
             context,
             status_code=400,
         )
 
 
 @router.post(
-    "/settings/bank-accounts/{bank_account_id}",
+    "/settings-hub/bank-accounts/{bank_account_id}",
     response_class=HTMLResponse,
     dependencies=[Depends(require_permission("system:settings:write"))],
 )
@@ -4445,25 +4542,20 @@ def settings_bank_account_update(
         )
         billing_service.bank_accounts.update(db, str(bank_account_id), payload)
         return RedirectResponse(
-            url="/admin/system/settings?domain=billing#bank-accounts", status_code=303
+            url="/admin/system/settings-hub/bank-accounts", status_code=303
         )
     except Exception as exc:
         error = exc.detail if hasattr(exc, "detail") else str(exc)
-        context = web_system_billing_forms_service.build_bank_account_error_context(
-            request,
-            db,
-            error=error,
-            message="Unable to update bank account.",
-        )
+        context = _hub_bank_accounts_context(request, db, error=error)
         return templates.TemplateResponse(
-            "admin/system/settings.html",
+            "admin/system/settings_hub_bank_accounts.html",
             context,
             status_code=400,
         )
 
 
 @router.post(
-    "/settings/bank-accounts/{bank_account_id}/deactivate",
+    "/settings-hub/bank-accounts/{bank_account_id}/deactivate",
     response_class=HTMLResponse,
     dependencies=[Depends(require_permission("system:settings:write"))],
 )
@@ -4472,7 +4564,7 @@ def settings_bank_account_deactivate(
 ):
     billing_service.bank_accounts.delete(db, str(bank_account_id))
     return RedirectResponse(
-        url="/admin/system/settings?domain=billing#bank-accounts", status_code=303
+        url="/admin/system/settings-hub/bank-accounts", status_code=303
     )
 
 
@@ -4669,11 +4761,23 @@ def _config_context(request: Request, db: Session, extra: dict) -> dict:
     """Build standard context for config pages."""
     from app.web.admin import get_current_user, get_sidebar_stats
 
+    hub = web_system_settings_hub_service.build_settings_hub_context(db)
+    path = request.url.path
+    matches = [
+        (len(link["url"]), category["id"])
+        for category in hub["categories"]
+        for link in category["links"]
+        if path == link["url"] or path.startswith(link["url"] + "/")
+    ]
+    category_id = max(matches)[1] if matches else ""
     return {
         "request": request,
         "active_menu": "system",
         "current_user": get_current_user(request),
         "sidebar_stats": get_sidebar_stats(db),
+        "settings_hub_categories": hub["categories"],
+        "settings_hub_category": category_id,
+        "settings_hub_navigation": bool(category_id) and "/settings-hub" not in path,
         **extra,
     }
 
@@ -5186,7 +5290,16 @@ def config_preferences_page(request: Request, db: Session = Depends(get_db)):
 )
 def config_preferences_save(request: Request, db: Session = Depends(get_db)):
     form = parse_form_data_sync(request)
-    web_system_config_service.save_preferences(db, form)
+    web_system_config_service.save_preferences(
+        db,
+        form,
+        context=_system_command_context(
+            request,
+            reason="Update preferences",
+            idempotency_key=f"save_preferences:{uuid4()}",
+            scope=domain_settings_service.ADMIN_SETTINGS_FORM_WRITE_SCOPE,
+        ),
+    )
     return RedirectResponse(url="/admin/system/config/preferences", status_code=303)
 
 
@@ -5233,7 +5346,16 @@ def config_portal_page(request: Request, db: Session = Depends(get_db)):
 def config_portal_save(request: Request, db: Session = Depends(get_db)):
     form = parse_form_data_sync(request)
     try:
-        web_system_config_service.save_portal_config(db, form)
+        web_system_config_service.save_portal_config(
+            db,
+            form,
+            context=_system_command_context(
+                request,
+                reason="Update portal config",
+                idempotency_key=f"save_portal_config:{uuid4()}",
+                scope=domain_settings_service.ADMIN_SETTINGS_FORM_WRITE_SCOPE,
+            ),
+        )
     except ValueError as exc:
         db.rollback()
         return RedirectResponse(
@@ -5278,7 +5400,16 @@ def config_billing_save(request: Request, db: Session = Depends(get_db)):
     form = parse_form_data_sync(request)
     before = dict(web_system_config_service.get_billing_config_context(db)["billing"])
     try:
-        web_system_config_service.save_billing_config(db, form)
+        web_system_config_service.save_billing_config(
+            db,
+            form,
+            context=_system_command_context(
+                request,
+                reason="Update billing config",
+                idempotency_key=f"save_billing_config:{uuid4()}",
+                scope=domain_settings_service.ADMIN_SETTINGS_FORM_WRITE_SCOPE,
+            ),
+        )
     except ValueError as exc:
         return templates.TemplateResponse(
             "admin/system/config/billing.html",
@@ -5339,7 +5470,16 @@ def config_direct_bank_transfer_save(request: Request, db: Session = Depends(get
         **dict(before_context["direct_bank_transfer"]),
         "collection_accounts": before_context["collection_accounts"],
     }
-    web_system_config_service.save_direct_bank_transfer_config(db, form)
+    web_system_config_service.save_direct_bank_transfer_config(
+        db,
+        form,
+        context=_system_command_context(
+            request,
+            reason="Update direct bank transfer config",
+            idempotency_key=f"save_direct_bank_transfer_config:{uuid4()}",
+            scope=domain_settings_service.ADMIN_SETTINGS_FORM_WRITE_SCOPE,
+        ),
+    )
     after_context = web_system_config_service.get_direct_bank_transfer_context(db)
     after = {
         **dict(after_context["direct_bank_transfer"]),
@@ -5415,7 +5555,16 @@ def config_outage_auto_notify_save(request: Request, db: Session = Depends(get_d
             "outage_auto_notify"
         ]
     )
-    web_system_config_service.save_outage_auto_notify(db, form)
+    web_system_config_service.save_outage_auto_notify(
+        db,
+        form,
+        context=_system_command_context(
+            request,
+            reason="Update outage auto notify",
+            idempotency_key=f"save_outage_auto_notify:{uuid4()}",
+            scope=domain_settings_service.ADMIN_SETTINGS_FORM_WRITE_SCOPE,
+        ),
+    )
     after = dict(
         web_system_config_service.get_outage_auto_notify_context(db)[
             "outage_auto_notify"
@@ -5465,7 +5614,16 @@ def config_reminders_page(request: Request, db: Session = Depends(get_db)):
 def config_reminders_save(request: Request, db: Session = Depends(get_db)):
     form = parse_form_data_sync(request)
     before = dict(web_system_config_service.get_reminders_context(db)["reminders"])
-    web_system_config_service.save_reminders(db, form)
+    web_system_config_service.save_reminders(
+        db,
+        form,
+        context=_system_command_context(
+            request,
+            reason="Update reminders",
+            idempotency_key=f"save_reminders:{uuid4()}",
+            scope=domain_settings_service.ADMIN_SETTINGS_FORM_WRITE_SCOPE,
+        ),
+    )
     after = dict(web_system_config_service.get_reminders_context(db)["reminders"])
     changes = _diff_audit_snapshots(before, after)
     if changes:
@@ -5509,7 +5667,16 @@ def config_billing_notif_save(request: Request, db: Session = Depends(get_db)):
     before = dict(
         web_system_config_service.get_billing_notifications_context(db)["billing_notif"]
     )
-    web_system_config_service.save_billing_notifications(db, form)
+    web_system_config_service.save_billing_notifications(
+        db,
+        form,
+        context=_system_command_context(
+            request,
+            reason="Update billing notifications",
+            idempotency_key=f"save_billing_notifications:{uuid4()}",
+            scope=domain_settings_service.ADMIN_SETTINGS_FORM_WRITE_SCOPE,
+        ),
+    )
     after = dict(
         web_system_config_service.get_billing_notifications_context(db)["billing_notif"]
     )
@@ -5556,7 +5723,16 @@ def config_plan_change_save(request: Request, db: Session = Depends(get_db)):
     form = parse_form_data_sync(request)
     before = dict(web_system_config_service.get_plan_change_context(db)["plan_change"])
     try:
-        web_system_config_service.save_plan_change(db, form)
+        web_system_config_service.save_plan_change(
+            db,
+            form,
+            context=_system_command_context(
+                request,
+                reason="Update plan change",
+                idempotency_key=f"save_plan_change:{uuid4()}",
+                scope=domain_settings_service.ADMIN_SETTINGS_FORM_WRITE_SCOPE,
+            ),
+        )
     except ValueError as exc:
         return templates.TemplateResponse(
             "admin/system/config/plan_change.html",
@@ -5622,7 +5798,16 @@ def config_radius_save(request: Request, db: Session = Depends(get_db)):
     form = parse_form_data_sync(request)
     before = dict(web_system_config_service.get_radius_config_context(db)["radius"])
     try:
-        web_system_config_service.save_radius_config(db, form)
+        web_system_config_service.save_radius_config(
+            db,
+            form,
+            context=_system_command_context(
+                request,
+                reason="Update radius config",
+                idempotency_key=f"save_radius_config:{uuid4()}",
+                scope=domain_settings_service.ADMIN_SETTINGS_FORM_WRITE_SCOPE,
+            ),
+        )
     except ValueError as exc:
         db.rollback()
         return RedirectResponse(
@@ -5944,7 +6129,16 @@ def config_monitoring_page(request: Request, db: Session = Depends(get_db)):
 def config_monitoring_save(request: Request, db: Session = Depends(get_db)):
     form = parse_form_data_sync(request)
     try:
-        web_system_config_service.save_monitoring_config(db, form)
+        web_system_config_service.save_monitoring_config(
+            db,
+            form,
+            context=_system_command_context(
+                request,
+                reason="Update monitoring config",
+                idempotency_key=f"save_monitoring_config:{uuid4()}",
+                scope=domain_settings_service.ADMIN_SETTINGS_FORM_WRITE_SCOPE,
+            ),
+        )
     except ValueError as exc:
         db.rollback()
         return RedirectResponse(

@@ -35,7 +35,7 @@ def test_settings_branding_update_ignores_non_subscriber_uploaded_by(
         {
             "type": "http",
             "method": "POST",
-            "path": "/admin/system/settings/branding",
+            "path": "/admin/system/branding",
             "headers": [],
         }
     )

@@ -3,8 +3,21 @@
 from __future__ import annotations
 
 import logging
+from copy import deepcopy
+from dataclasses import dataclass
+from uuid import UUID
 
 from sqlalchemy.orm import Session
+
+from app.services import settings_spec
+from app.services.settings_hub_catalog import (
+    SECTIONS,
+    TAB_NAMES,
+    SettingsSection,
+    SettingsTab,
+    section_by_id,
+    setting_section,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -297,7 +310,196 @@ SETTINGS_CATEGORIES: list[dict] = [
 
 
 def build_settings_hub_context(db: Session) -> dict:
-    """Return the settings hub page context with all categories."""
-    return {
-        "categories": SETTINGS_CATEGORIES,
+    """Project all registered settings and existing management destinations."""
+    categories = {
+        category["id"]: deepcopy(category) for category in SETTINGS_CATEGORIES
     }
+    for tab in SettingsTab:
+        if tab.value not in categories:
+            categories[tab.value] = {
+                "id": tab.value,
+                "name": TAB_NAMES[tab],
+                "icon": "",
+                "color": "slate",
+                "description": "Configuration and management",
+                "links": [],
+            }
+    moved = {
+        "Users & Roles": "security",
+        "API Keys": "security",
+        "Secrets (OpenBao)": "security",
+        "Webhooks": "integrations",
+        "ERP Material Catalogue": "integrations",
+        "Ticket Settings": "operations",
+        "Service Teams": "operations",
+        "Email / SMTP": "notifications",
+        "Control Plane": "logs",
+        "Resellers": "catalog",
+    }
+    for category in list(categories.values()):
+        retained = []
+        for link in category["links"]:
+            destination = moved.get(link["name"], category["id"])
+            if destination != category["id"]:
+                if not any(
+                    item["url"] == link["url"]
+                    for item in categories[destination]["links"]
+                ):
+                    categories[destination]["links"].append(link)
+            else:
+                retained.append(link)
+        category["links"] = retained
+    present = {
+        setting_section(domain=str(spec.domain), key=spec.key).id
+        for spec in settings_spec.SETTINGS_SPECS
+    }
+    for section in SECTIONS:
+        # Branding and notification values already have complete specialised editors.
+        if section.id not in present or section.id in {
+            "branding-values",
+            "notification",
+            "company",
+        }:
+            continue
+        categories[section.tab.value]["links"].append(
+            {
+                "name": section.name,
+                "url": section.url,
+                "description": "Registered settings, defaults, and operational policy",
+                "permission": "system:settings:read",
+            }
+        )
+    categories["system"]["links"].append(
+        {
+            "name": "Optional Modules & Features",
+            "url": "/admin/system/modules",
+            "description": "Canonical optional-capability and safety controls",
+            "permission": "system:settings:read",
+        }
+    )
+    categories["billing"]["links"].append(
+        {
+            "name": "Customer Bank Accounts",
+            "url": "/admin/system/settings-hub/bank-accounts",
+            "description": "Customer bank payment accounts and provider tokens",
+            "permission": "system:settings:read",
+        }
+    )
+    categories["operations"]["links"].append(
+        {
+            "name": "Recovery & Retention",
+            "url": "/admin/system/tools/restore",
+            "description": "Recovery tools and restore retention policy",
+            "permission": "system:settings:read",
+        }
+    )
+    categories["operations"]["links"].append(
+        {
+            "name": "Geocoding Jobs",
+            "url": "/admin/system/tools/geocode",
+            "description": "Batch address geocoding and job history",
+            "permission": "system:settings:read",
+        }
+    )
+    search_terms: dict[str, list[str]] = {}
+    for spec in settings_spec.SETTINGS_SPECS:
+        section = setting_section(domain=str(spec.domain), key=spec.key)
+        search_terms.setdefault(section.url, []).extend((spec.key, spec.label or ""))
+    for category in categories.values():
+        for link in category["links"]:
+            link["search_terms"] = " ".join(search_terms.get(link["url"], ()))
+    return {"categories": [categories[tab.value] for tab in SettingsTab]}
+
+
+@dataclass(frozen=True, slots=True)
+class HubSectionQuery:
+    section_id: str
+
+
+@dataclass(frozen=True, slots=True)
+class HubSettingRow:
+    spec: settings_spec.SettingSpec
+    value: object
+    configured: bool
+    source: str
+
+
+@dataclass(frozen=True, slots=True)
+class HubSectionView:
+    section: SettingsSection
+    rows: tuple[HubSettingRow, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class HubBankAccountsQuery:
+    account_id: UUID | None = None
+    offset: int = 0
+    is_active: bool = True
+
+
+@dataclass(frozen=True, slots=True)
+class HubBankAccountRow:
+    id: UUID
+    account_id: UUID
+    bank_name: str
+    account_type: str
+    account_last4: str
+    routing_last4: str
+    is_default: bool
+    is_active: bool
+
+
+def read_bank_accounts(
+    db: Session,
+    *,
+    query: HubBankAccountsQuery,
+) -> tuple[HubBankAccountRow, ...]:
+    """Project account metadata; provider tokens never enter the page context."""
+    from app.services import billing
+
+    accounts = billing.bank_accounts.list(
+        db,
+        account_id=str(query.account_id) if query.account_id else None,
+        is_active=query.is_active,
+        order_by="created_at",
+        order_dir="desc",
+        limit=50,
+        offset=query.offset,
+    )
+    return tuple(
+        HubBankAccountRow(
+            id=account.id,
+            account_id=account.account_id,
+            bank_name=account.bank_name or "",
+            account_type=account.account_type.value,
+            account_last4=account.account_last4 or "",
+            routing_last4=account.routing_last4 or "",
+            is_default=account.is_default,
+            is_active=account.is_active,
+        )
+        for account in accounts
+    )
+
+
+def section_specs(*, query: HubSectionQuery) -> tuple[settings_spec.SettingSpec, ...]:
+    section = section_by_id(query.section_id)
+    return tuple(
+        spec
+        for spec in settings_spec.SETTINGS_SPECS
+        if setting_section(domain=str(spec.domain), key=spec.key) == section
+    )
+
+
+def read_section(db: Session, *, query: HubSectionQuery) -> HubSectionView:
+    rows = []
+    for spec in section_specs(query=query):
+        value, source = settings_spec.resolve_with_source(db, spec.domain, spec.key)
+        rows.append(
+            HubSettingRow(
+                spec=spec,
+                value=None if spec.is_secret else value,
+                configured=value is not None and value != "",
+                source=source,
+            )
+        )
+    return HubSectionView(section=section_by_id(query.section_id), rows=tuple(rows))
