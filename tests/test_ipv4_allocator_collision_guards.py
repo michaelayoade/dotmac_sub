@@ -5,11 +5,21 @@ from __future__ import annotations
 from datetime import UTC, datetime
 from uuid import uuid4
 
+import pytest
+from fastapi import HTTPException
+
 from app.models.catalog import SubscriptionStatus
-from app.models.network import IPAssignment, IpPool, IPv4Address, IPVersion
+from app.models.network import (
+    IPAssignment,
+    IpPool,
+    IPv4Address,
+    IPv6Address,
+    IPVersion,
+)
 from app.models.radius_active_session import RadiusActiveSession
 from app.schemas.catalog import SubscriptionCreate
 from app.services import catalog as catalog_service
+from app.services import provisioning_helpers
 from app.services.provisioning_helpers import (
     _allocate_ipv4_on_demand,
     _ensure_ip_assignment_for_version,
@@ -268,3 +278,144 @@ def test_reactivation_keeps_own_address_when_only_own_session_uses_it(
         db_session, subscription, IPVersion.ipv4, {}
     )
     assert address is not None and address.address == "10.94.0.1"
+
+
+def _legacy_assignment(db, subscription, address, *, is_active, subscription_id=None):
+    row = IPAssignment(
+        subscriber_id=subscription.subscriber_id,
+        subscription_id=subscription_id,
+        ip_version=IPVersion.ipv4,
+        ipv4_address_id=address.id,
+        is_active=is_active,
+    )
+    db.add(row)
+    db.flush()
+    return row
+
+
+def test_reactivating_unbound_legacy_assignment_binds_subscription(
+    db_session, subscription
+):
+    pool = _pool(db_session)
+    (old,) = _rows(db_session, pool, 1)
+    row = _legacy_assignment(db_session, subscription, old, is_active=False)
+
+    assignment, address = _ensure_ip_assignment_for_version(
+        db_session, subscription, IPVersion.ipv4, {}
+    )
+
+    assert assignment is row
+    assert row.is_active is True
+    assert row.subscription_id == subscription.id
+    assert row.subscriber_id == subscription.subscriber_id
+    assert address is not None and address.address == "10.94.0.1"
+
+
+def test_already_active_unbound_legacy_assignment_is_bound(db_session, subscription):
+    pool = _pool(db_session)
+    (old,) = _rows(db_session, pool, 1)
+    row = _legacy_assignment(db_session, subscription, old, is_active=True)
+
+    assignment, _ = _ensure_ip_assignment_for_version(
+        db_session, subscription, IPVersion.ipv4, {}
+    )
+
+    assert assignment is row
+    assert row.subscription_id == subscription.id
+
+
+def test_assignment_already_bound_to_subscription_is_unchanged(
+    db_session, subscription
+):
+    pool = _pool(db_session)
+    (old,) = _rows(db_session, pool, 1)
+    row = _legacy_assignment(
+        db_session, subscription, old, is_active=False, subscription_id=subscription.id
+    )
+
+    assignment, _ = _ensure_ip_assignment_for_version(
+        db_session, subscription, IPVersion.ipv4, {}
+    )
+
+    assert assignment is row
+    assert row.is_active is True
+    assert row.subscription_id == subscription.id
+
+
+def test_bound_sole_active_assignment_becomes_primary(db_session, subscription):
+    pool = _pool(db_session)
+    (old,) = _rows(db_session, pool, 1)
+    row = _legacy_assignment(db_session, subscription, old, is_active=False)
+
+    _ensure_ip_assignment_for_version(db_session, subscription, IPVersion.ipv4, {})
+
+    assert row.subscription_id == subscription.id
+    assert row.is_primary is True
+
+
+def test_override_mismatch_does_not_bind(db_session, subscription):
+    pool = _pool(db_session)
+    (old,) = _rows(db_session, pool, 1)
+    row = _legacy_assignment(db_session, subscription, old, is_active=True)
+
+    with pytest.raises(HTTPException):
+        _ensure_ip_assignment_for_version(
+            db_session, subscription, IPVersion.ipv4, {"ipv4_address": "10.94.0.9"}
+        )
+
+    assert row.subscription_id is None
+    assert row.is_primary is False
+
+
+def test_ipv6_unbound_row_is_bound_without_primary_marking(
+    db_session, subscription, monkeypatch
+):
+    addr = IPv6Address(address="2001:db8::1")
+    db_session.add(addr)
+    db_session.flush()
+    row = IPAssignment(
+        subscriber_id=subscription.subscriber_id,
+        subscription_id=None,
+        ip_version=IPVersion.ipv6,
+        ipv6_address_id=addr.id,
+        is_active=True,
+    )
+    db_session.add(row)
+    db_session.flush()
+    calls = []
+    monkeypatch.setattr(
+        provisioning_helpers,
+        "mark_primary_ipv4_assignment",
+        lambda *a, **k: calls.append((a, k)),
+    )
+
+    _ensure_ip_assignment_for_version(db_session, subscription, IPVersion.ipv6, {})
+
+    assert row.subscription_id == subscription.id
+    assert calls == []
+
+
+def test_already_bound_non_primary_row_stays_non_primary(db_session, subscription):
+    pool = _pool(db_session)
+    (old,) = _rows(db_session, pool, 1)
+    row = _legacy_assignment(
+        db_session, subscription, old, is_active=True, subscription_id=subscription.id
+    )
+
+    _ensure_ip_assignment_for_version(db_session, subscription, IPVersion.ipv4, {})
+
+    assert row.is_primary is False
+
+
+def test_second_active_ipv4_row_means_no_primary_marking(db_session, subscription):
+    pool = _pool(db_session)
+    first, second = _rows(db_session, pool, 1, 2)
+    bound = _legacy_assignment(
+        db_session, subscription, first, is_active=True, subscription_id=subscription.id
+    )
+    legacy = _legacy_assignment(db_session, subscription, second, is_active=True)
+
+    _ensure_ip_assignment_for_version(db_session, subscription, IPVersion.ipv4, {})
+
+    assert bound.is_primary is False
+    assert legacy.is_primary is False
