@@ -9,7 +9,11 @@ from typing import Any, cast
 from dotmac_kernel.settings_models import SettingDomain as KernelSettingDomain
 from dotmac_kernel.settings_resolver import resolve_many as kernel_resolve_many
 from dotmac_kernel.settings_resolver import resolve_value as kernel_resolve_value
+from dotmac_kernel.settings_resolver import (
+    resolve_with_source as kernel_resolve_with_source,
+)
 from sqlalchemy import select
+from sqlalchemy.orm import Session
 
 from app.models.domain_settings import DomainSetting, SettingDomain
 from app.models.subscription_engine import SettingValueType
@@ -7073,6 +7077,46 @@ def resolve_value(db, domain: SettingDomain, key: str) -> Any:
         key,
         tenant_id=operator_tenant_id(),
     )
+
+
+def resolve_with_source(
+    db: Session, domain: SettingDomain, key: str
+) -> tuple[object, str]:
+    """Effective value and winning scope from the same kernel authority."""
+    if get_spec(domain, key) is None:
+        return None, "default"
+    value, source = kernel_resolve_with_source(
+        db,
+        KernelSettingDomain(str(domain)),
+        key,
+        tenant_id=operator_tenant_id(),
+    )
+    if (
+        domain == SettingDomain.billing
+        and key == "payment_due_days"
+        and source == "default"
+    ):
+        from app.services.billing_settings import resolve_payment_due_days
+
+        effective = resolve_payment_due_days(db, default=int(str(value)))
+        if effective != value:
+            return effective, "legacy billing payment terms"
+    # Auth still honors this retired alias until a canonical MFA value is stored.
+    # Editors must compare against the same fallback so an explicit disable saves.
+    if (
+        domain == SettingDomain.auth
+        and key == "admin_mfa_required"
+        and source == "default"
+    ):
+        legacy_value, legacy_source = kernel_resolve_with_source(
+            db,
+            KernelSettingDomain(str(domain)),
+            "force_2fa",
+            tenant_id=operator_tenant_id(),
+        )
+        if legacy_source != "default":
+            return legacy_value, f"legacy force_2fa ({legacy_source})"
+    return value, str(source)
 
 
 def active_setting_updated_at(db, domain: SettingDomain, key: str) -> datetime | None:

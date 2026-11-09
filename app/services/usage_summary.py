@@ -29,6 +29,7 @@ from dataclasses import dataclass
 from datetime import UTC, date, datetime, time, timedelta
 from enum import StrEnum
 from typing import Protocol
+from uuid import UUID
 from zoneinfo import ZoneInfo
 
 from sqlalchemy import BigInteger, cast, func, select
@@ -944,28 +945,175 @@ def bandwidth_usage_by_plan(db: Session, usage_subquery) -> list:
     )
 
 
-def period_usage_by_subscriber(
-    db: Session,
-    subscriber_ids: list,
-    *,
-    start: datetime,
-    end: datetime,
-) -> list:
-    """Per-subscriber usage rows (subscriber_id, usage_bytes, avg_bps,
-    active_services) over ``[start, end)`` for the given subscribers."""
-    span_seconds = max(0.0, (end - start).total_seconds())
-    usage = subscription_bandwidth_usage_subquery(start, end, span_seconds)
-    return list(
-        db.execute(
-            select(
-                Subscription.subscriber_id,
-                func.coalesce(func.sum(usage.c.usage_bytes), 0).label("usage_bytes"),
-                func.coalesce(func.sum(usage.c.avg_total), 0).label("avg_bps"),
-                func.count(usage.c.subscription_id).label("active_services"),
+@dataclass(frozen=True, slots=True)
+class PeriodUsageQuery:
+    subscriber_ids: tuple[UUID, ...]
+    start: datetime
+    end: datetime
+
+    def __post_init__(self) -> None:
+        if self.end <= self.start:
+            raise UsageQueryError(
+                code="usage_date_range_reversed",
+                message="Usage window end must follow its start.",
+                retryable=False,
             )
-            .select_from(usage)
-            .join(Subscription, Subscription.id == usage.c.subscription_id)
-            .where(Subscription.subscriber_id.in_(subscriber_ids))
-            .group_by(Subscription.subscriber_id)
-        ).all()
-    )
+
+
+class PeriodUsageSource(StrEnum):
+    recorded = "recorded"
+    mixed = "mixed"
+    bandwidth_estimate = "bandwidth_estimate"
+    unavailable = "unavailable"
+
+
+@dataclass(frozen=True, slots=True)
+class PeriodUsageRow:
+    subscriber_id: UUID
+    usage_bytes: int
+    avg_bps: float
+    active_services: int
+    source: PeriodUsageSource
+
+
+def period_usage_by_subscriber(
+    db: Session, *, query: PeriodUsageQuery
+) -> tuple[PeriodUsageRow, ...]:
+    """Recorded bytes by day, with a labeled sample estimate when absent.
+
+    Native RADIUS accounting takes precedence over imported daily usage for
+    the same subscriber and day, preventing double counting. A RADIUS session
+    is attributed to its start day because its stored counters are cumulative.
+    """
+    if not query.subscriber_ids:
+        return ()
+    sample_span = (query.end - query.start).total_seconds()
+    samples = subscription_bandwidth_usage_subquery(query.start, query.end, sample_span)
+    sample_rows = db.execute(
+        select(
+            Subscription.subscriber_id,
+            func.coalesce(func.sum(samples.c.avg_total), 0),
+            func.count(samples.c.subscription_id),
+        )
+        .select_from(samples)
+        .join(Subscription, Subscription.id == samples.c.subscription_id)
+        .where(Subscription.subscriber_id.in_(query.subscriber_ids))
+        .group_by(Subscription.subscriber_id)
+    ).all()
+    sample_by_customer = {
+        subscriber_id: (float(avg_bps), int(services))
+        for subscriber_id, avg_bps, services in sample_rows
+    }
+    sample_day = func.date(BandwidthSample.sample_at)
+    sampled_rows = db.execute(
+        select(
+            Subscription.subscriber_id,
+            sample_day,
+            func.avg(_bandwidth_total_bps_expr()),
+        )
+        .select_from(BandwidthSample)
+        .join(Subscription, Subscription.id == BandwidthSample.subscription_id)
+        .where(
+            Subscription.subscriber_id.in_(query.subscriber_ids),
+            BandwidthSample.sample_at >= query.start,
+            BandwidthSample.sample_at < query.end,
+        )
+        .group_by(Subscription.subscriber_id, sample_day)
+    ).all()
+    sample_bps_by_day = {
+        (subscriber_id, date.fromisoformat(str(sample_date))): float(avg_bps or 0)
+        for subscriber_id, sample_date, avg_bps in sampled_rows
+    }
+
+    daily_rows = db.execute(
+        select(
+            Subscription.subscriber_id,
+            SubscriberDailyUsage.usage_date,
+            func.sum(
+                SubscriberDailyUsage.upload_bytes + SubscriberDailyUsage.download_bytes
+            ),
+        )
+        .select_from(SubscriberDailyUsage)
+        .join(Subscription, Subscription.id == SubscriberDailyUsage.subscription_id)
+        .where(
+            Subscription.subscriber_id.in_(query.subscriber_ids),
+            SubscriberDailyUsage.usage_date >= query.start.date(),
+            SubscriberDailyUsage.usage_date
+            <= (query.end - timedelta(microseconds=1)).date(),
+        )
+        .group_by(Subscription.subscriber_id, SubscriberDailyUsage.usage_date)
+    ).all()
+    daily_bytes = {
+        (subscriber_id, usage_date): int(total or 0)
+        for subscriber_id, usage_date, total in daily_rows
+    }
+
+    session_day = func.date(RadiusAccountingSession.session_start)
+    radius_rows = db.execute(
+        select(
+            Subscription.subscriber_id,
+            session_day,
+            func.sum(
+                func.coalesce(RadiusAccountingSession.input_octets, 0)
+                + func.coalesce(RadiusAccountingSession.output_octets, 0)
+            ),
+        )
+        .select_from(RadiusAccountingSession)
+        .join(Subscription, Subscription.id == RadiusAccountingSession.subscription_id)
+        .where(
+            Subscription.subscriber_id.in_(query.subscriber_ids),
+            RadiusAccountingSession.session_start >= query.start,
+            RadiusAccountingSession.session_start < query.end,
+        )
+        .group_by(Subscription.subscriber_id, session_day)
+    ).all()
+    radius_bytes = {
+        (subscriber_id, date.fromisoformat(str(session_date))): int(total or 0)
+        for subscriber_id, session_date, total in radius_rows
+    }
+    recorded_dates: dict[UUID, set[date]] = {}
+    for subscriber_id, usage_date in daily_bytes | radius_bytes:
+        recorded_dates.setdefault(subscriber_id, set()).add(usage_date)
+    sampled_dates: dict[UUID, set[date]] = {}
+    for subscriber_id, usage_date in sample_bps_by_day:
+        sampled_dates.setdefault(subscriber_id, set()).add(usage_date)
+
+    result: list[PeriodUsageRow] = []
+    for subscriber_id in query.subscriber_ids:
+        avg_bps, services = sample_by_customer.get(subscriber_id, (0.0, 0))
+        usage_bytes = 0
+        estimated = False
+        for usage_date in recorded_dates.get(subscriber_id, set()) | sampled_dates.get(
+            subscriber_id, set()
+        ):
+            key = (subscriber_id, usage_date)
+            if key in radius_bytes:
+                usage_bytes += radius_bytes[key]
+            elif key in daily_bytes:
+                usage_bytes += daily_bytes[key]
+            else:
+                day_start = datetime.combine(usage_date, time.min, tzinfo=UTC)
+                seconds = (
+                    min(query.end, day_start + timedelta(days=1))
+                    - max(query.start, day_start)
+                ).total_seconds()
+                usage_bytes += int(sample_bps_by_day[key] / 8.0 * seconds)
+                estimated = True
+        if recorded_dates.get(subscriber_id) and estimated:
+            source = PeriodUsageSource.mixed
+        elif recorded_dates.get(subscriber_id):
+            source = PeriodUsageSource.recorded
+        elif estimated:
+            source = PeriodUsageSource.bandwidth_estimate
+        else:
+            source = PeriodUsageSource.unavailable
+        result.append(
+            PeriodUsageRow(
+                subscriber_id=subscriber_id,
+                usage_bytes=usage_bytes,
+                avg_bps=avg_bps,
+                active_services=services,
+                source=source,
+            )
+        )
+    return tuple(result)

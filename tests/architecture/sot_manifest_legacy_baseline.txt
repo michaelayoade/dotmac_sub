@@ -33,7 +33,6 @@ customer.location_capture
 customer.location_verification
 customer.network_context
 customer.profile_commands
-customer.usage_summary
 events.dispatcher
 events.store
 financial.account_credit_applications
@@ -145,7 +144,6 @@ service_intent.subscription_lifecycle_scheduling
 sessions.enforcement
 sessions.radius_accounting_health
 sessions.radius_reconciliation
-subscriber.growth_reports
 ui.action_form_contracts
 ui.bulk_action_contracts
 ui.customer_bulk_action_projection

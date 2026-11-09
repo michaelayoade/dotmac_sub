@@ -10,6 +10,7 @@ from app.services.web_system_config import (
     get_billing_config_context,
     save_billing_config,
 )
+from tests.settings_hub_fixtures import settings_context as _settings_context
 
 
 def _setting(key: str, value: str) -> DomainSetting:
@@ -101,6 +102,7 @@ def test_save_billing_config_normalizes_valid_policy_values(db_session):
             "invoice_pdf_payment_presentment": "Both",
             "upcoming_charges_prepaid_amount_bands": "0-10000,10000-",
         },
+        context=_settings_context(),
     )
 
     context = get_billing_config_context(db_session)["billing"]
@@ -141,7 +143,7 @@ def test_save_billing_config_rejects_invalid_policy_values(
     payload[field] = value
 
     with pytest.raises(ValueError, match=message):
-        save_billing_config(db_session, payload)
+        save_billing_config(db_session, payload, context=_settings_context())
 
 
 def test_billing_settings_template_confirms_and_bounds_policy_save():
@@ -163,3 +165,25 @@ def test_billing_settings_template_confirms_and_bounds_policy_save():
     assert 'name="send_billing_notifications"' not in template
     assert 'min="0"' in template
     assert 'max="3650"' in template
+
+
+def test_explicit_default_payment_terms_override_legacy_value(db_session):
+    db_session.add(
+        DomainSetting(
+            domain=SettingDomain.billing,
+            key="invoice_due_days",
+            value_type=SettingValueType.integer,
+            value_text="9",
+            is_active=True,
+        )
+    )
+    db_session.commit()
+    save_billing_config(
+        db_session,
+        {
+            "payment_due_days": "14",
+            "upcoming_charges_prepaid_amount_bands": "50000-100000,100000-500000,500000-",
+        },
+        context=_settings_context(),
+    )
+    assert resolve_payment_due_days(db_session) == 14

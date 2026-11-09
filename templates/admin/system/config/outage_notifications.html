@@ -21,14 +21,14 @@
         {% call card("Enable", color="amber") %}
         <div class="space-y-4">
             <label class="flex items-start gap-3">
-                <input type="checkbox" name="outage_auto_notify_enabled" value="true" {% if outage_auto_notify.outage_auto_notify_enabled %}checked{% endif %} class="mt-1 rounded border-slate-300 text-primary-600 focus:ring-primary-500 dark:border-slate-500 dark:bg-slate-700">
+                <input type="hidden" name="outage_auto_notify_enabled" value="false"><input type="checkbox" name="outage_auto_notify_enabled" value="true" {% if outage_auto_notify.outage_auto_notify_enabled %}checked{% endif %} class="mt-1 rounded border-slate-300 text-primary-600 focus:ring-primary-500 dark:border-slate-500 dark:bg-slate-700">
                 <span>
                     <span class="block text-sm font-medium text-slate-800 dark:text-slate-100">Enable automated outage notification</span>
                     <span class="block text-sm text-slate-500 dark:text-slate-400">When off, outage notifications are sent only by an operator from the detected-outages page. Nothing below has any effect.</span>
                 </span>
             </label>
             <label class="flex items-start gap-3">
-                <input type="checkbox" name="outage_auto_notify_dry_run" value="true" {% if outage_auto_notify.outage_auto_notify_dry_run %}checked{% endif %} class="mt-1 rounded border-slate-300 text-primary-600 focus:ring-primary-500 dark:border-slate-500 dark:bg-slate-700">
+                <input type="hidden" name="outage_auto_notify_dry_run" value="false"><input type="checkbox" name="outage_auto_notify_dry_run" value="true" {% if outage_auto_notify.outage_auto_notify_dry_run %}checked{% endif %} class="mt-1 rounded border-slate-300 text-primary-600 focus:ring-primary-500 dark:border-slate-500 dark:bg-slate-700">
                 <span>
                     <span class="block text-sm font-medium text-slate-800 dark:text-slate-100">Dry run &mdash; select and log recipients, send nothing</span>
                     <span class="block text-sm text-slate-500 dark:text-slate-400">Leave this on first. Compare the logged selections against the incidents your NOC would have notified about, then turn it off to go live.</span>

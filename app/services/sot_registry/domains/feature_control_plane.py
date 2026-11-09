@@ -63,6 +63,8 @@ DOMAIN = DomainSOT(
                 "The web form validates its complete submitted batch through the "
                 "registered setting specification before this owner stages every "
                 "row and one value-free audit record in a single transaction. "
+                "Hub and specialised configuration forms use this same owner; "
+                "unchanged effective values are omitted to preserve inheritance. "
                 "Read-modify-write editors, such as the walled-garden allowed-"
                 "resource page, pass the stored-value fingerprint they rendered; "
                 "the owner locks those rows and refuses a stale batch."

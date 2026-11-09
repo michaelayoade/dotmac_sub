@@ -151,13 +151,16 @@ def build_settings_context(db: Session, domain_value: str | None) -> dict:
             specs = [spec for spec in enforcement_specs() if spec.domain == domain]
             rows = []
             for spec in specs:
-                current = settings_spec.resolve_value(db, spec.domain, spec.key)
+                current, source = settings_spec.resolve_with_source(
+                    db, spec.domain, spec.key
+                )
                 raw = _resolve_raw_setting(db, spec.domain, spec.key)
                 rows.append(
                     {
                         "key": spec.key,
                         "spec": spec,
                         "value": current,
+                        "source": source,
                         "raw": raw,
                         "description": spec.label,
                         "default": spec.default,
@@ -251,13 +254,14 @@ def build_settings_context(db: Session, domain_value: str | None) -> dict:
     specs = settings_spec.list_specs(selected_domain)
     rows = []
     for spec in specs:
-        current = settings_spec.resolve_value(db, spec.domain, spec.key)
+        current, source = settings_spec.resolve_with_source(db, spec.domain, spec.key)
         raw = _resolve_raw_setting(db, spec.domain, spec.key)
         rows.append(
             {
                 "key": spec.key,
                 "spec": spec,
                 "value": current,
+                "source": source,
                 "raw": raw,
                 "description": spec.label,
                 "default": spec.default,

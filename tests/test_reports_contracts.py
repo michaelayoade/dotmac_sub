@@ -16,7 +16,7 @@ from app.models.catalog import Subscription, SubscriptionStatus
 from app.models.lifecycle import LifecycleEventType, SubscriptionLifecycleEvent
 from app.models.subscriber import AccountStatus, Subscriber, UserType
 from app.schemas.status_presentation import StatusTone
-from app.services import web_reports
+from app.services import subscriber_growth, web_reports
 from app.services.ui_contracts import Action, Kpi, StateValue
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -172,6 +172,53 @@ def test_subscribers_kpi_preserves_active_date_filter(db_session):
     assert query["date_from"] == ["2026-01-01"]
     assert query["date_to"] == ["2026-06-30"]
     assert query["status"] == [AccountStatus.active.value]
+
+
+def test_customer_growth_series_uses_selected_dates_and_status(db_session):
+    _make_subscriber(
+        db_session, AccountStatus.active, created_at=datetime(2025, 12, 31, tzinfo=UTC)
+    )
+    _make_subscriber(
+        db_session, AccountStatus.active, created_at=datetime(2026, 1, 2, tzinfo=UTC)
+    )
+    _make_subscriber(
+        db_session, AccountStatus.disabled, created_at=datetime(2026, 1, 3, tzinfo=UTC)
+    )
+    _make_subscriber(
+        db_session, AccountStatus.active, created_at=datetime(2026, 1, 4, tzinfo=UTC)
+    )
+
+    series = subscriber_growth.customer_report_growth_series(
+        db_session,
+        query=subscriber_growth.CustomerGrowthQuery(
+            start_at=datetime(2026, 1, 1, tzinfo=UTC),
+            end_at=datetime(2026, 1, 6, tzinfo=UTC),
+            status=AccountStatus.active,
+        ),
+    )
+
+    assert series.new == (0, 1, 0, 1, 0)
+    assert series.total == (1, 2, 2, 3, 3)
+    assert series.labels[0] == "01 Jan 2026"
+
+
+def test_customer_report_overview_does_not_load_detail_rows(db_session, monkeypatch):
+    _make_subscriber(db_session, AccountStatus.active)
+    monkeypatch.setattr(
+        web_reports,
+        "_load_report_subscribers",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("the first response must not load all customers")
+        ),
+    )
+
+    overview = web_reports.get_customer_report_overview(
+        db_session,
+        query=web_reports.CustomerReportOverviewQuery(status=AccountStatus.active),
+    )
+
+    assert overview.subscriber_kpis["total"].value.value == 1
+    assert overview.status_filter == AccountStatus.active.value
 
 
 # --------------------------------------------------------------------------
