@@ -322,12 +322,12 @@ def test_audit_middleware_cannot_be_switched_off_by_a_stale_enabled_flag(
 
     _run_async(
         main.audit_middleware(
-            _request(path="/admin/system/settings", method="POST"),
+            _request(path="/admin/system/settings-hub", method="POST"),
             _downstream_response,
         )
     )
 
-    assert audit_calls == ["/admin/system/settings"]
+    assert audit_calls == ["/admin/system/settings-hub"]
 
 
 def test_load_audit_settings_ignores_a_stored_enabled_row(db_session, monkeypatch):

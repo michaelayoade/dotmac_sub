@@ -11,7 +11,6 @@ from sqlalchemy.orm import Session
 from app.models.subscription_engine import SettingValueType
 from app.schemas.settings import DomainSettingUpdate
 from app.services import db_session_adapter, domain_settings, settings_spec
-from app.services import web_system_settings_views as web_system_settings_views_service
 from app.services.domain_errors import DomainError
 from app.services.owner_commands import CommandContext
 from app.services.settings_api_custom import (
@@ -23,9 +22,103 @@ logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True, slots=True)
-class SettingsFormUpdateResult:
-    settings_context: dict[str, object]
+class HubSettingsUpdateCommand:
+    section_id: str
+    values: Mapping[str, object]
+
+
+@dataclass(frozen=True, slots=True)
+class HubSettingsUpdateResult:
     errors: tuple[str, ...]
+
+
+def update_hub_section(
+    db: Session,
+    *,
+    command: HubSettingsUpdateCommand,
+    context: CommandContext,
+) -> HubSettingsUpdateResult:
+    """Only the section's declared identities participate in this atomic save."""
+    from app.services.web_system_settings_hub import HubSectionQuery, section_specs
+
+    if command.section_id in {"branding-values", "company"}:
+        return HubSettingsUpdateResult(
+            errors=("Use this section's specialised editor.",)
+        )
+    specs = section_specs(query=HubSectionQuery(section_id=command.section_id))
+    permitted = {spec.key for spec in specs} | {"_csrf_token"}
+    if set(command.values) - permitted:
+        return HubSettingsUpdateResult(
+            errors=("The submission contains fields outside this section.",)
+        )
+    return update_registered_settings(
+        db,
+        command=RegisteredSettingsUpdateCommand(specs=specs, values=command.values),
+        context=context,
+    )
+
+
+@dataclass(frozen=True, slots=True)
+class RegisteredSettingsUpdateCommand:
+    specs: tuple[settings_spec.SettingSpec, ...]
+    values: Mapping[str, object]
+
+
+def update_registered_settings(
+    db: Session,
+    *,
+    command: RegisteredSettingsUpdateCommand,
+    context: CommandContext,
+) -> HubSettingsUpdateResult:
+    """One save path for friendly and generic forms; inherited values stay inherited."""
+    updates, errors = _prepare_settings_from_specs(
+        form=command.values,
+        specs=tuple(spec for spec in command.specs if spec.key in command.values),
+    )
+    if errors:
+        return HubSettingsUpdateResult(errors=errors)
+    changed: list[domain_settings.AdminSettingWrite] = []
+    for update in updates:
+        spec = settings_spec.get_spec(update.domain, update.key)
+        if spec is None:
+            return HubSettingsUpdateResult(
+                errors=("A submitted setting is no longer registered.",)
+            )
+        if not spec.is_secret:
+            desired, error = settings_spec.coerce_value(
+                spec,
+                update.payload.value_text
+                if update.payload.value_text is not None
+                else update.payload.value_json,
+            )
+            if error:
+                return HubSettingsUpdateResult(errors=(f"{spec.key}: {error}",))
+            current, _source = settings_spec.resolve_with_source(
+                db, spec.domain, spec.key
+            )
+            if desired == current:
+                continue
+        changed.append(update)
+    return HubSettingsUpdateResult(
+        errors=_apply_prepared_settings(db=db, context=context, updates=tuple(changed))
+    )
+
+
+def safe_submitted_values(
+    *,
+    specs: Sequence[settings_spec.SettingSpec],
+    values: Mapping[str, object],
+) -> dict[str, object]:
+    """Keep attempted non-secret fields for error rendering, never passwords or tokens."""
+    return {
+        spec.key: (
+            form_bool(values.get(spec.key))
+            if spec.value_type == SettingValueType.boolean
+            else values.get(spec.key, "")
+        )
+        for spec in specs
+        if spec.key in values and not spec.is_secret and not spec.required_permission
+    }
 
 
 def form_bool(value: object | None) -> bool:
@@ -161,78 +254,6 @@ def upsert_settings_from_specs(
     if errors:
         return list(errors)
     return list(_apply_prepared_settings(db=db, context=context, updates=updates))
-
-
-def process_settings_update(
-    *,
-    db: Session,
-    domain_value: str | None,
-    form: Mapping[str, object],
-    context: CommandContext,
-) -> SettingsFormUpdateResult:
-    """Validate and atomically apply one posted settings form."""
-    errors: list[str] = []
-    updates: list[domain_settings.AdminSettingWrite] = []
-
-    if domain_value == web_system_settings_views_service.ENFORCEMENT_DOMAIN:
-        specs = web_system_settings_views_service.enforcement_specs()
-        domain_to_specs: dict[
-            settings_spec.SettingDomain, list[settings_spec.SettingSpec]
-        ] = {}
-        for spec in specs:
-            domain_to_specs.setdefault(spec.domain, []).append(spec)
-        for spec_domain, domain_specs in domain_to_specs.items():
-            service = settings_spec.DOMAIN_SETTINGS_SERVICE.get(spec_domain)
-            if not service:
-                errors.extend(
-                    f"{spec.key}: Settings service not configured."
-                    for spec in domain_specs
-                )
-                continue
-            prepared, preparation_errors = _prepare_settings_from_specs(
-                form=form,
-                specs=domain_specs,
-            )
-            updates.extend(prepared)
-            errors.extend(preparation_errors)
-        selected_domain_value = web_system_settings_views_service.ENFORCEMENT_DOMAIN
-    elif domain_value == web_system_settings_views_service.BRANDING_DOMAIN:
-        selected_domain_value = web_system_settings_views_service.BRANDING_DOMAIN
-        errors.append("Use the Branding form to update logo settings.")
-    else:
-        selected_domain = web_system_settings_views_service.resolve_settings_domain(
-            domain_value
-        )
-        selected_domain_value = selected_domain.value
-        specs = settings_spec.list_specs(selected_domain)
-        service = settings_spec.DOMAIN_SETTINGS_SERVICE.get(selected_domain)
-        if not service:
-            errors.append("Settings service not configured for this domain.")
-        else:
-            prepared, preparation_errors = _prepare_settings_from_specs(
-                form=form,
-                specs=specs,
-            )
-            updates.extend(prepared)
-            errors.extend(preparation_errors)
-
-    if not errors:
-        errors.extend(
-            _apply_prepared_settings(
-                db=db,
-                context=context,
-                updates=tuple(updates),
-            )
-        )
-
-    settings_context = web_system_settings_views_service.build_settings_context(
-        db,
-        selected_domain_value,
-    )
-    return SettingsFormUpdateResult(
-        settings_context=settings_context,
-        errors=tuple(errors),
-    )
 
 
 _STARTER_LEDGER_LIVE_KEY = "starter_ledger_live_enabled"

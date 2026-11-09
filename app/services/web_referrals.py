@@ -34,7 +34,7 @@ from app.services.ui_contracts import Kpi, StateValue
 
 # The five referral_* program keys render on the generic system settings page
 # under the subscriber domain (settings_spec gives them labels).
-PROGRAM_SETTINGS_URL = "/admin/system/settings?domain=subscriber"
+PROGRAM_SETTINGS_URL = "/admin/system/settings-hub/edit/referrals"
 
 STATUSES = [s.value for s in ReferralStatus]
 REWARD_STATUSES = [s.value for s in ReferralRewardStatus]

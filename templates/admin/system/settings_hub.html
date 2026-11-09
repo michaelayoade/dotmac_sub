@@ -44,7 +44,7 @@
         <div class="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
             {% for link in cat.links %}
             {% if not link.get("permission") or can(request, link.permission) %}
-            {% set link_search_blob = link.name ~ ' ' ~ link.description %}
+            {% set link_search_blob = link.name ~ ' ' ~ link.description ~ ' ' ~ (link.search_terms | default('')) %}
             <a href="{{ link.url }}" data-settings-search="{{ link_search_blob | lower | e }}" class="group settings-hub-link flex items-start gap-3 rounded-lg border border-slate-100 bg-slate-50 p-3 transition hover:border-{{ cat.color }}-200 hover:bg-{{ cat.color }}-50 dark:border-slate-700 dark:bg-slate-800/50 dark:hover:border-{{ cat.color }}-700 dark:hover:bg-{{ cat.color }}-900/20">
                 <div class="min-w-0">
                     <p class="text-sm font-medium text-slate-900 dark:text-white">{{ link.name }}</p>

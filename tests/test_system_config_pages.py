@@ -7,6 +7,16 @@ from app.models.domain_settings import DomainSetting, SettingDomain
 from app.models.subscription_engine import SettingValueType
 from app.services import web_system_config as web_system_config_service
 from app.web.admin import system as admin_system
+from tests.settings_hub_fixtures import settings_context as _settings_context
+
+
+@pytest.fixture(autouse=True)
+def authenticated_settings_command_context(monkeypatch):
+    monkeypatch.setattr(
+        admin_system,
+        "_system_command_context",
+        lambda _request, **_kwargs: _settings_context(),
+    )
 
 
 def test_portal_config_saves_only_consumed_domain_routing_keys(db_session):
@@ -21,6 +31,7 @@ def test_portal_config_saves_only_consumed_domain_routing_keys(db_session):
             "show_payment_due": "false",
             "mobile_app_google_play_id": "com.example.app",
         },
+        context=_settings_context(),
     )
 
     rows = {
@@ -61,6 +72,7 @@ def test_preferences_config_saves_only_consumed_admin_mfa_required(db_session):
             "admin_portal_title": "Unused Title",
             "search_debounce_ms": "750",
         },
+        context=_settings_context(),
     )
 
     rows = {
@@ -154,6 +166,7 @@ def test_radius_config_saves_spec_backed_keys_with_types(db_session):
             "pppoe_username_start": "100",
             "pppoe_default_password_length": "16",
         },
+        context=_settings_context(),
     )
 
     rows = {
@@ -181,6 +194,7 @@ def test_radius_config_save_rejects_invalid_spec_value(db_session):
                 "reject_ip_blocked": "172.16.134.11",
                 "pppoe_username_padding": "0",
             },
+            context=_settings_context(),
         )
 
     assert (
@@ -242,6 +256,7 @@ def test_billing_config_save_roundtrips_and_applies_spec_types(db_session):
             "minimum_balance": "10.50",
             "upcoming_charges_prepaid_amount_bands": "0-10000,10000-",
         },
+        context=_settings_context(),
     )
 
     rows = _billing_rows(db_session)
@@ -259,8 +274,7 @@ def test_billing_config_save_roundtrips_and_applies_spec_types(db_session):
 def test_billing_config_save_rejects_non_numeric_integer(db_session):
     with pytest.raises(ValueError):
         web_system_config_service.save_billing_config(
-            db_session,
-            {"payment_due_days": "abc"},
+            db_session, {"payment_due_days": "abc"}, context=_settings_context()
         )
 
     # Nothing is committed when validation fails.
@@ -278,13 +292,17 @@ def test_billing_config_saves_upcoming_charge_report_defaults(db_session):
             ),
             "upcoming_charges_include_funded_prepaid_default": "true",
         },
+        context=_settings_context(),
     )
 
     rows = _billing_rows(db_session)
     assert rows["upcoming_charges_postpaid_lead_days"].value_text == "21"
     assert rows["upcoming_charges_prepaid_lead_days"].value_text == "10"
+    assert "upcoming_charges_prepaid_amount_bands" not in rows
     assert (
-        rows["upcoming_charges_prepaid_amount_bands"].value_text
+        web_system_config_service.get_billing_config_context(db_session)["billing"][
+            "upcoming_charges_prepaid_amount_bands"
+        ]
         == "50000-100000,100000-500000,500000-"
     )
     assert rows["upcoming_charges_include_funded_prepaid_default"].value_json is True
@@ -295,6 +313,7 @@ def test_billing_config_rejects_overlapping_upcoming_charge_bands(db_session):
         web_system_config_service.save_billing_config(
             db_session,
             {"upcoming_charges_prepaid_amount_bands": "50000-200000,100000-"},
+            context=_settings_context(),
         )
 
     assert "upcoming_charges_prepaid_amount_bands" not in _billing_rows(db_session)
@@ -321,6 +340,7 @@ def test_direct_bank_transfer_save_persists_instructions_only(db_session):
             "account_account_name": "DotMac Ltd",
             "account_account_number": "0123456789",
         },
+        context=_settings_context(),
     )
 
     rows = _billing_rows(db_session)
@@ -343,6 +363,7 @@ def test_direct_bank_transfer_save_ignores_retired_alias_field(db_session):
     web_system_config_service.save_direct_bank_transfer_config(
         db_session,
         {"direct_bank_transfer_enabled": "maybe"},
+        context=_settings_context(),
     )
 
     assert "direct_bank_transfer_enabled" not in _billing_rows(db_session)
@@ -353,6 +374,7 @@ def test_reminders_save_roundtrips_raw_strings(db_session):
     web_system_config_service.save_reminders(
         db_session,
         {"reminders_enabled": "yes", "reminder_send_time": "09:00"},
+        context=_settings_context(),
     )
 
     rows = _collections_rows(db_session)
@@ -366,6 +388,7 @@ def test_reminders_save_ignores_channel_selection(db_session):
     web_system_config_service.save_reminders(
         db_session,
         {"reminders_enabled": "yes", "reminder_channel": "sms"},
+        context=_settings_context(),
     )
 
     assert "reminder_channel" not in _collections_rows(db_session)
@@ -376,6 +399,7 @@ def test_billing_notifications_save_types_send_hour(db_session):
     web_system_config_service.save_billing_notifications(
         db_session,
         {"billing_notif_send_hour": "9", "blocking_wave_enabled": "true"},
+        context=_settings_context(),
     )
 
     rows = _collections_rows(db_session)
@@ -388,8 +412,7 @@ def test_billing_notifications_save_types_send_hour(db_session):
 def test_billing_notifications_save_rejects_out_of_range_send_hour(db_session):
     with pytest.raises(ValueError):
         web_system_config_service.save_billing_notifications(
-            db_session,
-            {"billing_notif_send_hour": "30"},
+            db_session, {"billing_notif_send_hour": "30"}, context=_settings_context()
         )
 
     assert "billing_notif_send_hour" not in _collections_rows(db_session)
@@ -409,6 +432,7 @@ def test_plan_change_save_roundtrips_and_applies_spec_types(db_session):
             "discount_transfer": "false",
             "minimum_invoice_amount": "1.00",
         },
+        context=_settings_context(),
     )
 
     rows = _billing_rows(db_session)
@@ -416,8 +440,13 @@ def test_plan_change_save_roundtrips_and_applies_spec_types(db_session):
     assert rows["refund_policy"].value_type == SettingValueType.string
     assert rows["prepaid_rollover"].value_text == "true"
     assert rows["prepaid_rollover"].value_type == SettingValueType.boolean
-    assert rows["discount_transfer"].value_text == "false"
-    assert rows["discount_transfer"].value_type == SettingValueType.boolean
+    assert "discount_transfer" not in rows
+    assert (
+        web_system_config_service.get_plan_change_context(db_session)["plan_change"][
+            "discount_transfer"
+        ]
+        == "false"
+    )
     assert rows["upgrade_fee"].value_text == "5.00"
     assert rows["upgrade_fee"].value_type == SettingValueType.string
 
@@ -432,6 +461,7 @@ def test_plan_change_save_rejects_invalid_enum(db_session):
                 "prepaid_rollover": "true",
                 "discount_transfer": "false",
             },
+            context=_settings_context(),
         )
 
     assert "refund_policy" not in _billing_rows(db_session)
