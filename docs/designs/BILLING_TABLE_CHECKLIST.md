@@ -237,3 +237,25 @@ before merge.
 - [ ] Full CI and authenticated application/database acceptance must pass before
   merge. Local source/fixture checks do not replace these gates.
 - [ ] No merge or deployment authorized by this publication request.
+
+## PR #3864 CI follow-up
+
+- [x] Inspect the first complete CI run and all PR conversation/review/inline
+  comments. No review comments were present at the time of inspection.
+- [x] Update the linked billing/invoice/credit workflow guidance for identifier
+  navigation, compact menus, responsive records, sort/selection and credit detail.
+- [x] Include the new credit-projection domain in the documented and tested
+  registry order; preserve the existing generated manifest and its contract.
+- [x] Remove the resolved `web_billing_credits.py` adapter baseline entry (2 to
+  0) as required by the shrink-only architecture guard; do not relax the guard.
+- [x] Replace obsolete sticky-column assertions with responsive table/field-label
+  checks while retaining the actual payment-proof detail-link assertion.
+- [x] Patch the actual credit-note module in the missing-document test, rather
+  than the package's exported service instance; retain the owner 404 assertion.
+- [x] Local follow-up: 40 source-level tests pass; full repository lint/format
+  and whitespace checks pass. Application-backed test collection still requires
+  the private packages and is delegated to the complete GitHub CI environment.
+- [x] Initial CI already passed Linux type checking, import boundaries, security,
+  engineering standards, Docker build/health, E2E, migrations and all four
+  PostgreSQL test shards. The remaining failures above require a fresh CI run.
+- [ ] Confirm all required checks pass on the follow-up commit before merge.

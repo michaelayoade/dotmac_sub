@@ -1,5 +1,6 @@
 """Read-only credit drill-down preserves the incumbent owner's exact facts."""
 
+import importlib
 from datetime import UTC, datetime
 from decimal import Decimal
 from pathlib import Path
@@ -19,7 +20,6 @@ from app.models.billing import (
     CreditNoteStatus,
 )
 from app.services import web_billing_credits
-from app.services.billing import credit_notes
 
 
 def _credit() -> CreditNote:
@@ -87,6 +87,7 @@ def test_credit_detail_delegates_to_owner_without_recalculating_money(monkeypatc
 
 
 def test_missing_credit_preserves_owner_not_found(monkeypatch):
+    credit_notes = importlib.import_module("app.services.billing.credit_notes")
     monkeypatch.setattr(credit_notes, "get_by_id", lambda *args, **kwargs: None)
     with pytest.raises(HTTPException) as exc:
         web_billing_credits.build_credit_detail(

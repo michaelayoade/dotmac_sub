@@ -212,40 +212,41 @@ but equivalent state and actions resolve through the same backend owners.
 
 ## Domain Order
 
-1. `party_identity`
-2. `customer_context`
-3. `financial_access`
-4. `network`
-5. `subscriber_sessions`
-6. `application_sessions`
-7. `secrets_credentials`
-8. `notifications_communications`
-9. `events_webhooks`
-10. `runtime_infrastructure`
-11. `observability`
-12. `workforce_operations`
-13. `support_operations`
-14. `automation_control_plane`
-15. `custom_fields_control_plane`
-16. `tenancy`
-17. `ai_advisory`
-18. `provisioning_operations`
-19. `regulatory_reporting`
-20. `feature_control_plane`
-21. `authorization_control_plane`
-22. `scheduler_control_plane`
-23. `network_access_control_plane`
-24. `service_intent_control_plane`
-25. `integration_control_plane`
-26. `ui_list_projection`
-27. `ui_bulk_actions`
-28. `ui_display_formatting`
-29. `ui_action_forms`
-30. `ui_semantic_presentation`
-31. `vpn_remote_access`
-32. `geospatial`
-33. `sales_referrals`
-34. `migration_source`
+1. `ui_credit_detail_projection`
+2. `party_identity`
+3. `customer_context`
+4. `financial_access`
+5. `network`
+6. `subscriber_sessions`
+7. `application_sessions`
+8. `secrets_credentials`
+9. `notifications_communications`
+10. `events_webhooks`
+11. `runtime_infrastructure`
+12. `observability`
+13. `workforce_operations`
+14. `support_operations`
+15. `automation_control_plane`
+16. `custom_fields_control_plane`
+17. `tenancy`
+18. `ai_advisory`
+19. `provisioning_operations`
+20. `regulatory_reporting`
+21. `feature_control_plane`
+22. `authorization_control_plane`
+23. `scheduler_control_plane`
+24. `network_access_control_plane`
+25. `service_intent_control_plane`
+26. `integration_control_plane`
+27. `ui_list_projection`
+28. `ui_bulk_actions`
+29. `ui_display_formatting`
+30. `ui_action_forms`
+31. `ui_semantic_presentation`
+32. `vpn_remote_access`
+33. `geospatial`
+34. `sales_referrals`
+35. `migration_source`
 
 Rule: each change should finish one coherent domain boundary: define the owner
 service, migrate the highest-risk callers, and add focused tests. Avoid broad

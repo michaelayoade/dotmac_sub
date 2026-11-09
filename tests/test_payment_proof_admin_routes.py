@@ -730,8 +730,10 @@ class TestAdminPagesRender:
             assert resp.status_code == 200
             assert "Bank Transfer Proofs" in text
             assert "TRF-FILE" in text
-            assert "sticky left-0 z-30 min-w-56" in text
-            assert "sticky left-0 z-20 min-w-56" in text
+            assert 'class="billing-table min-w-full' in text
+            assert 'data-label="Subscriber"' in text
+            assert 'data-label="Claimed Amount"' in text
+            assert "sticky left-0" not in text
             assert (
                 f'href="/admin/billing/payment-proofs/{proof_env["proof"]["id"]}"'
                 in text
