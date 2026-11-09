@@ -983,7 +983,7 @@ def reports_subscribers(
         ),
     )
 
-    context = {
+    context: dict[str, object] = {
         "request": request,
         "active_page": "reports-customers",
         "active_menu": "reports",

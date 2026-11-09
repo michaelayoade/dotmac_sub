@@ -12,6 +12,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import UTC, date, datetime, time, timedelta
+from itertools import pairwise
 from types import SimpleNamespace
 from typing import Any
 
@@ -351,7 +352,7 @@ def customer_report_growth_series(
     labels: list[str] = []
     totals: list[int] = []
     new_counts: list[int] = []
-    for bucket_start, bucket_end in zip(boundaries, boundaries[1:], strict=True):
+    for bucket_start, bucket_end in pairwise(boundaries):
         signups = int(
             db.scalar(
                 select(func.count(Subscriber.id)).where(
