@@ -129,25 +129,6 @@ def test_validation_error_returns_form_response_instead_of_500(
     topup = _spec("topup_max_amount")
     notice_days = _spec("renewal_invoice_notice_days")
     monkeypatch.setattr(
-        web_system_settings_forms.settings_spec,
-        "list_specs",
-        lambda _domain: [topup, notice_days],
-    )
-    monkeypatch.setattr(
-        web_system_settings_forms.web_system_settings_views_service,
-        "build_settings_context",
-        lambda _db, domain: {"selected_domain": domain},
-    )
-    monkeypatch.setattr(
-        admin_system.web_system_settings_views_service,
-        "build_settings_page_context",
-        lambda request, _db, *, settings_context, extra=None: {
-            "request": request,
-            **settings_context,
-            **(extra or {}),
-        },
-    )
-    monkeypatch.setattr(
         admin_system.templates,
         "TemplateResponse",
         lambda _name, context, status_code=200: HTMLResponse(
@@ -159,7 +140,7 @@ def test_validation_error_returns_form_response_instead_of_500(
         {
             "type": "http",
             "method": "POST",
-            "path": "/admin/system/settings",
+            "path": "/admin/system/settings-hub",
             "headers": [],
             "query_string": b"",
             "scheme": "http",
@@ -170,9 +151,16 @@ def test_validation_error_returns_form_response_instead_of_500(
     request.state.actor_id = str(uuid4())
     request.state.auth = {"principal_type": "system_user"}
 
+    monkeypatch.setattr(
+        admin_system,
+        "_hub_editor_context",
+        lambda _request, _db, *, section_id, errors=(), saved=False, submitted_values=None: {
+            "errors": errors
+        },
+    )
     response = admin_system.settings_update(
         request,
-        domain="billing",
+        section_id="billing",
         form={topup.key: "2000000", notice_days.key: "not-a-number"},
         db=db_session,
     )

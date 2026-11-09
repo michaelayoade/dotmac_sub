@@ -1,0 +1,58 @@
+{% extends "layouts/admin.html" %}
+{% block title %}Customer Bank Accounts - Settings{% endblock %}
+{% block content %}
+{% include "admin/system/_settings_hub_navigation.html" %}
+<h1 class="text-2xl font-bold">Customer Bank Accounts</h1>
+<p class="my-3 text-sm text-slate-600 dark:text-slate-300">Customer payment accounts. Settlement and collection accounts are managed separately in Billing Setup.</p>
+{% if bank_account_error %}<p role="alert" class="my-4 rounded-lg bg-red-50 p-4 text-red-800">{{ bank_account_error }}</p>{% endif %}
+<form method="get" class="my-4 flex flex-wrap gap-3">
+    <label>Customer account reference<input name="account_id" value="{{ account_id or '' }}" class="ml-2 rounded-lg border border-slate-300 bg-transparent p-2"></label>
+    <label>Status<select name="is_active" class="ml-2 rounded border bg-transparent p-2"><option value="true" {% if is_active %}selected{% endif %}>Active</option><option value="false" {% if not is_active %}selected{% endif %}>Inactive</option></select></label>
+    <button class="rounded-lg border px-4 py-2">Filter accounts</button>
+</form>
+{% if can(request, 'system:settings:write') %}
+<details class="my-6 rounded-lg border border-slate-300 p-4 dark:border-slate-600">
+    <summary class="cursor-pointer font-semibold">Add bank account</summary>
+    <form method="post" action="/admin/system/settings-hub/bank-accounts" class="mt-4 grid gap-4 sm:grid-cols-2">
+        {% include "components/forms/csrf_input.html" %}
+        <label>Customer account reference<input name="account_id" value="{{ account_id or '' }}" required class="mt-1 block w-full rounded border bg-transparent p-2"></label>
+        <label>Bank name<input name="bank_name" class="mt-1 block w-full rounded border bg-transparent p-2"></label>
+        <label>Account type<select name="account_type" class="mt-1 block w-full rounded border bg-transparent p-2"><option value="checking">Checking</option><option value="savings">Savings</option><option value="business">Business</option><option value="other">Other</option></select></label>
+        <label>Account last four digits<input name="account_last4" maxlength="4" class="mt-1 block w-full rounded border bg-transparent p-2"></label>
+        <label>Routing last four digits<input name="routing_last4" maxlength="4" class="mt-1 block w-full rounded border bg-transparent p-2"></label>
+        <label>Provider token<input name="token" type="password" autocomplete="new-password" class="mt-1 block w-full rounded border bg-transparent p-2"></label>
+        <label><input type="checkbox" name="is_default" value="true"> Default account</label>
+        <button class="rounded bg-primary-600 px-4 py-2 text-white">Add account</button>
+    </form>
+</details>
+{% endif %}
+<div class="space-y-4">
+{% for account in bank_accounts %}
+    <details class="rounded-lg border border-slate-300 p-4 dark:border-slate-600">
+        <summary class="cursor-pointer">{{ account.bank_name or 'Bank account' }} · ending {{ account.account_last4 or '—' }}{% if account.is_default %} · Default{% endif %}</summary>
+        {% if can(request, 'system:settings:write') %}
+        <form method="post" action="/admin/system/settings-hub/bank-accounts/{{ account.id }}" class="mt-4 grid gap-4 sm:grid-cols-2">
+            {% include "components/forms/csrf_input.html" %}
+            <label>Bank name<input name="bank_name" value="{{ account.bank_name or '' }}" class="mt-1 block w-full rounded border bg-transparent p-2"></label>
+            <label>Account last four digits<input name="account_last4" value="{{ account.account_last4 or '' }}" maxlength="4" class="mt-1 block w-full rounded border bg-transparent p-2"></label>
+            <label>Account type<select name="account_type" class="mt-1 block w-full rounded border bg-transparent p-2">{% for kind in ['checking', 'savings', 'business', 'other'] %}<option value="{{ kind }}" {% if account.account_type == kind %}selected{% endif %}>{{ kind | title }}</option>{% endfor %}</select></label>
+            <label>Routing last four digits<input name="routing_last4" value="{{ account.routing_last4 }}" maxlength="4" class="mt-1 block w-full rounded border bg-transparent p-2"></label>
+            <input type="hidden" name="is_active" value="false">
+            <label><input type="checkbox" name="is_active" value="true" {% if account.is_active %}checked{% endif %}>Active</label>
+            <label>Replacement provider token<input name="token" type="password" autocomplete="new-password" class="mt-1 block w-full rounded border bg-transparent p-2"><span class="text-xs">Leave blank to keep the stored token.</span></label>
+            <input type="hidden" name="is_default" value="false">
+            <label><input type="checkbox" name="is_default" value="true" {% if account.is_default %}checked{% endif %}>Default account</label>
+            <button class="rounded bg-primary-600 px-4 py-2 text-white">Save account</button>
+        </form>
+        <form method="post" action="/admin/system/settings-hub/bank-accounts/{{ account.id }}/deactivate" class="mt-4" onsubmit="return confirm('Deactivate this bank account?')">
+            {% include "components/forms/csrf_input.html" %}<button class="text-red-700 dark:text-red-300">Deactivate account</button>
+        </form>
+        {% endif %}
+    </details>
+{% else %}<p>No bank accounts match this filter.</p>{% endfor %}
+</div>
+<nav aria-label="Bank account pages" class="mt-6 flex gap-4">
+    {% if offset > 0 %}<a href="?is_active={{ 'true' if is_active else 'false' }}&amp;offset={{ [0, offset - 50] | max }}{% if account_id %}&amp;account_id={{ account_id }}{% endif %}">Previous</a>{% endif %}
+    {% if bank_accounts | length == 50 %}<a href="?is_active={{ 'true' if is_active else 'false' }}&amp;offset={{ offset + 50 }}{% if account_id %}&amp;account_id={{ account_id }}{% endif %}">Next</a>{% endif %}
+</nav>
+{% endblock %}

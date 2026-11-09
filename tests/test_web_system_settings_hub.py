@@ -38,7 +38,7 @@ def test_settings_hub_includes_customer_connection_type_setup(db_session):
 def test_settings_hub_includes_control_plane_link(db_session):
     context = web_system_settings_hub.build_settings_hub_context(db_session)
     system_category = next(
-        category for category in context["categories"] if category["id"] == "system"
+        category for category in context["categories"] if category["id"] == "logs"
     )
 
     link = next(
@@ -64,7 +64,9 @@ def test_settings_hub_includes_canonical_email_link(db_session):
     context = web_system_settings_hub.build_settings_hub_context(db_session)
 
     system_category = next(
-        category for category in context["categories"] if category["id"] == "system"
+        category
+        for category in context["categories"]
+        if category["id"] == "notifications"
     )
     email_link = next(
         link for link in system_category["links"] if link["name"] == "Email / SMTP"
@@ -143,7 +145,7 @@ def test_settings_hub_includes_ticket_settings_link(db_session):
     context = web_system_settings_hub.build_settings_hub_context(db_session)
 
     system_category = next(
-        category for category in context["categories"] if category["id"] == "system"
+        category for category in context["categories"] if category["id"] == "operations"
     )
     ticket_settings_link = next(
         link
@@ -158,7 +160,7 @@ def test_settings_hub_service_team_link_declares_read_permission(db_session):
     context = web_system_settings_hub.build_settings_hub_context(db_session)
 
     system_category = next(
-        category for category in context["categories"] if category["id"] == "system"
+        category for category in context["categories"] if category["id"] == "operations"
     )
     service_team_link = next(
         link

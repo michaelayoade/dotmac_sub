@@ -57,4 +57,4 @@ def test_system_settings_is_linked_from_the_system_overview_header() -> None:
     overview = _read("admin/system/index.html")
     header = overview.split("{% call page_header", 1)[1].split("{% endcall %}", 1)[0]
 
-    assert 'action_button("System Settings", "/admin/system/settings"' in header
+    assert 'action_button("System Settings", "/admin/system/settings-hub"' in header
