@@ -179,6 +179,11 @@ def test_explicit_default_payment_terms_override_legacy_value(db_session):
     )
     db_session.commit()
     save_billing_config(
-        db_session, {"payment_due_days": "14"}, context=_settings_context()
+        db_session,
+        {
+            "payment_due_days": "14",
+            "upcoming_charges_prepaid_amount_bands": "50000-100000,100000-500000,500000-",
+        },
+        context=_settings_context(),
     )
     assert resolve_payment_due_days(db_session) == 14
