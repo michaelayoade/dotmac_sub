@@ -1,0 +1,70 @@
+{% extends "layouts/admin.html" %}
+{% block title %}{{ hub_view.section.name }} - Settings{% endblock %}
+{% block content %}
+{% include "admin/system/_settings_hub_navigation.html" %}
+<div class="space-y-6">
+    <div>
+        <h1 class="text-2xl font-bold text-slate-900 dark:text-white">{{ hub_view.section.name }}</h1>
+        <p class="mt-2 text-sm text-slate-600 dark:text-slate-300">Changes apply to this section. Leave a stored secret blank to keep its current value.</p>
+    </div>
+    {% if errors %}
+    <div role="alert" class="rounded-lg border border-red-300 bg-red-50 p-4 text-red-800 dark:bg-red-950 dark:text-red-200">
+        <p class="font-semibold">Settings could not be saved.</p>
+        <ul class="list-inside list-disc">{% for error in errors %}<li>{{ error }}</li>{% endfor %}</ul>
+    </div>
+    {% elif saved %}<p role="status" class="rounded-lg bg-emerald-50 p-4 text-emerald-800 dark:bg-emerald-950 dark:text-emerald-200">Settings saved.</p>{% endif %}
+    {% if hub_view.section.id == 'test-connection' %}
+    <p class="rounded-lg bg-blue-50 p-4 text-sm text-blue-900 dark:bg-blue-950 dark:text-blue-200">Temporary service access uses the default duration, capped at the maximum. Verify RADIUS/NAS deadline enforcement before enabling the verification setting.</p>
+    {% endif %}
+    <form method="post" action="{{ hub_view.section.url }}" class="space-y-6">
+        {% include "components/forms/csrf_input.html" %}
+        <div class="grid gap-6 rounded-xl border border-slate-200 bg-white p-6 dark:border-slate-700 dark:bg-slate-800 md:grid-cols-2">
+        {% for row in hub_view.rows %}
+            {% set spec = row.spec %}
+            {% set attempted = submitted_values | default(none) %}
+            {% set value = attempted.get(spec.key, row.value) if attempted is not none else row.value %}
+            {% set is_attempted = attempted is not none and spec.key in attempted %}
+            <div id="{{ spec.key }}" class="min-w-0 scroll-mt-6">
+                <label for="setting-{{ spec.key }}" class="mb-2 block text-sm font-medium text-slate-900 dark:text-white">{{ spec.label or spec.key | replace('_', ' ') | title }}</label>
+                {% if spec.required_permission %}
+                <p class="text-sm text-slate-600 dark:text-slate-300">{{ 'On' if value else 'Off' }} — use the protected form below.</p>
+                {% elif spec.value_type.value == 'boolean' %}
+                <label class="flex items-center gap-2 text-sm"><input type="hidden" name="{{ spec.key }}" value="false"><input id="setting-{{ spec.key }}" type="checkbox" name="{{ spec.key }}" value="true" {% if value %}checked{% endif %} class="h-4 w-4 rounded border-slate-300">Enabled</label>
+                {% elif spec.allowed %}
+                <select id="setting-{{ spec.key }}" name="{{ spec.key }}" class="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 dark:border-slate-600 dark:bg-slate-900">
+                    {% for option in spec.allowed | sort %}<option value="{{ option }}" {% if option == value %}selected{% endif %}>{{ option }}</option>{% endfor %}
+                </select>
+                {% elif spec.value_type.value in ['json', 'list'] %}
+                <textarea id="setting-{{ spec.key }}" name="{{ spec.key }}" rows="5" class="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 font-mono text-sm dark:border-slate-600 dark:bg-slate-900">{% if not spec.is_secret and value is not none %}{% if is_attempted %}{{ value }}{% else %}{{ value | tojson(indent=2) }}{% endif %}{% endif %}</textarea>
+                {% else %}
+                <input id="setting-{{ spec.key }}" name="{{ spec.key }}" type="{{ 'password' if spec.is_secret else ('number' if spec.value_type.value == 'integer' else 'text') }}"
+                       value="{% if not spec.is_secret and value is not none %}{{ value }}{% endif %}"
+                       {% if spec.min_value is not none %}min="{{ spec.min_value }}"{% endif %}
+                       {% if spec.max_value is not none %}max="{{ spec.max_value }}"{% endif %}
+                       {% if spec.required and not (spec.is_secret and row.configured) %}required{% endif %}
+                       {% if spec.is_secret %}autocomplete="new-password"{% endif %}
+                       class="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 dark:border-slate-600 dark:bg-slate-900">
+                {% endif %}
+                <p class="mt-1 text-xs text-slate-500">Value source: {{ row.source | default('default') | replace('_', ' ') | title }}</p>
+                {% if spec.key == 'inbox_agent_default_max_concurrent_conversations' %}<p class="mt-2 text-xs text-slate-500">Enter 1–100. Ten is the default, not the maximum. Applies to agents without an individual override.</p>{% endif %}
+                {% if spec.is_secret %}<p class="mt-1 text-xs text-slate-500">{{ 'A value is stored.' if row.configured else 'No value is configured.' }} Leave blank to preserve it.</p>{% endif %}
+            </div>
+        {% endfor %}
+        </div>
+        {% if can(request, 'system:settings:write') %}
+        <button type="submit" class="rounded-lg bg-primary-600 px-4 py-2 text-white hover:bg-primary-700">Save changes</button>
+        {% endif %}
+    </form>
+    {% if hub_view.section.id == 'starter-accounting' %}
+    <form method="post" action="/admin/system/settings-hub/actions/starter-ledger-live" class="space-y-3 rounded-lg border border-amber-300 p-4">
+        {% include "components/forms/csrf_input.html" %}
+        <h2 class="font-semibold">Starter ledger live</h2>
+        <p class="text-sm">Enabling requires the dedicated billing:starter_ledger_live:write permission. Every attempt is audited.</p>
+        {% for row in hub_view.rows if row.spec.key == 'starter_ledger_live_enabled' %}
+        <label class="flex items-center gap-2"><input type="hidden" name="enabled" value="false"><input type="checkbox" name="enabled" value="true" {% if row.value %}checked{% endif %}>Enabled</label>
+        {% endfor %}
+        {% if can(request, 'system:settings:write') %}<button type="submit" class="rounded-lg bg-amber-700 px-4 py-2 text-white">Save protected switch</button>{% endif %}
+    </form>
+    {% endif %}
+</div>
+{% endblock %}

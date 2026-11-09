@@ -22,6 +22,83 @@ DOMAIN = DomainSOT(
     domain="ui_semantic_presentation",
     services=(
         SOTService(
+            name="ui.settings_hub",
+            module="app.services.web_system_settings_hub",
+            owns=("settings hub navigation and section projection",),
+            depends_on=(
+                "control.settings_spec",
+                "control.settings_form_updates",
+                "financial.payments",
+            ),
+            contract=ServiceContract(
+                concerns=(
+                    ConcernContract(
+                        name="settings hub navigation and section projection",
+                        role=OwnerRole.RESOLVER,
+                        input_names=(
+                            "registered operational settings",
+                            "customer bank account metadata",
+                        ),
+                    ),
+                ),
+                authoritative_inputs=(
+                    AuthorityInput(
+                        name="registered operational settings",
+                        owner="control.settings_spec",
+                        kind=AuthorityKind.CONTROL_INPUT,
+                        source="SETTINGS_SPECS and DB-authoritative resolver; settings_hub_catalog owns presentation grouping only",
+                    ),
+                    AuthorityInput(
+                        name="customer bank account metadata",
+                        owner="financial.payments",
+                        kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                        source="BankAccounts.list projection excludes provider tokens and secrets",
+                    ),
+                ),
+                transaction=TransactionContract(
+                    mode=TransactionMode.READ_ONLY,
+                    boundary="Request-scoped read; section saves delegate to control.settings_form_updates.",
+                    locking="No projection locks; write owner retains transaction and stale-value rules.",
+                    idempotency="Same declared settings and resolved values produce the same section.",
+                    retries="Repeat the read; never retry a write from the projection.",
+                ),
+                errors=ErrorContract(
+                    domain_codes=(),
+                    mapping_owner="admin settings hub web adapter",
+                    fail_closed_on=("unknown section or unmapped setting domain",),
+                ),
+                migration=MigrationContract(
+                    state=AuthorityMigrationState.CUT_OVER,
+                    old_owner="split system settings route and curated hub directory",
+                    new_owner="ui.settings_hub",
+                    verification="Source census with platform-independent text fingerprints, runtime registry parity, changed-only section saves, specialised-writer parity, secret redaction, error-state preservation and route-retirement checks.",
+                    cutover_gate="All registered identities have a hub destination and every old route-family caller is migrated; runtime and browser acceptance before release.",
+                    fallback_retirement="The old /admin/system/settings GET/POST family and settings.html are removed; no compatibility writer remains mounted.",
+                ),
+                projections=(
+                    ProjectionContract(
+                        name="settings hub section",
+                        input_names=(
+                            "registered operational settings",
+                            "customer bank account metadata",
+                        ),
+                        writer="ui.settings_hub",
+                        freshness="Resolved per request through the existing settings resolver and cache.",
+                        stale_behavior="Uses the resolver's existing freshness policy; no independent cache.",
+                        drift_signal="Unassigned setting identity or migration-register mismatch fails coverage checks.",
+                        rebuild_operation="Read the section again and regenerate the source register.",
+                        repair_owner="ui.settings_hub",
+                    ),
+                ),
+                steward="platform UI",
+                design_refs=("docs/runbooks/SETTINGS_HUB_MIGRATION.md",),
+                test_refs=(
+                    "tests/test_settings_hub_sections.py",
+                    "tests/architecture/test_settings_hub_inventory.py",
+                ),
+            ),
+        ),
+        SOTService(
             name="ui.projection_contracts",
             module="app.services.ui_contracts",
             owns=(

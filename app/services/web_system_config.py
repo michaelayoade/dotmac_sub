@@ -2,21 +2,26 @@
 
 from __future__ import annotations
 
+import json
 import logging
 from collections.abc import Mapping
+from dataclasses import dataclass
 from decimal import Decimal, InvalidOperation
-from typing import Any, cast
+from typing import Any
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.models.domain_settings import DomainSetting, SettingDomain
 from app.models.subscription_engine import SettingValueType
-from app.schemas.settings import DomainSettingUpdate
 from app.services import settings_spec
 from app.services.billing import collection_account_directory
 from app.services.billing_settings import resolve_payment_due_days
-from app.services.domain_settings import DomainSettings
+from app.services.owner_commands import CommandContext
+from app.services.web_system_settings_forms import (
+    RegisteredSettingsUpdateCommand,
+    update_registered_settings,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -38,104 +43,103 @@ def _read_settings(
     result: dict[str, str] = dict.fromkeys(keys, "")
     for row in rows:
         result[row.key] = row.value_text or ""
+    for key in keys:
+        if settings_spec.get_spec(domain, key) is not None:
+            value, _source = settings_spec.resolve_with_source(db, domain, key)
+            result[key] = (
+                json.dumps(value)
+                if isinstance(value, (dict, list))
+                else ("true" if value else "false")
+                if isinstance(value, bool)
+                else ""
+                if value is None
+                else str(value)
+            )
     return result
+
+
+@dataclass(frozen=True, slots=True)
+class ConfigSettingGroup:
+    domain: SettingDomain
+    keys: tuple[str, ...]
 
 
 def _save_settings(
     db: Session,
     domain: SettingDomain,
-    data: Mapping[str, str],
+    data: Mapping[str, object],
     keys: list[str],
     *,
+    context: CommandContext,
     secret_keys: set[str] | None = None,
-    use_specs: bool = False,
 ) -> None:
-    """Upsert a batch of DomainSettings."""
-    secret_keys = secret_keys or set()
-    spec_updates: list[tuple[str, DomainSettingUpdate]] = []
-    skipped_optional_spec_keys: set[str] = set()
-    if use_specs:
-        for key in keys:
-            spec = settings_spec.get_spec(domain, key)
-            if not spec:
+    _save_settings_groups(
+        db,
+        data=data,
+        groups=(ConfigSettingGroup(domain=domain, keys=tuple(keys)),),
+        context=context,
+        secret_keys=secret_keys,
+    )
+
+
+def _save_settings_groups(
+    db: Session,
+    *,
+    data: Mapping[str, object],
+    groups: tuple[ConfigSettingGroup, ...],
+    context: CommandContext,
+    secret_keys: set[str] | None = None,
+) -> None:
+    """Registered fields share the hub writer; legacy unowned fields retain their existing owner."""
+    specs = tuple(
+        spec
+        for group in groups
+        for key in group.keys
+        if (spec := settings_spec.get_spec(group.domain, key)) is not None
+    )
+    result = update_registered_settings(
+        db,
+        command=RegisteredSettingsUpdateCommand(specs=specs, values=data),
+        context=context,
+    )
+    if result.errors:
+        labels = {spec.key: spec.label or spec.key for spec in specs}
+        messages = []
+        for error in result.errors:
+            key, separator, message = error.partition(":")
+            messages.append(f"{labels.get(key, key)}:{message}" if separator else error)
+        raise ValueError(" ".join(messages))
+    legacy_changed = False
+    for group in groups:
+        for key in group.keys:
+            if settings_spec.get_spec(group.domain, key) is not None:
                 continue
-            if key not in data and spec.default is None and not spec.required:
-                skipped_optional_spec_keys.add(key)
-                continue
-            value = _coerce_spec_form_value(spec, data.get(key))
-            value_text, value_json = settings_spec.normalize_for_db(spec, value)
-            setting_value_json = cast(dict | list | bool | int | str | None, value_json)
-            spec_updates.append(
-                (
-                    key,
-                    DomainSettingUpdate(
-                        value_type=spec.value_type,
-                        value_text=value_text,
-                        value_json=setting_value_json,
-                        is_secret=spec.is_secret or key in secret_keys,
-                        is_active=True,
-                    ),
+            value = str(data.get(key) or "").strip()
+            setting = db.scalars(
+                select(DomainSetting).where(
+                    DomainSetting.domain == group.domain,
+                    DomainSetting.key == key,
                 )
-            )
-
-    spec_keys = {key for key, _ in spec_updates} | skipped_optional_spec_keys
-    spec_service = DomainSettings(domain) if spec_updates else None
-    if spec_service:
-        for key, payload in spec_updates:
-            spec_service.upsert_by_key(db, key, payload)
-
-    for key in keys:
-        if key in spec_keys:
-            continue
-        value = (data.get(key) or "").strip()
-        stmt = select(DomainSetting).where(
-            DomainSetting.domain == domain,
-            DomainSetting.key == key,
-        )
-        setting = db.scalars(stmt).first()
-        if setting:
-            setting.value_text = value
-            setting.is_secret = key in secret_keys
-        else:
-            setting = DomainSetting(
-                domain=domain,
-                key=key,
-                value_text=value,
-                value_type=SettingValueType.string,
-                is_secret=key in secret_keys,
-            )
-            db.add(setting)
-    db.flush()
-    db.commit()
-
-
-def _coerce_spec_form_value(
-    spec: settings_spec.SettingSpec, raw_value: object
-) -> object | None:
-    raw = "" if raw_value is None else str(raw_value).strip()
-    if raw == "" and spec.default is not None:
-        raw_value = spec.default
-    else:
-        raw_value = raw
-
-    value, error = settings_spec.coerce_value(spec, raw_value)
-    label = spec.label or spec.key
-    if error:
-        raise ValueError(f"{label}: {error}.")
-    if spec.required and (value is None or value == ""):
-        raise ValueError(f"{label} is required.")
-    if spec.allowed and value is not None and value not in spec.allowed:
-        allowed = ", ".join(sorted(spec.allowed))
-        raise ValueError(f"{label} must be one of: {allowed}.")
-    if spec.value_type == SettingValueType.integer and value is not None:
-        parsed = value if isinstance(value, int) else None
-        if parsed is None:
-            raise ValueError(f"{label}: Value must be an integer.")
-        if spec.min_value is not None and parsed < spec.min_value:
-            raise ValueError(f"{label} must be at least {spec.min_value}.")
-        if spec.max_value is not None and parsed > spec.max_value:
-            raise ValueError(f"{label} must be at most {spec.max_value}.")
-    return value
+            ).first()
+            if setting:
+                if setting.value_text == value:
+                    continue
+                setting.value_text = value
+                setting.is_secret = key in (secret_keys or set())
+            else:
+                setting = DomainSetting(
+                    domain=group.domain,
+                    key=key,
+                    value_text=value,
+                    value_type=SettingValueType.string,
+                    is_secret=key in (secret_keys or set()),
+                    is_active=True,
+                )
+                db.add(setting)
+            legacy_changed = True
+    if legacy_changed:
+        db.flush()
+        db.commit()
 
 
 # ---------------------------------------------------------------------------
@@ -154,8 +158,10 @@ def get_preferences_context(db: Session) -> dict:
     return {"preferences": preferences}
 
 
-def save_preferences(db: Session, data: Mapping[str, Any]) -> None:
-    _save_settings(db, SettingDomain.auth, data, PREFERENCE_KEYS, use_specs=True)
+def save_preferences(
+    db: Session, data: Mapping[str, object], *, context: CommandContext
+) -> None:
+    _save_settings(db, SettingDomain.auth, data, PREFERENCE_KEYS, context=context)
 
 
 # 8.7 Subscriber Settings — REMOVED. The page's keys were not consumed by
@@ -179,8 +185,10 @@ def get_portal_config_context(db: Session) -> dict:
     return {"portal_settings": _read_settings(db, SettingDomain.auth, PORTAL_KEYS)}
 
 
-def save_portal_config(db: Session, data: Mapping[str, Any]) -> None:
-    _save_settings(db, SettingDomain.auth, data, PORTAL_KEYS, use_specs=True)
+def save_portal_config(
+    db: Session, data: Mapping[str, object], *, context: CommandContext
+) -> None:
+    _save_settings(db, SettingDomain.auth, data, PORTAL_KEYS, context=context)
 
 
 # 8.10 Data Retention — REMOVED. The page's retention keys were inert: no cleanup
@@ -426,22 +434,17 @@ def _normalized_billing_config(data: Mapping[str, Any]) -> dict[str, Any]:
     return normalized
 
 
-def save_billing_config(db: Session, data: Mapping[str, Any]) -> None:
-    # ``_normalized_billing_config`` still performs the canonicalisation (lower-
-    # casing enum choices, formatting decimals, validating CSV day-lists) and
-    # ``use_specs`` layers spec-based type coercion/validation on top for the
-    # keys that have a registered spec. Keys without a spec (payment_period,
-    # billing_day, use_creation_date, the
-    # invoice/receipt/credit-note number formats, and the proforma_* / zero_
-    # total_invoices / invoice_caching toggles) are intentionally NOT spec'd:
-    # nothing in the app reads them, so registering specs would create orphans.
-    # They keep their prior raw-string behaviour via the fall-through path.
+def save_billing_config(
+    db: Session, data: Mapping[str, object], *, context: CommandContext
+) -> None:
+    # Friendly-form canonicalisation precedes the shared registered-settings writer.
+    # Undeclared historical fields retain their pre-existing legacy path.
     _save_settings(
         db,
         SettingDomain.billing,
         _normalized_billing_config(data),
         BILLING_KEYS,
-        use_specs=True,
+        context=context,
     )
 
 
@@ -462,7 +465,9 @@ def get_direct_bank_transfer_context(db: Session) -> dict:
     }
 
 
-def save_direct_bank_transfer_config(db: Session, data: Mapping[str, Any]) -> None:
+def save_direct_bank_transfer_config(
+    db: Session, data: Mapping[str, object], *, context: CommandContext
+) -> None:
     """Persist the instructions copy only.
 
     This used to also write `direct_bank_transfer_accounts` and the legacy
@@ -480,7 +485,7 @@ def save_direct_bank_transfer_config(db: Session, data: Mapping[str, Any]) -> No
         SettingDomain.billing,
         payload,
         ["direct_bank_transfer_instructions"],
-        use_specs=True,
+        context=context,
     )
 
 
@@ -550,12 +555,20 @@ def get_reminders_context(db: Session) -> dict:
     return {"reminders": _read_settings(db, SettingDomain.collections, REMINDER_KEYS)}
 
 
-def save_reminders(db: Session, data: Mapping[str, Any]) -> None:
+def save_reminders(
+    db: Session, data: Mapping[str, object], *, context: CommandContext
+) -> None:
     # Routed through the spec path for consistency with the other settings
     # saves. None of the REMINDER_KEYS currently has a runtime reader, so none
     # is registered as a spec (registering them would create orphans); they all
     # take the raw-string fall-through until a consumer exists.
-    _save_settings(db, SettingDomain.collections, data, REMINDER_KEYS, use_specs=True)
+    _save_settings(
+        db,
+        SettingDomain.collections,
+        data,
+        REMINDER_KEYS,
+        context=context,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -588,14 +601,20 @@ def get_billing_notifications_context(db: Session) -> dict:
     }
 
 
-def save_billing_notifications(db: Session, data: Mapping[str, Any]) -> None:
+def save_billing_notifications(
+    db: Session, data: Mapping[str, object], *, context: CommandContext
+) -> None:
     # ``billing_notif_send_hour`` has a spec (integer 0-23, read by the
     # enforcement-window gate) and now gets spec type coercion/validation. The
     # blocking-wave / pre-block-wave keys have no runtime reader, so they are
     # deliberately left un-spec'd (avoiding orphans) and keep the raw-string
     # fall-through.
     _save_settings(
-        db, SettingDomain.collections, data, BILLING_NOTIF_KEYS, use_specs=True
+        db,
+        SettingDomain.collections,
+        data,
+        BILLING_NOTIF_KEYS,
+        context=context,
     )
 
 
@@ -618,7 +637,9 @@ def get_plan_change_context(db: Session) -> dict:
     return {"plan_change": _read_settings(db, SettingDomain.billing, PLAN_CHANGE_KEYS)}
 
 
-def save_plan_change(db: Session, data: Mapping[str, Any]) -> None:
+def save_plan_change(
+    db: Session, data: Mapping[str, object], *, context: CommandContext
+) -> None:
     normalized = dict(data)
     refund_policy = str(normalized.get("refund_policy") or "").strip().lower()
     invoice_timing = str(normalized.get("invoice_timing") or "").strip().lower()
@@ -663,10 +684,14 @@ def save_plan_change(db: Session, data: Mapping[str, Any]) -> None:
     # Every PLAN_CHANGE_KEYS entry is spec-registered. The lowercase
     # canonicalisation above is preserved so the coerced enum values match the
     # specs' ``allowed`` sets (refund_policy / invoice_timing) and the boolean
-    # coercion (prepaid_rollover / discount_transfer); use_specs then applies
-    # the spec typing/validation.
+    # coercion (prepaid_rollover / discount_transfer). The shared writer applies
+    # registered spec typing and validation.
     _save_settings(
-        db, SettingDomain.billing, normalized, PLAN_CHANGE_KEYS, use_specs=True
+        db,
+        SettingDomain.billing,
+        normalized,
+        PLAN_CHANGE_KEYS,
+        context=context,
     )
 
 
@@ -706,8 +731,10 @@ def get_radius_config_context(db: Session) -> dict:
     return {"radius": _read_settings(db, SettingDomain.radius, RADIUS_KEYS)}
 
 
-def save_radius_config(db: Session, data: Mapping[str, Any]) -> None:
-    _save_settings(db, SettingDomain.radius, data, RADIUS_KEYS, use_specs=True)
+def save_radius_config(
+    db: Session, data: Mapping[str, object], *, context: CommandContext
+) -> None:
+    _save_settings(db, SettingDomain.radius, data, RADIUS_KEYS, context=context)
 
 
 # 8.22 CPE Configuration — REMOVED. These QoS/blocking/DHCP/WLAN defaults had
@@ -821,50 +848,47 @@ def get_monitoring_config_context(db: Session) -> dict:
     return {"monitoring": settings}
 
 
-def save_monitoring_config(db: Session, data: Mapping[str, Any]) -> None:
-    _save_settings(
+def save_monitoring_config(
+    db: Session, data: Mapping[str, object], *, context: CommandContext
+) -> None:
+    _save_settings_groups(
         db,
-        SettingDomain.network_monitoring,
-        data,
-        [
-            "monitoring_vendors",
-            "monitoring_device_types",
-            "monitoring_groups",
-            "server_health_disk_warn_pct",
-            "server_health_disk_crit_pct",
-            "server_health_mem_warn_pct",
-            "server_health_mem_crit_pct",
-            "server_health_load_warn",
-            "server_health_load_crit",
-            "network_health_warn_pct",
-            "network_health_crit_pct",
-            "device_metrics_retention_days",
-            "alert_evaluation_interval_seconds",
-            "ont_signal_warning_dbm",
-            "ont_signal_critical_dbm",
-            "ont_signal_alert_cooldown_minutes",
-        ],
-        use_specs=True,
-    )
-    _save_settings(
-        db,
-        SettingDomain.snmp,
-        data,
-        [
-            "interface_walk_interval_seconds",
-            "interface_discovery_interval_seconds",
-        ],
-        use_specs=True,
-    )
-    _save_settings(
-        db,
-        SettingDomain.bandwidth,
-        data,
-        [
-            "hot_retention_hours",
-            "cleanup_interval_seconds",
-        ],
-        use_specs=True,
+        data=data,
+        groups=(
+            ConfigSettingGroup(
+                domain=SettingDomain.network_monitoring,
+                keys=(
+                    "monitoring_vendors",
+                    "monitoring_device_types",
+                    "monitoring_groups",
+                    "server_health_disk_warn_pct",
+                    "server_health_disk_crit_pct",
+                    "server_health_mem_warn_pct",
+                    "server_health_mem_crit_pct",
+                    "server_health_load_warn",
+                    "server_health_load_crit",
+                    "network_health_warn_pct",
+                    "network_health_crit_pct",
+                    "device_metrics_retention_days",
+                    "alert_evaluation_interval_seconds",
+                    "ont_signal_warning_dbm",
+                    "ont_signal_critical_dbm",
+                    "ont_signal_alert_cooldown_minutes",
+                ),
+            ),
+            ConfigSettingGroup(
+                domain=SettingDomain.snmp,
+                keys=(
+                    "interface_walk_interval_seconds",
+                    "interface_discovery_interval_seconds",
+                ),
+            ),
+            ConfigSettingGroup(
+                domain=SettingDomain.bandwidth,
+                keys=("hot_retention_hours", "cleanup_interval_seconds"),
+            ),
+        ),
+        context=context,
     )
 
 
@@ -972,16 +996,19 @@ def get_outage_auto_notify_context(db: Session) -> dict:
     }
 
 
-def save_outage_auto_notify(db: Session, data: Mapping[str, Any]) -> None:
+def save_outage_auto_notify(
+    db: Session, data: Mapping[str, object], *, context: CommandContext
+) -> None:
     """Persist the consolidated config through the registered specs.
 
     Every key has a spec, so bounds (minimum settling window, minimum interval)
-    are enforced by ``settings_spec`` rather than re-implemented here. Unchecked
-    HTML checkboxes are absent from the payload, so they are normalized to
-    ``false`` instead of being read as "leave as-is".
+    are enforced by ``settings_spec`` rather than re-implemented here. The form submits an explicit
+    ``false`` marker for unchecked boxes; an absent field is left unchanged.
     """
     payload = dict(data)
     for key in ("outage_auto_notify_enabled", "outage_auto_notify_dry_run"):
+        if key not in payload:
+            continue
         payload[key] = (
             "true"
             if str(payload.get(key, "")).lower()
@@ -998,5 +1025,5 @@ def save_outage_auto_notify(db: Session, data: Mapping[str, Any]) -> None:
         SettingDomain.network_monitoring,
         payload,
         OUTAGE_AUTO_NOTIFY_KEYS,
-        use_specs=True,
+        context=context,
     )

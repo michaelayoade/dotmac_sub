@@ -120,7 +120,7 @@ def test_admin_shell_shortcuts_follow_destination_permissions() -> None:
     assert "{% set admin_home_href = '/admin/dashboard' if can(request," in source
     assert "else '/admin/system/users/profile' %}" in source
     assert "{% if can(request, 'system:settings:read') %}" in source
-    assert '<a href="/admin/system/settings" role="menuitem"' in source
+    assert '<a href="/admin/system/settings-hub" role="menuitem"' in source
 
 
 def test_vendor_navigation_hides_each_destination_by_its_route_permission() -> None:

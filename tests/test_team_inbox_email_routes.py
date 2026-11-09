@@ -855,6 +855,9 @@ def test_inbox_settings_composes_existing_agent_operations_owners():
     assert "can(request, 'operations:service_team:read')" in ROUTES_TEMPLATE
     assert 'href="/admin/system/service-teams"' in ROUTES_TEMPLATE
     assert "can(request, 'system:settings:read')" in ROUTES_TEMPLATE
-    assert "domain=comms#inbox-agent-capacity" in ROUTES_TEMPLATE
+    assert (
+        "/admin/system/settings-hub/edit/comms#inbox_agent_default_max_concurrent_conversations"
+        in ROUTES_TEMPLATE
+    )
     assert 'href="/admin/integrations/connectors"' in ROUTES_TEMPLATE
     assert "Membership stays owned by Service Teams" in ROUTES_TEMPLATE
