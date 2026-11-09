@@ -87,7 +87,11 @@
         {% for s in subscribers %}
         <tr>
           <td class="px-5 py-2.5">
-            <a href="/admin/customers/{{ s.subscriber_id }}" class="font-medium text-cyan-700 hover:underline dark:text-cyan-300">{{ s.subscriber_name }}</a>
+            {% if can(request, 'customer:read') %}
+            <a href="/admin/customers/person/{{ s.subscriber_id }}" class="font-medium text-cyan-700 hover:underline dark:text-cyan-300">{{ s.subscriber_name }}</a>
+            {% else %}
+            <span class="font-medium">{{ s.subscriber_name }}</span>
+            {% endif %}
           </td>
           <td class="px-5 py-2.5 text-right tabular-nums">{{ s.open_invoice_count }}</td>
           <td class="px-5 py-2.5 text-right tabular-nums">{{ billing_account.currency }} {{ "{:,.2f}".format(s.open_balance) }}</td>

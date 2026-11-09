@@ -180,32 +180,28 @@
     {# ── Recent Invoices ── #}
     {% call card("Recent Invoices", icon='<svg class="h-4 w-4 text-blue-600 dark:text-blue-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/></svg>', color="blue", padding=False, actions='<a href="/admin/billing/invoices?account_id=' ~ account.id ~ '" class="text-sm font-medium text-amber-600 hover:text-amber-700 dark:text-amber-400 dark:hover:text-amber-300 transition-colors">View All</a>') %}
         <div class="overflow-x-auto">
-            <table class="min-w-full divide-y divide-slate-200 dark:divide-slate-700">
+            <table class="billing-table min-w-full divide-y divide-slate-200 dark:divide-slate-700">
                 {{ table_head([
                     {"label": "Invoice"},
                     {"label": "Status"},
                     {"label": "Total"},
-                    {"label": "Issued"},
-                    {"label": "Actions", "align": "right"}
+                    {"label": "Issued"}
                 ]) }}
                 <tbody class="divide-y divide-slate-100 bg-white dark:divide-slate-700/50 dark:bg-slate-800">
                     {% if invoices %}
                     {% for invoice in invoices %}
                     {% set invoice_currency = invoice.currency or account_currency %}
                     {% call table_row(color="emerald") %}
-                        <td class="whitespace-nowrap px-6 py-4">
+                        <td data-label="Invoice" class="whitespace-nowrap px-6 py-4">
                             <a href="/admin/billing/invoices/{{ invoice.id }}" class="font-semibold text-slate-900 hover:text-amber-600 dark:text-white dark:hover:text-amber-400 transition-colors">
                                 {{ invoice.invoice_number | default('INV-' ~ ((invoice.id|string)[:8])) }}
                             </a>
                         </td>
-                        <td class="whitespace-nowrap px-6 py-4">
+                        <td data-label="Status" class="whitespace-nowrap px-6 py-4">
                             {{ status_presentation_badge(invoice_status_presentations.get(invoice.id|string), size="sm") }}
                         </td>
-                        <td class="whitespace-nowrap px-6 py-4 text-sm font-bold text-slate-900 dark:text-white font-mono tabular-nums">{{ invoice_currency }} {{ '{:,.2f}'.format(invoice.total or 0) }}</td>
-                        <td class="whitespace-nowrap px-6 py-4 text-sm text-slate-600 dark:text-slate-400">{{ invoice.issued_at | app_datetime('%b %d, %Y', '—', include_tz=False) }}</td>
-                        {% call row_actions() %}
-                            {{ row_action(href="/admin/billing/invoices/" ~ invoice.id, icon=icon_view(), title="View", color="amber") }}
-                        {% endcall %}
+                        <td data-label="Total" class="billing-money whitespace-nowrap px-6 py-4 text-sm font-bold text-slate-900 dark:text-white font-mono tabular-nums">{{ invoice_currency }} {{ '{:,.2f}'.format(invoice.total or 0) }}</td>
+                        <td data-label="Issued" class="whitespace-nowrap px-6 py-4 text-sm text-slate-600 dark:text-slate-400">{{ invoice.issued_at | app_datetime('%b %d, %Y', '—', include_tz=False) }}</td>
                     {% endcall %}
                     {% endfor %}
                     {% else %}
@@ -216,7 +212,7 @@
                         color="emerald",
                         action_label="New Invoice",
                         action_href="/admin/billing/invoices/new?account_id=" ~ account.id,
-                        colspan=5
+                        colspan=4
                     ) }}
                     {% endif %}
                 </tbody>

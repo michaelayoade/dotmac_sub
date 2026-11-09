@@ -183,7 +183,7 @@ def dunning_detail(
     )
 
 
-@router.post("/dunning/{case_id}/{action}/confirm", response_class=HTMLResponse)
+@router.post("/dunning/{case_id:uuid}/{action}/confirm", response_class=HTMLResponse)
 def confirm_case_action(
     request: Request,
     case_id: UUID,

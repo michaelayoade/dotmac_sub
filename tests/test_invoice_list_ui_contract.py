@@ -170,7 +170,11 @@ def test_invoice_full_and_htmx_views_share_the_list_contract_partial():
     assert 'aria-current="page"' in table
     assert 'role="status"' in table
     assert "('created_at', 'Created (UTC)')" in table
-    assert "invoice_created_dates.get(invoice.id|string)" in table
+    assert 'aria-label="Sort invoices"' in table
+    assert 'id="invoice-select-page"' in table
+    assert table.index('aria-label="Sort invoices"') < table.index("<table")
+    assert table.index('id="invoice-select-page"') < table.index("<table")
+    assert "invoice_created_dates.get(invoice.id|string)" not in table
     assert "/admin/billing/invoices?page=" not in table
     assert "range(1, total_pages + 1)" not in table
     assert "page_meta.start_item" in table

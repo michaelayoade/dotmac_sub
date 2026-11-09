@@ -1,5 +1,7 @@
 """Admin billing credit note routes."""
 
+from uuid import UUID
+
 from fastapi import APIRouter, Depends, Form, Query, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
@@ -11,6 +13,37 @@ from app.services.auth_dependencies import require_permission
 
 templates = Jinja2Templates(directory="templates")
 router = APIRouter(prefix="/billing", tags=["web-admin-billing"])
+
+
+@router.get(
+    "/credits/{credit_note_id:uuid}",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("billing:credit_note:read"))],
+)
+def billing_credit_detail(
+    request: Request,
+    credit_note_id: UUID,
+    db: Session = Depends(get_db),
+) -> HTMLResponse:
+    from app.web.admin import get_current_user, get_sidebar_stats
+
+    credit = web_billing_credits_service.build_credit_detail(
+        db=db,
+        query=web_billing_credits_service.CreditDetailQuery(
+            credit_note_id=credit_note_id
+        ),
+    )
+    return templates.TemplateResponse(
+        "admin/billing/credit_detail.html",
+        {
+            "request": request,
+            "credit": credit,
+            "active_page": "credits",
+            "active_menu": "billing",
+            "current_user": get_current_user(request),
+            "sidebar_stats": get_sidebar_stats(db),
+        },
+    )
 
 
 @router.get(

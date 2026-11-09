@@ -1,8 +1,7 @@
 {% extends "layouts/admin.html" %}
 {% from "components/ui/macros.html" import
     stats_card, status_badge, status_presentation_badge,
-    action_button,
-    icon_invoice, icon_download, icon_credit_card, icon_view,
+    icon_invoice, icon_credit_card, icon_view,
     icon_archive, icon_building, icon_calendar, icon_chart_bar, icon_clipboard,
     icon_database, icon_filter, icon_lightning, icon_refresh,
     icon_link, icon_shield, icon_upload, icon_warning
@@ -57,7 +56,6 @@
             {{ icon_clipboard("h-4 w-4") }}
             More
         </button>
-        {{ action_button("Export", href="#", icon=icon_download("h-4 w-4"), variant="secondary", color="emerald", size="sm") }}
         </div>
     </div>
 
@@ -228,7 +226,7 @@
         </div>
         <div class="overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm dark:border-slate-700 dark:bg-slate-800">
             {% if invoices %}
-            <table class="w-full text-left text-sm">
+            <table class="billing-table w-full text-left text-sm">
                 <thead>
                     <tr class="border-b border-slate-100 dark:border-slate-700/60">
                         <th class="px-6 py-3 text-[10px] font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">Invoice #</th>
@@ -241,16 +239,16 @@
                 <tbody class="divide-y divide-slate-100 dark:divide-slate-700/40">
                     {% for invoice in invoices[:10] %}
                     {% set invoice_currency = invoice.currency or default_currency|default('NGN') %}
-                    <tr class="transition hover:bg-slate-50 dark:hover:bg-slate-700/30 cursor-pointer" onclick="window.location='/admin/billing/invoices/{{ invoice.id }}'">
-                        <td class="px-6 py-3 font-medium text-emerald-600 dark:text-emerald-400">{{ invoice.invoice_number|default('Invoice') }}</td>
-                        <td class="px-6 py-3 text-slate-900 dark:text-white">
+                    <tr class="transition hover:bg-slate-50 dark:hover:bg-slate-700/30">
+                        <td data-label="Invoice" class="px-6 py-3 font-medium text-emerald-600 dark:text-emerald-400">{% if can(request, 'billing:invoice:read') %}<a href="/admin/billing/invoices/{{ invoice.id }}" class="hover:underline">{{ invoice.invoice_number|default('Invoice') }}</a>{% else %}{{ invoice.invoice_number|default('Invoice') }}{% endif %}</td>
+                        <td data-label="Account" class="px-6 py-3 text-slate-900 dark:text-white">
                             {% if invoice.account %}
                                 {{ invoice.account.name }}
                             {% else %}Account{% endif %}
                         </td>
-                        <td class="px-6 py-3 text-right font-mono tabular-nums font-medium text-slate-900 dark:text-white">{{ invoice_currency }} {{ "{:,.2f}".format(invoice.total|default(0)) }}</td>
-                        <td class="px-6 py-3 text-slate-500 dark:text-slate-400">{{ invoice.due_at | app_datetime('%b %d, %Y', '—', include_tz=False) }}</td>
-                        <td class="px-6 py-3">
+                        <td data-label="Amount" class="billing-money px-6 py-3 text-right font-mono tabular-nums font-medium text-slate-900 dark:text-white">{{ invoice_currency }} {{ "{:,.2f}".format(invoice.total|default(0)) }}</td>
+                        <td data-label="Due" class="px-6 py-3 text-slate-500 dark:text-slate-400">{{ invoice.due_at | app_datetime('%b %d, %Y', '—', include_tz=False) }}</td>
+                        <td data-label="Status" class="px-6 py-3">
                             {{ status_presentation_badge(invoice_status_presentations.get(invoice.id|string), size="sm") }}
                         </td>
                     </tr>

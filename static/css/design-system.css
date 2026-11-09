@@ -1,3 +1,81 @@
+/* Product-owned billing list projection. Shared dotmac-ui assets stay package-owned. */
+.billing-table {
+    width: 100%;
+    min-width: 0;
+    table-layout: auto;
+}
+.billing-table :is(th, td) {
+    padding: 0.625rem 0.5rem;
+    white-space: normal;
+    overflow-wrap: anywhere;
+    vertical-align: top;
+}
+.billing-table td { min-width: 0; }
+.billing-table th { white-space: nowrap; overflow-wrap: normal; }
+.billing-table td[data-label="Invoice"],
+.billing-table td[data-label="Transaction"] { min-width: 8rem; }
+.billing-table td[data-label="Due"],
+.billing-table td[data-label="Date"] { min-width: 5.5rem; }
+.billing-table td[data-label="Status"] { min-width: 6.5rem; }
+.billing-table td[data-label="Status"] > span { white-space: nowrap; }
+.billing-table :is(td, th).billing-money {
+    white-space: nowrap;
+    overflow-wrap: normal;
+    text-align: right;
+    font-variant-numeric: tabular-nums;
+    font-size: 0.8125rem;
+}
+.billing-table a:focus-visible,
+.billing-row-menu summary:focus-visible {
+    outline: 2px solid var(--color-brand-600);
+    outline-offset: 3px;
+    border-radius: 4px;
+}
+.billing-row-menu { text-align: left; font-size: 0.8125rem; }
+.billing-row-menu > summary {
+    cursor: pointer;
+    padding: 0.5rem;
+    white-space: nowrap;
+    border: 1px solid var(--color-border-default, currentColor);
+    border-radius: 0.5rem;
+}
+/* Native disclosure stays in flow so scrolling containers cannot clip actions. */
+.billing-row-menu > div {
+    display: flex;
+    flex-direction: column;
+    align-items: stretch;
+    gap: 0.25rem;
+    padding-top: 0.5rem;
+}
+.billing-row-menu > div :is(a, button) { justify-content: flex-start; }
+.billing-row-menu a[aria-label]::after { content: attr(aria-label); margin-left: 0.375rem; }
+.billing-table .billing-row-menu a { white-space: normal; }
+@media (max-width: 1100px) {
+    .billing-table:has(td[data-label]) thead {
+        display: none;
+    }
+    .billing-table:has(td[data-label]),
+    .billing-table:has(td[data-label]) tbody,
+    .billing-table:has(td[data-label]) tr { display: block; width: 100%; }
+    .billing-table td[data-label] {
+        display: block;
+        width: 100%;
+        text-align: left;
+        white-space: normal;
+        overflow-wrap: anywhere;
+    }
+    .billing-table td[data-label]::before {
+        content: attr(data-label);
+        display: block;
+        margin-bottom: 0.25rem;
+        font-size: 0.75rem;
+        font-weight: 600;
+    }
+    .billing-table td[data-label] > * { min-width: 0; }
+    .billing-table td.billing-money { display: block; }
+    .billing-table td.billing-money::before { display: block; margin-bottom: 0.25rem; }
+}
+
 :root {
     /* Typography */
     --font-display: 'Outfit', system-ui, sans-serif;

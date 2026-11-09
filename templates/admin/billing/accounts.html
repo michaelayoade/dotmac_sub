@@ -1,9 +1,9 @@
 {% extends "layouts/admin.html" %}
 {% from "components/ui/macros.html" import
     ambient_background, page_header, stats_card,
-    table_head, table_row, row_actions, row_action, status_presentation_badge,
+    table_head, table_row, status_presentation_badge,
     empty_state, action_button, animation_styles,
-    icon_plus, icon_view, icon_invoice
+    icon_plus
 %}
 
 {% block title %}Billing Accounts - Admin{% endblock %}
@@ -103,7 +103,7 @@
     {# ── Accounts Table ── #}
     <div id="accounts-table" class="animate-fade-in-up rounded-2xl border border-slate-200/60 bg-white shadow-sm dark:border-slate-700/60 dark:bg-slate-800">
         <div class="overflow-x-auto">
-            <table class="min-w-full divide-y divide-slate-200 dark:divide-slate-700">
+            <table class="billing-table min-w-full divide-y divide-slate-200 dark:divide-slate-700">
                 {{ table_head([
                     {"label": "Subscriber Number"},
                     {"label": "Subscriber"},
@@ -117,12 +117,12 @@
                     {% for row in accounts %}
                     {% set account = row.account %}
                     {% call table_row(color="emerald") %}
-                        <td class="whitespace-nowrap px-6 py-4">
-                            <span class="text-sm font-mono text-slate-700 dark:text-slate-300">
+                        <td data-label="Subscriber Number" class="whitespace-nowrap px-6 py-4">
+                            <a href="/admin/billing/accounts/{{ account.id }}" class="text-sm font-mono text-primary-700 hover:underline dark:text-primary-300">
                                 {{ account.subscriber_number or 'N/A' }}
-                            </span>
+                            </a>
                         </td>
-                        <td class="whitespace-nowrap px-6 py-4">
+                        <td data-label="Subscriber" class="whitespace-nowrap px-6 py-4">
                             <a href="/admin/customers/{{ 'business/' ~ account.id if account.is_business else 'person/' ~ account.id }}" class="text-sm text-slate-600 hover:text-amber-600 dark:text-slate-400 dark:hover:text-amber-400 transition-colors">
                                 {% if account.person %}
                                     {{ account.first_name }} {{ account.last_name }}
@@ -133,11 +133,11 @@
                                 {% endif %}
                             </a>
                         </td>
-                        <td class="whitespace-nowrap px-6 py-4">
+                        <td data-label="Status" class="whitespace-nowrap px-6 py-4">
                             {# Status semantics from the account status presentation owner. #}
                             {{ status_presentation_badge(account_status_presentation(account.status | default('active')), size="sm") }}
                         </td>
-                        <td class="whitespace-nowrap px-6 py-4">
+                        <td data-label="Balance" class="billing-money whitespace-nowrap px-6 py-4">
                             {% set balance = row.balance | default(0) %}
                             {% set account_currency = account.currency if account.currency is defined else default_currency|default('NGN') %}
                             <span class="text-sm font-bold font-mono tabular-nums {% if balance > 0 %}text-amber-600 dark:text-amber-400{% elif balance < 0 %}text-emerald-600 dark:text-emerald-400{% else %}text-slate-600 dark:text-slate-400{% endif %}">
@@ -149,15 +149,17 @@
                             <p class="text-xs text-emerald-600 dark:text-emerald-400">Credit</p>
                             {% endif %}
                         </td>
-                        <td class="whitespace-nowrap px-6 py-4">
+                        <td data-label="Created" class="whitespace-nowrap px-6 py-4">
                             <span class="text-sm text-slate-600 dark:text-slate-400">{{ account.created_at | app_datetime('%b %d, %Y', 'N/A', include_tz=False) }}</span>
                         </td>
-                        <td class="whitespace-nowrap px-6 py-4 text-right">
-                            <div class="flex items-center justify-end gap-2 opacity-0 transition-opacity group-hover:opacity-100">
-                                {{ row_action(href="/admin/billing/accounts/" ~ account.id, icon=icon_view(), title="View Details", color="amber") }}
-                                {{ row_action(href="/admin/billing/accounts/" ~ account.id ~ "/edit", icon='<svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z"/></svg>', title="Edit Account", color="blue") }}
-                                {{ row_action(href="/admin/billing/invoices/new?account=" ~ account.id, icon=icon_invoice("h-4 w-4"), title="Create Invoice", color="emerald") }}
-                            </div>
+                        <td data-label="Actions" class="whitespace-nowrap px-6 py-4 text-right">
+                            <details class="billing-row-menu">
+                                <summary class="cursor-pointer text-sm font-medium text-primary-700 dark:text-primary-300">More actions</summary>
+                                <div class="flex flex-col items-start gap-2 pt-2">
+                                    <a href="/admin/billing/accounts/{{ account.id }}/edit" class="text-sm hover:underline">Edit account</a>
+                                    <a href="/admin/billing/invoices/new?account={{ account.id }}" class="text-sm hover:underline">Create invoice</a>
+                                </div>
+                            </details>
                         </td>
                     {% endcall %}
                     {% endfor %}

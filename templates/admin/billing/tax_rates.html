@@ -64,7 +64,7 @@
         </div>
         <div class="lg:col-span-1 rounded-xl border border-slate-200 bg-white shadow-sm dark:border-slate-700 dark:bg-slate-800">
             <div class="overflow-x-auto">
-                <table class="min-w-full divide-y divide-slate-200 dark:divide-slate-700">
+                <table class="billing-table min-w-full divide-y divide-slate-200 dark:divide-slate-700">
                     <thead class="bg-slate-50 dark:bg-slate-800/50">
                         <tr>
                             <th class="px-6 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400">Name</th>
@@ -79,18 +79,18 @@
                         {% if rates %}
                         {% for rate in rates %}
                         <tr class="hover:bg-slate-50 dark:hover:bg-slate-700/50">
-                            <td class="px-6 py-4 text-sm font-medium text-slate-900 dark:text-white">{{ rate.name }}</td>
-                            <td class="px-6 py-4 text-sm font-mono text-slate-500 dark:text-slate-400">{{ rate.code or '—' }}</td>
-                            <td class="px-6 py-4 text-sm text-right font-mono tabular-nums text-slate-900 dark:text-white">{{ "%.2f"|format(rate.rate) }}%</td>
-                            <td class="px-6 py-4 text-sm text-slate-500 dark:text-slate-400 max-w-xs truncate">{{ rate.description or '—' }}</td>
-                            <td class="px-6 py-4 text-center">
+                            <td data-label="Name" class="px-6 py-4 text-sm font-medium text-slate-900 dark:text-white">{{ rate.name }}</td>
+                            <td data-label="Code" class="px-6 py-4 text-sm font-mono text-slate-500 dark:text-slate-400">{{ rate.code or '—' }}</td>
+                            <td data-label="Rate" class="billing-money px-6 py-4 text-sm text-right font-mono tabular-nums text-slate-900 dark:text-white">{{ "%.2f"|format(rate.rate) }}%</td>
+                            <td data-label="Description" class="px-6 py-4 text-sm text-slate-500 dark:text-slate-400 max-w-xs truncate">{{ rate.description or '—' }}</td>
+                            <td data-label="Status" class="px-6 py-4 text-center">
                                 {% if rate.is_active %}
                                 <span class="inline-flex items-center rounded-full bg-emerald-100 px-2.5 py-0.5 text-xs font-medium text-emerald-800 dark:bg-emerald-900 dark:text-emerald-200">Active</span>
                                 {% else %}
                                 <span class="inline-flex items-center rounded-full bg-slate-100 px-2.5 py-0.5 text-xs font-medium text-slate-600 dark:bg-slate-700 dark:text-slate-300">Inactive</span>
                                 {% endif %}
                             </td>
-                            <td class="px-6 py-4 text-right whitespace-nowrap">
+                            <td data-label="Actions" class="px-6 py-4 text-right whitespace-nowrap">
                                 <div class="flex items-center justify-end gap-2">
                                     <form method="post" action="/admin/billing/tax-rates/{{ rate.id }}/toggle" class="inline">
                                         {% include "components/forms/csrf_input.html" %}

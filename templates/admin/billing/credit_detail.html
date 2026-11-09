@@ -1,0 +1,71 @@
+{% extends "layouts/admin.html" %}
+{% from "components/ui/macros.html" import detail_header, card, info_row, status_presentation_badge %}
+
+{% block title %}Credit {{ credit.number }} - Admin{% endblock %}
+
+{% block content %}
+<div class="space-y-6">
+    {% set status_html %}{{ status_presentation_badge(credit.status_presentation, size='sm') }}{% endset %}
+    {% call detail_header(title="Credit Note", subtitle=credit.number, back_href="/admin/billing/credits", back_label="Credit notes", status=status_html) %}{% endcall %}
+
+    <section aria-label="Credit note summary">
+        {% call card("Document") %}
+        <div class="grid gap-x-6 md:grid-cols-2">
+            {{ info_row("Credit number", credit.number) }}
+            {{ info_row("Account", credit.account_label) }}
+            {{ info_row("Currency", credit.currency) }}
+            {{ info_row("Total", '{:,.2f}'.format(credit.total)) }}
+            {{ info_row("Applied", '{:,.2f}'.format(credit.applied_total)) }}
+            {{ info_row("Subtotal", '{:,.2f}'.format(credit.subtotal)) }}
+            {{ info_row("Tax", '{:,.2f}'.format(credit.tax_total)) }}
+            {{ info_row("Created", credit.created_at | app_datetime('%b %d, %Y %I:%M %p', '—')) }}
+            {{ info_row("Issued", credit.issued_at | app_datetime('%b %d, %Y %I:%M %p', '—')) }}
+        </div>
+        {% endcall %}
+    </section>
+
+    {% call card("Memo") %}
+    <p class="whitespace-pre-wrap break-words text-sm text-slate-700 dark:text-slate-300">{{ credit.memo or 'No memo recorded.' }}</p>
+    {% endcall %}
+
+    {% call card("Lines", padding=False) %}
+    <table class="billing-table w-full text-sm">
+        <thead><tr><th scope="col">Description</th><th scope="col">Quantity</th><th scope="col">Unit price</th><th scope="col">Amount</th></tr></thead>
+        <tbody>
+            {% for line in credit.lines %}
+            <tr>
+                <td data-label="Description">{{ line.description }}</td>
+                <td data-label="Quantity">{{ line.quantity }}</td>
+                <td data-label="Unit price" class="billing-money">{{ credit.currency }} {{ '{:,.2f}'.format(line.unit_price) }}</td>
+                <td data-label="Amount" class="billing-money">{{ credit.currency }} {{ '{:,.2f}'.format(line.amount) }}</td>
+            </tr>
+            {% else %}<tr><td colspan="4">No line items recorded.</td></tr>{% endfor %}
+        </tbody>
+    </table>
+    {% endcall %}
+
+    {% call card("Application evidence", padding=False) %}
+    <p class="px-3 py-3 text-sm text-slate-500 dark:text-slate-400">Recorded applications are historical evidence. The applied total above is the credit owner's current document value.</p>
+    <table class="billing-table w-full text-sm">
+        <thead><tr><th scope="col">Application</th><th scope="col">Invoice</th><th scope="col">Amount</th><th scope="col">Created</th></tr></thead>
+        <tbody>
+            {% for application in credit.applications %}
+            <tr>
+                <td data-label="Application"><span class="break-all font-mono">{{ application.id }}</span>{% if application.memo %}<p class="mt-1 text-slate-500 dark:text-slate-400">{{ application.memo }}</p>{% endif %}</td>
+                <td data-label="Invoice">{% if can(request, 'billing:invoice:read') %}<a href="/admin/billing/invoices/{{ application.invoice_id }}" class="break-all text-primary-700 underline dark:text-primary-400">{{ application.invoice_id }}</a>{% else %}<span class="break-all font-mono">{{ application.invoice_id }}</span>{% endif %}</td>
+                <td data-label="Amount" class="billing-money">{{ credit.currency }} {{ '{:,.2f}'.format(application.amount) }}</td>
+                <td data-label="Created">{{ application.created_at | app_datetime('%b %d, %Y %I:%M %p', '—') }}</td>
+            </tr>
+            {% else %}<tr><td colspan="4">No applications recorded.</td></tr>{% endfor %}
+        </tbody>
+    </table>
+    {% endcall %}
+
+    {% call card("Record identity") %}
+    <dl class="space-y-3 text-sm">
+        <div><dt class="text-slate-500 dark:text-slate-400">Credit ID</dt><dd class="select-all break-all font-mono">{{ credit.id }}</dd></div>
+        <div><dt class="text-slate-500 dark:text-slate-400">Account ID</dt><dd class="select-all break-all font-mono">{{ credit.account_id }}</dd></div>
+    </dl>
+    {% endcall %}
+</div>
+{% endblock %}

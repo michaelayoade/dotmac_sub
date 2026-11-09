@@ -1986,7 +1986,7 @@ class CreditNotes(ListResponseMixin):
         )
 
     @staticmethod
-    def get(db: Session, credit_note_id: str):
+    def get(db: Session, credit_note_id: str) -> CreditNote:
         credit_note = get_by_id(
             db,
             CreditNote,
