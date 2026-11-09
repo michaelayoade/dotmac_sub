@@ -20,112 +20,33 @@
         color="teal",
         color2="cyan"
     ) %}
-        {% if can(request, "reports:billing:export") %}
-        <form method="GET" action="/admin/reports/revenue/export" class="flex items-center gap-2">
-            <label for="days" class="sr-only">Export period</label>
-            <select id="days" name="days" class="rounded-lg border border-slate-300 px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
-                <option value="30">Last 30 Days</option>
-                <option value="90">Last 90 Days</option>
-                <option value="365">Last Year</option>
-            </select>
-            <button type="submit" class="group inline-flex items-center px-4 py-2.5 text-sm gap-2 rounded-xl border border-slate-200 bg-white font-semibold text-slate-700 shadow-sm transition-all hover:border-slate-300 hover:bg-slate-50 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-300 dark:hover:border-slate-500 dark:hover:bg-slate-700">
-                <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"/></svg>
-                Export
-            </button>
+    {% endcall %}
+
+    <section aria-labelledby="revenue-filters-heading" class="rounded-xl border border-slate-200 bg-white p-4 shadow-sm dark:border-slate-700 dark:bg-slate-800">
+        <h2 id="revenue-filters-heading" class="mb-3 text-sm font-semibold text-slate-900 dark:text-white">Custom date range</h2>
+        <form method="get" action="/admin/reports/revenue" class="flex flex-wrap items-end gap-3">
+            <div><label for="date_from" class="block text-sm font-medium text-slate-700 dark:text-slate-300">Start date</label><input id="date_from" name="date_from" type="date" required value="{{ date_from }}" class="mt-1 rounded-lg border border-slate-300 px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white"></div>
+            <div><label for="date_to" class="block text-sm font-medium text-slate-700 dark:text-slate-300">End date</label><input id="date_to" name="date_to" type="date" required value="{{ date_to }}" class="mt-1 rounded-lg border border-slate-300 px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white"></div>
+            <button type="submit" class="rounded-lg bg-teal-600 px-4 py-2 text-sm font-semibold text-white hover:bg-teal-700">Apply</button>
+            <a href="/admin/reports/revenue" class="rounded-lg border border-slate-300 px-4 py-2 text-sm font-medium text-slate-700 dark:border-slate-600 dark:text-slate-300">Clear</a>
+            {% if can(request, "reports:billing:export") %}<a href="{{ export_url }}" class="rounded-lg border border-slate-300 px-4 py-2 text-sm font-medium text-slate-700 dark:border-slate-600 dark:text-slate-300">Export</a>{% endif %}
         </form>
-        {% endif %}
-    {% endcall %}
-
-    {# KPI Cards #}
-    <div class="grid gap-4 sm:grid-cols-2 lg:grid-cols-4 animate-fade-in-up" style="animation-delay: 50ms;">
-        {{ stats_card("Total Collections", "₦" ~ "{:,.2f}".format(total_revenue), icon='<svg class="h-6 w-6 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8c-1.657 0-3 .895-3 2s1.343 2 3 2 3 .895 3 2-1.343 2-3 2m0-8c1.11 0 2.08.402 2.599 1M12 8V7m0 1v8m0 0v1m0-1c-1.11 0-2.08-.402-2.599-1M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>', color="emerald", color2="teal", change=revenue_growth, compact_value=True) }}
-        {{ stats_card("Recurring Revenue", "₦" ~ "{:,.2f}".format(recurring_revenue), icon='<svg class="h-6 w-6 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/></svg>', color="blue", color2="indigo", compact_value=True) }}
-        {{ stats_card("Outstanding", "₦" ~ "{:,.2f}".format(outstanding_amount), icon='<svg class="h-6 w-6 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>', color="amber", color2="orange", compact_value=True) }}
-        {{ stats_card("Collection Rate", "%.1f"|format(collection_rate) ~ "%", icon='<svg class="h-6 w-6 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>', color="violet", color2="purple", compact_value=True) }}
-    </div>
-
-    {# Compact report detail row #}
-    <section data-revenue-overview-grid class="grid gap-6 lg:grid-cols-2 lg:items-start">
-    <div class="min-w-0 animate-fade-in-up" style="animation-delay: 100ms;">
-    {% call report_chart_card("Revenue Trend", revenue_chart, "revenue-chart", color="teal", min_height=240) %}
-        <script>
-        document.addEventListener('DOMContentLoaded', function() {
-            const ctx = document.getElementById('revenue-chart');
-            if (!ctx) return;
-            const chartData = {
-                labels: {{ revenue_chart.labels | tojson | safe }},
-                datasets: [
-                    {
-                        label: 'Collections',
-                        data: {{ revenue_chart.series[0].values | tojson | safe }},
-                        borderColor: '#14b8a6',
-                        backgroundColor: 'rgba(20, 184, 166, 0.1)',
-                        fill: true,
-                        tension: 0.4
-                    }
-                ]
-            };
-            const chart = DotmacCharts.createAreaChart(ctx, chartData, {});
-            DotmacCharts.registerChart('revenue-chart', chart);
-        });
-        </script>
-    {% endcall %}
-    </div>
-
-    {# Recent Payments #}
-    <div class="min-w-0 animate-fade-in-up" style="animation-delay: 150ms;">
-    {% call card("Recent Payments", color="teal", padding=False) %}
-        {% if recent_payments %}
-        <div class="max-h-[288px] overflow-x-hidden overflow-y-auto">
-            <table class="w-full table-fixed divide-y divide-slate-200 dark:divide-slate-700">
-                <colgroup>
-                    <col class="w-[22%]">
-                    <col class="w-[32%]">
-                    <col class="w-[28%]">
-                    <col class="w-[18%]">
-                </colgroup>
-                {{ table_head([
-                    {"label": "Date"},
-                    {"label": "Account"},
-                    {"label": "Amount"},
-                    {"label": "Method"}
-                ]) }}
-                <tbody class="divide-y divide-slate-200 bg-white dark:divide-slate-700 dark:bg-slate-800">
-                    {% for payment in recent_payments %}
-                    {% call table_row(payment.id) %}
-                        <td class="truncate px-4 py-3 text-sm text-slate-900 dark:text-white">
-                            {{ payment.paid_at | app_datetime('%b %d, %Y', include_tz=False) if payment.paid_at else (payment.created_at | app_datetime('%b %d, %Y', '-', include_tz=False)) }}
-                        </td>
-                        <td class="truncate px-4 py-3 text-sm text-slate-600 dark:text-slate-300">
-                            {% if payment.account %}
-                                {{ payment.account.name }}
-                            {% else %}
-                                Account
-                            {% endif %}
-                        </td>
-                        <td class="truncate px-4 py-3 font-mono text-sm font-medium tabular-nums text-emerald-600 dark:text-emerald-400">₦{{ "{:,.2f}".format(payment.amount) }}</td>
-                        <td class="truncate px-4 py-3 text-sm text-slate-600 dark:text-slate-300">
-                            {% if payment.payment_method %}
-                                {{ payment.payment_method.label or payment.payment_method.method_type.value | title }}
-                            {% else %}
-                                -
-                            {% endif %}
-                        </td>
-                    {% endcall %}
-                    {% endfor %}
-                </tbody>
-            </table>
-        </div>
-        {% else %}
-        <table class="min-w-full"><tbody>{{ empty_state("No recent payments", "Payments will appear here as they are recorded.") }}</tbody></table>
-        {% endif %}
-    {% endcall %}
-    </div>
     </section>
+    <section id="revenue-results" class="space-y-8" aria-live="polite" aria-busy="true" hx-get="{{ lazy_data_url }}" hx-trigger="load" hx-swap="outerHTML">
+        <div class="grid gap-4 sm:grid-cols-2 lg:grid-cols-4" aria-label="Loading revenue summary">
+            {% for _ in range(4) %}<div class="h-28 animate-pulse rounded-xl bg-slate-100 dark:bg-slate-800"></div>{% endfor %}
+        </div>
+        <div class="h-64 animate-pulse rounded-xl bg-slate-100 dark:bg-slate-800"></div>
+    </section>
+    <script>
+    document.body.addEventListener('htmx:responseError', function(event) {
+        if (event.detail.elt.id !== 'revenue-results') return;
+        event.detail.elt.setAttribute('aria-busy', 'false');
+        event.detail.elt.innerHTML = '<div role="alert" class="rounded-xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-900">Revenue report data could not be loaded. <a class="underline" href="{{ lazy_data_url }}">Try again</a>.</div>';
+    });
+    </script>
+    <noscript><p class="text-sm">JavaScript is required for the report preview. <a class="underline" href="{{ lazy_data_url }}">Open report data</a>.</p></noscript>
 
-    {% set activity_title = "Reports Activity" %}
-    {% set activity_link = "/admin/system/audit" %}
-    {% include "components/data/recent_activity_panel.html" %}
 </div>
 
 {{ animation_styles() }}

@@ -1,0 +1,5 @@
+<section id="revenue-activity" hx-get="/admin/reports/revenue/activity" hx-trigger="every 20s" hx-swap="outerHTML" aria-live="polite">
+    {% set activity_title = "Reports Activity" %}
+    {% set activity_link = "/admin/system/audit" %}
+    {% include "components/data/recent_activity_panel.html" %}
+</section>

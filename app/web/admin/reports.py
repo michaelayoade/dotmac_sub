@@ -49,6 +49,10 @@ from app.services.auth_dependencies import (
 from app.services.billing import reporting as billing_reporting
 from app.services.db_session_adapter import db_session_adapter
 from app.services.domain_errors import DomainError
+from app.services.inclusive_date_range import (
+    InclusiveDateRange,
+    InclusiveDateRangeError,
+)
 from app.services.sales import reports as sales_reports_service
 from app.timezone import APP_TIMEZONE
 
@@ -826,15 +830,44 @@ def sales_order_performance_export(
     )
 
 
+def _revenue_report_query(
+    *, date_from: str | None, date_to: str | None
+) -> billing_reporting.AdminRevenueReportQuery:
+    if not date_from and not date_to:
+        today = datetime.now(UTC).date()
+        start = today - timedelta(days=29)
+        end = today
+    elif not date_from or not date_to:
+        raise HTTPException(
+            status_code=422, detail="Start date and end date are required"
+        )
+    else:
+        parsed_start = _parse_report_date(date_from)
+        parsed_end = _parse_report_date(date_to)
+        assert parsed_start is not None and parsed_end is not None
+        start, end = parsed_start, parsed_end
+    try:
+        return billing_reporting.AdminRevenueReportQuery(
+            period=InclusiveDateRange.from_dates(start_date=start, end_date=end)
+        )
+    except (ValueError, InclusiveDateRangeError) as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
 @router.get(
     "/revenue",
     response_class=HTMLResponse,
     dependencies=[Depends(require_permission("reports:billing:read"))],
 )
-def reports_revenue(request: Request, db: Session = Depends(get_db)):
+def reports_revenue(
+    request: Request,
+    date_from: str | None = None,
+    date_to: str | None = None,
+    db: Session = Depends(get_db),
+):
     from app.web.admin import get_current_user, get_sidebar_stats
 
-    report_data = web_reports_service.get_revenue_report_data(db=db)
+    query = _revenue_report_query(date_from=date_from, date_to=date_to)
 
     context = {
         "request": request,
@@ -842,25 +875,88 @@ def reports_revenue(request: Request, db: Session = Depends(get_db)):
         "active_menu": "reports",
         "current_user": get_current_user(request),
         "sidebar_stats": get_sidebar_stats(db),
+        "date_from": query.period.start_value,
+        "date_to": query.period.end_value,
+        "lazy_data_url": (
+            "/admin/reports/revenue/data?"
+            + urlencode(
+                {
+                    "date_from": query.period.start_value,
+                    "date_to": query.period.end_value,
+                }
+            )
+        ),
+        "export_url": (
+            "/admin/reports/revenue/export?"
+            + urlencode(
+                {
+                    "date_from": query.period.start_value,
+                    "date_to": query.period.end_value,
+                }
+            )
+        ),
+    }
+    return templates.TemplateResponse("admin/reports/revenue.html", context)
+
+
+@router.get(
+    "/revenue/data",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("reports:billing:read"))],
+)
+def reports_revenue_data(
+    request: Request,
+    date_from: str | None = None,
+    date_to: str | None = None,
+    db: Session = Depends(get_db),
+):
+    query = _revenue_report_query(date_from=date_from, date_to=date_to)
+    report_data = web_reports_service.get_revenue_report_data(db=db, query=query)
+    context = {
+        "request": request,
+        "date_from": report_data.date_from,
+        "date_to": report_data.date_to,
         "total_revenue": report_data.total_revenue,
         "revenue_growth": report_data.revenue_growth,
         "recurring_revenue": report_data.recurring_revenue,
+        "recurring_as_of": report_data.recurring_as_of,
         "outstanding_amount": report_data.outstanding_amount,
         "outstanding_count": report_data.outstanding_count,
         "collection_rate": report_data.collection_rate,
         "recent_payments": report_data.recent_payments,
         "revenue_chart": report_data.revenue_chart,
-        "recent_activities": recent_activity_for_paths(db, ["/admin/reports"]),
     }
-    return templates.TemplateResponse("admin/reports/revenue.html", context)
+    return templates.TemplateResponse("admin/reports/_revenue_data.html", context)
+
+
+@router.get(
+    "/revenue/activity",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("reports:billing:read"))],
+)
+def reports_revenue_activity(request: Request, db: Session = Depends(get_db)):
+    return templates.TemplateResponse(
+        "admin/reports/_revenue_activity.html",
+        {
+            "request": request,
+            "recent_activities": recent_activity_for_paths(
+                db, ["/admin/reports/revenue"], success_only=True
+            ),
+        },
+    )
 
 
 @router.get(
     "/revenue/export",
     dependencies=[Depends(require_permission("reports:billing:export"))],
 )
-def reports_revenue_export(days: int | None = None, db: Session = Depends(get_db)):
-    content = web_reports_service.build_revenue_export_csv(db=db, days=days)
+def reports_revenue_export(
+    date_from: str | None = None,
+    date_to: str | None = None,
+    db: Session = Depends(get_db),
+):
+    query = _revenue_report_query(date_from=date_from, date_to=date_to)
+    content = web_reports_service.build_revenue_export_csv(db=db, query=query)
     return Response(
         content,
         media_type="text/csv",

@@ -2229,7 +2229,15 @@ projection, and events retain the existing lifecycle transaction boundary.
    canonical bases decided 2026-07-16 — figures labelled "Revenue" use the
    invoice settled-value basis, the payments basis is labelled Collections,
    and recurring revenue uses the MRR-countable basis. Report/web layers
-   compose these reads and own presentation only. The admin overview card
+   compose these reads and own presentation only. For the admin Revenue Report,
+   this owner applies one inclusive UTC calendar period
+   to successful collections, invoiced value, current outstanding on invoices
+   issued in that period, recent payments, and trend buckets. It compares
+   collections to the preceding equal-length period and reads the latest MRR
+   snapshot on or before the selected end date, exposing snapshot freshness.
+   Its CSV uses the same payment date cohort and retains all payment statuses.
+   The audit owner records explicit report Apply and Export reads; the report
+   activity panel projects those durable events. The admin overview card
    named "Collections This Month" is a scoped exception: it sums settled
    value only on collectible paid and partially-paid invoices created in the
    current UTC month, not receipts dated in that month. The separate

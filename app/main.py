@@ -901,6 +901,7 @@ async def audit_middleware(request: Request, call_next):
     track_read = request.method == "GET" and (
         request.headers.get(audit_settings["read_trigger_header"], "").lower() == "true"
         or request.query_params.get(audit_settings["read_trigger_query"]) == "true"
+        or path in {"/admin/reports/revenue", "/admin/reports/revenue/export"}
     )
     should_log = request.method in audit_settings["methods"] or track_read
     if _is_audit_path_skipped(path, audit_settings["skip_paths"]):

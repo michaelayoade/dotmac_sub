@@ -32,12 +32,12 @@ from app.models.billing import Invoice, InvoiceStatus, Payment, PaymentStatus
 from app.models.catalog import Subscription, SubscriptionStatus
 from app.models.subscriber import AccountStatus, Subscriber, SubscriberCategory
 from app.schemas.status_presentation import StatusTone
-from app.services import billing as billing_service
 from app.services import crm_reporting as crm_reporting_service
 from app.services import customer_connection_types as customer_connection_types_service
 from app.services import subscriber as subscriber_service
 from app.services import subscriber_growth
 from app.services import usage_summary as usage_summary_service
+from app.services.billing import reporting as billing_reporting
 from app.services.customer_regions import (
     DEFAULT_REGION_COLOR,
     RegionOption,
@@ -100,9 +100,12 @@ class NetworkReportData:
 
 @dataclass(frozen=True, slots=True)
 class RevenueReportData:
+    date_from: str
+    date_to: str
     total_revenue: Decimal
     revenue_growth: float | None
-    recurring_revenue: Decimal
+    recurring_revenue: Decimal | None
+    recurring_as_of: date | None
     outstanding_amount: Decimal
     outstanding_count: int
     collection_rate: float
@@ -1060,58 +1063,50 @@ def build_regional_report_csv(data: RegionalReportData) -> str:
     return output.getvalue()
 
 
-def get_revenue_report_data(db: Session) -> RevenueReportData:
+def get_revenue_report_data(
+    db: Session, *, query: billing_reporting.AdminRevenueReportQuery
+) -> RevenueReportData:
     """Compose the revenue report from the billing reporting read owners.
 
     All figures (payments-basis revenue, outstanding receivables, total
     invoiced, recurring revenue, monthly series) are owned by
     app.services.billing.reporting; this function assembles and presents.
     """
-    from app.services.billing import reporting as billing_reporting
-
-    revenue = billing_reporting.get_payments_revenue_summary(db=db)
-    outstanding = billing_reporting.get_outstanding_receivables(db=db)
-    total_invoiced = billing_reporting.get_total_invoiced(db=db)
-    try:
-        recurring_revenue = billing_reporting.get_recurring_revenue(db=db)
-    except Exception:
-        logger.debug("Failed to compute recurring revenue", exc_info=True)
-        recurring_revenue = Decimal("0")
-
-    recent_payments = billing_service.payments.list(
+    facts = billing_reporting.get_admin_revenue_report_facts(db=db, query=query)
+    recent_payments = billing_reporting.list_admin_revenue_payments(
         db=db,
-        account_id=None,
-        invoice_id=None,
-        status=PaymentStatus.succeeded.value,
-        is_active=None,
-        order_by="paid_at",
-        order_dir="desc",
+        query=query,
         limit=10,
-        offset=0,
+        succeeded_only=True,
     )
     collection_rate = (
-        (float(revenue.total) / float(total_invoiced) * 100) if total_invoiced else 0
+        (float(facts.collections) / float(facts.invoiced) * 100)
+        if facts.invoiced
+        else 0
     )
-    revenue_growth = _percent_change(revenue.current_month, revenue.previous_month)
-    if revenue_growth is None and revenue.current_month:
+    revenue_growth = _percent_change(facts.collections, facts.previous_collections)
+    if revenue_growth is None and facts.collections:
         revenue_growth = 0.0
     revenue_chart = (
         ChartProjection.present(
-            labels=revenue.monthly.labels,
-            series=(ChartSeries(label="Collections", values=revenue.monthly.values),),
+            labels=facts.trend_labels,
+            series=(ChartSeries(label="Collections", values=facts.trend_values),),
             as_of=datetime.now(UTC),
         )
-        if revenue.monthly.observation_count
+        if facts.trend_observations
         else ChartProjection.empty(
-            "No successful collections were recorded in the last six months."
+            "No successful collections were recorded in the selected period."
         )
     )
     return RevenueReportData(
-        total_revenue=revenue.total,
+        date_from=query.period.start_value or "",
+        date_to=query.period.end_value or "",
+        total_revenue=facts.collections,
         revenue_growth=revenue_growth,
-        recurring_revenue=recurring_revenue,
-        outstanding_amount=outstanding.amount,
-        outstanding_count=outstanding.count,
+        recurring_revenue=facts.recurring_revenue,
+        recurring_as_of=facts.recurring_as_of,
+        outstanding_amount=facts.outstanding,
+        outstanding_count=facts.outstanding_count,
         collection_rate=collection_rate,
         recent_payments=tuple(recent_payments),
         revenue_chart=revenue_chart,
@@ -1124,21 +1119,10 @@ def _subscriber_growth_percent(db: Session) -> float | None:
     return _percent_change(current_new, previous_new)
 
 
-def build_revenue_export_csv(db: Session, days: int | None = None) -> str:
-    payments = billing_service.payments.list(
-        db=db,
-        account_id=None,
-        invoice_id=None,
-        status=None,
-        is_active=None,
-        order_by="paid_at",
-        order_dir="desc",
-        limit=5000,
-        offset=0,
-    )
-    if days:
-        cutoff = datetime.now(UTC) - timedelta(days=days)
-        payments = [p for p in payments if p.paid_at and p.paid_at >= cutoff]
+def build_revenue_export_csv(
+    db: Session, *, query: billing_reporting.AdminRevenueReportQuery
+) -> str:
+    payments = billing_reporting.list_admin_revenue_payments(db=db, query=query)
     output = io.StringIO()
     writer = csv.writer(output)
     writer.writerow(

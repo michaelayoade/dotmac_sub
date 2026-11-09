@@ -855,6 +855,24 @@ def build_recent_activity_feed(db: Session, events: list, limit: int = 5) -> lis
         )
         message = f"{actor_name} {action_label} {entity_label}"
         detail = change_summary or entity_label
+        if getattr(event, "entity_type", None) == "/admin/reports/revenue/export":
+            message = f"{actor_name} exported the revenue report"
+        elif getattr(event, "entity_type", None) == "/admin/reports/revenue":
+            query = metadata.get("query")
+            if (
+                isinstance(query, dict)
+                and query.get("date_from")
+                and query.get("date_to")
+            ):
+                message = f"{actor_name} applied a revenue report date range"
+        if str(getattr(event, "entity_type", "")).startswith("/admin/reports/revenue"):
+            query = metadata.get("query")
+            if (
+                isinstance(query, dict)
+                and query.get("date_from")
+                and query.get("date_to")
+            ):
+                detail = f"{query['date_from']} to {query['date_to']}"
         activities.append(
             {
                 "message": message,
@@ -870,6 +888,7 @@ def recent_activity_for_paths(
     path_prefixes: list[str],
     limit: int = 5,
     fetch_limit: int = 200,
+    success_only: bool = False,
 ) -> list[dict]:
     events = audit_service.audit_events.list(
         db=db,
@@ -879,7 +898,7 @@ def recent_activity_for_paths(
         entity_type=None,
         entity_id=None,
         request_id=None,
-        is_success=None,
+        is_success=True if success_only else None,
         status_code=None,
         is_active=None,
         order_by="occurred_at",
