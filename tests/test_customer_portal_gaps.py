@@ -1,3 +1,5 @@
+from tests.settings_hub_fixtures import settings_context as _settings_context
+
 """Tests for customer portal gap fixes.
 
 Covers: ticket creation, password change, event types, route registration.
@@ -328,6 +330,7 @@ class TestCaptiveRedirectPersistence:
                 "captive_portal_ip": "203.0.113.10/32",
                 "captive_portal_url": "https://example.com/portal",
             },
+            context=_settings_context(),
         )
 
         setting = radius_settings.get_by_key(db_session, "captive_redirect_enabled")
@@ -1643,6 +1646,7 @@ class TestPlanChangeSettingsValidation:
                     "discount_transfer": "false",
                     "minimum_invoice_amount": "0",
                 },
+                context=_settings_context(),
             )
 
     def test_save_plan_change_normalizes_valid_values(self) -> None:
@@ -1663,6 +1667,7 @@ class TestPlanChangeSettingsValidation:
                     "discount_transfer": "false",
                     "minimum_invoice_amount": "100.00",
                 },
+                context=_settings_context(),
             )
 
         saved_payload = save_mock.call_args.args[2]
