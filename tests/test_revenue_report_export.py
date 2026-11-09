@@ -2,11 +2,13 @@ from __future__ import annotations
 
 import csv
 import io
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 from decimal import Decimal
 
 from app.models.billing import Payment, PaymentMethod, PaymentMethodType, PaymentStatus
 from app.services import web_reports
+from app.services.billing import reporting as billing_reporting
+from app.services.inclusive_date_range import InclusiveDateRange
 
 
 def _payment(
@@ -51,8 +53,15 @@ def test_revenue_export_uses_payment_method_label(db_session, subscriber):
         amount="1250.00",
     )
 
+    query = billing_reporting.AdminRevenueReportQuery(
+        period=InclusiveDateRange.from_dates(
+            start_date=date(2026, 10, 28), end_date=date(2026, 10, 28)
+        )
+    )
     rows = list(
-        csv.DictReader(io.StringIO(web_reports.build_revenue_export_csv(db_session)))
+        csv.DictReader(
+            io.StringIO(web_reports.build_revenue_export_csv(db_session, query=query))
+        )
     )
 
     assert len(rows) == 1

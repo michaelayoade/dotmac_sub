@@ -1241,6 +1241,7 @@ HELP_ONLY_GUIDANCE: tuple[AdminWorkflowGuidance, ...] = (
         "Open linked records when a total or exception needs investigation.",
         "Export only the filtered scope you are authorized to use.",
         "For Upcoming Charges, choose the postpaid or prepaid view, narrow the cohort with the available filters, and use the optional month/year or summary view when you need a focused planning period.",
+        "For Revenue, apply both calendar dates before comparing collections, invoices, and recent payments; Clear restores the last 30 days, and Export uses the applied period.",
         route_templates=("/admin/reports",),
     ),
     _guide(
