@@ -7,7 +7,9 @@ from datetime import date, timedelta
 from decimal import Decimal, InvalidOperation
 from enum import Enum
 from urllib.parse import urlencode
+from uuid import UUID
 
+from fastapi import HTTPException
 from pydantic import ValidationError
 from sqlalchemy import case, func, select
 from sqlalchemy.orm import Session, joinedload
@@ -52,8 +54,8 @@ from app.schemas.catalog import (
     RadiusProfileUpdate,
 )
 from app.schemas.status_presentation import StatusTone
+from app.services import access_rate_profile, catalog_billing_governance, settings_spec
 from app.services import catalog as catalog_service
-from app.services import catalog_billing_governance, settings_spec
 from app.services.audit_helpers import (
     build_audit_activities,
     diff_dicts,
@@ -291,6 +293,20 @@ def parse_offer_form(form: FormData) -> dict[str, object]:
 
 def validate_offer_form(offer: dict[str, object]) -> str | None:
     """Validate required offer form fields."""
+    for key, label in (
+        ("speed_download_mbps", "Download speed"),
+        ("speed_upload_mbps", "Upload speed"),
+    ):
+        raw = str(offer.get(key) or "").strip()
+        if not raw:
+            continue
+        try:
+            speed = int(raw)
+        except ValueError:
+            return f"{label} must be a whole number of Mbps."
+        if speed <= 0:
+            return f"{label} must be greater than zero Mbps."
+
     plan_kind = str(offer.get("plan_kind") or PLAN_KIND_STANDARD).strip().lower()
     if plan_kind not in PLAN_KINDS:
         return "Plan kind is invalid."
@@ -312,7 +328,87 @@ def validate_offer_form(offer: dict[str, object]) -> str | None:
     return None
 
 
-def build_offer_payload_data(offer: dict[str, object]) -> dict[str, object]:
+def radius_profile_or_none(db: Session, profile_id: str) -> RadiusProfile | None:
+    """Read a linked profile through its catalog query owner."""
+    try:
+        UUID(profile_id)
+    except ValueError:
+        return None
+    try:
+        return catalog_service.radius_profiles.get_including_inactive(
+            db=db, entity_id=profile_id
+        )
+    except HTTPException as exc:
+        if exc.status_code == 404:
+            return None
+        raise
+
+
+def selected_profile_speed_issue(
+    db: Session,
+    *,
+    profile_id: str,
+    download_mbps: int | None,
+    upload_mbps: int | None,
+    existing_offer: CatalogOffer | None = None,
+    previous_profile_id: str | None = None,
+) -> str | None:
+    """Validate a changed tariff/profile pair without rewriting legacy offers."""
+    if not profile_id:
+        return None
+    try:
+        profile_uuid = UUID(profile_id)
+    except ValueError:
+        return "Select a valid RADIUS profile."
+    profile = radius_profile_or_none(db, str(profile_uuid))
+    if profile is None:
+        return "The selected RADIUS profile is unavailable."
+    assessment = access_rate_profile.assess_catalog_profile_speed(
+        access_rate_profile.CatalogSpeedQuery(
+            profile_id=profile.id,
+            profile_code=profile.code,
+            configured=access_rate_profile.profile_configured_speed_mbps(profile),
+            download_mbps=download_mbps,
+            upload_mbps=upload_mbps,
+            existing_offer_id=existing_offer.id if existing_offer else None,
+            existing_download_mbps=(
+                existing_offer.speed_download_mbps if existing_offer else None
+            ),
+            existing_upload_mbps=(
+                existing_offer.speed_upload_mbps if existing_offer else None
+            ),
+            previous_profile_id=(
+                UUID(previous_profile_id) if previous_profile_id else None
+            ),
+        )
+    )
+    if not assessment.blocks_save:
+        return None
+    if assessment.status is access_rate_profile.CatalogSpeedStatus.invalid_literal:
+        return "The selected RADIUS profile's rate limit cannot be verified."
+    if assessment.status is access_rate_profile.CatalogSpeedStatus.fractional_profile:
+        return "The selected RADIUS profile uses fractional Mbps; this tariff form accepts whole Mbps. Choose a compatible profile."
+    configured = assessment.configured
+
+    def display(value: Decimal | None) -> str:
+        return format(value, "f") if value is not None else "—"
+
+    return (
+        f"Tariff speed {display(Decimal(download_mbps) if download_mbps is not None else None)}/"
+        f"{display(Decimal(upload_mbps) if upload_mbps is not None else None)} Mbps "
+        f"does not match RADIUS profile {display(configured.download_mbps)}/"
+        f"{display(configured.upload_mbps)} Mbps. Adjust the tariff speed or choose another profile."
+    )
+
+
+def _validated_form_speed(offer: dict[str, object], key: str) -> int | None:
+    value = str(offer.get(key) or "").strip()
+    return int(value) if value else None
+
+
+def build_offer_payload_data(
+    offer: dict[str, object], *, for_update: bool = False
+) -> dict[str, object]:
     """Build payload dict for CatalogOffer create/update schemas."""
     payload_data = {
         "name": offer["name"],
@@ -359,6 +455,12 @@ def build_offer_payload_data(offer: dict[str, object]) -> dict[str, object]:
         value = offer.get(key)
         if value:
             payload_data[key] = value
+        elif for_update and key in {
+            "speed_download_mbps",
+            "speed_upload_mbps",
+            "guaranteed_speed_limit_at",
+        }:
+            payload_data[key] = None
     return payload_data
 
 
@@ -408,7 +510,7 @@ def get_linked_radius_profile_id(db: Session, offer_id: str) -> str | None:
 
 def generated_radius_profile_code_for_offer(offer_id: str) -> str:
     """Return the stable code used for auto-generated offer RADIUS profiles."""
-    return f"offer-{offer_id}"
+    return access_rate_profile.generated_profile_code_for_offer(offer_id)
 
 
 #: ``CatalogOffer.speed_*_mbps`` is megabits; ``RadiusProfile.*_speed`` is
@@ -762,6 +864,18 @@ def offer_detail_context(db: Session, offer_id: str) -> dict[str, object] | None
     offer = get_offer_or_none(db, offer_id)
     if offer is None:
         return None
+    linked_profile_id = get_linked_radius_profile_id(db, offer_id)
+    rate_profile = (
+        radius_profile_or_none(db, linked_profile_id) if linked_profile_id else None
+    )
+    configured_profile_rate = (
+        access_rate_profile.profile_configured_speed_mbps(rate_profile)
+        if rate_profile
+        else None
+    )
+    effective_rate = access_rate_profile.parse_rate_limit_speed_mbps(
+        access_rate_profile.rate_limit_for(rate_profile, offer)
+    )
 
     prices = catalog_service.offer_prices.list(
         db=db,
@@ -792,6 +906,18 @@ def offer_detail_context(db: Session, offer_id: str) -> dict[str, object] | None
 
     context: dict[str, object] = {
         "offer": offer,
+        "rate_profile": rate_profile,
+        "configured_profile_rate": configured_profile_rate,
+        "effective_rate": effective_rate,
+        "effective_rate_source": (
+            "RADIUS profile rate limit"
+            if rate_profile and rate_profile.mikrotik_rate_limit
+            else "Tariff speeds"
+            if offer.speed_download_mbps and offer.speed_upload_mbps
+            else "RADIUS profile speeds"
+            if rate_profile
+            else "Unavailable"
+        ),
         "offer_clean_description": cleaned_description,
         "offer_plan_kind": plan_kind,
         "offer_ip_block_size": plan_meta.get("ip_block_size"),
@@ -847,7 +973,9 @@ def create_offer_payload(offer: dict[str, object]) -> CatalogOfferCreate:
 
 
 def update_offer_payload(offer: dict[str, object]) -> CatalogOfferUpdate:
-    return CatalogOfferUpdate.model_validate(build_offer_payload_data(offer))
+    return CatalogOfferUpdate.model_validate(
+        build_offer_payload_data(offer, for_update=True)
+    )
 
 
 def parse_addon_links_from_form(form: FormData) -> list[dict[str, object]]:
@@ -948,6 +1076,13 @@ def offer_form_context(
         limit=200,
         offset=0,
     )
+    selected_profile_id = str(offer.get("radius_profile_id") or "")
+    if selected_profile_id and all(
+        str(profile.id) != selected_profile_id for profile in radius_profiles
+    ):
+        selected_profile = radius_profile_or_none(db, selected_profile_id)
+        if selected_profile is not None:
+            radius_profiles.append(selected_profile)
     policy_sets = catalog_service.policy_sets.list(
         db=db, is_active=True, order_by="name", order_dir="asc", limit=200, offset=0
     )
@@ -982,6 +1117,18 @@ def offer_form_context(
         "usage_allowances": usage_allowances,
         "sla_profiles": sla_profiles,
         "radius_profiles": radius_profiles,
+        "radius_profile_speeds": {
+            str(profile.id): access_rate_profile.profile_configured_speed_mbps(profile)
+            for profile in radius_profiles
+        },
+        "auto_generated_profile_ids": {
+            str(profile.id)
+            for profile in radius_profiles
+            if offer.get("id")
+            and access_rate_profile.is_offer_generated_profile(
+                profile, str(offer["id"])
+            )
+        },
         "policy_sets": policy_sets,
         "add_ons": add_ons,
         "addon_links_map": addon_links_map,
@@ -1085,6 +1232,8 @@ def overview_page_data(
     plan_category: str | None = None,
     plan_family: str | None = None,
     search: str | None = None,
+    sort: str | None = None,
+    dir: str | None = None,
     page: int = 1,
     per_page: int = 25,
 ) -> dict[str, object]:
@@ -1134,9 +1283,18 @@ def overview_page_data(
     total_pages = (total + per_page - 1) // per_page if total else 1
     offset = (page - 1) * per_page
 
-    offers = db.scalars(
-        stmt.order_by(CatalogOffer.created_at.desc()).limit(per_page).offset(offset)
-    ).all()
+    current_sort = "name" if sort == "name" else ""
+    current_dir = "desc" if dir == "desc" else "asc"
+    if current_sort == "name":
+        name_order = (
+            CatalogOffer.name.desc()
+            if current_dir == "desc"
+            else CatalogOffer.name.asc()
+        )
+        ordering = (name_order, CatalogOffer.id.asc())
+    else:
+        ordering = (CatalogOffer.created_at.desc(), CatalogOffer.id.asc())
+    offers = db.scalars(stmt.order_by(*ordering).limit(per_page).offset(offset)).all()
     offer_plan_metadata = {}
     for offer in offers:
         metadata, _ = parse_offer_description_metadata(offer.description)
@@ -1177,6 +1335,25 @@ def overview_page_data(
         offset=0,
     )
 
+    tab_query = {
+        "status": status,
+        "plan_kind": normalized_plan_kind,
+        "plan_family": normalized_plan_family,
+        "search": search,
+        "sort": current_sort,
+        "dir": current_dir if current_sort else None,
+        "per_page": per_page if per_page != 25 else None,
+    }
+    category_tab_urls = {}
+    for category in ("", *(item.value for item in PlanCategory)):
+        params = {key: value for key, value in tab_query.items() if value}
+        if category:
+            params["plan_category"] = category
+        query = urlencode(params)
+        category_tab_urls[category] = (
+            f"/admin/catalog?{query}" if query else "/admin/catalog"
+        )
+
     return {
         "offers": offers,
         "offer_subscription_counts": offer_subscription_counts,
@@ -1188,6 +1365,9 @@ def overview_page_data(
         "plan_families": plan_family_values(db),
         "plan_categories": [item.value for item in PlanCategory],
         "search": search,
+        "current_sort": current_sort,
+        "current_dir": current_dir,
+        "category_tab_urls": category_tab_urls,
         "page": page,
         "per_page": per_page,
         "total": total,
@@ -1591,11 +1771,22 @@ def update_offer_with_audit(
         metadata=metadata,
     )
 
+    selected_profile_id = str(offer_data.get("radius_profile_id") or "").strip()
+    if (
+        selected_profile_id
+        and selected_profile_id == previous_profile_id
+        and {"speed_download_mbps", "speed_upload_mbps"}.intersection(changes)
+    ):
+        selected_profile = radius_profile_or_none(db, selected_profile_id)
+        if selected_profile and access_rate_profile.is_offer_generated_profile(
+            selected_profile, offer_id
+        ):
+            selected_profile_id = ""
+
     ensure_offer_radius_profile(
         db,
         updated_offer,
-        explicit_profile_id=str(offer_data.get("radius_profile_id") or "").strip()
-        or None,
+        explicit_profile_id=selected_profile_id or None,
         previous_profile_id=previous_profile_id,
     )
 
@@ -1666,6 +1857,17 @@ def handle_offer_create_form(
             ),
         }
 
+    error = selected_profile_speed_issue(
+        db,
+        profile_id=str(offer.get("radius_profile_id") or ""),
+        download_mbps=_validated_form_speed(offer, "speed_download_mbps"),
+        upload_mbps=_validated_form_speed(offer, "speed_upload_mbps"),
+    )
+    if error:
+        context = offer_form_context(db, offer, error)
+        context["speed_error"] = error
+        return {"form_context": context}
+
     try:
         create_offer_with_audit(db, offer, form, request, actor_id)
         return {"redirect_url": return_to or "/admin/catalog/offers"}
@@ -1699,9 +1901,24 @@ def handle_offer_update_form(
         return {"not_found": True}
 
     offer_data = parse_offer_form(form)
+    offer_data["id"] = existing_offer.id
     error = validate_offer_form(offer_data)
     if error:
         context = offer_form_context(db, offer_data, error)
+        context["action_url"] = f"/admin/catalog/offers/{offer_id}/edit"
+        return {"form_context": context}
+
+    error = selected_profile_speed_issue(
+        db,
+        profile_id=str(offer_data.get("radius_profile_id") or ""),
+        download_mbps=_validated_form_speed(offer_data, "speed_download_mbps"),
+        upload_mbps=_validated_form_speed(offer_data, "speed_upload_mbps"),
+        existing_offer=existing_offer,
+        previous_profile_id=get_linked_radius_profile_id(db, offer_id),
+    )
+    if error:
+        context = offer_form_context(db, offer_data, error)
+        context["speed_error"] = error
         context["action_url"] = f"/admin/catalog/offers/{offer_id}/edit"
         return {"form_context": context}
 
