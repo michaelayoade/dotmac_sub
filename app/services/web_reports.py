@@ -9,7 +9,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
-from typing import TYPE_CHECKING, TypedDict, cast
+from typing import TYPE_CHECKING, TypedDict
 from urllib.parse import urlencode
 from uuid import UUID
 
@@ -75,6 +75,12 @@ class NetworkPoolReportRow:
 
 
 @dataclass(frozen=True, slots=True)
+class NetworkReportQuery:
+    date_from: date | None = None
+    date_to: date | None = None
+
+
+@dataclass(frozen=True, slots=True)
 class NetworkReportData:
     olts: tuple[crm_reporting_service.NetworkOltFacts, ...]
     total_olts: int
@@ -96,6 +102,11 @@ class NetworkReportData:
     splitter_capacity: int
     device_health_chart: ChartProjection
     ip_pool_chart: ChartProjection
+    date_from: date | None = None
+    date_to: date | None = None
+    as_of: datetime | None = None
+    activity_total: int = 0
+    activity_online: int = 0
 
 
 @dataclass(frozen=True, slots=True)
@@ -191,6 +202,98 @@ class CustomerGrowthSeries(TypedDict):
     new: list[int]
 
 
+@dataclass(frozen=True, slots=True)
+class CustomerReportOverviewQuery:
+    date_from: date | None = None
+    date_to: date | None = None
+    status: AccountStatus | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class CustomerReportOverview:
+    subscriber_kpis: dict[str, Kpi]
+    subscriber_growth: float | None
+    new_this_month: int
+    date_from: str
+    date_to: str
+    status_filter: str
+    status_options: tuple[str, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class CustomerReportUsage:
+    total_gb: float
+    has_data: bool
+    includes_estimate: bool
+
+
+def get_customer_report_overview(
+    db: Session, *, query: CustomerReportOverviewQuery
+) -> CustomerReportOverview:
+    """Small first-paint projection; cohort details load in a separate request."""
+    date_from = query.date_from.isoformat() if query.date_from else None
+    date_to = query.date_to.isoformat() if query.date_to else None
+    status = query.status.value if query.status else None
+    now = datetime.now(UTC)
+    month_start_iso = now.replace(day=1).date().isoformat()
+    new_this_month = _report_new_since_count(
+        db, since_iso=month_start_iso, date_to=date_to, status=status
+    )
+    cohort_total, cohort_by_status = _report_status_cohort_counts(
+        db, date_from=date_from, date_to=date_to
+    )
+    subscriber_kpis = {
+        "total": Kpi(
+            label="Total Customers",
+            value=StateValue.present(cohort_total),
+            cohort_url=_customers_report_cohort_url(
+                date_from=date_from, date_to=date_to
+            ),
+        ),
+        "new_this_month": Kpi(
+            label="New This Month",
+            value=StateValue.present(new_this_month),
+            cohort_url=_customers_report_cohort_url(
+                status=status, date_from=month_start_iso, date_to=date_to
+            ),
+            tone=StatusTone.positive,
+        ),
+        "active": Kpi(
+            label="Active",
+            value=StateValue.present(
+                cohort_by_status.get(AccountStatus.active.value, 0)
+            ),
+            cohort_url=_customers_report_cohort_url(
+                status=AccountStatus.active.value,
+                date_from=date_from,
+                date_to=date_to,
+            ),
+            tone=StatusTone.info,
+        ),
+        "suspended": Kpi(
+            label="Suspended",
+            value=StateValue.present(
+                cohort_by_status.get(AccountStatus.suspended.value, 0)
+            ),
+            cohort_url=_customers_report_cohort_url(
+                status=AccountStatus.suspended.value,
+                date_from=date_from,
+                date_to=date_to,
+            ),
+            tone=StatusTone.warning,
+        ),
+    }
+    return CustomerReportOverview(
+        subscriber_kpis=subscriber_kpis,
+        subscriber_growth=_subscriber_growth_percent(db),
+        new_this_month=new_this_month,
+        date_from=date_from or "",
+        date_to=date_to or "",
+        status_filter=status or "",
+        status_options=tuple(item.value for item in AccountStatus),
+    )
+
+
 class RegionalSubscriberReportRow(TypedDict):
     region: str
     subscribers: int
@@ -217,6 +320,8 @@ class SubscriberReportData(TypedDict):
     usage_date_from: str
     usage_date_to: str
     total_usage_gb: float
+    usage_has_data: bool
+    usage_includes_estimate: bool
     status_filter: str
     status_options: list[str]
     growth_data: CustomerGrowthSeries
@@ -275,8 +380,22 @@ def _ensure_aware_datetime(value: datetime | None) -> datetime | None:
     return value
 
 
-def get_network_report_data(db: Session, hours: int | None = None) -> NetworkReportData:
-    facts = crm_reporting_service.network_infrastructure_facts(db=db, hours=hours)
+def get_network_report_data(
+    db: Session, *, query: NetworkReportQuery = NetworkReportQuery()
+) -> NetworkReportData:
+    start_at = (
+        datetime.combine(query.date_from, datetime.min.time(), UTC)
+        if query.date_from
+        else None
+    )
+    end_at = (
+        datetime.combine(query.date_to + timedelta(days=1), datetime.min.time(), UTC)
+        if query.date_to
+        else None
+    )
+    facts = crm_reporting_service.network_infrastructure_facts(
+        db=db, activity_start_at=start_at, activity_end_at=end_at
+    )
     as_of = datetime.now(UTC)
     pool_data = tuple(
         NetworkPoolReportRow(
@@ -359,10 +478,15 @@ def get_network_report_data(db: Session, hours: int | None = None) -> NetworkRep
         splitter_capacity=facts.splitter_capacity,
         device_health_chart=device_health_chart,
         ip_pool_chart=ip_pool_chart,
+        date_from=query.date_from,
+        date_to=query.date_to,
+        as_of=as_of,
+        activity_total=facts.activity_total,
+        activity_online=facts.activity_online,
     )
 
 
-def build_network_export_csv(data: NetworkReportData, hours: int | None = None) -> str:
+def build_network_export_csv(*, data: NetworkReportData) -> str:
     output = io.StringIO()
     writer = csv.writer(output)
     writer.writerow(["metric", "value"])
@@ -380,7 +504,11 @@ def build_network_export_csv(data: NetworkReportData, hours: int | None = None) 
     writer.writerow(["available_fiber_strands", data.available_fiber_strands])
     writer.writerow(["active_fdh", data.total_fdh])
     writer.writerow(["splitter_output_capacity", data.splitter_capacity])
-    writer.writerow(["report_window_hours", hours or ""])
+    writer.writerow(["date_from", data.date_from.isoformat() if data.date_from else ""])
+    writer.writerow(["date_to", data.date_to.isoformat() if data.date_to else ""])
+    writer.writerow(["data_as_of", data.as_of.isoformat() if data.as_of else ""])
+    writer.writerow(["ont_records_updated_in_range", data.activity_total])
+    writer.writerow(["currently_online_in_range", data.activity_online])
     writer.writerow([])
     writer.writerow(["pool_name", "cidr", "used_count", "total_count", "usage_percent"])
     for pool in data.pool_data:
@@ -392,6 +520,20 @@ def build_network_export_csv(data: NetworkReportData, hours: int | None = None) 
                 pool.used_count,
                 pool.total_count,
                 f"{usage:.2f}",
+            ]
+        )
+    writer.writerow([])
+    writer.writerow(
+        ["ont_model", "serial_number", "olt_name", "current_status", "last_updated_at"]
+    )
+    for ont in data.recent_ont_activity:
+        writer.writerow(
+            [
+                ont.model or "",
+                ont.serial_number,
+                ont.olt_name or "",
+                "online" if ont.is_online else "offline",
+                ont.updated_at.isoformat() if ont.updated_at else "",
             ]
         )
     content = output.getvalue()
@@ -516,6 +658,13 @@ def _customer_report_usage_window(
 ) -> tuple[datetime, datetime, str, str]:
     from app.services.web_reports_extended import _resolve_report_window
 
+    if date_to and not date_from:
+        try:
+            selected_end = date.fromisoformat(date_to)
+        except ValueError:
+            selected_end = None
+        if selected_end is not None:
+            date_from = (selected_end - timedelta(days=(days or 30) - 1)).isoformat()
     return _resolve_report_window(
         date_from=date_from,
         date_to=date_to,
@@ -529,26 +678,29 @@ def _attach_period_usage_to_subscribers(
     *,
     start: datetime,
     end: datetime,
-) -> float:
+) -> CustomerReportUsage:
     # Report-only fields stuffed onto ORM instances for template consumption.
     for sub in subscribers:
         sub.period_usage_gb = 0.0  # type: ignore[attr-defined]
         sub.period_avg_mbps = 0.0  # type: ignore[attr-defined]
         sub.period_active_services = 0  # type: ignore[attr-defined]
+        sub.period_usage_source = usage_summary_service.PeriodUsageSource.unavailable  # type: ignore[attr-defined]
 
     subscriber_ids = [sub.id for sub in subscribers if getattr(sub, "id", None)]
     if not subscriber_ids:
-        return 0.0
+        return CustomerReportUsage(0.0, False, False)
 
     rows = usage_summary_service.period_usage_by_subscriber(
         db,
-        subscriber_ids,
-        start=start,
-        end=end,
+        query=usage_summary_service.PeriodUsageQuery(
+            subscriber_ids=tuple(subscriber_ids), start=start, end=end
+        ),
     )
 
     by_subscriber = {row.subscriber_id: row for row in rows}
     total_usage_gb = 0.0
+    has_data = False
+    includes_estimate = False
     for sub in subscribers:
         row = by_subscriber.get(sub.id)
         if row is None:
@@ -559,8 +711,17 @@ def _attach_period_usage_to_subscribers(
             float(row.avg_bps or 0) / 1_000_000, 2
         )
         sub.period_active_services = int(row.active_services or 0)  # type: ignore[attr-defined]
+        sub.period_usage_source = row.source  # type: ignore[attr-defined]
+        has_data = (
+            has_data
+            or row.source != usage_summary_service.PeriodUsageSource.unavailable
+        )
+        includes_estimate = includes_estimate or row.source in {
+            usage_summary_service.PeriodUsageSource.bandwidth_estimate,
+            usage_summary_service.PeriodUsageSource.mixed,
+        }
         total_usage_gb += usage_gb
-    return round(total_usage_gb, 2)
+    return CustomerReportUsage(round(total_usage_gb, 2), has_data, includes_estimate)
 
 
 def _invoice_amount_due(invoice: object) -> Decimal | int | float:
@@ -1180,7 +1341,7 @@ def get_subscribers_report_data(
     usage_start, usage_end, usage_date_from, usage_date_to = (
         _customer_report_usage_window(date_from=date_from, date_to=date_to)
     )
-    total_usage_gb = _attach_period_usage_to_subscribers(
+    usage = _attach_period_usage_to_subscribers(
         db,
         all_subscribers,
         start=usage_start,
@@ -1216,65 +1377,20 @@ def get_subscribers_report_data(
             reverse=True,
         )[:10]
     ]
-    now = datetime.now(UTC)
-    month_start = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
-    month_start_iso = month_start.date().isoformat()
-    new_this_month = _report_new_since_count(
-        db, since_iso=month_start_iso, date_to=date_to, status=status
+    overview = get_customer_report_overview(
+        db,
+        query=CustomerReportOverviewQuery(
+            date_from=date.fromisoformat(date_from) if date_from else None,
+            date_to=date.fromisoformat(date_to) if date_to else None,
+            status=(
+                AccountStatus(status)
+                if status in {item.value for item in AccountStatus}
+                else None
+            ),
+        ),
     )
-    # Headline tiles as KPI contracts. Each status tile overrides only the
-    # status dimension and preserves the active date window; "new this month"
-    # overrides the start-date dimension and keeps the current status filter.
-    #
-    # KPI-parity: a tile value must count exactly the rows its cohort_url links
-    # to, regardless of the page status filter. The status-narrowed
-    # ``all_subscribers`` set drives the table and page metrics below, but the
-    # overview tiles count their own cohort so "Total" never shrinks to the
-    # active-only rows and "Suspended" never reads 0 while linking to a
-    # non-empty suspended list. These grouped counts are computed independent of
-    # the page status filter.
-    cohort_total, cohort_by_status = _report_status_cohort_counts(
-        db, date_from=date_from, date_to=date_to
-    )
-    cohort_active = cohort_by_status.get(AccountStatus.active.value, 0)
-    cohort_suspended = cohort_by_status.get(AccountStatus.suspended.value, 0)
-    subscriber_kpis = {
-        "total": Kpi(
-            label="Total Customers",
-            value=StateValue.present(cohort_total),
-            cohort_url=_customers_report_cohort_url(
-                date_from=date_from, date_to=date_to
-            ),
-        ),
-        "new_this_month": Kpi(
-            label="New This Month",
-            value=StateValue.present(new_this_month),
-            cohort_url=_customers_report_cohort_url(
-                status=status, date_from=month_start_iso, date_to=date_to
-            ),
-            tone=StatusTone.positive,
-        ),
-        "active": Kpi(
-            label="Active",
-            value=StateValue.present(cohort_active),
-            cohort_url=_customers_report_cohort_url(
-                status=AccountStatus.active.value,
-                date_from=date_from,
-                date_to=date_to,
-            ),
-            tone=StatusTone.info,
-        ),
-        "suspended": Kpi(
-            label="Suspended",
-            value=StateValue.present(cohort_suspended),
-            cohort_url=_customers_report_cohort_url(
-                status=AccountStatus.suspended.value,
-                date_from=date_from,
-                date_to=date_to,
-            ),
-            tone=StatusTone.warning,
-        ),
-    }
+    subscriber_kpis = overview.subscriber_kpis
+    new_this_month = overview.new_this_month
     subscriber_ids = [subscriber.id for subscriber in all_subscribers]
     segment_facts = crm_reporting_service.subscriber_segment_facts(
         db,
@@ -1296,10 +1412,25 @@ def get_subscribers_report_data(
             region_counts.items(), key=lambda item: item[1], reverse=True
         )
     ]
+    growth_start, growth_end, _, _ = _date_range_values(
+        date_from=date_from, date_to=date_to
+    )
+    growth_series = subscriber_growth.customer_report_growth_series(
+        db,
+        query=subscriber_growth.CustomerGrowthQuery(
+            start_at=growth_start,
+            end_at=growth_end,
+            status=(
+                AccountStatus(status)
+                if status in {item.value for item in AccountStatus}
+                else None
+            ),
+        ),
+    )
     return {
         "subscriber_kpis": subscriber_kpis,
         "total_subscribers": total_subscribers,
-        "subscriber_growth": _subscriber_growth_percent(db),
+        "subscriber_growth": overview.subscriber_growth,
         "new_this_month": new_this_month,
         "active_subscribers": active_count,
         "suspended_subscribers": suspended_count,
@@ -1315,13 +1446,16 @@ def get_subscribers_report_data(
         "date_to": date_to or "",
         "usage_date_from": usage_date_from,
         "usage_date_to": usage_date_to,
-        "total_usage_gb": total_usage_gb,
+        "total_usage_gb": usage.total_gb,
+        "usage_has_data": usage.has_data,
+        "usage_includes_estimate": usage.includes_estimate,
         "status_filter": status or "",
         "status_options": [item.value for item in AccountStatus],
-        "growth_data": cast(
-            CustomerGrowthSeries,
-            subscriber_growth.monthly_customer_growth_series(db),
-        ),
+        "growth_data": {
+            "labels": list(growth_series.labels),
+            "total": list(growth_series.total),
+            "new": list(growth_series.new),
+        },
         "plan_distribution": plan_distribution,
         "regional_breakdown": regional_breakdown,
     }
@@ -1372,6 +1506,7 @@ def build_subscribers_export_csv(
             "period_usage_gb",
             "period_avg_mbps",
             "period_active_services",
+            "period_usage_source",
         ]
     )
     for sub in all_subscribers:
@@ -1401,6 +1536,11 @@ def build_subscribers_export_csv(
                 getattr(sub, "period_usage_gb", 0),
                 getattr(sub, "period_avg_mbps", 0),
                 getattr(sub, "period_active_services", 0),
+                getattr(
+                    sub,
+                    "period_usage_source",
+                    usage_summary_service.PeriodUsageSource.unavailable,
+                ).value,
             ]
         )
     content = output.getvalue()

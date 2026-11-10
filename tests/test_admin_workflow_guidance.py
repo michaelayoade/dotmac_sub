@@ -570,7 +570,7 @@ def test_period_review_guidance_explains_manual_approval_and_reserved_cash() -> 
 
 def test_every_help_guide_has_complete_action_sections() -> None:
     guides = (*WORKFLOW_GUIDANCE, *HELP_ONLY_GUIDANCE)
-    assert len(guides) == 67
+    assert len(guides) == 68
     for guide in guides:
         actions = help_actions_for(guide)
         assert actions, guide.id
@@ -728,3 +728,27 @@ def test_ip_pool_labelling_guide_is_route_specific() -> None:
     content = " ".join((guide.purpose, *guide.steps, *guide.notes))
     for needle in ("NAT", "main site", "Unlabelled", "inactive"):
         assert needle in content
+
+
+def test_settings_hub_pages_explain_section_saves_and_preservation() -> None:
+    for path in (
+        "/admin/system/settings-hub",
+        "/admin/system/settings-hub/edit/test-connection",
+        "/admin/system/settings-hub/bank-accounts",
+        "/admin/system/branding",
+        "/admin/system/company-info",
+    ):
+        guide = guidance_for_path(path)
+        assert guide is not None and guide.id == "settings"
+        content = " ".join((*guide.steps, *guide.notes))
+        for phrase in (
+            "Settings Hub",
+            "inherited",
+            "stored secret blank",
+            "Test Connection",
+            "Billing Setup",
+        ):
+            assert phrase in content
+    smtp = guidance_for_path("/admin/system/email")
+    assert smtp is not None and smtp.id == "smtp-senders"
+    assert "Settings Hub > Notifications" in " ".join(smtp.steps)

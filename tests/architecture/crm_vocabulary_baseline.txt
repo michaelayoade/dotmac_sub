@@ -356,7 +356,10 @@ alembic/versions_archive/k2l3m4n5o6p7_add_crm_social_comment_replies.py
 alembic/versions_archive/l1m2n3o4p5q6_add_inbound_message_dedupe_index.py
 alembic/versions_archive/p0q1r2s3t4u5_add_integration_connector_model.py
 #
-# --- docs: 107 files ---
+# --- docs: 108 files ---
+# Generated settings census records existing identities and retired aliases only;
+# its vocabulary is inventory evidence, not a new runtime integration.
+docs/settings-hub-migration-register.json
 docs/ACCOUNT_CREDIT_DEPOSITS.md
 docs/ARCHITECTURE.md
 docs/CHAT_LIVE_SETUP.md
@@ -737,4 +740,4 @@ tests/test_work_order_views.py
 tests/test_workqueue_parity.py
 tests/test_workqueue_web.py
 #
-# TOTAL: 687 files
+# TOTAL: 688 files

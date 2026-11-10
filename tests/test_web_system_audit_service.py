@@ -135,6 +135,35 @@ def test_recent_activity_feed_uses_actor_name_metadata_for_unresolved_user(
     assert feed[0]["message"].startswith("Archived Admin ")
 
 
+def test_customer_report_activity_filters_before_limiting(db_session):
+    report_event = AuditEvent(
+        actor_type=AuditActorType.user,
+        actor_id="archived-report-operator",
+        action="GET",
+        entity_type="/admin/reports/customers",
+        is_success=True,
+        metadata_={
+            "actor_name": "Report Operator",
+            "query": {"date_from": "2026-01-01", "status": "active"},
+        },
+    )
+    unrelated_event = AuditEvent(
+        actor_type=AuditActorType.system,
+        action="POST",
+        entity_type="/admin/integrations/settings",
+        is_success=True,
+    )
+    db_session.add_all((report_event, unrelated_event))
+    db_session.commit()
+
+    feed = audit_helpers.recent_customer_report_activity(db_session, limit=1)
+
+    assert len(feed) == 1
+    assert feed[0]["message"] == "Report Operator Filtered Customer Report"
+    assert "From 2026-01-01" in feed[0]["detail"]
+    assert "Status: active" in feed[0]["detail"]
+
+
 def test_log_audit_event_derives_system_user_actor_name_when_id_missing(db_session):
     user = SystemUser(
         first_name="NOC",

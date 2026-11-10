@@ -43,9 +43,9 @@
     </div>
     {% endif %}
 
-    <form method="POST" action="/admin/system/settings" class="space-y-6 animate-fade-in-up" style="animation-delay: 50ms;">
+    <form method="POST" action="/admin/system/settings-hub/edit/notification" class="space-y-6 animate-fade-in-up" style="animation-delay: 50ms;">
         {% include "components/forms/csrf_input.html" %}
-        <input type="hidden" name="domain" value="notification">
+
         <div class="rounded-xl border border-slate-200 bg-white p-6 shadow-sm dark:border-slate-700 dark:bg-slate-800">
             <div class="flex items-center justify-between">
                 <div>
@@ -61,6 +61,9 @@
                     <h3 class="text-sm font-semibold text-slate-900 dark:text-white">{{ section.title }}</h3>
                     <div class="mt-4 grid gap-4 sm:grid-cols-2">
                         {% for setting in section.rows %}
+                        {% set attempted = submitted_values | default(none) %}
+                        {% set value = attempted.get(setting.key, setting.value) if attempted is not none else setting.value %}
+                        {% set is_attempted = attempted is not none and setting.key in attempted %}
                         <div>
                             <label class="mb-1.5 block text-sm font-medium text-slate-700 dark:text-slate-300">
                                 {{ setting.spec.label or (setting.key | replace('_', ' ') | title) }}
@@ -70,8 +73,8 @@
                             </label>
                             {% if setting.spec.value_type.value == 'boolean' %}
                             <label class="flex items-center gap-2 text-sm text-slate-600 dark:text-slate-300">
-                                <input type="checkbox" name="{{ setting.key }}" value="true"
-                                       {% if setting.value %}checked{% endif %}
+                                <input type="hidden" name="{{ setting.key }}" value="false"><input type="checkbox" name="{{ setting.key }}" value="true"
+                                       {% if value %}checked{% endif %}
                                        class="h-4 w-4 rounded border-slate-300 text-primary-600 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700">
                                 Enabled
                             </label>
@@ -80,22 +83,24 @@
                                     {% if setting.spec.required %}required{% endif %}
                                     class="block w-full rounded-lg border border-slate-300 bg-white px-4 py-2.5 text-sm shadow-sm focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-500/20 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
                                 {% for option in setting.spec.allowed %}
-                                <option value="{{ option }}" {% if option == setting.value %}selected{% endif %}>{{ option | replace('_', ' ') | title }}</option>
+                                <option value="{{ option }}" {% if option == value %}selected{% endif %}>{{ option | replace('_', ' ') | title }}</option>
                                 {% endfor %}
                             </select>
-                            {% elif setting.spec.value_type.value == 'integer' %}
-                            <input type="number" name="{{ setting.key }}" value="{{ setting.value }}"
+                            {% elif setting.spec.value_type.value in ['json', 'list'] %}
+                    <textarea name="{{ setting.key }}" aria-label="{{ setting.spec.label or setting.key }}" rows="4" class="w-full rounded-lg border border-slate-300 bg-white p-3 font-mono text-sm dark:border-slate-600 dark:bg-slate-700">{% if not setting.spec.is_secret and value is not none %}{% if is_attempted %}{{ value }}{% else %}{{ value | tojson(indent=2) }}{% endif %}{% endif %}</textarea>
+                    {% elif setting.spec.value_type.value == 'integer' %}
+                            <input type="number" name="{{ setting.key }}" value="{{ value }}"
                                    {% if setting.spec.min_value is not none %}min="{{ setting.spec.min_value }}"{% endif %}
                                    {% if setting.spec.max_value is not none %}max="{{ setting.spec.max_value }}"{% endif %}
                                    {% if setting.spec.required %}required{% endif %}
                                    class="block w-full rounded-lg border border-slate-300 bg-white px-4 py-2.5 text-sm shadow-sm focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-500/20 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
                             {% else %}
                             <input type="{% if setting.spec.is_secret %}password{% else %}text{% endif %}" name="{{ setting.key }}"
-                                   value="{% if setting.spec.is_secret %}{% else %}{{ setting.value }}{% endif %}"
+                                   value="{% if setting.spec.is_secret %}{% else %}{{ value }}{% endif %}"
                                    placeholder="{% if setting.spec.is_secret %}••••••{% endif %}"
-                                   {% if setting.spec.required and not (setting.spec.is_secret and setting.value) %}required{% endif %}
+                                   {% if setting.spec.required and not (setting.spec.is_secret and value) %}required{% endif %}
                                    class="block w-full rounded-lg border border-slate-300 bg-white px-4 py-2.5 text-sm shadow-sm focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-500/20 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
-                            {% if setting.spec.is_secret and setting.value %}
+                            {% if setting.spec.is_secret and value %}
                             <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">Stored value hidden.</p>
                             {% endif %}
                             {% endif %}
@@ -108,6 +113,9 @@
             {% else %}
             <div class="mt-6 grid gap-4 sm:grid-cols-2">
                 {% for setting in settings_rows %}
+                {% set attempted = submitted_values | default(none) %}
+                {% set value = attempted.get(setting.key, setting.value) if attempted is not none else setting.value %}
+                {% set is_attempted = attempted is not none and setting.key in attempted %}
                 <div>
                     <label class="mb-1.5 block text-sm font-medium text-slate-700 dark:text-slate-300">
                         {{ setting.spec.label or (setting.key | replace('_', ' ') | title) }}
@@ -117,8 +125,8 @@
                     </label>
                     {% if setting.spec.value_type.value == 'boolean' %}
                     <label class="flex items-center gap-2 text-sm text-slate-600 dark:text-slate-300">
-                        <input type="checkbox" name="{{ setting.key }}" value="true"
-                               {% if setting.value %}checked{% endif %}
+                        <input type="hidden" name="{{ setting.key }}" value="false"><input type="checkbox" name="{{ setting.key }}" value="true"
+                               {% if value %}checked{% endif %}
                                class="h-4 w-4 rounded border-slate-300 text-primary-600 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700">
                         Enabled
                     </label>
@@ -127,22 +135,24 @@
                             {% if setting.spec.required %}required{% endif %}
                             class="block w-full rounded-lg border border-slate-300 bg-white px-4 py-2.5 text-sm shadow-sm focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-500/20 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
                         {% for option in setting.spec.allowed %}
-                        <option value="{{ option }}" {% if option == setting.value %}selected{% endif %}>{{ option | replace('_', ' ') | title }}</option>
+                        <option value="{{ option }}" {% if option == value %}selected{% endif %}>{{ option | replace('_', ' ') | title }}</option>
                         {% endfor %}
                     </select>
+                    {% elif setting.spec.value_type.value in ['json', 'list'] %}
+                    <textarea name="{{ setting.key }}" aria-label="{{ setting.spec.label or setting.key }}" rows="4" class="w-full rounded-lg border border-slate-300 bg-white p-3 font-mono text-sm dark:border-slate-600 dark:bg-slate-700">{% if not setting.spec.is_secret and value is not none %}{% if is_attempted %}{{ value }}{% else %}{{ value | tojson(indent=2) }}{% endif %}{% endif %}</textarea>
                     {% elif setting.spec.value_type.value == 'integer' %}
-                    <input type="number" name="{{ setting.key }}" value="{{ setting.value }}"
+                    <input type="number" name="{{ setting.key }}" value="{{ value }}"
                            {% if setting.spec.min_value is not none %}min="{{ setting.spec.min_value }}"{% endif %}
                            {% if setting.spec.max_value is not none %}max="{{ setting.spec.max_value }}"{% endif %}
                            {% if setting.spec.required %}required{% endif %}
                            class="block w-full rounded-lg border border-slate-300 bg-white px-4 py-2.5 text-sm shadow-sm focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-500/20 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
                     {% else %}
                     <input type="{% if setting.spec.is_secret %}password{% else %}text{% endif %}" name="{{ setting.key }}"
-                           value="{% if setting.spec.is_secret %}{% else %}{{ setting.value }}{% endif %}"
+                           value="{% if setting.spec.is_secret %}{% else %}{{ value }}{% endif %}"
                            placeholder="{% if setting.spec.is_secret %}••••••{% endif %}"
-                           {% if setting.spec.required and not (setting.spec.is_secret and setting.value) %}required{% endif %}
+                           {% if setting.spec.required and not (setting.spec.is_secret and value) %}required{% endif %}
                            class="block w-full rounded-lg border border-slate-300 bg-white px-4 py-2.5 text-sm shadow-sm focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-500/20 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
-                    {% if setting.spec.is_secret and setting.value %}
+                    {% if setting.spec.is_secret and value %}
                     <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">Stored value hidden.</p>
                     {% endif %}
                     {% endif %}
@@ -205,16 +215,16 @@
                             <td class="px-3 py-3">
                                 <div class="flex flex-wrap items-center gap-2">
                                     <a href="/admin/system/email?edit_sender={{ sender.sender_key }}#smtp-senders" class="rounded-md border border-amber-300 px-2.5 py-1 text-xs font-medium text-amber-700 hover:bg-amber-50 dark:border-amber-700 dark:text-amber-300 dark:hover:bg-amber-900/30">Edit</a>
-                                    <form method="post" action="/admin/system/settings/smtp-senders/default">
+                                    <form method="post" action="/admin/system/email/smtp-senders/default">
                                         {% include "components/forms/csrf_input.html" %}
                                         <input type="hidden" name="sender_key" value="{{ sender.sender_key }}">
                                         <button type="submit" class="rounded-md border border-slate-300 px-2.5 py-1 text-xs font-medium text-slate-700 hover:bg-slate-50 dark:border-slate-600 dark:text-slate-200 dark:hover:bg-slate-700">Set Default</button>
                                     </form>
-                                    <form method="post" action="/admin/system/settings/smtp-senders/{{ sender.sender_key }}/test">
+                                    <form method="post" action="/admin/system/email/smtp-senders/{{ sender.sender_key }}/test">
                                         {% include "components/forms/csrf_input.html" %}
                                         <button type="submit" class="rounded-md border border-sky-300 px-2.5 py-1 text-xs font-medium text-sky-700 hover:bg-sky-50 dark:border-sky-700 dark:text-sky-300 dark:hover:bg-sky-900/30">Test</button>
                                     </form>
-                                    <form method="post" action="/admin/system/settings/smtp-senders/{{ sender.sender_key }}/delete" onsubmit="return confirm('Delete sender {{ sender.sender_key }}?')">
+                                    <form method="post" action="/admin/system/email/smtp-senders/{{ sender.sender_key }}/delete" onsubmit="return confirm('Delete sender {{ sender.sender_key }}?')">
                                         {% include "components/forms/csrf_input.html" %}
                                         <button type="submit" class="rounded-md border border-rose-300 px-2.5 py-1 text-xs font-medium text-rose-700 hover:bg-rose-50 dark:border-rose-700 dark:text-rose-300 dark:hover:bg-rose-900/30">Disable</button>
                                     </form>
@@ -238,7 +248,7 @@
                     If sender key exists, this updates it. Leave password blank to keep current password.
                     {% endif %}
                 </p>
-                <form method="post" action="/admin/system/settings/smtp-senders" class="mt-4 grid gap-4 sm:grid-cols-2">
+                <form method="post" action="/admin/system/email/smtp-senders" class="mt-4 grid gap-4 sm:grid-cols-2">
                     {% include "components/forms/csrf_input.html" %}
                     <div>
                         <label class="mb-1.5 block text-sm font-medium text-slate-700 dark:text-slate-300">Sender Key</label>
@@ -270,19 +280,19 @@
                     </div>
                     <div class="space-y-2">
                         <label class="flex items-center gap-2 text-sm text-slate-700 dark:text-slate-300">
-                            <input type="checkbox" name="use_tls" value="true" {% if smtp_sender_form.use_tls %}checked{% endif %} class="h-4 w-4 rounded border-slate-300 text-primary-600 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700">
+                            <input type="hidden" name="use_tls" value="false"><input type="checkbox" name="use_tls" value="true" {% if smtp_sender_form.use_tls %}checked{% endif %} class="h-4 w-4 rounded border-slate-300 text-primary-600 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700">
                             Use TLS
                         </label>
                         <label class="flex items-center gap-2 text-sm text-slate-700 dark:text-slate-300">
-                            <input type="checkbox" name="use_ssl" value="true" {% if smtp_sender_form.use_ssl %}checked{% endif %} class="h-4 w-4 rounded border-slate-300 text-primary-600 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700">
+                            <input type="hidden" name="use_ssl" value="false"><input type="checkbox" name="use_ssl" value="true" {% if smtp_sender_form.use_ssl %}checked{% endif %} class="h-4 w-4 rounded border-slate-300 text-primary-600 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700">
                             Use SSL
                         </label>
                         <label class="flex items-center gap-2 text-sm text-slate-700 dark:text-slate-300">
-                            <input type="checkbox" name="is_active" value="true" {% if smtp_sender_form.is_active %}checked{% endif %} class="h-4 w-4 rounded border-slate-300 text-primary-600 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700">
+                            <input type="hidden" name="is_active" value="false"><input type="checkbox" name="is_active" value="true" {% if smtp_sender_form.is_active %}checked{% endif %} class="h-4 w-4 rounded border-slate-300 text-primary-600 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700">
                             Active
                         </label>
                         <label class="flex items-center gap-2 text-sm text-slate-700 dark:text-slate-300">
-                            <input type="checkbox" name="is_default" value="true" {% if smtp_sender_form.is_default %}checked{% endif %} class="h-4 w-4 rounded border-slate-300 text-primary-600 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700">
+                            <input type="hidden" name="is_default" value="false"><input type="checkbox" name="is_default" value="true" {% if smtp_sender_form.is_default %}checked{% endif %} class="h-4 w-4 rounded border-slate-300 text-primary-600 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700">
                             Set as default sender
                         </label>
                     </div>
@@ -300,7 +310,7 @@
             <div class="mt-6 border-t border-slate-200 pt-6 dark:border-slate-700">
                 <h3 class="text-sm font-semibold text-slate-900 dark:text-white">Activity Routing</h3>
                 <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">Choose sender per activity. Leave blank to use the default sender.</p>
-                <form method="post" action="/admin/system/settings/smtp-senders/activities" class="mt-4 grid gap-4 sm:grid-cols-2">
+                <form method="post" action="/admin/system/email/smtp-senders/activities" class="mt-4 grid gap-4 sm:grid-cols-2">
                     {% include "components/forms/csrf_input.html" %}
                     {% for row in smtp_sender_activity_rows %}
                     <div>

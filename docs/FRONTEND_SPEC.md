@@ -1745,6 +1745,13 @@ Tabs: Network, Revenue, Subscribers, Churn, Technician
 
 #### Network Report
 
+The page and CSV export accept an optional inclusive `date_from` / `date_to`
+range (UTC calendar dates). Both dates are required together. Apply filters ONT
+records by last update; Clear restores the unfiltered list. Infrastructure
+capacity and status cards remain a current snapshot, labeled with their query
+time. The ONT list shows the latest ten records in the selected range and its
+full cohort count.
+
 ```python
 {
     "olts": list[OLT],

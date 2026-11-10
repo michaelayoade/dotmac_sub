@@ -355,6 +355,7 @@ class NetworkOntFacts:
     serial_number: str
     olt_name: str | None
     is_online: bool
+    updated_at: datetime | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -373,6 +374,8 @@ class NetworkInfrastructureFacts:
     fiber_status: tuple[tuple[str, int], ...]
     total_fdh: int
     splitter_capacity: int
+    activity_total: int = 0
+    activity_online: int = 0
 
 
 @dataclass(frozen=True, slots=True)
@@ -528,6 +531,132 @@ class CustomerRetentionPageQuery:
             raise CrmReportQueryError("Customer retention page must be at least 1.")
         if self.per_page != 20:
             raise CrmReportQueryError("Customer retention page size must be 20.")
+
+
+@dataclass(frozen=True, slots=True)
+class CustomerRetentionMetricsQuery:
+    date_from: date
+    date_to: date
+
+    def __post_init__(self) -> None:
+        if self.date_from > self.date_to:
+            raise CrmReportQueryError("Start date must not follow end date.")
+
+
+@dataclass(frozen=True, slots=True)
+class CustomerRetentionMetrics:
+    date_from: date
+    date_to: date
+    churned_customers: int
+    churn_population: int
+    churn_rate: float | None
+    recovered_customers: int
+    eligible_recovery_customers: int
+    recovery_rate: float | None
+    evidence_note: str
+
+
+def get_customer_retention_metrics(
+    db: Session, *, query: CustomerRetentionMetricsQuery
+) -> CustomerRetentionMetrics:
+    """Period metrics over the churn owner and trusted lifecycle transitions."""
+
+    start, end = subscriber_growth.churn_window(
+        date_from=query.date_from.isoformat(), date_to=query.date_to.isoformat()
+    )
+    assert start is not None and end is not None
+    churn = subscriber_growth.churn_summary(
+        db=db,
+        date_from=query.date_from.isoformat(),
+        date_to=query.date_to.isoformat(),
+    )
+    inactive = (
+        SubscriptionStatus.suspended,
+        SubscriptionStatus.paused,
+        SubscriptionStatus.disabled,
+    )
+    transitions = (
+        select(
+            Subscription.subscriber_id.label("subscriber_id"),
+            SubscriptionLifecycleEvent.subscription_id.label("subscription_id"),
+            SubscriptionLifecycleEvent.id.label("event_id"),
+            SubscriptionLifecycleEvent.effective_at.label("effective_at"),
+            SubscriptionLifecycleEvent.to_status.label("to_status"),
+            SubscriptionLifecycleEvent.from_status.label("from_status"),
+        )
+        .join(
+            Subscription, Subscription.id == SubscriptionLifecycleEvent.subscription_id
+        )
+        .join(Subscriber, Subscriber.id == Subscription.subscriber_id)
+        .where(
+            subscriber_service.visible_subscriber_clause(),
+            subscriber_growth.trusted_lifecycle_transition_clause(),
+            SubscriptionLifecycleEvent.effective_at < end,
+        )
+        .subquery("retention_transitions")
+    )
+    before_ranked = (
+        select(
+            transitions.c.subscriber_id,
+            transitions.c.subscription_id,
+            transitions.c.to_status,
+            func.row_number()
+            .over(
+                partition_by=transitions.c.subscription_id,
+                order_by=(
+                    transitions.c.effective_at.desc(),
+                    transitions.c.event_id.desc(),
+                ),
+            )
+            .label("rank"),
+        )
+        .where(transitions.c.effective_at < start)
+        .subquery("retention_before_ranked")
+    )
+    eligible = union_all(
+        select(before_ranked.c.subscriber_id).where(
+            before_ranked.c.rank == 1, before_ranked.c.to_status.in_(inactive)
+        ),
+        select(transitions.c.subscriber_id).where(
+            transitions.c.effective_at >= start,
+            transitions.c.to_status.in_(inactive),
+        ),
+        select(transitions.c.subscriber_id).where(
+            transitions.c.effective_at >= start,
+            transitions.c.from_status.in_(inactive),
+            transitions.c.to_status == SubscriptionStatus.active,
+        ),
+    ).subquery("retention_eligible")
+    eligible_count = int(
+        db.scalar(select(func.count(func.distinct(eligible.c.subscriber_id)))) or 0
+    )
+    recovered_count = int(
+        db.scalar(
+            select(func.count(func.distinct(transitions.c.subscriber_id))).where(
+                transitions.c.effective_at >= start,
+                transitions.c.from_status.in_(inactive),
+                transitions.c.to_status == SubscriptionStatus.active,
+            )
+        )
+        or 0
+    )
+    return CustomerRetentionMetrics(
+        date_from=query.date_from,
+        date_to=query.date_to,
+        churned_customers=churn.churn_count,
+        churn_population=churn.total,
+        churn_rate=(churn.churn_count / churn.total * 100 if churn.total else None),
+        recovered_customers=recovered_count,
+        eligible_recovery_customers=eligible_count,
+        recovery_rate=(
+            recovered_count / eligible_count * 100 if eligible_count else None
+        ),
+        evidence_note=(
+            "Recovery uses verified subscription transitions. Historical events "
+            "before lifecycle evidence was introduced may be incomplete; the churn "
+            "figure follows the existing churn report's legacy fallback."
+        ),
+    )
 
 
 class CustomerRetentionRiskSegment(StrEnum):
@@ -889,7 +1018,10 @@ def _page(
 
 
 def network_infrastructure_facts(
-    db: Session, *, hours: int | None = None
+    db: Session,
+    *,
+    activity_start_at: datetime | None = None,
+    activity_end_at: datetime | None = None,
 ) -> NetworkInfrastructureFacts:
     """Read typed network facts for the infrastructure report projection."""
     olts = tuple(
@@ -914,16 +1046,27 @@ def network_infrastructure_facts(
         or 0
     )
 
-    ont_filters: list[ColumnElement[bool]] = []
-    if hours:
-        ont_filters.append(
-            OntUnit.updated_at >= datetime.now(UTC) - timedelta(hours=hours)
-        )
-    total_onts = int(db.scalar(select(func.count(OntUnit.id)).where(*ont_filters)) or 0)
+    total_onts = int(db.scalar(select(func.count(OntUnit.id))) or 0)
     connected_onts = int(
         db.scalar(
             select(func.count(OntUnit.id)).where(
-                *ont_filters, OntUnit.olt_status == OnuOnlineStatus.online
+                OntUnit.olt_status == OnuOnlineStatus.online
+            )
+        )
+        or 0
+    )
+    activity_filters: list[ColumnElement[bool]] = []
+    if activity_start_at is not None:
+        activity_filters.append(OntUnit.updated_at >= activity_start_at)
+    if activity_end_at is not None:
+        activity_filters.append(OntUnit.updated_at < activity_end_at)
+    activity_total = int(
+        db.scalar(select(func.count(OntUnit.id)).where(*activity_filters)) or 0
+    )
+    activity_online = int(
+        db.scalar(
+            select(func.count(OntUnit.id)).where(
+                *activity_filters, OntUnit.olt_status == OnuOnlineStatus.online
             )
         )
         or 0
@@ -934,6 +1077,7 @@ def network_infrastructure_facts(
             serial_number=row.serial_number,
             olt_name=row.olt_name,
             is_online=row.olt_status == OnuOnlineStatus.online,
+            updated_at=row.updated_at,
         )
         for row in db.execute(
             select(
@@ -941,9 +1085,10 @@ def network_infrastructure_facts(
                 OntUnit.serial_number,
                 OLTDevice.name.label("olt_name"),
                 OntUnit.olt_status,
+                OntUnit.updated_at,
             )
             .outerjoin(OLTDevice, OLTDevice.id == OntUnit.olt_device_id)
-            .where(*ont_filters)
+            .where(*activity_filters)
             .order_by(OntUnit.updated_at.desc())
             .limit(10)
         ).all()
@@ -992,6 +1137,8 @@ def network_infrastructure_facts(
         total_onts=total_onts,
         connected_onts=connected_onts,
         recent_ont_activity=recent_ont_activity,
+        activity_total=activity_total,
+        activity_online=activity_online,
         pools=tuple(pools),
         used_ips=used_ips,
         total_ips=total_ips,

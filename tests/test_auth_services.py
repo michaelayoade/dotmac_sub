@@ -42,6 +42,7 @@ from app.services.auth_flow import hash_password
 from tests import api_key_issuance_fixtures as issuance_commands
 from tests import api_key_update_fixtures as update_commands
 from tests import credential_administration_fixtures as credential_commands
+from tests.settings_hub_fixtures import settings_context as _settings_context
 from tests.staff_identity_fixtures import project_staff_login
 
 
@@ -297,6 +298,7 @@ def test_preferences_save_writes_canonical_admin_mfa_required(db_session):
             "admin_mfa_required": "true",
             "search_debounce_ms": "250",
         },
+        context=_settings_context(),
     )
 
     setting = (
@@ -809,3 +811,34 @@ def test_user_credentials_duplicate_username_is_409_not_500(db_session, person):
     # query about `person` -- the rollback discarded the transaction the
     # fixture created that row in.
     assert db_session.query(UserCredential).count() >= 0
+
+
+def test_preferences_can_disable_legacy_mfa_requirement(db_session):
+    db_session.add(
+        DomainSetting(
+            domain=SettingDomain.auth,
+            key="force_2fa",
+            value_type=SettingValueType.boolean,
+            value_text="true",
+            is_active=True,
+        )
+    )
+    db_session.commit()
+    web_system_config_service.save_preferences(
+        db_session,
+        {"admin_mfa_required": "false"},
+        context=_settings_context(),
+    )
+    canonical = (
+        db_session.query(DomainSetting)
+        .filter(DomainSetting.domain == SettingDomain.auth)
+        .filter(DomainSetting.key == "admin_mfa_required")
+        .one()
+    )
+    assert canonical.value_text == "false"
+    assert (
+        web_system_config_service.get_preferences_context(db_session)["preferences"][
+            "admin_mfa_required"
+        ]
+        == "false"
+    )

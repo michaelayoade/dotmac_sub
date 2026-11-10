@@ -7,7 +7,9 @@ from uuid import uuid4
 
 import pytest
 
+from app.models.catalog import SubscriptionStatus
 from app.models.collections import DunningCase
+from app.models.lifecycle import LifecycleEventType, SubscriptionLifecycleEvent
 from app.models.network import OLTDevice, OntUnit, OnuOnlineStatus
 from app.models.provisioning import (
     AppointmentStatus,
@@ -142,6 +144,64 @@ def test_retention_page_fetches_twenty_rows_at_a_time(db_session):
     assert {row.customer_id for row in first.rows}.isdisjoint(
         row.customer_id for row in second.rows
     )
+
+
+def test_retention_metrics_count_unique_verified_recovery(db_session, subscription):
+    subscription.subscriber.user_type = UserType.customer
+    subscription.subscriber.created_at = datetime(2026, 1, 1, tzinfo=UTC)
+    times = (
+        (
+            LifecycleEventType.suspend,
+            SubscriptionStatus.active,
+            SubscriptionStatus.suspended,
+            datetime(2026, 10, 31, 12, tzinfo=UTC),
+        ),
+        (
+            LifecycleEventType.resume,
+            SubscriptionStatus.suspended,
+            SubscriptionStatus.active,
+            datetime(2026, 11, 2, 12, tzinfo=UTC),
+        ),
+        (
+            LifecycleEventType.suspend,
+            SubscriptionStatus.active,
+            SubscriptionStatus.suspended,
+            datetime(2026, 11, 3, 12, tzinfo=UTC),
+        ),
+        (
+            LifecycleEventType.resume,
+            SubscriptionStatus.suspended,
+            SubscriptionStatus.active,
+            datetime(2026, 11, 4, 12, tzinfo=UTC),
+        ),
+    )
+    for index, (kind, before, after, occurred_at) in enumerate(times):
+        db_session.add(
+            SubscriptionLifecycleEvent(
+                subscription_id=subscription.id,
+                event_type=kind,
+                from_status=before,
+                to_status=after,
+                evidence_grade="transition_evidence",
+                evidence_source="lifecycle_command",
+                source_id=f"retention-metrics-{uuid4()}-{index}",
+                evidence_fingerprint=f"sha256:{uuid4().hex * 2}",
+                effective_at=occurred_at,
+                recorded_at=occurred_at,
+            )
+        )
+    db_session.commit()
+
+    metrics = crm_reporting.get_customer_retention_metrics(
+        db_session,
+        query=crm_reporting.CustomerRetentionMetricsQuery(
+            date_from=date(2026, 11, 1), date_to=date(2026, 11, 9)
+        ),
+    )
+    assert metrics.recovered_customers == 1
+    assert metrics.eligible_recovery_customers == 1
+    assert metrics.recovery_rate == 100
+    assert metrics.churned_customers == 1
 
 
 def test_agent_performance_period_defaults_and_presets_use_lagos_boundaries():
@@ -321,6 +381,65 @@ def test_network_route_wires_all_infrastructure_capacity_metrics(
         "ip_pool_chart",
     ):
         assert context[key] == getattr(report_data, key)
+
+
+def test_network_date_range_filters_updated_onts_without_changing_inventory(db_session):
+    db_session.add_all(
+        [
+            OntUnit(
+                serial_number="ONT-START",
+                olt_status=OnuOnlineStatus.online,
+                updated_at=datetime(2026, 11, 1, 0, 0, tzinfo=UTC),
+            ),
+            OntUnit(
+                serial_number="ONT-END",
+                olt_status=OnuOnlineStatus.offline,
+                updated_at=datetime(2026, 11, 2, 23, 59, tzinfo=UTC),
+            ),
+            OntUnit(
+                serial_number="ONT-OUTSIDE",
+                olt_status=OnuOnlineStatus.online,
+                updated_at=datetime(2026, 11, 3, 0, 0, tzinfo=UTC),
+            ),
+        ]
+    )
+    db_session.commit()
+
+    report = web_reports.get_network_report_data(
+        db_session,
+        query=web_reports.NetworkReportQuery(
+            date_from=date(2026, 11, 1), date_to=date(2026, 11, 2)
+        ),
+    )
+
+    assert report.total_onts == 3
+    assert report.connected_onts == 2
+    assert report.activity_total == 2
+    assert report.activity_online == 1
+    assert {ont.serial_number for ont in report.recent_ont_activity} == {
+        "ONT-START",
+        "ONT-END",
+    }
+    export = web_reports.build_network_export_csv(data=report)
+    assert "date_from,2026-11-01" in export
+    assert "date_to,2026-11-02" in export
+    assert "ONT-OUTSIDE" not in export
+
+
+@pytest.mark.parametrize(
+    ("date_from", "date_to"),
+    [
+        ("2026-11-01", None),
+        ("2026-11-03", "2026-11-02"),
+        ("invalid", "2026-11-02"),
+    ],
+)
+def test_network_date_range_rejects_invalid_pairs(date_from, date_to):
+    from fastapi import HTTPException
+
+    with pytest.raises(HTTPException) as error:
+        report_routes._network_report_query(date_from=date_from, date_to=date_to)
+    assert error.value.status_code == 422
 
 
 def test_online_activity_maps_the_internal_api_contract(monkeypatch, db_session):

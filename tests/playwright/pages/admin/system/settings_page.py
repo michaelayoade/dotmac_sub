@@ -14,7 +14,7 @@ class SettingsPage(BasePage):
     def __init__(self, page: Page, base_url: str) -> None:
         super().__init__(page, base_url)
 
-    def goto(self, path: str = "/admin/system/settings") -> None:
+    def goto(self, path: str = "/admin/system/settings-hub") -> None:
         """Navigate to the settings page."""
         last_error: Exception | None = None
         for _ in range(2):
@@ -31,24 +31,24 @@ class SettingsPage(BasePage):
     def expect_loaded(self) -> None:
         """Assert the settings page is loaded."""
         expect(
-            self.page.get_by_role("heading", name="System Settings", exact=True)
+            self.page.get_by_role("heading", name="Settings Hub", exact=True)
         ).to_be_visible()
 
     def select_domain(self, domain: str) -> None:
         """Select a settings domain."""
-        self.page.get_by_label("Domain").select_option(domain)
+        self.page.goto(f"{self.base_url}/admin/system/settings-hub/edit/{domain}")
 
     def fill_setting(self, key: str, value: str) -> None:
         """Fill a setting value."""
-        self.page.get_by_label(key).fill(value)
+        self.page.locator(f'[name="{key}"]').fill(value)
 
     def toggle_setting(self, key: str) -> None:
         """Toggle a boolean setting."""
-        self.page.get_by_label(key).click()
+        self.page.locator(f'[name="{key}"]').click()
 
     def save(self) -> None:
         """Save settings."""
-        self.page.get_by_role("button", name="Save").click()
+        self.page.get_by_role("button", name="Save changes", exact=True).click()
 
     def expect_saved(self) -> None:
         """Assert settings were saved successfully."""

@@ -205,7 +205,7 @@
    STATS CARD
    Metric card with hover glow effect
    ============================================ #}
-{% macro stats_card(label, value, icon="", color="blue", color2=None, href="", change=None, change_type="", action_label="", tone="", compact_value=False, active=False) %}
+{% macro stats_card(label, value, icon="", color="blue", color2=None, href="", change=None, change_type="", action_label="", tone="", compact_value=False, active=False, value_size="default") %}
 {% set c2 = color2 or color %}
 {% set is_link = href != "" %}
 <{% if is_link %}a href="{{ href }}"{% else %}div{% endif %}{% if active %} aria-current="true"{% endif %} class="group relative overflow-hidden rounded-2xl border border-slate-200/70 bg-white p-4 shadow-sm transition-all hover:-translate-y-0.5 hover:shadow-md dark:border-slate-700/70 dark:bg-slate-800 {% if is_link %}focus:outline-none focus:ring-2 focus:ring-{{ color }}-500 focus:ring-offset-2 dark:focus:ring-{{ color }}-400 dark:focus:ring-offset-slate-900{% endif %} {% if active %}ring-2 ring-{{ color }}-500 ring-offset-2 dark:ring-{{ color }}-400 dark:ring-offset-slate-900{% endif %} {% if tone %}status-tone-{{ tone }} status-metric{% else %}hover:border-{{ color }}-200 dark:hover:border-{{ color }}-700/40{% endif %}">
@@ -214,7 +214,7 @@
     <div class="relative flex items-center justify-between gap-3">
         <div class="min-w-0 flex-1">
             <p class="text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-500 dark:text-slate-400">{{ label }}</p>
-            <p class="mt-2.5 {% if compact_value %}break-words text-[clamp(0.95rem,1.15vw,1.1rem)] leading-tight tracking-tight{% else %}text-[clamp(1.25rem,2.2vw,1.8rem)] leading-none{% endif %} font-bold tabular-nums text-slate-900 dark:text-white">{{ value }}</p>
+            <p class="mt-2.5 {% if value_size == '24px' %}break-words text-[24px] leading-tight tracking-tight{% elif compact_value %}break-words text-[clamp(0.95rem,1.15vw,1.1rem)] leading-tight tracking-tight{% else %}text-[clamp(1.25rem,2.2vw,1.8rem)] leading-none{% endif %} font-bold tabular-nums text-slate-900 dark:text-white">{{ value }}</p>
             {% if change is not none %}
             {% set change_num = change %}
             {% if change is string %}
@@ -488,9 +488,9 @@
    CARD
    Generic card container with gradient header
    ============================================ #}
-{% macro card(title="", icon="", color="slate", color2=None, actions=None, padding=True, allow_overflow=False) %}
+{% macro card(title="", icon="", color="slate", color2=None, actions=None, padding=True, allow_overflow=False, class_name="", body_class="") %}
 {% set c2 = color2 or color %}
-<div class="animate-fade-in-up {{ 'overflow-visible' if allow_overflow else 'overflow-hidden' }} rounded-3xl border border-slate-200/60 bg-white shadow-sm dark:border-slate-700/60 dark:bg-slate-800">
+<div class="animate-fade-in-up {{ 'overflow-visible' if allow_overflow else 'overflow-hidden' }} rounded-3xl border border-slate-200/60 bg-white shadow-sm dark:border-slate-700/60 dark:bg-slate-800 {{ class_name }}">
     {% if title %}
     <div class="relative flex items-center justify-between border-b border-slate-200/60 bg-gradient-to-r from-slate-50 via-white to-{{ c2 }}-50/35 px-6 py-4 dark:border-slate-700/60 dark:from-slate-800 dark:via-slate-800 dark:to-{{ c2 }}-900/10">
         <div class="flex items-center gap-3">
@@ -504,7 +504,7 @@
         {% if actions %}{{ actions|safe }}{% endif %}
     </div>
     {% endif %}
-    <div class="{% if padding %}p-6{% endif %} bg-white dark:bg-slate-800">
+    <div class="{% if padding %}p-6{% endif %} bg-white dark:bg-slate-800 {{ body_class }}">
         {{ caller() }}
     </div>
 </div>

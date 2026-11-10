@@ -214,6 +214,40 @@ def test_audit_middleware_uses_stale_settings_without_db_refresh(monkeypatch):
     assert audit_calls == [("/portal/payments", 200)]
 
 
+def test_audit_middleware_records_customer_report_reads_only(monkeypatch):
+    monkeypatch.setattr(
+        main,
+        "_get_cached_audit_settings",
+        lambda **_kwargs: {
+            "methods": {"POST", "PUT", "PATCH", "DELETE"},
+            "skip_paths": [],
+            "read_trigger_header": "x-audit-read",
+            "read_trigger_query": "audit",
+        },
+    )
+    audit_calls = []
+    monkeypatch.setattr(
+        main,
+        "_try_log_audit_request",
+        lambda request, _response: audit_calls.append(request.url.path),
+    )
+    for path in (
+        "/admin/reports/customers",
+        "/admin/reports/customers/export",
+        "/admin/reports/customers/content",
+        "/admin/reports/revenue",
+    ):
+        _run_async(
+            main.audit_middleware(
+                _request(path=path, method="GET"), _downstream_response
+            )
+        )
+    assert audit_calls == [
+        "/admin/reports/customers",
+        "/admin/reports/customers/export",
+    ]
+
+
 class _PostgresBind:
     class dialect:
         name = "postgresql"
@@ -322,12 +356,12 @@ def test_audit_middleware_cannot_be_switched_off_by_a_stale_enabled_flag(
 
     _run_async(
         main.audit_middleware(
-            _request(path="/admin/system/settings", method="POST"),
+            _request(path="/admin/system/settings-hub", method="POST"),
             _downstream_response,
         )
     )
 
-    assert audit_calls == ["/admin/system/settings"]
+    assert audit_calls == ["/admin/system/settings-hub"]
 
 
 def test_load_audit_settings_ignores_a_stored_enabled_row(db_session, monkeypatch):

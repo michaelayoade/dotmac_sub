@@ -22,6 +22,7 @@ from app.db import get_db
 from app.models.billing import InvoiceDiscountSource, InvoiceStatus
 from app.models.catalog import SubscriptionStatus
 from app.models.sales import QuoteStatus
+from app.models.subscriber import AccountStatus
 from app.models.team_inbox import InboxConversation, InboxConversationStatus
 from app.services import crm_reporting as crm_reporting_service
 from app.services import (
@@ -40,7 +41,10 @@ from app.services import ticket_sla_reports as ticket_sla_reports_service
 from app.services import web_document_discount_report as discount_report_service
 from app.services import web_reports as web_reports_service
 from app.services import web_reports_extended as web_reports_ext_service
-from app.services.audit_helpers import recent_activity_for_paths
+from app.services.audit_helpers import (
+    recent_activity_for_paths,
+    recent_customer_report_activity,
+)
 from app.services.auth_dependencies import (
     can,
     require_any_permission,
@@ -1056,54 +1060,84 @@ def reports_regional_performance_export(
 )
 def reports_subscribers(
     request: Request,
-    date_from: str | None = None,
-    date_to: str | None = None,
-    status: str | None = None,
+    date_from: date | None = None,
+    date_to: date | None = None,
+    status: AccountStatus | None = None,
     page: int = Query(default=1, ge=1),
     per_page: int = Query(default=50, ge=10, le=200),
+    eager: bool = False,
     db: Session = Depends(get_db),
 ):
     from app.web.admin import get_current_user, get_sidebar_stats
 
-    report_data = web_reports_service.get_subscribers_report_data(
+    overview = web_reports_service.get_customer_report_overview(
         db,
-        date_from=date_from,
-        date_to=date_to,
-        status=status,
-        page=page,
-        per_page=per_page,
+        query=web_reports_service.CustomerReportOverviewQuery(
+            date_from=date_from,
+            date_to=date_to,
+            status=status,
+        ),
     )
 
-    context = {
+    context: dict[str, object] = {
         "request": request,
         "active_page": "reports-customers",
         "active_menu": "reports",
         "current_user": get_current_user(request),
         "sidebar_stats": get_sidebar_stats(db),
-        "subscriber_kpis": report_data["subscriber_kpis"],
-        "total_subscribers": report_data["total_subscribers"],
-        "subscriber_growth": report_data["subscriber_growth"],
-        "new_this_month": report_data["new_this_month"],
-        "active_subscribers": report_data["active_subscribers"],
-        "suspended_subscribers": report_data["suspended_subscribers"],
-        "active_rate": report_data["active_rate"],
-        "status_breakdown": report_data["status_breakdown"],
-        "recent_subscribers": report_data["recent_subscribers"],
-        "recent_activities": recent_activity_for_paths(db, ["/admin/reports"]),
-        "customers": report_data["customers"],
-        "growth_data": report_data["growth_data"],
-        "date_from": report_data["date_from"],
-        "date_to": report_data["date_to"],
-        "status_filter": report_data["status_filter"],
-        "status_options": report_data["status_options"],
-        "plan_distribution": report_data["plan_distribution"],
-        "regional_breakdown": report_data["regional_breakdown"],
-        "page": report_data["page"],
-        "per_page": report_data["per_page"],
-        "has_previous": report_data["has_previous"],
-        "has_next": report_data["has_next"],
+        "subscriber_kpis": overview.subscriber_kpis,
+        "subscriber_growth": overview.subscriber_growth,
+        "date_from": overview.date_from,
+        "date_to": overview.date_to,
+        "status_filter": overview.status_filter,
+        "status_options": overview.status_options,
+        "eager": eager,
     }
+    if eager:
+        context.update(
+            web_reports_service.get_subscribers_report_data(
+                db,
+                date_from=overview.date_from or None,
+                date_to=overview.date_to or None,
+                status=overview.status_filter or None,
+                page=page,
+                per_page=per_page,
+            )
+        )
+        context["recent_activities"] = recent_customer_report_activity(db)
     return templates.TemplateResponse("admin/reports/subscribers.html", context)
+
+
+@router.get(
+    "/customers/content",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("customer:read"))],
+)
+def reports_subscribers_content(
+    request: Request,
+    date_from: date | None = None,
+    date_to: date | None = None,
+    status: AccountStatus | None = None,
+    page: int = Query(default=1, ge=1),
+    per_page: int = Query(default=50, ge=10, le=200),
+    db: Session = Depends(get_db),
+):
+    report_data = web_reports_service.get_subscribers_report_data(
+        db,
+        date_from=date_from.isoformat() if date_from else None,
+        date_to=date_to.isoformat() if date_to else None,
+        status=status.value if status else None,
+        page=page,
+        per_page=per_page,
+    )
+    return templates.TemplateResponse(
+        "admin/reports/_subscribers_details.html",
+        {
+            "request": request,
+            **report_data,
+            "recent_activities": recent_customer_report_activity(db),
+        },
+    )
 
 
 @router.get(
@@ -1264,15 +1298,36 @@ def reports_churn_export(
     )
 
 
+def _network_report_query(
+    *, date_from: str | None, date_to: str | None
+) -> web_reports_service.NetworkReportQuery:
+    if bool(date_from) != bool(date_to):
+        raise HTTPException(status_code=422, detail="Select both network report dates")
+    start = _parse_report_date(date_from)
+    end = _parse_report_date(date_to)
+    if start and end:
+        if start > end:
+            raise HTTPException(
+                status_code=422, detail="Start date must be on or before end date"
+            )
+    return web_reports_service.NetworkReportQuery(date_from=start, date_to=end)
+
+
 @router.get(
     "/network",
     response_class=HTMLResponse,
     dependencies=[Depends(require_permission("reports:network:read"))],
 )
-def reports_network(request: Request, db: Session = Depends(get_db)):
+def reports_network(
+    request: Request,
+    db: Session = Depends(get_db),
+    date_from: str | None = None,
+    date_to: str | None = None,
+):
     from app.web.admin import get_current_user, get_sidebar_stats
 
-    report_data = web_reports_service.get_network_report_data(db=db)
+    query = _network_report_query(date_from=date_from, date_to=date_to)
+    report_data = web_reports_service.get_network_report_data(db=db, query=query)
 
     context = {
         "request": request,
@@ -1297,6 +1352,11 @@ def reports_network(request: Request, db: Session = Depends(get_db)):
         "olts": report_data.olts,
         "ip_pools": report_data.pool_data,
         "recent_ont_activity": report_data.recent_ont_activity,
+        "activity_total": report_data.activity_total,
+        "activity_online": report_data.activity_online,
+        "date_from": query.date_from.isoformat() if query.date_from else "",
+        "date_to": query.date_to.isoformat() if query.date_to else "",
+        "network_as_of": report_data.as_of,
         "device_health_chart": report_data.device_health_chart,
         "ip_pool_chart": report_data.ip_pool_chart,
         "recent_activities": recent_activity_for_paths(db, ["/admin/reports"]),
@@ -1308,11 +1368,14 @@ def reports_network(request: Request, db: Session = Depends(get_db)):
     "/network/export",
     dependencies=[Depends(require_permission("reports:network:export"))],
 )
-def reports_network_export(hours: int | None = None, db: Session = Depends(get_db)):
-    report_data = web_reports_service.get_network_report_data(db=db, hours=hours)
-    content = web_reports_service.build_network_export_csv(
-        data=report_data, hours=hours
-    )
+def reports_network_export(
+    date_from: str | None = None,
+    date_to: str | None = None,
+    db: Session = Depends(get_db),
+):
+    query = _network_report_query(date_from=date_from, date_to=date_to)
+    report_data = web_reports_service.get_network_report_data(db=db, query=query)
+    content = web_reports_service.build_network_export_csv(data=report_data)
     return Response(
         content,
         media_type="text/csv",

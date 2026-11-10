@@ -19,6 +19,7 @@ from app.services.billing_automation import (
 from app.services.owner_commands import CommandContext
 from app.services.settings_cache import SettingsCache
 from app.services.web_system_config import save_billing_config
+from tests.settings_hub_fixtures import settings_context as _settings_context
 
 
 def _set_config(db, *, enabled: bool, days: int | None) -> None:
@@ -79,6 +80,7 @@ def test_billing_settings_reject_enabled_notice_without_days(db_session):
                 "renewal_invoice_notice_days": "",
                 "upcoming_charges_prepaid_amount_bands": "0-10000,10000-",
             },
+            context=_settings_context(),
         )
 
 

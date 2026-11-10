@@ -1,10 +1,15 @@
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 from pathlib import Path
 from types import SimpleNamespace
 
 from app.models.bandwidth import BandwidthSample
 from app.models.subscriber import SubscriberStatus, UserType
-from app.services import web_reports
+from app.models.usage import (
+    AccountingStatus,
+    RadiusAccountingSession,
+    SubscriberDailyUsage,
+)
+from app.services import usage_summary, web_reports
 
 
 def _subscriber(email: str, status: SubscriberStatus, created_at: datetime):
@@ -39,7 +44,7 @@ def test_customer_report_is_visible_from_reports_hub():
 
 
 def test_customer_report_breakdowns_scroll_only_beyond_fifteen_records():
-    page_template = Path("templates/admin/reports/subscribers.html").read_text(
+    page_template = Path("templates/admin/reports/_subscribers_details.html").read_text(
         encoding="utf-8"
     )
 
@@ -54,18 +59,35 @@ def test_customer_report_breakdowns_scroll_only_beyond_fifteen_records():
     )
 
 
-def test_customer_growth_chart_uses_bounded_compact_height():
-    page_template = Path("templates/admin/reports/subscribers.html").read_text(
+def test_customer_growth_chart_has_readable_height_and_two_scales():
+    page_template = Path("templates/admin/reports/_subscribers_details.html").read_text(
         encoding="utf-8"
     )
 
     assert 'id="subscriber-growth-chart"' in page_template
-    assert "height: 35.28px; min-height: 35.28px; max-height: 35.28px;" in page_template
-    assert 'style="min-height: 98px;"' not in page_template
+    assert "height: 260px; min-height: 260px;" in page_template
+    assert "yAxisID: 'yTotal'" in page_template
+    assert "yAxisID: 'yNew'" in page_template
+
+
+def test_customer_report_lazily_loads_details_in_requested_order():
+    page = Path("templates/admin/reports/subscribers.html").read_text(encoding="utf-8")
+    details = Path("templates/admin/reports/_subscribers_details.html").read_text(
+        encoding="utf-8"
+    )
+    assert 'hx-trigger="revealed once"' in page
+    assert 'hx-get="/admin/reports/customers/content?' in page
+    assert "Active Customers by Plan" not in page
+    assert (
+        details.index("Customer Growth Trend")
+        < details.index("Active Customers by Plan")
+        < details.index("Regional Breakdown")
+    )
+    assert details.count('value_size="24px"') == 2
 
 
 def test_matching_customers_scrolls_beyond_fifteen_and_has_page_search():
-    page_template = Path("templates/admin/reports/subscribers.html").read_text(
+    page_template = Path("templates/admin/reports/_subscribers_details.html").read_text(
         encoding="utf-8"
     )
 
@@ -79,7 +101,7 @@ def test_matching_customers_scrolls_beyond_fifteen_and_has_page_search():
 
 
 def test_status_and_recent_signup_cards_use_matching_scrollable_heights():
-    page_template = Path("templates/admin/reports/subscribers.html").read_text(
+    page_template = Path("templates/admin/reports/_subscribers_details.html").read_text(
         encoding="utf-8"
     )
 
@@ -132,6 +154,110 @@ def test_customer_report_includes_usage_for_filtered_period(
     assert "period_usage_gb,period_avg_mbps,period_active_services" in csv_content
     assert "Usage Customer" in csv_content
     assert ",5.0,1" in csv_content
+
+
+def test_customer_report_prefers_recorded_bytes_over_samples_and_fills_history(
+    db_session, subscriber, subscription
+):
+    subscriber.status = SubscriberStatus.active
+    subscriber.user_type = UserType.customer
+    subscriber.created_at = datetime(2026, 1, 10, tzinfo=UTC)
+    db_session.add_all(
+        (
+            SubscriberDailyUsage(
+                subscription_id=subscription.id,
+                splynx_service_id=81201,
+                usage_date=date(2026, 1, 20),
+                upload_bytes=1024**3,
+                download_bytes=0,
+            ),
+            SubscriberDailyUsage(
+                subscription_id=subscription.id,
+                splynx_service_id=81201,
+                usage_date=date(2026, 1, 21),
+                upload_bytes=2 * 1024**3,
+                download_bytes=0,
+            ),
+            RadiusAccountingSession(
+                subscription_id=subscription.id,
+                session_id="report-recorded-jan20",
+                status_type=AccountingStatus.stop,
+                session_start=datetime(2026, 1, 20, 12, tzinfo=UTC),
+                input_octets=3 * 1024**3,
+                output_octets=0,
+            ),
+            BandwidthSample(
+                subscription_id=subscription.id,
+                rx_bps=4_000_000,
+                tx_bps=1_000_000,
+                sample_at=datetime(2026, 1, 20, 12, tzinfo=UTC),
+            ),
+        )
+    )
+    db_session.commit()
+
+    rows = usage_summary.period_usage_by_subscriber(
+        db_session,
+        query=usage_summary.PeriodUsageQuery(
+            subscriber_ids=(subscriber.id,),
+            start=datetime(2026, 1, 20, tzinfo=UTC),
+            end=datetime(2026, 1, 22, tzinfo=UTC),
+        ),
+    )
+    assert rows[0].usage_bytes == 5 * 1024**3
+    assert rows[0].source == usage_summary.PeriodUsageSource.recorded
+
+    data = web_reports.get_subscribers_report_data(
+        db_session, date_from="2026-01-01", date_to="2026-01-31"
+    )
+    assert data["total_usage_gb"] == 5
+    assert data["usage_has_data"]
+    assert not data["usage_includes_estimate"]
+
+    db_session.add(
+        BandwidthSample(
+            subscription_id=subscription.id,
+            rx_bps=1_000_000,
+            tx_bps=0,
+            sample_at=datetime(2026, 1, 22, 12, tzinfo=UTC),
+        )
+    )
+    db_session.commit()
+    mixed = usage_summary.period_usage_by_subscriber(
+        db_session,
+        query=usage_summary.PeriodUsageQuery(
+            subscriber_ids=(subscriber.id,),
+            start=datetime(2026, 1, 20, tzinfo=UTC),
+            end=datetime(2026, 1, 23, tzinfo=UTC),
+        ),
+    )
+    assert mixed[0].source == usage_summary.PeriodUsageSource.mixed
+    assert mixed[0].usage_bytes > 5 * 1024**3
+
+
+def test_customer_report_marks_missing_usage_as_unavailable(db_session, subscriber):
+    subscriber.status = SubscriberStatus.active
+    subscriber.user_type = UserType.customer
+    subscriber.created_at = datetime(2026, 1, 10, tzinfo=UTC)
+    db_session.commit()
+
+    data = web_reports.get_subscribers_report_data(
+        db_session, date_from="2026-01-01", date_to="2026-01-31"
+    )
+
+    assert data["total_usage_gb"] == 0
+    assert not data["usage_has_data"]
+    assert data["customers"][0].period_usage_source == (
+        usage_summary.PeriodUsageSource.unavailable
+    )
+
+
+def test_customer_report_end_only_filter_uses_a_window_ending_on_that_day():
+    _start, _end, shown_start, shown_end = web_reports._customer_report_usage_window(
+        date_to="2026-01-31"
+    )
+    assert shown_start == "2026-01-02"
+    assert shown_end == "2026-01-31"
 
 
 def test_recent_signups_use_a_view_model_without_mutating_subscriber(

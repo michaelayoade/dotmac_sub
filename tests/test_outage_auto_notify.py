@@ -1,3 +1,5 @@
+from tests.settings_hub_fixtures import settings_context as _settings_context
+
 """Automated outage dispatch (ADR 0004): eligibility gates and safety."""
 
 import uuid
@@ -414,6 +416,7 @@ def test_config_reports_the_three_operating_states(db_session):
                 "outage_auto_notify_max_incidents_per_run": "10",
                 "outage_auto_notify_interval_seconds": "300",
             },
+            context=_settings_context(),
         )
         return web_system_config.get_outage_auto_notify_context(db_session)[
             "outage_auto_notify_state"
@@ -425,7 +428,7 @@ def test_config_reports_the_three_operating_states(db_session):
 
 
 def test_unchecked_enable_box_disarms_rather_than_persisting(db_session):
-    """An absent checkbox must read as false, not 'leave as-is'."""
+    """The browser sends an explicit false marker for an unchecked checkbox."""
     from app.services import web_system_config
 
     base = {
@@ -435,10 +438,16 @@ def test_unchecked_enable_box_disarms_rather_than_persisting(db_session):
         "outage_auto_notify_interval_seconds": "300",
     }
     web_system_config.save_outage_auto_notify(
-        db_session, {**base, "outage_auto_notify_enabled": "true"}
+        db_session,
+        {**base, "outage_auto_notify_enabled": "true"},
+        context=_settings_context(),
     )
-    # Second save omits the checkbox entirely, as a browser would.
-    web_system_config.save_outage_auto_notify(db_session, dict(base))
+    # Second save carries the hidden false marker emitted by the form.
+    web_system_config.save_outage_auto_notify(
+        db_session,
+        {**base, "outage_auto_notify_enabled": "false"},
+        context=_settings_context(),
+    )
 
     context = web_system_config.get_outage_auto_notify_context(db_session)
     assert context["outage_auto_notify"]["outage_auto_notify_enabled"] is False
@@ -461,6 +470,7 @@ def test_config_rejects_an_out_of_bounds_interval(db_session):
                 "outage_auto_notify_max_incidents_per_run": "10",
                 "outage_auto_notify_interval_seconds": "5",
             },
+            context=_settings_context(),
         )
 
 

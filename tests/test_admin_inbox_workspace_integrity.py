@@ -1115,15 +1115,20 @@ def test_manager_capacity_links_to_an_explicit_bounded_save_control():
         encoding="utf-8"
     )
     overlays = Path("templates/admin/inbox/_overlays.html").read_text(encoding="utf-8")
-    settings = Path("templates/admin/system/settings.html").read_text(encoding="utf-8")
+    settings = Path("templates/admin/system/settings_hub_editor.html").read_text(
+        encoding="utf-8"
+    )
 
     for template in (manager, overlays):
         assert "can_manage_inbox_capacity" in template
-        assert "domain=comms#inbox-agent-capacity" in template
+        assert (
+            "settings-hub/edit/comms#inbox_agent_default_max_concurrent_conversations"
+            in template
+        )
         assert "Change default capacity" in template
     assert "inbox_agent_default_max_concurrent_conversations" in settings
     assert "Enter 1–100. Ten is the default, not the maximum." in settings
-    assert "Save Inbox capacity" in settings
+    assert "Save changes" in settings
 
 
 def test_stats_filter_header_uses_the_page_scoped_amber_contract():

@@ -1,0 +1,8 @@
+<nav aria-label="Settings categories" class="mb-6 flex flex-wrap gap-2">
+    <a href="/admin/system/settings-hub" class="rounded-full border border-slate-300 px-3 py-2 text-sm dark:border-slate-600">All settings</a>
+    {% for category in categories %}
+    <a href="/admin/system/settings-hub?category={{ category.id }}"
+       {% if selected_category == category.id %}aria-current="page"{% endif %}
+       class="rounded-full border px-3 py-2 text-sm {% if selected_category == category.id %}border-primary-600 bg-primary-50 text-primary-700 dark:bg-primary-900 dark:text-primary-200{% else %}border-slate-300 dark:border-slate-600{% endif %}">{{ category.name }}</a>
+    {% endfor %}
+</nav>
