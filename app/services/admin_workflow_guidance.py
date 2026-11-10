@@ -1245,6 +1245,19 @@ HELP_ONLY_GUIDANCE: tuple[AdminWorkflowGuidance, ...] = (
         route_templates=("/admin/reports",),
     ),
     _guide(
+        "customer-retention-report",
+        "Reports",
+        "Review customer retention",
+        "Authorized billing and customer operations staff",
+        "Compare period churn and recovery while reviewing the live billing-risk queue.",
+        (),
+        "Choose both calendar dates and apply the period to the retention metrics.",
+        "Review churn and recovery counts with their cohort sizes and evidence note.",
+        "Search the live billing-risk queue and open a customer profile for investigation.",
+        "Export the current queue when authorized; its scope is the search, not the metric dates.",
+        route_templates=("/admin/customer-retention",),
+    ),
+    _guide(
         "churn-report",
         "Reports",
         "Review subscriber churn",
@@ -2349,6 +2362,17 @@ _ACTION_SPECS: dict[str, tuple[_ActionSpec, ...]] = {
             permission="customer:read",
         ),
     ),
+    "customer-retention-report": (
+        _action("choose-retention-period", "Choose the retention dates", 0),
+        _action("review-retention-metrics", "Review churn and recovery metrics", 1),
+        _action("investigate-retention-queue", "Investigate a customer", 2),
+        _action(
+            "export-retention-queue",
+            "Export the current billing-risk queue",
+            3,
+            permission="reports:billing:export",
+        ),
+    ),
     "regional-performance-report": (
         _action("filter-regional-report", "Filter regional performance", 0, 1),
         _action("review-regional-metrics", "Review regional metrics", 2),
@@ -2691,6 +2715,7 @@ HELP_NAVIGATION: tuple[AdminHelpNavigationSection, ...] = (
         "Reports",
         (
             "reports-overview",
+            "customer-retention-report",
             "churn-report",
             "regional-performance-report",
             "ticket-sla-report",
@@ -2761,6 +2786,7 @@ HELP_GUIDE_VIEW_PERMISSIONS: dict[str, tuple[str, ...]] = {
     "vendor-routes": ("network:fiber:read",),
     "ticket-sla-report": ("reports:support:read",),
     "churn-report": ("customer:read",),
+    "customer-retention-report": ("reports:billing:read",),
     "regional-performance-report": ("reports:billing:read",),
     "ncc-complaints-report": ("reports:ncc:read",),
     "support-csat-report": ("reports:support:read",),
