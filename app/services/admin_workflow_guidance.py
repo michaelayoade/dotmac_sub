@@ -1227,6 +1227,7 @@ HELP_ONLY_GUIDANCE: tuple[AdminWorkflowGuidance, ...] = (
         notes=(
             "Staff-owned proposals remain separate from vendor quote submissions and stay pending until an authorized reviewer decides.",
             "If a work order already belongs to an installation project, linking the work order can populate that project association; otherwise the proposal may remain unscoped.",
+            "On a project route page, network map data and project routes load separately and each shows its own status. Saved project routes can still appear if network map data fails. If project route data fails, refresh before drawing a staff proposal.",
         ),
     ),
     _guide(
