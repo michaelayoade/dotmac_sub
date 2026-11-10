@@ -79,10 +79,10 @@ def test_explicit_registry_preserves_marketplace_catalogue_parity() -> None:
 def test_marketplace_projection_exposes_all_available_cards(db_session) -> None:
     data = build_marketplace_data(db_session)
 
-    assert data["stats"] == {"available": 10, "installed": 0, "updates": 0}
     assert {card["key"] for card in data["marketplace_cards"]} == set(
         EXPECTED_MARKETPLACE
     )
+    assert all(card["installed_count"] == 0 for card in data["marketplace_cards"])
 
 
 def test_manifest_digest_is_deterministic_and_capabilities_are_queryable() -> None:

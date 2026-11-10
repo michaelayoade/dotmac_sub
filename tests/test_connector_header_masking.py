@@ -1,21 +1,9 @@
-"""Connector header/metadata secrets are masked on display, kept on save."""
+"""Saved connector header values are hidden and preserved on edit."""
 
 from __future__ import annotations
 
-import json
-
 from app.models.connector import ConnectorAuthType, ConnectorConfig, ConnectorType
 from app.services import web_integrations as svc
-
-
-def test_mask_secret_values():
-    masked = svc.mask_secret_values(
-        {"Authorization": "Bearer xyz", "X-Api-Key": "k", "Content-Type": "json"}
-    )
-    assert masked["Authorization"] == svc.SECRET_VALUE_SENTINEL
-    assert masked["X-Api-Key"] == svc.SECRET_VALUE_SENTINEL
-    assert masked["Content-Type"] == "json"  # non-secret untouched
-    assert svc.mask_secret_values(None) == {}
 
 
 def test_unmask_restores_sentinel_keeps_edits():
@@ -37,22 +25,33 @@ def test_update_preserves_masked_secret_header(db_session):
     db_session.add(cfg)
     db_session.commit()
 
-    # Simulate the edit form: secret masked, a non-secret edited, then saved.
-    masked = svc.mask_secret_values(cfg.headers)
+    # Every saved header value is masked, regardless of its name.
+    rows = svc.connector_edit_form(cfg)["header_rows"]
+    masked = {row["name"]: row["value"] for row in rows}
+    assert set(masked.values()) == {svc.SECRET_VALUE_SENTINEL}
     masked["Content-Type"] = "text/plain"
 
     updated = svc.update_connector_config(
         db_session,
         str(cfg.id),
-        base_url=None,
-        auth_type="none",
-        timeout_sec=None,
-        auth_config=None,
-        headers=json.dumps(masked),
-        retry_policy=None,
-        metadata=None,
-        notes=None,
-        is_active=True,
+        svc.ConnectorFormCommand(
+            auth_type=ConnectorAuthType.none,
+            base_url=None,
+            timeout_sec=None,
+            username=None,
+            password=None,
+            token=None,
+            api_key=None,
+            secret=None,
+            client_id=None,
+            client_secret=None,
+            header_names=tuple(masked),
+            header_values=tuple(masked.values()),
+            retry_max_attempts=None,
+            retry_backoff_sec=None,
+            notes=None,
+            is_active=True,
+        ),
     )
 
     assert updated.headers["Authorization"] == "Bearer xyz"  # secret preserved

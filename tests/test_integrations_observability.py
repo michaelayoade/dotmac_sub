@@ -20,6 +20,7 @@ from app.models.integration import (
     IntegrationTarget,
 )
 from app.models.integration_platform import IntegrationInstallation
+from app.services import connector as connector_service
 from app.services import web_integrations
 from app.services.auth import hash_api_key
 from app.services.auth_dependencies import require_user_auth
@@ -91,16 +92,17 @@ def test_installed_integrations_evidence_template_compiles() -> None:
     env.get_template("admin/integrations/installed.html")
 
 
-def test_connectors_index_exposes_managed_installations(db_session) -> None:
+def test_legacy_connections_list_excludes_managed_installations(db_session) -> None:
     installation = _make_installation(db_session, name="Managed ERP transport")
 
-    data = web_integrations.build_connectors_list_data(db_session)
-
-    managed = data["managed_connectors"]
-    assert [row["installation"].id for row in managed] == [installation.id]
-    assert managed[0]["definition"].key == "webhook.http"
-    assert data["stats"]["total"] == 1
-    assert data["stats"]["active"] == 1
+    page = connector_service.connector_configs.list_page(
+        db_session, connector_service.connector_list_query()
+    )
+    assert page.page_meta.total_items == 0
+    assert page.rows == ()
+    assert _evidence_for(
+        web_integrations.build_installed_integrations_data(db_session), installation
+    )
 
 
 def test_connectors_index_and_erp_config_templates_compile() -> None:
@@ -111,18 +113,15 @@ def test_connectors_index_and_erp_config_templates_compile() -> None:
     env.get_template("admin/integrations/erp/config.html")
 
 
-def test_connectors_section_does_not_scroll_horizontally() -> None:
+def test_legacy_connections_table_is_compact_and_hides_free_text() -> None:
     source = Path("templates/admin/integrations/connectors/index.html").read_text(
         encoding="utf-8"
     )
-    connectors_section = source.split("{# Connectors Table #}", 1)[1].split(
-        'card("Managed connector installations"', 1
-    )[0]
-
-    assert '<div class="overflow-hidden">' in connectors_section
-    assert '<table class="w-full table-fixed' in connectors_section
-    assert "overflow-x-auto" not in connectors_section
-    assert "whitespace-nowrap" not in connectors_section
+    assert '<table class="w-full table-fixed' in source
+    assert 'name="search"' in source
+    assert "list_pagination(list_query, page_meta" in source
+    assert "connector.base_url" not in source
+    assert "connector.notes" not in source
 
 
 def test_connector_evidence_says_when_no_signals(db_session):
@@ -135,7 +134,6 @@ def test_connector_evidence_says_when_no_signals(db_session):
         "No completed job or delivery evidence has been recorded."
     )
     assert evidence["needs_attention"] is False
-    assert data["stats"]["attention"] == 0
 
 
 def test_connector_evidence_reports_last_success_without_health_label(db_session):
@@ -161,7 +159,6 @@ def test_connector_evidence_reports_last_success_without_health_label(db_session
     evidence = _evidence_for(data, connector)
     assert evidence["last_result"] == "The last completed integration job succeeded."
     assert evidence["needs_attention"] is False
-    assert data["stats"]["attention"] == 0
 
 
 def test_connector_evidence_reports_last_failure_and_attention(db_session):
@@ -187,7 +184,6 @@ def test_connector_evidence_reports_last_failure_and_attention(db_session):
     evidence = _evidence_for(data, connector)
     assert evidence["last_result"] == "The last completed integration job failed."
     assert evidence["needs_attention"] is True
-    assert data["stats"]["attention"] == 1
 
 
 def test_connector_evidence_ignores_in_flight_runs(db_session):
@@ -207,7 +203,7 @@ def test_connector_evidence_ignores_in_flight_runs(db_session):
     )
 
 
-def test_activity_log_resolves_connector_name_and_run_duration(db_session):
+def test_scoped_activity_log_reports_run_duration(db_session):
     connector = _make_installation(db_session, name=f"Billing sync {uuid4().hex[:6]}")
     started = datetime.now(UTC) - timedelta(minutes=10)
     _make_run(
@@ -219,19 +215,60 @@ def test_activity_log_resolves_connector_name_and_run_duration(db_session):
         job_name="pull-tickets",
     )
 
-    data = web_integrations.build_installed_integrations_data(db_session)
+    data = web_integrations.build_installed_integrations_data(
+        db_session, activity_installation_id=connector.id
+    )
 
-    entries = [
-        item
-        for item in data["activity_log"]
-        if item["connector_id"] == str(connector.id)
-    ]
+    entries = data["activity_log"]
     assert entries, "run should appear in the activity log"
     entry = entries[0]
-    assert entry["connector_name"] == connector.name
+    assert entry["installation_id"] == str(connector.id)
     assert entry["event_type"] == "job: pull-tickets"
     assert entry["status"] == "success"
     assert entry["response_time_ms"] == 2500
+
+
+def test_activity_is_loaded_only_for_selected_installation(db_session):
+    first = _make_installation(db_session)
+    second = _make_installation(db_session)
+    now = datetime.now(UTC)
+    _make_run(
+        db_session,
+        first,
+        status=IntegrationRunStatus.success,
+        started_at=now - timedelta(minutes=2),
+    )
+    _make_run(
+        db_session,
+        second,
+        status=IntegrationRunStatus.failed,
+        started_at=now - timedelta(minutes=1),
+    )
+
+    assert (
+        web_integrations.build_installed_integrations_data(db_session)["activity_log"]
+        == []
+    )
+    selected = web_integrations.build_installed_integrations_data(
+        db_session, activity_installation_id=first.id
+    )["activity_log"]
+    assert len(selected) == 1
+    assert selected[0]["installation_id"] == str(first.id)
+
+
+def test_installed_list_uses_canonical_page_and_preserves_selected_activity(db_session):
+    first = _make_installation(db_session, name="Alpha integration")
+    _make_installation(db_session, name="Beta integration")
+    query = web_integrations.installed_list_query(
+        search="integration", status="enabled", page=2, per_page=10
+    )
+    data = web_integrations.build_installed_integrations_data(
+        db_session, activity_installation_id=first.id, list_query=query
+    )
+    assert data["page_meta"].total_items == 2
+    assert data["list_query"].page == 1
+    assert len(data["integrations"]) == 2
+    assert data["activity_installation"]["installation"].id == first.id
 
 
 def test_api_key_auth_stamps_last_used_at(db_session):

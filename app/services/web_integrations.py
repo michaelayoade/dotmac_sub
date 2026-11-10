@@ -10,10 +10,10 @@ from typing import cast
 from urllib.parse import urlparse
 from uuid import UUID
 
-import httpx
 from sqlalchemy import case, func
 from sqlalchemy.orm import Session
 
+from app.models.connector import ConnectorAuthType, ConnectorConfig, ConnectorType
 from app.models.integration import (
     IntegrationJob,
     IntegrationRun,
@@ -29,7 +29,6 @@ from app.schemas.connector import ConnectorConfigCreate, ConnectorConfigUpdate
 from app.schemas.integration import IntegrationJobCreate, IntegrationTargetCreate
 from app.services import connector as connector_service
 from app.services import integration as integration_service
-from app.services import operational_checks as operational_checks_service
 from app.services.common import validate_enum
 from app.services.integrations import installations
 from app.services.integrations import registry as integration_registry
@@ -37,9 +36,51 @@ from app.services.integrations.runtime_execution import (
     build_execution_context,
     validate_connection,
 )
+from app.services.list_query import (
+    ListDefinition,
+    ListFieldDefinition,
+    ListQuery,
+    PageMeta,
+)
 from app.validators.forms import parse_uuid
 
 logger = logging.getLogger(__name__)
+
+INSTALLED_LIST_DEFINITION = ListDefinition(
+    key="installed-integrations",
+    fields=(
+        ListFieldDefinition("name", "Integration", searchable=True, sortable=True),
+        ListFieldDefinition("status", "State", filterable=True),
+    ),
+    default_sort="name",
+    default_sort_dir="asc",
+)
+
+
+def installed_list_query(
+    *,
+    search: str = "",
+    status: str = "all",
+    sort: str = "name",
+    direction: str = "asc",
+    page: int = 1,
+    per_page: int = 25,
+) -> ListQuery:
+    return INSTALLED_LIST_DEFINITION.build_query(
+        search=search[:160],
+        filters={
+            "status": status
+            if status
+            in {"all", "draft", "validating", "disabled", "enabled", "quarantined"}
+            else "all"
+        },
+        sort_by=sort if sort in INSTALLED_LIST_DEFINITION.sortable_keys else "name",
+        sort_dir=direction if direction in {"asc", "desc"} else "asc",
+        page=max(1, page),
+        per_page=per_page
+        if per_page in INSTALLED_LIST_DEFINITION.per_page_options
+        else 25,
+    )
 
 
 @dataclass(frozen=True, slots=True)
@@ -101,43 +142,196 @@ def _parse_json(value: str | None, field: str) -> dict | None:
 
 
 def connector_form_options() -> dict[str, object]:
-    from app.models.connector import ConnectorAuthType, ConnectorType
-
     return {
         "connector_types": [t.value for t in ConnectorType],
         "auth_types": [t.value for t in ConnectorAuthType],
     }
 
 
+@dataclass(frozen=True, slots=True, repr=False)
+class ConnectorFormCommand:
+    auth_type: ConnectorAuthType
+    base_url: str | None
+    timeout_sec: int | None
+    username: str | None
+    password: str | None
+    token: str | None
+    api_key: str | None
+    secret: str | None
+    client_id: str | None
+    client_secret: str | None
+    header_names: tuple[str, ...]
+    header_values: tuple[str, ...]
+    retry_max_attempts: int | None
+    retry_backoff_sec: int | None
+    notes: str | None
+    is_active: bool
+    name: str | None = None
+    connector_type: ConnectorType | None = None
+    clear_base_url: bool = False
+
+
+def _auth_fields(command: ConnectorFormCommand) -> dict[str, str]:
+    fields = {
+        ConnectorAuthType.basic: (
+            ("username", command.username),
+            ("password", command.password),
+        ),
+        ConnectorAuthType.bearer: (("token", command.token),),
+        ConnectorAuthType.api_key: (("api_key", command.api_key),),
+        ConnectorAuthType.hmac: (("secret", command.secret),),
+        ConnectorAuthType.oauth2: (
+            ("client_id", command.client_id),
+            ("client_secret", command.client_secret),
+        ),
+    }.get(command.auth_type, ())
+    return {key: value for key, value in fields if value and value.strip()}
+
+
+def _validate_auth_fields(auth_type: ConnectorAuthType, auth: dict[str, str]) -> None:
+    required = {
+        ConnectorAuthType.basic: ("username", "password"),
+        ConnectorAuthType.bearer: ("token",),
+        ConnectorAuthType.api_key: ("api_key",),
+        ConnectorAuthType.hmac: ("secret",),
+        ConnectorAuthType.oauth2: ("client_id", "client_secret"),
+    }.get(auth_type, ())
+    missing = [key.replace("_", " ") for key in required if not auth.get(key)]
+    if missing:
+        raise ValueError(
+            f"Enter {', '.join(missing)} for {auth_type.value} authentication."
+        )
+
+
+def _header_fields(command: ConnectorFormCommand) -> dict[str, str]:
+    if len(command.header_names) != len(command.header_values):
+        raise ValueError("Each header needs a name and a value.")
+    headers: dict[str, str] = {}
+    for raw_name, value in zip(
+        command.header_names, command.header_values, strict=True
+    ):
+        name = raw_name.strip()
+        if not name and not value:
+            continue
+        if (
+            not name
+            or not name.isascii()
+            or any(not (char.isalnum() or char in "!#$%&'*+-.^_`|~") for char in name)
+        ):
+            raise ValueError("Header names may contain only HTTP header characters.")
+        if "\r" in value or "\n" in value:
+            raise ValueError("Header values cannot contain line breaks.")
+        if name.lower() in (key.lower() for key in headers):
+            raise ValueError(f"Header {name} is listed more than once.")
+        headers[name] = value
+    return headers
+
+
+def _http_base_url(value: str | None) -> str | None:
+    url = (value or "").strip()
+    if not url:
+        return None
+    if len(url) > 500:
+        raise ValueError("Base URL must be 500 characters or fewer.")
+    if any(ord(char) < 32 or ord(char) == 127 for char in url):
+        raise ValueError("Base URL cannot contain control characters.")
+    try:
+        parsed = urlparse(url)
+        hostname = parsed.hostname
+        port = parsed.port
+    except ValueError as exc:
+        raise ValueError("Enter a valid HTTP(S) base URL.") from exc
+    if (
+        parsed.scheme not in {"http", "https"}
+        or not hostname
+        or port == 0
+        or parsed.username is not None
+        or parsed.password is not None
+        or parsed.query
+        or parsed.fragment
+    ):
+        raise ValueError(
+            "Enter an HTTP(S) base URL without credentials or query parameters. "
+            "Use the integration's secret setup for credentials."
+        )
+    return url
+
+
+def _retry_fields(command: ConnectorFormCommand) -> dict[str, int]:
+    attempts = command.retry_max_attempts
+    backoff = command.retry_backoff_sec
+    if attempts is not None and not 1 <= attempts <= 10:
+        raise ValueError("Retry attempts must be between 1 and 10.")
+    if backoff is not None and not 0 <= backoff <= 3600:
+        raise ValueError("Retry delay must be between 0 and 3600 seconds.")
+    return {
+        key: value
+        for key, value in (("max_attempts", attempts), ("backoff_sec", backoff))
+        if value is not None
+    }
+
+
 def connector_error_state(
-    *,
-    name: str,
-    connector_type: str,
-    auth_type: str,
-    base_url: str | None,
-    timeout_sec: str | None,
-    auth_config: str | None,
-    headers: str | None,
-    retry_policy: str | None,
-    metadata: str | None,
-    notes: str | None,
-    is_active: bool,
+    command: ConnectorFormCommand,
 ) -> dict[str, object]:
+    try:
+        safe_base_url = _http_base_url(command.base_url) or ""
+    except ValueError:
+        safe_base_url = ""
+    header_rows = [
+        {
+            "name": name,
+            "value": value if value == SECRET_VALUE_SENTINEL else "",
+            "secret": value == SECRET_VALUE_SENTINEL,
+        }
+        for name, value in zip(command.header_names, command.header_values)
+    ]
     return {
         **connector_form_options(),
         "form": {
-            "name": name,
-            "connector_type": connector_type,
-            "auth_type": auth_type,
-            "base_url": base_url or "",
-            "timeout_sec": timeout_sec or "",
-            "auth_config": auth_config or "",
-            "headers": headers or "",
-            "retry_policy": retry_policy or "",
-            "metadata": metadata or "",
-            "notes": notes or "",
-            "is_active": is_active,
+            "name": command.name or "",
+            "connector_type": command.connector_type.value
+            if command.connector_type
+            else "custom",
+            "auth_type": command.auth_type.value,
+            "base_url": safe_base_url,
+            "timeout_sec": command.timeout_sec or "",
+            "username": command.username or "",
+            "client_id": command.client_id or "",
+            "header_rows": header_rows or [{"name": "", "value": "", "secret": False}],
+            "retry_max_attempts": command.retry_max_attempts or "",
+            "retry_backoff_sec": command.retry_backoff_sec
+            if command.retry_backoff_sec is not None
+            else "",
+            "notes": command.notes or "",
+            "is_active": command.is_active,
         },
+    }
+
+
+def connector_edit_form(connector: ConnectorConfig) -> dict[str, object]:
+    auth = getattr(connector, "auth_config", None) or {}
+    headers = getattr(connector, "headers", None) or {}
+    retry = getattr(connector, "retry_policy", None) or {}
+    return {
+        "auth_type": connector.auth_type.value,
+        "base_url": "",
+        "timeout_sec": connector.timeout_sec or "",
+        "username": auth.get("username", ""),
+        "client_id": auth.get("client_id", ""),
+        "header_rows": [
+            {
+                "name": name,
+                "value": SECRET_VALUE_SENTINEL if value else "",
+                "secret": bool(value),
+            }
+            for name, value in headers.items()
+        ]
+        or [{"name": "", "value": "", "secret": False}],
+        "retry_max_attempts": retry.get("max_attempts", ""),
+        "retry_backoff_sec": retry.get("backoff_sec", ""),
+        "notes": connector.notes or "",
+        "is_active": connector.is_active,
     }
 
 
@@ -252,73 +446,6 @@ def job_error_state(
     }
 
 
-def connector_stats(connectors: list) -> dict[str, object]:
-    by_type: dict[str, int] = {}
-    stats = {
-        "total": len(connectors),
-        "active": sum(1 for c in connectors if c.is_active),
-        "by_type": by_type,
-    }
-    for connector in connectors:
-        ctype = (
-            connector.connector_type.value
-            if hasattr(connector.connector_type, "value")
-            else str(connector.connector_type or "custom")
-        )
-        by_type[ctype] = by_type.get(ctype, 0) + 1
-    return stats
-
-
-def build_connectors_list_data(db) -> dict[str, object]:
-    connectors = connector_service.connector_configs.list_all(
-        db=db,
-        connector_type=None,
-        auth_type=None,
-        order_by="name",
-        order_dir="asc",
-        limit=100,
-        offset=0,
-    )
-    installations_rows = [
-        row
-        for row in installations.list_installations(db, limit=500)
-        if row.state != IntegrationInstallationState.retired.value
-    ]
-    managed_connectors = [
-        {
-            "installation": installation,
-            "definition": integration_registry.require_connector_definition(
-                installation.connector_key
-            ),
-            "manage_url": _installation_manage_url(installation),
-        }
-        for installation in installations_rows
-    ]
-    stats = connector_stats(connectors)
-    stats["total"] += len(managed_connectors)
-    stats["active"] += sum(
-        row.state == IntegrationInstallationState.enabled.value
-        for row in installations_rows
-    )
-    return {
-        "connectors": connectors,
-        "managed_connectors": managed_connectors,
-        "stats": stats,
-    }
-
-
-def _parse_version_tuple(version: str) -> tuple[int, int, int]:
-    raw = (version or "0.0.0").strip().lower().lstrip("v")
-    parts = raw.split(".")
-    nums = []
-    for item in parts[:3]:
-        digits = "".join(ch for ch in item if ch.isdigit())
-        nums.append(int(digits) if digits else 0)
-    while len(nums) < 3:
-        nums.append(0)
-    return tuple(nums)  # type: ignore[return-value]
-
-
 def build_marketplace_data(db) -> dict[str, object]:
     installed_rows = (
         db.query(IntegrationInstallation)
@@ -328,62 +455,35 @@ def build_marketplace_data(db) -> dict[str, object]:
         .order_by(IntegrationInstallation.created_at.asc())
         .all()
     )
-    installed_by_key = {
-        installation.connector_key: installation for installation in installed_rows
-    }
+    installed_by_key: dict[str, list[IntegrationInstallation]] = {}
+    for installation in installed_rows:
+        installed_by_key.setdefault(installation.connector_key, []).append(installation)
     discovered = integration_registry.discover_connectors()
+    install_urls = {
+        "whatsapp": "/admin/integrations/whatsapp/config",
+        "meta.social": "/admin/crm/meta",
+        "paystack": "/admin/integrations/payment-gateways/paystack",
+        "flutterwave": "/admin/integrations/payment-gateways/flutterwave",
+    }
     cards: list[dict[str, object]] = []
     for entry in discovered:
-        installed = installed_by_key.get(entry.key)
-        definition = integration_registry.require_connector_definition(entry.key)
-        installed_version = installed.connector_version if installed else None
-        update_available = bool(
-            installed
-            and _parse_version_tuple(entry.version)
-            > _parse_version_tuple(installed_version or "0.0.0")
-        )
+        matches = installed_by_key.get(entry.key, [])
+        installed = matches[0] if len(matches) == 1 else None
         cards.append(
             {
                 "key": entry.key,
                 "name": entry.name,
                 "description": entry.description,
                 "type": entry.connector_type,
-                "available_version": entry.version,
-                "module_name": entry.module_name,
-                "file_size_bytes": entry.file_size_bytes,
-                "installed": bool(installed),
-                "installed_installation": installed,
-                "installed_version": installed_version,
-                "update_available": update_available,
-                "last_sync": installed.updated_at if installed else None,
+                "installed_count": len(matches),
                 "manage_url": _installation_manage_url(installed)
                 if installed
                 else None,
-                "install_url": (
-                    "/admin/integrations/whatsapp/config"
-                    if entry.key == "whatsapp"
-                    else (
-                        "/admin/crm/meta"
-                        if entry.key == "meta.social"
-                        else (
-                            f"/admin/integrations/payment-gateways/{entry.key}"
-                            if entry.key in {"paystack", "flutterwave"}
-                            else None
-                        )
-                    )
-                ),
-                "installable": (definition.runtime.type.value != "catalogue_only"),
+                "install_url": install_urls.get(entry.key),
             }
         )
 
-    return {
-        "marketplace_cards": cards,
-        "stats": {
-            "available": len(cards),
-            "installed": sum(1 for card in cards if card["installed"]),
-            "updates": sum(1 for card in cards if card["update_available"]),
-        },
-    }
+    return {"marketplace_cards": cards}
 
 
 def _installation_manage_url(installation: IntegrationInstallation) -> str:
@@ -541,30 +641,69 @@ def installed_integration_projections(
     return tuple(projections)
 
 
-def build_installed_integrations_data(db: Session) -> dict[str, object]:
-    paystack_operational_check = operational_checks_service.paystack_payment_check(
-        db
-    ).to_dict()
-    crm_operational_check = operational_checks_service.crm_operational_check(
-        db
-    ).to_dict()
-    projections = installed_integration_projections(db)
-    installed = [projection.installation for projection in projections]
+def build_installed_integrations_data(
+    db: Session,
+    *,
+    activity_installation_id: UUID | None = None,
+    list_query: ListQuery | None = None,
+) -> dict[str, object]:
+    all_projections = installed_integration_projections(db)
+    projections = all_projections
+    installed = [projection.installation for projection in all_projections]
     installation_ids = [installation.id for installation in installed]
-    installation_names = {
-        str(installation.id): installation.name for installation in installed
-    }
-    rows = [projection.to_template_data() for projection in projections]
+    list_query = list_query or installed_list_query()
+    if list_query.search:
+        needle = list_query.search.casefold()
+        projections = tuple(
+            row for row in projections if needle in row.installation.name.casefold()
+        )
+    status = list_query.filter_value("status")
+    if status and status != "all":
+        projections = tuple(
+            row for row in projections if row.installation.state == status
+        )
+    projections = tuple(
+        sorted(
+            projections,
+            key=lambda row: (
+                row.installation.name.casefold(),
+                str(row.installation.id),
+            ),
+            reverse=list_query.sort_dir == "desc",
+        )
+    )
+    page_meta = PageMeta.from_query(list_query, len(projections))
+    if page_meta.page != list_query.page:
+        list_query = list_query.with_page(page_meta.page)
+        page_meta = PageMeta.from_query(list_query, len(projections))
+    rows = [
+        row.to_template_data()
+        for row in projections[
+            list_query.offset : list_query.offset + list_query.per_page
+        ]
+    ]
+    selected = (
+        next(
+            (
+                row.to_template_data()
+                for row in all_projections
+                if row.installation.id == activity_installation_id
+            ),
+            None,
+        )
+        if activity_installation_id is not None
+        else None
+    )
 
     activities: list[dict[str, object]] = []
-    if installation_ids:
+    if activity_installation_id in installation_ids:
         run_rows = (
             db.query(
                 IntegrationRun,
                 IntegrationJob.name.label("job_name"),
             )
             .join(IntegrationJob, IntegrationRun.job_id == IntegrationJob.id)
-            .filter(IntegrationRun.installation_id.in_(installation_ids))
+            .filter(IntegrationRun.installation_id == activity_installation_id)
             .order_by(IntegrationRun.started_at.desc())
             .limit(50)
             .all()
@@ -575,14 +714,9 @@ def build_installed_integrations_data(db: Session) -> dict[str, object]:
                 duration_ms = int(
                     (run.finished_at - run.started_at).total_seconds() * 1000
                 )
-            installation_key = str(run.installation_id)
             activities.append(
                 {
-                    "installation_id": installation_key,
-                    "connector_id": installation_key,
-                    "connector_name": installation_names.get(
-                        installation_key, installation_key
-                    ),
+                    "installation_id": str(run.installation_id),
                     "timestamp": run.started_at,
                     "event_type": f"job: {job_name}",
                     "status_code": None,
@@ -597,20 +731,17 @@ def build_installed_integrations_data(db: Session) -> dict[str, object]:
                 IntegrationDelivery.capability_binding_id
                 == IntegrationCapabilityBinding.id,
             )
-            .filter(IntegrationCapabilityBinding.installation_id.in_(installation_ids))
+            .filter(
+                IntegrationCapabilityBinding.installation_id == activity_installation_id
+            )
             .order_by(IntegrationDelivery.created_at.desc())
             .limit(50)
             .all()
         )
         for delivery_row, delivery_installation_id in delivery_rows:
-            installation_key = str(delivery_installation_id)
             activities.append(
                 {
-                    "installation_id": installation_key,
-                    "connector_id": installation_key,
-                    "connector_name": installation_names.get(
-                        installation_key, installation_key
-                    ),
+                    "installation_id": str(delivery_installation_id),
                     "timestamp": delivery_row.last_attempt_at
                     or delivery_row.created_at,
                     "event_type": f"event: {delivery_row.event_type}",
@@ -623,31 +754,10 @@ def build_installed_integrations_data(db: Session) -> dict[str, object]:
     activities = activities[:50]
     return {
         "integrations": rows,
+        "list_query": list_query,
+        "page_meta": page_meta,
+        "activity_installation": selected,
         "activity_log": activities,
-        "stats": {
-            "total": len(rows),
-            "enabled": sum(
-                1
-                for installation in installed
-                if installation.state == IntegrationInstallationState.enabled.value
-            ),
-            "attention": sum(
-                1
-                for row in rows
-                if bool(
-                    cast(
-                        dict[str, object],
-                        row["operational_evidence"],
-                    ).get("needs_attention")
-                )
-            ),
-        },
-        "integration_operational_checks": [
-            paystack_operational_check,
-            crm_operational_check,
-        ],
-        "paystack_operational_check": paystack_operational_check,
-        "crm_operational_check": crm_operational_check,
     }
 
 
@@ -703,69 +813,37 @@ def uninstall_integration(db: Session, connector_id: str):
     return installations.commit_installation_changes(db, installation)
 
 
-def create_connector(
-    db,
-    *,
-    name: str,
-    connector_type: str,
-    auth_type: str,
-    base_url: str | None,
-    timeout_sec: str | None,
-    auth_config: str | None,
-    headers: str | None,
-    retry_policy: str | None,
-    metadata: str | None,
-    notes: str | None = None,
-    is_active: bool = True,
-):
-    from app.models.connector import ConnectorAuthType, ConnectorType
-
+def create_connector(db: Session, command: ConnectorFormCommand):
+    if not command.name or not command.name.strip() or not command.connector_type:
+        raise ValueError("Name and connector type are required.")
+    if len(command.name.strip()) > 160:
+        raise ValueError("Connection name must be 160 characters or fewer.")
+    if (
+        db.query(ConnectorConfig.id)
+        .filter(ConnectorConfig.name == command.name.strip())
+        .first()
+    ):
+        raise ValueError("A legacy connection with this name already exists.")
+    auth = _auth_fields(command)
+    _validate_auth_fields(command.auth_type, auth)
+    if command.timeout_sec is not None and command.timeout_sec < 1:
+        raise ValueError("Timeout must be at least one second.")
     payload = ConnectorConfigCreate(
-        name=name.strip(),
-        connector_type=validate_enum(connector_type, ConnectorType, "connector_type"),
-        auth_type=validate_enum(auth_type, ConnectorAuthType, "auth_type"),
-        base_url=base_url.strip() if base_url else None,
-        timeout_sec=int(timeout_sec) if timeout_sec else None,
-        auth_config=_parse_json(auth_config, "auth_config"),
-        headers=_parse_json(headers, "headers"),
-        retry_policy=_parse_json(retry_policy, "retry_policy"),
-        metadata_=_parse_json(metadata, "metadata"),
-        notes=notes.strip() if notes else None,
-        is_active=is_active,
+        name=command.name.strip(),
+        connector_type=command.connector_type,
+        auth_type=command.auth_type,
+        base_url=_http_base_url(command.base_url),
+        timeout_sec=command.timeout_sec,
+        auth_config=auth or None,
+        headers=_header_fields(command) or None,
+        retry_policy=_retry_fields(command) or None,
+        notes=command.notes.strip() if command.notes else None,
+        is_active=command.is_active,
     )
     return connector_service.connector_configs.create(db, payload)
 
 
-# Header/metadata keys whose values are secrets — masked on display so a connector
-# detail page never re-renders pasted tokens (e.g. an Authorization header).
 SECRET_VALUE_SENTINEL = "__redacted__"
-_SECRET_KEY_HINTS = (
-    "authorization",
-    "token",
-    "secret",
-    "password",
-    "cookie",
-    "api_key",
-    "apikey",
-    "api-key",
-    "auth",
-    "credential",
-)
-
-
-def _is_secret_key(key: str) -> bool:
-    lowered = str(key).lower()
-    return any(hint in lowered for hint in _SECRET_KEY_HINTS)
-
-
-def mask_secret_values(data: dict | None) -> dict:
-    """Copy of ``data`` with secret-keyed values replaced by a sentinel."""
-    if not isinstance(data, dict):
-        return {}
-    return {
-        key: (SECRET_VALUE_SENTINEL if (_is_secret_key(key) and value) else value)
-        for key, value in data.items()
-    }
 
 
 def _unmask_secret_values(submitted: object, stored: dict | None) -> object:
@@ -777,116 +855,48 @@ def _unmask_secret_values(submitted: object, stored: dict | None) -> object:
     if not isinstance(submitted, dict):
         return submitted
     stored = stored if isinstance(stored, dict) else {}
-    return {
-        key: (stored.get(key) if value == SECRET_VALUE_SENTINEL else value)
-        for key, value in submitted.items()
-    }
+    restored = {}
+    for key, value in submitted.items():
+        if value == SECRET_VALUE_SENTINEL:
+            if key not in stored:
+                raise ValueError(f"Enter a value for header {key}.")
+            restored[key] = stored[key]
+        else:
+            restored[key] = value
+    return restored
 
 
 def update_connector_config(
-    db,
+    db: Session,
     connector_id: str,
-    *,
-    base_url: str | None,
-    auth_type: str,
-    timeout_sec: str | None,
-    auth_config: str | None,
-    headers: str | None,
-    retry_policy: str | None,
-    metadata: str | None,
-    notes: str | None,
-    is_active: bool,
+    command: ConnectorFormCommand,
 ):
-    from app.models.connector import ConnectorAuthType
-
     existing = connector_service.connector_configs.get(db, connector_id)
-    timeout_value = int(timeout_sec) if timeout_sec else None
-    payload = ConnectorConfigUpdate(
-        base_url=base_url.strip() if base_url else None,
-        auth_type=validate_enum(auth_type, ConnectorAuthType, "auth_type"),
-        timeout_sec=timeout_value,
-        auth_config=_parse_json(auth_config, "auth_config"),
-        headers=_unmask_secret_values(
-            _parse_json(headers, "headers"), existing.headers
-        ),
-        retry_policy=_parse_json(retry_policy, "retry_policy"),
-        metadata_=_unmask_secret_values(
-            _parse_json(metadata, "metadata"), existing.metadata_
-        ),
-        notes=notes.strip() if notes else None,
-        is_active=is_active,
-    )
-    return connector_service.connector_configs.update(db, connector_id, payload)
-
-
-def build_embedded_connector_data(
-    db,
-    *,
-    connector_id: str,
-    perform_check: bool = False,
-) -> dict[str, object]:
-    connector = connector_service.connector_configs.get(db, connector_id)
-    base_url = (connector.base_url or "").strip()
-    parsed = urlparse(base_url) if base_url else None
-    is_http = bool(parsed and parsed.scheme in {"http", "https"} and parsed.netloc)
-    health_status = "ready" if is_http else "misconfigured"
-    health_http_status: int | None = None
-    probe_checked = False
-    if perform_check and is_http:
-        probe_checked = True
-        health_status, health_http_status, health_message = _probe_embedded_url_health(
-            base_url
-        )
-    else:
-        health_message = (
-            "Connector URL is not configured or invalid. Set a full http(s) base URL to embed this integration."
-            if not is_http
-            else "Connection appears configured. Use 'Check Connection' to probe reachability."
-        )
-    return {
-        "connector": connector,
-        "embed_url": base_url if is_http else "",
-        "health_status": health_status,
-        "health_http_status": health_http_status,
-        "probe_checked": probe_checked,
-        "health_message": health_message,
+    auth = _auth_fields(command)
+    if command.auth_type != existing.auth_type:
+        _validate_auth_fields(command.auth_type, auth)
+    if command.timeout_sec is not None and command.timeout_sec < 1:
+        raise ValueError("Timeout must be at least one second.")
+    data: dict[str, object] = {
+        "auth_type": command.auth_type,
+        "timeout_sec": command.timeout_sec,
+        "headers": _unmask_secret_values(_header_fields(command), existing.headers),
+        "notes": command.notes.strip() if command.notes else None,
+        "is_active": command.is_active,
     }
-
-
-def _probe_embedded_url_health(url: str) -> tuple[str, int | None, str]:
-    try:
-        response = httpx.get(url, timeout=6.0, follow_redirects=True)
-    except Exception as exc:
-        return (
-            "unreachable",
-            None,
-            f"Connection check failed: {exc}. Confirm DNS/network reachability and remote service availability.",
-        )
-
-    status = int(response.status_code)
-    if 200 <= status < 300:
-        return (
-            "ready",
-            status,
-            f"Connection check succeeded ({status}). If iframe still fails, target may block embedding with X-Frame-Options/CSP.",
-        )
-    if status in {401, 403}:
-        return (
-            "auth_required",
-            status,
-            f"Service is reachable but denied access ({status}). Configure credentials/session and verify embed permissions.",
-        )
-    if status >= 500:
-        return (
-            "unreachable",
-            status,
-            f"Service returned server error ({status}). Check upstream service health and logs.",
-        )
-    return (
-        "degraded",
-        status,
-        f"Service responded with status {status}. Verify endpoint path and access controls.",
-    )
+    if command.base_url and command.base_url.strip():
+        data["base_url"] = _http_base_url(command.base_url)
+    elif command.clear_base_url:
+        data["base_url"] = None
+    if auth or command.auth_type != existing.auth_type:
+        data["auth_config"] = auth or None
+    retry = dict(existing.retry_policy or {})
+    for key in ("max_attempts", "backoff_sec"):
+        retry.pop(key, None)
+    retry.update(_retry_fields(command))
+    data["retry_policy"] = retry or None
+    payload = ConnectorConfigUpdate.model_validate(data)
+    return connector_service.connector_configs.update(db, connector_id, payload)
 
 
 def target_stats(targets: list) -> dict[str, object]:

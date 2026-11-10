@@ -1,5 +1,6 @@
 """Admin integrations routes."""
 
+from typing import cast
 from uuid import UUID, uuid4
 
 from fastapi import APIRouter, Depends, Form, HTTPException, Request
@@ -9,6 +10,7 @@ from pydantic import SecretStr
 from sqlalchemy.orm import Session
 
 from app.db import get_db
+from app.models.connector import ConnectorAuthType, ConnectorType
 from app.services import connector as connector_service
 from app.services import integration as integration_service
 from app.services import web_connector_runtime as web_connector_runtime_service
@@ -28,11 +30,56 @@ from app.services.field import material_catalog
 from app.services.integrations import erp_admin as erp_admin_service
 from app.services.integrations import installations, payment_capability
 from app.services.integrations.nextcloud_talk_installation import TALK_CREDENTIAL_SCOPE
+from app.services.list_query import ListQuery, request_needs_canonicalization
 from app.services.owner_commands import CommandContext
 from app.tasks.dotmac_erp_outbox import refresh_material_catalog
 
 router = APIRouter(prefix="/integrations", tags=["web-admin-integrations"])
 templates = Jinja2Templates(directory="templates")
+
+
+def _connector_form_command(
+    name: str | None = Form(None),
+    connector_type: ConnectorType | None = Form(None),
+    auth_type: ConnectorAuthType = Form(ConnectorAuthType.none),
+    base_url: str | None = Form(None),
+    clear_base_url: bool = Form(False),
+    timeout_sec: int | None = Form(None),
+    auth_username: str | None = Form(None),
+    auth_password: str | None = Form(None),
+    auth_token: str | None = Form(None),
+    auth_api_key: str | None = Form(None),
+    auth_secret: str | None = Form(None),
+    auth_client_id: str | None = Form(None),
+    auth_client_secret: str | None = Form(None),
+    header_name: list[str] = Form(default=[]),
+    header_value: list[str] = Form(default=[]),
+    retry_max_attempts: int | None = Form(None),
+    retry_backoff_sec: int | None = Form(None),
+    notes: str | None = Form(None),
+    is_active: bool = Form(False),
+) -> web_integrations_service.ConnectorFormCommand:
+    return web_integrations_service.ConnectorFormCommand(
+        name=name,
+        connector_type=connector_type,
+        auth_type=auth_type,
+        base_url=base_url,
+        clear_base_url=clear_base_url,
+        timeout_sec=timeout_sec,
+        username=auth_username,
+        password=auth_password,
+        token=auth_token,
+        api_key=auth_api_key,
+        secret=auth_secret,
+        client_id=auth_client_id,
+        client_secret=auth_client_secret,
+        header_names=tuple(header_name),
+        header_values=tuple(header_value),
+        retry_max_attempts=retry_max_attempts,
+        retry_backoff_sec=retry_backoff_sec,
+        notes=notes,
+        is_active=is_active,
+    )
 
 
 @router.get(
@@ -126,23 +173,9 @@ def _base_context(
     response_class=HTMLResponse,
     dependencies=[Depends(require_permission("system:settings:read"))],
 )
-def integrations_overview(request: Request, db: Session = Depends(get_db)):
-    """Main integrations page with connector inventory and integration actions."""
-    state = web_integrations_service.build_connectors_list_data(db)
-
-    context = _base_context(request, db, active_page="integrations")
-    context.update(
-        {
-            **state,
-            "page_title": "Integrations",
-            "page_subtitle": "Manage integrations, connectors, syncs, and external system access",
-            "table_title": "Connectors",
-            "recent_activities": recent_activity_for_paths(db, ["/admin/integrations"]),
-        }
-    )
-    return templates.TemplateResponse(
-        "admin/integrations/connectors/index.html", context
-    )
+def integrations_overview():
+    """Lead with installed integrations, the operational work surface."""
+    return RedirectResponse("/admin/integrations/installed", status_code=303)
 
 
 @router.get(
@@ -356,50 +389,109 @@ def sync_configure(
     response_class=HTMLResponse,
     dependencies=[Depends(require_permission("system:settings:read"))],
 )
-def connectors_list(request: Request, db: Session = Depends(get_db)):
-    """List all connector configurations."""
-    state = web_integrations_service.build_connectors_list_data(db)
+def connectors_list(
+    request: Request,
+    search: str = "",
+    status: str = "all",
+    sort: str = "name",
+    dir: str = "asc",
+    page: int = 1,
+    per_page: int = 25,
+    db: Session = Depends(get_db),
+):
+    """List legacy connector configurations separately from installations."""
+    result = connector_service.connector_configs.list_page(
+        db,
+        connector_service.connector_list_query(
+            search=search,
+            status=status,
+            sort=sort,
+            direction=dir,
+            page=page,
+            per_page=per_page,
+        ),
+    )
+    if request_needs_canonicalization(
+        result.query,
+        search=search,
+        filters={"status": status},
+        sort_by=sort,
+        sort_dir=dir,
+        page=page,
+        per_page=per_page,
+    ):
+        return RedirectResponse(
+            result.query.url("/admin/integrations/connectors"), status_code=303
+        )
 
     context = _base_context(request, db, active_page="connectors")
     context.update(
-        {
-            **state,
-            "recent_activities": recent_activity_for_paths(db, ["/admin/integrations"]),
-        }
+        connectors=result.rows,
+        list_query=result.query,
+        page_meta=result.page_meta,
     )
     return templates.TemplateResponse(
         "admin/integrations/connectors/index.html", context
     )
 
 
-@router.get("/marketplace", response_class=HTMLResponse)
+@router.get(
+    "/marketplace",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("system:settings:read"))],
+)
 def integrations_marketplace(request: Request, db: Session = Depends(get_db)):
     """Integrations marketplace with discovered and installed connectors."""
     state = web_integrations_service.build_marketplace_data(db)
     context = _base_context(request, db, active_page="connectors")
-    context.update(
-        {
-            **state,
-            "updates_checked": request.query_params.get("checked") == "1",
-        }
-    )
+    context.update(state)
     return templates.TemplateResponse("admin/integrations/marketplace.html", context)
 
 
-@router.post(
-    "/marketplace/check-updates",
+@router.get(
+    "/installed",
     response_class=HTMLResponse,
-    dependencies=[Depends(require_permission("system:settings:write"))],
+    dependencies=[Depends(require_permission("system:settings:read"))],
 )
-def integrations_marketplace_check_updates():
-    return RedirectResponse(
-        "/admin/integrations/marketplace?checked=1", status_code=303
+def integrations_installed(
+    request: Request,
+    activity_for: UUID | None = None,
+    search: str = "",
+    status: str = "all",
+    sort: str = "name",
+    dir: str = "asc",
+    page: int = 1,
+    per_page: int = 25,
+    db: Session = Depends(get_db),
+):
+    state = web_integrations_service.build_installed_integrations_data(
+        db,
+        activity_installation_id=activity_for,
+        list_query=web_integrations_service.installed_list_query(
+            search=search,
+            status=status,
+            sort=sort,
+            direction=dir,
+            page=page,
+            per_page=per_page,
+        ),
     )
-
-
-@router.get("/installed", response_class=HTMLResponse)
-def integrations_installed(request: Request, db: Session = Depends(get_db)):
-    state = web_integrations_service.build_installed_integrations_data(db)
+    if activity_for is not None and state["activity_installation"] is None:
+        raise HTTPException(status_code=404, detail="Installation not found")
+    list_query = cast(ListQuery, state["list_query"])
+    if request_needs_canonicalization(
+        list_query,
+        search=search,
+        filters={"status": status},
+        sort_by=sort,
+        sort_dir=dir,
+        page=page,
+        per_page=per_page,
+    ):
+        url = list_query.url("/admin/integrations/installed")
+        if activity_for is not None:
+            url += f"&activity_for={activity_for}"
+        return RedirectResponse(url, status_code=303)
     context = _base_context(request, db, active_page="connectors")
     context.update(
         {
@@ -420,12 +512,15 @@ def integrations_installed_bulk(
     action: str = Form(...),
     db: Session = Depends(get_db),
 ):
-    if connector_ids:
-        web_integrations_service.bulk_set_integrations_enabled(
-            db,
-            connector_ids=connector_ids,
-            enabled=(action == "enable"),
-        )
+    if action not in {"enable", "disable"}:
+        raise HTTPException(status_code=400, detail="Invalid bulk action")
+    if not connector_ids:
+        return RedirectResponse("/admin/integrations/installed", status_code=303)
+    web_integrations_service.bulk_set_integrations_enabled(
+        db,
+        connector_ids=connector_ids,
+        enabled=(action == "enable"),
+    )
     return RedirectResponse("/admin/integrations/installed?saved=1", status_code=303)
 
 
@@ -457,7 +552,11 @@ def integrations_installed_uninstall(connector_id: str, db: Session = Depends(ge
     return RedirectResponse("/admin/integrations/installed?saved=1", status_code=303)
 
 
-@router.get("/connectors/new", response_class=HTMLResponse)
+@router.get(
+    "/connectors/new",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("system:settings:write"))],
+)
 def connector_new(request: Request, db: Session = Depends(get_db)):
     """New connector form."""
     context = _base_context(request, db, active_page="connectors")
@@ -472,51 +571,18 @@ def connector_new(request: Request, db: Session = Depends(get_db)):
 )
 def connector_create(
     request: Request,
-    name: str = Form(...),
-    connector_type: str = Form("custom"),
-    auth_type: str = Form("none"),
-    base_url: str | None = Form(None),
-    timeout_sec: str | None = Form(None),
-    auth_config: str | None = Form(None),
-    headers: str | None = Form(None),
-    retry_policy: str | None = Form(None),
-    metadata: str | None = Form(None),
-    notes: str | None = Form(None),
-    is_active: bool = Form(False),
+    command: web_integrations_service.ConnectorFormCommand = Depends(
+        _connector_form_command
+    ),
     db: Session = Depends(get_db),
 ):
     try:
-        connector = web_integrations_service.create_connector(
-            db,
-            name=name,
-            connector_type=connector_type,
-            auth_type=auth_type,
-            base_url=base_url,
-            timeout_sec=timeout_sec,
-            auth_config=auth_config,
-            headers=headers,
-            retry_policy=retry_policy,
-            metadata=metadata,
-            notes=notes,
-            is_active=is_active,
-        )
-    except Exception as exc:
+        connector = web_integrations_service.create_connector(db, command=command)
+    except ValueError as exc:
         context = _base_context(request, db, active_page="connectors")
         context.update(
             {
-                **web_integrations_service.connector_error_state(
-                    name=name,
-                    connector_type=connector_type,
-                    auth_type=auth_type,
-                    base_url=base_url,
-                    timeout_sec=timeout_sec,
-                    auth_config=auth_config,
-                    headers=headers,
-                    retry_policy=retry_policy,
-                    metadata=metadata,
-                    notes=notes,
-                    is_active=is_active,
-                ),
+                **web_integrations_service.connector_error_state(command),
                 "error": str(exc),
             }
         )
@@ -528,7 +594,11 @@ def connector_create(
     )
 
 
-@router.get("/connectors/{connector_id}", response_class=HTMLResponse)
+@router.get(
+    "/connectors/{connector_id}",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("system:settings:read"))],
+)
 def connector_detail(
     request: Request, connector_id: str, db: Session = Depends(get_db)
 ):
@@ -548,14 +618,7 @@ def connector_detail(
     context.update(
         {
             "connector": connector,
-            # Secret-keyed header/metadata values are masked for display; the
-            # update path restores them unless overwritten (see web_integrations).
-            "headers_display": web_integrations_service.mask_secret_values(
-                connector.headers
-            ),
-            "metadata_display": web_integrations_service.mask_secret_values(
-                connector.metadata_
-            ),
+            "form": web_integrations_service.connector_edit_form(connector),
             **web_integrations_service.connector_form_options(),
         }
     )
@@ -569,59 +632,42 @@ def connector_detail(
     dependencies=[Depends(require_permission("system:settings:write"))],
 )
 def connector_update(
+    request: Request,
     connector_id: str,
-    base_url: str | None = Form(None),
-    auth_type: str = Form("none"),
-    timeout_sec: str | None = Form(None),
-    auth_config: str | None = Form(None),
-    headers: str | None = Form(None),
-    retry_policy: str | None = Form(None),
-    metadata: str | None = Form(None),
-    notes: str | None = Form(None),
-    is_active: bool = Form(False),
+    command: web_integrations_service.ConnectorFormCommand = Depends(
+        _connector_form_command
+    ),
     db: Session = Depends(get_db),
 ):
-    web_integrations_service.update_connector_config(
-        db,
-        connector_id,
-        base_url=base_url,
-        auth_type=auth_type,
-        timeout_sec=timeout_sec,
-        auth_config=auth_config,
-        headers=headers,
-        retry_policy=retry_policy,
-        metadata=metadata,
-        notes=notes,
-        is_active=is_active,
-    )
+    try:
+        web_integrations_service.update_connector_config(
+            db, connector_id=connector_id, command=command
+        )
+    except ValueError as exc:
+        connector = connector_service.connector_configs.get(db, connector_id)
+        context = _base_context(request, db, active_page="connectors")
+        context.update(
+            connector=connector,
+            form=web_integrations_service.connector_error_state(command)["form"],
+            error=str(exc),
+            **web_integrations_service.connector_form_options(),
+        )
+        return templates.TemplateResponse(
+            "admin/integrations/connectors/detail.html", context, status_code=400
+        )
     return RedirectResponse(
         url=f"/admin/integrations/connectors/{connector_id}?saved=1", status_code=303
     )
 
 
-@router.get("/connectors/{connector_id}/embed", response_class=HTMLResponse)
-def connector_embed(request: Request, connector_id: str, db: Session = Depends(get_db)):
-    """Embedded connector frame view with reload/open controls."""
-    perform_check = request.query_params.get("check") == "1"
-    try:
-        state = web_integrations_service.build_embedded_connector_data(
-            db,
-            connector_id=connector_id,
-            perform_check=perform_check,
-        )
-    except HTTPException as exc:
-        if exc.status_code != 404:
-            raise
-        context = _base_context(request, db, active_page="connectors")
-        context["message"] = "The connector you are trying to embed does not exist."
-        return templates.TemplateResponse(
-            "admin/errors/404.html", context, status_code=404
-        )
-
-    context = _base_context(request, db, active_page="connectors")
-    context.update(state)
-    return templates.TemplateResponse(
-        "admin/integrations/connectors/embed.html", context
+@router.get(
+    "/connectors/{connector_id}/embed",
+    dependencies=[Depends(require_permission("system:settings:read"))],
+)
+def connector_embed(connector_id: str):
+    """Keep old bookmarks while the generic iframe/probe is retired."""
+    return RedirectResponse(
+        f"/admin/integrations/connectors/{connector_id}", status_code=303
     )
 
 

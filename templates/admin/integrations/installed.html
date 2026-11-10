@@ -1,72 +1,56 @@
 {% extends "layouts/admin.html" %}
-{% from "components/ui/macros.html" import ambient_background, page_header, stats_card %}
+{% from "components/ui/macros.html" import status_badge %}
+{% from "components/ui/list_macros.html" import list_pagination, sort_header %}
 
-{% block title %}Installed Integrations - Admin{% endblock %}
+{% block title %}Integrations - Admin{% endblock %}
 
 {% block content %}
-{{ ambient_background("indigo", "violet") }}
-
-<div class="relative space-y-8">
-    {% call page_header(
-        title="Installed Integrations",
-        subtitle="Manage version-pinned installations and inspect the evidence behind runtime behavior",
-        icon='<svg class="h-6 w-6 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"/></svg>',
-        color="indigo",
-        color2="violet"
-    ) %}
-        <a href="/admin/integrations/marketplace" class="inline-flex items-center gap-2 rounded-lg bg-indigo-600 px-4 py-2.5 text-sm font-semibold text-white hover:bg-indigo-700">Connector Catalogue</a>
-    {% endcall %}
+<div class="space-y-6" x-data="{ selected: [] }">
+    <div class="flex flex-wrap items-start justify-between gap-3">
+        <div>
+            <h1 class="text-2xl font-semibold text-slate-900 dark:text-white">Integrations</h1>
+            <p class="mt-1 text-sm text-slate-600 dark:text-slate-300">Installed integrations and their latest observed state.</p>
+        </div>
+        <a href="/admin/integrations/marketplace" class="inline-flex items-center rounded-lg bg-indigo-600 px-4 py-2 text-sm font-semibold text-white hover:bg-indigo-700">Browse integrations</a>
+    </div>
 
     {% if saved %}
-    <div class="rounded-lg border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-700 dark:border-emerald-900/40 dark:bg-emerald-900/20 dark:text-emerald-300">Integration settings updated.</div>
+        {% set success = 'Integration settings updated.' %}
+        {% include "components/feedback/form_success.html" %}
     {% endif %}
 
-    <div class="grid gap-4 sm:grid-cols-3">
-        {{ stats_card("Installed", stats.total, color="slate", color2="gray") }}
-        {{ stats_card("Enabled", stats.enabled, color="emerald", color2="teal") }}
-        {{ stats_card("Need attention", stats.attention, color="amber", color2="orange") }}
-    </div>
+    <p class="text-sm text-slate-600 dark:text-slate-300">Looking for an older configuration? <a href="/admin/integrations/connectors" class="font-medium text-indigo-600 hover:underline dark:text-indigo-400">View legacy connections</a>.</p>
 
-    {% for check in integration_operational_checks %}
-    <div class="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm dark:border-slate-700 dark:bg-slate-800">
-        <div class="grid gap-4 lg:grid-cols-[14rem_minmax(0,1fr)_minmax(0,1fr)]">
-            <div>
-                <h2 class="text-base font-semibold text-slate-900 dark:text-white">{{ check.subject }}</h2>
-                <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">{{ check.expected }}</p>
-            </div>
-            <div>
-                <p class="text-[10.5px] font-semibold uppercase tracking-wide text-slate-400">Last observation and evidence</p>
-                <p class="mt-1 text-sm text-slate-700 dark:text-slate-200">{{ check.last_result }}</p>
-                {% if check.observed_at %}<time class="mt-1 block text-xs tabular-nums text-slate-400">{{ check.observed_at | app_datetime('%Y-%m-%d %H:%M:%S') }}</time>{% endif %}
-                <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">{{ check.evidence }}</p>
-            </div>
-            <div>
-                <p class="text-[10.5px] font-semibold uppercase tracking-wide text-slate-400">Impact and next step</p>
-                <p class="mt-1 text-sm text-slate-700 dark:text-slate-200">{{ check.impact }}</p>
-                <p class="mt-2 text-xs font-medium {{ 'text-amber-700 dark:text-amber-300' if check.needs_attention else 'text-slate-500 dark:text-slate-400' }}">{{ check.next_step }}</p>
-            </div>
-        </div>
-    </div>
-    {% endfor %}
+    <form method="get" action="/admin/integrations/installed" class="flex flex-wrap items-end gap-3" role="search">
+        <div class="min-w-56 flex-1"><label for="installation-search" class="block text-sm font-medium text-slate-700 dark:text-slate-300">Search installations</label><input id="installation-search" name="search" value="{{ list_query.search or '' }}" maxlength="160" class="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-800 dark:text-white"></div>
+        <div><label for="installation-status" class="block text-sm font-medium text-slate-700 dark:text-slate-300">State</label><select id="installation-status" name="status" class="mt-1 rounded-lg border border-slate-300 px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-800 dark:text-white"><option value="all">All</option>{% for state in ('draft', 'validating', 'disabled', 'enabled', 'quarantined') %}<option value="{{ state }}" {% if list_query.filter_value('status') == state %}selected{% endif %}>{{ state|title }}</option>{% endfor %}</select></div>
+        <input type="hidden" name="sort" value="{{ list_query.sort_by }}"><input type="hidden" name="dir" value="{{ list_query.sort_dir }}"><input type="hidden" name="per_page" value="{{ list_query.per_page }}">
+        <button type="submit" class="rounded-lg border border-slate-300 px-4 py-2 text-sm font-medium text-slate-800 dark:border-slate-600 dark:text-slate-200">Apply</button>
+    </form>
 
+    {% if can(request, "system:settings:write") %}
     <form id="bulk-installed-form" method="POST" action="/admin/integrations/installed/bulk" class="hidden">
         {% include "components/forms/csrf_input.html" %}
     </form>
+    {% endif %}
 
     <div class="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm dark:border-slate-700 dark:bg-slate-800">
-        <div class="mb-3 flex items-center gap-2">
+        {% if can(request, "system:settings:write") %}
+        <div class="mb-3 flex items-center gap-2" x-show="selected.length > 0" x-cloak>
             <button type="submit" form="bulk-installed-form" name="action" value="enable" onclick="return confirm('Enable the selected integrations?');" class="rounded-lg bg-emerald-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-emerald-700">Enable Selected</button>
             <button type="submit" form="bulk-installed-form" name="action" value="disable" onclick="return confirm('Disable the selected integrations?');" class="rounded-lg bg-amber-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-amber-700">Disable Selected</button>
         </div>
+        {% endif %}
 
+        {% set state_variant = {'enabled': 'active', 'disabled': 'disabled', 'draft': 'draft', 'validating': 'pending', 'quarantined': 'blocked'} %}
         <div class="overflow-x-auto">
             <table class="min-w-full divide-y divide-slate-200 dark:divide-slate-700">
                 <thead>
                     <tr class="bg-slate-50/60 dark:bg-slate-800/50">
-                        <th class="px-3 py-2 text-left"><input type="checkbox" onclick="for (const el of document.querySelectorAll('.js-select-integration')) el.checked=this.checked"></th>
-                        <th class="px-3 py-2 text-left text-xs font-semibold uppercase tracking-wide text-slate-500">Name</th>
-                        <th class="px-3 py-2 text-left text-xs font-semibold uppercase tracking-wide text-slate-500">Title</th>
-                        <th class="px-3 py-2 text-left text-xs font-semibold uppercase tracking-wide text-slate-500">Root</th>
+                        {% if can(request, "system:settings:write") %}
+                        <th class="px-3 py-2 text-left text-xs font-semibold text-slate-500">Select</th>
+                        {% endif %}
+                        {{ sort_header(list_query, '/admin/integrations/installed', 'name', 'Integration', entity='integrations', th_class='px-3 py-2 text-left text-xs font-semibold uppercase tracking-wide text-slate-500') }}
                         <th class="px-3 py-2 text-left text-xs font-semibold uppercase tracking-wide text-slate-500">Type</th>
                         <th class="px-3 py-2 text-left text-xs font-semibold uppercase tracking-wide text-slate-500">Status</th>
                         <th class="px-3 py-2 text-left text-xs font-semibold uppercase tracking-wide text-slate-500">Last observation</th>
@@ -76,52 +60,69 @@
                 <tbody class="divide-y divide-slate-100 dark:divide-slate-700/50">
                     {% for row in integrations %}
                     <tr>
-                        <td class="px-3 py-2"><input class="js-select-integration" type="checkbox" form="bulk-installed-form" name="connector_ids" value="{{ row.installation.id }}"></td>
-                        <td class="px-3 py-2 text-sm text-slate-700 dark:text-slate-300">{{ row.installation.name }}</td>
-                        <td class="px-3 py-2 text-sm text-slate-700 dark:text-slate-300">{{ row.title }}</td>
-                        <td class="px-3 py-2 text-sm text-slate-700 dark:text-slate-300">{{ row.root|title }}</td>
-                        <td class="px-3 py-2 text-sm text-slate-700 dark:text-slate-300">{{ row.integration_type|replace('_', ' ')|title }}</td>
+                        {% if can(request, "system:settings:write") %}
                         <td class="px-3 py-2">
-                            {% if row.installation.state == 'enabled' %}
-                            <span class="inline-flex rounded-full bg-emerald-100 px-2 py-0.5 text-xs font-semibold text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-300">Enabled</span>
-                            {% else %}
-                            <span class="inline-flex rounded-full bg-slate-100 px-2 py-0.5 text-xs font-semibold text-slate-700 dark:bg-slate-700 dark:text-slate-200">Disabled</span>
+                            {% if row.installation.state in ('enabled', 'disabled') %}
+                            <input type="checkbox" x-model="selected" aria-label="Select {{ row.installation.name }}" form="bulk-installed-form" name="connector_ids" value="{{ row.installation.id }}">
                             {% endif %}
                         </td>
+                        {% endif %}
+                        <td class="px-3 py-2 text-sm text-slate-700 dark:text-slate-300">
+                            <span class="font-medium">{{ row.installation.name }}</span>
+                            {% if row.title != row.installation.name %}<span class="mt-0.5 block text-xs text-slate-500 dark:text-slate-400">{{ row.title }}</span>{% endif %}
+                        </td>
+                        <td class="px-3 py-2 text-sm text-slate-700 dark:text-slate-300">{{ row.integration_type|replace('_', ' ')|title }}</td>
+                        <td class="px-3 py-2">{{ status_badge(row.installation.state|title, state_variant.get(row.installation.state, 'neutral'), size='sm') }}</td>
                         <td class="px-3 py-2">
-                            <p class="max-w-xs text-xs {{ 'font-semibold text-amber-700 dark:text-amber-300' if row.operational_evidence.needs_attention else 'text-slate-600 dark:text-slate-300' }}">{{ row.operational_evidence.last_result }}</p>
+                            <a href="{{ list_query.url('/admin/integrations/installed') }}&amp;activity_for={{ row.installation.id }}#activity" class="block max-w-xs text-xs hover:underline {{ 'font-semibold text-amber-700 dark:text-amber-300' if row.operational_evidence.needs_attention else 'text-slate-600 dark:text-slate-300' }}" aria-label="View runs and deliveries for {{ row.installation.name }}">{{ row.operational_evidence.last_result }}</a>
                             {% if row.operational_evidence.observed_at %}<time class="mt-0.5 block text-[10.5px] tabular-nums text-slate-400">{{ row.operational_evidence.observed_at | app_datetime('%Y-%m-%d %H:%M:%S') }}</time>{% endif %}
                         </td>
-                        <td class="px-3 py-2 text-right space-x-2">
+                        <td class="px-3 py-2 text-right">
                             <a href="{{ row.manage_url }}" class="text-xs font-semibold text-indigo-600 hover:text-indigo-700 dark:text-indigo-400">Manage</a>
-                            <form method="POST" action="/admin/integrations/installed/{{ row.installation.id }}/toggle" class="inline" onsubmit="return confirm('{{ 'Disable this integration?' if row.installation.state == 'enabled' else 'Validate and enable this integration?' }}');">
+                            {% if can(request, "system:settings:write") %}
+                            <details class="ml-2 inline-block text-left align-middle">
+                                <summary class="cursor-pointer text-xs font-semibold text-slate-600 hover:text-slate-900 dark:text-slate-300">More actions</summary>
+                                <div class="mt-2 space-y-2">
+                            {% if row.installation.state in ('enabled', 'disabled') %}
+                            <form method="POST" action="/admin/integrations/installed/{{ row.installation.id }}/toggle" onsubmit="return confirm('{{ 'Disable this integration?' if row.installation.state == 'enabled' else 'Validate and enable this integration?' }}');">
                                 {% include "components/forms/csrf_input.html" %}
                                 <input type="hidden" name="enabled" value="{{ 'false' if row.installation.state == 'enabled' else 'true' }}">
                                 <button type="submit" class="text-xs font-semibold text-amber-600 hover:text-amber-700 dark:text-amber-400">{{ 'Disable' if row.installation.state == 'enabled' else 'Enable' }}</button>
                             </form>
-                            <form method="POST" action="/admin/integrations/installed/{{ row.installation.id }}/uninstall" class="inline" onsubmit="return confirm('Retire this integration? This cannot be re-enabled.')">
+                            {% endif %}
+                            <form method="POST" action="/admin/integrations/installed/{{ row.installation.id }}/uninstall" onsubmit="return confirm('Retire this integration? This cannot be re-enabled.')">
                                 {% include "components/forms/csrf_input.html" %}
                                 <button type="submit" class="text-xs font-semibold text-rose-600 hover:text-rose-700 dark:text-rose-400">Retire</button>
                             </form>
+                                </div>
+                            </details>
+                            {% endif %}
                         </td>
                     </tr>
                     {% else %}
-                    <tr><td colspan="9" class="px-4 py-8 text-center text-sm text-slate-500">No installed integrations yet.</td></tr>
+                    <tr><td colspan="{{ 6 if can(request, 'system:settings:write') else 5 }}" class="px-4 py-8 text-center text-sm text-slate-500">No installed integrations yet. Browse integrations to configure one.</td></tr>
                     {% endfor %}
                 </tbody>
             </table>
         </div>
     </div>
 
-    <div class="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm dark:border-slate-700 dark:bg-slate-800">
-        <h2 class="text-base font-semibold text-slate-900 dark:text-white">Integration Activity Log</h2>
-        <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">Last 50 webhook deliveries and job runs with status and duration.</p>
+    {{ list_pagination(list_query, page_meta, '/admin/integrations/installed', entity='integrations') }}
+
+    {% if activity_installation %}
+    <div id="activity" class="rounded-lg border border-slate-200 bg-white p-5 dark:border-slate-700 dark:bg-slate-800">
+        <div class="flex items-start justify-between gap-3">
+            <div>
+                <h2 class="text-base font-semibold text-slate-900 dark:text-white">Runs and deliveries for {{ activity_installation.installation.name }}</h2>
+                <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">The latest 50 job runs and delivery attempts for this installation. Administrative changes are in the audit log.</p>
+            </div>
+            <a href="{{ list_query.url('/admin/integrations/installed') }}" class="text-sm font-medium text-indigo-600 hover:underline dark:text-indigo-400">Close</a>
+        </div>
         <div class="mt-4 overflow-x-auto">
             <table class="min-w-full divide-y divide-slate-200 dark:divide-slate-700">
                 <thead>
                     <tr class="bg-slate-50/60 dark:bg-slate-800/50">
                         <th class="px-3 py-2 text-left text-xs font-semibold uppercase tracking-wide text-slate-500">Timestamp</th>
-                        <th class="px-3 py-2 text-left text-xs font-semibold uppercase tracking-wide text-slate-500">Connector</th>
                         <th class="px-3 py-2 text-left text-xs font-semibold uppercase tracking-wide text-slate-500">Event</th>
                         <th class="px-3 py-2 text-left text-xs font-semibold uppercase tracking-wide text-slate-500">Status</th>
                         <th class="px-3 py-2 text-left text-xs font-semibold uppercase tracking-wide text-slate-500">HTTP</th>
@@ -132,18 +133,18 @@
                     {% for item in activity_log %}
                     <tr>
                         <td class="px-3 py-2 text-xs text-slate-600 dark:text-slate-300">{{ item.timestamp | app_datetime('%Y-%m-%d %H:%M:%S', '-') }}</td>
-                        <td class="px-3 py-2 text-xs text-slate-600 dark:text-slate-300">{{ item.connector_name or item.connector_id }}</td>
                         <td class="px-3 py-2 text-xs text-slate-600 dark:text-slate-300">{{ item.event_type }}</td>
                         <td class="px-3 py-2 text-xs text-slate-600 dark:text-slate-300">{{ item.status }}</td>
                         <td class="px-3 py-2 text-xs text-slate-600 dark:text-slate-300">{{ item.status_code or '-' }}</td>
                         <td class="px-3 py-2 text-xs text-slate-600 dark:text-slate-300">{{ item.response_time_ms if item.response_time_ms is not none else '-' }}{% if item.response_time_ms is not none %} ms{% endif %}</td>
                     </tr>
                     {% else %}
-                    <tr><td colspan="6" class="px-4 py-8 text-center text-sm text-slate-500">No webhook deliveries or job runs recorded.</td></tr>
+                    <tr><td colspan="5" class="px-4 py-8 text-center text-sm text-slate-500">No job runs or deliveries recorded for this installation.</td></tr>
                     {% endfor %}
                 </tbody>
             </table>
         </div>
     </div>
+    {% endif %}
 </div>
 {% endblock %}
