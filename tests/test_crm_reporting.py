@@ -7,7 +7,9 @@ from uuid import uuid4
 
 import pytest
 
+from app.models.catalog import SubscriptionStatus
 from app.models.collections import DunningCase
+from app.models.lifecycle import LifecycleEventType, SubscriptionLifecycleEvent
 from app.models.network import OLTDevice, OntUnit, OnuOnlineStatus
 from app.models.provisioning import (
     AppointmentStatus,
@@ -142,6 +144,64 @@ def test_retention_page_fetches_twenty_rows_at_a_time(db_session):
     assert {row.customer_id for row in first.rows}.isdisjoint(
         row.customer_id for row in second.rows
     )
+
+
+def test_retention_metrics_count_unique_verified_recovery(db_session, subscription):
+    subscription.subscriber.user_type = UserType.customer
+    subscription.subscriber.created_at = datetime(2026, 1, 1, tzinfo=UTC)
+    times = (
+        (
+            LifecycleEventType.suspend,
+            SubscriptionStatus.active,
+            SubscriptionStatus.suspended,
+            datetime(2026, 10, 31, 12, tzinfo=UTC),
+        ),
+        (
+            LifecycleEventType.resume,
+            SubscriptionStatus.suspended,
+            SubscriptionStatus.active,
+            datetime(2026, 11, 2, 12, tzinfo=UTC),
+        ),
+        (
+            LifecycleEventType.suspend,
+            SubscriptionStatus.active,
+            SubscriptionStatus.suspended,
+            datetime(2026, 11, 3, 12, tzinfo=UTC),
+        ),
+        (
+            LifecycleEventType.resume,
+            SubscriptionStatus.suspended,
+            SubscriptionStatus.active,
+            datetime(2026, 11, 4, 12, tzinfo=UTC),
+        ),
+    )
+    for index, (kind, before, after, occurred_at) in enumerate(times):
+        db_session.add(
+            SubscriptionLifecycleEvent(
+                subscription_id=subscription.id,
+                event_type=kind,
+                from_status=before,
+                to_status=after,
+                evidence_grade="transition_evidence",
+                evidence_source="lifecycle_command",
+                source_id=f"retention-metrics-{uuid4()}-{index}",
+                evidence_fingerprint=f"sha256:{uuid4().hex * 2}",
+                effective_at=occurred_at,
+                recorded_at=occurred_at,
+            )
+        )
+    db_session.commit()
+
+    metrics = crm_reporting.get_customer_retention_metrics(
+        db_session,
+        query=crm_reporting.CustomerRetentionMetricsQuery(
+            date_from=date(2026, 11, 1), date_to=date(2026, 11, 9)
+        ),
+    )
+    assert metrics.recovered_customers == 1
+    assert metrics.eligible_recovery_customers == 1
+    assert metrics.recovery_rate == 100
+    assert metrics.churned_customers == 1
 
 
 def test_agent_performance_period_defaults_and_presets_use_lagos_boundaries():

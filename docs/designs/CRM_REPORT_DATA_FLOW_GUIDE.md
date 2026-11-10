@@ -79,6 +79,19 @@ Ownership: Self-Care-owned; CRM retention engagement records are excluded.
 Data freshness/synchronization: Live native lifecycle read.
 Plain-English flow: Native subscriber/service cancellation state is summarized directly without treating CRM outreach or dispositions as lifecycle truth.
 
+## Customer retention
+
+REPORT: Customer Retention
+Data source: Visible subscriber population, trusted subscription lifecycle transitions, and current invoice/enforcement billing-risk facts.
+Backend query/service: Typed `crm_reporting.get_customer_retention_metrics` uses `subscriber_growth.churn_summary`; the existing `get_customer_retention_page` owns the current queue.
+Transformation/calculation: The selected inclusive Lagos dates scope churn and distinct verified inactive-to-active recoveries. Recovery Rate divides distinct recovered subscribers by the eligible recovery cohort; a zero denominator displays N/A. The current billing-risk queue is independent of the metric dates.
+Route/API: `/admin/customer-retention`; lazy fragments at `/metrics` and `/queue`; existing search-scoped CSV at `/export`.
+UI component/template: `customer_retention_tracker.html` and its metric/queue fragments.
+Displayed as: Churn Rate, Recovered Customers, Recovery Rate, live Tracked Accounts and Revenue At Risk, and profile-linked retention queue. The metric evidence note discloses historical limitations.
+Permission: `reports:billing:read`; queue CSV requires `reports:billing:export`.
+Ownership: Self-Care lifecycle and billing facts; no CRM engagement or outreach state is copied.
+Data freshness/synchronization: Both fragments read committed records when loaded. A failed fragment shows an error rather than zero or stale data.
+
 ## Technician performance
 
 REPORT: Technician Performance
