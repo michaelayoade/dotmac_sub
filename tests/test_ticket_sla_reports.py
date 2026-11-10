@@ -50,6 +50,19 @@ def test_ticket_sla_dashboard_names_current_metric_scope() -> None:
     assert "closed_breached" not in template
 
 
+def test_ticket_sla_breakdowns_use_roomier_responsive_columns() -> None:
+    template = Path("templates/admin/reports/ticket_sla.html").read_text(
+        encoding="utf-8"
+    )
+    breakdowns = template.split("data-ticket-sla-breakdowns", 1)[1].split(
+        '{% call card("SLA Breach Queue"', 1
+    )[0]
+
+    assert "lg:grid-cols-2 2xl:grid-cols-4" in template
+    assert breakdowns.count("min-w-0 break-words") == 4
+    assert breakdowns.count("shrink-0 whitespace-nowrap") == 4
+
+
 def test_ticket_sla_drilldowns_use_the_ticket_list_filter_contract() -> None:
     team_id = str(uuid4())
     team_url = reports_web._ticket_sla_drilldown_url(

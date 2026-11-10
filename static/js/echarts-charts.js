@@ -307,6 +307,7 @@ function createStackedBarChart(ctx, data, options = {}) {
 function createDoughnutChart(ctx, data, options = {}) {
     const container = _container(ctx);
     const pie = !!options.pie;
+    const showLegend = options.legend?.display !== false;
     const inner = pie ? '0%' : (typeof options.cutout === 'string' ? options.cutout : '62%');
     const colors = data.colors || CATEGORICAL;
     const items = (data.labels || []).map((name, i) => ({
@@ -315,11 +316,11 @@ function createDoughnutChart(ctx, data, options = {}) {
     }));
     return _makeChart(container, (theme) => ({
         tooltip: { trigger: 'item', ..._tooltip(theme) },
-        legend: _legend(theme, options.legendPosition || 'right'),
+        legend: { ..._legend(theme, options.legendPosition || 'right'), show: showLegend },
         series: [{
             type: 'pie',
             radius: [inner, '78%'],
-            center: options.legendPosition === 'bottom' ? ['50%', '44%'] : ['40%', '50%'],
+            center: !showLegend ? ['50%', '50%'] : options.legendPosition === 'bottom' ? ['50%', '44%'] : ['40%', '50%'],
             avoidLabelOverlap: true,
             itemStyle: { borderColor: theme.background, borderWidth: 2 },
             label: { show: false },
