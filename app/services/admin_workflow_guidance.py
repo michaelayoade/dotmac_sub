@@ -1245,7 +1245,21 @@ HELP_ONLY_GUIDANCE: tuple[AdminWorkflowGuidance, ...] = (
         "Open linked records when a total or exception needs investigation.",
         "Export only the filtered scope you are authorized to use.",
         "For Upcoming Charges, choose the postpaid or prepaid view, narrow the cohort with the available filters, and use the optional month/year or summary view when you need a focused planning period.",
+        "For Customers, apply the date and status filters before comparing KPIs; reveal the detailed cohort to inspect usage, growth, and regional breakdown, then export the same scope if authorized.",
         route_templates=("/admin/reports",),
+    ),
+    _guide(
+        "customer-retention-report",
+        "Reports",
+        "Review customer retention",
+        "Authorized billing and customer operations staff",
+        "Compare period churn and recovery while reviewing the live billing-risk queue.",
+        (),
+        "Choose both calendar dates and apply the period to the retention metrics.",
+        "Review churn and recovery counts with their cohort sizes and evidence note.",
+        "Search the live billing-risk queue and open a customer profile for investigation.",
+        "Export the current queue when authorized; its scope is the search, not the metric dates.",
+        route_templates=("/admin/customer-retention",),
     ),
     _guide(
         "churn-report",
@@ -2339,6 +2353,7 @@ _ACTION_SPECS: dict[str, tuple[_ActionSpec, ...]] = {
         _action(
             "export-report", "Export a report", 3, permission="reports:billing:export"
         ),
+        _action("review-customer-report", "Review customer report details", 5),
     ),
     "churn-report": (
         _action("choose-churn-window", "Choose the churn date range", 0),
@@ -2349,6 +2364,17 @@ _ACTION_SPECS: dict[str, tuple[_ActionSpec, ...]] = {
             "Export the filtered churn report",
             4,
             permission="customer:read",
+        ),
+    ),
+    "customer-retention-report": (
+        _action("choose-retention-period", "Choose the retention dates", 0),
+        _action("review-retention-metrics", "Review churn and recovery metrics", 1),
+        _action("investigate-retention-queue", "Investigate a customer", 2),
+        _action(
+            "export-retention-queue",
+            "Export the current billing-risk queue",
+            3,
+            permission="reports:billing:export",
         ),
     ),
     "regional-performance-report": (
@@ -2693,6 +2719,7 @@ HELP_NAVIGATION: tuple[AdminHelpNavigationSection, ...] = (
         "Reports",
         (
             "reports-overview",
+            "customer-retention-report",
             "churn-report",
             "regional-performance-report",
             "ticket-sla-report",
@@ -2763,6 +2790,7 @@ HELP_GUIDE_VIEW_PERMISSIONS: dict[str, tuple[str, ...]] = {
     "vendor-routes": ("network:fiber:read",),
     "ticket-sla-report": ("reports:support:read",),
     "churn-report": ("customer:read",),
+    "customer-retention-report": ("reports:billing:read",),
     "regional-performance-report": ("reports:billing:read",),
     "ncc-complaints-report": ("reports:ncc:read",),
     "support-csat-report": ("reports:support:read",),

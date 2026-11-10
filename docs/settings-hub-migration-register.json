@@ -49,11 +49,11 @@
       "disposition": "Mapped to hub; preserve registered type, validation, tenant scope and owner-command writes",
       "source_references": [
         "app/api/nas.py:455",
-        "app/main.py:1867",
-        "app/main.py:1868",
-        "app/main.py:1869",
+        "app/main.py:1877",
+        "app/main.py:1878",
+        "app/main.py:1879",
         "app/main.py:820",
-        "app/main.py:905"
+        "app/main.py:912"
       ]
     },
     {
@@ -77,8 +77,8 @@
       },
       "disposition": "Mapped to hub; preserve registered type, validation, tenant scope and owner-command writes",
       "source_references": [
-        "app/main.py:1877",
-        "app/main.py:1878",
+        "app/main.py:1887",
+        "app/main.py:1888",
         "app/main.py:822",
         "app/main.py:902"
       ]
@@ -104,8 +104,8 @@
       },
       "disposition": "Mapped to hub; preserve registered type, validation, tenant scope and owner-command writes",
       "source_references": [
-        "app/main.py:1879",
-        "app/main.py:1880",
+        "app/main.py:1889",
+        "app/main.py:1890",
         "app/main.py:823",
         "app/main.py:903"
       ]
@@ -131,11 +131,11 @@
       },
       "disposition": "Mapped to hub; preserve registered type, validation, tenant scope and owner-command writes",
       "source_references": [
-        "app/main.py:1871",
-        "app/main.py:1872",
-        "app/main.py:1874",
+        "app/main.py:1881",
+        "app/main.py:1882",
+        "app/main.py:1884",
         "app/main.py:821",
-        "app/main.py:906"
+        "app/main.py:916"
       ]
     },
     {
@@ -1417,8 +1417,8 @@
       },
       "disposition": "Mapped to hub; preserve registered type, validation, tenant scope and owner-command writes",
       "source_references": [
-        "app/main.py:953",
-        "app/main.py:956",
+        "app/main.py:963",
+        "app/main.py:966",
         "app/services/email.py:798",
         "app/services/email.py:803",
         "app/services/email.py:804",
@@ -1449,8 +1449,8 @@
       },
       "disposition": "Mapped to hub; preserve registered type, validation, tenant scope and owner-command writes",
       "source_references": [
-        "app/main.py:953",
-        "app/main.py:957",
+        "app/main.py:963",
+        "app/main.py:967",
         "app/services/web_system_config.py:178",
         "templates/admin/system/config/portal.html:30"
       ]
@@ -2219,7 +2219,7 @@
         "app/services/web_billing_accounts.py:558",
         "app/services/web_billing_collection_accounts.py:44",
         "app/services/web_billing_collection_accounts.py:55",
-        "app/services/web_billing_credits.py:131",
+        "app/services/web_billing_credits.py:223",
         "app/services/web_billing_invoice_forms.py:112",
         "app/services/web_billing_invoice_forms.py:97",
         "app/services/web_billing_overview.py:398",
@@ -8565,8 +8565,8 @@
         "app/schemas/fiber_inquiry.py:113",
         "app/schemas/subscriber.py:601",
         "app/services/ai_intake_conversation_engine.py:2343",
-        "app/services/audit.py:689",
-        "app/services/audit.py:694",
+        "app/services/audit.py:719",
+        "app/services/audit.py:724",
         "app/services/audit_helpers.py:354",
         "app/services/audit_helpers.py:369",
         "app/services/audit_helpers.py:385",
@@ -8598,10 +8598,10 @@
         "app/services/crm_api.py:353",
         "app/services/crm_api.py:367",
         "app/services/crm_api.py:887",
-        "app/services/crm_reporting.py:723",
-        "app/services/crm_reporting.py:774",
-        "app/services/crm_reporting.py:799",
-        "app/services/crm_reporting.py:817",
+        "app/services/crm_reporting.py:849",
+        "app/services/crm_reporting.py:900",
+        "app/services/crm_reporting.py:925",
+        "app/services/crm_reporting.py:943",
         "app/services/customer_bulk_message_contracts.py:40",
         "app/services/customer_canonical_profile_patch.py:25",
         "app/services/customer_experience_handoffs.py:207",
@@ -8849,8 +8849,8 @@
         "app/web/admin/network_monitoring.py:282",
         "app/web/admin/network_monitoring.py:283",
         "app/web/admin/notifications.py:1073",
-        "app/web/admin/reports.py:3237",
-        "app/web/admin/reports.py:3240",
+        "app/web/admin/reports.py:3271",
+        "app/web/admin/reports.py:3274",
         "app/web/admin/resellers.py:496",
         "app/web/admin/resellers.py:501",
         "app/web/admin/resellers.py:526",
@@ -9445,7 +9445,7 @@
         "app/services/web_integrations_whatsapp.py:74",
         "app/services/web_network_speedtests.py:248",
         "app/services/web_network_speedtests.py:94",
-        "app/services/web_reports.py:1154",
+        "app/services/web_reports.py:1267",
         "app/services/web_system_geocode_tool.py:326",
         "app/tasks/notifications.py:858",
         "app/tasks/notifications.py:901",
@@ -9540,12 +9540,12 @@
       },
       "disposition": "Mapped to hub; preserve registered type, validation, tenant scope and owner-command writes",
       "source_references": [
-        "app/services/audit.py:268",
-        "app/services/audit.py:270",
-        "app/services/audit.py:287",
-        "app/services/audit.py:288",
-        "app/services/audit.py:347",
-        "app/services/audit.py:349",
+        "app/services/audit.py:282",
+        "app/services/audit.py:284",
+        "app/services/audit.py:301",
+        "app/services/audit.py:302",
+        "app/services/audit.py:377",
+        "app/services/audit.py:379",
         "app/services/geocoding.py:135",
         "app/services/geocoding.py:170",
         "app/services/web_network_speedtests.py:258"
@@ -20542,7 +20542,7 @@
       "source_references": [
         "app/services/fup_enforcement.py:283",
         "app/services/usage.py:1319",
-        "app/services/usage_summary.py:278",
+        "app/services/usage_summary.py:279",
         "app/services/web_system_settings_views.py:113"
       ]
     },

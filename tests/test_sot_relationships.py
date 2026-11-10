@@ -591,6 +591,8 @@ def test_domain_sot_relationships_encode_cross_domain_dependencies() -> None:
     assert name_remediation.contract is not None
     assert sot_relationships.dependencies_for("customer.usage_summary") == (
         "sessions.radius_reconciliation",
+        "customer.accounts",
+        "access.subscription_lifecycle",
     )
     assert sot_relationships.dependencies_for("financial.prepaid_plan_change") == (
         "financial.account_adjustments",

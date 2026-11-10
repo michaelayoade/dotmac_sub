@@ -259,3 +259,25 @@ before merge.
   engineering standards, Docker build/health, E2E, migrations and all four
   PostgreSQL test shards. The remaining failures above require a fresh CI run.
 - [ ] Confirm all required checks pass on the follow-up commit before merge.
+
+## November 10: refresh after other PRs merged
+
+- [x] Preserve remote billing update `d2906a082` and integrate `origin/main`
+  at `e4d7c18c3` into the feature branch without merging PR #3864.
+- [x] Inspect run `42657004022`: aggregate test gates failed because unit,
+  architecture and PostgreSQL jobs were `abandoned`, not because a failing
+  test assertion was reported. All jobs that completed before those gates
+  passed. No inline review comments were present.
+- [x] Regenerate the settings-hub register after integration. The billing-credit
+  setting reference moves from line 131 to 223; no setting identity, value,
+  destination or authority changes.
+- [x] Lint/format and composition checks pass; billing route audit checks 346
+  destinations against 1,779 admin registrations with no missing or shadowed
+  billing routes.
+- [x] Re-run 63 regression checks after refreshing the register: all pass,
+  including the complete source census, credit projection, billing navigation,
+  responsive controls, adapter baseline and composition checks. Application
+  compilation also passes. Local application-backed collection still requires
+  the private packages; the full GitHub run remains the acceptance gate.
+- [ ] Fresh full CI must complete on the pushed, updated branch. Abandoned jobs
+  do not establish test acceptance and must not be treated as passing.

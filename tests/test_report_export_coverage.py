@@ -8,7 +8,7 @@ REPORT_TEMPLATES = Path("templates/admin/reports")
 
 def test_every_previously_uncovered_report_exposes_an_export_control() -> None:
     expected = {
-        "customer_retention_tracker.html": "/admin/customer-retention/export",
+        "_customer_retention_queue.html": "/admin/customer-retention/export",
         "ticket_sla.html": "/admin/reports/ticket-sla/export",
         "discounts.html": "/admin/reports/discounts/export",
         "subscriber_growth.html": "/admin/reports/extended-export/subscriber-growth",
