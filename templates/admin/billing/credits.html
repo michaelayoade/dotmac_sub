@@ -103,7 +103,7 @@
             </label>
         </div>
         <div class="overflow-x-auto">
-            <table class="min-w-full divide-y divide-slate-200 dark:divide-slate-700">
+            <table class="billing-table w-full divide-y divide-slate-200 dark:divide-slate-700">
                 {{ table_head([
                     {"label": "Credit #"},
                     {"label": "Account"},
@@ -124,12 +124,12 @@
                         'void': 'error'
                     } %}
                     {% call table_row(color="emerald") %}
-                        <td class="whitespace-nowrap px-6 py-4">
-                            <span class="font-semibold text-slate-900 dark:text-white">
+                        <td data-label="Credit" class="px-3 py-2.5">
+                            <a href="/admin/billing/credits/{{ credit.id }}" class="font-semibold text-primary-700 hover:underline focus-visible:underline dark:text-primary-400">
                                 {{ credit.credit_number or (credit.id | string)[:8] ~ '...' }}
-                            </span>
+                            </a>
                         </td>
-                        <td class="whitespace-nowrap px-6 py-4">
+                        <td data-label="Account" class="px-3 py-2.5">
                             {% if credit.account %}
                             <a href="/admin/customers/{{ 'business/' ~ credit.account.id if credit.account.is_business else 'person/' ~ credit.account.id }}" class="text-sm font-medium text-amber-600 hover:text-amber-700 dark:text-amber-400 transition-colors">
                                 {{ credit.account.name }}
@@ -138,16 +138,16 @@
                             <span class="text-sm text-slate-400">-</span>
                             {% endif %}
                         </td>
-                        <td class="whitespace-nowrap px-6 py-4">
+                        <td data-label="Status" class="px-3 py-2.5">
                             {{ status_badge(credit_status | replace('_', ' ') | title, variant=credit_variants.get(credit_status, 'default')) }}
                         </td>
-                        <td class="whitespace-nowrap px-6 py-4 text-right text-sm font-bold text-slate-900 dark:text-white font-mono tabular-nums">
+                        <td data-label="Amount" class="billing-money billing-money px-3 py-2.5 text-right text-sm font-bold text-slate-900 dark:text-white font-mono tabular-nums">
                             {{ credit.currency }} {{ '{:,.2f}'.format(credit.total) }}
                         </td>
-                        <td class="whitespace-nowrap px-6 py-4 text-right text-sm text-slate-600 dark:text-slate-400 font-mono tabular-nums">
+                        <td data-label="Applied" class="billing-money billing-money px-3 py-2.5 text-right text-sm text-slate-600 dark:text-slate-400 font-mono tabular-nums">
                             {{ credit.currency }} {{ '{:,.2f}'.format(credit.applied_total) }}
                         </td>
-                        <td class="whitespace-nowrap px-6 py-4 text-sm text-slate-600 dark:text-slate-400">
+                        <td data-label="Created" class="px-3 py-2.5 text-sm text-slate-600 dark:text-slate-400">
                             {{ credit.created_at | app_datetime('%b %d, %Y', 'N/A', include_tz=False) }}
                         </td>
                     {% endcall %}

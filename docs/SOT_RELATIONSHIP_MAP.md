@@ -212,40 +212,41 @@ but equivalent state and actions resolve through the same backend owners.
 
 ## Domain Order
 
-1. `party_identity`
-2. `customer_context`
-3. `financial_access`
-4. `network`
-5. `subscriber_sessions`
-6. `application_sessions`
-7. `secrets_credentials`
-8. `notifications_communications`
-9. `events_webhooks`
-10. `runtime_infrastructure`
-11. `observability`
-12. `workforce_operations`
-13. `support_operations`
-14. `automation_control_plane`
-15. `custom_fields_control_plane`
-16. `tenancy`
-17. `ai_advisory`
-18. `provisioning_operations`
-19. `regulatory_reporting`
-20. `feature_control_plane`
-21. `authorization_control_plane`
-22. `scheduler_control_plane`
-23. `network_access_control_plane`
-24. `service_intent_control_plane`
-25. `integration_control_plane`
-26. `ui_list_projection`
-27. `ui_bulk_actions`
-28. `ui_display_formatting`
-29. `ui_action_forms`
-30. `ui_semantic_presentation`
-31. `vpn_remote_access`
-32. `geospatial`
-33. `sales_referrals`
-34. `migration_source`
+1. `ui_credit_detail_projection`
+2. `party_identity`
+3. `customer_context`
+4. `financial_access`
+5. `network`
+6. `subscriber_sessions`
+7. `application_sessions`
+8. `secrets_credentials`
+9. `notifications_communications`
+10. `events_webhooks`
+11. `runtime_infrastructure`
+12. `observability`
+13. `workforce_operations`
+14. `support_operations`
+15. `automation_control_plane`
+16. `custom_fields_control_plane`
+17. `tenancy`
+18. `ai_advisory`
+19. `provisioning_operations`
+20. `regulatory_reporting`
+21. `feature_control_plane`
+22. `authorization_control_plane`
+23. `scheduler_control_plane`
+24. `network_access_control_plane`
+25. `service_intent_control_plane`
+26. `integration_control_plane`
+27. `ui_list_projection`
+28. `ui_bulk_actions`
+29. `ui_display_formatting`
+30. `ui_action_forms`
+31. `ui_semantic_presentation`
+32. `vpn_remote_access`
+33. `geospatial`
+34. `sales_referrals`
+35. `migration_source`
 
 Rule: each change should finish one coherent domain boundary: define the owner
 service, migrate the highest-risk callers, and add focused tests. Avoid broad
@@ -498,6 +499,7 @@ Edit the owning domain shard and regenerate; do not hand-edit these rows.
 
 | Service | Concern | Role | Authoritative inputs | Transaction | Migration | Steward | Evidence |
 | --- | --- | --- | --- | --- | --- | --- | --- |
+| `ui.credit_detail_projection` | read-only credit-note detail projection | `resolver` | canonical credit-note document ← `financial.credit_notes`<br>credit status presentation ← `ui.status_presentation` | `read_only` | `native` | billing UI operations | `docs/FRONTEND_SPEC.md`<br>`docs/UI_INFORMATION_AND_ACTION_STANDARD.md`<br>`tests/test_web_billing_credit_detail.py`<br>`tests/architecture/test_credit_detail_projection_boundary.py` |
 | `party.kernel_import` | rollback-only historical Party root and Sub context import | `command_writer` | reviewed complete Party fixture cohort ← `party.registry` | `participant` | `inventoried` | Sub identity and platform operations | `docs/designs/KERNEL_LINEAGE_ENTRY_PROTOTYPE.md`<br>`tests/integration/test_kernel_party_import.py`<br>`tests/architecture/test_kernel_party_import_boundary.py` |
 | `party.identity_reactivation` | reviewed quarantined Party identity reactivation | `command_writer` | attributable Party reactivation decision ← `party.identity_reactivation`<br>canonical Party identity ← `party.registry` | `owner_managed` | `native` | identity and authentication | `docs/PARTY_PRINCIPAL_CONTEXT_BINDING.md`<br>`docs/runbooks/PARTY_IDENTITY_REACTIVATION.md`<br>`docs/SOT_RELATIONSHIP_MAP.md`<br>`tests/test_party_identity_reactivation.py`<br>`tests/architecture/test_party_identity_reactivation_boundary.py` |
 | `party.subscriber_binding_repair` | reviewed single-subscriber Party binding repair | `application_coordinator` | attributable reviewed binding decision ← `party.subscriber_binding_repair`<br>canonical Subscriber account state ← `auth.subscriber_assignments`<br>canonical Party identity ← `party.registry` | `coordinator_managed` | `shadowing` | identity and customer operations | `docs/PARTY_ROLE_RELATIONSHIP_SOT.md`<br>`docs/UI_INFORMATION_AND_ACTION_STANDARD.md`<br>`docs/SOT_RELATIONSHIP_MAP.md`<br>`tests/test_subscriber_party_binding_repair.py`<br>`tests/test_identity_lock_order.py` |

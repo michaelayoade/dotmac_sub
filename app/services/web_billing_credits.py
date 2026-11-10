@@ -4,22 +4,114 @@ from __future__ import annotations
 
 import logging
 import secrets
+from dataclasses import dataclass
+from datetime import datetime
 from decimal import Decimal
 from uuid import UUID
+
+from sqlalchemy.orm import Session
 
 from app.models.billing import CreditNote, CreditNoteStatus
 from app.schemas.billing import (
     CreditNoteIssuePreviewRequest,
     CreditNoteIssueRequest,
 )
+from app.schemas.status_presentation import StatusPresentation
 from app.services import billing as billing_service
 from app.services import display_format
 from app.services import subscriber as subscriber_service
 from app.services import web_billing_customers as web_billing_customers_service
 from app.services.audit_helpers import log_audit_event
+from app.services.status_presentation import credit_note_status_presentation
 from app.validators.forms import parse_decimal, parse_uuid
 
 logger = logging.getLogger(__name__)
+
+
+@dataclass(frozen=True, slots=True)
+class CreditDetailQuery:
+    credit_note_id: UUID
+
+
+@dataclass(frozen=True, slots=True)
+class CreditLineView:
+    id: UUID
+    description: str
+    quantity: Decimal
+    unit_price: Decimal
+    amount: Decimal
+
+
+@dataclass(frozen=True, slots=True)
+class CreditApplicationView:
+    id: UUID
+    invoice_id: UUID
+    amount: Decimal
+    created_at: datetime
+    memo: str | None
+
+
+@dataclass(frozen=True, slots=True)
+class CreditDetailView:
+    id: UUID
+    number: str
+    account_id: UUID
+    account_label: str
+    status: CreditNoteStatus
+    status_presentation: StatusPresentation
+    currency: str
+    subtotal: Decimal
+    tax_total: Decimal
+    total: Decimal
+    applied_total: Decimal
+    memo: str | None
+    created_at: datetime
+    issued_at: datetime | None
+    lines: tuple[CreditLineView, ...]
+    applications: tuple[CreditApplicationView, ...]
+
+
+def build_credit_detail(db: Session, *, query: CreditDetailQuery) -> CreditDetailView:
+    """Project the incumbent credit owner's document; never recalculate money."""
+    credit = billing_service.credit_notes.get(
+        db=db, credit_note_id=str(query.credit_note_id)
+    )
+    return CreditDetailView(
+        id=credit.id,
+        number=credit.credit_number or str(credit.id),
+        account_id=credit.account_id,
+        account_label=web_billing_customers_service.account_label(credit.account),
+        status=credit.status,
+        status_presentation=credit_note_status_presentation(credit.status),
+        currency=credit.currency,
+        subtotal=credit.subtotal,
+        tax_total=credit.tax_total,
+        total=credit.total,
+        applied_total=credit.applied_total,
+        memo=credit.memo,
+        created_at=credit.created_at,
+        issued_at=credit.issued_at,
+        lines=tuple(
+            CreditLineView(
+                id=line.id,
+                description=line.description,
+                quantity=line.quantity,
+                unit_price=line.unit_price,
+                amount=line.amount,
+            )
+            for line in credit.lines
+        ),
+        applications=tuple(
+            CreditApplicationView(
+                id=application.id,
+                invoice_id=application.invoice_id,
+                amount=application.amount,
+                created_at=application.created_at,
+                memo=application.memo,
+            )
+            for application in credit.applications
+        ),
+    )
 
 
 def _default_currency(db) -> str:

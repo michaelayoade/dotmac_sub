@@ -7,6 +7,7 @@ from app.services import sot_relationships
 
 def test_domain_sot_relationships_cover_expected_domains():
     assert sot_relationships.domain_order() == [
+        "ui_credit_detail_projection",
         "party_identity",
         "customer_context",
         "financial_access",

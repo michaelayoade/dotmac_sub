@@ -1,10 +1,28 @@
 from pathlib import Path
 
+import pytest
+from starlette.routing import Match
+
 from app.models.catalog import DunningAction
 from app.schemas.collections import DunningActionLogCreate, DunningCaseCreate
 from app.services import collections as collections_service
 from app.services import web_billing_dunning
 from app.web.admin.billing_dunning import router
+
+
+@pytest.mark.parametrize("action", ["pause", "resume", "close"])
+def test_bulk_confirmation_dispatches_to_bulk_handler(action: str) -> None:
+    scope = {
+        "type": "http",
+        "method": "POST",
+        "path": f"/billing/dunning/bulk/{action}/confirm",
+        "root_path": "",
+    }
+    matched = next(
+        route for route in router.routes if route.matches(scope)[0] is Match.FULL
+    )
+    assert matched.endpoint.__name__ == "confirm_bulk_action"
+    assert matched.matches(scope)[1]["path_params"] == {"action": action}
 
 
 def test_dunning_detail_route_is_registered():
@@ -71,7 +89,7 @@ def test_dunning_safe_action_routes_replace_direct_mutation_routes():
     }
 
     assert (
-        "/billing/dunning/{case_id}/{action}/confirm",
+        "/billing/dunning/{case_id:uuid}/{action}/confirm",
         ("POST",),
     ) in paths
     assert (

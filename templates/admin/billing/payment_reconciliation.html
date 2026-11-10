@@ -78,7 +78,7 @@
                 <h2 class="text-sm font-semibold text-slate-900 dark:text-white">Unmatched Statement Batches</h2>
             </div>
             <div class="max-h-[420px] overflow-auto">
-                <table class="min-w-full divide-y divide-slate-200 dark:divide-slate-700">
+                <table class="billing-table min-w-full divide-y divide-slate-200 dark:divide-slate-700">
                     <thead class="bg-slate-50 dark:bg-slate-900/40">
                         <tr>
                             <th class="px-4 py-2 text-left text-xs font-semibold uppercase text-slate-500">Date</th>
@@ -89,9 +89,9 @@
                     <tbody class="divide-y divide-slate-200 dark:divide-slate-700">
                         {% for row in unmatched_imports %}
                         <tr>
-                            <td class="px-4 py-2 text-sm text-slate-700 dark:text-slate-200">{{ row.occurred_at | app_datetime('%Y-%m-%d %H:%M', '-') }}</td>
-                            <td class="px-4 py-2 text-sm text-slate-700 dark:text-slate-200">{{ row.file_name }}</td>
-                            <td class="px-4 py-2 text-sm font-semibold text-amber-600 dark:text-amber-300">{{ row.unmatched_count }}</td>
+                            <td data-label="Date" class="px-4 py-2 text-sm text-slate-700 dark:text-slate-200">{{ row.occurred_at | app_datetime('%Y-%m-%d %H:%M', '-') }}</td>
+                            <td data-label="File" class="px-4 py-2 text-sm text-slate-700 dark:text-slate-200">{{ row.file_name }}</td>
+                            <td data-label="Unmatched" class="px-4 py-2 text-sm font-semibold text-amber-600 dark:text-amber-300">{{ row.unmatched_count }}</td>
                         </tr>
                         {% else %}
                         <tr><td colspan="3" class="px-4 py-6 text-center text-sm text-slate-500 dark:text-slate-400">No unmatched rows found.</td></tr>
@@ -106,7 +106,7 @@
                 <h2 class="text-sm font-semibold text-slate-900 dark:text-white">Potential Duplicate Payments</h2>
             </div>
             <div class="max-h-[420px] overflow-auto">
-                <table class="min-w-full divide-y divide-slate-200 dark:divide-slate-700">
+                <table class="billing-table min-w-full divide-y divide-slate-200 dark:divide-slate-700">
                     <thead class="bg-slate-50 dark:bg-slate-900/40">
                         <tr>
                             <th class="px-4 py-2 text-left text-xs font-semibold uppercase text-slate-500">External ID</th>
@@ -117,9 +117,9 @@
                     <tbody class="divide-y divide-slate-200 dark:divide-slate-700">
                         {% for row in duplicate_candidates %}
                         <tr>
-                            <td class="px-4 py-2 text-sm text-slate-700 dark:text-slate-200">{{ row.external_id }}</td>
-                            <td class="px-4 py-2 text-sm font-semibold text-red-600 dark:text-red-300">{{ row.count }}</td>
-                            <td class="px-4 py-2 text-sm font-semibold text-slate-900 dark:text-white">{{ row.total_display }}</td>
+                            <td data-label="External ID" class="px-4 py-2 text-sm text-slate-700 dark:text-slate-200">{{ row.external_id }}</td>
+                            <td data-label="Count" class="px-4 py-2 text-sm font-semibold text-red-600 dark:text-red-300">{{ row.count }}</td>
+                            <td data-label="Total" class="billing-money px-4 py-2 text-sm font-semibold text-slate-900 dark:text-white">{{ row.total_display }}</td>
                         </tr>
                         {% else %}
                         <tr><td colspan="3" class="px-4 py-6 text-center text-sm text-slate-500 dark:text-slate-400">No duplicate candidates.</td></tr>

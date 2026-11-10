@@ -125,8 +125,10 @@ _DISPATCH = {
     "credit_notes": _credit_note_rows,
 }
 
-_DETAIL_BASE = {
+_DETAIL_BASE: dict[str, str] = {
     "invoices": "/admin/billing/invoices/",
+    "payments": "/admin/billing/payments/",
+    "credit_notes": "/admin/billing/credits/",
 }
 
 

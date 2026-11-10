@@ -28,12 +28,13 @@
     </div>
 
     {# ledger #}
+    {% set detail_permission = {'invoices': 'billing:invoice:read', 'payments': 'billing:payment:read', 'credit_notes': 'billing:credit_note:read'}.get(facet) %}
     <div class="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm dark:border-slate-800 dark:bg-slate-900">
         <div class="flex items-center justify-between border-b border-slate-200 px-5 py-3 dark:border-slate-800">
             <h2 class="font-display text-sm font-semibold text-slate-900 dark:text-white">{{ facet_label }} <span class="ml-1 font-normal text-slate-400 dark:text-slate-500">· {{ row_count }}</span></h2>
         </div>
         <div class="overflow-x-auto">
-            <table class="min-w-full divide-y divide-slate-100 dark:divide-slate-800">
+            <table class="billing-table min-w-full divide-y divide-slate-100 dark:divide-slate-800">
                 <thead>
                     <tr class="bg-slate-50 dark:bg-slate-800/40">
                         {% for col in columns %}
@@ -45,10 +46,10 @@
                     {% for row in rows %}
                     <tr class="transition-colors hover:bg-slate-50 dark:hover:bg-slate-800/50">
                         {% for col in columns %}
-                        <td class="whitespace-nowrap px-5 py-3 text-sm text-slate-700 dark:text-slate-200">
+                        <td data-label="{{ col[0] }}" class="{% if col[1] in ['total', 'balance', 'amount', 'applied'] %}billing-money {% endif %}px-3 py-2.5 text-sm text-slate-700 dark:text-slate-200">
                             {%- if col[1] == '__status' -%}
                                 {{ status_presentation_badge(row.status, size="sm") }}
-                            {%- elif loop.first and detail_base -%}
+                            {%- elif loop.first and detail_base and detail_permission and can(request, detail_permission) -%}
                                 <a href="{{ detail_base }}{{ row.id }}" class="font-medium text-slate-900 transition-colors hover:text-accent-600 dark:text-white dark:hover:text-accent-400">{{ row[col[1]] }}</a>
                             {%- else -%}
                                 {{ row[col[1]] }}

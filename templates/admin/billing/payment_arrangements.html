@@ -82,22 +82,21 @@
     {# Data table #}
     <div class="animate-fade-in-up overflow-hidden rounded-2xl border border-slate-200/60 bg-white/80 shadow-sm backdrop-blur-sm dark:border-slate-700/60 dark:bg-slate-800/80" style="animation-delay: 150ms;">
         <div class="overflow-x-auto">
-            <table class="min-w-full divide-y divide-slate-200 dark:divide-slate-700">
+            <table class="billing-table min-w-full divide-y divide-slate-200 dark:divide-slate-700">
                 {{ table_head([
                     {"label": "Subscriber"},
                     {"label": "Total Amount"},
                     {"label": "Installments"},
                     {"label": "Frequency"},
                     {"label": "Status"},
-                    {"label": "Next Due"},
-                    {"label": "Actions", "align": "right"}
+                    {"label": "Next Due"}
                 ]) }}
                 <tbody class="divide-y divide-slate-100 dark:divide-slate-800">
                     {% if arrangements %}
                     {% for arr in arrangements %}
                     {% set arrangement_currency = arr.invoice.currency if arr.invoice and arr.invoice.currency else 'NGN' %}
                     {% call table_row(color="emerald") %}
-                        <td class="whitespace-nowrap px-6 py-4">
+                        <td data-label="Subscriber" class="whitespace-nowrap px-6 py-4">
                             <div class="flex items-center gap-3">
                                 <div class="flex h-10 w-10 flex-shrink-0 items-center justify-center rounded-xl bg-gradient-to-br from-emerald-500 to-teal-600 text-white shadow-sm">
                                     <svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -106,30 +105,30 @@
                                 </div>
                                 <div>
                                     {% if arr.subscriber and arr.subscriber.person %}
-                                    <p class="font-semibold text-slate-900 dark:text-white">
+                                    <a href="/admin/billing/payment-arrangements/{{ arr.id }}" class="font-semibold text-primary-700 hover:underline dark:text-primary-300">
                                         {{ arr.subscriber.first_name }} {{ arr.subscriber.last_name }}
-                                    </p>
+                                    </a>
                                     {% else %}
-                                    <p class="font-semibold text-slate-900 dark:text-white">Subscriber</p>
+                                    <a href="/admin/billing/payment-arrangements/{{ arr.id }}" class="font-semibold text-primary-700 hover:underline dark:text-primary-300">Subscriber</a>
                                     {% endif %}
                                     <p class="text-xs text-slate-500 dark:text-slate-400">{{ arr.id | string | truncate(8, True, '') }}</p>
                                 </div>
                             </div>
                         </td>
-                        <td class="whitespace-nowrap px-6 py-4">
+                        <td data-label="Total Amount" class="billing-money whitespace-nowrap px-6 py-4">
                             <span class="text-sm font-bold font-mono tabular-nums text-slate-900 dark:text-white">
                                 {{ arrangement_currency }} {{ "{:,.2f}".format(arr.total_amount) }}
                             </span>
                         </td>
-                        <td class="whitespace-nowrap px-6 py-4 text-sm text-slate-600 dark:text-slate-300">
+                        <td data-label="Installments" class="whitespace-nowrap px-6 py-4 text-sm text-slate-600 dark:text-slate-300">
                             {{ arr.installments_paid }} / {{ arr.installments_total }}
                         </td>
-                        <td class="whitespace-nowrap px-6 py-4">
+                        <td data-label="Frequency" class="whitespace-nowrap px-6 py-4">
                             <span class="inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-medium bg-slate-100 text-slate-800 dark:bg-slate-700 dark:text-slate-200">
                                 {{ arr.frequency.value | replace('_', ' ') | title if arr.frequency else 'N/A' }}
                             </span>
                         </td>
-                        <td class="whitespace-nowrap px-6 py-4">
+                        <td data-label="Status" class="whitespace-nowrap px-6 py-4">
                             {% set st = arr.status.value if arr.status else 'pending' %}
                             {% if st == 'active' %}
                                 {{ status_badge("Active", variant="active") }}
@@ -145,13 +144,8 @@
                                 {{ status_badge(st | title, variant="default") }}
                             {% endif %}
                         </td>
-                        <td class="whitespace-nowrap px-6 py-4 text-sm text-slate-500 dark:text-slate-400">
+                        <td data-label="Next Due" class="whitespace-nowrap px-6 py-4 text-sm text-slate-500 dark:text-slate-400">
                             {{ arr.next_due_date.strftime('%Y-%m-%d') if arr.next_due_date else 'N/A' }}
-                        </td>
-                        <td class="whitespace-nowrap px-6 py-4 text-right">
-                            <div class="flex items-center justify-end gap-2 opacity-0 transition-opacity group-hover:opacity-100">
-                                {{ row_action(href="/admin/billing/payment-arrangements/" ~ arr.id, icon=icon_view(), title="View Details", color="emerald") }}
-                            </div>
                         </td>
                     {% endcall %}
                     {% endfor %}
@@ -161,7 +155,7 @@
                         message="Payment arrangements will appear here when subscribers set up installment plans",
                         icon='<svg class="h-12 w-12" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z"/></svg>',
                         color="emerald",
-                        colspan=7
+                        colspan=6
                     ) }}
                     {% endif %}
                 </tbody>

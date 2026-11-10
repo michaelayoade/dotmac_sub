@@ -195,13 +195,12 @@
         </div>
         {% endif %}
         <div class="overflow-x-auto">
-            <table class="min-w-full divide-y divide-slate-200 dark:divide-slate-700">
+            <table class="billing-table min-w-full divide-y divide-slate-200 dark:divide-slate-700">
                 {{ table_head([
                     {"label": "Transaction"},
                     {"label": "Account"},
-                    {"label": "Amount"},
+                    {"label": "Amount", "align": "right"},
                     {"label": "Method"},
-                    {"label": "Narration"},
                     {"label": "Status"},
                     {"label": "Date"},
                     {"label": "Actions", "align": "right"}
@@ -209,79 +208,47 @@
                 <tbody class="divide-y divide-slate-100 bg-white dark:divide-slate-700/50 dark:bg-slate-800">
                     {% if payments %}
                     {% for payment in payments %}
-                    {% call table_row(color="primary") %}
-                        <td class="whitespace-nowrap px-6 py-4">
-                            <div class="flex items-center gap-4">
-                                <div class="flex h-11 w-11 flex-shrink-0 items-center justify-center rounded-xl bg-primary-50 text-primary-600 dark:bg-primary-900/30 dark:text-primary-400">
-                                    <svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17 9V7a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2m2 4h10a2 2 0 002-2v-6a2 2 0 00-2-2H9a2 2 0 00-2 2v6a2 2 0 002 2zm7-5a2 2 0 11-4 0 2 2 0 014 0z"/></svg>
-                                </div>
-                                <div>
-                                    <a href="/admin/billing/payments/{{ payment.id }}" class="font-mono text-sm font-semibold text-slate-900 dark:text-white hover:text-amber-600">
-                                        {{ payment.display_number | default(payment.id | string | truncate(12, True, '')) }}
-                                    </a>
-                                    {% if payment.external_id %}
-                                    <p class="text-xs text-slate-500 dark:text-slate-400">{{ payment.external_id }}</p>
-                                    {% endif %}
-                                </div>
-                            </div>
+                    <tr class="hover:bg-slate-50 dark:hover:bg-slate-700/40">
+                        <td data-label="Transaction" class="px-3 py-2.5">
+                            <a href="/admin/billing/payments/{{ payment.id }}" class="font-mono text-sm font-semibold text-slate-900 hover:text-primary-700 dark:text-white dark:hover:text-primary-400">
+                                {{ payment.display_number | default(payment.id | string | truncate(12, True, '')) }}
+                            </a>
                         </td>
-                        <td class="whitespace-nowrap px-6 py-4">
+                        <td data-label="Account" class="px-3 py-2.5">
                             {% if payment.account_id %}
-                            <a href="/admin/billing/accounts/{{ payment.account_id }}" class="text-sm text-slate-600 hover:text-amber-600 dark:text-slate-400 dark:hover:text-amber-400 transition-colors">
+                            <a href="/admin/billing/accounts/{{ payment.account_id }}" class="text-sm text-slate-700 hover:text-primary-700 dark:text-slate-300 dark:hover:text-primary-400">
                                 {{ payment.account.name if payment.account else 'Account' }}
                             </a>
-                            {% else %}
-                            <span class="text-sm text-slate-400 dark:text-slate-500">—</span>
-                            {% endif %}
+                            {% else %}<span class="text-slate-500 dark:text-slate-400">—</span>{% endif %}
                         </td>
-                        <td class="whitespace-nowrap px-6 py-4">
-                            <span class="text-sm font-bold text-slate-900 dark:text-white">
-                                {{ payment.currency or 'NGN' }} {{ "{:,.2f}".format(payment.amount or 0) }}
-                            </span>
+                        <td data-label="Amount" class="billing-money whitespace-nowrap px-3 py-2.5 text-right font-mono tabular-nums text-slate-900 dark:text-white">
+                            {{ payment.currency or 'NGN' }} {{ "{:,.2f}".format(payment.amount or 0) }}
                         </td>
-                        <td class="whitespace-nowrap px-6 py-4">
-                            {% set method = payment.display_method | default('Other') %}
-                            <div class="flex items-center gap-2">
-                                {% if method == 'Bank' or method == 'Bank Transfer' %}
-                                <div class="flex h-7 w-7 items-center justify-center rounded-lg bg-blue-100 dark:bg-blue-900/30">
-                                    <svg class="h-4 w-4 text-blue-600 dark:text-blue-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 21V5a2 2 0 00-2-2H7a2 2 0 00-2 2v16m14 0h2m-2 0h-5m-9 0H3m2 0h5M9 7h1m-1 4h1m4-4h1m-1 4h1m-5 10v-5a1 1 0 011-1h2a1 1 0 011 1v5m-4 0h4"/></svg>
-                                </div>
-                                {% elif method == 'card' or method == 'Card' %}
-                                <div class="flex h-7 w-7 items-center justify-center rounded-lg bg-violet-100 dark:bg-violet-900/30">
-                                    <svg class="h-4 w-4 text-violet-600 dark:text-violet-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 10h18M7 15h1m4 0h1m-7 4h12a3 3 0 003-3V8a3 3 0 00-3-3H6a3 3 0 00-3 3v8a3 3 0 003 3z"/></svg>
-                                </div>
-                                {% elif method == 'cash' or method == 'Cash' %}
-                                <div class="flex h-7 w-7 items-center justify-center rounded-lg bg-emerald-100 dark:bg-emerald-900/30">
-                                    <svg class="h-4 w-4 text-emerald-600 dark:text-emerald-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17 9V7a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2m2 4h10a2 2 0 002-2v-6a2 2 0 00-2-2H9a2 2 0 00-2 2v6a2 2 0 002 2zm7-5a2 2 0 11-4 0 2 2 0 014 0z"/></svg>
-                                </div>
-                                {% else %}
-                                <div class="flex h-7 w-7 items-center justify-center rounded-lg bg-amber-100 dark:bg-amber-900/30">
-                                    <svg class="h-4 w-4 text-amber-600 dark:text-amber-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 18h.01M8 21h8a2 2 0 002-2V5a2 2 0 00-2-2H8a2 2 0 00-2 2v14a2 2 0 002 2z"/></svg>
-                                </div>
-                                {% endif %}
-                                <span class="text-sm text-slate-600 dark:text-slate-400">{{ method }}</span>
-                            </div>
+                        <td data-label="Method" class="px-3 py-2.5 text-slate-700 dark:text-slate-300">
+                            {{ payment.display_method | default('Other') }}
                         </td>
-                        <td class="max-w-xs truncate px-6 py-4 text-sm text-slate-600 dark:text-slate-400">{{ payment.narration | default('-') }}</td>
-                        <td class="whitespace-nowrap px-6 py-4">
+                        <td data-label="Status" class="px-3 py-2.5">
                             {{ status_presentation_badge(payment_status_presentations.get(payment.id|string), size="sm") }}
                         </td>
-                        <td class="whitespace-nowrap px-6 py-4">
-                            <span class="text-sm text-slate-600 dark:text-slate-400">{{ payment.created_at | app_datetime('%b %d, %Y', '—', include_tz=False) }}</span>
-                            {% if payment.created_at %}
-                            <p class="text-xs text-slate-400 dark:text-slate-500">{{ payment.created_at | app_datetime('%I:%M %p') }}</p>
-                            {% endif %}
+                        <td data-label="Date" class="whitespace-nowrap px-3 py-2.5 text-slate-700 dark:text-slate-300">
+                            {{ payment.created_at | app_datetime('%b %d, %Y', '—', include_tz=False) }}
+                            {% if payment.created_at %}<p class="text-xs">{{ payment.created_at | app_datetime('%I:%M %p') }}</p>{% endif %}
                         </td>
-                        {% call row_actions() %}
-                            {% if payment.status.value == 'succeeded' %}
-                            {{ row_action(href="/admin/billing/payments/" ~ payment.id ~ "/receipt/pdf", icon='<svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 5v10m0 0 4-4m-4 4-4-4M5 19h14"/></svg>', title="Download receipt", color="emerald") }}
-                            {% endif %}
-                            {{ row_action(href="/admin/billing/payments/" ~ payment.id ~ "/edit", icon=icon_edit(), title="Edit", color="amber") }}
-                        {% endcall %}
-                    {% endcall %}
+                        <td data-label="Actions" class="px-3 py-2.5 text-right">
+                            <div class="flex items-start justify-end gap-2">
+<details class="billing-row-menu">
+                                    <summary aria-label="More actions for payment {{ payment.display_number | default(payment.id) }}">More actions</summary>
+                                    <div>
+{% if payment.status.value == 'succeeded' %}
+                                <a href="/admin/billing/payments/{{ payment.id }}/receipt/pdf" class="inline-flex rounded-lg px-2 py-1 text-sm font-medium text-primary-700 hover:underline dark:text-primary-400">Receipt</a>
+                                {% endif %}
+{% if can(request, 'billing:payment:update') %}<a href="/admin/billing/payments/{{ payment.id }}/edit">Edit</a>{% endif %}</div></details>
+                            </div>
+                        </td>
+                    </tr>
                     {% endfor %}
                     <tr class="bg-slate-50 dark:bg-slate-800/70">
-                        <td colspan="8" class="px-6 py-3">
+                        <td colspan="7" class="px-6 py-3">
                             <div class="flex flex-wrap items-center gap-4 text-xs font-semibold uppercase tracking-wide text-slate-600 dark:text-slate-300">
                                 <span>Succeeded: {{ status_totals.succeeded.count }} ({{ status_totals.succeeded.display }})</span>
                                 <span>Pending: {{ status_totals.pending.count }} ({{ status_totals.pending.display }})</span>
@@ -301,7 +268,7 @@
                         color="emerald",
                         action_label="Record Payment",
                         action_href="/admin/billing/payments/new",
-                        colspan=8
+                        colspan=7
                     ) }}
                     {% endif %}
                 </tbody>

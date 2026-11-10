@@ -67,6 +67,9 @@ from app.services.sot_registry.domains.support_operations import (
 from app.services.sot_registry.domains.tenancy import DOMAIN as TENANCY
 from app.services.sot_registry.domains.ui_action_forms import DOMAIN as UI_ACTION_FORMS
 from app.services.sot_registry.domains.ui_bulk_actions import DOMAIN as UI_BULK_ACTIONS
+from app.services.sot_registry.domains.ui_credit_detail_projection import (
+    DOMAIN as UI_CREDIT_DETAIL_PROJECTION,
+)
 from app.services.sot_registry.domains.ui_display_formatting import (
     DOMAIN as UI_DISPLAY_FORMATTING,
 )
@@ -84,6 +87,7 @@ from app.services.sot_registry.domains.workforce_operations import (
 )
 
 DOMAIN_DECLARATIONS = (
+    UI_CREDIT_DETAIL_PROJECTION,
     PARTY_IDENTITY,
     CUSTOMER_CONTEXT,
     FINANCIAL_ACCESS,

@@ -237,6 +237,7 @@
                     {% endcall %}
                     {% endif %}
                     {% call info_row("Dates") %}
+                        Created: <span class="font-medium text-slate-900 dark:text-white">{{ invoice.created_at | app_datetime('%b %d, %Y %H:%M', 'N/A') }}</span><br>
                         Issued: <span class="font-medium text-slate-900 dark:text-white">{{ invoice.issued_at | app_datetime('%b %d, %Y', 'N/A', include_tz=False) }}</span><br>
                         Due: <span class="font-medium text-slate-900 dark:text-white">{{ invoice.due_at | app_datetime('%b %d, %Y', 'N/A', include_tz=False) }}</span>
                         {% if invoice.paid_at %}

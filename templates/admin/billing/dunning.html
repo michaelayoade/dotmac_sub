@@ -122,39 +122,44 @@
         </div>
         {% endif %}
 
+        {% if dunning_bulk_action_contract.selection_enabled %}
+        <label class="flex items-center gap-2 px-3 py-3 text-sm text-slate-700 dark:text-slate-200">
+            <input id="dunning-select-page" type="checkbox"
+                   x-model="selectAll"
+                   @change="selected = $event.target.checked ? [...document.querySelectorAll('[data-case-id]')].map(el => el.dataset.caseId) : []"
+                   aria-label="Select all dunning cases on this page"
+                   class="h-4 w-4 rounded border-slate-300 text-emerald-600 focus:ring-emerald-500 dark:border-slate-600 dark:bg-slate-700">
+            Select page
+        </label>
+        {% endif %}
         <div class="overflow-x-auto">
-            <table class="min-w-full divide-y divide-slate-200 dark:divide-slate-700">
+            <table class="billing-table min-w-full divide-y divide-slate-200 dark:divide-slate-700">
                 <thead>
                     <tr class="border-b border-slate-100 dark:border-slate-700/50">
                         <th scope="col" class="w-12 px-6 py-3">
-                            {% if dunning_bulk_action_contract.selection_enabled %}
-                            <input type="checkbox"
-                                   x-model="selectAll"
-                                   @change="selected = $event.target.checked ? [...document.querySelectorAll('[data-case-id]')].map(el => el.dataset.caseId) : []"
-                                   aria-label="Select all dunning cases on this page"
-                                   class="h-4 w-4 rounded border-slate-300 text-emerald-600 focus:ring-emerald-500 dark:border-slate-600 dark:bg-slate-700">
-                            {% endif %}
+                            <span class="sr-only">Select</span>
                         </th>
                         <th scope="col" class="px-6 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-400 dark:text-slate-500">Account</th>
                         <th scope="col" class="px-6 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-400 dark:text-slate-500">Status</th>
                         <th scope="col" class="px-6 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-400 dark:text-slate-500">Step</th>
                         <th scope="col" class="px-6 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-400 dark:text-slate-500">Started</th>
-                        <th scope="col" class="px-6 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-400 dark:text-slate-500">Resolved</th>
-                        <th scope="col" class="px-6 py-3 text-right text-xs font-semibold uppercase tracking-wider text-slate-400 dark:text-slate-500">Actions</th>
+
+
                     </tr>
                 </thead>
                 <tbody class="divide-y divide-slate-100 bg-white dark:divide-slate-700/50 dark:bg-slate-800">
                     {% if cases %}
                     {% for case in cases %}
                     <tr class="group transition-all hover:bg-gradient-to-r hover:from-emerald-50/50 hover:to-emerald-50/30 dark:hover:from-emerald-900/10 dark:hover:to-emerald-900/5" data-case-id="{{ case.id }}">
-                        <td class="px-6 py-4">
+                        <td data-label="Select" class="px-6 py-4">
                             {% if dunning_bulk_action_contract.selection_enabled %}
                             <input type="checkbox" :value="'{{ case.id }}'" x-model="selected"
                                    aria-label="Select dunning case {{ case.id }}"
                                    class="h-4 w-4 rounded border-slate-300 text-emerald-600 focus:ring-emerald-500 dark:border-slate-600 dark:bg-slate-700">
                             {% endif %}
                         </td>
-                        <td class="px-6 py-4">
+                        <td data-label="Case / Account" class="px-6 py-4">
+                            <a href="/admin/billing/dunning/{{ case.id }}" class="font-medium text-primary-700 hover:underline dark:text-primary-300">Case {{ case.id | string | truncate(8, True, '') }}</a><br>
                             <a href="/admin/billing/accounts/{{ case.account_id }}" class="text-sm font-medium text-emerald-600 hover:text-emerald-700 dark:text-emerald-400">
                                 {% if case.subscriber %}
                                     {{ case.subscriber.name }}
@@ -166,7 +171,7 @@
                             <p class="text-xs text-slate-500 dark:text-slate-400">{{ case.subscriber.account_number }}</p>
                             {% endif %}
                         </td>
-                        <td class="px-6 py-4">
+                        <td data-label="Status" class="px-6 py-4">
                             {% if case.status.value == 'open' %}
                             {{ status_badge("Open", variant="error") }}
                             {% elif case.status.value == 'paused' %}
@@ -179,30 +184,21 @@
                             {{ status_badge(case.status.value | capitalize, variant="default") }}
                             {% endif %}
                         </td>
-                        <td class="px-6 py-4 text-sm text-slate-500 dark:text-slate-400">
+                        <td data-label="Step" class="px-6 py-4 text-sm text-slate-500 dark:text-slate-400">
                             {% if case.current_step is not none %}
                             Day {{ case.current_step }}
                             {% else %}
                             -
                             {% endif %}
                         </td>
-                        <td class="px-6 py-4 text-sm text-slate-500 dark:text-slate-400">
+                        <td data-label="Started" class="px-6 py-4 text-sm text-slate-500 dark:text-slate-400">
                             {{ case.started_at | app_datetime('%b %d, %Y', 'N/A', include_tz=False) }}
-                        </td>
-                        <td class="px-6 py-4 text-sm text-slate-500 dark:text-slate-400">
-                            {{ case.resolved_at | app_datetime('%b %d, %Y', '-', include_tz=False) }}
-                        </td>
-                        <td class="px-6 py-4 text-right">
-                            <a href="/admin/billing/dunning/{{ case.id }}"
-                               class="text-sm font-medium text-primary-600 hover:text-primary-700 dark:text-primary-400">
-                                View details
-                            </a>
                         </td>
                     </tr>
                     {% endfor %}
                     {% else %}
                     <tr>
-                        <td colspan="7" class="px-6 py-16 text-center">
+                        <td colspan="5" class="px-6 py-16 text-center">
                             <div class="flex flex-col items-center gap-4">
                                 <div class="flex h-16 w-16 items-center justify-center rounded-2xl bg-gradient-to-br from-emerald-100 to-teal-100 dark:from-emerald-900/40 dark:to-teal-900/30">
                                     <svg class="h-8 w-8 text-emerald-600 dark:text-emerald-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">

@@ -787,6 +787,8 @@ WORKFLOW_GUIDANCE: tuple[AdminWorkflowGuidance, ...] = (
         "Open the specific record that explains the issue before taking action.",
         notes=(
             "Do not use one workflow to imitate another: payments, credits, voids, write-offs, and extensions have different meanings.",
+            "Open a billing entry through its linked identifier or first column. Secondary actions are in the row menu; narrower screens stack each record with field labels. Open details for investigation evidence omitted from the list.",
+            "The overview has no export action. Use the export on the relevant billing list when available. Consolidated-account member names open Customer 360 when you have customer read access.",
         ),
         route_templates=("/admin/billing",),
     ),
@@ -822,6 +824,7 @@ WORKFLOW_GUIDANCE: tuple[AdminWorkflowGuidance, ...] = (
             "Eligible postpaid single-line drafts are now issued by the Starter billing ledger: the invoice number and ledger position come from Starter, and this page mirrors them. If Starter issuance is refused, the draft stays unissued — resolve the named evidence gap instead of retrying edits.",
             "Issued invoices use post-issue actions, not direct edits.",
             "The Unpaid view includes collectible issued, partially paid, and overdue balances; it excludes drafts, proformas, and zero-balance invoices.",
+            "Use Sort and Select page above the invoice table, including on narrow screens. Sending returns to the filtered invoice list or the invoice you opened; voiding defaults to that invoice's detail page.",
         ),
     ),
     _guide(
@@ -836,6 +839,7 @@ WORKFLOW_GUIDANCE: tuple[AdminWorkflowGuidance, ...] = (
         "Confirm and verify the Billing tab afterwards.",
         notes=(
             "Do not record a fake payment to reduce an invoice; use approved credit.",
+            "Open the credit number to review its read-only document, lines and invoice applications. Follow an invoice application link only when you have invoice read access.",
         ),
     ),
     _guide(

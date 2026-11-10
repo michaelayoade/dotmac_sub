@@ -1,7 +1,8 @@
 """Admin billing invoice action/detail routes."""
 
 import secrets
-from urllib.parse import quote_plus
+from typing import Literal
+from urllib.parse import parse_qsl, quote_plus, urlencode, urlsplit, urlunsplit
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, Form, HTTPException, Query, Request
@@ -25,6 +26,46 @@ from app.services.domain_errors import DomainError
 
 templates = Jinja2Templates(directory="templates")
 router = APIRouter(prefix="/billing", tags=["web-admin-billing"])
+
+
+def _invoice_return_url(
+    value: str | None,
+    *,
+    invoice_id: UUID,
+    detail_default: bool = False,
+    message_key: Literal["notice", "error"] | None = None,
+    message: str | None = None,
+) -> str:
+    """Keep action returns on the invoice list or the acted-on invoice."""
+    list_path = "/admin/billing/invoices"
+    detail_path = f"{list_path}/{invoice_id}"
+    fallback = detail_path if detail_default else list_path
+    target = urlsplit(fallback)
+    if (
+        value
+        and "\\" not in value
+        and not any(ord(char) < 32 or ord(char) == 127 for char in value)
+    ):
+        try:
+            candidate = urlsplit(value)
+        except ValueError:
+            candidate = None
+        if (
+            candidate is not None
+            and not candidate.scheme
+            and not candidate.netloc
+            and candidate.path in {list_path, detail_path}
+        ):
+            target = candidate
+    if message_key is not None and message is not None:
+        query = [
+            (key, val)
+            for key, val in parse_qsl(target.query, keep_blank_values=True)
+            if key not in {"notice", "error"}
+        ]
+        query.append((message_key, message))
+        target = target._replace(query=urlencode(query))
+    return urlunsplit(target)
 
 
 def _actor_id(request: Request) -> str | None:
@@ -711,7 +752,7 @@ def invoice_send_and_return(
     next_url: str = Form("/admin/billing/invoices"),
     issue_draft: str | None = Form(None),
     db: Session = Depends(get_db),
-):
+) -> RedirectResponse:
     try:
         result = web_billing_invoices_service.send_invoice_web(
             db,
@@ -722,15 +763,17 @@ def invoice_send_and_return(
         )
     except (HTTPException, DomainError) as exc:
         message = exc.message if isinstance(exc, DomainError) else str(exc.detail)
-        separator = "&" if "?" in next_url else "?"
         return RedirectResponse(
-            url=f"{next_url}{separator}error={quote_plus(message)}",
+            url=_invoice_return_url(
+                next_url, invoice_id=invoice_id, message_key="error", message=message
+            ),
             status_code=303,
         )
     message = "Invoice issued and sent" if result.issued_now else "Invoice sent"
-    separator = "&" if "?" in next_url else "?"
     return RedirectResponse(
-        url=f"{next_url}{separator}notice={quote_plus(message)}",
+        url=_invoice_return_url(
+            next_url, invoice_id=invoice_id, message_key="notice", message=message
+        ),
         status_code=303,
     )
 
@@ -864,9 +907,9 @@ def invoice_void_and_return(
     invoice_id: UUID,
     next_url: str | None = Form(None),
     db: Session = Depends(get_db),
-):
+) -> RedirectResponse:
     invoice_void(request=request, invoice_id=invoice_id, db=db)
     return RedirectResponse(
-        url=next_url or f"/admin/billing/invoices/{invoice_id}",
+        url=_invoice_return_url(next_url, invoice_id=invoice_id, detail_default=True),
         status_code=303,
     )

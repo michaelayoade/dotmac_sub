@@ -165,8 +165,14 @@ Invoice and payment list periods use explicit optional `start_date` and
 are inclusive; owners translate the end date to the exclusive start of the next
 UTC day. List totals, pagination, status summaries, deep links, and CSV exports
 consume the same normalized range. The invoice UI labels this basis as Created
-From/To (UTC), renders a sortable Created (UTC) column, and preserves the
-human-readable label for an active typed customer selection after HTMX refreshes.
+From/To (UTC) and provides a persistent Sort control, including Created (UTC)
+and Issued in both directions. The six-column work surface keeps Invoice,
+Customer, Total, Balance due, Status and Due; secondary dates remain on details.
+The Sort, Select page (when permitted), and Rows controls stay above the table
+on desktop and narrow layouts, including after HTMX refreshes. Narrow layouts
+hide the desktop header and its duplicate sorting links rather than leaving
+invisible keyboard targets. Active typed customer selections retain their
+human-readable label after HTMX refreshes.
 
 The support-ticket queue is the next list adoption. `app.services.support.Tickets`
 owns the canonical filtered domain query, while
@@ -2327,3 +2333,38 @@ templates/
 7. **Use branding/theme tokens** — `primary-*`/`accent-*` for identity and
    `status-*` roles for state; do not add literal module or status colors
 8. **Test with HTMX** — partials return fragments, not full pages
+
+## Credit note drill-down
+
+`/admin/billing/credits/{credit_note_id:uuid}` is a read-only detail surface,
+protected by `billing:credit_note:read`, reached through the linked credit
+number in the six-column credit list. `CreditDetailQuery` and the immutable
+`CreditDetailView` in `app.services.web_billing_credits` project the incumbent
+`financial.credit_notes` owner's `CreditNotes.get` document. This adapter does
+not create a new money authority, recalculate totals, or write records.
+
+The detail shows credit identity, account label, status, currency, subtotal,
+tax, total, current applied total, dates, memo, lines, and historical application
+evidence. Application rows are not summed to infer the current applied total;
+reversals and lifecycle calculations remain with the credit-note owner. Invoice
+links render only for `billing:invoice:read`. The shared package remains the
+owner of published UI assets/components; this product-specific projection adds
+no package copy or new shared component contract.
+
+## Billing navigation and return destinations
+
+Single-case dunning confirmation uses an explicit UUID path converter so it cannot
+capture `/admin/billing/dunning/bulk/{action}/confirm`. Bulk previews retain their
+existing confirmation target and financial command owner.
+
+Consolidated-account member links use the unified Customer 360 destination
+`/admin/customers/person/{subscriber_id}` and render as links only when the viewer
+has `customer:read`. The billing overview offers no placeholder Export action;
+document-level exports remain on their existing invoice/payment work surfaces.
+
+Invoice send-and-return and void-and-return accept only the canonical invoice list
+or the acted-on invoice's detail path. Valid filters and fragments are preserved;
+unknown, external, protocol-relative, backslash and control-character destinations
+fall back to the list for sending or the current detail for voiding. Notice/error
+feedback is encoded into the query before any fragment. This navigation policy
+does not change command eligibility, permissions, confirmations or money owners.
