@@ -26,7 +26,11 @@ from app.models.referral_native import Referral, ReferralStatus
 from app.models.sales import Lead
 from app.models.subscriber import Subscriber, SubscriberStatus
 from app.schemas.referral import ReferralSelfServiceAccountCreate
-from app.schemas.subscriber import CustomerServiceLocationUpdate, SubscriberCreate
+from app.schemas.subscriber import (
+    AddressCreate,
+    CustomerServiceLocationUpdate,
+    SubscriberCreate,
+)
 from app.services import context_signing
 from app.services import party as party_service
 from app.services import subscriber as subscriber_service
@@ -525,7 +529,7 @@ def _create_operation(
     subscriber = subscriber_service.subscribers.prepare_new_account(
         db, subscriber_payload
     )
-    if service_address is not None:
+    if service_address is not None and service_address.latitude is not None:
         subscriber_service.update_customer_service_location(
             db,
             CustomerServiceLocationUpdate(
@@ -542,6 +546,23 @@ def _create_operation(
                 longitude=service_address.longitude,
                 is_primary=True,
             ),
+        )
+    elif service_address is not None:
+        subscriber_service.create_address(
+            db,
+            AddressCreate(
+                subscriber_id=subscriber.id,
+                label="Primary service",
+                address_line1=service_address.address_line1,
+                address_line2=service_address.address_line2,
+                city=service_address.city,
+                region=service_address.region,
+                lga=service_address.lga,
+                postal_code=service_address.postal_code,
+                country_code=service_address.country_code,
+                is_primary=True,
+            ),
+            geocode=False,
         )
     _bind_and_attach(
         db,

@@ -144,6 +144,31 @@ def test_public_referral_link_capture_and_signup_create_the_exact_account(db_ses
     assert address.is_primary is True
 
 
+def test_public_signup_accepts_typed_address_without_browser_location(db_session):
+    _, capture = _capture(db_session)
+    result = referral_api.signup_referral_account(
+        ReferralSelfServiceSignupRequest(
+            conversion_token=capture.conversion_token,
+            account=ReferralSelfServiceAccountCreate(
+                first_name="Manual",
+                last_name="Address",
+                email=_email("manual-address"),
+                address_line1="12 Referral Close",
+            ),
+        ),
+        db_session,
+    )
+    address = (
+        db_session.query(Address)
+        .filter(Address.subscriber_id == result.subscriber_id)
+        .one()
+    )
+    assert address.address_line1 == "12 Referral Close"
+    assert address.is_primary is True
+    assert address.latitude is None
+    assert address.longitude is None
+
+
 def test_capture_returns_expiring_pii_free_signed_context(db_session):
     referral, result = _capture(db_session)
 
@@ -294,6 +319,8 @@ def test_public_signup_schema_forbids_privileged_account_controls():
         ("address_line1", "   "),
         ("latitude", 91),
         ("longitude", 181),
+        ("latitude", None),
+        ("longitude", None),
     ),
 )
 def test_public_signup_requires_valid_service_location(field, value):

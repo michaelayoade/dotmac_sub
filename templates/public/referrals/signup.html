@@ -117,8 +117,8 @@
           </div>
         </div>
         <fieldset class="location">
-          <legend>Service location (required)</legend>
-          <p id="location-help" class="hint">Enter the service address and share your current location. Both are required so we can confirm where service is needed.</p>
+          <legend>Service address (required)</legend>
+          <p id="location-help" class="hint">Type your service address, or use your current location to fill it in. Check the address before continuing.</p>
           <div class="field">
             <label for="service-address">Service address</label>
             <input id="service-address" name="address_line1" autocomplete="street-address" maxlength="120" placeholder="House number, street and area" aria-describedby="location-help address-error" required>
@@ -126,7 +126,7 @@
           </div>
           <button id="capture-location" class="secondary" type="button" aria-describedby="location-help location-status">
             <span id="location-spinner" class="spinner" aria-hidden="true" hidden></span>
-            <span id="location-button-label">Use my current location</span>
+            <span id="location-button-label">Use my current location (optional)</span>
           </button>
           <p id="location-status" class="location-status" data-state="neutral" role="status" aria-live="polite">Location not captured.</p>
           <input id="latitude" name="latitude" type="hidden">
@@ -161,6 +161,7 @@
       const locationStatus = document.getElementById('location-status');
       const latitude = document.getElementById('latitude');
       const longitude = document.getElementById('longitude');
+      const addressInput = document.getElementById('service-address');
       const formControls = Array.from(form.elements);
       const fieldRules = {
         first_name: {
@@ -232,6 +233,13 @@
         rule.input.addEventListener('input', () => clearFieldError(rule));
         rule.input.addEventListener('blur', () => validateField(rule));
       });
+      addressInput.addEventListener('input', () => {
+        if (latitude.value || longitude.value) {
+          latitude.value = '';
+          longitude.value = '';
+          setLocationState('neutral', 'Address edited. Your typed address will be used.');
+        }
+      });
       async function post(path, payload) {
         const response = await fetch(path, {
           method: 'POST',
@@ -250,7 +258,7 @@
       }
       locationButton.addEventListener('click', () => {
         if (!navigator.geolocation) {
-          setLocationState('error', 'This browser does not support location access. Use a supported browser to continue.');
+          setLocationState('error', 'This browser does not support location access. Type your service address to continue.');
           return;
         }
         locationButton.disabled = true;
@@ -259,26 +267,40 @@
         locationButton.setAttribute('aria-busy', 'true');
         setLocationState('loading', 'Getting your current location...');
         navigator.geolocation.getCurrentPosition(
-          (position) => {
-            latitude.value = position.coords.latitude.toFixed(7);
-            longitude.value = position.coords.longitude.toFixed(7);
-            const accuracy = Math.max(1, Math.round(position.coords.accuracy));
-            const accuracyUnit = accuracy === 1 ? 'metre' : 'metres';
-            setLocationState('success', `Location captured within approximately ${accuracy} ${accuracyUnit}.`);
-            locationButtonLabel.textContent = 'Update my current location';
-            locationSpinner.hidden = true;
-            locationButton.removeAttribute('aria-busy');
-            locationButton.disabled = false;
-            submitButton.disabled = false;
+          async (position) => {
+            try {
+              const lat = position.coords.latitude.toFixed(7);
+              const lon = position.coords.longitude.toFixed(7);
+              const response = await fetch(`/r/${encodeURIComponent(code)}/reverse-geocode?latitude=${encodeURIComponent(lat)}&longitude=${encodeURIComponent(lon)}`);
+              if (!response.ok) throw new Error('Address lookup failed');
+              const result = await response.json();
+              if (typeof result.display_name !== 'string' || !result.display_name.trim()) throw new Error('Address unavailable');
+              addressInput.value = result.display_name.trim().slice(0, 120);
+              clearFieldError(fieldRules.address_line1);
+              latitude.value = lat;
+              longitude.value = lon;
+              setLocationState('success', 'Address filled from your current location. Check and edit it if needed.');
+              locationButtonLabel.textContent = 'Update my current location';
+            } catch (_) {
+              latitude.value = '';
+              longitude.value = '';
+              setLocationState('error', 'We could not fill your address. Type it yourself to continue.');
+              locationButtonLabel.textContent = 'Try location again';
+            } finally {
+              locationSpinner.hidden = true;
+              locationButton.removeAttribute('aria-busy');
+              locationButton.disabled = false;
+              submitButton.disabled = false;
+            }
           },
           (error) => {
             latitude.value = '';
             longitude.value = '';
             setLocationState('error', error.code === error.PERMISSION_DENIED
-              ? 'Location access was denied. Enable it in your browser settings, then try again.'
+              ? 'Location access was denied. Type your service address to continue.'
               : error.code === error.TIMEOUT
-                ? 'Location request timed out. Please try again.'
-                : 'Your location could not be found. Please try again.');
+                ? 'Location request timed out. Type your service address or try again.'
+                : 'Your location could not be found. Type your service address or try again.');
             locationButtonLabel.textContent = 'Try location again';
             locationSpinner.hidden = true;
             locationButton.removeAttribute('aria-busy');
@@ -302,14 +324,6 @@
           return;
         }
         const values = Object.fromEntries(new FormData(form));
-        const resolvedLatitude = Number(values.latitude);
-        const resolvedLongitude = Number(values.longitude);
-        if (!values.latitude || !values.longitude || !Number.isFinite(resolvedLatitude) || !Number.isFinite(resolvedLongitude)) {
-          message.hidden = true;
-          setLocationState('error', 'Location is required. Select Use my current location, then try again.');
-          locationButton.focus();
-          return;
-        }
         setFormBusy(true);
         message.hidden = false;
         message.className = 'message';
@@ -319,10 +333,12 @@
           last_name: values.last_name.trim(),
           email: values.email.trim(),
           phone: values.phone.trim() || null,
-          address_line1: values.address_line1.trim(),
-          latitude: resolvedLatitude,
-          longitude: resolvedLongitude
+          address_line1: values.address_line1.trim()
         };
+        if (values.latitude && values.longitude) {
+          account.latitude = Number(values.latitude);
+          account.longitude = Number(values.longitude);
+        }
         try {
           const capture = await post('/api/v1/referrals/capture', {
             code,
@@ -353,7 +369,7 @@
             latitude.value = '';
             longitude.value = '';
             locationButtonLabel.textContent = 'Try location again';
-            setLocationState('error', 'The captured location was not accepted. Capture your current location again.');
+            setLocationState('error', 'The captured location was not accepted. Your typed address can still be used.');
           }
           setFormBusy(false);
           if (invalidFields.length || invalidLocation) {

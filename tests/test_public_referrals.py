@@ -7,6 +7,7 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from app.db import get_db
+from app.schemas.geocoding import ReverseGeocodeResult
 from app.services.brand_profiles import ResolvedBrand
 from app.web.public.referrals import router
 
@@ -67,10 +68,13 @@ def test_valid_link_renders_capture_and_signup_flow(db_session):
     assert 'name="address_line1"' in response.text
     assert 'id="capture-location"' in response.text
     assert "navigator.geolocation.getCurrentPosition" in response.text
-    assert "Both are required" in response.text
+    assert "Type your service address, or use your current location" in response.text
+    assert "Use my current location (optional)" in response.text
+    assert "Address filled from your current location" in response.text
+    assert "Your typed address will be used" in response.text
     assert 'data-state="neutral"' in response.text
     assert "position.coords.accuracy" in response.text
-    assert "Enable it in your browser settings" in response.text
+    assert "Type your service address to continue" in response.text
     assert "setFormBusy(true)" in response.text
     assert 'id="address-error"' in response.text
     assert 'id="first-name-error"' in response.text
@@ -96,6 +100,31 @@ def test_valid_link_renders_capture_and_signup_flow(db_session):
     assert (
         "Use your current location before creating your account." not in response.text
     )
+
+
+def test_location_lookup_fills_address_for_valid_referral(db_session):
+    with (
+        patch(
+            "app.web.public.referrals.referrals.get_by_code",
+            return_value=SimpleNamespace(code="LOOKUP01"),
+        ),
+        patch(
+            "app.web.public.referrals.referrals.program", return_value={"enabled": True}
+        ),
+        patch(
+            "app.web.public.referrals.geocoding.resolve_coordinates",
+            return_value=ReverseGeocodeResult(
+                display_name="12 Referral Close, Abuja",
+                latitude=9.0765,
+                longitude=7.3986,
+            ),
+        ),
+    ):
+        response = _client(db_session).get(
+            "/r/LOOKUP01/reverse-geocode?latitude=9.0765&longitude=7.3986"
+        )
+    assert response.status_code == 200
+    assert response.json() == {"display_name": "12 Referral Close, Abuja"}
 
 
 def test_unknown_link_is_unavailable(db_session):

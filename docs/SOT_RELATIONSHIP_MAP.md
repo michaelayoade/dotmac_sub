@@ -1969,7 +1969,7 @@ Referral/Party/Lead UUID triple already stored by migration 356, so account
 conversion adds no parallel table or migration. The coordinator locks and
 revalidates the exact Referral, Party, Lead, and selected Subscriber, asks
 `customer.accounts` to prepare a new Subscriber when needed, then delegates
-public signup's required primary service address and browser location to that
+public signup's required primary service address and optional browser location to that
 same transaction-neutral owner before delegating Party binding, Lead attachment,
 and Referral attachment. Account, service address, bindings, PII-free audit, and
 versioned events commit or roll back together. A stale context, different

@@ -33,7 +33,7 @@ session. The coordinator performs one transaction in this order:
 2. ask `customer.accounts` to prepare a new Subscriber, or lock the exact
    existing Subscriber selected by an operator;
 3. for public signup, ask `customer.accounts` to create the required primary
-   service address with the browser-provided latitude and longitude;
+   service address, with coordinates only when the customer used location lookup;
 4. ask `party.registry` to bind that account to the exact referred Party;
 5. ask `referrals.program` to attach the Subscriber, which delegates the Lead
    account link to `sales.lead_lifecycle`;
@@ -62,8 +62,9 @@ token is a sensitive bearer value: adapters must not log it, persist it as
 business data, place it in URLs, or copy it into Referral/Lead metadata.
 
 `POST /referrals/signup` accepts that bearer capability and a narrow account
-payload. The public schema requires a service address and valid browser-provided
-latitude and longitude. It also permits basic name, contact, additional address,
+payload. The public schema requires a service address. Browser location is an
+optional aid that fills an editable address; latitude and longitude must be
+provided together when used. It also permits basic name, contact, additional address,
 locale, and timezone fields. It forbids caller-selected lifecycle status, reseller,
 verification, billing, numbering, authorization, marketing-consent, and
 existing-person controls. Public accounts enter the existing account owner

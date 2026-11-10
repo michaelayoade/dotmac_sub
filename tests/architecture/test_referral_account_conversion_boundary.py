@@ -47,6 +47,8 @@ def test_conversion_uses_transaction_neutral_record_owner_collaborators() -> Non
     assert "prepare_new_account" in owner
     assert "update_customer_service_location" in owner
     assert "CustomerServiceLocationUpdate(" in owner
+    assert "create_address" in owner
+    assert "AddressCreate(" in owner
     assert "stage_prepared_account_created_event" in owner
     assert "attach_subscriber_for_conversion" in owner
     assert "def stage_prepared_account_created_event" in subscriber

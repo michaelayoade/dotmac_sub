@@ -434,7 +434,7 @@ SERVICES: tuple[SOTService, ...] = (
                     source=(
                         "transaction-neutral account initialization and the "
                         "exact existing or newly prepared Subscriber, including "
-                        "the required primary service address and location for "
+                        "the required primary service address and optional location for "
                         "public signup"
                     ),
                 ),
