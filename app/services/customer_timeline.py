@@ -236,14 +236,15 @@ def _audit_activity_items(
     *,
     limit: int,
 ) -> list[CustomerTimelineItem]:
-    events_by_id: dict[UUID, AuditEvent] = {}
-    for offset in range(0, len(entity_refs), 250):
+    events_by_id = {
+        event.id: event
+        for offset in range(0, len(entity_refs), 250)
         for event in list_audit_events_for_entities(
             db,
             list(entity_refs[offset : offset + 250]),
             limit=limit,
-        ):
-            events_by_id[event.id] = event
+        )
+    }
     events = sorted(
         events_by_id.values(),
         key=lambda event: (event.occurred_at, str(event.id)),
