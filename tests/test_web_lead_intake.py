@@ -51,3 +51,8 @@ def test_admin_template_surface_explains_publish_gate_and_immutability():
     assert "each customer type" in index
     assert "Published versions are immutable" in form
     assert "{link}" in form
+    assert '{% extends "layouts/admin.html" %}' in index
+    assert '{% extends "layouts/admin.html" %}' in form
+    assert "{% call page_header(" in index
+    assert "text-3xl" not in index + form
+    assert "rounded-lg border border-slate-200 bg-white" in form
