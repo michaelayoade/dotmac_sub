@@ -46,6 +46,7 @@ from app.schemas.billing import (
     PaymentSettlementReconciliationRequest,
     PaymentUpdate,
 )
+from app.schemas.status_presentation import StatusPresentation
 from app.services import audit as audit_service
 from app.services import billing as billing_service
 from app.services import display_format, settings_spec
@@ -67,6 +68,90 @@ from app.services.status_presentation import payment_status_presentation
 logger = logging.getLogger(__name__)
 _IDEMPOTENCY_TOKEN_RE = re.compile(r"^[A-Za-z0-9_-]{8,120}$")
 _PAYMENT_CSV_YIELD_PER = 500
+CUSTOMER_PAYMENT_PAGE_SIZE = 10
+
+
+@dataclass(frozen=True, slots=True)
+class CustomerPaymentHistoryQuery:
+    account_id: UUID
+    page: int = 1
+
+    def __post_init__(self) -> None:
+        if self.page < 1:
+            raise ValueError("Customer payment page must be positive")
+
+
+@dataclass(frozen=True, slots=True)
+class CustomerPaymentHistoryRow:
+    id: UUID
+    receipt_number: str
+    occurred_at: datetime | None
+    amount: Decimal
+    status: StatusPresentation
+
+
+@dataclass(frozen=True, slots=True)
+class CustomerPaymentHistoryPage:
+    account_id: UUID
+    rows: tuple[CustomerPaymentHistoryRow, ...]
+    page: int
+    per_page: int
+    total_count: int
+    total_pages: int
+    page_start: int
+    page_end: int
+    previous_page_url: str | None
+    next_page_url: str | None
+    full_list_url: str
+
+
+def customer_payment_history_page(
+    db: Session, *, query: CustomerPaymentHistoryQuery
+) -> CustomerPaymentHistoryPage:
+    """Read one customer-scoped payment page without loading full history."""
+    scoped = db.query(Payment).filter(
+        Payment.account_id == query.account_id,
+        Payment.is_active.is_(True),
+    )
+    total_count = scoped.count()
+    total_pages = max(
+        1, (total_count + CUSTOMER_PAYMENT_PAGE_SIZE - 1) // CUSTOMER_PAYMENT_PAGE_SIZE
+    )
+    page = min(query.page, total_pages)
+    offset = (page - 1) * CUSTOMER_PAYMENT_PAGE_SIZE
+    payments = (
+        scoped.order_by(
+            func.coalesce(Payment.paid_at, Payment.created_at).desc(),
+            Payment.id.desc(),
+        )
+        .offset(offset)
+        .limit(CUSTOMER_PAYMENT_PAGE_SIZE)
+        .all()
+    )
+    rows = tuple(
+        CustomerPaymentHistoryRow(
+            id=payment.id,
+            receipt_number=payment.receipt_number or str(payment.id)[:8].upper(),
+            occurred_at=payment.paid_at or payment.created_at,
+            amount=Decimal(payment.amount or 0),
+            status=payment_status_presentation(payment.status),
+        )
+        for payment in payments
+    )
+    page_url = f"/admin/customers/person/{query.account_id}/billing/history/payments"
+    return CustomerPaymentHistoryPage(
+        account_id=query.account_id,
+        rows=rows,
+        page=page,
+        per_page=CUSTOMER_PAYMENT_PAGE_SIZE,
+        total_count=total_count,
+        total_pages=total_pages,
+        page_start=offset + 1 if rows else 0,
+        page_end=offset + len(rows),
+        previous_page_url=f"{page_url}?page={page - 1}" if page > 1 else None,
+        next_page_url=f"{page_url}?page={page + 1}" if page < total_pages else None,
+        full_list_url=f"/admin/billing/payments?customer_ref={query.account_id}",
+    )
 
 
 @dataclass(frozen=True, slots=True)

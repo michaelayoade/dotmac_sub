@@ -69,6 +69,8 @@ from app.models.subscriber import (
 from app.models.subscription_engine import SettingValueType
 from app.models.system_user import SystemUser, SystemUserType
 from app.services import web_billing_ledger as web_billing_ledger_service
+from app.services import web_billing_overview as web_billing_overview_service
+from app.services import web_billing_payments as web_billing_payments_service
 from app.services.credential_crypto import encrypt_credential
 from app.services.customer_financial_ledger import CustomerFinancialEvent
 from app.services.web_billing_ledger import CustomerLedgerQuery
@@ -375,6 +377,167 @@ def test_customer_billing_ledger_tab_is_permission_gated_and_lazy() -> None:
         "templates/admin/customers/_billing_ledger.html"
     ).read_text(encoding="utf-8")
     assert "/admin/billing/ledger?account=" not in template
+
+
+def test_customer_invoice_and_payment_tabs_load_only_when_opened() -> None:
+    template = Path("templates/admin/customers/detail.html").read_text(encoding="utf-8")
+    assert 'id="customer-billing-invoices"' in template
+    assert 'id="customer-billing-payments"' in template
+    assert (
+        'hx-get="/admin/customers/person/{{ customer.id }}/billing/history/invoices"'
+        in template
+    )
+    assert (
+        'hx-get="/admin/customers/person/{{ customer.id }}/billing/history/payments"'
+        in template
+    )
+    assert template.count('hx-trigger="revealed once"') >= 3
+    pagination = Path(
+        "templates/admin/customers/_billing_history_pagination.html"
+    ).read_text(encoding="utf-8")
+    assert 'hx-push-url="false"' in pagination
+    assert "Customer {{ history_kind }} pagination" in pagination
+
+
+@pytest.mark.parametrize(
+    ("path", "permission"),
+    [
+        (
+            "/customers/person/{customer_id}/billing/history/invoices",
+            "billing:invoice:read",
+        ),
+        (
+            "/customers/person/{customer_id}/billing/history/payments",
+            "billing:payment:read",
+        ),
+    ],
+)
+def test_customer_billing_history_routes_require_exact_read_permission(
+    path: str, permission: str
+) -> None:
+    route = next(
+        item
+        for item in customer_routes.router.routes
+        if isinstance(item, APIRoute) and item.path == path
+    )
+    dependency_cells = [
+        " ".join(
+            str(cell.cell_contents)
+            for cell in (getattr(dependency.call, "__closure__", None) or ())
+        )
+        for dependency in route.dependant.dependencies
+    ]
+    assert route.methods == {"GET"}
+    assert any("customer:read" in cells for cells in dependency_cells)
+    assert any(permission in cells for cells in dependency_cells)
+
+
+def test_customer_invoice_and_payment_history_pages_are_scoped_and_bounded(
+    db_session, subscriber
+) -> None:
+    subscriber.user_type = UserType.customer
+    other = Subscriber(
+        first_name="Other",
+        last_name="Billing",
+        email="other-billing-history@example.com",
+    )
+    db_session.add(other)
+    db_session.flush()
+    for index in range(1, 13):
+        db_session.add_all(
+            [
+                Invoice(
+                    account_id=subscriber.id,
+                    invoice_number=f"HISTORY-INV-{index:02d}",
+                    status=InvoiceStatus.issued,
+                    subtotal=Decimal("100.00"),
+                    total=Decimal("100.00"),
+                    balance_due=Decimal("100.00"),
+                    issued_at=datetime(2026, 2, index, tzinfo=UTC),
+                    is_active=True,
+                ),
+                Payment(
+                    account_id=subscriber.id,
+                    amount=Decimal("100.00"),
+                    status=PaymentStatus.succeeded,
+                    receipt_number=f"HISTORY-PAY-{index:02d}",
+                    paid_at=datetime(2026, 2, index, tzinfo=UTC),
+                    is_active=True,
+                ),
+            ]
+        )
+    db_session.add_all(
+        [
+            Invoice(
+                account_id=other.id,
+                invoice_number="OTHER-INVOICE",
+                status=InvoiceStatus.issued,
+                subtotal=Decimal("900.00"),
+                total=Decimal("900.00"),
+                balance_due=Decimal("900.00"),
+                is_active=True,
+            ),
+            Payment(
+                account_id=other.id,
+                amount=Decimal("900.00"),
+                status=PaymentStatus.succeeded,
+                receipt_number="OTHER-PAYMENT",
+                is_active=True,
+            ),
+        ]
+    )
+    db_session.commit()
+
+    invoice_pages = [
+        web_billing_overview_service.customer_invoice_history_page(
+            db_session,
+            query=web_billing_overview_service.CustomerInvoiceHistoryQuery(
+                account_id=subscriber.id, page=page
+            ),
+        )
+        for page in (1, 2)
+    ]
+    payment_pages = [
+        web_billing_payments_service.customer_payment_history_page(
+            db_session,
+            query=web_billing_payments_service.CustomerPaymentHistoryQuery(
+                account_id=subscriber.id, page=page
+            ),
+        )
+        for page in (1, 2)
+    ]
+    for pages, prefix, field in (
+        (invoice_pages, "HISTORY-INV-", "invoice_number"),
+        (payment_pages, "HISTORY-PAY-", "receipt_number"),
+    ):
+        assert [len(page.rows) for page in pages] == [10, 2]
+        assert [page.total_count for page in pages] == [12, 12]
+        assert pages[0].next_page_url is not None
+        assert pages[1].previous_page_url is not None
+        assert pages[1].next_page_url is None
+        names = [getattr(row, field) for page in pages for row in page.rows]
+        assert names == [f"{prefix}{index:02d}" for index in range(12, 0, -1)]
+
+    invoice_response = customer_routes.customer_billing_invoice_history(
+        request=_bare_request(
+            f"/admin/customers/person/{subscriber.id}/billing/history/invoices?page=2"
+        ),
+        customer_id=subscriber.id,
+        page=2,
+        db=db_session,
+    )
+    payment_response = customer_routes.customer_billing_payment_history(
+        request=_bare_request(
+            f"/admin/customers/person/{subscriber.id}/billing/history/payments?page=2"
+        ),
+        customer_id=subscriber.id,
+        page=2,
+        db=db_session,
+    )
+    assert "HISTORY-INV-02" in invoice_response.body.decode("utf-8")
+    assert "HISTORY-INV-03" not in invoice_response.body.decode("utf-8")
+    assert "HISTORY-PAY-02" in payment_response.body.decode("utf-8")
+    assert "HISTORY-PAY-03" not in payment_response.body.decode("utf-8")
 
 
 def test_customer_billing_ledger_route_requires_customer_and_ledger_read() -> None:

@@ -835,6 +835,13 @@ The Recent Invoices and Recent Payments `View all` links
 open their respective full lists filtered to the current customer, using the
 same customer reference as the Invoices subtab's full-list link.
 
+The customer Billing Invoices and Payments tabs load only when opened. Each
+shows 10 newest active records per page, a full customer-scoped count, and
+Previous and Next controls that replace only that tab's content. The Billing
+Overview keeps its short recent-record previews. The embedded history routes
+require customer read access and the respective invoice or payment read
+permission; the full tabs are hidden when that permission is absent.
+
 **Billing Ledger tab presentation contract:**
 `app.services.web_billing_ledger.build_customer_ledger_view` owns the embedded,
 customer-scoped read model. The first page contains the 10 newest financial

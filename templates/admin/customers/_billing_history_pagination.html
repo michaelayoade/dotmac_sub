@@ -1,0 +1,17 @@
+{% if history.total_count > history.per_page %}
+<div class="flex flex-col gap-3 border-t border-slate-100 px-5 py-4 dark:border-slate-700 sm:flex-row sm:items-center sm:justify-between">
+    <p class="text-sm text-slate-500 dark:text-slate-400">Page {{ history.page }} of {{ history.total_pages }}</p>
+    <nav class="flex items-center gap-2" aria-label="Customer {{ history_kind }} pagination">
+        {% if history.previous_page_url %}
+        <a href="{{ history.previous_page_url }}" hx-get="{{ history.previous_page_url }}" hx-target="#customer-billing-{{ history_kind }}" hx-swap="innerHTML" hx-push-url="false" class="inline-flex items-center rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm font-semibold text-slate-700 transition hover:bg-slate-50 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-300 dark:hover:bg-slate-700">Previous</a>
+        {% else %}
+        <span aria-disabled="true" class="inline-flex cursor-not-allowed items-center rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-sm font-semibold text-slate-400 dark:border-slate-700 dark:bg-slate-900/40 dark:text-slate-600">Previous</span>
+        {% endif %}
+        {% if history.next_page_url %}
+        <a href="{{ history.next_page_url }}" hx-get="{{ history.next_page_url }}" hx-target="#customer-billing-{{ history_kind }}" hx-swap="innerHTML" hx-push-url="false" class="inline-flex items-center rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm font-semibold text-slate-700 transition hover:bg-slate-50 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-300 dark:hover:bg-slate-700">Next</a>
+        {% else %}
+        <span aria-disabled="true" class="inline-flex cursor-not-allowed items-center rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-sm font-semibold text-slate-400 dark:border-slate-700 dark:bg-slate-900/40 dark:text-slate-600">Next</span>
+        {% endif %}
+    </nav>
+</div>
+{% endif %}

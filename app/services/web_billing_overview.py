@@ -51,6 +51,92 @@ class InvoiceCustomerFilterSelection:
     label: str
 
 
+CUSTOMER_INVOICE_PAGE_SIZE = 10
+
+
+@dataclass(frozen=True, slots=True)
+class CustomerInvoiceHistoryQuery:
+    account_id: UUID
+    page: int = 1
+
+    def __post_init__(self) -> None:
+        if self.page < 1:
+            raise ValueError("Customer invoice page must be positive")
+
+
+@dataclass(frozen=True, slots=True)
+class CustomerInvoiceHistoryRow:
+    id: UUID
+    invoice_number: str
+    occurred_at: datetime | None
+    status: StatusPresentation
+    balance_due: Decimal
+    total: Decimal
+
+
+@dataclass(frozen=True, slots=True)
+class CustomerInvoiceHistoryPage:
+    rows: tuple[CustomerInvoiceHistoryRow, ...]
+    page: int
+    per_page: int
+    total_count: int
+    total_pages: int
+    page_start: int
+    page_end: int
+    previous_page_url: str | None
+    next_page_url: str | None
+    full_list_url: str
+
+
+def customer_invoice_history_page(
+    db: Session, *, query: CustomerInvoiceHistoryQuery
+) -> CustomerInvoiceHistoryPage:
+    """Read one customer-scoped invoice page without loading full history."""
+    scoped = db.query(Invoice).filter(
+        Invoice.account_id == query.account_id,
+        Invoice.is_active.is_(True),
+    )
+    total_count = scoped.count()
+    total_pages = max(
+        1, (total_count + CUSTOMER_INVOICE_PAGE_SIZE - 1) // CUSTOMER_INVOICE_PAGE_SIZE
+    )
+    page = min(query.page, total_pages)
+    offset = (page - 1) * CUSTOMER_INVOICE_PAGE_SIZE
+    invoices = (
+        scoped.order_by(
+            func.coalesce(Invoice.issued_at, Invoice.created_at).desc(),
+            Invoice.id.desc(),
+        )
+        .offset(offset)
+        .limit(CUSTOMER_INVOICE_PAGE_SIZE)
+        .all()
+    )
+    rows = tuple(
+        CustomerInvoiceHistoryRow(
+            id=invoice.id,
+            invoice_number=invoice.invoice_number or str(invoice.id)[:8].upper(),
+            occurred_at=invoice.issued_at or invoice.created_at,
+            status=invoice_status_presentation(invoice.status),
+            balance_due=Decimal(invoice.balance_due or 0),
+            total=Decimal(invoice.total or 0),
+        )
+        for invoice in invoices
+    )
+    page_url = f"/admin/customers/person/{query.account_id}/billing/history/invoices"
+    return CustomerInvoiceHistoryPage(
+        rows=rows,
+        page=page,
+        per_page=CUSTOMER_INVOICE_PAGE_SIZE,
+        total_count=total_count,
+        total_pages=total_pages,
+        page_start=offset + 1 if rows else 0,
+        page_end=offset + len(rows),
+        previous_page_url=f"{page_url}?page={page - 1}" if page > 1 else None,
+        next_page_url=f"{page_url}?page={page + 1}" if page < total_pages else None,
+        full_list_url=f"/admin/billing/invoices?customer_ref={query.account_id}",
+    )
+
+
 class InvoiceTotalProjection(TypedDict):
     count: int
     amount: float

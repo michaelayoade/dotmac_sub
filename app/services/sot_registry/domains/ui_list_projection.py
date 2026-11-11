@@ -1321,6 +1321,7 @@ DOMAIN = DomainSOT(
                 "admin invoice filter semantics",
                 "admin invoice stable sort semantics",
                 "admin invoice page and status-summary projection",
+                "customer-scoped invoice history page projection",
                 "admin invoice export scope",
             ),
             depends_on=(
@@ -1343,7 +1344,9 @@ DOMAIN = DomainSOT(
                 "Exports consume the same canonical "
                 "scope without a page cap. The CSV customer_name column uses "
                 "the customer account's human display identity and does not "
-                "expose account UUIDs."
+                "expose account UUIDs. The embedded customer invoice tab reads "
+                "one bounded page on demand using the same canonical invoice "
+                "records and exact customer account scope."
             ),
         ),
         SOTService(
@@ -1354,6 +1357,7 @@ DOMAIN = DomainSOT(
                 "admin payments filter semantics",
                 "admin payments stable sort and default-order semantics",
                 "admin payments list pagination normalization",
+                "customer-scoped payment history page projection",
                 "admin payments export scope",
             ),
             depends_on=(
@@ -1377,6 +1381,9 @@ DOMAIN = DomainSOT(
                 "UUIDs. Gated by the existing granular "
                 "billing:payment:read. Read-only: no admin bulk command declared, "
                 "so no selection or bulk."
+                " The embedded customer payment tab reads one bounded page "
+                "on demand using the same canonical payment records and exact "
+                "customer account scope."
             ),
         ),
         SOTService(
