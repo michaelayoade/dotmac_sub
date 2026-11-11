@@ -21,3 +21,12 @@ jobs:
             timeout 45 docker run --rm --network "$network" ubuntu:24.04 bash -c \
               'cat /etc/resolv.conf; getent ahostsv4 archive.ubuntu.com; getent ahostsv4 security.ubuntu.com' || true
           done
+      - name: Inspect prebuilt FreeRADIUS image
+        run: |
+          docker run --rm --entrypoint /bin/sh freeradius/freeradius-server:3.2.10 -c '
+            for binary in radiusd freeradius radclient psql python3; do
+              echo "$binary: $(command -v "$binary" || true)"
+            done
+            ls -ld /etc/raddb /etc/freeradius/3.0 2>/dev/null || true
+            find /usr -name rlm_sql_postgresql.so -print 2>/dev/null
+          '
