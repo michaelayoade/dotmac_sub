@@ -830,6 +830,11 @@ their existing customer, access, and identity owners.
 - Subscription records are investigated and managed in the Services tab; the
   Account tab does not duplicate an Active Subscriptions preview.
 
+**Billing Overview links:**
+The Recent Invoices and Recent Payments `View all` links
+open their respective full lists filtered to the current customer, using the
+same customer reference as the Invoices subtab's full-list link.
+
 **Billing Ledger tab presentation contract:**
 `app.services.web_billing_ledger.build_customer_ledger_view` owns the embedded,
 customer-scoped read model. The first page contains the 10 newest financial
