@@ -1102,6 +1102,21 @@ HELP_ONLY_GUIDANCE: tuple[AdminWorkflowGuidance, ...] = (
         route_templates=("/admin/sales",),
     ),
     _guide(
+        "sales-lead-intake",
+        "Sales",
+        "Manage lead intake templates",
+        "Sales staff",
+        "Review the invitation rollout and maintain the templates sent to new Meta prospects.",
+        ("/admin/sales/lead-intake",),
+        "Open Lead intake templates to review published versions and the automatic-send rollout state.",
+        "Choose New template, select the customer type, write the invitation and confirmation copy, include {link} in the invitation message, choose the target Sales service team, and save a draft.",
+        "Open a draft to review its copy, owner, pipeline, and stage before publishing. Published versions are immutable; start a new draft to revise the content.",
+        "Retire a published version only when it should stop being selected. Confirm that both customer types have a published template and the rollout setting is enabled before expecting automatic sends.",
+        notes=(
+            "Saving a draft does not turn on automatic invitations. The rollout state shown on the list remains authoritative.",
+        ),
+    ),
+    _guide(
         "service-requests",
         "Service Requests",
         "Review service requests",
@@ -1154,9 +1169,9 @@ HELP_ONLY_GUIDANCE: tuple[AdminWorkflowGuidance, ...] = (
         "Dispatch and field-operations staff",
         "Create, assign, schedule, and track field work.",
         (),
-        "Search or filter the work-order list by status, priority, technician, team, or date.",
+        "Search the work-order list by work order, customer, or site, or filter by status. The four summary tiles open Active, Scheduled, In progress, and Completed cohorts; use All to reset filters and review the total.",
         "Open a work order to confirm its customer or shared infrastructure target, linked ticket or project task, scope, location, and current assignment. The assigned actor uses the job brief to check task instructions, affected customers, directions, and explicitly linked assets.",
-        "As supervisor, review site/access instructions, priority, schedule, skills, safety, and material needs before assigning the work. Use the separate classification form for the explicit purpose and fiber or radio technology; creation and classification do not dispatch the visit.",
+        "Use Create Work Order for a customer visit, or start from an eligible project task to retain its subscriber, project, and task link. Enter the title, type, priority, schedule, site, description, and any required additional information. Correct highlighted fields in the same form if validation fails; reopen a task whose link is no longer valid. Creation does not assign the attending technician. As supervisor, review site/access instructions, skills, safety, and material needs, then use the separate classification form for explicit purpose and fiber or radio technology.",
         "Select one active native technician or vendor organization. For a vendor, use Choose attending technician to select the active member who will attend. Review the assignment preview and current work state, then confirm. If the work changed, refresh the preview before trying again.",
         "Track visit acceptance, departure, arrival, start, pause/hold, and completion separately from supervisor acceptance. Retain notes, photos, required signature or permitted signature-unavailable reason, and authored criterion evidence; open completion review to review submitted criteria against the exact enrolled revision.",
         "For shared outages, open the outage console, confirm the incident, issued/current affected-subscription scope, infrastructure ticket, and team assignment, then issue infrastructure field work with a clear reason. Fiber and radio infrastructure visits can serve multiple customers without an individual customer target.",
@@ -1166,6 +1181,7 @@ HELP_ONLY_GUIDANCE: tuple[AdminWorkflowGuidance, ...] = (
             "/admin/dispatch/visit-followups/**",
         ),
         notes=(
+            "If additional information fails after creation, the resulting page names the created work order. Open that record to correct the information; do not submit Create Work Order again.",
             "Shared outage work has no individual customer target; verify the outage scope and infrastructure location before issuing it.",
             "For unable-to-complete or rejected visits, open Failed visit followups at /admin/dispatch/visit-followups. Record the responsible native team, optional member, due time, reason, and triage/revisit/no-revisit decision. Review failed-visit replacement in completion review and link the exact approved coverage; a new visit or note alone does not discharge the failed scope or book an appointment.",
             "Publish an explicit completion-review policy and enroll native or engineering work before reviewing its authored criteria. Reviewer independence follows the configured policy; signature exceptions are evidence, not customer acceptance. Preparation suggestions do not enforce technology-specific thresholds.",
@@ -2230,6 +2246,27 @@ _ACTION_SPECS: dict[str, tuple[_ActionSpec, ...]] = {
         _action("review-sales-orders", "Review sales orders", 2),
         _action("verify-sales-identity", "Verify sales identity", 3),
     ),
+    "sales-lead-intake": (
+        _action("review-lead-intake", "Review lead intake rollout", 0),
+        _action(
+            "draft-lead-intake",
+            "Create a lead intake draft",
+            1,
+            permission=LEAD_WRITE_PERMISSION,
+        ),
+        _action(
+            "publish-lead-intake",
+            "Review and publish a draft",
+            2,
+            permission=LEAD_WRITE_PERMISSION,
+        ),
+        _action(
+            "retire-lead-intake",
+            "Retire a published version",
+            3,
+            permission=LEAD_WRITE_PERMISSION,
+        ),
+    ),
     "service-requests": (
         _action("find-service-request", "Find and review a service request", 0),
         _action("validate-service-request", "Validate request information", 1),
@@ -2627,7 +2664,7 @@ HELP_NAVIGATION: tuple[AdminHelpNavigationSection, ...] = (
     AdminHelpNavigationSection(
         "sales",
         "Sales",
-        ("sales-overview", "sales-quotes", "sales-orders"),
+        ("sales-overview", "sales-lead-intake", "sales-quotes", "sales-orders"),
         LEAD_READ_PERMISSION,
     ),
     AdminHelpNavigationSection(
