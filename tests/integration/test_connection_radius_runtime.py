@@ -35,20 +35,34 @@ def test_real_radius_authentication_and_worker_independent_expiry(engine):
     with psycopg.connect(maintenance, autocommit=True) as admin:
         admin.execute(sql.SQL("CREATE DATABASE {}").format(sql.Identifier(name)))
     environ = dict(os.environ)
+    db_host = str(base.host or "127.0.0.1")
+    container_db_host = (
+        "host.docker.internal"
+        if db_host in {"localhost", "127.0.0.1", "::1"}
+        else db_host
+    )
     values = {
-        "PGHOST": str(base.host or "127.0.0.1"),
+        "PGHOST": container_db_host,
         "PGPORT": str(base.port or 5432),
         "PGUSER": str(base.username),
         "PGPASSWORD": str(base.password),
         "PGDATABASE": name,
-        "FREERADIUS_DB_HOST": str(base.host or "127.0.0.1"),
+        "FREERADIUS_DB_HOST": container_db_host,
         "FREERADIUS_DB_PORT": str(base.port or 5432),
         "FREERADIUS_DB_USER": str(base.username),
         "FREERADIUS_DB_PASS": str(base.password),
         "FREERADIUS_DB_NAME": name,
     }
     environ.update(values)
-    command = [docker, "run", "--rm", "--name", container, "--network", "host"]
+    command = [
+        docker,
+        "run",
+        "--rm",
+        "--name",
+        container,
+        "--add-host",
+        "host.docker.internal:host-gateway",
+    ]
     for key in values:
         command.extend(("-e", key))
     command.extend(
