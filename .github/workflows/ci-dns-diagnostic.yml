@@ -1,0 +1,23 @@
+name: CI DNS diagnostic
+
+on:
+  push:
+    branches:
+      - feat/infrastructure-ticket-work-orders
+
+jobs:
+  dns:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Compare runner and container DNS
+        run: |
+          cat /etc/resolv.conf
+          for host in archive.ubuntu.com security.ubuntu.com azure.archive.ubuntu.com; do
+            echo "Runner $host"
+            timeout 15 getent ahostsv4 "$host" || true
+          done
+          for network in host bridge; do
+            echo "Container $network"
+            timeout 45 docker run --rm --network "$network" ubuntu:24.04 bash -c \
+              'cat /etc/resolv.conf; getent ahostsv4 archive.ubuntu.com; getent ahostsv4 security.ubuntu.com' || true
+          done
