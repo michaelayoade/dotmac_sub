@@ -580,8 +580,8 @@ def detail_page(
     pair = work_order_views.get_work_order_row(db, public_id)
     if pair is None:
         raise HTTPException(status_code=404, detail="Work order not found")
-    row, subscriber = pair
     row: WorkOrder
+    row, subscriber = pair
     project = db.get(Project, row.project_id) if row.project_id else None
     task = db.get(ProjectTask, row.project_task_id) if row.project_task_id else None
     ticket = db.get(Ticket, row.origin_ticket_id) if row.origin_ticket_id else None
