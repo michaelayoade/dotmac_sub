@@ -7,7 +7,7 @@ import logging
 import uuid
 from collections.abc import Mapping
 from datetime import date
-from typing import Any, Literal
+from typing import Annotated, Any, Literal
 from urllib.parse import quote_plus
 from uuid import UUID, uuid4
 
@@ -1198,7 +1198,7 @@ def person_detail(
     usage_view: str = Query("chart", pattern="^(chart|table)$"),
     usage_start_date: date | None = None,
     usage_end_date: date | None = None,
-    timeline_page: int = Query(1, ge=1),
+    timeline_page: Annotated[int, Query(ge=1)] = 1,
     db: Session = Depends(get_db),
 ):
     """View customer details (unified — person and org members)."""
