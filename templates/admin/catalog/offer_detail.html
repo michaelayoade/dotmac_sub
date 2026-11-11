@@ -89,7 +89,7 @@
                             <dd class="mt-1 text-sm text-slate-900 dark:text-white">{{ offer.access_type.value | replace('_', ' ') | title }}</dd>
                         </div>
                         <div>
-                            <dt class="text-sm font-medium text-slate-500 dark:text-slate-400">Bandwidth</dt>
+                            <dt class="text-sm font-medium text-slate-500 dark:text-slate-400">Tariff speed (download/upload)</dt>
                             <dd class="mt-1 text-sm text-slate-900 dark:text-white">
                                 {% if offer.speed_download_mbps or offer.speed_upload_mbps %}
                                 {{ offer.speed_download_mbps or '-' }}/{{ offer.speed_upload_mbps or '-' }} Mbps
@@ -113,11 +113,21 @@
                             <dd class="mt-1 text-sm text-slate-900 dark:text-white">{{ 'Yes' if offer.with_vat else 'No' }}</dd>
                         </div>
                         <div>
-                            <dt class="text-sm font-medium text-slate-500 dark:text-slate-400">Download/Upload</dt>
+                            <dt class="text-sm font-medium text-slate-500 dark:text-slate-400">Linked RADIUS profile</dt>
                             <dd class="mt-1 text-sm text-slate-900 dark:text-white">
-                                {% if offer.speed_download_mbps or offer.speed_upload_mbps %}
-                                {{ offer.speed_download_mbps or '-' }}/{{ offer.speed_upload_mbps or '-' }} Mbps
-                                {% else %}-{% endif %}
+                                {{ rate_profile.name if rate_profile else 'None' }}
+                                {% if configured_profile_rate and (configured_profile_rate.download_mbps is not none or configured_profile_rate.upload_mbps is not none) %}
+                                <span class="block text-xs text-slate-500 dark:text-slate-400">Configured speed: {{ configured_profile_rate.download_mbps if configured_profile_rate.download_mbps is not none else '—' }}/{{ configured_profile_rate.upload_mbps if configured_profile_rate.upload_mbps is not none else '—' }} Mbps</span>
+                                {% endif %}
+                            </dd>
+                        </div>
+                        <div>
+                            <dt class="text-sm font-medium text-slate-500 dark:text-slate-400">Effective plan rate (download/upload)</dt>
+                            <dd class="mt-1 text-sm text-slate-900 dark:text-white">
+                                {% if effective_rate %}
+                                {{ effective_rate.download_mbps }}/{{ effective_rate.upload_mbps }} Mbps
+                                <span class="block text-xs text-slate-500 dark:text-slate-400">Source: {{ effective_rate_source }}</span>
+                                {% else %}Unavailable{% endif %}
                             </dd>
                         </div>
                         <div>

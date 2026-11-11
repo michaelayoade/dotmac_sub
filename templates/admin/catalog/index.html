@@ -68,12 +68,12 @@
     {# Category Tabs #}
     {% set category_tab_labels = {"internet": "Internet", "recurring": "Recurring", "one_time": "One-time", "bundle": "Bundles"} %}
     <div class="mb-4 flex flex-wrap items-center gap-2 rounded-2xl border border-slate-200/60 bg-white px-6 py-3 dark:border-slate-700/60 dark:bg-slate-800">
-        <a href="/admin/catalog{% if status %}?status={{ status }}{% endif %}{% if search %}{% if status %}&{% else %}?{% endif %}search={{ search }}{% endif %}{% if plan_kind %}{% if status or search %}&{% else %}?{% endif %}plan_kind={{ plan_kind }}{% endif %}{% if plan_family %}{% if status or search or plan_kind %}&{% else %}?{% endif %}plan_family={{ plan_family }}{% endif %}"
+        <a href="{{ category_tab_urls[''] }}" data-catalog-category=""
            class="inline-flex items-center rounded-lg px-3 py-1.5 text-sm font-medium transition-colors {% if not plan_category %}bg-violet-100 text-violet-800 dark:bg-violet-900/30 dark:text-violet-400{% else %}bg-slate-100 text-slate-600 hover:bg-slate-200 dark:bg-slate-700 dark:text-slate-300 dark:hover:bg-slate-600{% endif %}">
             All
         </a>
         {% for cat in plan_categories %}
-        <a href="/admin/catalog?plan_category={{ cat }}{% if status %}&status={{ status }}{% endif %}{% if search %}&search={{ search }}{% endif %}{% if plan_kind %}&plan_kind={{ plan_kind }}{% endif %}{% if plan_family %}&plan_family={{ plan_family }}{% endif %}"
+        <a href="{{ category_tab_urls[cat] }}" data-catalog-category="{{ cat }}"
            class="inline-flex items-center rounded-lg px-3 py-1.5 text-sm font-medium transition-colors {% if plan_category == cat %}bg-violet-100 text-violet-800 dark:bg-violet-900/30 dark:text-violet-400{% else %}bg-slate-100 text-slate-600 hover:bg-slate-200 dark:bg-slate-700 dark:text-slate-300 dark:hover:bg-slate-600{% endif %}">
             {{ category_tab_labels.get(cat, cat | replace("_", " ") | title) }}
         </a>
@@ -85,6 +85,29 @@
 </div>
 
 {{ animation_styles() }}
+
+<script>
+function syncCatalogCategoryLinks(form = null) {
+    const current = new URLSearchParams(form ? new FormData(form) : window.location.search);
+    current.delete('page');
+    document.querySelectorAll('[data-catalog-category]').forEach(link => {
+        const params = new URLSearchParams(current);
+        const category = link.dataset.catalogCategory;
+        if (category) params.set('plan_category', category);
+        else params.delete('plan_category');
+        const query = params.toString();
+        link.href = `/admin/catalog${query ? `?${query}` : ''}`;
+    });
+}
+document.addEventListener('DOMContentLoaded', () => syncCatalogCategoryLinks());
+document.addEventListener('submit', event => {
+    if (event.target.id === 'catalog-grid-search-form') syncCatalogCategoryLinks(event.target);
+});
+document.addEventListener('htmx:afterSettle', () =>
+    syncCatalogCategoryLinks(document.getElementById('catalog-grid-search-form'))
+);
+window.addEventListener('popstate', () => syncCatalogCategoryLinks());
+</script>
 
 {# Chart.js Scripts #}
 {% if catalog_stats %}

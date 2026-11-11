@@ -53,6 +53,7 @@ import uuid
 from collections import defaultdict
 from collections.abc import Iterable, Sequence
 from dataclasses import dataclass, field
+from decimal import Decimal
 from typing import Any
 
 from sqlalchemy import ColumnElement, select
@@ -408,6 +409,188 @@ def _as_uuid(value: object) -> uuid.UUID | None:
 
 _RATE_PART = re.compile(r"^(\d+(?:\.\d+)?)([kKmMgG]?)$")
 _UNIT_KBPS = {"": 1 / 1000, "k": 1.0, "m": 1000.0, "g": 1_000_000.0}
+_UNIT_MBPS = {
+    "": Decimal("0.000001"),
+    "k": Decimal("0.001"),
+    "m": Decimal(1),
+    "g": Decimal(1000),
+}
+
+
+class RateSpeedSource(enum.StrEnum):
+    literal = "mikrotik_rate_limit"
+    profile_fields = "profile_speed_fields"
+    unavailable = "unavailable"
+    invalid_literal = "invalid_literal"
+
+
+@dataclass(frozen=True)
+class RateSpeed:
+    download_mbps: Decimal | None
+    upload_mbps: Decimal | None
+    source: RateSpeedSource
+
+    @property
+    def provisioning_note(self) -> str:
+        """Explain the plan-layer precedence used by :func:`rate_limit_for`."""
+        if self.source is RateSpeedSource.literal:
+            return "Its literal rate limit takes precedence when provisioning."
+        if self.source is RateSpeedSource.profile_fields:
+            return (
+                "Tariff speeds determine provisioning when both are set; "
+                "profile speed fields are the fallback."
+            )
+        return ""
+
+    @property
+    def mismatch_blocks_save(self) -> bool:
+        """Only a literal profile rate overrides complete tariff speeds."""
+        return self.source is RateSpeedSource.literal
+
+
+class CatalogSpeedStatus(enum.StrEnum):
+    match = "match"
+    mismatch = "mismatch"
+    profile_fields_differ = "profile_fields_differ"
+    fractional_profile = "fractional_profile"
+    invalid_literal = "invalid_literal"
+    unavailable = "unavailable"
+    unchanged_legacy = "unchanged_legacy"
+    generated_profile_refresh = "generated_profile_refresh"
+
+
+@dataclass(frozen=True)
+class CatalogSpeedAssessment:
+    status: CatalogSpeedStatus
+    configured: RateSpeed
+
+    @property
+    def blocks_save(self) -> bool:
+        return self.status in {
+            CatalogSpeedStatus.mismatch,
+            CatalogSpeedStatus.fractional_profile,
+            CatalogSpeedStatus.invalid_literal,
+        }
+
+
+@dataclass(frozen=True)
+class CatalogSpeedQuery:
+    """Immutable tariff intent and profile evidence for one speed comparison."""
+
+    profile_id: uuid.UUID
+    profile_code: str | None
+    configured: RateSpeed
+    download_mbps: int | None
+    upload_mbps: int | None
+    existing_offer_id: uuid.UUID | None = None
+    existing_download_mbps: int | None = None
+    existing_upload_mbps: int | None = None
+    previous_profile_id: uuid.UUID | None = None
+
+
+def parse_rate_limit_speed_mbps(rate_limit: str | None) -> RateSpeed | None:
+    """Read the ceiling pair (NAS upload/download) from a MikroTik rate string."""
+    first = (rate_limit or "").split(maxsplit=1)
+    if not first or first[0].count("/") != 1:
+        return None
+    upload_token, download_token = first[0].split("/", 1)
+    upload_match = _RATE_PART.fullmatch(upload_token)
+    download_match = _RATE_PART.fullmatch(download_token)
+    if upload_match is None or download_match is None:
+        return None
+
+    def mbps(match: re.Match[str]) -> Decimal:
+        return Decimal(match.group(1)) * _UNIT_MBPS[match.group(2).lower()]
+
+    return RateSpeed(
+        download_mbps=mbps(download_match),
+        upload_mbps=mbps(upload_match),
+        source=RateSpeedSource.literal,
+    )
+
+
+def profile_configured_speed_mbps(profile: RadiusProfile) -> RateSpeed:
+    """Return the rate a profile declares, using the current literal precedence."""
+    if profile.mikrotik_rate_limit:
+        return parse_rate_limit_speed_mbps(profile.mikrotik_rate_limit) or RateSpeed(
+            None, None, RateSpeedSource.invalid_literal
+        )
+    if profile.download_speed is None and profile.upload_speed is None:
+        return RateSpeed(None, None, RateSpeedSource.unavailable)
+    return RateSpeed(
+        download_mbps=(
+            Decimal(profile.download_speed) / 1000
+            if profile.download_speed is not None
+            else None
+        ),
+        upload_mbps=(
+            Decimal(profile.upload_speed) / 1000
+            if profile.upload_speed is not None
+            else None
+        ),
+        source=RateSpeedSource.profile_fields,
+    )
+
+
+def generated_profile_code_for_offer(offer_id: uuid.UUID | str) -> str:
+    """Stable identity of Sub's auto-generated delivery profile."""
+    return f"offer-{offer_id}"
+
+
+def is_offer_generated_profile(
+    profile: RadiusProfile, offer_id: uuid.UUID | str
+) -> bool:
+    return profile.code == generated_profile_code_for_offer(offer_id)
+
+
+def assess_catalog_profile_speed(query: CatalogSpeedQuery) -> CatalogSpeedAssessment:
+    """Compare tariff intent with profile evidence without changing rate authority."""
+    configured = query.configured
+    if (
+        query.existing_offer_id is not None
+        and query.previous_profile_id == query.profile_id
+        and query.existing_download_mbps == query.download_mbps
+        and query.existing_upload_mbps == query.upload_mbps
+    ):
+        return CatalogSpeedAssessment(CatalogSpeedStatus.unchanged_legacy, configured)
+    if (
+        query.existing_offer_id is not None
+        and query.previous_profile_id == query.profile_id
+        and query.profile_code
+        == generated_profile_code_for_offer(query.existing_offer_id)
+    ):
+        return CatalogSpeedAssessment(
+            CatalogSpeedStatus.generated_profile_refresh, configured
+        )
+    if configured.source is RateSpeedSource.invalid_literal:
+        return CatalogSpeedAssessment(CatalogSpeedStatus.invalid_literal, configured)
+    if configured.source is RateSpeedSource.unavailable:
+        return CatalogSpeedAssessment(CatalogSpeedStatus.unavailable, configured)
+    mismatch = any(
+        actual is not None and expected is not None and Decimal(actual) != expected
+        for actual, expected in (
+            (query.download_mbps, configured.download_mbps),
+            (query.upload_mbps, configured.upload_mbps),
+        )
+    )
+    if not mismatch:
+        return CatalogSpeedAssessment(CatalogSpeedStatus.match, configured)
+    if any(
+        speed is not None and speed != speed.to_integral_value()
+        for speed in (configured.download_mbps, configured.upload_mbps)
+    ):
+        return CatalogSpeedAssessment(
+            CatalogSpeedStatus.fractional_profile
+            if configured.mismatch_blocks_save
+            else CatalogSpeedStatus.profile_fields_differ,
+            configured,
+        )
+    return CatalogSpeedAssessment(
+        CatalogSpeedStatus.mismatch
+        if configured.mismatch_blocks_save
+        else CatalogSpeedStatus.profile_fields_differ,
+        configured,
+    )
 
 
 def _download_kbps(profile: RadiusProfile) -> float | None:

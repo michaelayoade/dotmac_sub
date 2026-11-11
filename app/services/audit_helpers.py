@@ -512,7 +512,7 @@ def list_audit_events_for_entities(
         db.query(AuditEvent)
         .filter(AuditEvent.is_active.is_(True))
         .filter(predicate)
-        .order_by(AuditEvent.occurred_at.desc())
+        .order_by(AuditEvent.occurred_at.desc(), AuditEvent.id.desc())
         .limit(limit)
         .all()
     )
