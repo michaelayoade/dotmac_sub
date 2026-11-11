@@ -158,7 +158,9 @@ def test_catalog_grid_search_requires_submit_and_preserves_filters():
     assert 'name="page"' not in search_form
     assert 'hx-trigger="input changed delay:300ms, search"' not in search_form
     assert ">\n                Search\n" in search_form
-    assert ">\n                Clear\n" in search_form
+    assert ">\n                Clear search\n" in search_form
+    assert "Reset filters" in html
+    assert 'name="per_page"' in search_form
     assert "requestSubmit()" in search_form
     for field in ("status", "plan_kind", "plan_family", "plan_category"):
         assert f'name="{field}"' in search_form
@@ -200,5 +202,25 @@ def test_catalog_detail_displays_offer_speeds_in_mbps():
         "{{ offer.speed_download_mbps or '-' }}/{{ offer.speed_upload_mbps or '-' }} "
         "Mbps"
     )
-    assert source.count(expected_speed) == 2
+    assert source.count(expected_speed) == 1
+    assert "Effective plan rate (download/upload)" in source
+    assert "Linked RADIUS profile" in source
+    assert "Configured speed:" in source
     assert "Kbps" not in source
+
+
+def test_catalog_form_uses_mbps_and_explains_profile_speed():
+    source = (
+        Path(__file__).resolve().parents[1] / "templates/admin/catalog/offer_form.html"
+    ).read_text(encoding="utf-8")
+    assert "Download Speed (Mbps)" in source
+    assert "Upload Speed (Mbps)" in source
+    assert "Download Speed (Kbps)" not in source
+    assert "Upload Speed (Kbps)" not in source
+    assert 'id="profile-speed-notice"' in source
+    assert 'data-rate-source="{{ profile_speed.source.value }}"' in source
+    script = (
+        Path(__file__).resolve().parents[1] / "static/js/catalog-offer-speed.js"
+    ).read_text(encoding="utf-8")
+    assert 'profile.addEventListener("change", showNotice)' in script
+    assert "input.value = speed" not in script

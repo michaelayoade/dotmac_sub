@@ -209,6 +209,17 @@ hand-builds a rate-limit string.
 > exceptions and unexplained drift — reconcile to zero unexplained differences,
 > then canary. This is a separate programme from the FUP work.
 
+The admin tariff form compares its separately entered Mbps values with the
+selected RADIUS profile. A new or changed mismatch against a literal profile
+rate is refused because that literal wins at provisioning. A difference from
+the profile's numeric speed fields is a warning when tariff speeds determine
+the plan rate. Unspecified tariff speeds are not treated as conflicting with
+profile values. An unchanged legacy pair remains editable, and changing a
+tariff linked to its own generated profile refreshes that profile. The
+comparison does not copy profile speeds into the offer or change the current
+plan-layer rate precedence. The effective plan rate and its source are shown
+on the detail page; this is operator context, not the paused authority cutover.
+
 ### FUP throttle path
 
 1. Windowed usage crosses a `reduce_speed` rule's threshold over that rule's

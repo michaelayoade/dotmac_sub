@@ -1132,8 +1132,8 @@ HELP_ONLY_GUIDANCE: tuple[AdminWorkflowGuidance, ...] = (
         "Manage offers, plans, add-ons, and subscription-facing catalog rules.",
         ("/admin/catalog",),
         "Choose Offers, Plans, Add-ons, or Subscriptions for the item you need to review.",
-        "Search the list and open the exact catalog record to confirm pricing, billing, availability, and lifecycle state.",
-        "Create or edit an item, review its customer and billing effect, then save and verify the result.",
+        "Search and filter the list, then open the exact catalog record to confirm pricing, billing, availability, and lifecycle state.",
+        "When creating or editing a tariff, enter speeds in Mbps and compare them with the selected RADIUS profile notice before saving; verify the effective plan rate on the detail page.",
         "Deactivate instead of deleting an item that is already referenced by customer service history.",
     ),
     _guide(
