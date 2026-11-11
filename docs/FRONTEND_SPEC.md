@@ -867,9 +867,10 @@ The template displays the recorded actor category and label, plain-language
 action and object, timestamp, outcome, security sensitivity, related-record
 link, and expandable evidence. An audit event keeps its recorded attribution;
 record-only activity displays `Actor not recorded` and `Recorded` rather than
-inventing a person or claiming a successful action. This surface intentionally
-has no timeline filters, search, date controls, grouping, pagination, or load-more
-control.
+inventing a person or claiming a successful action. The timeline shows the
+existing customer-linked activity types newest first, 20 items per page.
+Previous and Next links preserve the Timeline tab and reach older records and
+their audit evidence. It has no filters, search, date controls, or grouping.
 
 The **All Subscriptions** work surface exposes one visible `Restore` row action
 for blocked, suspended, stopped, or disabled services only when the authenticated
