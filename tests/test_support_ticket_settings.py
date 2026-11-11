@@ -252,6 +252,7 @@ def test_ticket_settings_persist_routing_and_sla(db_session):
         db_session,
         _configuration_command(
             ticket_types=("incident", "core link disconnection"),
+            infrastructure_types=(),
             regions=("North",),
             auto_assign=True,
             auto_assign_max_open_tickets=3,
