@@ -922,7 +922,6 @@
                     {% if can_read_service_extensions %}
                     {% set billing_tabs = billing_tabs + [{'id': 'extensions', 'label': 'Extensions', 'count': service_extension_history.total_count}] %}
                     {% endif %}
-                    {% set billing_tabs = billing_tabs + [{'id': 'activity', 'label': 'Activity', 'count': credit_applications|length}] %}
                     {% for tab in billing_tabs %}
                     <button type="button"
                             @click="billingSubTab = '{{ tab.id }}'"
@@ -1150,6 +1149,31 @@
             {% else %}
             <div class="px-5 py-10 text-center text-sm text-slate-500 dark:text-slate-400">No credit notes found.</div>
             {% endif %}
+            <div class="border-t border-slate-100 dark:border-slate-700">
+                <div class="flex items-center justify-between bg-slate-50/60 px-5 py-3 dark:bg-slate-900/20">
+                    <h4 class="text-sm font-semibold text-slate-900 dark:text-white">Credit application history</h4>
+                    {% if can(request, 'billing:ledger:read') %}<button type="button" @click="billingSubTab = 'ledger'" class="text-xs font-semibold text-amber-600 hover:text-amber-700 dark:text-amber-400">View ledger</button>{% endif %}
+                </div>
+                {% if credit_applications %}
+                <div class="divide-y divide-slate-100 dark:divide-slate-700">
+                    {% for application in credit_applications %}
+                    <div class="flex flex-col gap-3 px-5 py-4 md:flex-row md:items-center md:justify-between">
+                        <div>
+                            <p class="text-sm font-semibold text-slate-900 dark:text-white">{{ application.credit_note.credit_number if application.credit_note else (application.credit_note_id|string)[:8]|upper }}</p>
+                            <p class="text-xs text-slate-500 dark:text-slate-400">
+                                Applied {{ application.created_at | app_datetime('%b %d, %Y', 'N/A', include_tz=False) }}
+                                {% if application.invoice %} to {{ application.invoice.invoice_number or (application.invoice.id|string)[:8]|upper }}{% endif %}
+                            </p>
+                            {% if application.memo %}<p class="mt-1 text-xs text-slate-500 dark:text-slate-400">{{ application.memo }}</p>{% endif %}
+                        </div>
+                        <p class="text-sm font-bold tabular-nums text-emerald-700 dark:text-emerald-300">₦{{ '{:,.2f}'.format(application.amount | default(0)) }}</p>
+                    </div>
+                    {% endfor %}
+                </div>
+                {% else %}
+                <div class="px-5 py-6 text-center text-sm text-slate-500 dark:text-slate-400">No credit applications recorded.</div>
+                {% endif %}
+            </div>
         </div>
 
         {% if can_read_service_extensions %}<div x-show="billingSubTab === 'extensions'" x-cloak class="rounded-2xl border border-slate-200/60 bg-white shadow-sm dark:border-slate-700/60 dark:bg-slate-800">
@@ -1185,31 +1209,6 @@
             {% endif %}
         </div>{% endif %}
 
-        <div x-show="billingSubTab === 'activity'" x-cloak class="rounded-2xl border border-slate-200/60 bg-white shadow-sm dark:border-slate-700/60 dark:bg-slate-800">
-            <div class="flex items-center justify-between border-b border-slate-100 px-5 py-4 dark:border-slate-700">
-                <h3 class="font-semibold text-slate-900 dark:text-white">Credit Application Activity</h3>
-                {% if can(request, 'billing:ledger:read') %}<button type="button" @click="billingSubTab = 'ledger'" class="text-xs font-semibold text-amber-600 hover:text-amber-700 dark:text-amber-400">View ledger</button>{% endif %}
-            </div>
-            {% if credit_applications %}
-            <div class="divide-y divide-slate-100 dark:divide-slate-700">
-                {% for application in credit_applications %}
-                <div class="flex flex-col gap-3 px-5 py-4 md:flex-row md:items-center md:justify-between">
-                    <div>
-                        <p class="text-sm font-semibold text-slate-900 dark:text-white">{{ application.credit_note.credit_number if application.credit_note else (application.credit_note_id|string)[:8]|upper }}</p>
-                        <p class="text-xs text-slate-500 dark:text-slate-400">
-                            Applied {{ application.created_at | app_datetime('%b %d, %Y', 'N/A', include_tz=False) }}
-                            {% if application.invoice %} to {{ application.invoice.invoice_number or (application.invoice.id|string)[:8]|upper }}{% endif %}
-                        </p>
-                        {% if application.memo %}<p class="mt-1 text-xs text-slate-500 dark:text-slate-400">{{ application.memo }}</p>{% endif %}
-                    </div>
-                    <p class="text-sm font-bold tabular-nums text-emerald-700 dark:text-emerald-300">₦{{ '{:,.2f}'.format(application.amount | default(0)) }}</p>
-                </div>
-                {% endfor %}
-            </div>
-            {% else %}
-            <div class="px-5 py-10 text-center text-sm text-slate-500 dark:text-slate-400">No credit applications recorded.</div>
-            {% endif %}
-        </div>
     </div>
 
     <!-- Tab Content: Subscriptions -->

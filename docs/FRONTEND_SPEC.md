@@ -842,6 +842,11 @@ Overview keeps its short recent-record previews. The embedded history routes
 require customer read access and the respective invoice or payment read
 permission; the full tabs are hidden when that permission is absent.
 
+The customer Billing Credits tab shows the 10 newest active credit notes and,
+below them, the 10 newest credit applications with their invoice and amount.
+There is no separate billing Activity subtab. The customer-wide Activity
+Timeline remains a separate view of broader customer events.
+
 **Billing Ledger tab presentation contract:**
 `app.services.web_billing_ledger.build_customer_ledger_view` owns the embedded,
 customer-scoped read model. The first page contains the 10 newest financial
