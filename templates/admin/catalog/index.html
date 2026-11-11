@@ -87,8 +87,8 @@
 {{ animation_styles() }}
 
 <script>
-function syncCatalogCategoryLinks() {
-    const current = new URLSearchParams(window.location.search);
+function syncCatalogCategoryLinks(form = null) {
+    const current = new URLSearchParams(form ? new FormData(form) : window.location.search);
     current.delete('page');
     document.querySelectorAll('[data-catalog-category]').forEach(link => {
         const params = new URLSearchParams(current);
@@ -99,9 +99,14 @@ function syncCatalogCategoryLinks() {
         link.href = `/admin/catalog${query ? `?${query}` : ''}`;
     });
 }
-document.addEventListener('DOMContentLoaded', syncCatalogCategoryLinks);
-document.addEventListener('htmx:afterSettle', syncCatalogCategoryLinks);
-window.addEventListener('popstate', syncCatalogCategoryLinks);
+document.addEventListener('DOMContentLoaded', () => syncCatalogCategoryLinks());
+document.addEventListener('submit', event => {
+    if (event.target.id === 'catalog-grid-search-form') syncCatalogCategoryLinks(event.target);
+});
+document.addEventListener('htmx:afterSettle', () =>
+    syncCatalogCategoryLinks(document.getElementById('catalog-grid-search-form'))
+);
+window.addEventListener('popstate', () => syncCatalogCategoryLinks());
 </script>
 
 {# Chart.js Scripts #}

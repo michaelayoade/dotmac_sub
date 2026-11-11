@@ -9,7 +9,6 @@ from enum import Enum
 from urllib.parse import urlencode
 from uuid import UUID
 
-from fastapi import HTTPException
 from pydantic import ValidationError
 from sqlalchemy import case, func, select
 from sqlalchemy.orm import Session, joinedload
@@ -331,17 +330,12 @@ def validate_offer_form(offer: dict[str, object]) -> str | None:
 def radius_profile_or_none(db: Session, profile_id: str) -> RadiusProfile | None:
     """Read a linked profile through its catalog query owner."""
     try:
-        UUID(profile_id)
+        parsed_id = UUID(profile_id)
     except ValueError:
         return None
-    try:
-        return catalog_service.radius_profiles.get_including_inactive(
-            db=db, entity_id=profile_id
-        )
-    except HTTPException as exc:
-        if exc.status_code == 404:
-            return None
-        raise
+    return catalog_service.radius_profiles.find_including_inactive(
+        db=db, profile_id=parsed_id
+    )
 
 
 def selected_profile_speed_issue(
@@ -1291,10 +1285,10 @@ def overview_page_data(
             if current_dir == "desc"
             else CatalogOffer.name.asc()
         )
-        ordering = (name_order, CatalogOffer.id.asc())
+        stmt = stmt.order_by(name_order, CatalogOffer.id.asc())
     else:
-        ordering = (CatalogOffer.created_at.desc(), CatalogOffer.id.asc())
-    offers = db.scalars(stmt.order_by(*ordering).limit(per_page).offset(offset)).all()
+        stmt = stmt.order_by(CatalogOffer.created_at.desc(), CatalogOffer.id.asc())
+    offers = db.scalars(stmt.limit(per_page).offset(offset)).all()
     offer_plan_metadata = {}
     for offer in offers:
         metadata, _ = parse_offer_description_metadata(offer.description)

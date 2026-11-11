@@ -190,6 +190,7 @@ def test_fractional_profile_rate_explains_integer_form_limit():
 
 def test_update_can_clear_optional_speed_values():
     offer = web_catalog_offers.default_offer_form()
+    offer["name"] = "Optional speed test"
     payload = web_catalog_offers.update_offer_payload(offer).model_dump(
         exclude_unset=True
     )
