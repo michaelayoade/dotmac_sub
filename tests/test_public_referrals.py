@@ -73,7 +73,8 @@ def test_valid_link_renders_capture_and_signup_flow(db_session):
     assert "Address filled from your current location" in response.text
     assert "Your typed address will be used" in response.text
     assert 'data-state="neutral"' in response.text
-    assert "position.coords.accuracy" in response.text
+    assert "position.coords.latitude" in response.text
+    assert "position.coords.longitude" in response.text
     assert "Type your service address to continue" in response.text
     assert "setFormBusy(true)" in response.text
     assert 'id="address-error"' in response.text

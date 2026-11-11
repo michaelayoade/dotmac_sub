@@ -529,7 +529,11 @@ def _create_operation(
     subscriber = subscriber_service.subscribers.prepare_new_account(
         db, subscriber_payload
     )
-    if service_address is not None and service_address.latitude is not None:
+    if (
+        service_address is not None
+        and service_address.latitude is not None
+        and service_address.longitude is not None
+    ):
         subscriber_service.update_customer_service_location(
             db,
             CustomerServiceLocationUpdate(
