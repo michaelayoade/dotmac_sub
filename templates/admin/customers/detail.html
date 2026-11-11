@@ -1745,7 +1745,11 @@
                     <div class="px-5 py-4">
                         <div class="flex items-start justify-between gap-3">
                             <div class="min-w-0">
+                                {% if log.channel.value == 'email' %}
+                                <a href="/admin/customers/person/{{ customer.id }}/communications/emails/{{ log.id }}" class="block truncate text-sm font-semibold text-slate-900 hover:text-amber-600 focus-visible:rounded focus-visible:outline focus-visible:outline-2 focus-visible:outline-amber-500 dark:text-white dark:hover:text-amber-400">{{ log.subject or log.recipient or 'Email' }}</a>
+                                {% else %}
                                 <p class="truncate text-sm font-semibold text-slate-900 dark:text-white">{{ log.subject or log.recipient or log.channel.value | replace('_', ' ') | title }}</p>
+                                {% endif %}
                                 <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">{{ log.channel.value | replace('_', ' ') | title }} · {{ log.direction.value | title }} · {{ log.status.value | title }}</p>
                             </div>
                             <span class="whitespace-nowrap text-xs text-slate-500 dark:text-slate-400">{{ (log.sent_at or log.created_at) | app_datetime('%b %d, %Y', 'N/A', include_tz=False) }}</span>

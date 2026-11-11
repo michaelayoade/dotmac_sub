@@ -41,6 +41,9 @@ from app.services import (
     subscriber_party_binding_repair,
     web_prepaid_activation_funding,
 )
+from app.services import (
+    customer_communication_history as customer_communication_history_service,
+)
 from app.services import customer_connection_types as customer_connection_types_service
 from app.services import customer_network_path as customer_network_path_service
 from app.services import network_monitoring as network_monitoring_service
@@ -1144,6 +1147,40 @@ async def customer_create(
             },
             status_code=400,
         )
+
+
+@router.get(
+    "/person/{customer_id}/communications/emails/{message_id}",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("customer:read"))],
+)
+def person_email_detail(
+    request: Request,
+    customer_id: UUID,
+    message_id: UUID,
+    db: Session = Depends(get_db),
+):
+    email = customer_communication_history_service.get_customer_email_detail(
+        db=db,
+        query=customer_communication_history_service.CustomerEmailDetailQuery(
+            customer_id=customer_id,
+            message_id=message_id,
+        ),
+    )
+    if email is None:
+        raise HTTPException(status_code=404, detail="Email not found")
+
+    from app.web.admin import get_current_user, get_sidebar_stats
+
+    return templates.TemplateResponse(
+        "admin/customers/communication_email_detail.html",
+        {
+            "request": request,
+            "email": email,
+            "current_user": get_current_user(request),
+            "sidebar_stats": get_sidebar_stats(db),
+        },
+    )
 
 
 @router.get(

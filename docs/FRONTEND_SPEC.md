@@ -847,6 +847,17 @@ below them, the 10 newest credit applications with their invoice and amount.
 There is no separate billing Activity subtab. The customer-wide Activity
 Timeline remains a separate view of broader customer events.
 
+**Customer communication email detail:**
+In the customer Tickets tab, the second Communications card shows the 12 newest
+customer-linked communication-log entries. An email subject opens
+`GET /admin/customers/person/{customer_id}/communications/emails/{message_id}`.
+The read-only page shows the stored subject, sender, recipient, sent or recorded
+date, direction, status, and complete body as escaped text. If no body was
+stored, it says so. Other communication channels remain unlinked. The route
+requires customer read permission and returns 404 for an absent customer,
+another customer's message, or a non-email entry. Its back link returns to
+the customer Tickets tab.
+
 **Billing Ledger tab presentation contract:**
 `app.services.web_billing_ledger.build_customer_ledger_view` owns the embedded,
 customer-scoped read model. The first page contains the 10 newest financial

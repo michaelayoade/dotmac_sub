@@ -1297,6 +1297,75 @@ DOMAIN = DomainSOT(
             ),
         ),
         SOTService(
+            name="ui.customer_communication_history",
+            module="app.services.customer_communication_history",
+            owns=("customer-scoped historical email detail projection",),
+            depends_on=("customer.accounts", "communications.notification_service"),
+            notes=(
+                "A read-only customer detail drill-down exposes the stored email "
+                "body as text. The typed query requires both customer and message "
+                "IDs; missing, cross-customer, and non-email records are unavailable."
+            ),
+            contract=ServiceContract(
+                concerns=(
+                    ConcernContract(
+                        name="customer-scoped historical email detail projection",
+                        role=OwnerRole.RESOLVER,
+                        input_names=(
+                            "canonical customer account identity",
+                            "customer-linked communication-log email",
+                        ),
+                    ),
+                ),
+                authoritative_inputs=(
+                    AuthorityInput(
+                        name="canonical customer account identity",
+                        owner="customer.accounts",
+                        kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                        source="customer Subscriber row",
+                    ),
+                    AuthorityInput(
+                        name="customer-linked communication-log email",
+                        owner="communications.notification_service",
+                        kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                        source="email CommunicationLog row with matching subscriber_id",
+                    ),
+                ),
+                transaction=TransactionContract(
+                    mode=TransactionMode.READ_ONLY,
+                    boundary=(
+                        "The admin adapter owns the session; this query only reads "
+                        "the customer and one scoped communication row."
+                    ),
+                    locking="No mutation or lock is required for this read.",
+                    idempotency="The same stored email yields the same detail fields.",
+                    retries="The read-only query is safe to retry.",
+                ),
+                errors=ErrorContract(
+                    domain_codes=(),
+                    mapping_owner="app.web.admin.customers",
+                    fail_closed_on=(
+                        "missing customer or email",
+                        "cross-customer email",
+                        "non-email communication",
+                    ),
+                ),
+                migration=MigrationContract(
+                    state=AuthorityMigrationState.NATIVE,
+                    new_owner="ui.customer_communication_history",
+                    verification=(
+                        "Scoped email-detail behavior and read-only UI boundary tests."
+                    ),
+                ),
+                steward="customer operations UI",
+                design_refs=(
+                    "docs/UI_INFORMATION_AND_ACTION_STANDARD.md",
+                    "docs/FRONTEND_SPEC.md",
+                ),
+                test_refs=("tests/test_customer_communication_history.py",),
+            ),
+        ),
+        SOTService(
             name="ui.subscriber_list_projection",
             module="app.services.web_subscriber_lists",
             owns=(
