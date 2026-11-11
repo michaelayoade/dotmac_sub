@@ -490,36 +490,36 @@ class TestDetailContext:
         )
         direct = web_dispatch_work_orders.create_from_form(
             db_session,
-            {
-                "public_id": "sub-project-panel",
-                "subscriber_id": str(subscriber.id),
-                "project_id": str(project.id),
-                "title": "Project survey",
-                "status": "scheduled",
-            },
+            web_dispatch_work_orders.WorkOrderCreateFormInput(
+                public_id="sub-project-panel",
+                subscriber_id=str(subscriber.id),
+                project_id=str(project.id),
+                title="Project survey",
+                status="scheduled",
+            ),
         )
         via_task = web_dispatch_work_orders.create_from_form(
             db_session,
-            {
-                "public_id": "sub-project-task-panel",
-                "subscriber_id": str(subscriber.id),
-                "project_task_id": str(task.id),
-                "title": "Task survey",
-                "status": "scheduled",
-            },
+            web_dispatch_work_orders.WorkOrderCreateFormInput(
+                public_id="sub-project-task-panel",
+                subscriber_id=str(subscriber.id),
+                project_task_id=str(task.id),
+                title="Task survey",
+                status="scheduled",
+            ),
         )
         unrelated_project = _create_project(
             db_session, subscriber, name="Unrelated project"
         )
         web_dispatch_work_orders.create_from_form(
             db_session,
-            {
-                "public_id": "sub-unrelated-project-panel",
-                "subscriber_id": str(subscriber.id),
-                "project_id": str(unrelated_project.id),
-                "title": "Unrelated survey",
-                "status": "scheduled",
-            },
+            web_dispatch_work_orders.WorkOrderCreateFormInput(
+                public_id="sub-unrelated-project-panel",
+                subscriber_id=str(subscriber.id),
+                project_id=str(unrelated_project.id),
+                title="Unrelated survey",
+                status="scheduled",
+            ),
         )
 
         context = web_projects.build_project_detail_context(
@@ -545,13 +545,13 @@ class TestDetailContext:
         )
         web_dispatch_work_orders.create_from_form(
             db_session,
-            {
-                "public_id": "sub-existing-task-work",
-                "subscriber_id": str(subscriber.id),
-                "project_task_id": str(first.id),
-                "title": "Existing task work",
-                "status": "scheduled",
-            },
+            web_dispatch_work_orders.WorkOrderCreateFormInput(
+                public_id="sub-existing-task-work",
+                subscriber_id=str(subscriber.id),
+                project_task_id=str(first.id),
+                title="Existing task work",
+                status="scheduled",
+            ),
         )
 
         context = web_projects.build_project_detail_context(
@@ -671,13 +671,13 @@ class TestTasksContext:
         ):
             web_dispatch_work_orders.create_from_form(
                 db_session,
-                {
-                    "public_id": public_id,
-                    "subscriber_id": str(subscriber.id),
-                    "project_task_id": str(task.id),
-                    "title": public_id,
-                    "status": "scheduled",
-                },
+                web_dispatch_work_orders.WorkOrderCreateFormInput(
+                    public_id=public_id,
+                    subscriber_id=str(subscriber.id),
+                    project_task_id=str(task.id),
+                    title=public_id,
+                    status="scheduled",
+                ),
             )
 
         original = web_projects.work_order_views.list_task_work_order_summaries_bulk
@@ -797,23 +797,23 @@ class TestTasksContext:
         )
         first = web_dispatch_work_orders.create_from_form(
             db_session,
-            {
-                "public_id": "sub-task-panel-1",
-                "subscriber_id": str(subscriber.id),
-                "project_task_id": str(task.id),
-                "title": "First visit",
-                "status": "scheduled",
-            },
+            web_dispatch_work_orders.WorkOrderCreateFormInput(
+                public_id="sub-task-panel-1",
+                subscriber_id=str(subscriber.id),
+                project_task_id=str(task.id),
+                title="First visit",
+                status="scheduled",
+            ),
         )
         second = web_dispatch_work_orders.create_from_form(
             db_session,
-            {
-                "public_id": "sub-task-panel-2",
-                "subscriber_id": str(subscriber.id),
-                "project_task_id": str(task.id),
-                "title": "Follow-up visit",
-                "status": "scheduled",
-            },
+            web_dispatch_work_orders.WorkOrderCreateFormInput(
+                public_id="sub-task-panel-2",
+                subscriber_id=str(subscriber.id),
+                project_task_id=str(task.id),
+                title="Follow-up visit",
+                status="scheduled",
+            ),
         )
 
         context = web_projects.build_task_detail_context(
