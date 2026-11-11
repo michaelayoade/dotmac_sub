@@ -624,6 +624,11 @@ def detail_page(
         "subscriber": subscriber,
         "subscriber_label": _subscriber_label(subscriber),
         "work_order_kind": row.work_order_kind,
+        "infrastructure_target_name": (
+            str((row.metadata_ or {}).get("infrastructure_target_name") or "")
+            if row.work_order_kind == "infrastructure"
+            else ""
+        ),
         "project": project,
         "project_label": (
             project.name or project.code or project.number or str(project.id)

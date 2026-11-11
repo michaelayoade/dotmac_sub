@@ -45,7 +45,7 @@ def test_base_station_required_ticket_type_requires_details(db_session):
     with pytest.raises(DomainError) as exc:
         ticket_validation.validate_ticket_creation(
             db_session,
-            _payload(ticket_type="BTS Outage"),
+            _payload(ticket_type="Dell Server Down"),
         )
 
     assert exc.value.code == "ticket_base_station_required"
@@ -59,7 +59,7 @@ def test_base_station_required_ticket_type_accepts_metadata_details(db_session):
     ticket_validation.validate_ticket_creation(
         db_session,
         _payload(
-            ticket_type="BTS Outage",
+            ticket_type="Dell Server Down",
             metadata={"base_station_details": "Jabi mast sector 2"},
         ),
     )

@@ -833,6 +833,83 @@ def issue_ticket_work_order(
 
 
 @router.post(
+    "/{ticket_id}/infrastructure-work-orders",
+    response_class=HTMLResponse,
+    dependencies=[
+        Depends(require_permission("support:ticket:update")),
+        Depends(require_permission("monitoring:write")),
+        Depends(require_permission("operations:dispatch:write")),
+    ],
+)
+def issue_infrastructure_ticket_work_order(
+    request: Request,
+    ticket_id: UUID,
+    title: str = Form(...),
+    reason: str = Form(...),
+    description: str | None = Form(default=None),
+    priority: str = Form(default="high"),
+    work_type: str = Form(default="repair"),
+    address: str | None = Form(default=None),
+    expected_scope_revision_sequence: int | None = Form(default=None),
+    manual_target_name: str | None = Form(default=None),
+    idempotency_key: str = Form(...),
+    db: Session = Depends(get_db),
+):
+    from app.schemas.network import InfrastructureWorkOrderIssueRequest
+    from app.services.owner_commands import CommandContext
+    from app.services.topology import outage_work_order_handoff as handoff
+
+    try:
+        actor_id = UUID(str(_actor_id(request)))
+        payload = InfrastructureWorkOrderIssueRequest(
+            title=title.strip(),
+            reason=reason.strip(),
+            description=(description or "").strip() or None,
+            priority=priority,
+            work_type=work_type,
+            address=(address or "").strip() or None,
+            expected_scope_revision_sequence=expected_scope_revision_sequence,
+        )
+        result = handoff.issue_from_ticket(
+            db,
+            handoff.InfrastructureTicketWorkOrderIssueCommand(
+                ticket_id=ticket_id,
+                request=payload,
+                actor_id=actor_id,
+                actor_type=handoff.HandoffActorType.SYSTEM_USER,
+                permissions=frozenset(
+                    {
+                        "support:ticket:update",
+                        "monitoring:write",
+                        "operations:dispatch:write",
+                    }
+                ),
+                context=CommandContext.system(
+                    actor=str(actor_id),
+                    scope=handoff.ISSUE_SCOPE,
+                    reason=payload.reason,
+                    idempotency_key=idempotency_key,
+                ),
+                request_id=getattr(getattr(request, "state", None), "request_id", None),
+                manual_target_name=manual_target_name,
+            ),
+        )
+    except (ValidationError, ValueError, DomainError, HTTPException) as exc:
+        message = (
+            exc.message if isinstance(exc, DomainError) else _ticket_form_error(exc)
+        )
+        return RedirectResponse(
+            url=f"/admin/support/tickets/{ticket_id}?{urlencode({'handoff_error': message})}",
+            status_code=303,
+        )
+    verb = "replayed" if result.replayed else "created"
+    return RedirectResponse(
+        url=f"/admin/support/tickets/{ticket_id}?{urlencode({'handoff_notice': f'Infrastructure work order {result.work_order.public_id} {verb}'})}",
+        status_code=303,
+    )
+
+
+@router.post(
     "/{ticket_id}/edit",
     response_class=HTMLResponse,
     dependencies=[Depends(require_permission("support:ticket:update"))],

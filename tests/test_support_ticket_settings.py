@@ -9,6 +9,8 @@ from starlette.datastructures import FormData
 from app.models.service_team import ServiceTeam, ServiceTeamType
 from app.models.support import Ticket, TicketChannel, TicketStatus
 from app.models.ticket_workflow import TicketAssignmentRule
+from app.schemas.support import TicketCreate
+from app.services import infrastructure_ticket_selection, ticket_validation
 from app.services import support_ticket_settings as support_ticket_settings_service
 from app.services import web_support_tickets as web_support_tickets_service
 from app.web.admin import system as admin_system
@@ -42,9 +44,65 @@ def test_ticket_settings_defaults_loaded_without_db_rows(db_session):
     assert "closed" in statuses
     assert "resolved" not in statuses
     assert support_ticket_settings_service.list_priority_options(db_session)
-    assert support_ticket_settings_service.list_ticket_type_options(db_session)
+    options = support_ticket_settings_service.list_ticket_type_options(db_session)
+    assert "incident" in options
+    assert "Cabinet Disconnection" in options
+    assert "Core Link Disconnection" in options
     assert (
         support_ticket_settings_service.auto_assign_max_open_tickets(db_session) is None
+    )
+
+
+def test_infrastructure_types_can_be_added_and_removed_in_ticket_settings(db_session):
+    rule = support_ticket_settings_service.InfrastructureTicketTypeUpdate
+    support_ticket_settings_service.update_ticket_configuration(
+        db_session,
+        _configuration_command(
+            ticket_types=("Cabinet Disconnection", "New tower issue"),
+            infrastructure_types=(
+                rule("Cabinet Disconnection", ("cabinet",)),
+                rule("New tower issue", ("basestation", "manual")),
+            ),
+        ),
+    )
+    assert infrastructure_ticket_selection.allowed_kinds(
+        db_session, "New tower issue"
+    ) == (
+        infrastructure_ticket_selection.InfrastructureKind.basestation,
+        infrastructure_ticket_selection.InfrastructureKind.manual,
+    )
+    support_ticket_settings_service.update_ticket_configuration(
+        db_session,
+        _configuration_command(
+            ticket_types=("Cabinet Disconnection", "New tower issue"),
+            infrastructure_types=(rule("New tower issue", ("basestation",)),),
+        ),
+    )
+    assert (
+        infrastructure_ticket_selection.allowed_kinds(
+            db_session, "Cabinet Disconnection"
+        )
+        == ()
+    )
+
+
+def test_infrastructure_setting_overrides_legacy_subscriber_requirement(db_session):
+    rule = support_ticket_settings_service.InfrastructureTicketTypeUpdate
+    support_ticket_settings_service.update_ticket_configuration(
+        db_session,
+        _configuration_command(
+            ticket_types=("Customer Link Disconnection",),
+            infrastructure_types=(rule("Customer Link Disconnection", ("manual",)),),
+        ),
+    )
+    ticket_validation.validate_ticket_creation(
+        db_session,
+        TicketCreate(
+            title="Shared core link issue",
+            description="Multiple customer paths are affected",
+            ticket_type="Customer Link Disconnection",
+            priority="high",
+        ),
     )
 
 
@@ -56,6 +114,7 @@ def test_ticket_settings_drive_support_ticket_form_context(db_session):
         _configuration_command(
             priorities=("normal", "critical"),
             ticket_types=("incident", "network audit"),
+            infrastructure_types=(),
             regions=("lagos", "abuja"),
         ),
     )

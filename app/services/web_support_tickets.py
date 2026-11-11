@@ -970,7 +970,9 @@ def build_ticket_form_context(
         "base_station_required_ticket_types": (
             ticket_validation.base_station_required_ticket_types()
         ),
-        "infrastructure_ticket_policy": infrastructure_ticket_selection.category_policy(),
+        "infrastructure_ticket_policy": infrastructure_ticket_selection.category_policy(
+            db
+        ),
         "service_team_options": service_team_options(db),
         "region_manager_routing": manager_routing_preview,
         "staff_options": staff,
@@ -1202,7 +1204,7 @@ def create_ticket_from_form(
     payload = command.payload.model_copy(deep=True)
     actor_id = command.actor_id
     selection = command.infrastructure
-    kinds = infrastructure_ticket_selection.allowed_kinds(payload.ticket_type)
+    kinds = infrastructure_ticket_selection.allowed_kinds(db, payload.ticket_type)
     manual_only = kinds == (infrastructure_ticket_selection.InfrastructureKind.manual,)
     if kinds:
         if "monitoring:write" not in command.infrastructure_permissions or not actor_id:
@@ -1224,6 +1226,10 @@ def create_ticket_from_form(
                 "Select an infrastructure record or confirm a manual entry."
             )
         if isinstance(selection, ManualInfrastructureSelection):
+            if infrastructure_ticket_selection.InfrastructureKind.manual not in kinds:
+                raise ValueError(
+                    "This ticket type does not allow a manual infrastructure name."
+                )
             if len(selection.name.strip()) < 3:
                 raise ValueError("Enter an infrastructure name.")
         elif manual_only or selection.kind not in kinds:
@@ -2172,6 +2178,7 @@ def build_ticket_detail_context(
 
     from app.services import team_inbox_read, ticket_work_order_handoff
     from app.services.audit_helpers import build_audit_activities
+    from app.services.topology import outage_work_order_handoff
 
     status_options = support_ticket_settings_service.list_status_options(db)
     priority_options = support_ticket_settings_service.list_priority_options(db)
@@ -2327,6 +2334,9 @@ def build_ticket_detail_context(
         ),
         "ticket_conversations": ticket_conversations,
         "linked_project_tasks": linked_project_tasks,
+        "infrastructure_work_order_surface": outage_work_order_handoff.ticket_work_order_surface(
+            db, ticket, actor_id=actor_id
+        ),
         "issue_work_order_action": ticket_work_order_handoff.issue_action(
             db, ticket, actor_id=actor_id
         ),
