@@ -29,6 +29,11 @@ the same pull request. `scripts/architecture/workflow_guidance_gate.py` is run
 by the required **Workflow Guidance Gate** CI job and fails a PR that changes
 `app/web/admin` without changing the guidance registry.
 
+Ticket Settings explains the editable infrastructure ticket-type and target-kind
+policy. The support ticket guide describes creating a customerless infrastructure
+work order from a ticket; the dispatch guide describes assigning its technician
+after creation.
+
 ## Churn analysis
 
 Use `/admin/reports/churn` to review subscriber churn within a defined calendar

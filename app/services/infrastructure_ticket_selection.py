@@ -20,7 +20,7 @@ from app.models.network_monitoring import (
     PopSite,
 )
 from app.schemas.infrastructure import InfrastructureReference, InfrastructureSearch
-from app.services import infrastructure_catalogue
+from app.services import infrastructure_catalogue, support_ticket_settings
 from app.services.network.outage_impact import (
     resolve_basestation_impact,
     resolve_fdh_impact,
@@ -66,24 +66,8 @@ class InfrastructureTicketReference:
     asset_id: UUID
 
 
-_CATEGORY_KINDS: dict[str, tuple[InfrastructureKind, ...]] = {
-    "bts outage": (InfrastructureKind.basestation,),
-    "cabinet disconnection": (InfrastructureKind.cabinet,),
-    "multiple cabinet disconnection": (
-        InfrastructureKind.basestation,
-        InfrastructureKind.node,
-    ),
-    "multiple cabinet link disconnection": (
-        InfrastructureKind.basestation,
-        InfrastructureKind.node,
-    ),
-    "access point outage": (InfrastructureKind.node,),
-    "core link disconnection": (InfrastructureKind.manual,),
-}
-
-
 def catalogue_type(
-    kind: InfrastructureKind, ticket_type: str
+    db: Session, kind: InfrastructureKind, ticket_type: str
 ) -> InfrastructureType | None:
     if kind is InfrastructureKind.basestation:
         return InfrastructureType.base_station
@@ -92,21 +76,36 @@ def catalogue_type(
     if kind is InfrastructureKind.node:
         return (
             InfrastructureType.access_point
-            if ticket_type.strip().casefold() == "access point outage"
+            if "access_point"
+            in support_ticket_settings.infrastructure_type_kinds(db).get(
+                ticket_type.strip().casefold(), ()
+            )
             else None
         )
     raise ValueError("Manual infrastructure has no inventory reference")
 
 
-def allowed_kinds(ticket_type: str | None) -> tuple[InfrastructureKind, ...]:
-    return _CATEGORY_KINDS.get((ticket_type or "").strip().casefold(), ())
+def allowed_kinds(
+    db: Session, ticket_type: str | None
+) -> tuple[InfrastructureKind, ...]:
+    configured = support_ticket_settings.infrastructure_type_kinds(db).get(
+        (ticket_type or "").strip().casefold(), ()
+    )
+    return tuple(
+        dict.fromkeys(
+            InfrastructureKind.node
+            if kind == "access_point"
+            else InfrastructureKind(kind)
+            for kind in configured
+        )
+    )
 
 
-def category_policy() -> dict[str, tuple[str, ...]]:
+def category_policy(db: Session) -> dict[str, tuple[str, ...]]:
     """Serialize the same category policy used by the backend for form display."""
     return {
-        name: tuple(kind.value for kind in kinds)
-        for name, kinds in _CATEGORY_KINDS.items()
+        name: tuple(kind.value for kind in allowed_kinds(db, name))
+        for name in support_ticket_settings.infrastructure_type_kinds(db)
     }
 
 
@@ -114,13 +113,13 @@ def search(
     db: Session, *, query: InfrastructureTicketSearch
 ) -> tuple[InfrastructureChoice, ...]:
     term = query.term.strip()
-    if len(term) < 2 or not allowed_kinds(query.ticket_type):
+    if len(term) < 2 or not allowed_kinds(db, query.ticket_type):
         return ()
     results: list[InfrastructureChoice] = []
-    for kind in allowed_kinds(query.ticket_type):
+    for kind in allowed_kinds(db, query.ticket_type):
         if kind is InfrastructureKind.manual:
             continue
-        inventory_type = catalogue_type(kind, query.ticket_type)
+        inventory_type = catalogue_type(db, kind, query.ticket_type)
         options = (
             infrastructure_catalogue.search(
                 db,
@@ -147,11 +146,11 @@ def preview(
     db: Session, *, query: InfrastructureTicketReference
 ) -> InfrastructurePreview | None:
     if (
-        query.kind not in allowed_kinds(query.ticket_type)
+        query.kind not in allowed_kinds(db, query.ticket_type)
         or query.kind is InfrastructureKind.manual
     ):
         return None
-    inventory_type = catalogue_type(query.kind, query.ticket_type)
+    inventory_type = catalogue_type(db, query.kind, query.ticket_type)
     option = (
         infrastructure_catalogue.resolve(
             db,

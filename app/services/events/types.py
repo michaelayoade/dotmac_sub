@@ -463,6 +463,7 @@ class EventType(enum.Enum):
     ticket_resolution_confirmed = "ticket.resolution_confirmed"
     ticket_resolution_disputed = "ticket.resolution_disputed"
     ticket_work_order_issued = "ticket.work_order_issued"
+    infrastructure_ticket_work_order_issued = "infrastructure_ticket.work_order_issued"
     outage_infrastructure_work_order_issued = "outage.infrastructure_work_order_issued"
     work_order_field_outcome_recorded = "work_order.field_outcome_recorded"
 

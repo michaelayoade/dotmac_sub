@@ -9,6 +9,7 @@ from enum import StrEnum
 from typing import Literal
 from uuid import UUID
 
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.models.audit import AuditActorType
@@ -18,7 +19,9 @@ from app.models.network_monitoring import (
     OutageIncidentWorkOrderLink,
     OutageScopeRevision,
 )
+from app.models.rbac import Role, SystemUserRole
 from app.models.service_team import ServiceTeam, ServiceTeamMember
+from app.models.subscriber import UserType
 from app.models.support import Ticket, TicketChannel, TicketStatus
 from app.models.system_user import SystemUser
 from app.models.work_order import WorkOrder
@@ -52,7 +55,7 @@ REQUIRED_PERMISSIONS = frozenset({"monitoring:write", "operations:dispatch:write
 TICKET_CREATE_PERMISSIONS = frozenset({"monitoring:write", "support:ticket:create"})
 _DEFINITION = OwnerCommandDefinition(
     owner="network.outage_work_order_handoff",
-    concern="shared-outage work-order issuance eligibility",
+    concern="infrastructure-ticket work-order issuance eligibility",
     name="issue_infrastructure_work_order",
 )
 _TICKET_DEFINITION = OwnerCommandDefinition(
@@ -78,6 +81,27 @@ class OutageWorkOrderIssueCommand:
     permissions: frozenset[str]
     context: CommandContext
     request_id: str | None = None
+    expected_ticket_id: UUID | None = None
+
+
+@dataclass(frozen=True)
+class InfrastructureTicketWorkOrderIssueCommand:
+    ticket_id: UUID
+    request: InfrastructureWorkOrderIssueRequest
+    actor_id: UUID
+    actor_type: HandoffActorType
+    permissions: frozenset[str]
+    context: CommandContext
+    request_id: str | None = None
+    manual_target_name: str | None = None
+
+
+@dataclass(frozen=True)
+class InfrastructureTicketWorkOrderSurface:
+    target_label: str
+    action: Action
+    expected_scope_revision_sequence: int | None = None
+    manual_target_name: str | None = None
 
 
 @dataclass(frozen=True)
@@ -149,7 +173,7 @@ def _create_ticket_for_infrastructure_asset(
         )
     kind = command.asset_kind
     if (
-        kind not in allowed_kinds(command.ticket_type)
+        kind not in allowed_kinds(db, command.ticket_type)
         or kind is InfrastructureKind.manual
     ):
         raise OutageWorkOrderHandoffError(
@@ -175,7 +199,7 @@ def _create_ticket_for_infrastructure_asset(
         raise OutageWorkOrderHandoffError(
             "description_required", "Description is required", kind="invalid"
         )
-    inventory_type = catalogue_type(kind, command.ticket_type)
+    inventory_type = catalogue_type(db, kind, command.ticket_type)
     if inventory_type is None:
         infrastructure_catalogue.lock_network_node(
             db,
@@ -251,7 +275,7 @@ class OutageWorkOrderHandoffError(DomainError):
 @dataclass(frozen=True)
 class OutageWorkOrderIssueResult:
     work_order: WorkOrder
-    link: OutageIncidentWorkOrderLink
+    link: OutageIncidentWorkOrderLink | None
     replayed: bool
 
 
@@ -262,35 +286,59 @@ class OutageInfrastructureTicketIssueResult:
     replayed: bool
 
 
-def _validate_team_member(db: Session, ticket: Ticket, *, actor_id: object) -> UUID:
+def _validate_issuer(db: Session, ticket: Ticket, *, actor_id: object) -> UUID:
     try:
         actor_uuid = coerce_uuid(actor_id)
     except (TypeError, ValueError, AttributeError) as exc:
         raise OutageWorkOrderHandoffError(
-            "team_membership_required",
-            "An active member of the assigned team must issue field work",
+            "staff_required",
+            "An active staff member must issue field work",
             kind="forbidden",
         ) from exc
     if actor_uuid is None or ticket.service_team_id is None:
         raise OutageWorkOrderHandoffError(
-            "team_membership_required",
-            "An active member of the assigned team must issue field work",
+            "team_required",
+            "Assign an active service team before issuing field work",
             kind="forbidden",
         )
     team = db.get(ServiceTeam, ticket.service_team_id)
-    member = (
-        db.query(ServiceTeamMember)
-        .join(SystemUser, SystemUser.person_party_id == ServiceTeamMember.person_id)
-        .filter(ServiceTeamMember.team_id == ticket.service_team_id)
-        .filter(ServiceTeamMember.is_active.is_(True))
-        .filter(SystemUser.id == actor_uuid)
-        .filter(SystemUser.is_active.is_(True))
-        .one_or_none()
+    actor = db.get(SystemUser, actor_uuid)
+    if team is None or not team.is_active:
+        raise OutageWorkOrderHandoffError(
+            "team_inactive", "The assigned service team is not active", kind="invalid"
+        )
+    if (
+        actor is None
+        or not actor.is_active
+        or actor.user_type is not UserType.system_user
+    ):
+        raise OutageWorkOrderHandoffError(
+            "staff_required",
+            "An active staff member must issue field work",
+            kind="forbidden",
+        )
+    member = db.scalar(
+        select(ServiceTeamMember.id).where(
+            ServiceTeamMember.team_id == team.id,
+            ServiceTeamMember.person_id == actor.person_party_id,
+            ServiceTeamMember.is_active.is_(True),
+        )
     )
-    if team is None or not team.is_active or member is None:
+    admin = db.scalar(
+        select(SystemUserRole.id)
+        .join(Role, Role.id == SystemUserRole.role_id)
+        .where(
+            SystemUserRole.system_user_id == actor_uuid,
+            SystemUserRole.scope_type == "",
+            SystemUserRole.scope_id == "",
+            Role.is_active.is_(True),
+            func.lower(Role.name) == "admin",
+        )
+    )
+    if member is None and admin is None:
         raise OutageWorkOrderHandoffError(
             "assigned_team_membership_required",
-            "Only an active member of the assigned team may issue field work",
+            "Only an active team member or administrator may issue field work",
             kind="forbidden",
         )
     return actor_uuid
@@ -346,7 +394,7 @@ def _validate_incident(
             "The outage audience must be calculated before field work is issued",
             kind="conflict",
         )
-    return ticket, revision, _validate_team_member(db, ticket, actor_id=actor_id)
+    return ticket, revision, _validate_issuer(db, ticket, actor_id=actor_id)
 
 
 def issue_action(
@@ -367,6 +415,317 @@ def issue_action(
         label="Create infrastructure work order",
         allowed=True,
         permission="operations:dispatch:write",
+    )
+
+
+def ticket_work_order_surface(
+    db: Session, ticket: Ticket, *, actor_id: object | None
+) -> InfrastructureTicketWorkOrderSurface | None:
+    """Project the ticket's durable infrastructure origin and issue readiness."""
+    links = (
+        db.query(OutageIncidentTicketLink)
+        .filter(
+            OutageIncidentTicketLink.ticket_id == ticket.id,
+            OutageIncidentTicketLink.role == "infrastructure",
+        )
+        .all()
+    )
+    if links:
+        incident = (
+            db.get(OutageIncident, links[0].incident_id) if len(links) == 1 else None
+        )
+        if incident is None:
+            return InfrastructureTicketWorkOrderSurface(
+                target_label=ticket.title,
+                action=Action(
+                    key="issue_infrastructure_work_order",
+                    label="Create infrastructure work order",
+                    allowed=False,
+                    reason="The linked outage is unavailable or ambiguous",
+                    permission="operations:dispatch:write",
+                ),
+            )
+        return InfrastructureTicketWorkOrderSurface(
+            target_label=_incident_target_label(db, incident),
+            action=issue_action(db, incident, actor_id=actor_id),
+            expected_scope_revision_sequence=(
+                revision.sequence
+                if (revision := latest_scope_revision(db, incident.id)) is not None
+                else None
+            ),
+        )
+    target_label = _manual_infrastructure_target(db, ticket)
+    if target_label is None:
+        return None
+    try:
+        _validate_manual_ticket(db, ticket, actor_id=actor_id)
+    except OutageWorkOrderHandoffError as exc:
+        action = Action(
+            key="issue_infrastructure_work_order",
+            label="Create infrastructure work order",
+            allowed=False,
+            reason=exc.message,
+            permission="operations:dispatch:write",
+        )
+    else:
+        action = Action(
+            key="issue_infrastructure_work_order",
+            label="Create infrastructure work order",
+            allowed=True,
+            permission="operations:dispatch:write",
+        )
+    return InfrastructureTicketWorkOrderSurface(
+        target_label=target_label or "Confirm the affected infrastructure",
+        action=action,
+        manual_target_name=target_label,
+    )
+
+
+def _manual_infrastructure_target(db: Session, ticket: Ticket) -> str | None:
+    from app.services.infrastructure_ticket_selection import allowed_kinds
+
+    if any(
+        (
+            ticket.subscriber_id,
+            ticket.customer_account_id,
+            ticket.customer_person_id,
+            ticket.lead_id,
+        )
+    ):
+        return None
+    metadata = ticket.metadata_ or {}
+    selection = metadata.get("infrastructure_selection")
+    if isinstance(selection, dict) and selection.get("mode") == "manual":
+        return str(selection.get("name") or "").strip()
+    if InfrastructureKind.manual not in allowed_kinds(db, ticket.ticket_type):
+        return None
+    return str(metadata.get("base_station_details") or "").strip()
+
+
+def _validate_manual_ticket(
+    db: Session, ticket: Ticket, *, actor_id: object | None
+) -> UUID:
+    if (
+        not ticket.is_active
+        or ticket.merged_into_ticket_id
+        or str(ticket.status)
+        in {
+            "closed",
+            "canceled",
+            "merged",
+            "TicketStatus.closed",
+            "TicketStatus.canceled",
+        }
+    ):
+        raise OutageWorkOrderHandoffError(
+            "infrastructure_ticket_terminal",
+            "Only an active ticket can issue field work",
+            kind="invalid",
+        )
+    if any(
+        (
+            ticket.subscriber_id,
+            ticket.customer_account_id,
+            ticket.customer_person_id,
+            ticket.lead_id,
+        )
+    ):
+        raise OutageWorkOrderHandoffError(
+            "customerless_ticket_required",
+            "Infrastructure work orders require a customerless ticket",
+            kind="invalid",
+        )
+    return _validate_issuer(db, ticket, actor_id=actor_id)
+
+
+def issue_from_ticket(
+    db: Session, command: InfrastructureTicketWorkOrderIssueCommand
+) -> OutageWorkOrderIssueResult:
+    from app.services.db_session_adapter import db_session_adapter
+
+    db_session_adapter.release_read_transaction(db)
+    return execute_owner_command(
+        db,
+        definition=_DEFINITION,
+        context=command.context,
+        operation=lambda: _issue_from_ticket(db, command),
+    )
+
+
+def _issue_from_ticket(
+    db: Session, command: InfrastructureTicketWorkOrderIssueCommand
+) -> OutageWorkOrderIssueResult:
+    if (
+        command.context.scope != ISSUE_SCOPE
+        or (REQUIRED_PERMISSIONS | {"support:ticket:update"}) - command.permissions
+    ):
+        raise OutageWorkOrderHandoffError(
+            "permission_required",
+            "Ticket update, monitoring, and dispatch write permissions are required",
+            kind="forbidden",
+        )
+    if not str(command.context.idempotency_key or "").strip():
+        raise OutageWorkOrderHandoffError(
+            "idempotency_key_required", "Idempotency-Key is required", kind="invalid"
+        )
+    links = (
+        db.query(OutageIncidentTicketLink)
+        .filter(
+            OutageIncidentTicketLink.ticket_id == command.ticket_id,
+            OutageIncidentTicketLink.role == "infrastructure",
+        )
+        .all()
+    )
+    if links:
+        if len(links) != 1:
+            raise OutageWorkOrderHandoffError(
+                "ambiguous_outage_link", "Ticket has multiple infrastructure outages"
+            )
+        return _issue_work_order(
+            db,
+            OutageWorkOrderIssueCommand(
+                incident_id=links[0].incident_id,
+                request=command.request,
+                actor_id=command.actor_id,
+                actor_type=command.actor_type,
+                permissions=command.permissions,
+                context=command.context,
+                request_id=command.request_id,
+                expected_ticket_id=command.ticket_id,
+            ),
+        )
+    from app.services.work_order_assignment_contracts import WorkOrderLinkageFence
+    from app.services.work_order_commands import lock_work_order_linkage
+
+    lock_work_order_linkage(
+        db, query=WorkOrderLinkageFence(ticket_id=command.ticket_id)
+    )
+    ticket = (
+        db.query(Ticket)
+        .populate_existing()
+        .filter(Ticket.id == command.ticket_id)
+        .with_for_update()
+        .one_or_none()
+    )
+    if ticket is None:
+        raise OutageWorkOrderHandoffError(
+            "ticket_not_found", "Ticket not found", kind="not_found"
+        )
+    if (
+        db.query(OutageIncidentTicketLink.id)
+        .filter(
+            OutageIncidentTicketLink.ticket_id == ticket.id,
+            OutageIncidentTicketLink.role == "infrastructure",
+        )
+        .first()
+    ):
+        raise OutageWorkOrderHandoffError(
+            "infrastructure_ticket_changed",
+            "The ticket was linked to an outage; reload before issuing field work",
+            kind="conflict",
+        )
+    if _manual_infrastructure_target(db, ticket) is None:
+        raise OutageWorkOrderHandoffError(
+            "infrastructure_ticket_required",
+            "Ticket is not an infrastructure ticket",
+            kind="invalid",
+        )
+    actor_uuid = _validate_manual_ticket(db, ticket, actor_id=command.actor_id)
+    target_name = str(command.manual_target_name or "").strip()
+    if not 3 <= len(target_name) <= 255:
+        raise OutageWorkOrderHandoffError(
+            "manual_target_required",
+            "Enter the affected infrastructure name (3 to 255 characters)",
+            kind="invalid",
+        )
+    existing_ids = {
+        row.id
+        for row in db.query(WorkOrder.id).filter(
+            WorkOrder.origin_ticket_id == ticket.id
+        )
+    }
+    payload = command.request
+    description = f"Issuance reason: {payload.reason}"
+    if payload.description:
+        description += f"\n\n{payload.description}"
+    from app.services import work_order_commands
+
+    command_key = f"ticket-infrastructure-work-order:{ticket.id}:{command.context.idempotency_key}"
+    stable_request_id = (
+        f"infra-ticket-wo-{hashlib.sha256(command_key.encode()).hexdigest()[:24]}"
+    )
+    work_order = (
+        work_order_commands.work_order_commands.stage_infrastructure_work_order(
+            db,
+            InfrastructureWorkOrderHeaderCreate(
+                title=payload.title,
+                description=description,
+                status=payload.status,
+                priority=payload.priority,
+                work_type=payload.work_type,
+                address=payload.address,
+                scheduled_start=payload.scheduled_start,
+                scheduled_end=payload.scheduled_end,
+                estimated_duration_minutes=payload.estimated_duration_minutes,
+                required_skills=payload.required_skills,
+                tags=payload.tags,
+                access_notes=payload.access_notes,
+                requires_as_built_evidence=payload.requires_as_built_evidence,
+            ),
+            origin_ticket_id=ticket.id,
+            infrastructure_target_name=target_name,
+            auth={
+                "principal_type": command.actor_type.value,
+                "principal_id": str(actor_uuid),
+            },
+            request_id=stable_request_id,
+            idempotency_key=command_key,
+        )
+    )
+    from app.models.audit import AuditEvent
+
+    existing_audit = (
+        db.query(AuditEvent.id)
+        .filter(
+            AuditEvent.action == "infrastructure_ticket.work_order_issued",
+            AuditEvent.entity_type == "support_ticket",
+            AuditEvent.entity_id == str(ticket.id),
+            AuditEvent.request_id == stable_request_id,
+        )
+        .one_or_none()
+    )
+    if existing_audit is None:
+        stage_audit_event(
+            db,
+            action="infrastructure_ticket.work_order_issued",
+            entity_type="support_ticket",
+            entity_id=str(ticket.id),
+            actor=AuditActor(actor_type=AuditActorType.user, actor_id=str(actor_uuid)),
+            request_id=stable_request_id,
+            metadata={
+                "owner": "network.outage_work_order_handoff",
+                "work_order_id": work_order.public_id,
+                "target_name": target_name,
+                "assigned_team_id": str(ticket.service_team_id),
+                "reason": payload.reason,
+                "transport_request_id": command.request_id,
+            },
+        )
+        emit_event(
+            db,
+            EventType.infrastructure_ticket_work_order_issued,
+            {
+                "ticket_id": str(ticket.id),
+                "work_order_id": str(work_order.id),
+                "work_order_public_id": work_order.public_id,
+                "target_name": target_name,
+                "assigned_team_id": str(ticket.service_team_id),
+                "issued_by": str(actor_uuid),
+            },
+            actor=str(actor_uuid),
+        )
+    return OutageWorkOrderIssueResult(
+        work_order=work_order, link=None, replayed=work_order.id in existing_ids
     )
 
 
@@ -431,6 +790,15 @@ def _issue_work_order(
     ticket, revision, actor_uuid = _validate_incident(
         db, incident, actor_id=command.actor_id
     )
+    if (
+        command.expected_ticket_id is not None
+        and ticket.id != command.expected_ticket_id
+    ):
+        raise OutageWorkOrderHandoffError(
+            "infrastructure_ticket_changed",
+            "The outage ticket changed; reload the ticket",
+            kind="conflict",
+        )
     payload = command.request
     if (
         payload.expected_scope_revision_sequence is not None
@@ -677,6 +1045,16 @@ def _create_infrastructure_ticket(
                 "The active outage already has a ticket with a different type",
                 kind="conflict",
             )
+        if (
+            command.ticket_payload is not None
+            and command.ticket_payload.service_team_id is not None
+            and ticket.service_team_id != command.ticket_payload.service_team_id
+        ):
+            raise OutageWorkOrderHandoffError(
+                "infrastructure_ticket_team_conflict",
+                "The active outage already has a ticket assigned to another service team",
+                kind="conflict",
+            )
         return OutageInfrastructureTicketIssueResult(
             ticket=ticket, link=existing, replayed=True
         )
@@ -686,15 +1064,31 @@ def _create_infrastructure_ticket(
             "Only open or confirmed outages can receive an infrastructure ticket",
             kind="invalid",
         )
-    routing = service_team_composition.resolve_routing_team(
-        db, domain="network.outage", route_key="incident.primary"
+    requested_team_id = (
+        command.ticket_payload.service_team_id
+        if command.ticket_payload is not None
+        else None
     )
-    if routing is None:
-        raise OutageWorkOrderHandoffError(
-            "outage_team_missing",
-            "No active outage-response team is configured",
-            kind="conflict",
+    if requested_team_id is not None:
+        requested_team = db.get(ServiceTeam, requested_team_id)
+        if requested_team is None or not requested_team.is_active:
+            raise OutageWorkOrderHandoffError(
+                "selected_team_inactive",
+                "Select an active service team for the infrastructure ticket",
+                kind="invalid",
+            )
+        team_id = requested_team.id
+    else:
+        routing = service_team_composition.resolve_routing_team(
+            db, domain="network.outage", route_key="incident.primary"
         )
+        if routing is None:
+            raise OutageWorkOrderHandoffError(
+                "outage_team_missing",
+                "No active outage-response team is configured",
+                kind="conflict",
+            )
+        team_id = routing.team_id
     target = _incident_target_label(db, incident)
     from app.services import support as support_service
 
@@ -708,7 +1102,7 @@ def _create_infrastructure_ticket(
             priority="urgent",
             channel=TicketChannel.web,
             status=TicketStatus.open,
-            service_team_id=routing.team_id,
+            service_team_id=team_id,
             tags=["infrastructure", "shared-outage"],
             metadata_={
                 "outage_incident_id": str(incident.id),
@@ -716,7 +1110,7 @@ def _create_infrastructure_ticket(
             },
         )
     )
-    ticket_payload.service_team_id = routing.team_id
+    ticket_payload.service_team_id = team_id
     ticket_payload.status = TicketStatus.open
     ticket_payload.tags = list(
         dict.fromkeys([*ticket_payload.tags, "infrastructure", "shared-outage"])
@@ -753,7 +1147,7 @@ def _create_infrastructure_ticket(
         metadata={
             "ticket_id": str(ticket.id),
             "ticket_number": ticket.number,
-            "service_team_id": str(routing.team_id),
+            "service_team_id": str(team_id),
         },
     )
     return OutageInfrastructureTicketIssueResult(

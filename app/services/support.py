@@ -3113,7 +3113,15 @@ class Tickets:
             )
         from app.services.infrastructure_ticket_selection import allowed_kinds
 
-        if allowed_kinds(payload.ticket_type):
+        customer_target = any(
+            (
+                payload.subscriber_id,
+                payload.customer_account_id,
+                payload.customer_person_id,
+                payload.lead_id,
+            )
+        )
+        if allowed_kinds(db, payload.ticket_type) and not customer_target:
             definition = current_command_definition(db)
             if (definition.owner, definition.name) not in {
                 ("network.outage_work_order_handoff", "create_infrastructure_ticket"),
@@ -3276,7 +3284,10 @@ class Tickets:
         db: Session, *, command: ManualInfrastructureTicketCreateCommand
     ) -> ManualInfrastructureTicketCreateResult:
         """Record an operator-named infrastructure ticket without inventing inventory."""
-        from app.services.infrastructure_ticket_selection import allowed_kinds
+        from app.services.infrastructure_ticket_selection import (
+            InfrastructureKind,
+            allowed_kinds,
+        )
 
         payload = command.payload.model_copy(deep=True)
         name = command.name.strip()
@@ -3288,7 +3299,10 @@ class Tickets:
                 "infrastructure_permission_required",
                 "Infrastructure ticket permission is required.",
             )
-        if not allowed_kinds(payload.ticket_type) or not 3 <= len(name) <= 255:
+        if (
+            InfrastructureKind.manual not in allowed_kinds(db, payload.ticket_type)
+            or not 3 <= len(name) <= 255
+        ):
             raise _ticket_error(
                 "infrastructure_selection_required",
                 "Enter an affected infrastructure name.",

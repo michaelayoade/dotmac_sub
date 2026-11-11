@@ -265,6 +265,7 @@ def test_specific_workflow_routes_override_or_reject_broad_sections() -> None:
         "/admin/billing": "billing-overview",
         "/admin/billing/payments/reconciliation": "payment-reconciliation",
         "/admin/support/tickets/ticket-id": "support-tickets",
+        "/admin/system/ticket-settings": "ticket-settings",
         "/admin/inbox/manager-ai": "team-inbox",
         "/admin/network/olts": "olt-operational-health",
     }
@@ -585,7 +586,7 @@ def test_period_review_guidance_explains_manual_approval_and_reserved_cash() -> 
 
 def test_every_help_guide_has_complete_action_sections() -> None:
     guides = (*WORKFLOW_GUIDANCE, *HELP_ONLY_GUIDANCE)
-    assert len(guides) == 69
+    assert len(guides) == 70
     for guide in guides:
         actions = help_actions_for(guide)
         assert actions, guide.id
@@ -659,6 +660,19 @@ def test_walled_garden_page_has_its_own_guide() -> None:
     settings = guidance_for_path("/admin/system/config/radius")
     assert settings is not None
     assert settings.id == "settings"
+
+
+def test_ticket_settings_guidance_explains_infrastructure_policy() -> None:
+    guide = guidance_for_path("/admin/system/ticket-settings")
+    assert guide is not None
+    assert guide.id == "ticket-settings"
+    content = " ".join((*guide.steps, *guide.notes)).lower()
+    assert "manual target" in content
+    assert "saved explicit manual origin" in content
+    actions = {action.id: action for action in help_actions_for(guide)}
+    assert (
+        actions["configure-infrastructure-types"].permission == "system:settings:write"
+    )
 
 
 def test_customer_connection_types_page_has_its_own_guide() -> None:

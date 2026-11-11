@@ -853,6 +853,8 @@ DOMAIN = DomainSOT(
                 "later removed from the configured subset. "
                 "Status configuration does not own semantic colors or tones. Every "
                 "ticket SLA target is operator-managed in the ticket settings UI. "
+                "Ticket Settings also owns the editable infrastructure ticket-type "
+                "and target-kind policy consumed by support ticket creation. "
                 "Customer-portal routing resolves current native Service Teams by "
                 "exact case-insensitive name without owning their identity."
             ),

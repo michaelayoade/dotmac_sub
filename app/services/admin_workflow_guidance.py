@@ -951,12 +951,13 @@ WORKFLOW_GUIDANCE: tuple[AdminWorkflowGuidance, ...] = (
         "Use ordinary ticket editing for status, priority, description, and assignment details.",
         "Assign or reassign an engineer, manager, service team, or additional assignee from the ticket edit workflow.",
         "When adding an internal note or customer reply, submit once and wait while the button is disabled; if attachment or form validation returns the page, correct the displayed issue and submit again.",
+        "For an infrastructure ticket, open Create Infrastructure Work Order, confirm the affected infrastructure when asked, and enter the field reason and instructions. An active assigned-team member or global administrator with the required permissions can issue it. Open the created order in dispatch to assign a technician.",
         "After reviewing field outcomes, open Customer confirmation on the ticket and request resolution against the current accepted evidence. Record the customer response through the support workflow; a dispute requires follow-up, and visit feedback remains separate from ticket confirmation.",
         notes=(
             "Tickets track communication and follow-up; they do not own billing or service state changes.",
             "Automatic ticket actions are configured as Automation Center rules. The separate legacy ticket automation page was retired and no longer changes tickets.",
             "Execution completion is followed by the configured supervisor review, then a separate customer confirmation request. Confirmation and grace closure recheck the current evidence; changed scope or acceptance requires a fresh request. Customer feedback does not replace these decisions or restore service.",
-            "Ticket assignment uses the same ticket-update authority as the rest of the edit workflow. In Field Work Orders, an active member of the assigned service team with support and dispatch permissions explicitly uses Create Work Order with a reason and reviewed scope. One ticket may need zero, one, or many visits; ticket assignment does not assign the attending technician.",
+            "Ticket assignment uses the same ticket-update authority as the rest of the edit workflow. Customer tickets use Create Work Order; infrastructure tickets use Create Infrastructure Work Order when their saved origin or configured manual type permits it. One ticket may need zero, one, or many visits; ticket assignment does not assign the attending technician.",
         ),
     ),
     _guide(
@@ -1183,6 +1184,7 @@ HELP_ONLY_GUIDANCE: tuple[AdminWorkflowGuidance, ...] = (
         notes=(
             "If additional information fails after creation, the resulting page names the created work order. Open that record to correct the information; do not submit Create Work Order again.",
             "Shared outage work has no individual customer target; verify the outage scope and infrastructure location before issuing it.",
+            "A customerless manually named infrastructure ticket can also issue a work order without an outage link. Its affected infrastructure name is retained on the work order. Assign the technician after creation through this dispatch page.",
             "For unable-to-complete or rejected visits, open Failed visit followups at /admin/dispatch/visit-followups. Record the responsible native team, optional member, due time, reason, and triage/revisit/no-revisit decision. Review failed-visit replacement in completion review and link the exact approved coverage; a new visit or note alone does not discharge the failed scope or book an appointment.",
             "Publish an explicit completion-review policy and enroll native or engineering work before reviewing its authored criteria. Reviewer independence follows the configured policy; signature exceptions are evidence, not customer acceptance. Preparation suggestions do not enforce technology-specific thresholds.",
             "For shared complaints, every issued scope covering the selected service needs current accepted evidence or an exact reviewed replacement before support confirmation. Field acceptance does not establish network restoration or close every complaint.",
@@ -1449,6 +1451,22 @@ HELP_ONLY_GUIDANCE: tuple[AdminWorkflowGuidance, ...] = (
             "You must hold the admin role and the reseller-write permission, and the user must belong to the reseller whose page you are on; you cannot remove your own MFA.",
             "The action appears only for reseller users, not for customers linked to the reseller.",
             "If removal fails unexpectedly, the page shows a safe general message; use the protected logs and audit evidence for investigation instead of exposing internal details to the user.",
+        ),
+    ),
+    _guide(
+        "ticket-settings",
+        "Settings",
+        "Configure infrastructure ticket types",
+        "Support administrators",
+        "Choose which ticket categories create customerless infrastructure tickets and which targets staff can select.",
+        ("/admin/system/ticket-settings",),
+        "Review the Ticket Types list and its Infrastructure ticket type checkboxes. The existing infrastructure categories appear here even before settings have been saved.",
+        "Add or remove a ticket type, then mark each infrastructure category and choose its allowed target kinds: base station, cabinet, network node, access point, or manual name. Choose either network node or access point for one category.",
+        "Save Ticket Settings and reopen the ticket form to confirm the available categories and infrastructure choices.",
+        notes=(
+            "A manual target permits an unlinked customerless ticket and a ticket-backed infrastructure work order. An inventory selection uses the canonical outage ticket and audience.",
+            "Removing a type or its manual kind affects new selection and legacy fallback. Tickets with saved explicit manual origin and tickets linked to an outage retain their infrastructure identity.",
+            "A category shared with customer-facing intake still uses the customer work-order path when the ticket has an explicit customer target.",
         ),
     ),
     _guide(
@@ -2122,9 +2140,15 @@ _ACTION_SPECS: dict[str, tuple[_ActionSpec, ...]] = {
             permission="support:ticket:update",
         ),
         _action(
+            "issue-infrastructure-field-work",
+            "Create an infrastructure work order",
+            5,
+            permission="operations:dispatch:write",
+        ),
+        _action(
             "complete-follow-up",
             "Record completed follow-up",
-            5,
+            6,
             permission="support:ticket:update",
         ),
     ),
@@ -2566,6 +2590,16 @@ _ACTION_SPECS: dict[str, tuple[_ActionSpec, ...]] = {
         _action("confirm-reseller-mfa-removal", "Confirm the removal", 2),
         _action("follow-up-reseller-mfa", "Audit and re-enrol", 3),
     ),
+    "ticket-settings": (
+        _action("review-ticket-types", "Review ticket type policy", 0),
+        _action(
+            "configure-infrastructure-types",
+            "Configure infrastructure ticket types",
+            1,
+            permission="system:settings:write",
+        ),
+        _action("verify-ticket-types", "Verify ticket form choices", 2),
+    ),
     "settings": (
         _action("choose-settings-area", "Choose a settings area", 0),
         _action("review-effective-setting", "Review an effective setting", 1),
@@ -2793,6 +2827,7 @@ HELP_NAVIGATION: tuple[AdminHelpNavigationSection, ...] = (
         "Settings",
         (
             "settings",
+            "ticket-settings",
             "walled-garden",
             "customer-connection-types",
             "smtp-senders",

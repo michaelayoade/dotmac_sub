@@ -605,6 +605,7 @@ def detail_page(
     pair = work_order_views.get_work_order_row(db, public_id)
     if pair is None:
         raise HTTPException(status_code=404, detail="Work order not found")
+    row: WorkOrder
     row, subscriber = pair
     project = db.get(Project, row.project_id) if row.project_id else None
     task = db.get(ProjectTask, row.project_task_id) if row.project_task_id else None
@@ -649,6 +650,11 @@ def detail_page(
         "subscriber": subscriber,
         "subscriber_label": _subscriber_label(subscriber),
         "work_order_kind": row.work_order_kind,
+        "infrastructure_target_name": (
+            str((row.metadata_ or {}).get("infrastructure_target_name") or "")
+            if row.work_order_kind == "infrastructure"
+            else ""
+        ),
         "project": project,
         "project_label": (
             project.name or project.code or project.number or str(project.id)

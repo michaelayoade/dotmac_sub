@@ -32,6 +32,7 @@ from app.services.owner_commands import (
 STATUS_OPTIONS_KEY = "support_ticket_status_options"
 PRIORITY_OPTIONS_KEY = "support_ticket_priority_options"
 TYPE_OPTIONS_KEY = "support_ticket_type_options"
+INFRASTRUCTURE_TYPE_KINDS_KEY = "support_ticket_infrastructure_type_kinds"
 REGION_OPTIONS_KEY = "support_ticket_region_options"
 AUTO_ASSIGN_ENABLED_KEY = "support_ticket_auto_assign_enabled"
 AUTO_ASSIGN_MAX_OPEN_TICKETS_KEY = "support_ticket_auto_assign_max_open_tickets"
@@ -56,6 +57,17 @@ DEFAULT_TYPE_OPTIONS = [
     "maintenance",
     "outage",
 ]
+DEFAULT_INFRASTRUCTURE_TYPE_KINDS = {
+    "BTS Outage": ["basestation", "manual"],
+    "Cabinet Disconnection": ["cabinet", "manual"],
+    "Multiple Cabinet Disconnection": ["basestation", "node", "manual"],
+    "Multiple Cabinet Link Disconnection": ["basestation", "node", "manual"],
+    "Access Point Outage": ["access_point", "manual"],
+    "Core Link Disconnection": ["manual"],
+}
+INFRASTRUCTURE_TARGET_KINDS = frozenset(
+    {"basestation", "cabinet", "node", "access_point", "manual"}
+)
 DEFAULT_REGION_OPTIONS = ["north", "south", "east", "west", "central"]
 DEFAULT_SLA_POLICY = {
     "urgent": {"response_hours": 1, "resolution_hours": 8, "aging_hours": 4},
@@ -188,6 +200,7 @@ class TicketConfigurationUpdate:
     statuses: tuple[str, ...]
     priorities: tuple[str, ...]
     ticket_types: tuple[str, ...]
+    infrastructure_types: tuple[InfrastructureTicketTypeUpdate, ...] | None = None
     regions: tuple[str, ...] | None = None
     auto_assign: bool | None = None
     auto_assign_max_open_tickets: int | None = None
@@ -200,6 +213,12 @@ class TicketConfigurationUpdate:
 @dataclass(frozen=True, slots=True)
 class TicketConfigurationUpdateOutcome:
     routing_rule_count: int
+
+
+@dataclass(frozen=True, slots=True)
+class InfrastructureTicketTypeUpdate:
+    ticket_type: str
+    kinds: tuple[str, ...]
 
 
 @dataclass(frozen=True, slots=True)
@@ -606,11 +625,35 @@ def list_priority_options(db: Session) -> list[str]:
 
 
 def list_ticket_type_options(db: Session) -> list[str]:
-    return _read_list(
+    options = _read_list(
         db,
         key=TYPE_OPTIONS_KEY,
         defaults=DEFAULT_TYPE_OPTIONS,
     )
+    displayed = {name.casefold() for name in options}
+    default_names = {
+        name.casefold(): name for name in DEFAULT_INFRASTRUCTURE_TYPE_KINDS
+    }
+    for name in infrastructure_type_kinds(db):
+        if name not in displayed:
+            options.append(default_names.get(name, name))
+            displayed.add(name)
+    return options
+
+
+def infrastructure_type_kinds(db: Session) -> dict[str, tuple[str, ...]]:
+    """Read the configured ticket-type to infrastructure-target policy."""
+    raw = _read_raw_setting(db, INFRASTRUCTURE_TYPE_KINDS_KEY)
+    source = DEFAULT_INFRASTRUCTURE_TYPE_KINDS if raw is None else raw
+    if not isinstance(source, dict):
+        return {}
+    return {
+        str(name).strip().casefold(): tuple(
+            kind for kind in kinds if kind in INFRASTRUCTURE_TARGET_KINDS
+        )
+        for name, kinds in source.items()
+        if isinstance(name, str) and isinstance(kinds, list)
+    }
 
 
 def list_region_options(db: Session) -> list[str]:
@@ -894,9 +937,34 @@ def update_ticket_configuration(
         command.ticket_types,
         defaults=DEFAULT_TYPE_OPTIONS,
     )
+    if command.infrastructure_types is not None:
+        configured_types = {value.casefold() for value in normalized_types}
+        infrastructure_policy: dict[str, list[str]] = {}
+        for infrastructure_rule in command.infrastructure_types:
+            name = infrastructure_rule.ticket_type.strip().casefold()
+            if name not in configured_types:
+                raise ValueError("Infrastructure type must be a configured ticket type")
+            kinds = list(dict.fromkeys(infrastructure_rule.kinds))
+            if not kinds or any(
+                kind not in INFRASTRUCTURE_TARGET_KINDS for kind in kinds
+            ):
+                raise ValueError(
+                    f"Select a valid infrastructure target for {infrastructure_rule.ticket_type}"
+                )
+            if "node" in kinds and "access_point" in kinds:
+                raise ValueError(
+                    f"Select node or access point for {infrastructure_rule.ticket_type}, not both"
+                )
+            if name in infrastructure_policy:
+                raise ValueError(
+                    f"Duplicate infrastructure type: {infrastructure_rule.ticket_type}"
+                )
+            infrastructure_policy[name] = kinds
     _write_list(db, key=STATUS_OPTIONS_KEY, values=normalized_statuses)
     _write_list(db, key=PRIORITY_OPTIONS_KEY, values=normalized_priorities)
     _write_list(db, key=TYPE_OPTIONS_KEY, values=normalized_types)
+    if command.infrastructure_types is not None:
+        _write_json(db, key=INFRASTRUCTURE_TYPE_KINDS_KEY, value=infrastructure_policy)
     if command.regions is not None:
         _write_list(
             db,
