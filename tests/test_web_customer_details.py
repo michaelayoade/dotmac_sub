@@ -367,7 +367,10 @@ def test_customer_detail_billing_workspace_includes_pending_extension_request(
 def test_customer_billing_ledger_tab_is_permission_gated_and_lazy() -> None:
     template = Path("templates/admin/customers/detail.html").read_text(encoding="utf-8")
 
-    assert "{'id': 'ledger', 'label': 'Ledger', 'count': none}" in template
+    assert (
+        "{'id': 'ledger', 'label': 'Ledger', 'count': none, "
+        "'visible': can(request, 'billing:ledger:read')}" in template
+    )
     assert "{% if can(request, 'billing:ledger:read') %}" in template
     assert (
         'hx-get="/admin/customers/person/{{ customer.id }}/billing/ledger"' in template
