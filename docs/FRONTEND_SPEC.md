@@ -416,6 +416,10 @@ body cell padding while preserving column visibility, sorting, pagination,
 empty-state dimensions, and mobile horizontal overflow as a fallback. Use it
 only when the bounded default columns fit at standard desktop widths; do not
 use density to retain irrelevant columns or duplicate row actions.
+For submitted-search grids, `count_below=true` places the result count below
+the toolbar, `reset_url` provides a full-filter reset, and `push_url=true`
+keeps sortable headers and pagination in browser history. These options are
+opt-in and are used by the catalog grid.
 
 ### Buttons & Forms
 
@@ -1386,9 +1390,18 @@ as a responsive fallback.
 Catalog search is explicitly submitted: typing does not issue a request. Enter
 or the **Search** button submits the search together with Status, Plan kind,
 Plan family, and Plan category, resets pagination to page 1, and updates the
-browser URL. **Clear** empties the query and makes one request while preserving
-those filters. Concurrent catalog-search requests use replacement semantics so
-an older response cannot overwrite newer results.
+browser URL. **Clear search** empties only the query and makes one request;
+**Reset filters** returns to the unfiltered catalog. Category tabs, name
+sorting, and pagination preserve the active query and filters in the browser
+URL. Concurrent catalog-search requests use replacement semantics so an older
+response cannot overwrite newer results.
+
+Tariff download and upload fields accept whole Mbps. Selecting a RADIUS
+profile displays its configured rate and source for comparison without copying
+values into the tariff. A new or changed mismatch against a profile's literal
+rate limit is rejected; unchanged legacy pairs remain editable. The detail
+page distinguishes tariff speed, configured profile speed, and effective plan
+rate. The existing profile literal precedence remains in force.
 
 ```python
 {
@@ -1413,6 +1426,9 @@ an older response cannot overwrite newer results.
     "plan_kind": str,
     "plan_category": str,
     "search": str | None,
+    "current_sort": str,
+    "current_dir": str,
+    "category_tab_urls": dict[str, str],
 
     # ── Pagination ──
     "page": int,
@@ -1436,6 +1452,8 @@ an older response cannot overwrite newer results.
     "usage_allowances": list[UsageAllowance],
     "sla_profiles": list[SlaProfile],
     "radius_profiles": list[RadiusProfile],
+    "radius_profile_speeds": dict[str, RateSpeed],
+    "auto_generated_profile_ids": set[str],
     "policy_sets": list[PolicySet],
     "add_ons": list[AddOn],
     "addon_links_map": dict[str, dict],         # addon_id → {is_required, min_quantity, max_quantity}
@@ -1457,6 +1475,7 @@ an older response cannot overwrite newer results.
 
     "action_url": str,
     "error": str | None,
+    "speed_error": str | None,
 }
 ```
 
@@ -2065,7 +2084,7 @@ These are the ORM objects your templates receive. Access fields with dot notatio
 | Customers | `GET /admin/customers?search=...` | `keyup changed delay:300ms` | `#data-table` |
 | Subscribers | `GET /admin/subscribers?search=...` | `keyup changed delay:300ms` | `#data-table` |
 | Invoices | `GET /admin/billing?search=...` | `keyup changed delay:300ms` | `#data-table` |
-| Offers | `GET /admin/catalog?search=...` | form submit (Enter or **Search**); **Clear** submits once | `#catalog-grid-wrapper` |
+| Offers | `GET /admin/catalog?search=...` | form submit (Enter or **Search**); **Clear search** submits once | `#catalog-grid-wrapper` |
 
 ### Dynamic Form Fields
 

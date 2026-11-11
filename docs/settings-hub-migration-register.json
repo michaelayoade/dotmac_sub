@@ -6249,7 +6249,7 @@
       "disposition": "Mapped to hub; preserve registered type, validation, tenant scope and owner-command writes",
       "source_references": [
         "app/services/catalog/offers.py:152",
-        "app/services/web_catalog_offers.py:927",
+        "app/services/web_catalog_offers.py:1049",
         "app/services/web_catalog_subscriptions.py:4378"
       ]
     },
@@ -6324,7 +6324,7 @@
       },
       "disposition": "Mapped to hub; preserve registered type, validation, tenant scope and owner-command writes",
       "source_references": [
-        "app/services/catalog/radius.py:44"
+        "app/services/catalog/radius.py:50"
       ]
     },
     {
@@ -6596,7 +6596,7 @@
       },
       "disposition": "Mapped to hub; preserve registered type, validation, tenant scope and owner-command writes",
       "source_references": [
-        "app/services/web_catalog_offers.py:180"
+        "app/services/web_catalog_offers.py:181"
       ]
     },
     {
@@ -6622,9 +6622,9 @@
       "source_references": [
         "app/services/catalog/plan_family_catalogues.py:175",
         "app/services/catalog/plan_family_catalogues.py:191",
-        "app/services/web_catalog_offers.py:1188",
-        "app/services/web_catalog_offers.py:905",
-        "app/services/web_catalog_offers.py:994",
+        "app/services/web_catalog_offers.py:1027",
+        "app/services/web_catalog_offers.py:1135",
+        "app/services/web_catalog_offers.py:1359",
         "templates/admin/catalog/settings/catalogues.html:26",
         "templates/admin/catalog/settings/catalogues.html:27"
       ]
@@ -7440,9 +7440,9 @@
       },
       "disposition": "Mapped to hub; preserve registered type, validation, tenant scope and owner-command writes",
       "source_references": [
-        "app/services/access_rate_profile.py:392",
-        "app/services/access_rate_profile.py:647",
-        "app/services/access_rate_profile.py:865",
+        "app/services/access_rate_profile.py:1048",
+        "app/services/access_rate_profile.py:393",
+        "app/services/access_rate_profile.py:830",
         "app/services/collections/_core.py:1195",
         "app/services/collections/_core.py:640"
       ]
@@ -18619,7 +18619,7 @@
       },
       "disposition": "Mapped to hub; preserve registered type, validation, tenant scope and owner-command writes",
       "source_references": [
-        "app/services/access_rate_profile.py:78",
+        "app/services/access_rate_profile.py:79",
         "app/services/access_rate_switch.py:991",
         "app/services/radius_population.py:1249"
       ]

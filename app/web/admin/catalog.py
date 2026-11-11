@@ -181,6 +181,8 @@ def catalog_overview(
     plan_category: str | None = None,
     plan_family: str | None = None,
     search: str | None = None,
+    sort: str | None = None,
+    dir: str | None = None,
     page: int = Query(1, ge=1),
     per_page: int = Query(25, ge=10, le=100),
     db: Session = Depends(get_db),
@@ -192,6 +194,8 @@ def catalog_overview(
         plan_category=plan_category,
         plan_family=plan_family,
         search=search,
+        sort=sort,
+        dir=dir,
         page=page,
         per_page=per_page,
     )
