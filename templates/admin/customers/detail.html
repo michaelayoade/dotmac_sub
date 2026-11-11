@@ -904,25 +904,16 @@
             <div class="overflow-x-auto rounded-2xl border border-slate-200/70 bg-slate-50 p-1 shadow-sm dark:border-slate-700/70 dark:bg-slate-900/40">
                 <div class="flex min-w-max gap-1">
                     {% set billing_tabs = [
-                        {'id': 'overview', 'label': 'Overview', 'count': none}
+                        {'id': 'overview', 'label': 'Overview', 'count': none, 'visible': true},
+                        {'id': 'invoices', 'label': 'Invoices', 'count': none, 'visible': can_read_invoices},
+                        {'id': 'payments', 'label': 'Payments', 'count': none, 'visible': can_read_payments},
+                        {'id': 'ledger', 'label': 'Ledger', 'count': none, 'visible': can(request, 'billing:ledger:read')},
+                        {'id': 'proofs', 'label': 'Proofs', 'count': payment_proofs|length, 'visible': true},
+                        {'id': 'credits', 'label': 'Credits', 'count': credit_notes|length, 'visible': true},
+                        {'id': 'extensions', 'label': 'Extensions', 'count': service_extension_history.total_count if service_extension_history else none, 'visible': can_read_service_extensions}
                     ] %}
-                    {% if can_read_invoices %}
-                    {% set billing_tabs = billing_tabs + [{'id': 'invoices', 'label': 'Invoices', 'count': none}] %}
-                    {% endif %}
-                    {% if can_read_payments %}
-                    {% set billing_tabs = billing_tabs + [{'id': 'payments', 'label': 'Payments', 'count': none}] %}
-                    {% endif %}
-                    {% if can(request, 'billing:ledger:read') %}
-                    {% set billing_tabs = billing_tabs + [{'id': 'ledger', 'label': 'Ledger', 'count': none}] %}
-                    {% endif %}
-                    {% set billing_tabs = billing_tabs + [
-                        {'id': 'proofs', 'label': 'Proofs', 'count': payment_proofs|length},
-                        {'id': 'credits', 'label': 'Credits', 'count': credit_notes|length}
-                    ] %}
-                    {% if can_read_service_extensions %}
-                    {% set billing_tabs = billing_tabs + [{'id': 'extensions', 'label': 'Extensions', 'count': service_extension_history.total_count}] %}
-                    {% endif %}
                     {% for tab in billing_tabs %}
+                    {% if tab.visible %}
                     <button type="button"
                             @click="billingSubTab = '{{ tab.id }}'"
                             :class="billingSubTab === '{{ tab.id }}' ? 'bg-white text-slate-950 shadow-sm ring-1 ring-slate-200 dark:bg-slate-800 dark:text-white dark:ring-slate-700' : 'text-slate-600 hover:bg-white/70 hover:text-slate-900 dark:text-slate-400 dark:hover:bg-slate-800/70 dark:hover:text-white'"
@@ -932,6 +923,7 @@
                         <span class="rounded-full bg-slate-200 px-1.5 py-0.5 text-[11px] font-bold text-slate-700 dark:bg-slate-700 dark:text-slate-300">{{ tab.count }}</span>
                         {% endif %}
                     </button>
+                    {% endif %}
                     {% endfor %}
                 </div>
             </div>
