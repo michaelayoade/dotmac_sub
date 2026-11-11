@@ -9,7 +9,6 @@
 # then enter the owner command.
 # Format: resolver count repository-relative-path.
 resolve_boolean 3 app/tasks/gis.py
-resolve_value 1 app/services/web_billing_invoice_forms.py
 resolve_value 1 app/services/web_catalog_offers.py
 resolve_value 4 app/services/web_catalog_subscriptions.py
 resolve_value 1 app/services/web_system_export_tool.py

@@ -784,7 +784,10 @@ def _render_invoice_text_lines(
         if presentment.payment_url:
             out.extend(["", "Pay with Paystack:", presentment.payment_url])
     out.append(f"Memo: {(invoice.memo or '').strip() or '-'}")
-    return out
+    return [
+        line.replace("—", "-").encode("latin-1", errors="replace").decode("latin-1")
+        for line in out
+    ]
 
 
 def _build_branded_fallback_pdf(db: Session, invoice: Invoice) -> bytes:

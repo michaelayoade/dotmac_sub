@@ -4674,7 +4674,7 @@ class InvoiceLines(ListResponseMixin):
                 _apply_invoice_line_tax_snapshot(line, tax_rate)
                 db.add(line)
                 continue
-            existing_line = existing.get(replacement.line_id)
+            existing_line: InvoiceLine | None = existing.get(replacement.line_id)
             if existing_line is None:
                 raise DraftInvoiceParticipantError(
                     "line_not_found",
