@@ -52,6 +52,8 @@
     <div class="overflow-hidden rounded-2xl border border-slate-200/60 bg-white shadow-sm dark:border-slate-700/60 dark:bg-slate-800">
         <div id="route-map"></div>
     </div>
+    <p id="route-map-status" class="text-sm text-slate-500 dark:text-slate-400" role="status" aria-live="polite">Loading network map data...</p>
+    <p id="project-route-status" class="text-sm text-slate-500 dark:text-slate-400" role="status" aria-live="polite">Loading project routes...</p>
     {% if can_write_routes %}
     <section class="rounded-md border border-violet-200 bg-violet-50/60 p-5 dark:border-violet-900/60 dark:bg-violet-950/20">
         <div class="flex flex-wrap items-start justify-between gap-3">
@@ -140,12 +142,12 @@
             <div class="grid gap-3 sm:grid-cols-2">
                 <form method="post" action="{{ revision.accept_action.preview_url }}" class="space-y-2">
                     {% include "components/forms/csrf_input.html" %}
-                    <label class="block text-xs text-slate-500">Acceptance note<textarea name="reason" rows="2" maxlength="2000" class="mt-1 w-full rounded-md border-slate-300 text-sm"></textarea></label>
+                    <label class="block text-xs text-slate-500 dark:text-slate-300">Acceptance note<textarea name="reason" rows="2" maxlength="2000" class="mt-1 block w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 focus:border-violet-500 focus:outline-none focus:ring-2 focus:ring-violet-500/20 dark:border-slate-600 dark:bg-slate-800 dark:text-white"></textarea></label>
                     <button class="w-full rounded-md bg-teal-600 px-3 py-2 text-sm font-semibold text-white">{{ revision.accept_action.label }}</button>
                 </form>
                 <form method="post" action="{{ revision.reject_action.preview_url }}" class="space-y-2">
                     {% include "components/forms/csrf_input.html" %}
-                    <label class="block text-xs text-slate-500">Rejection reason<textarea name="reason" rows="2" maxlength="2000" required class="mt-1 w-full rounded-md border-slate-300 text-sm"></textarea></label>
+                    <label class="block text-xs text-slate-500 dark:text-slate-300">Rejection reason<textarea name="reason" rows="2" maxlength="2000" required class="mt-1 block w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 focus:border-violet-500 focus:outline-none focus:ring-2 focus:ring-violet-500/20 dark:border-slate-600 dark:bg-slate-800 dark:text-white"></textarea></label>
                     <button class="w-full rounded-md border border-amber-500 px-3 py-2 text-sm font-semibold text-amber-700">{{ revision.reject_action.label }}</button>
                 </form>
             </div>
@@ -195,10 +197,11 @@
 {% if can_write_routes %}<script src="/static/js/vendor-route-authoring.js"></script>{% endif %}
 <script>
 (function() {
-    const networkGeojson = {{ network_geojson | tojson | safe }};
     const ROUTE_URL = '/api/v1/vendor-routes/projects/{{ project_id }}/geojson';
+    const NETWORK_URL = '/api/v1/fiber-plant/geojson?include_fdh=true&include_closures=true&include_pops=true&include_segments=true';
     const selectedRevisionId = {{ revision_id | tojson }};
-    const routeContextGeojson = {{ route_geojson | tojson | safe }};
+    const mapStatus = document.getElementById('route-map-status');
+    const projectRouteStatus = document.getElementById('project-route-status');
 
     function escapeHtml(value) {
         return String(value == null ? '' : value)
@@ -246,7 +249,8 @@
     }
 
     // Fiber network overlay (context).
-    L.geoJSON(networkGeojson, {
+    function showNetwork(networkGeojson) {
+        L.geoJSON(networkGeojson, {
         style: function(feature) {
             const t = feature.properties && feature.properties.type;
             if (t === 'fiber_segment') return { color: '#38bdf8', weight: 2, opacity: 0.45 };
@@ -257,13 +261,20 @@
             const color = t === 'fdh_cabinet' ? '#f97316' : (t === 'splice_closure' ? '#14b8a6' : '#94a3b8');
             return L.circleMarker(latlng, { radius: 4, color: '#fff', weight: 1, fillColor: color, fillOpacity: 0.9 });
         }
-    }).addTo(map);
+        }).addTo(map);
+    }
+
+    fetch(NETWORK_URL, { headers: { 'Accept': 'application/json' } })
+        .then(function(r) { return r.ok ? r.json() : Promise.reject(r.status); })
+        .then(function(fc) { showNetwork(fc); mapStatus.textContent = 'Network map data loaded.'; })
+        .catch(function() { mapStatus.textContent = 'Network map data could not be loaded. Project routes may still be available.'; });
 
     fetch(ROUTE_URL, { headers: { 'Accept': 'application/json' } })
         .then(function(r) { return r.ok ? r.json() : Promise.reject(r.status); })
         .then(function(fc) {
             const features = (fc && fc.features) || [];
-            if (!features.length) { document.getElementById('route-empty').classList.remove('hidden'); return; }
+            if (!features.length) { document.getElementById('route-empty').classList.remove('hidden'); }
+            projectRouteStatus.textContent = features.length ? 'Project routes loaded.' : 'No project routes saved yet.';
             const featureLayers = {};
             const routeLayer = L.geoJSON(fc, {
                 style: function(feature) {
@@ -321,25 +332,24 @@
                 button.addEventListener('click', function() { focusRevision(button.dataset.focusRevision); });
             });
             if (selectedRevisionId) focusRevision(selectedRevisionId);
+            {% if can_write_routes %}
+            window.VendorRouteAuthoring.mount({
+                mapId: 'admin-route-author-map',
+                formId: 'admin-route-author-form',
+                geojsonId: 'admin-route-geojson',
+                lengthId: 'admin-route-length',
+                submitId: 'admin-route-submit',
+                hintId: 'admin-route-hint',
+                errorId: 'admin-route-error',
+                locateId: 'admin-route-locate',
+                undoId: 'admin-route-undo',
+                clearId: 'admin-route-clear',
+                contextGeojson: fc,
+                adminMode: true,
+            });
+            {% endif %}
         })
-        .catch(function() { document.getElementById('route-empty').classList.remove('hidden'); });
-
-    {% if can_write_routes %}
-    window.VendorRouteAuthoring.mount({
-        mapId: 'admin-route-author-map',
-        formId: 'admin-route-author-form',
-        geojsonId: 'admin-route-geojson',
-        lengthId: 'admin-route-length',
-        submitId: 'admin-route-submit',
-        hintId: 'admin-route-hint',
-        errorId: 'admin-route-error',
-        locateId: 'admin-route-locate',
-        undoId: 'admin-route-undo',
-        clearId: 'admin-route-clear',
-        contextGeojson: routeContextGeojson,
-        adminMode: true,
-    });
-    {% endif %}
+        .catch(function() { projectRouteStatus.textContent = 'Project route data could not be loaded. Refresh to try again.'; });
 })();
 </script>
 {% endblock %}

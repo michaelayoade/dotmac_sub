@@ -7,7 +7,7 @@ import logging
 import uuid
 from collections.abc import Mapping
 from datetime import date
-from typing import Any, Literal
+from typing import Annotated, Any, Literal
 from urllib.parse import quote_plus
 from uuid import UUID, uuid4
 
@@ -76,7 +76,10 @@ from app.services.auth_dependencies import (
 )
 from app.services.bandwidth import bandwidth_samples
 from app.services.customer_portal_context import resolve_customer_subscription
-from app.services.customer_timeline import CustomerTimelineItem
+from app.services.customer_timeline import (
+    CustomerTimelineItem,
+    CustomerTimelinePageQuery,
+)
 from app.services.db_session_adapter import db_session_adapter
 from app.services.domain_errors import DomainError
 from app.services.owner_commands import CommandContext
@@ -1156,6 +1159,7 @@ def person_detail(
     usage_view: str = Query("chart", pattern="^(chart|table)$"),
     usage_start_date: date | None = None,
     usage_end_date: date | None = None,
+    timeline_page: Annotated[int, Query(ge=1)] = 1,
     db: Session = Depends(get_db),
 ):
     """View customer details (unified — person and org members)."""
@@ -1193,6 +1197,7 @@ def person_detail(
             network_query=web_customer_details_service.CustomerDetailNetworkQuery(
                 include=panel == "network",
             ),
+            timeline_query=CustomerTimelinePageQuery(page=timeline_page),
         )
     except HTTPException:
         return templates.TemplateResponse(

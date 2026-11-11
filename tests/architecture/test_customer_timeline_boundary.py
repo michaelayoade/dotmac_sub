@@ -16,14 +16,14 @@ def test_customer_detail_delegates_timeline_projection_to_registered_owner():
     projection = _source("app/services/customer_timeline.py")
     owner = service_relationship("ui.customer_timeline_projection")
 
-    assert "customer_timeline_service.build_customer_timeline(" in detail_service
+    assert "customer_timeline_service.get_customer_timeline_page(" in detail_service
     assert "def _build_activity_items(" not in detail_service
     assert "AuditEvent" not in detail_service
     assert "class CustomerTimelineItem(TypedDict):" in projection
     assert owner.module == "app.services.customer_timeline"
 
 
-def test_customer_timeline_ui_shows_attribution_result_and_evidence_without_controls():
+def test_customer_timeline_ui_shows_attribution_result_evidence_and_pagination():
     template = _source("templates/admin/customers/detail.html")
 
     assert "data-customer-timeline-item" in template
@@ -32,6 +32,9 @@ def test_customer_timeline_ui_shows_attribution_result_and_evidence_without_cont
     assert "data-timeline-result" in template
     assert "Audit details" in template
     assert "Security" in template
+    assert 'aria-label="Timeline pages"' in template
+    assert "activity_page.has_next" in template
+    assert "activity_items[:10]" not in template
     assert "Actor not recorded" not in template
     assert "timeline-filter" not in template
     assert "timeline-search" not in template

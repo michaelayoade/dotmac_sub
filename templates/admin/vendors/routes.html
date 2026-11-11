@@ -4,15 +4,17 @@
 
 {% block content %}
 <div class="relative space-y-6">
-    <div class="flex items-center gap-4">
-        <div class="flex h-14 w-14 items-center justify-center rounded-2xl bg-gradient-to-br from-orange-500 to-amber-600 shadow-lg shadow-orange-500/25">
+    <div class="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+        <div class="flex min-w-0 items-center gap-4">
+            <div class="flex h-14 w-14 shrink-0 items-center justify-center rounded-2xl bg-gradient-to-br from-orange-500 to-amber-600 shadow-lg shadow-orange-500/25">
             <svg class="h-7 w-7 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 20l-5.447-2.724A1 1 0 013 16.382V5.618a1 1 0 011.447-.894L9 7m0 13l6-3m-6 3V7m6 10l4.553 2.276A1 1 0 0021 18.382V7.618a1 1 0 00-.553-.894L15 4m0 13V4m0 0L9 7"/></svg>
         </div>
-        <div>
-            <h1 class="text-2xl font-bold text-slate-900 dark:text-white">Vendor Routes</h1>
-            <p class="mt-0.5 text-sm text-slate-500 dark:text-slate-400">Installation projects with proposed or as-built fiber route geometry</p>
+            <div>
+                <h1 class="text-2xl font-bold text-slate-900 dark:text-white">Vendor Routes</h1>
+                <p class="mt-0.5 text-sm text-slate-500 dark:text-slate-400">Installation projects with proposed or as-built fiber route geometry</p>
+            </div>
         </div>
-        <a href="/admin/vendors/routes/new" class="inline-flex items-center gap-2 rounded-lg bg-violet-600 px-4 py-2 text-sm font-semibold text-white hover:bg-violet-700">Create admin proposal</a>
+        <a href="/admin/vendors/routes/new" class="inline-flex shrink-0 items-center justify-center gap-2 self-start rounded-lg bg-violet-600 px-4 py-2 text-sm font-semibold text-white hover:bg-violet-700 sm:self-auto">Create admin proposal</a>
     </div>
 
     <div class="overflow-hidden rounded-2xl border border-slate-200/60 bg-white shadow-sm dark:border-slate-700/60 dark:bg-slate-800">

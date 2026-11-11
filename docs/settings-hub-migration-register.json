@@ -6249,7 +6249,7 @@
       "disposition": "Mapped to hub; preserve registered type, validation, tenant scope and owner-command writes",
       "source_references": [
         "app/services/catalog/offers.py:152",
-        "app/services/web_catalog_offers.py:927",
+        "app/services/web_catalog_offers.py:1049",
         "app/services/web_catalog_subscriptions.py:4378"
       ]
     },
@@ -6324,7 +6324,7 @@
       },
       "disposition": "Mapped to hub; preserve registered type, validation, tenant scope and owner-command writes",
       "source_references": [
-        "app/services/catalog/radius.py:44"
+        "app/services/catalog/radius.py:50"
       ]
     },
     {
@@ -6596,7 +6596,7 @@
       },
       "disposition": "Mapped to hub; preserve registered type, validation, tenant scope and owner-command writes",
       "source_references": [
-        "app/services/web_catalog_offers.py:180"
+        "app/services/web_catalog_offers.py:181"
       ]
     },
     {
@@ -6622,9 +6622,9 @@
       "source_references": [
         "app/services/catalog/plan_family_catalogues.py:175",
         "app/services/catalog/plan_family_catalogues.py:191",
-        "app/services/web_catalog_offers.py:1188",
-        "app/services/web_catalog_offers.py:905",
-        "app/services/web_catalog_offers.py:994",
+        "app/services/web_catalog_offers.py:1027",
+        "app/services/web_catalog_offers.py:1135",
+        "app/services/web_catalog_offers.py:1359",
         "templates/admin/catalog/settings/catalogues.html:26",
         "templates/admin/catalog/settings/catalogues.html:27"
       ]
@@ -7440,9 +7440,9 @@
       },
       "disposition": "Mapped to hub; preserve registered type, validation, tenant scope and owner-command writes",
       "source_references": [
-        "app/services/access_rate_profile.py:392",
-        "app/services/access_rate_profile.py:647",
-        "app/services/access_rate_profile.py:865",
+        "app/services/access_rate_profile.py:1048",
+        "app/services/access_rate_profile.py:393",
+        "app/services/access_rate_profile.py:830",
         "app/services/collections/_core.py:1195",
         "app/services/collections/_core.py:640"
       ]
@@ -8838,10 +8838,10 @@
         "app/services/web_system_users.py:918",
         "app/services/web_vendors.py:230",
         "app/validators/bulk.py:26",
-        "app/web/admin/customers.py:1010",
-        "app/web/admin/customers.py:1026",
-        "app/web/admin/customers.py:1104",
-        "app/web/admin/customers.py:3260",
+        "app/web/admin/customers.py:1013",
+        "app/web/admin/customers.py:1029",
+        "app/web/admin/customers.py:1107",
+        "app/web/admin/customers.py:3265",
         "app/web/admin/inbox.py:1749",
         "app/web/admin/inbox.py:3889",
         "app/web/admin/network.py:101",
@@ -8869,12 +8869,12 @@
         "templates/admin/customers/_wizard_step_basic.html:88",
         "templates/admin/customers/_wizard_step_basic.html:92",
         "templates/admin/customers/_wizard_step_contacts.html:70",
-        "templates/admin/customers/detail.html:2632",
-        "templates/admin/customers/detail.html:2913",
-        "templates/admin/customers/detail.html:2926",
+        "templates/admin/customers/detail.html:2643",
+        "templates/admin/customers/detail.html:2924",
+        "templates/admin/customers/detail.html:2937",
         "templates/admin/customers/detail.html:307",
-        "templates/admin/customers/detail.html:3082",
-        "templates/admin/customers/detail.html:3111",
+        "templates/admin/customers/detail.html:3093",
+        "templates/admin/customers/detail.html:3122",
         "templates/admin/customers/form.html:255",
         "templates/admin/customers/form.html:259",
         "templates/admin/customers/form.html:329",
@@ -18619,7 +18619,7 @@
       },
       "disposition": "Mapped to hub; preserve registered type, validation, tenant scope and owner-command writes",
       "source_references": [
-        "app/services/access_rate_profile.py:78",
+        "app/services/access_rate_profile.py:79",
         "app/services/access_rate_switch.py:991",
         "app/services/radius_population.py:1249"
       ]
@@ -19511,7 +19511,7 @@
         "app/services/web_customer_actions.py:2818",
         "app/services/web_subscriber_actions.py:128",
         "app/services/workforce_attendance.py:110",
-        "app/web/admin/customers.py:1034",
+        "app/web/admin/customers.py:1037",
         "app/web/admin/inbox_sla.py:50",
         "templates/admin/notifications/oncall_form.html:55",
         "templates/admin/notifications/oncall_rotations.html:142",
