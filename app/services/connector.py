@@ -65,6 +65,14 @@ class ConnectorListPage:
 
 class ConnectorConfigs(ListResponseMixin):
     @staticmethod
+    def name_exists(db: Session, name: str) -> bool:
+        """Check legacy connection name uniqueness in the owning service."""
+        return (
+            db.query(ConnectorConfig.id).filter(ConnectorConfig.name == name).first()
+            is not None
+        )
+
+    @staticmethod
     def create(db: Session, payload: ConnectorConfigCreate):
         config = ConnectorConfig(**payload.model_dump())
         db.add(config)

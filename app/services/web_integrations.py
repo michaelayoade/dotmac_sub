@@ -818,11 +818,7 @@ def create_connector(db: Session, command: ConnectorFormCommand):
         raise ValueError("Name and connector type are required.")
     if len(command.name.strip()) > 160:
         raise ValueError("Connection name must be 160 characters or fewer.")
-    if (
-        db.query(ConnectorConfig.id)
-        .filter(ConnectorConfig.name == command.name.strip())
-        .first()
-    ):
+    if connector_service.connector_configs.name_exists(db, command.name.strip()):
         raise ValueError("A legacy connection with this name already exists.")
     auth = _auth_fields(command)
     _validate_auth_fields(command.auth_type, auth)

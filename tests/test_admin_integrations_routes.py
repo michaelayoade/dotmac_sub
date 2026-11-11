@@ -103,11 +103,11 @@ def test_legacy_list_passes_canonical_filters(client):
         routes.connector_service.connector_configs, "list_page", side_effect=list_page
     ) as listing:
         response = client.get(
-            "/admin/integrations/connectors?search=CRM&status=disabled"
+            "/admin/integrations/connectors?search=Legacy&status=disabled"
         )
         assert response.status_code == 200
         query = listing.call_args.args[1]
-        assert query.search == "CRM"
+        assert query.search == "Legacy"
         assert query.filter_value("status") == "disabled"
 
 
@@ -141,10 +141,10 @@ def test_create_and_edit_accept_structured_form_fields(client):
         response = client.post(
             "/admin/integrations/connectors",
             data={
-                "name": "CRM",
+                "name": "Legacy connection",
                 "connector_type": "http",
                 "auth_type": "basic",
-                "base_url": "https://crm.example.test",
+                "base_url": "https://legacy.example.test",
                 "auth_username": "operator",
                 "auth_password": " password ",
                 "header_name": "X-Region",

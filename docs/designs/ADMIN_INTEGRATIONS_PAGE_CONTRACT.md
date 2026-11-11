@@ -17,7 +17,7 @@ schemas, provider credentials, or a new connector runtime.
   `app.services.web_integrations` projects installation state and runtime
   evidence. Run and delivery records own their respective observations.
 - **First viewport:** title and browse action, then the installed list with
-  state and latest observation. Global Paystack and CRM checks
+  state and latest observation. Global provider checks
   do not describe a selected installation and are excluded.
 - **List:** installation name, plugin title when different, type, state, latest
   observed result and time, manage/enable/disable/retire actions. No duplicate
