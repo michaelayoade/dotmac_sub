@@ -1745,6 +1745,7 @@ def build_customer_detail_snapshot(
     include_conversations: bool = False,
     include_service_extensions: bool = False,
     network_query: CustomerDetailNetworkQuery | None = None,
+    timeline_query: customer_timeline_service.CustomerTimelinePageQuery | None = None,
 ) -> dict[str, Any]:
     """Build unified customer detail snapshot.
 
@@ -1889,12 +1890,13 @@ def build_customer_detail_snapshot(
         db.rollback()
         notifications = []
 
-    activity_items = customer_timeline_service.build_customer_timeline(
+    activity_page = customer_timeline_service.get_customer_timeline_page(
         db,
         customer_id=str(customer_id),
         account_ids=account_ids,
-        subscriptions=subscriptions,
+        query=timeline_query or customer_timeline_service.CustomerTimelinePageQuery(),
     )
+    activity_items = activity_page.items
     relationship_summary = cast(
         dict[str, int],
         relationship_data["relationship_summary"],
@@ -2135,6 +2137,7 @@ def build_customer_detail_snapshot(
         "has_active_subscribers": active_subscribers > 0,
         "has_any_subscribers": total_subscribers > 0,
         "activity_items": activity_items,
+        "activity_page": activity_page,
         "customer_user_access": customer_user_access,
         "crm_sync_status": _build_crm_sync_status(db, customer),
         "identity_profile": _build_identity_profile(customer),

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Sequence
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from enum import StrEnum
 from typing import TypedDict
@@ -70,6 +71,20 @@ class CustomerTimelineItem(TypedDict):
     link: str | None
     security_sensitive: bool
     details: tuple[CustomerTimelineDetail, ...]
+
+
+@dataclass(frozen=True)
+class CustomerTimelinePageQuery:
+    page: int = 1
+    per_page: int = 20
+
+
+@dataclass(frozen=True)
+class CustomerTimelinePage:
+    items: tuple[CustomerTimelineItem, ...]
+    page: int
+    per_page: int
+    has_next: bool
 
 
 _ACTION_LABELS = {
@@ -221,11 +236,19 @@ def _audit_activity_items(
     *,
     limit: int,
 ) -> list[CustomerTimelineItem]:
-    events: list[AuditEvent] = list_audit_events_for_entities(
-        db,
-        list(entity_refs),
-        limit=limit,
-    )
+    events_by_id: dict[UUID, AuditEvent] = {}
+    for offset in range(0, len(entity_refs), 250):
+        for event in list_audit_events_for_entities(
+            db,
+            list(entity_refs[offset : offset + 250]),
+            limit=limit,
+        ):
+            events_by_id[event.id] = event
+    events = sorted(
+        events_by_id.values(),
+        key=lambda event: (event.occurred_at, str(event.id)),
+        reverse=True,
+    )[:limit]
     if not events:
         return []
     actors = load_audit_actor_subscribers(db, events)
@@ -366,32 +389,42 @@ def build_customer_timeline(
     subscriptions: Sequence[Subscription],
     limit: int = 20,
 ) -> list[CustomerTimelineItem]:
-    """Compose recent customer activity without inventing missing actors."""
+    """Compose a bounded newest-first prefix of customer activity."""
     items: list[CustomerTimelineItem] = []
     normalized_account_ids = list(dict.fromkeys(account_ids))
+    source_limit = max(limit, 1)
 
     if normalized_account_ids:
         invoices = (
             db.query(Invoice)
             .filter(Invoice.account_id.in_(normalized_account_ids))
             .filter(Invoice.is_active.is_(True))
-            .order_by(func.coalesce(Invoice.issued_at, Invoice.created_at).desc())
-            .limit(8)
+            .order_by(
+                func.coalesce(Invoice.issued_at, Invoice.created_at).desc(),
+                Invoice.id.desc(),
+            )
+            .limit(source_limit)
             .all()
         )
         payments = (
             db.query(Payment)
             .filter(Payment.account_id.in_(normalized_account_ids))
             .filter(Payment.is_active.is_(True))
-            .order_by(func.coalesce(Payment.paid_at, Payment.created_at).desc())
-            .limit(8)
+            .order_by(
+                func.coalesce(Payment.paid_at, Payment.created_at).desc(),
+                Payment.id.desc(),
+            )
+            .limit(source_limit)
             .all()
         )
         tickets = (
             db.query(Ticket)
             .filter(ticket_customer_any_link_filter(Ticket, normalized_account_ids))
-            .order_by(Ticket.updated_at.desc())
-            .limit(8)
+            .order_by(
+                func.coalesce(Ticket.updated_at, Ticket.created_at).desc(),
+                Ticket.id.desc(),
+            )
+            .limit(source_limit)
             .all()
         )
         communications = (
@@ -401,16 +434,20 @@ def build_customer_timeline(
                 func.coalesce(
                     CommunicationLog.sent_at,
                     CommunicationLog.created_at,
-                ).desc()
+                ).desc(),
+                CommunicationLog.id.desc(),
             )
-            .limit(8)
+            .limit(source_limit)
             .all()
         )
         orders = (
             db.query(ServiceOrder)
             .filter(ServiceOrder.subscriber_id.in_(normalized_account_ids))
-            .order_by(ServiceOrder.updated_at.desc())
-            .limit(8)
+            .order_by(
+                func.coalesce(ServiceOrder.updated_at, ServiceOrder.created_at).desc(),
+                ServiceOrder.id.desc(),
+            )
+            .limit(source_limit)
             .all()
         )
         dunning_cases = (
@@ -421,9 +458,11 @@ def build_customer_timeline(
                     DunningCase.resolved_at,
                     DunningCase.updated_at,
                     DunningCase.started_at,
-                ).desc()
+                    DunningCase.created_at,
+                ).desc(),
+                DunningCase.id.desc(),
             )
-            .limit(8)
+            .limit(source_limit)
             .all()
         )
     else:
@@ -474,7 +513,7 @@ def build_customer_timeline(
             )
         )
 
-    for subscription in list(subscriptions)[:8]:
+    for subscription in list(subscriptions)[:source_limit]:
         account_label = (
             subscription.login or subscription.ipv4_address or subscription.ipv6_address
         )
@@ -598,14 +637,95 @@ def build_customer_timeline(
         ("subscriber", str(customer_id)),
         ("subscriber_account", str(customer_id)),
     ]
-    entity_refs.extend(("subscription", str(row.id)) for row in subscriptions)
-    entity_refs.extend(("invoice", str(row.id)) for row in invoices)
-    entity_refs.extend(("payment", str(row.id)) for row in payments)
-    entity_refs.extend(("support_ticket", str(row.id)) for row in tickets)
-    entity_refs.extend(("communication_log", str(row.id)) for row in communications)
-    entity_refs.extend(("service_order", str(row.id)) for row in orders)
-    entity_refs.extend(("dunning_case", str(row.id)) for row in dunning_cases)
-    items.extend(_audit_activity_items(db, entity_refs, limit=max(limit * 2, 40)))
+    if normalized_account_ids:
+        for model, entity_type, predicate in (
+            (
+                Subscription,
+                "subscription",
+                Subscription.subscriber_id.in_(normalized_account_ids),
+            ),
+            (
+                Invoice,
+                "invoice",
+                Invoice.account_id.in_(normalized_account_ids)
+                & Invoice.is_active.is_(True),
+            ),
+            (
+                Payment,
+                "payment",
+                Payment.account_id.in_(normalized_account_ids)
+                & Payment.is_active.is_(True),
+            ),
+            (
+                Ticket,
+                "support_ticket",
+                ticket_customer_any_link_filter(Ticket, normalized_account_ids),
+            ),
+            (
+                CommunicationLog,
+                "communication_log",
+                CommunicationLog.subscriber_id.in_(normalized_account_ids),
+            ),
+            (
+                ServiceOrder,
+                "service_order",
+                ServiceOrder.subscriber_id.in_(normalized_account_ids),
+            ),
+            (
+                DunningCase,
+                "dunning_case",
+                DunningCase.account_id.in_(normalized_account_ids),
+            ),
+        ):
+            entity_refs.extend(
+                (entity_type, str(row_id))
+                for (row_id,) in db.query(model.id).filter(predicate).all()
+            )
+    items.extend(_audit_activity_items(db, entity_refs, limit=source_limit))
 
     unique_items = {item["key"]: item for item in items}
     return sorted(unique_items.values(), key=_timeline_sort_key, reverse=True)[:limit]
+
+
+def get_customer_timeline_page(
+    db: Session,
+    *,
+    customer_id: str,
+    account_ids: Sequence[UUID],
+    query: CustomerTimelinePageQuery,
+) -> CustomerTimelinePage:
+    """Return one page while keeping older items available on later pages."""
+    if query.page < 1 or not 1 <= query.per_page <= 100:
+        raise ValueError("Invalid customer timeline page")
+    requested = query.page * query.per_page
+    subscriptions = (
+        db.query(Subscription)
+        .filter(Subscription.subscriber_id.in_(account_ids))
+        .order_by(
+            func.coalesce(
+                Subscription.updated_at,
+                Subscription.next_billing_at,
+                Subscription.start_at,
+                Subscription.created_at,
+            ).desc(),
+            Subscription.id.desc(),
+        )
+        .limit(requested + 1)
+        .all()
+        if account_ids
+        else []
+    )
+    prefix = build_customer_timeline(
+        db,
+        customer_id=customer_id,
+        account_ids=account_ids,
+        subscriptions=subscriptions,
+        limit=requested + 1,
+    )
+    start = (query.page - 1) * query.per_page
+    return CustomerTimelinePage(
+        items=tuple(prefix[start:requested]),
+        page=query.page,
+        per_page=query.per_page,
+        has_next=len(prefix) > requested,
+    )
