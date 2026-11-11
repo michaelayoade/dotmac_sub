@@ -451,21 +451,11 @@ def vendor_route_view(
                 db,
                 coerce_uuid(project["native_project_id"]),
             ),
-            "route_geojson": vendor_routes_api.build_project_route_geojson(
-                db, project_id
-            ),
             "route_revisions": (
                 vendor_portal_operations.list_route_revisions_for_project(
                     db,
                     project_id,
                 )
-            ),
-            "network_geojson": fiber_plant_api.build_fiber_plant_geojson(
-                db,
-                include_fdh=True,
-                include_closures=True,
-                include_pops=True,
-                include_segments=True,
             ),
         }
     )
