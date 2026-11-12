@@ -2464,6 +2464,8 @@ Account adjustments and add-on purchase debits use one evidenced contract:
   consequence as distinct preview fields. Confirmation locks the account,
   recomputes the preview, rejects stale or unfunded requests, records
   idempotency and actor audit evidence, and links one decision to one exact debit.
+  Plan-change and renewal debits measure available funding from the reviewed
+  prepaid opening plus later native events, matching their service previews.
   Direct API confirmations enter typed owner commands on transaction-free
   sessions. Plan-change, add-on, and renewal owners use separately named typed
   staging collaborators that flush only inside their wider transaction; no
