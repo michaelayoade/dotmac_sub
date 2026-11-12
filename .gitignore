@@ -134,5 +134,6 @@ Billing-summary.md
 /inbox-log-fixes.local.md
 
 # Local overrides for development/testing (never committed)
+*.local.*
 *.local
 .agents/

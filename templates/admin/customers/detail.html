@@ -867,6 +867,7 @@
         {% set service_extension_history = billing_workspace.service_extension_history | default(none) %}
         {% set service_extension_items = service_extension_history.items if service_extension_history else [] %}
         {% set billing_account_id = accounts[0].id if accounts and accounts|length == 1 else customer.id %}
+        {% set can_read_invoices = can(request, 'billing:invoice:read') %}
         {% set can_read_payments = can(request, 'billing:payment:read') %}
 
         <div class="flex flex-col gap-4 rounded-2xl border border-slate-200/70 bg-white p-5 shadow-sm dark:border-slate-700/70 dark:bg-slate-800 sm:flex-row sm:items-center sm:justify-between">
@@ -903,20 +904,16 @@
             <div class="overflow-x-auto rounded-2xl border border-slate-200/70 bg-slate-50 p-1 shadow-sm dark:border-slate-700/70 dark:bg-slate-900/40">
                 <div class="flex min-w-max gap-1">
                     {% set billing_tabs = [
-                        {'id': 'overview', 'label': 'Overview', 'count': none},
-                        {'id': 'invoices', 'label': 'Invoices', 'count': invoices|length},
-                        {'id': 'payments', 'label': 'Payments', 'count': payments|length},
-                        {'id': 'proofs', 'label': 'Proofs', 'count': payment_proofs|length},
-                        {'id': 'credits', 'label': 'Credits', 'count': credit_notes|length},
-                        {'id': 'activity', 'label': 'Activity', 'count': credit_applications|length}
+                        {'id': 'overview', 'label': 'Overview', 'count': none, 'visible': true},
+                        {'id': 'invoices', 'label': 'Invoices', 'count': none, 'visible': can_read_invoices},
+                        {'id': 'payments', 'label': 'Payments', 'count': none, 'visible': can_read_payments},
+                        {'id': 'ledger', 'label': 'Ledger', 'count': none, 'visible': can(request, 'billing:ledger:read')},
+                        {'id': 'proofs', 'label': 'Proofs', 'count': payment_proofs|length, 'visible': true},
+                        {'id': 'credits', 'label': 'Credits', 'count': credit_notes|length, 'visible': true},
+                        {'id': 'extensions', 'label': 'Extensions', 'count': service_extension_history.total_count if service_extension_history else none, 'visible': can_read_service_extensions}
                     ] %}
-                    {% if can_read_service_extensions %}
-                    {% set billing_tabs = billing_tabs[:5] + [{'id': 'extensions', 'label': 'Extensions', 'count': service_extension_history.total_count}] + billing_tabs[5:] %}
-                    {% endif %}
-                    {% if can(request, 'billing:ledger:read') %}
-                    {% set billing_tabs = billing_tabs[:3] + [{'id': 'ledger', 'label': 'Ledger', 'count': none}] + billing_tabs[3:] %}
-                    {% endif %}
                     {% for tab in billing_tabs %}
+                    {% if tab.visible %}
                     <button type="button"
                             @click="billingSubTab = '{{ tab.id }}'"
                             :class="billingSubTab === '{{ tab.id }}' ? 'bg-white text-slate-950 shadow-sm ring-1 ring-slate-200 dark:bg-slate-800 dark:text-white dark:ring-slate-700' : 'text-slate-600 hover:bg-white/70 hover:text-slate-900 dark:text-slate-400 dark:hover:bg-slate-800/70 dark:hover:text-white'"
@@ -926,6 +923,7 @@
                         <span class="rounded-full bg-slate-200 px-1.5 py-0.5 text-[11px] font-bold text-slate-700 dark:bg-slate-700 dark:text-slate-300">{{ tab.count }}</span>
                         {% endif %}
                     </button>
+                    {% endif %}
                     {% endfor %}
                 </div>
             </div>
@@ -966,7 +964,7 @@
             <div class="rounded-2xl border border-slate-200/60 bg-white shadow-sm dark:border-slate-700/60 dark:bg-slate-800">
                 <div class="flex items-center justify-between border-b border-slate-100 px-5 py-4 dark:border-slate-700">
                     <h3 class="font-semibold text-slate-900 dark:text-white">Recent Invoices</h3>
-                    <a href="/admin/billing/invoices" class="text-xs font-medium text-amber-600 hover:text-amber-700 dark:text-amber-400">View all</a>
+                    <a href="/admin/billing/invoices?customer_ref={{ customer.id }}" class="text-xs font-medium text-amber-600 hover:text-amber-700 dark:text-amber-400">View all</a>
                 </div>
                 {% if invoices %}
                 <div class="divide-y divide-slate-100 dark:divide-slate-700">
@@ -1000,7 +998,7 @@
             <div class="rounded-2xl border border-slate-200/60 bg-white shadow-sm dark:border-slate-700/60 dark:bg-slate-800">
                 <div class="flex items-center justify-between border-b border-slate-100 px-5 py-4 dark:border-slate-700">
                     <h3 class="font-semibold text-slate-900 dark:text-white">Recent Payments</h3>
-                    {% if can_read_payments %}<a href="/admin/billing/payments" class="text-xs font-medium text-primary-600 hover:text-primary-700 dark:text-primary-400">View all</a>{% endif %}
+                    {% if can_read_payments %}<a href="/admin/billing/payments?customer_ref={{ customer.id }}" class="text-xs font-medium text-primary-600 hover:text-primary-700 dark:text-primary-400">View all</a>{% endif %}
                 </div>
                 {% if payments %}
                 <div class="divide-y divide-slate-100 dark:divide-slate-700">
@@ -1035,71 +1033,25 @@
             </div>
         </div>
 
-        <div x-show="billingSubTab === 'invoices'" x-cloak class="rounded-2xl border border-slate-200/60 bg-white shadow-sm dark:border-slate-700/60 dark:bg-slate-800">
-            <div class="flex items-center justify-between border-b border-slate-100 px-5 py-4 dark:border-slate-700">
-                <h3 class="font-semibold text-slate-900 dark:text-white">Invoices</h3>
-                <a href="/admin/billing/invoices?customer_ref={{ customer.id }}" class="text-xs font-semibold text-amber-600 hover:text-amber-700 dark:text-amber-400">Open invoice list</a>
+        {% if can_read_invoices %}
+        <div x-show="billingSubTab === 'invoices'" x-cloak id="customer-billing-invoices"
+             hx-get="/admin/customers/person/{{ customer.id }}/billing/history/invoices"
+             hx-trigger="revealed once" hx-swap="innerHTML" class="min-h-48">
+            <div class="flex min-h-48 items-center justify-center rounded-2xl border border-slate-200/60 bg-white text-sm text-slate-500 shadow-sm dark:border-slate-700/60 dark:bg-slate-800 dark:text-slate-400">
+                Loading customer invoices?
             </div>
-            {% if invoices %}
-            <div class="overflow-x-auto">
-                <table class="min-w-full divide-y divide-slate-100 dark:divide-slate-700">
-                    <thead class="bg-slate-50 dark:bg-slate-900/40">
-                        <tr>
-                            <th class="px-5 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-500">Invoice</th>
-                            <th class="px-5 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-500">Date</th>
-                            <th class="px-5 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-500">Status</th>
-                            <th class="px-5 py-3 text-right text-xs font-semibold uppercase tracking-wider text-slate-500">Balance</th>
-                            <th class="px-5 py-3 text-right text-xs font-semibold uppercase tracking-wider text-slate-500">Total</th>
-                        </tr>
-                    </thead>
-                    <tbody class="divide-y divide-slate-100 dark:divide-slate-700">
-                        {% for invoice in invoices %}
-                        <tr class="hover:bg-slate-50 dark:hover:bg-slate-700/30">
-                            <td class="px-5 py-3">
-                                <a href="/admin/billing/invoices/{{ invoice.id }}" class="text-sm font-semibold text-slate-900 hover:text-amber-600 dark:text-white dark:hover:text-amber-400">{{ invoice.invoice_number | default((invoice.id|string)[:8]|upper) }}</a>
-                            </td>
-                            <td class="px-5 py-3 text-sm text-slate-500 dark:text-slate-400">{{ (invoice.issued_at or invoice.created_at) | app_datetime('%b %d, %Y', 'N/A', include_tz=False) }}</td>
-                            <td class="px-5 py-3">{{ status_presentation_badge(invoice_status_presentations.get(invoice.id|string), size="sm") }}</td>
-                            <td class="px-5 py-3 text-right text-sm font-semibold tabular-nums text-slate-900 dark:text-white">₦{{ '{:,.2f}'.format(invoice.balance_due | default(0)) }}</td>
-                            <td class="px-5 py-3 text-right text-sm font-semibold tabular-nums text-slate-900 dark:text-white">₦{{ '{:,.2f}'.format(invoice.total_amount if invoice.total_amount is defined and invoice.total_amount is not none else invoice.total | default(0)) }}</td>
-                        </tr>
-                        {% endfor %}
-                    </tbody>
-                </table>
-            </div>
-            {% else %}
-            <div class="px-5 py-10 text-center text-sm text-slate-500 dark:text-slate-400">No invoices found.</div>
-            {% endif %}
         </div>
+        {% endif %}
 
-        <div x-show="billingSubTab === 'payments'" x-cloak class="rounded-2xl border border-slate-200/60 bg-white shadow-sm dark:border-slate-700/60 dark:bg-slate-800">
-            <div class="flex items-center justify-between border-b border-slate-100 px-5 py-4 dark:border-slate-700">
-                <h3 class="font-semibold text-slate-900 dark:text-white">Payments</h3>
-                <div class="flex items-center gap-3">
-                    {% if customer_type == 'person' and can(request, 'billing:payment_intent:read') %}<a href="/admin/customers/person/{{ customer.id }}/payment-intents" class="text-xs font-semibold text-primary-600 hover:text-primary-700 dark:text-primary-400">Payment intents</a>{% endif %}
-                    <a href="/admin/billing/payments/new?account={{ billing_account_id }}" class="text-xs font-semibold text-amber-600 hover:text-amber-700 dark:text-amber-400">Record payment</a>
-                </div>
+        {% if can_read_payments %}
+        <div x-show="billingSubTab === 'payments'" x-cloak id="customer-billing-payments"
+             hx-get="/admin/customers/person/{{ customer.id }}/billing/history/payments"
+             hx-trigger="revealed once" hx-swap="innerHTML" class="min-h-48">
+            <div class="flex min-h-48 items-center justify-center rounded-2xl border border-slate-200/60 bg-white text-sm text-slate-500 shadow-sm dark:border-slate-700/60 dark:bg-slate-800 dark:text-slate-400">
+                Loading customer payments?
             </div>
-            {% if payments %}
-            <div class="divide-y divide-slate-100 dark:divide-slate-700">
-                {% for payment in payments %}
-                {% set payment_presentation = payment_status_presentations.get(payment.id|string) %}
-                <a href="/admin/billing/payments/{{ payment.id }}" class="flex items-center justify-between gap-4 px-5 py-3 transition hover:bg-slate-50 dark:hover:bg-slate-700/30">
-                    <div>
-                        <p class="text-sm font-semibold text-slate-900 dark:text-white">{{ payment.receipt_number or (payment.id|string)[:8]|upper }}</p>
-                        <p class="text-xs text-slate-500 dark:text-slate-400">{{ payment.paid_at | app_datetime('%b %d, %Y', include_tz=False) if payment.paid_at else payment.created_at | app_datetime('%b %d, %Y', include_tz=False) }}</p>
-                    </div>
-                    <div class="text-right">
-                        <p class="text-sm font-bold tabular-nums text-slate-900 dark:text-white">₦{{ '{:,.2f}'.format(payment.amount | default(0)) }}</p>
-                        <div class="mt-1">{{ status_presentation_badge(payment_presentation, size="sm") }}</div>
-                    </div>
-                </a>
-                {% endfor %}
-            </div>
-            {% else %}
-            <div class="px-5 py-10 text-center text-sm text-slate-500 dark:text-slate-400">No payments recorded.</div>
-            {% endif %}
         </div>
+        {% endif %}
 
         {% if can(request, 'billing:ledger:read') %}
         <div x-show="billingSubTab === 'ledger'"
@@ -1189,6 +1141,31 @@
             {% else %}
             <div class="px-5 py-10 text-center text-sm text-slate-500 dark:text-slate-400">No credit notes found.</div>
             {% endif %}
+            <div class="border-t border-slate-100 dark:border-slate-700">
+                <div class="flex items-center justify-between bg-slate-50/60 px-5 py-3 dark:bg-slate-900/20">
+                    <h4 class="text-sm font-semibold text-slate-900 dark:text-white">Credit application history</h4>
+                    {% if can(request, 'billing:ledger:read') %}<button type="button" @click="billingSubTab = 'ledger'" class="text-xs font-semibold text-amber-600 hover:text-amber-700 dark:text-amber-400">View ledger</button>{% endif %}
+                </div>
+                {% if credit_applications %}
+                <div class="divide-y divide-slate-100 dark:divide-slate-700">
+                    {% for application in credit_applications %}
+                    <div class="flex flex-col gap-3 px-5 py-4 md:flex-row md:items-center md:justify-between">
+                        <div>
+                            <p class="text-sm font-semibold text-slate-900 dark:text-white">{{ application.credit_note.credit_number if application.credit_note else (application.credit_note_id|string)[:8]|upper }}</p>
+                            <p class="text-xs text-slate-500 dark:text-slate-400">
+                                Applied {{ application.created_at | app_datetime('%b %d, %Y', 'N/A', include_tz=False) }}
+                                {% if application.invoice %} to {{ application.invoice.invoice_number or (application.invoice.id|string)[:8]|upper }}{% endif %}
+                            </p>
+                            {% if application.memo %}<p class="mt-1 text-xs text-slate-500 dark:text-slate-400">{{ application.memo }}</p>{% endif %}
+                        </div>
+                        <p class="text-sm font-bold tabular-nums text-emerald-700 dark:text-emerald-300">₦{{ '{:,.2f}'.format(application.amount | default(0)) }}</p>
+                    </div>
+                    {% endfor %}
+                </div>
+                {% else %}
+                <div class="px-5 py-6 text-center text-sm text-slate-500 dark:text-slate-400">No credit applications recorded.</div>
+                {% endif %}
+            </div>
         </div>
 
         {% if can_read_service_extensions %}<div x-show="billingSubTab === 'extensions'" x-cloak class="rounded-2xl border border-slate-200/60 bg-white shadow-sm dark:border-slate-700/60 dark:bg-slate-800">
@@ -1224,31 +1201,6 @@
             {% endif %}
         </div>{% endif %}
 
-        <div x-show="billingSubTab === 'activity'" x-cloak class="rounded-2xl border border-slate-200/60 bg-white shadow-sm dark:border-slate-700/60 dark:bg-slate-800">
-            <div class="flex items-center justify-between border-b border-slate-100 px-5 py-4 dark:border-slate-700">
-                <h3 class="font-semibold text-slate-900 dark:text-white">Credit Application Activity</h3>
-                {% if can(request, 'billing:ledger:read') %}<button type="button" @click="billingSubTab = 'ledger'" class="text-xs font-semibold text-amber-600 hover:text-amber-700 dark:text-amber-400">View ledger</button>{% endif %}
-            </div>
-            {% if credit_applications %}
-            <div class="divide-y divide-slate-100 dark:divide-slate-700">
-                {% for application in credit_applications %}
-                <div class="flex flex-col gap-3 px-5 py-4 md:flex-row md:items-center md:justify-between">
-                    <div>
-                        <p class="text-sm font-semibold text-slate-900 dark:text-white">{{ application.credit_note.credit_number if application.credit_note else (application.credit_note_id|string)[:8]|upper }}</p>
-                        <p class="text-xs text-slate-500 dark:text-slate-400">
-                            Applied {{ application.created_at | app_datetime('%b %d, %Y', 'N/A', include_tz=False) }}
-                            {% if application.invoice %} to {{ application.invoice.invoice_number or (application.invoice.id|string)[:8]|upper }}{% endif %}
-                        </p>
-                        {% if application.memo %}<p class="mt-1 text-xs text-slate-500 dark:text-slate-400">{{ application.memo }}</p>{% endif %}
-                    </div>
-                    <p class="text-sm font-bold tabular-nums text-emerald-700 dark:text-emerald-300">₦{{ '{:,.2f}'.format(application.amount | default(0)) }}</p>
-                </div>
-                {% endfor %}
-            </div>
-            {% else %}
-            <div class="px-5 py-10 text-center text-sm text-slate-500 dark:text-slate-400">No credit applications recorded.</div>
-            {% endif %}
-        </div>
     </div>
 
     <!-- Tab Content: Subscriptions -->
@@ -1785,7 +1737,11 @@
                     <div class="px-5 py-4">
                         <div class="flex items-start justify-between gap-3">
                             <div class="min-w-0">
+                                {% if log.channel.value == 'email' %}
+                                <a href="/admin/customers/person/{{ customer.id }}/communications/emails/{{ log.id }}" class="block truncate text-sm font-semibold text-slate-900 hover:text-amber-600 focus-visible:rounded focus-visible:outline focus-visible:outline-2 focus-visible:outline-amber-500 dark:text-white dark:hover:text-amber-400">{{ log.subject or log.recipient or 'Email' }}</a>
+                                {% else %}
                                 <p class="truncate text-sm font-semibold text-slate-900 dark:text-white">{{ log.subject or log.recipient or log.channel.value | replace('_', ' ') | title }}</p>
+                                {% endif %}
                                 <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">{{ log.channel.value | replace('_', ' ') | title }} · {{ log.direction.value | title }} · {{ log.status.value | title }}</p>
                             </div>
                             <span class="whitespace-nowrap text-xs text-slate-500 dark:text-slate-400">{{ (log.sent_at or log.created_at) | app_datetime('%b %d, %Y', 'N/A', include_tz=False) }}</span>

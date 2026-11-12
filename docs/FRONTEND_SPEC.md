@@ -834,6 +834,34 @@ their existing customer, access, and identity owners.
 - Subscription records are investigated and managed in the Services tab; the
   Account tab does not duplicate an Active Subscriptions preview.
 
+**Billing Overview links:**
+The Recent Invoices and Recent Payments `View all` links
+open their respective full lists filtered to the current customer, using the
+same customer reference as the Invoices subtab's full-list link.
+
+The customer Billing Invoices and Payments tabs load only when opened. Each
+shows 10 newest active records per page, a full customer-scoped count, and
+Previous and Next controls that replace only that tab's content. The Billing
+Overview keeps its short recent-record previews. The embedded history routes
+require customer read access and the respective invoice or payment read
+permission; the full tabs are hidden when that permission is absent.
+
+The customer Billing Credits tab shows the 10 newest active credit notes and,
+below them, the 10 newest credit applications with their invoice and amount.
+There is no separate billing Activity subtab. The customer-wide Activity
+Timeline remains a separate view of broader customer events.
+
+**Customer communication email detail:**
+In the customer Tickets tab, the second Communications card shows the 12 newest
+customer-linked communication-log entries. An email subject opens
+`GET /admin/customers/person/{customer_id}/communications/emails/{message_id}`.
+The read-only page shows the stored subject, sender, recipient, sent or recorded
+date, direction, status, and complete body as escaped text. If no body was
+stored, it says so. Other communication channels remain unlinked. The route
+requires customer read permission and returns 404 for an absent customer,
+another customer's message, or a non-email entry. Its back link returns to
+the customer Tickets tab.
+
 **Billing Ledger tab presentation contract:**
 `app.services.web_billing_ledger.build_customer_ledger_view` owns the embedded,
 customer-scoped read model. The first page contains the 10 newest financial

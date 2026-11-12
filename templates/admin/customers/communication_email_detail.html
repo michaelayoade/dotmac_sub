@@ -1,0 +1,31 @@
+{% extends "layouts/admin.html" %}
+
+{% block title %}{{ email.subject or 'Email' }} - Customer communications{% endblock %}
+
+{% block content %}
+<div class="mx-auto max-w-4xl space-y-6">
+    <nav aria-label="Breadcrumb" class="text-sm">
+        <a href="/admin/customers/person/{{ email.customer_id }}#support" class="font-medium text-amber-700 hover:underline dark:text-amber-400">&larr; Customer tickets</a>
+    </nav>
+
+    <article class="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm dark:border-slate-700 dark:bg-slate-800" aria-labelledby="email-subject">
+        <header class="border-b border-slate-100 px-5 py-5 dark:border-slate-700 sm:px-7">
+            <p class="text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">Email</p>
+            <h1 id="email-subject" class="mt-2 break-words text-xl font-semibold text-slate-900 dark:text-white">{{ email.subject or 'No subject' }}</h1>
+            <dl class="mt-5 grid gap-x-6 gap-y-4 text-sm sm:grid-cols-2">
+                <div><dt class="font-medium text-slate-500 dark:text-slate-400">From</dt><dd class="mt-1 break-all text-slate-900 dark:text-white">{{ email.sender or 'Not recorded' }}</dd></div>
+                <div><dt class="font-medium text-slate-500 dark:text-slate-400">To</dt><dd class="mt-1 break-all text-slate-900 dark:text-white">{{ email.recipient or 'Not recorded' }}</dd></div>
+                <div><dt class="font-medium text-slate-500 dark:text-slate-400">Date</dt><dd class="mt-1 text-slate-900 dark:text-white">{{ (email.sent_at or email.created_at) | app_datetime('%b %d, %Y %I:%M %p', 'N/A') }}</dd></div>
+                <div><dt class="font-medium text-slate-500 dark:text-slate-400">Direction and status</dt><dd class="mt-1 text-slate-900 dark:text-white">{{ email.direction.value | title }} · {{ email.status.value | title }}</dd></div>
+            </dl>
+        </header>
+        <div class="px-5 py-6 sm:px-7">
+            {% if email.body %}
+            <div class="whitespace-pre-wrap break-words text-sm leading-6 text-slate-800 dark:text-slate-200">{{ email.body }}</div>
+            {% else %}
+            <p class="text-sm text-slate-500 dark:text-slate-400">No email body was recorded.</p>
+            {% endif %}
+        </div>
+    </article>
+</div>
+{% endblock %}

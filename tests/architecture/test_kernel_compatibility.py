@@ -577,6 +577,9 @@ def test_a105_sub_boot_does_not_construct_or_resolve_kernel_runtime() -> None:
     while allowing Sub's own ``app.db`` engine and session factory.
 
     Fixed phases and one stack-only dump precede the unchanged 120s deadline.
+    A successful probe exits immediately after its assertions so interpreter
+    shutdown garbage collection cannot turn a completed boot check into a
+    resource-contention timeout.
     Timeout reports read at most 32 KiB from a dedicated diagnostic stream;
     diagnostics never inspect local values or the process environment.
     """
@@ -587,6 +590,7 @@ def test_a105_sub_boot_does_not_construct_or_resolve_kernel_runtime() -> None:
                     sys.executable,
                     "-c",
                     "import faulthandler\n"
+                    "import os\n"
                     "import signal\n"
                     "import sys\n"
                     "diagnostics = open(int(sys.argv[1]), 'w', closefd=False)\n"
@@ -704,7 +708,8 @@ def test_a105_sub_boot_does_not_construct_or_resolve_kernel_runtime() -> None:
                     "runtime = sys.modules.get('dotmac_kernel.session_runtime')\n"
                     "assert runtime is not None, 'K105 session_runtime was not observed'\n"
                     "assert runtime._binding is None, runtime._binding\n"
-                    "assert runtime._reference_claimed is False, runtime._reference_claimed\n",
+                    "assert runtime._reference_claimed is False, runtime._reference_claimed\n"
+                    "os._exit(0)\n",
                     str(diagnostics.fileno()),
                 ],
                 cwd=PROJECT_ROOT,

@@ -41,12 +41,17 @@ from app.services import (
     subscriber_party_binding_repair,
     web_prepaid_activation_funding,
 )
+from app.services import (
+    customer_communication_history as customer_communication_history_service,
+)
 from app.services import customer_connection_types as customer_connection_types_service
 from app.services import customer_network_path as customer_network_path_service
 from app.services import network_monitoring as network_monitoring_service
 from app.services import subscriber as subscriber_service
 from app.services import web_billing_invoices as web_billing_invoices_service
 from app.services import web_billing_ledger as web_billing_ledger_service
+from app.services import web_billing_overview as web_billing_overview_service
+from app.services import web_billing_payments as web_billing_payments_service
 from app.services import (
     web_catalog_subscription_workflows as web_catalog_subscription_workflows_service,
 )
@@ -1145,6 +1150,40 @@ async def customer_create(
 
 
 @router.get(
+    "/person/{customer_id}/communications/emails/{message_id}",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("customer:read"))],
+)
+def person_email_detail(
+    request: Request,
+    customer_id: UUID,
+    message_id: UUID,
+    db: Session = Depends(get_db),
+):
+    email = customer_communication_history_service.get_customer_email_detail(
+        db=db,
+        query=customer_communication_history_service.CustomerEmailDetailQuery(
+            customer_id=customer_id,
+            message_id=message_id,
+        ),
+    )
+    if email is None:
+        raise HTTPException(status_code=404, detail="Email not found")
+
+    from app.web.admin import get_current_user, get_sidebar_stats
+
+    return templates.TemplateResponse(
+        "admin/customers/communication_email_detail.html",
+        {
+            "request": request,
+            "email": email,
+            "current_user": get_current_user(request),
+            "sidebar_stats": get_sidebar_stats(db),
+        },
+    )
+
+
+@router.get(
     "/person/{customer_id}",
     response_class=HTMLResponse,
     dependencies=[Depends(require_permission("customer:read"))],
@@ -1451,6 +1490,68 @@ def customer_billing_ledger(
             "customer": customer,
             "customer_ledger": ledger,
         },
+    )
+
+
+@router.get(
+    "/person/{customer_id}/billing/history/invoices",
+    response_class=HTMLResponse,
+    dependencies=[
+        Depends(require_permission("customer:read")),
+        Depends(require_permission("billing:invoice:read")),
+    ],
+)
+def customer_billing_invoice_history(
+    request: Request,
+    customer_id: UUID,
+    page: int = Query(1, ge=1),
+    db: Session = Depends(get_db),
+):
+    """Load one customer-scoped invoice page in the Billing tab."""
+    customer = _get_subscriber(db, str(customer_id))
+    if customer.user_type != UserType.customer:
+        raise HTTPException(status_code=404, detail="Customer not found")
+    history = web_billing_overview_service.customer_invoice_history_page(
+        db,
+        query=web_billing_overview_service.CustomerInvoiceHistoryQuery(
+            account_id=customer.id,
+            page=page,
+        ),
+    )
+    return templates.TemplateResponse(
+        "admin/customers/_billing_invoice_history.html",
+        {"request": request, "history": history},
+    )
+
+
+@router.get(
+    "/person/{customer_id}/billing/history/payments",
+    response_class=HTMLResponse,
+    dependencies=[
+        Depends(require_permission("customer:read")),
+        Depends(require_permission("billing:payment:read")),
+    ],
+)
+def customer_billing_payment_history(
+    request: Request,
+    customer_id: UUID,
+    page: int = Query(1, ge=1),
+    db: Session = Depends(get_db),
+):
+    """Load one customer-scoped payment page in the Billing tab."""
+    customer = _get_subscriber(db, str(customer_id))
+    if customer.user_type != UserType.customer:
+        raise HTTPException(status_code=404, detail="Customer not found")
+    history = web_billing_payments_service.customer_payment_history_page(
+        db,
+        query=web_billing_payments_service.CustomerPaymentHistoryQuery(
+            account_id=customer.id,
+            page=page,
+        ),
+    )
+    return templates.TemplateResponse(
+        "admin/customers/_billing_payment_history.html",
+        {"request": request, "history": history},
     )
 
 

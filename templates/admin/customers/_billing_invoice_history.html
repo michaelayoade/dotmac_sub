@@ -1,0 +1,40 @@
+{% from "components/ui/macros.html" import status_presentation_badge %}
+{% set history_kind = 'invoices' %}
+<div class="rounded-2xl border border-slate-200/60 bg-white shadow-sm dark:border-slate-700/60 dark:bg-slate-800">
+    <div class="flex items-center justify-between border-b border-slate-100 px-5 py-4 dark:border-slate-700">
+        <h3 class="font-semibold text-slate-900 dark:text-white">Invoices</h3>
+        <div class="flex items-center gap-3">
+            {% if history.rows %}<span class="text-xs text-slate-500 dark:text-slate-400">Showing {{ history.page_start }}–{{ history.page_end }} of {{ history.total_count }}</span>{% endif %}
+            <a href="{{ history.full_list_url }}" class="text-xs font-semibold text-amber-600 hover:text-amber-700 dark:text-amber-400">Open invoice list</a>
+        </div>
+    </div>
+    {% if history.rows %}
+    <div class="overflow-x-auto">
+        <table class="min-w-full divide-y divide-slate-100 dark:divide-slate-700">
+            <thead class="bg-slate-50 dark:bg-slate-900/40">
+                <tr>
+                    <th class="px-5 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-500">Invoice</th>
+                    <th class="px-5 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-500">Date</th>
+                    <th class="px-5 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-500">Status</th>
+                    <th class="px-5 py-3 text-right text-xs font-semibold uppercase tracking-wider text-slate-500">Balance</th>
+                    <th class="px-5 py-3 text-right text-xs font-semibold uppercase tracking-wider text-slate-500">Total</th>
+                </tr>
+            </thead>
+            <tbody class="divide-y divide-slate-100 dark:divide-slate-700">
+                {% for invoice in history.rows %}
+                <tr class="hover:bg-slate-50 dark:hover:bg-slate-700/30">
+                    <td class="px-5 py-3"><a href="/admin/billing/invoices/{{ invoice.id }}" class="text-sm font-semibold text-slate-900 hover:text-amber-600 dark:text-white dark:hover:text-amber-400">{{ invoice.invoice_number }}</a></td>
+                    <td class="px-5 py-3 text-sm text-slate-500 dark:text-slate-400">{{ invoice.occurred_at | app_datetime('%b %d, %Y', 'N/A', include_tz=False) }}</td>
+                    <td class="px-5 py-3">{{ status_presentation_badge(invoice.status, size="sm") }}</td>
+                    <td class="px-5 py-3 text-right text-sm font-semibold tabular-nums text-slate-900 dark:text-white">₦{{ '{:,.2f}'.format(invoice.balance_due) }}</td>
+                    <td class="px-5 py-3 text-right text-sm font-semibold tabular-nums text-slate-900 dark:text-white">₦{{ '{:,.2f}'.format(invoice.total) }}</td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+    {% else %}
+    <div class="px-5 py-10 text-center text-sm text-slate-500 dark:text-slate-400">No invoices found.</div>
+    {% endif %}
+    {% include "admin/customers/_billing_history_pagination.html" %}
+</div>
