@@ -62,14 +62,15 @@
 
     <div class="rounded-xl border border-slate-200 bg-white p-6 shadow-sm dark:border-slate-700 dark:bg-slate-800">
         <h3 class="text-sm font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">Open outages</h3>
-        <table class="mt-4 w-full text-sm">
+        <div class="mt-4 overflow-x-auto">
+        <table class="w-full min-w-[52rem] text-sm">
             <thead><tr class="text-left text-xs uppercase text-slate-400">
-                <th class="py-2">Target</th><th>Status</th><th>Affected</th><th>Deliveries</th><th>Declared</th><th>By</th><th>Note</th><th></th>
+                <th scope="col" class="py-2 pr-4">Target</th><th scope="col" class="pr-4">Status</th><th scope="col" class="pr-4">Impact</th><th scope="col" class="pr-4">Started</th><th scope="col">Actions</th>
             </tr></thead>
             <tbody>
             {% for row in incidents %}
                 <tr class="border-t border-slate-100 dark:border-slate-700">
-                    <td class="py-2 text-slate-700 dark:text-slate-200">{{ row.target }}{% if row.stale %} <span class="ml-1 rounded bg-amber-100 px-1.5 py-0.5 text-xs font-medium text-amber-700 dark:bg-amber-900/40 dark:text-amber-300" title="Open longer than 36h — review and resolve if the outage is over">stale</span>{% endif %}</td>
+                    <td class="py-2 pr-4 font-medium text-slate-700 dark:text-slate-200">{{ row.target }}{% if row.stale %} <span class="ml-1 rounded bg-amber-100 px-1.5 py-0.5 text-xs font-medium text-amber-700 dark:bg-amber-900/40 dark:text-amber-300" title="Open longer than 36h — review and resolve if the outage is over">stale</span>{% endif %}</td>
                     <td>{{ status_presentation_badge(row.status_presentation, size="sm") }}</td>
                     <td class="text-xs">
                         <span class="font-semibold text-slate-900 dark:text-white">{{ row.impact.audience_count }}</span>
@@ -80,39 +81,12 @@
                         {% if row.impact.potentially_affected %}
                         <span class="ml-1 text-slate-500 dark:text-slate-400">{{ row.impact.potentially_affected }} potentially affected</span>
                         {% endif %}
-                        {% if row.infrastructure_work_orders %}
-                        <div class="mt-1">
-                            <span class="text-slate-500">Field work:</span>
-                            {% for work_order in row.infrastructure_work_orders %}
-                            <a href="/admin/dispatch/work-orders/{{ work_order.public_id }}" class="ml-1 text-blue-600 underline dark:text-blue-400">{{ work_order.public_id }}</a>
-                            {% endfor %}
-                        </div>
-                        {% endif %}
                     </td>
-                    <td class="min-w-[14rem] text-xs text-slate-500">
-                        {% set counts = row.delivery_audit.counts %}
-                        {% if row.delivery_audit.total %}
-                        <div class="flex flex-wrap gap-1">
-                            <span class="rounded bg-slate-100 px-1.5 py-0.5 text-slate-600 dark:bg-slate-700 dark:text-slate-200">pending {{ counts.pending }}</span>
-                            <span class="rounded bg-emerald-100 px-1.5 py-0.5 text-emerald-700 dark:bg-emerald-900/40 dark:text-emerald-300">sent {{ counts.sent }}</span>
-                            <span class="rounded bg-rose-100 px-1.5 py-0.5 text-rose-700 dark:bg-rose-900/40 dark:text-rose-300">failed {{ counts.failed }}</span>
-                            <span class="rounded bg-amber-100 px-1.5 py-0.5 text-amber-700 dark:bg-amber-900/40 dark:text-amber-300">suppressed {{ counts.suppressed }}</span>
-                        </div>
-                        {% if row.delivery_audit.recent %}
-                        <div class="mt-1 space-y-0.5">
-                            {% for delivery in row.delivery_audit.recent %}
-                            <div>{{ delivery.channel }} · {{ delivery.recipient_type }} · {{ delivery.delivery_status }}</div>
-                            {% endfor %}
-                        </div>
-                        {% endif %}
-                        {% else %}
-                        —
-                        {% endif %}
-                    </td>
-                    <td class="text-slate-500">{{ row.incident.started_at | app_datetime('%Y-%m-%d %H:%M', '—') }}</td>
-                    <td class="text-slate-500">{{ row.incident.declared_by or '—' }}</td>
-                    <td class="text-slate-500">{{ row.incident.note or '' }}</td>
-                    <td>
+                    <td class="whitespace-nowrap pr-4 text-slate-500">{{ row.incident.started_at | app_datetime('%Y-%m-%d %H:%M', '—') }}</td>
+                    <td class="py-2">
+                        <details class="min-w-[13rem]">
+                        <summary class="cursor-pointer rounded-lg border border-slate-300 px-3 py-2 font-semibold text-slate-700 hover:bg-slate-50 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-amber-500 dark:border-slate-600 dark:text-slate-200 dark:hover:bg-slate-700">Actions</summary>
+                        <div class="mt-2 space-y-2 border-l-2 border-slate-200 pl-3 dark:border-slate-600">
                         {% if row.infrastructure_link %}
                         <a href="/admin/support/tickets/{{ row.infrastructure_link.ticket_id }}" class="mb-2 inline-block text-blue-600 underline hover:text-blue-700 dark:text-blue-400">View infrastructure ticket</a>
                         {% elif row.ticket_issue_action.allowed %}
@@ -145,13 +119,37 @@
                             {% include "components/forms/csrf_input.html" %}
                             <button type="submit" class="rounded-lg border border-slate-300 px-3 py-1 text-xs text-slate-600 hover:bg-slate-100 dark:hover:bg-slate-700 dark:border-slate-600 dark:text-slate-300">Resolve</button>
                         </form>
+                        </div>
+                        </details>
+                    </td>
+                </tr>
+                <tr class="border-t border-slate-100 dark:border-slate-700">
+                    <td colspan="5" class="pb-3">
+                        <details class="text-xs text-slate-600 dark:text-slate-300">
+                            <summary class="w-fit cursor-pointer py-2 font-medium text-blue-700 hover:underline focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-amber-500 dark:text-blue-300">Delivery, note &amp; related work</summary>
+                            <div class="grid gap-4 rounded-lg bg-slate-50 p-4 dark:bg-slate-900/40 sm:grid-cols-2 lg:grid-cols-3">
+                                <div><h4 class="font-semibold text-slate-700 dark:text-slate-200">Declared by</h4><p class="mt-1">{{ row.incident.declared_by or 'Not recorded' }}</p></div>
+                                <div class="min-w-0"><h4 class="font-semibold text-slate-700 dark:text-slate-200">Note</h4><p class="mt-1 break-words">{{ row.incident.note or 'No note recorded' }}</p></div>
+                                <div class="min-w-0"><h4 class="font-semibold text-slate-700 dark:text-slate-200">Field work</h4>
+                                    {% if row.infrastructure_work_orders %}<div class="mt-1 flex flex-wrap gap-2">{% for work_order in row.infrastructure_work_orders %}<a href="/admin/dispatch/work-orders/{{ work_order.public_id }}" class="text-blue-700 underline dark:text-blue-300">{{ work_order.public_id }}</a>{% endfor %}</div>{% else %}<p class="mt-1">None linked</p>{% endif %}
+                                </div>
+                                <div class="min-w-0 sm:col-span-2 lg:col-span-3"><h4 class="font-semibold text-slate-700 dark:text-slate-200">Deliveries</h4>
+                                    {% set counts = row.delivery_audit.counts %}
+                                    {% if row.delivery_audit.total %}
+                                    <div class="mt-1 flex flex-wrap gap-2 tabular-nums"><span class="rounded bg-slate-100 px-1.5 py-0.5 text-slate-600 dark:bg-slate-700 dark:text-slate-200">pending {{ counts.pending }}</span><span class="rounded bg-emerald-100 px-1.5 py-0.5 text-emerald-700 dark:bg-emerald-900/40 dark:text-emerald-300">sent {{ counts.sent }}</span><span class="rounded bg-rose-100 px-1.5 py-0.5 text-rose-700 dark:bg-rose-900/40 dark:text-rose-300">failed {{ counts.failed }}</span><span class="rounded bg-amber-100 px-1.5 py-0.5 text-amber-700 dark:bg-amber-900/40 dark:text-amber-300">suppressed {{ counts.suppressed }}</span></div>
+                                    {% if row.delivery_audit.recent %}<div class="mt-2 space-y-1">{% for delivery in row.delivery_audit.recent %}<div>{{ delivery.channel }} · {{ delivery.recipient_type }} · {{ delivery.delivery_status }}</div>{% endfor %}</div>{% endif %}
+                                    {% else %}<p class="mt-1">No deliveries recorded</p>{% endif %}
+                                </div>
+                            </div>
+                        </details>
                     </td>
                 </tr>
             {% else %}
-                <tr><td colspan="8" class="py-4 text-slate-400">No open outages.</td></tr>
+                <tr><td colspan="5" class="py-4 text-slate-400">No open outages.</td></tr>
             {% endfor %}
             </tbody>
         </table>
+        </div>
     </div>
 </div>
 <script src="/static/js/outage-reachability-pagination.js"></script>

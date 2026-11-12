@@ -37,6 +37,11 @@ def test_console_template_compiles():
     source = Path("templates/admin/network/outages.html").read_text()
     assert "Create infrastructure ticket" in source
     assert 'include "admin/network/_outage_reachability.html"' in source
+    assert 'scope="col">Actions</th>' in source
+    assert 'colspan="5"' in source
+    assert "Delivery, note &amp; related work" in source
+    assert "Create field work" in source
+    assert "Resolve" in source
 
 
 def test_reachability_route_renders_only_its_table(db_session, monkeypatch):

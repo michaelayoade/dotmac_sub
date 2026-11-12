@@ -221,6 +221,12 @@ current rows stay readable during loading, the controls show progress or a
 retry message, and the URL changes after a successful load. Ordinary links
 still work without JavaScript.
 
+Open outages keeps target, status, customer impact, start time, and an Actions
+disclosure in the scannable row. The Actions disclosure contains the existing
+ticket, field-work, and resolve controls. A separate row disclosure contains
+delivery evidence, the declaration note and actor, and linked work orders.
+The table scrolls horizontally when space is constrained.
+
 Customer connection API/portal/reseller projections carry
 `status_presentation` beside the raw verdict; customer web and mobile map only
 its tone/icon to platform-native visuals. Raw RADIUS session indicators remain
