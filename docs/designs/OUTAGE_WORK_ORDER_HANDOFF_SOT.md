@@ -2,15 +2,16 @@
 
 ## Purpose
 
-An infrastructure ticket represents one shared outage affecting many
-customers. Staff can issue one field work order for that outage without
-creating one customer work order per affected subscriber.
+An asset-linked infrastructure ticket represents one shared outage affecting
+many customers. A manually named infrastructure ticket has no outage. Both can
+issue customerless field work orders into the shared dispatch queue.
 
 ## Authority
 
 - `network.outage_lifecycle` owns the incident and its immutable audience
   revisions.
-- `network.outage_work_order_handoff` issues the canonical infrastructure ticket from the outage console, atomically binding it to the outage and routing it to the outage-response team.
+- `network.outage_work_order_handoff` issues the canonical infrastructure ticket from the outage console, atomically binding it to the outage. Console issuance uses the outage-response team; creation from the support form retains the selected active service team.
+- If an outage already has a canonical ticket assigned to another team, support-form creation reports a conflict instead of changing or silently ignoring the selected team.
 - `support.ticket_lifecycle` owns the canonical infrastructure ticket.
 - `network.outage_work_order_handoff` decides whether field work may be issued
   and records the outage-to-work-order link.
@@ -28,9 +29,10 @@ onto the work order.
 2. Staff selects **Create infrastructure ticket** on the open outage row. The command is idempotent, creates no subscriber link, and binds the canonical ticket to the outage.
 3. The outage must have a current audience revision and a canonical active
    infrastructure ticket.
-4. An active member of the ticket's assigned team enters the field instructions
-   and submits the form.
-5. The coordinator rechecks permissions, ticket/team membership, incident
+4. An active assigned-team member or global administrator with monitoring and
+   dispatch-write permissions enters the field instructions from the ticket
+   detail page or outage console.
+5. The coordinator rechecks permissions, active team and staff identity, incident
    status, and the audience revision. A stale form is rejected.
 6. The coordinator stages the infrastructure work order, provenance link,
    audit record, and event in one transaction.
@@ -39,10 +41,33 @@ onto the work order.
 8. Staff verifies restoration, then resolves the outage and closes the ticket
    through their existing owners.
 
+For a manually named infrastructure ticket, the ticket detail action validates
+the saved explicit manual selection or current manual-kind policy for legacy
+tickets, active ticket and assigned team, and stages a
+native infrastructure work order with the ticket as origin. The operator
+confirms or enters the affected infrastructure name in the modal; the work
+order stores it and displays it on the dispatch detail page. Older customerless
+tickets without selection metadata use this path when their configured ticket
+type permits a manual target. Saved site details prefill the name; otherwise
+the operator must enter it. The ticket title alone is not used as target
+evidence. There is no fabricated outage link or customer audience. Creation
+and technician assignment remain separate commands. A dispatch staff member
+can open the created order from the ticket to assign a technician. The manual
+path locks and rechecks the ticket, then records ticket-scoped audit and event
+evidence once per idempotency key.
+
 ## Support ticket form infrastructure selection
 
-The staff support form offers an infrastructure typeahead for configured BTS,
-cabinet, access point, and multiple-cabinet ticket categories. A selected BTS,
+Ticket Settings owns the editable category-to-target policy. The ticket-type
+list supplies rows; staff marks each infrastructure type and its allowed target
+kinds (base station, cabinet, network node, access point, or manual). The
+existing six categories retain their manual-name fallback as defaults until
+settings are saved, after which the saved policy is authoritative, including
+an empty policy. These default categories appear in the ticket type selector
+even before settings are saved. Removing a category's manual kind stops new
+manual work-order issuance from legacy tickets of that category. Tickets with
+explicit saved manual selection remain infrastructure tickets, and linked
+outage tickets continue through their canonical outage path. A selected BTS,
 FDH cabinet, or network node is revalidated by the outage handoff owner. That
 owner serializes creation on the selected inventory row, reuses an open incident
 when present, or declares one with an immutable audience revision before
@@ -58,9 +83,11 @@ records this as unlinked evidence in ticket metadata. It does not create an
 inventory record or outage incident, and the count is unknown. The manual
 evidence remains on the ticket as the operator's description. No matching or
 later inventory reconciliation is required by this workflow. Generic ticket
-creation rejects these infrastructure categories even when old callers send
-`base_station_details`; the typed manual ticket command or outage handoff
-command is required. Manual creation serializes the request key and checks a
+creation of customerless tickets rejects these infrastructure categories even
+when old callers send `base_station_details`; the typed manual ticket command
+or outage handoff command is required. Generic API/customer tickets with an
+explicit customer target retain their customer work-order path even if their
+category is marked for infrastructure. Manual creation serializes the request key and checks a
 payload fingerprint, so an exact retry returns the existing ticket and reuse
 of the key with different details fails closed.
 

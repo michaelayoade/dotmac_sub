@@ -459,13 +459,30 @@
                             class="mt-1 block w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm shadow-sm focus:border-primary-500 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
                             <option value="" {% if not offer.radius_profile_id %}selected{% endif %}>Auto-generate from offer speeds</option>
                             {% for profile in radius_profiles %}
-                            <option value="{{ profile.id }}" {% if offer.radius_profile_id|string == profile.id|string %}selected{% endif %}>
+                            {% set profile_speed = radius_profile_speeds.get(profile.id|string) %}
+                            <option value="{{ profile.id }}" data-download-mbps="{{ profile_speed.download_mbps if profile_speed.download_mbps is not none else '' }}" data-upload-mbps="{{ profile_speed.upload_mbps if profile_speed.upload_mbps is not none else '' }}" data-rate-source="{{ profile_speed.source.value }}" data-rate-note="{{ profile_speed.provisioning_note }}" data-blocks-mismatch="{{ 'true' if profile_speed.mismatch_blocks_save else 'false' }}" data-auto-generated-for-offer="{{ 'true' if profile.id|string in auto_generated_profile_ids else 'false' }}" {% if offer.radius_profile_id|string == profile.id|string %}selected{% endif %}>
                                 {{ profile.name }}
                             </option>
                             {% endfor %}
                         </select>
-                        <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">Leave blank to auto-create and link a MikroTik profile from this offer's name and speeds.</p>
+                        <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">Selecting a profile shows its configured speed for comparison; it does not change the tariff speed below. Leave blank to auto-create and link a MikroTik profile from this offer's name and speeds.</p>
                     </div>
+
+                    <div>
+                        <label for="speed_download_mbps" class="block text-sm font-medium text-slate-700 dark:text-slate-300">Download Speed (Mbps)</label>
+                        <input type="number" name="speed_download_mbps" id="speed_download_mbps" min="1" step="1"
+                            value="{{ offer.speed_download_mbps if offer.speed_download_mbps is not none else '' }}"
+                            class="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm shadow-sm focus:border-primary-500 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                    </div>
+
+                    <div>
+                        <label for="speed_upload_mbps" class="block text-sm font-medium text-slate-700 dark:text-slate-300">Upload Speed (Mbps)</label>
+                        <input type="number" name="speed_upload_mbps" id="speed_upload_mbps" min="1" step="1"
+                            value="{{ offer.speed_upload_mbps if offer.speed_upload_mbps is not none else '' }}"
+                            class="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm shadow-sm focus:border-primary-500 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                    </div>
+
+                    <p id="profile-speed-notice" role="{{ 'alert' if speed_error else 'status' }}" aria-live="polite" data-server-error="{{ 'true' if speed_error else '' }}" class="sm:col-span-2 rounded-lg border {{ 'border-amber-400 bg-amber-50 dark:bg-amber-900/20' if speed_error else 'border-slate-200 bg-slate-50 dark:bg-slate-900' }} px-4 py-3 text-sm text-slate-700 dark:text-slate-200">{% if speed_error %}{{ speed_error }}{% else %}Choose a profile to compare its configured rate with the tariff speed.{% endif %}</p>
 
                     <div>
                         <label for="usage_allowance_id" class="block text-sm font-medium text-slate-700 dark:text-slate-300">Usage Allowance</label>
@@ -594,7 +611,7 @@
             <div class="flex items-center justify-between border-b border-slate-200 px-6 py-4 dark:border-slate-700">
                 <div>
                     <h2 class="font-semibold text-slate-900 dark:text-white">Network Provisioning</h2>
-                    <p class="mt-1 text-sm text-slate-500 dark:text-slate-400">Advanced speed, quality-of-service, and legacy tax compatibility settings.</p>
+                    <p class="mt-1 text-sm text-slate-500 dark:text-slate-400">Advanced quality-of-service and legacy tax compatibility settings.</p>
                 </div>
                 <button type="button" class="inline-flex items-center gap-2 rounded-lg border border-slate-200 px-3 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-50 dark:border-slate-600 dark:text-slate-200 dark:hover:bg-slate-700"
                         @click="open = !open" :aria-expanded="open.toString()">
@@ -614,21 +631,7 @@
                     </div>
 
                     <div>
-                        <label for="speed_download_mbps" class="block text-sm font-medium text-slate-700 dark:text-slate-300">Download Speed (Kbps)</label>
-                        <input type="number" name="speed_download_mbps" id="speed_download_mbps"
-                            value="{{ offer.speed_download_mbps }}"
-                            class="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm shadow-sm focus:border-primary-500 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
-                    </div>
-
-                    <div>
-                        <label for="speed_upload_mbps" class="block text-sm font-medium text-slate-700 dark:text-slate-300">Upload Speed (Kbps)</label>
-                        <input type="number" name="speed_upload_mbps" id="speed_upload_mbps"
-                            value="{{ offer.speed_upload_mbps }}"
-                            class="mt-1 block w-full rounded-lg border border-slate-300 px-3 py-2 text-sm shadow-sm focus:border-primary-500 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
-                    </div>
-
-                    <div>
-                        <label for="guaranteed_speed_limit_at" class="block text-sm font-medium text-slate-700 dark:text-slate-300">Guaranteed Speed Limit At</label>
+                        <label for="guaranteed_speed_limit_at" class="block text-sm font-medium text-slate-700 dark:text-slate-300">Guaranteed speed limit <span id="guaranteed-speed-unit"></span></label>
                         <div class="mt-1 flex items-center rounded-lg border border-slate-300 bg-white shadow-sm focus-within:border-primary-500 focus-within:ring-1 focus-within:ring-primary-500 dark:border-slate-600 dark:bg-slate-700">
                             <input type="number" name="guaranteed_speed_limit_at" id="guaranteed_speed_limit_at" min="0"
                                 value="{{ offer.guaranteed_speed_limit_at }}"
@@ -707,4 +710,5 @@
         </div>
     </form>
 </div>
+<script src="/static/js/catalog-offer-speed.js" defer></script>
 {% endblock %}

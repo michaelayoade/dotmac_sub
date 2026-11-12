@@ -90,19 +90,19 @@ def test_list_page_counts_filters_and_options(db_session):
     db_session.flush()
     work_order = web_dispatch.create_from_form(
         db_session,
-        {
-            "public_id": "sub-web-wo-1",
-            "subscriber_id": str(sub.id),
-            "project_id": str(project.id),
-            "requires_as_built_evidence": "0",
-            "title": "Fibre install",
-            "status": "scheduled",
-            "priority": "high",
-            "work_type": "install",
-            "address": "Plot 14, Jabi",
-            "required_skills": "fiber, splicing",
-            "tags": "native, install",
-        },
+        web_dispatch.WorkOrderCreateFormInput(
+            public_id="sub-web-wo-1",
+            subscriber_id=str(sub.id),
+            project_id=str(project.id),
+            requires_as_built_evidence="0",
+            title="Fibre install",
+            status="scheduled",
+            priority="high",
+            work_type="install",
+            address="Plot 14, Jabi",
+            required_skills="fiber, splicing",
+            tags="native, install",
+        ),
     )
     work_order.origin_ticket_id = ticket.id
     db_session.commit()
@@ -163,15 +163,15 @@ def test_task_deep_link_prefills_and_creates_authoritative_bindings(db_session):
 
     work_order = web_dispatch.create_from_form(
         db_session,
-        {
-            "public_id": "sub-task-prefill",
-            "subscriber_id": str(prefill.subscriber_id),
-            "project_id": str(prefill.project_id),
-            "project_task_id": str(prefill.project_task_id),
-            "title": prefill.title,
-            "status": "scheduled",
-            "address": prefill.address,
-        },
+        web_dispatch.WorkOrderCreateFormInput(
+            public_id="sub-task-prefill",
+            subscriber_id=str(prefill.subscriber_id),
+            project_id=str(prefill.project_id),
+            project_task_id=str(prefill.project_task_id),
+            title=prefill.title,
+            status="scheduled",
+            address=prefill.address,
+        ),
     )
 
     assert work_order.project_id == project.id
@@ -219,33 +219,33 @@ def test_task_filter_applies_native_scope_with_search_status_and_pagination(
     for index in range(11):
         web_dispatch.create_from_form(
             db_session,
-            {
-                "public_id": f"sub-filter-selected-{index:02d}",
-                "subscriber_id": str(sub.id),
-                "project_task_id": str(selected_task.id),
-                "title": f"Needle visit {index:02d}",
-                "status": "scheduled",
-            },
+            web_dispatch.WorkOrderCreateFormInput(
+                public_id=f"sub-filter-selected-{index:02d}",
+                subscriber_id=str(sub.id),
+                project_task_id=str(selected_task.id),
+                title=f"Needle visit {index:02d}",
+                status="scheduled",
+            ),
         )
     web_dispatch.create_from_form(
         db_session,
-        {
-            "public_id": "sub-filter-selected-completed",
-            "subscriber_id": str(sub.id),
-            "project_task_id": str(selected_task.id),
-            "title": "Needle completed",
-            "status": "draft",
-        },
+        web_dispatch.WorkOrderCreateFormInput(
+            public_id="sub-filter-selected-completed",
+            subscriber_id=str(sub.id),
+            project_task_id=str(selected_task.id),
+            title="Needle completed",
+            status="draft",
+        ),
     )
     web_dispatch.create_from_form(
         db_session,
-        {
-            "public_id": "sub-filter-other",
-            "subscriber_id": str(sub.id),
-            "project_task_id": str(other_task.id),
-            "title": "Needle other task",
-            "status": "scheduled",
-        },
+        web_dispatch.WorkOrderCreateFormInput(
+            public_id="sub-filter-other",
+            subscriber_id=str(sub.id),
+            project_task_id=str(other_task.id),
+            title="Needle other task",
+            status="scheduled",
+        ),
     )
 
     first = web_dispatch.list_page(
@@ -299,13 +299,13 @@ def test_archived_task_filter_remains_readable_but_creation_fails_closed(db_sess
     db_session.flush()
     work_order = web_dispatch.create_from_form(
         db_session,
-        {
-            "public_id": "sub-archived-task-filter",
-            "subscriber_id": str(sub.id),
-            "project_task_id": str(task.id),
-            "title": "Existing visit",
-            "status": "scheduled",
-        },
+        web_dispatch.WorkOrderCreateFormInput(
+            public_id="sub-archived-task-filter",
+            subscriber_id=str(sub.id),
+            project_task_id=str(task.id),
+            title="Existing visit",
+            status="scheduled",
+        ),
     )
     task.is_active = False
     db_session.commit()
@@ -338,12 +338,12 @@ def test_update_and_queue_from_form(db_session):
     tech = _technician(db_session)
     web_dispatch.create_from_form(
         db_session,
-        {
-            "public_id": "sub-web-wo-2",
-            "subscriber_id": str(sub.id),
-            "title": "Router swap",
-            "status": "scheduled",
-        },
+        web_dispatch.WorkOrderCreateFormInput(
+            public_id="sub-web-wo-2",
+            subscriber_id=str(sub.id),
+            title="Router swap",
+            status="scheduled",
+        ),
     )
 
     updated = web_dispatch.update_from_form(
@@ -425,14 +425,14 @@ def test_detail_page_exposes_authoritative_context_and_assignment_action(db_sess
     db_session.flush()
     work_order = web_dispatch.create_from_form(
         db_session,
-        {
-            "public_id": "sub-detail-context",
-            "subscriber_id": str(sub.id),
-            "project_id": str(project.id),
-            "project_task_id": str(task.id),
-            "title": "Inspect access fibre",
-            "status": "scheduled",
-        },
+        web_dispatch.WorkOrderCreateFormInput(
+            public_id="sub-detail-context",
+            subscriber_id=str(sub.id),
+            project_id=str(project.id),
+            project_task_id=str(task.id),
+            title="Inspect access fibre",
+            status="scheduled",
+        ),
     )
     work_order.origin_ticket_id = ticket.id
     db_session.commit()

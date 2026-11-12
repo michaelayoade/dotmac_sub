@@ -2079,6 +2079,7 @@ class WorkOrderCommands:
         payload: InfrastructureWorkOrderHeaderCreate,
         *,
         origin_ticket_id: object,
+        infrastructure_target_name: str | None = None,
         auth: dict[str, Any] | None = None,
         request_id: str | None = None,
         idempotency_key: str,
@@ -2110,11 +2111,23 @@ class WorkOrderCommands:
         data["status"] = status
         data["work_order_kind"] = "infrastructure"
         data["subscriber_id"] = None
+        target_name = str(infrastructure_target_name or "").strip()
+        if infrastructure_target_name is not None and not 3 <= len(target_name) <= 255:
+            raise WorkOrderCommandError(
+                "infrastructure_target_invalid",
+                "Infrastructure target name must be 3 to 255 characters",
+                kind="invalid",
+            )
         key = str(idempotency_key).strip()
         public_id = f"sub-{uuid.uuid5(_CREATE_ID_NAMESPACE, key).hex}"
         supplied_metadata = dict(data.pop("metadata_", None) or {})
         command_fingerprint = _fingerprint(
-            {"public_id": public_id, **data, "origin_ticket_id": ticket_id}
+            {
+                "public_id": public_id,
+                **data,
+                "origin_ticket_id": ticket_id,
+                **({"infrastructure_target_name": target_name} if target_name else {}),
+            }
         )
         existing = (
             db.query(WorkOrder).filter(WorkOrder.public_id == public_id).one_or_none()
@@ -2131,6 +2144,7 @@ class WorkOrderCommands:
                 "native_source": "sub",
                 "native_create_fingerprint": command_fingerprint,
                 "infrastructure_origin_ticket_id": str(ticket_id),
+                **({"infrastructure_target_name": target_name} if target_name else {}),
             }
         )
         row = WorkOrder(

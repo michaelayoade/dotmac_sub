@@ -207,7 +207,7 @@
                         <button type="button" @click="selectInfrastructure(choice)" class="block w-full px-3 py-2 text-left text-sm hover:bg-amber-50 dark:hover:bg-slate-700" x-text="choice.label"></button>
                     </template>
                 </div>
-                <button type="button" x-show="!manualOnlyInfrastructure && !infrastructureMode && infrastructureText.trim().length >= 3" @click="useManualInfrastructure()" class="mt-2 text-sm font-semibold text-amber-700 underline">Use entered name as manual infrastructure</button>
+                <button type="button" x-show="infrastructureKinds.includes('manual') && !manualOnlyInfrastructure && !infrastructureMode && infrastructureText.trim().length >= 3" @click="useManualInfrastructure()" class="mt-2 text-sm font-semibold text-amber-700 underline">Use entered name as manual infrastructure</button>
                 <button type="button" x-show="!manualOnlyInfrastructure && infrastructureMode === 'manual'" @click="searchInfrastructure()" class="mt-2 text-sm font-semibold text-amber-700 underline">Search inventory instead</button>
                 <p x-show="manualOnlyInfrastructure" class="mt-2 text-xs text-slate-500">Describe the affected link, including both endpoints or ports if known.</p>
                 <template x-if="infrastructureMode === 'existing'"><p class="mt-2 text-sm">Selected: <span x-text="infrastructureText"></span> · Affected customers: <span x-text="affectedCount === null ? 'Unable to determine' : affectedCount"></span></p></template>

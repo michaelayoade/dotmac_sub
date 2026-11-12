@@ -121,13 +121,13 @@ def test_render_index_and_table(db_session, base_context, fiber_project):
 def test_render_project_detail_with_stages(db_session, base_context, fiber_project):
     work_order = web_dispatch_work_orders.create_from_form(
         db_session,
-        {
-            "public_id": "sub-render-project-work",
-            "subscriber_id": str(fiber_project.subscriber_id),
-            "project_id": str(fiber_project.id),
-            "title": "Render project visit",
-            "status": "scheduled",
-        },
+        web_dispatch_work_orders.WorkOrderCreateFormInput(
+            public_id="sub-render-project-work",
+            subscriber_id=str(fiber_project.subscriber_id),
+            project_id=str(fiber_project.id),
+            title="Render project visit",
+            status="scheduled",
+        ),
     )
     context = web_projects.build_project_detail_context(
         db_session, project=fiber_project, can_read_work_orders=True
@@ -261,13 +261,13 @@ def test_render_tasks_pages(db_session, base_context, fiber_project):
 
     work_order = web_dispatch_work_orders.create_from_form(
         db_session,
-        {
-            "public_id": "sub-render-task-work",
-            "subscriber_id": str(fiber_project.subscriber_id),
-            "project_task_id": str(task.id),
-            "title": "Render task visit",
-            "status": "scheduled",
-        },
+        web_dispatch_work_orders.WorkOrderCreateFormInput(
+            public_id="sub-render-task-work",
+            subscriber_id=str(fiber_project.subscriber_id),
+            project_task_id=str(task.id),
+            title="Render task visit",
+            status="scheduled",
+        ),
     )
     detail_ctx = web_projects.build_task_detail_context(
         db_session, task=task, can_read_work_orders=True
@@ -292,13 +292,13 @@ def test_task_detail_keeps_linked_work_visible_without_dispatch_write(
     )
     work_order = web_dispatch_work_orders.create_from_form(
         db_session,
-        {
-            "public_id": "sub-read-only-task-work",
-            "subscriber_id": str(fiber_project.subscriber_id),
-            "project_task_id": str(task.id),
-            "title": "Visible visit",
-            "status": "scheduled",
-        },
+        web_dispatch_work_orders.WorkOrderCreateFormInput(
+            public_id="sub-read-only-task-work",
+            subscriber_id=str(fiber_project.subscriber_id),
+            project_task_id=str(task.id),
+            title="Visible visit",
+            status="scheduled",
+        ),
     )
     context = web_projects.build_task_detail_context(
         db_session, task=task, can_read_work_orders=True
@@ -335,13 +335,13 @@ def test_task_list_renders_open_and_many_labels(
     ):
         web_dispatch_work_orders.create_from_form(
             db_session,
-            {
-                "public_id": public_id,
-                "subscriber_id": str(fiber_project.subscriber_id),
-                "project_task_id": str(task.id),
-                "title": public_id,
-                "status": "scheduled",
-            },
+            web_dispatch_work_orders.WorkOrderCreateFormInput(
+                public_id=public_id,
+                subscriber_id=str(fiber_project.subscriber_id),
+                project_task_id=str(task.id),
+                title=public_id,
+                status="scheduled",
+            ),
         )
     context = web_projects.build_tasks_list_context(
         db_session,

@@ -11,8 +11,10 @@ from app.models.billing import Invoice, InvoiceStatus
 from app.models.system_user import SystemUser, SystemUserType
 from app.services.customer_timeline import (
     CustomerTimelineActorKind,
+    CustomerTimelinePageQuery,
     CustomerTimelineResult,
     build_customer_timeline,
+    get_customer_timeline_page,
 )
 
 
@@ -186,3 +188,54 @@ def test_customer_timeline_does_not_invent_actor_for_record_only_activity(
             "value": "No audit actor is attached to this record activity.",
         },
     )
+
+
+def test_customer_timeline_pages_include_older_records_and_their_audit(
+    db_session,
+    subscriber,
+):
+    issued_at = datetime(2026, 8, 5, 10, 0, tzinfo=UTC)
+    invoices = [
+        Invoice(
+            account_id=subscriber.id,
+            invoice_number=f"INV-TIMELINE-{number:03d}",
+            status=InvoiceStatus.issued,
+            currency="NGN",
+            subtotal=Decimal("100.00"),
+            total=Decimal("100.00"),
+            balance_due=Decimal("100.00"),
+            issued_at=issued_at - timedelta(days=number),
+            is_active=True,
+        )
+        for number in range(25)
+    ]
+    db_session.add_all(invoices)
+    db_session.flush()
+    db_session.add(
+        AuditEvent(
+            occurred_at=issued_at - timedelta(days=24, hours=1),
+            actor_type=AuditActorType.system,
+            actor_id="system:billing-scheduler",
+            action="update",
+            entity_type="invoice",
+            entity_id=str(invoices[-1].id),
+            is_success=True,
+        )
+    )
+    db_session.commit()
+
+    pages = [
+        get_customer_timeline_page(
+            db_session,
+            customer_id=str(subscriber.id),
+            account_ids=[subscriber.id],
+            query=CustomerTimelinePageQuery(page=page, per_page=10),
+        )
+        for page in range(1, 4)
+    ]
+    keys = [item["key"] for page in pages for item in page.items]
+    assert len(keys) == len(set(keys)) == 26
+    assert [len(page.items) for page in pages] == [10, 10, 6]
+    assert [page.has_next for page in pages] == [True, True, False]
+    assert f"invoice:{invoices[-1].id}:record" in keys
+    assert any(key.startswith("audit:") for key in keys)

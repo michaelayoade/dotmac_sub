@@ -18,16 +18,25 @@ from app.services.infrastructure_ticket_selection import (
 )
 
 
-def test_infrastructure_categories_have_exact_asset_kinds():
-    assert allowed_kinds(" BTS Outage ") == (InfrastructureKind.basestation,)
-    assert allowed_kinds("Cabinet Disconnection") == (InfrastructureKind.cabinet,)
-    assert allowed_kinds("Multiple Cabinet Disconnection") == (
+def test_infrastructure_categories_have_exact_asset_kinds(db_session):
+    assert allowed_kinds(db_session, " BTS Outage ") == (
+        InfrastructureKind.basestation,
+        InfrastructureKind.manual,
+    )
+    assert allowed_kinds(db_session, "Cabinet Disconnection") == (
+        InfrastructureKind.cabinet,
+        InfrastructureKind.manual,
+    )
+    assert allowed_kinds(db_session, "Multiple Cabinet Disconnection") == (
         InfrastructureKind.basestation,
         InfrastructureKind.node,
+        InfrastructureKind.manual,
     )
-    assert allowed_kinds("Core Link Disconnection") == (InfrastructureKind.manual,)
-    assert allowed_kinds("Customer Link Disconnection") == ()
-    assert category_policy()["bts outage"] == ("basestation",)
+    assert allowed_kinds(db_session, "Core Link Disconnection") == (
+        InfrastructureKind.manual,
+    )
+    assert allowed_kinds(db_session, "Customer Link Disconnection") == ()
+    assert category_policy(db_session)["bts outage"] == ("basestation", "manual")
 
 
 def test_core_link_uses_operator_text_without_inventory_choices(db_session):
@@ -52,21 +61,23 @@ def test_incompatible_preview_does_not_leak_an_asset(db_session):
     )
 
 
-def test_category_maps_to_canonical_catalogue_kinds():
+def test_category_maps_to_canonical_catalogue_kinds(db_session):
     assert (
-        catalogue_type(InfrastructureKind.basestation, "BTS Outage")
+        catalogue_type(db_session, InfrastructureKind.basestation, "BTS Outage")
         is InfrastructureType.base_station
     )
     assert (
-        catalogue_type(InfrastructureKind.cabinet, "Cabinet Disconnection")
+        catalogue_type(db_session, InfrastructureKind.cabinet, "Cabinet Disconnection")
         is InfrastructureType.cabinet
     )
     assert (
-        catalogue_type(InfrastructureKind.node, "Access Point Outage")
+        catalogue_type(db_session, InfrastructureKind.node, "Access Point Outage")
         is InfrastructureType.access_point
     )
     assert (
-        catalogue_type(InfrastructureKind.node, "Multiple Cabinet Disconnection")
+        catalogue_type(
+            db_session, InfrastructureKind.node, "Multiple Cabinet Disconnection"
+        )
         is None
     )
 
