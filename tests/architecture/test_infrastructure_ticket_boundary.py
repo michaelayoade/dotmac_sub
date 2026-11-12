@@ -15,6 +15,7 @@ def test_selection_and_handoff_have_complete_registered_contracts():
     assert selection.contract is not None
     assert handoff.contract is not None
     assert "network.infrastructure_catalogue" in selection.depends_on
+    assert "support.ticket_configuration" in selection.depends_on
     assert "network.infrastructure_ticket_selection" in handoff.depends_on
 
 
@@ -28,6 +29,7 @@ def test_web_adapter_cannot_declare_or_link_outages():
     assert "declare_outage" not in calls
     assert "link_infrastructure_ticket" not in calls
     assert "execute_owner_command" not in calls
+    assert "handoff.issue_from_ticket" in calls
 
 
 def test_generic_ticket_create_retains_owner_gate_for_infrastructure():

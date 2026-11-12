@@ -227,6 +227,40 @@ def test_overview_page_data_filters_plan_kind_and_counts(db_session, subscriber)
     assert str(ip_plan.id) not in ids
 
 
+def test_catalog_overview_name_sort_and_encoded_category_links(db_session):
+    for name in ("Zulu Fiber", "Alpha Fiber"):
+        catalog_service.offers.create(
+            db_session,
+            CatalogOfferCreate(
+                name=name,
+                service_type=ServiceType.residential,
+                access_type=AccessType.fiber,
+                price_basis=PriceBasis.flat,
+            ),
+        )
+
+    ascending = web_catalog_offers_service.overview_page_data(
+        db_session, sort="name", dir="asc", per_page=25
+    )
+    descending = web_catalog_offers_service.overview_page_data(
+        db_session, sort="name", dir="desc", per_page=25
+    )
+    assert [offer.name for offer in ascending["offers"]] == [
+        "Alpha Fiber",
+        "Zulu Fiber",
+    ]
+    assert [offer.name for offer in descending["offers"]] == [
+        "Zulu Fiber",
+        "Alpha Fiber",
+    ]
+    filtered = web_catalog_offers_service.overview_page_data(
+        db_session, search="Fiber &", status="active", sort="name", dir="desc"
+    )
+    assert "search=Fiber+%26" in filtered["category_tab_urls"]["internet"]
+    assert "status=active" in filtered["category_tab_urls"]["internet"]
+    assert "sort=name" in filtered["category_tab_urls"]["internet"]
+
+
 def test_active_subscription_creation_materializes_anchor_through_lifecycle_owner(
     db_session, subscriber, catalog_offer
 ):

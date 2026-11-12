@@ -82,10 +82,9 @@
 
 {# ============================================
    PAGE HEADER
-   Title section with gradient icon and actions
+   Compact page title, breadcrumbs, and actions
    ============================================ #}
 {% macro page_header(title, subtitle="", icon="", color="amber", color2=None, actions=None, breadcrumbs=None, allow_overflow=False) %}
-{% set c2 = color2 or color %}
 {% set auto_breadcrumbs = breadcrumbs %}
 {% if not auto_breadcrumbs and request is defined and request and request.url and request.url.path %}
 {% set request_path = request.url.path %}
@@ -105,22 +104,20 @@
     {% endif %}
 {% endif %}
 {% endif %}
-<div class="relative {{ 'overflow-visible' if allow_overflow else 'overflow-hidden' }} rounded-3xl border border-slate-200/70 bg-gradient-to-br from-{{ color }}-50 via-white to-{{ c2 }}-50/70 px-6 py-6 shadow-sm animate-fade-in-up dark:border-slate-700/60 dark:from-slate-800 dark:via-slate-800 dark:to-slate-700">
-    <div class="pointer-events-none absolute -right-12 -top-16 h-40 w-40 rounded-full bg-gradient-to-br from-{{ c2 }}-400/15 to-{{ color }}-500/5 blur-3xl dark:hidden"></div>
-    <div class="pointer-events-none absolute -bottom-16 left-10 h-28 w-28 rounded-full bg-gradient-to-tr from-{{ color }}-300/10 to-transparent blur-2xl dark:hidden"></div>
-    <div class="relative flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
-    <div class="flex items-center gap-4">
+<div class="relative {{ 'overflow-visible' if allow_overflow else '' }}">
+    <div class="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+    <div class="flex min-w-0 items-center gap-3">
         {% if icon %}
-        <div class="flex h-14 w-14 items-center justify-center rounded-2xl bg-gradient-to-br from-{{ color }}-500 to-{{ c2 }}-600 shadow-lg shadow-{{ color }}-500/25 ring-1 ring-white/70 dark:ring-white/10">
+        <div class="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-{{ color }}-600">
             {{ icon|safe }}
         </div>
         {% endif %}
-        <div>
+        <div class="min-w-0">
             {% if auto_breadcrumbs %}
-            <nav class="mb-2 flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-500 dark:text-slate-400">
+            <nav aria-label="Breadcrumb" class="mb-1 flex flex-wrap items-center gap-1.5 text-sm text-slate-500 dark:text-slate-400">
                 {% for crumb in auto_breadcrumbs %}
                 {% if not loop.last %}
-                <a href="{{ crumb.href }}" class="transition hover:text-{{ color }}-700 dark:hover:text-{{ color }}-300">{{ crumb.label }}</a>
+                {% if crumb.href %}<a href="{{ crumb.href }}" class="hover:text-{{ color }}-700 dark:hover:text-{{ color }}-300">{{ crumb.label }}</a>{% else %}<span>{{ crumb.label }}</span>{% endif %}
                 <svg class="h-3 w-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"/></svg>
                 {% else %}
                 <span class="text-slate-700 dark:text-slate-200">{{ crumb.label }}</span>
@@ -128,7 +125,7 @@
                 {% endfor %}
             </nav>
             {% endif %}
-            <h1 class="text-2xl font-bold font-display tracking-tight text-slate-900 dark:text-white">{{ title }}</h1>
+            <h1 class="font-display text-xl font-bold tracking-tight text-slate-900 dark:text-white">{{ title }}</h1>
             {% if subtitle %}
             <p class="mt-1 max-w-3xl text-sm leading-6 text-slate-600 dark:text-slate-300">{{ subtitle }}</p>
             {% endif %}

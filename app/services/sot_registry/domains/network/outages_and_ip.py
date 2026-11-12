@@ -24,16 +24,30 @@ SERVICES: tuple[SOTService, ...] = (
         name="network.infrastructure_ticket_selection",
         module="app.services.infrastructure_ticket_selection",
         owns=("ticket-category infrastructure eligibility and count-only preview",),
-        depends_on=("network.infrastructure_catalogue", "network.outage_impact"),
+        depends_on=(
+            "network.infrastructure_catalogue",
+            "network.outage_impact",
+            "support.ticket_configuration",
+        ),
         contract=ServiceContract(
             concerns=(
                 ConcernContract(
                     name="ticket-category infrastructure eligibility and count-only preview",
                     role=OwnerRole.RESOLVER,
-                    input_names=("native inventory options", "outage impact count"),
+                    input_names=(
+                        "native inventory options",
+                        "outage impact count",
+                        "configured infrastructure ticket types",
+                    ),
                 ),
             ),
             authoritative_inputs=(
+                AuthorityInput(
+                    name="configured infrastructure ticket types",
+                    owner="support.ticket_configuration",
+                    kind=AuthorityKind.CONTROL_INPUT,
+                    source="workflow ticket type to allowed infrastructure target kinds setting",
+                ),
                 AuthorityInput(
                     name="native inventory options",
                     owner="network.infrastructure_catalogue",
@@ -1078,7 +1092,7 @@ SERVICES: tuple[SOTService, ...] = (
         module="app.services.topology.outage_work_order_handoff",
         owns=(
             "shared-outage infrastructure ticket issuance",
-            "shared-outage work-order issuance eligibility",
+            "infrastructure-ticket work-order issuance eligibility",
             "outage-to-work-order provenance",
         ),
         depends_on=(
@@ -1098,8 +1112,10 @@ SERVICES: tuple[SOTService, ...] = (
             "records only the outage, ticket, target, and revision provenance. "
             "Issuance never creates customer work orders or closes tickets. "
             "The support form can resolve a BTS, FDH cabinet, or network node "
-            "to an incident and its count-only impact preview. Explicit manual "
-            "infrastructure evidence creates an unlinked support ticket."
+            "to an incident and its count-only impact preview. The selected "
+            "active service team is retained; console issuance uses the outage "
+            "routing team. Explicit manual infrastructure evidence creates an "
+            "unlinked support ticket and can issue ticket-backed field work."
         ),
         contract=ServiceContract(
             concerns=(
@@ -1114,12 +1130,12 @@ SERVICES: tuple[SOTService, ...] = (
                     ),
                 ),
                 ConcernContract(
-                    name="shared-outage work-order issuance eligibility",
+                    name="infrastructure-ticket work-order issuance eligibility",
                     role=OwnerRole.APPLICATION_COORDINATOR,
                     input_names=(
                         "locked outage incident and scope revision",
                         "canonical infrastructure ticket",
-                        "assigned team membership",
+                        "active assigned team and staff issuer",
                         "typed infrastructure work-order request",
                     ),
                 ),
@@ -1156,7 +1172,7 @@ SERVICES: tuple[SOTService, ...] = (
                     name="outage-response routing team",
                     owner="operations.service_team_composition",
                     kind=AuthorityKind.CONTROL_INPUT,
-                    source="active incident.primary routing policy and capability-selected service team",
+                    source="active support-selected team when supplied; otherwise incident.primary routing policy and capability-selected service team",
                 ),
                 AuthorityInput(
                     name="typed infrastructure ticket create input",
@@ -1165,10 +1181,10 @@ SERVICES: tuple[SOTService, ...] = (
                     source="validated no-subscriber outage ticket title, description, urgency, tags, and outage provenance",
                 ),
                 AuthorityInput(
-                    name="assigned team membership",
+                    name="active assigned team and staff issuer",
                     owner="support.ticket_lifecycle",
                     kind=AuthorityKind.CONTROL_INPUT,
-                    source="active service-team assignment and active system-user membership",
+                    source="active service-team assignment and active staff system user who is an active team member or global administrator",
                 ),
                 AuthorityInput(
                     name="typed infrastructure work-order request",
@@ -1186,8 +1202,8 @@ SERVICES: tuple[SOTService, ...] = (
             transaction=TransactionContract(
                 mode=TransactionMode.COORDINATOR_MANAGED,
                 boundary="The coordinator enters execute_owner_command once and commits the work order, provenance link, audit, and event atomically.",
-                locking="Lock the outage incident before reading the latest scope revision and replay link.",
-                idempotency="A unique incident plus command key link and the native work-order public id make retries exact replays; a changed payload with the same key fails closed.",
+                locking="Lock the outage incident for linked work; lock and recheck the support ticket for manual work before staging the native order.",
+                idempotency="A unique incident plus command key link, or the ticket-scoped native work-order public id and audit request id, make retries exact replays; a changed payload with the same key fails closed.",
                 retries="Serialization and deadlock failures retry the complete owner command; partial work is never committed.",
             ),
             errors=ErrorContract(
@@ -1203,8 +1219,15 @@ SERVICES: tuple[SOTService, ...] = (
                     "network.outage_work_order_handoff.infrastructure_ticket_terminal",
                     "network.outage_work_order_handoff.scope_revision_required",
                     "network.outage_work_order_handoff.scope_revision_stale",
-                    "network.outage_work_order_handoff.team_membership_required",
+                    "network.outage_work_order_handoff.team_required",
+                    "network.outage_work_order_handoff.team_inactive",
+                    "network.outage_work_order_handoff.selected_team_inactive",
+                    "network.outage_work_order_handoff.staff_required",
                     "network.outage_work_order_handoff.assigned_team_membership_required",
+                    "network.outage_work_order_handoff.manual_target_required",
+                    "network.outage_work_order_handoff.ambiguous_outage_link",
+                    "network.outage_work_order_handoff.infrastructure_ticket_changed",
+                    "network.outage_work_order_handoff.ticket_not_found",
                     "network.outage_work_order_handoff.permission_required",
                     "network.outage_work_order_handoff.idempotency_key_required",
                     "network.outage_work_order_handoff.idempotency_conflict",
@@ -1213,6 +1236,7 @@ SERVICES: tuple[SOTService, ...] = (
                     "network.outage_work_order_handoff.outage_team_missing",
                     "network.outage_work_order_handoff.description_required",
                     "network.outage_work_order_handoff.infrastructure_ticket_type_conflict",
+                    "network.outage_work_order_handoff.infrastructure_ticket_team_conflict",
                     "network.outage_work_order_handoff.invalid_asset_kind",
                     "network.outage_work_order_handoff.asset_not_found",
                     "network.outage_work_order_handoff.customerless_ticket_required",
@@ -1222,15 +1246,19 @@ SERVICES: tuple[SOTService, ...] = (
                     "unresolved outage target",
                     "missing canonical infrastructure ticket",
                     "stale outage scope revision",
-                    "non-member or inactive issuing actor",
+                    "inactive issuing actor or assigned team",
+                    "issuer outside the assigned team without a global administrator grant",
                 ),
             ),
             events=EventContract(
-                event_types=("outage.infrastructure_work_order_issued",),
+                event_types=(
+                    "outage.infrastructure_work_order_issued",
+                    "infrastructure_ticket.work_order_issued",
+                ),
                 schema_version=1,
                 delivery_owner="events.dispatcher",
-                compatibility="Version 1 carries incident, ticket, work-order, target, scope sequence, and membership token; it carries no customer list.",
-                replay="The provenance link and native public work-order identity make redelivery and operator retries exact no-ops.",
+                compatibility="Outage events carry incident, ticket, work-order, target, and scope sequence. Manual ticket events carry ticket, work-order, named target, and team. Neither carries a customer list.",
+                replay="The provenance link or ticket-scoped audit and native work-order public identity make retries exact no-ops.",
             ),
             migration=MigrationContract(
                 state=AuthorityMigrationState.NATIVE,

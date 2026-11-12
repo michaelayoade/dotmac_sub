@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import secrets
 from collections.abc import Callable
+from dataclasses import dataclass
 from datetime import datetime
 from decimal import Decimal, InvalidOperation
 from urllib.parse import urlencode
@@ -85,6 +86,35 @@ def _ctx(request: Request, db: Session) -> dict:
     }
 
 
+@dataclass(frozen=True, slots=True)
+class WorkOrderCreateFormValues:
+    subscriber_id: str
+    project_id: str
+    project_task_id: str
+    title: str
+    work_type: str
+    priority: str
+    scheduled_start: str
+    scheduled_end: str
+    address: str
+    description: str
+
+    @classmethod
+    def from_form(cls, form: FormData) -> WorkOrderCreateFormValues:
+        return cls(
+            subscriber_id=_form_text(form, "subscriber_id"),
+            project_id=_form_text(form, "project_id"),
+            project_task_id=_form_text(form, "project_task_id"),
+            title=_form_text(form, "title"),
+            work_type=_form_text(form, "work_type"),
+            priority=_form_text(form, "priority"),
+            scheduled_start=_form_text(form, "scheduled_start"),
+            scheduled_end=_form_text(form, "scheduled_end"),
+            address=_form_text(form, "address"),
+            description=_form_text(form, "description"),
+        )
+
+
 def _work_order_scope_for(
     permission_key: str,
 ) -> Callable[[Request, Session], tuple[str, str] | None]:
@@ -162,6 +192,30 @@ def _require_expense_csrf(request: Request) -> None:
 def _form_text(form: FormData, name: str) -> str:
     value = form.get(name)
     return value if isinstance(value, str) else ""
+
+
+def _work_order_create_form(
+    form: FormData,
+) -> work_orders_service.WorkOrderCreateFormInput:
+    return work_orders_service.WorkOrderCreateFormInput(
+        public_id=_form_text(form, "public_id"),
+        subscriber_id=_form_text(form, "subscriber_id"),
+        project_id=_form_text(form, "project_id"),
+        project_task_id=_form_text(form, "project_task_id"),
+        requires_as_built_evidence=_form_text(form, "requires_as_built_evidence"),
+        title=_form_text(form, "title"),
+        status=_form_text(form, "status"),
+        priority=_form_text(form, "priority"),
+        work_type=_form_text(form, "work_type"),
+        description=_form_text(form, "description"),
+        address=_form_text(form, "address"),
+        scheduled_start=_form_text(form, "scheduled_start"),
+        scheduled_end=_form_text(form, "scheduled_end"),
+        estimated_duration_minutes=_form_text(form, "estimated_duration_minutes"),
+        required_skills=_form_text(form, "required_skills"),
+        tags=_form_text(form, "tags"),
+        access_notes=_form_text(form, "access_notes"),
+    )
 
 
 def _expense_form(form: FormData) -> expense_web.WorkOrderExpenseFormInput:
@@ -262,6 +316,70 @@ def _expense_detail_response(
     )
 
 
+def _work_orders_response(
+    request: Request,
+    db: Session,
+    *,
+    status: str | None = None,
+    q: str | None = None,
+    active: bool | None = None,
+    project_task_id: str | None = None,
+    page: int = 1,
+    per_page: int = 25,
+    notice: str | None = None,
+    error: str | None = None,
+    create_form: FormData | None = None,
+    create_error: str | None = None,
+    create_error_field: str | None = None,
+) -> HTMLResponse:
+    create_failed = create_error is not None
+    state = work_orders_service.list_page(
+        db,
+        status=status,
+        q=q,
+        active=active,
+        project_task_id=project_task_id,
+        can_create=can(request, "operations:dispatch:write"),
+        page=page,
+        per_page=per_page,
+    )
+    if create_form is not None and not state["create_work_order_action"].allowed:
+        error = (
+            f"{state['create_work_order_action'].reason}. "
+            "Reopen the project task before creating its work order."
+        )
+        create_error = None
+    context = _ctx(request, db)
+    context.update(state)
+    auth = getattr(getattr(request, "state", None), "auth", None) or {}
+    context.update(
+        web_custom_fields_service.build_creation_form_context(
+            db,
+            target_type="work_order",
+            permission_keys=load_permission_keys(auth, db) if auth else frozenset(),
+            form=create_form,
+        )
+    )
+    context.update(
+        {
+            "notice": notice,
+            "error": error,
+            "create_form_values": (
+                WorkOrderCreateFormValues.from_form(create_form)
+                if create_form is not None
+                else None
+            ),
+            "create_error": create_error,
+            "create_error_field": create_error_field,
+        }
+    )
+    return templates.TemplateResponse(
+        "admin/dispatch/work_orders.html",
+        context,
+        status_code=422 if create_failed else 200,
+    )
+
+
 @router.get(
     "/work-orders",
     response_class=HTMLResponse,
@@ -278,29 +396,19 @@ def dispatch_work_orders(
     notice: str | None = None,
     error: str | None = None,
     db: Session = Depends(get_db),
-):
-    state = work_orders_service.list_page(
+) -> HTMLResponse:
+    return _work_orders_response(
+        request,
         db,
         status=status,
         q=q,
         active=active,
         project_task_id=project_task_id,
-        can_create=can(request, "operations:dispatch:write"),
         page=page,
         per_page=per_page,
+        notice=notice,
+        error=error,
     )
-    context = _ctx(request, db)
-    context.update(state)
-    auth = getattr(getattr(request, "state", None), "auth", None) or {}
-    context.update(
-        web_custom_fields_service.build_creation_form_context(
-            db,
-            target_type="work_order",
-            permission_keys=load_permission_keys(auth, db) if auth else frozenset(),
-        )
-    )
-    context.update({"notice": notice, "error": error})
-    return templates.TemplateResponse("admin/dispatch/work_orders.html", context)
 
 
 @router.get(
@@ -567,26 +675,63 @@ def create_dispatch_work_order(
     request: Request,
     db: Session = Depends(get_db),
 ):
-    form = dict(parse_form_data_sync(request))
+    submitted = parse_form_data_sync(request)
+    form = _work_order_create_form(submitted)
     try:
         row = work_orders_service.create_from_form(
             db,
-            form,
+            form=form,
             auth=getattr(request.state, "auth", None),
             request_id=request.headers.get("X-Request-ID"),
         )
+    except (HTTPException, ValidationError, ValueError, DomainError) as exc:
+        db_session_adapter.discard_failed_transaction(db)
+        field = None
+        if isinstance(exc, ValidationError):
+            issue = exc.errors()[0]
+            field = str(issue["loc"][-1]) if issue["loc"] else None
+            detail = str(issue["msg"])
+        else:
+            detail = str(
+                getattr(exc, "detail", None) or getattr(exc, "message", None) or exc
+            )
+        if not can(request, _WORK_ORDER_READ_PERMISSION):
+            raise HTTPException(status_code=422, detail=detail) from exc
+        raw_task_id = _form_text(submitted, "project_task_id")
+        try:
+            task_filter_id = str(UUID(raw_task_id)) if raw_task_id else None
+        except ValueError as invalid_task:
+            raise HTTPException(
+                status_code=409,
+                detail="Project task link is invalid. Reopen the project task.",
+            ) from invalid_task
+        return _work_orders_response(
+            request,
+            db,
+            project_task_id=task_filter_id,
+            create_form=submitted,
+            create_error=detail,
+            create_error_field=field,
+        )
+    try:
         auth = getattr(getattr(request, "state", None), "auth", None) or {}
         web_custom_fields_service.apply_creation_values(
             db,
             target_type="work_order",
             target_id=row.id,
-            form=form,
+            form=submitted,
             permission_keys=load_permission_keys(auth, db) if auth else frozenset(),
             actor=(auth.get("actor_id") if isinstance(auth, dict) else None),
         )
     except (HTTPException, ValidationError, ValueError, DomainError) as exc:
         detail = getattr(exc, "detail", None) or str(exc)
-        return _redirect(error=detail)
+        return _detail_redirect(
+            row.public_id,
+            error=(
+                f"Work order {row.public_id} was created, but additional information "
+                f"was not saved: {detail}"
+            ),
+        )
     return _detail_redirect(row.public_id, notice=f"Work order {row.public_id} created")
 
 

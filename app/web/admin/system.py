@@ -4887,13 +4887,16 @@ def _ticket_settings_page_values(
         )
     ]
     region_options = support_ticket_settings_service.list_region_options(db)
+    infrastructure_type_kinds = (
+        support_ticket_settings_service.infrastructure_type_kinds(db)
+    )
+    ticket_type_options = support_ticket_settings_service.list_ticket_type_options(db)
     return {
         "active_page": "ticket-settings",
         "status_options": support_ticket_settings_service.list_status_options(db),
         "priority_options": support_ticket_settings_service.list_priority_options(db),
-        "ticket_type_options": support_ticket_settings_service.list_ticket_type_options(
-            db
-        ),
+        "ticket_type_options": ticket_type_options,
+        "infrastructure_type_kinds": infrastructure_type_kinds,
         "region_options": region_options,
         "routing_region_options": list(
             dict.fromkeys(
@@ -5003,6 +5006,7 @@ def ticket_settings_update(
     statuses = form.getlist("status_values")
     priorities = form.getlist("priority_values")
     ticket_types = form.getlist("ticket_type_values")
+    infrastructure_indices_raw = form.getlist("infrastructure_type_index")
     regions = form.getlist("region_values")
     routing_regions = form.getlist("routing_regions")
     routing_ticket_manager_person_ids = form.getlist(
@@ -5025,6 +5029,11 @@ def ticket_settings_update(
         support_ticket_settings_service.RegionRoutingRuleUpdate, ...
     ] = ()
     try:
+        infrastructure_indices = {int(value) for value in infrastructure_indices_raw}
+        if any(
+            index < 0 or index >= len(ticket_types) for index in infrastructure_indices
+        ):
+            raise ValueError("Infrastructure ticket type selection is invalid")
         routing_rules = tuple(
             support_ticket_settings_service.RegionRoutingRuleUpdate(
                 region=str(region or "").strip() or None,
@@ -5081,6 +5090,14 @@ def ticket_settings_update(
             statuses=tuple(statuses),
             priorities=tuple(priorities),
             ticket_types=tuple(ticket_types),
+            infrastructure_types=tuple(
+                support_ticket_settings_service.InfrastructureTicketTypeUpdate(
+                    ticket_type=ticket_types[index],
+                    kinds=tuple(form.getlist(f"infrastructure_kind_{index}")),
+                )
+                for index in sorted(infrastructure_indices)
+                if 0 <= index < len(ticket_types)
+            ),
             regions=tuple(regions),
             auto_assign=form.get("auto_assign_enabled") == "1",
             auto_assign_max_open_tickets=(

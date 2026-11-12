@@ -12,12 +12,21 @@ from __future__ import annotations
 from pathlib import Path
 from types import SimpleNamespace
 from urllib.parse import parse_qs, urlsplit
+from uuid import UUID
 
 import pytest
+from fastapi import HTTPException
+from starlette.datastructures import FormData
 
+from app.models.work_order import WorkOrder
 from app.services import web_dispatch_work_orders as service
 from app.services.ui_contracts import Action, Kpi, StateValue
-from app.web.admin.dispatch_work_orders import _redirect, templates
+from app.web.admin import dispatch_work_orders as routes
+from app.web.admin.dispatch_work_orders import (
+    WorkOrderCreateFormValues,
+    _redirect,
+    templates,
+)
 
 _COUNTS = {
     "total": 12,
@@ -149,12 +158,15 @@ def test_template_consumes_the_kpi_and_action_contracts():
     assert "kpis.total.value.value" in source
     assert "href=kpis.active.cohort_url" in source
     assert "href=kpis.completed.cohort_url" in source
+    assert source.count("stats_card(") == 4
     # Task-originated creation locks the validated subscriber/project/task scope.
     assert 'name="project_task_id"' in source
     assert "create_prefill.project_task_id" in source
     assert 'aria-controls="create-work-order-dialog"' in source
     assert '@click="createOpen = true;' in source
     assert 'id="create-work-order-dialog"' in source
+    assert 'x-trap.inert.noscroll="createOpen"' in source
+    assert "createTrigger?.focus()" in source
     assert '<details id="create-work-order"' not in source
     assert "Open form" not in source
     assert 'href="/admin/dispatch/work-orders/{{ wo.public_id }}"' in source
@@ -162,6 +174,18 @@ def test_template_consumes_the_kpi_and_action_contracts():
     assert 'aria-label="Work order pages"' in source
     assert "previous_page_url" in source
     assert "next_page_url" in source
+
+
+def test_shared_page_header_is_compact_and_unframed():
+    html = templates.env.from_string(
+        '{% from "components/ui/macros.html" import page_header %}'
+        '{{ page_header("Dispatch", breadcrumbs=[{"label": "Dispatch"}]) }}'
+    ).render()
+
+    assert 'aria-label="Breadcrumb"' in html
+    assert "rounded-3xl" not in html
+    assert "bg-gradient" not in html
+    assert "blur-3xl" not in html
 
 
 def test_work_order_page_url_preserves_the_list_cohort():
@@ -224,6 +248,34 @@ def test_work_order_list_composes_with_one_header_form_trigger(db_session):
     assert "Open form" not in html
     assert '<details id="create-work-order"' not in html
 
+    context.update(
+        {
+            "create_form_values": WorkOrderCreateFormValues.from_form(
+                FormData(
+                    [
+                        ("subscriber_id", "subscriber-2"),
+                        ("project_id", "project-2"),
+                        ("title", "Repair east wing"),
+                        ("work_type", "repair"),
+                        ("priority", "high"),
+                        ("scheduled_start", "2026-11-12T09:00"),
+                        ("description", "Access via gate B"),
+                    ]
+                )
+            ),
+            "create_error": "Check the scheduled end time",
+            "create_error_field": "scheduled_end",
+        }
+    )
+    failed_html = templates.env.get_template("admin/dispatch/work_orders.html").render(
+        **context
+    )
+    assert 'value="Repair east wing"' in failed_html
+    assert 'value="2026-11-12T09:00"' in failed_html
+    assert "Access via gate B" in failed_html
+    assert 'value="repair" selected' in failed_html
+    assert "Check the scheduled end time" in failed_html
+
 
 def test_detail_template_owns_the_visible_assignment_next_action():
     source = (
@@ -250,3 +302,200 @@ def test_post_create_redirect_identifies_the_new_work_order():
         "notice": ["Work order sub-new-work created"],
         "q": ["sub-new-work"],
     }
+
+
+def test_failed_create_rerenders_the_submitted_form(monkeypatch):
+    submitted = FormData(
+        [("title", "Repair east wing"), ("scheduled_start", "bad date")]
+    )
+    request = SimpleNamespace(
+        state=SimpleNamespace(
+            auth={
+                "permission_keys": {
+                    "operations:dispatch:read",
+                    "operations:dispatch:write",
+                }
+            }
+        ),
+        headers={},
+    )
+    captured = {}
+
+    def reject_create(*args, **kwargs):
+        raise ValueError("Invalid scheduled start")
+
+    def render_form(*args, **kwargs):
+        captured.update(kwargs)
+        return "form response"
+
+    monkeypatch.setattr(routes, "parse_form_data_sync", lambda request: submitted)
+    monkeypatch.setattr(routes.work_orders_service, "create_from_form", reject_create)
+    monkeypatch.setattr(
+        routes.db_session_adapter, "discard_failed_transaction", lambda db: None
+    )
+    monkeypatch.setattr(routes, "_work_orders_response", render_form)
+
+    assert routes.create_dispatch_work_order(request, db=object()) == "form response"
+    assert captured["create_form"] is submitted
+    assert captured["create_error"] == "Invalid scheduled start"
+
+
+def test_failed_create_does_not_render_read_protected_rows_for_write_only_staff(
+    monkeypatch,
+):
+    request = SimpleNamespace(
+        state=SimpleNamespace(auth={"permission_keys": {"operations:dispatch:write"}}),
+        headers={},
+    )
+    monkeypatch.setattr(routes, "parse_form_data_sync", lambda request: FormData())
+    monkeypatch.setattr(
+        routes.work_orders_service,
+        "create_from_form",
+        lambda *args, **kwargs: (_ for _ in ()).throw(ValueError("Invalid title")),
+    )
+    monkeypatch.setattr(
+        routes.db_session_adapter, "discard_failed_transaction", lambda db: None
+    )
+    monkeypatch.setattr(
+        routes,
+        "_work_orders_response",
+        lambda *args, **kwargs: pytest.fail("read-protected list was rendered"),
+    )
+    with pytest.raises(HTTPException) as exc:
+        routes.create_dispatch_work_order(request, db=object())
+    assert exc.value.status_code == 422
+
+
+def test_invalid_task_link_cannot_be_retried_as_an_unlinked_work_order(monkeypatch):
+    request = SimpleNamespace(
+        state=SimpleNamespace(
+            auth={
+                "permission_keys": {
+                    "operations:dispatch:read",
+                    "operations:dispatch:write",
+                }
+            }
+        ),
+        headers={},
+    )
+    monkeypatch.setattr(
+        routes,
+        "parse_form_data_sync",
+        lambda request: FormData([("project_task_id", "invalid-task")]),
+    )
+    monkeypatch.setattr(
+        routes.work_orders_service,
+        "create_from_form",
+        lambda *args, **kwargs: (_ for _ in ()).throw(ValueError("Invalid task")),
+    )
+    monkeypatch.setattr(
+        routes.db_session_adapter, "discard_failed_transaction", lambda db: None
+    )
+    with pytest.raises(HTTPException) as exc:
+        routes.create_dispatch_work_order(request, db=object())
+    assert exc.value.status_code == 409
+    assert "Reopen the project task" in exc.value.detail
+
+
+def test_stale_task_origin_stays_blocked_in_the_error_response(monkeypatch):
+    request = SimpleNamespace(
+        state=SimpleNamespace(
+            auth={
+                "permission_keys": {
+                    "operations:dispatch:read",
+                    "operations:dispatch:write",
+                }
+            }
+        )
+    )
+    task_id = "d0129727-784c-4f4e-a795-839cdfdf8f79"
+    captured = {}
+
+    def list_page(*args, **kwargs):
+        captured["task_filter"] = kwargs["project_task_id"]
+        return {
+            "create_work_order_action": Action(
+                key="create_work_order",
+                label="Create Work Order",
+                allowed=False,
+                reason="Project subscriber is missing",
+                permission="operations:dispatch:write",
+            )
+        }
+
+    def render(template_name, context, *, status_code):
+        captured["context"] = context
+        captured["status_code"] = status_code
+        return "blocked response"
+
+    monkeypatch.setattr(routes.work_orders_service, "list_page", list_page)
+    monkeypatch.setattr(routes, "_ctx", lambda request, db: {"request": request})
+    monkeypatch.setattr(
+        routes.web_custom_fields_service,
+        "build_creation_form_context",
+        lambda *args, **kwargs: {},
+    )
+    monkeypatch.setattr(routes.templates, "TemplateResponse", render)
+
+    assert (
+        routes._work_orders_response(
+            request,
+            db=object(),
+            project_task_id=task_id,
+            create_form=FormData([("project_task_id", task_id)]),
+            create_error="Title is missing",
+        )
+        == "blocked response"
+    )
+    assert captured["task_filter"] == task_id
+    assert captured["status_code"] == 422
+    assert "Reopen the project task" in captured["context"]["error"]
+    assert captured["context"]["create_error"] is None
+
+
+def test_custom_field_multiselect_is_preserved_and_partial_creation_is_named(
+    monkeypatch,
+):
+    submitted = FormData(
+        [
+            ("title", "Fiber visit"),
+            ("custom_field__skills", "fiber"),
+            ("custom_field__skills", "splicing"),
+        ]
+    )
+    request = SimpleNamespace(state=SimpleNamespace(auth={}), headers={})
+    row = WorkOrder(
+        id=UUID("d0129727-784c-4f4e-a795-839cdfdf8f79"),
+        public_id="sub-created",
+    )
+    captured = {}
+    monkeypatch.setattr(routes, "parse_form_data_sync", lambda request: submitted)
+
+    def create(*args, **kwargs):
+        captured["create_input"] = kwargs["form"]
+        return row
+
+    def save_custom_fields(*args, **kwargs):
+        captured["custom_form"] = kwargs["form"]
+        raise ValueError("Invalid additional information")
+
+    def redirect(public_id, **kwargs):
+        captured["redirect_id"] = public_id
+        captured.update(kwargs)
+        return "detail response"
+
+    monkeypatch.setattr(routes.work_orders_service, "create_from_form", create)
+    monkeypatch.setattr(
+        routes.web_custom_fields_service, "apply_creation_values", save_custom_fields
+    )
+    monkeypatch.setattr(routes, "_detail_redirect", redirect)
+
+    assert routes.create_dispatch_work_order(request, db=object()) == "detail response"
+    assert captured["create_input"].title == "Fiber visit"
+    assert captured["custom_form"].getlist("custom_field__skills") == [
+        "fiber",
+        "splicing",
+    ]
+    assert captured["redirect_id"] == "sub-created"
+    assert "was created" in captured["error"]
+    assert "additional information was not saved" in captured["error"]

@@ -32,6 +32,21 @@ def test_every_guide_has_plain_language_content_and_a_route() -> None:
         )
 
 
+def test_work_order_and_lead_intake_guidance_matches_the_updated_admin_flows() -> None:
+    work_orders = guidance_for_path("/admin/dispatch/work-orders")
+    assert work_orders is not None
+    assert work_orders.id == "work-orders"
+    work_order_copy = " ".join((*work_orders.steps, *work_orders.notes))
+    assert "eligible project task" in work_order_copy
+    assert "do not submit Create Work Order again" in work_order_copy
+
+    lead_intake = guidance_for_path("/admin/sales/lead-intake/new")
+    assert lead_intake is not None
+    assert lead_intake.id == "sales-lead-intake"
+    assert "rollout state" in " ".join((*lead_intake.steps, *lead_intake.notes))
+    assert len(help_actions_for(lead_intake)) == 4
+
+
 def test_automation_center_guidance_explains_the_read_only_boundary() -> None:
     guide = guidance_for_path("/admin/automation")
 
@@ -250,6 +265,7 @@ def test_specific_workflow_routes_override_or_reject_broad_sections() -> None:
         "/admin/billing": "billing-overview",
         "/admin/billing/payments/reconciliation": "payment-reconciliation",
         "/admin/support/tickets/ticket-id": "support-tickets",
+        "/admin/system/ticket-settings": "ticket-settings",
         "/admin/inbox/manager-ai": "team-inbox",
         "/admin/network/olts": "olt-operational-health",
     }
@@ -570,7 +586,7 @@ def test_period_review_guidance_explains_manual_approval_and_reserved_cash() -> 
 
 def test_every_help_guide_has_complete_action_sections() -> None:
     guides = (*WORKFLOW_GUIDANCE, *HELP_ONLY_GUIDANCE)
-    assert len(guides) == 68
+    assert len(guides) == 70
     for guide in guides:
         actions = help_actions_for(guide)
         assert actions, guide.id
@@ -644,6 +660,19 @@ def test_walled_garden_page_has_its_own_guide() -> None:
     settings = guidance_for_path("/admin/system/config/radius")
     assert settings is not None
     assert settings.id == "settings"
+
+
+def test_ticket_settings_guidance_explains_infrastructure_policy() -> None:
+    guide = guidance_for_path("/admin/system/ticket-settings")
+    assert guide is not None
+    assert guide.id == "ticket-settings"
+    content = " ".join((*guide.steps, *guide.notes)).lower()
+    assert "manual target" in content
+    assert "saved explicit manual origin" in content
+    actions = {action.id: action for action in help_actions_for(guide)}
+    assert (
+        actions["configure-infrastructure-types"].permission == "system:settings:write"
+    )
 
 
 def test_customer_connection_types_page_has_its_own_guide() -> None:

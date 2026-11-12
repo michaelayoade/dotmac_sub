@@ -79,6 +79,31 @@ WORK_TYPE_OPTIONS = (
     "disconnect",
     "other",
 )
+
+
+@dataclass(frozen=True, slots=True)
+class WorkOrderCreateFormInput:
+    """Named browser values admitted by the dispatch create adapter."""
+
+    public_id: str = ""
+    subscriber_id: str = ""
+    project_id: str = ""
+    project_task_id: str = ""
+    requires_as_built_evidence: str | None = None
+    title: str = ""
+    status: str = ""
+    priority: str = ""
+    work_type: str = ""
+    description: str = ""
+    address: str = ""
+    scheduled_start: str = ""
+    scheduled_end: str = ""
+    estimated_duration_minutes: str = ""
+    required_skills: str = ""
+    tags: str = ""
+    access_notes: str = ""
+
+
 QUEUE_STATUS_OPTIONS = (
     DispatchQueueStatus.queued,
     DispatchQueueStatus.assigned,
@@ -580,6 +605,7 @@ def detail_page(
     pair = work_order_views.get_work_order_row(db, public_id)
     if pair is None:
         raise HTTPException(status_code=404, detail="Work order not found")
+    row: WorkOrder
     row, subscriber = pair
     project = db.get(Project, row.project_id) if row.project_id else None
     task = db.get(ProjectTask, row.project_task_id) if row.project_task_id else None
@@ -624,6 +650,11 @@ def detail_page(
         "subscriber": subscriber,
         "subscriber_label": _subscriber_label(subscriber),
         "work_order_kind": row.work_order_kind,
+        "infrastructure_target_name": (
+            str((row.metadata_ or {}).get("infrastructure_target_name") or "")
+            if row.work_order_kind == "infrastructure"
+            else ""
+        ),
         "project": project,
         "project_label": (
             project.name or project.code or project.number or str(project.id)
@@ -648,43 +679,37 @@ def detail_page(
 
 def create_from_form(
     db: Session,
-    form: dict[str, Any],
+    form: WorkOrderCreateFormInput,
     *,
     auth: dict[str, Any] | None = None,
     request_id: str | None = None,
 ) -> WorkOrder:
     payload = WorkOrderHeaderCreate(
-        public_id=_clean(form.get("public_id")),
-        subscriber_id=coerce_uuid(str(form.get("subscriber_id"))),
-        project_id=(
-            coerce_uuid(str(form["project_id"]))
-            if str(form.get("project_id") or "").strip()
-            else None
-        ),
+        public_id=_clean(form.public_id),
+        subscriber_id=coerce_uuid(form.subscriber_id),
+        project_id=(coerce_uuid(form.project_id) if form.project_id.strip() else None),
         project_task_id=(
-            coerce_uuid(str(form["project_task_id"]))
-            if str(form.get("project_task_id") or "").strip()
-            else None
+            coerce_uuid(form.project_task_id) if form.project_task_id.strip() else None
         ),
         requires_as_built_evidence=(
-            _form_bool(form.get("requires_as_built_evidence"), default=True)
+            _form_bool(form.requires_as_built_evidence, default=True)
         ),
-        title=str(form.get("title") or "").strip(),
-        status=str(form.get("status") or "scheduled"),
-        priority=_clean(form.get("priority")) or "normal",
-        work_type=_clean(form.get("work_type")) or "install",
-        description=_clean(form.get("description")),
-        address=_clean(form.get("address")),
-        scheduled_start=_parse_dt(form.get("scheduled_start")),
-        scheduled_end=_parse_dt(form.get("scheduled_end")),
+        title=form.title.strip(),
+        status=form.status or "scheduled",
+        priority=_clean(form.priority) or "normal",
+        work_type=_clean(form.work_type) or "install",
+        description=_clean(form.description),
+        address=_clean(form.address),
+        scheduled_start=_parse_dt(form.scheduled_start),
+        scheduled_end=_parse_dt(form.scheduled_end),
         estimated_duration_minutes=(
-            int(form["estimated_duration_minutes"])
-            if str(form.get("estimated_duration_minutes") or "").strip()
+            int(form.estimated_duration_minutes)
+            if form.estimated_duration_minutes.strip()
             else None
         ),
-        required_skills=_split_csv(form.get("required_skills")),
-        tags=_split_csv(form.get("tags")),
-        access_notes=_clean(form.get("access_notes")),
+        required_skills=_split_csv(form.required_skills),
+        tags=_split_csv(form.tags),
+        access_notes=_clean(form.access_notes),
     )
     return dispatch_service.work_order_headers.create(
         db,

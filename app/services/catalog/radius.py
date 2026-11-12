@@ -1,6 +1,7 @@
 """RADIUS profile and attribute management services."""
 
 import logging
+from uuid import UUID
 
 from fastapi import HTTPException
 from sqlalchemy.orm import Session
@@ -34,6 +35,11 @@ class RadiusProfiles(CRUDManager[RadiusProfile]):
     not_found_detail = "RADIUS profile not found"
     soft_delete_field = "is_active"
     soft_delete_value = False
+
+    @staticmethod
+    def find_including_inactive(db: Session, profile_id: UUID) -> RadiusProfile | None:
+        """Return a profile for catalog comparison without HTTP semantics."""
+        return db.get(RadiusProfile, profile_id)
 
     @staticmethod
     def create(db: Session, payload: RadiusProfileCreate):

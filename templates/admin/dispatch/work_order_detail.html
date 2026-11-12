@@ -25,6 +25,7 @@
 <div><dt class="text-xs font-semibold uppercase text-slate-500">Assigned to</dt><dd class="mt-1">{{ work_order.assigned_to_name or 'Unassigned' }}</dd></div>
 <div><dt class="text-xs font-semibold uppercase text-slate-500">Queue</dt><dd class="mt-1">{% if queue_status %}{{ status_badge(queue_status|replace('_', ' ')|title, variant='info') }}{% else %}Not queued{% endif %}</dd></div>
 </dl>
+{% if infrastructure_target_name %}<div class="mt-5 border-t pt-4"><p class="text-xs font-semibold uppercase text-slate-500">Affected infrastructure</p><p class="mt-1">{{ infrastructure_target_name }}</p></div>{% endif %}
 {% if work_order.address %}<div class="mt-5 border-t pt-4"><p class="text-xs font-semibold uppercase text-slate-500">Site</p><p class="mt-1">{{ work_order.address }}</p></div>{% endif %}
 {% if work_order.description %}<div class="mt-5 border-t pt-4"><p class="text-xs font-semibold uppercase text-slate-500">Description</p><p class="mt-1 whitespace-pre-wrap text-sm">{{ work_order.description }}</p></div>{% endif %}
 {% endcall %}
