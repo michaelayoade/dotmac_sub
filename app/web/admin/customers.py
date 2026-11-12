@@ -43,6 +43,7 @@ from app.services import (
 )
 from app.services import customer_connection_types as customer_connection_types_service
 from app.services import customer_network_path as customer_network_path_service
+from app.services import customer_timeline as customer_timeline_service
 from app.services import network_monitoring as network_monitoring_service
 from app.services import subscriber as subscriber_service
 from app.services import web_billing_invoices as web_billing_invoices_service
@@ -1142,6 +1143,38 @@ async def customer_create(
             },
             status_code=400,
         )
+
+
+@router.get(
+    "/person/{customer_id}/timeline",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("customer:read"))],
+)
+def customer_timeline_page(
+    request: Request,
+    customer_id: UUID,
+    timeline_page: Annotated[int, Query(ge=1)] = 1,
+    db: Session = Depends(get_db),
+) -> Response:
+    """Render one customer timeline page without rebuilding the detail view."""
+    customer = _get_subscriber(db, str(customer_id))
+    if customer.user_type != UserType.customer:
+        raise HTTPException(status_code=404, detail="Customer not found")
+    activity_page = customer_timeline_service.get_customer_timeline_page(
+        db,
+        customer_id=str(customer.id),
+        account_ids=(customer.id,),
+        query=CustomerTimelinePageQuery(page=timeline_page),
+    )
+    return templates.TemplateResponse(
+        "admin/customers/_timeline_page.html",
+        {
+            "request": request,
+            "customer": customer,
+            "activity_page": activity_page,
+            "activity_items": activity_page.items,
+        },
+    )
 
 
 @router.get(
