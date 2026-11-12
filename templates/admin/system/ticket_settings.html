@@ -3,18 +3,18 @@
 {% block title %}Ticket Settings - Admin{% endblock %}
 
 {% block content %}
-<div class="space-y-6" x-data="ticketSettingsPage()">
+<div class="space-y-6 text-[var(--dmui-text-primary,var(--text-primary))]" x-data="ticketSettingsPage()">
     <div class="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
         <div>
-            <nav class="mb-2 flex items-center gap-2 text-sm text-slate-500 dark:text-slate-400">
-                <a href="/admin/system/settings-hub" class="hover:text-amber-600">Settings Hub</a>
+            <nav class="mb-2 flex items-center gap-2 text-sm text-[var(--dmui-text-secondary,var(--text-secondary))]">
+                <a href="/admin/system/settings-hub" class="hover:underline">Settings Hub</a>
                 <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"/></svg>
-                <span class="text-slate-900 dark:text-white">Ticket Settings</span>
+                <span class="text-[var(--dmui-text-primary,var(--text-primary))]">Ticket Settings</span>
             </nav>
-            <h1 class="text-2xl font-bold text-slate-900 dark:text-white">Ticket Settings</h1>
-            <p class="mt-1 text-sm text-slate-500 dark:text-slate-400">Manage the ticket taxonomy, routing controls, and SLA targets used by support workflows.</p>
+            <h1 class="text-2xl font-bold text-[var(--dmui-text-primary,var(--text-primary))]">Ticket Settings</h1>
+            <p class="mt-1 text-sm text-[var(--dmui-text-secondary,var(--text-secondary))]">Manage the ticket taxonomy, routing controls, and SLA targets used by support workflows.</p>
         </div>
-        <a href="/admin/support/tickets/new" class="inline-flex items-center justify-center rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50 dark:hover:bg-slate-700 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-300">Open Ticket Form</a>
+        <a href="/admin/support/tickets/new" class="inline-flex items-center justify-center rounded-lg border border-[var(--dmui-border-default,var(--border-default))] bg-[var(--dmui-surface-primary,var(--surface-primary))] px-4 py-2 text-sm font-medium text-[var(--dmui-text-primary,var(--text-primary))] hover:bg-[var(--dmui-surface-tertiary,var(--surface-tertiary))]">Open Ticket Form</a>
     </div>
 
     {% if errors %}
@@ -37,129 +37,243 @@
     </div>
     {% endif %}
 
-    <form method="post" action="/admin/system/ticket-settings" class="space-y-6">
+    <nav aria-label="Ticket settings sections" class="flex flex-wrap gap-2 border-b border-[var(--border-default)] pb-3">
+        {% for id, label in [('general', 'General'), ('types', 'Ticket Types'), ('sla', 'SLA'), ('routing', 'Routing & Assignment')] %}
+        <button type="button" aria-controls="ticket-settings-{{ id }}"
+                :aria-current="section === '{{ id }}' ? 'true' : null"
+                @click="section = '{{ id }}'"
+                class="rounded-lg px-4 py-2 text-sm font-medium hover:bg-[var(--surface-tertiary)] aria-[current=true]:bg-[var(--surface-tertiary)] aria-[current=true]:underline">
+            {{ label }}
+        </button>
+        {% endfor %}
+    </nav>
+
+    <form method="post" action="/admin/system/ticket-settings" id="ticket-settings-form" @invalid.capture="revealInvalid($event)" class="space-y-6">
         {% include "components/forms/csrf_input.html" %}
 
-        <div class="grid gap-6 xl:grid-cols-3">
-            <section class="rounded-xl border border-slate-200 bg-white p-5 shadow-sm dark:border-slate-700 dark:bg-slate-800">
+        <div id="ticket-settings-general" data-settings-section="general" x-show="section === 'general'" x-cloak class="space-y-4">
+            <div class="grid items-start gap-4 md:grid-cols-2 xl:grid-cols-3">
+            <section class="rounded-xl border border-[var(--dmui-border-default,var(--border-default))] bg-[var(--dmui-surface-primary,var(--surface-primary))] p-5 shadow-sm">
                 <div class="flex items-start justify-between gap-3">
                     <div>
-                        <h2 class="text-lg font-semibold text-slate-900 dark:text-white">Statuses</h2>
-                        <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">Choose from the operator-selectable lifecycle statuses supported by the ticket service.</p>
+                        <h2 class="text-lg font-semibold text-[var(--dmui-text-primary,var(--text-primary))]">Statuses</h2>
+                        <p class="mt-1 text-xs text-[var(--dmui-text-secondary,var(--text-secondary))]">Choose from the operator-selectable lifecycle statuses supported by the ticket service.</p>
                     </div>
-                    <button type="button" @click="statusValues.push('')" class="rounded-lg border border-slate-300 px-3 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-50 dark:border-slate-600 dark:text-slate-300 dark:hover:bg-slate-700">Add</button>
+                    <button type="button" @click="statusValues.push('')" class="rounded-lg border border-[var(--dmui-border-default,var(--border-default))] px-3 py-1.5 text-xs font-medium text-[var(--dmui-text-primary,var(--text-primary))] hover:bg-[var(--dmui-surface-tertiary,var(--surface-tertiary))]">Add</button>
                 </div>
                 <div class="mt-4 space-y-2">
                     <template x-for="(value, index) in statusValues" :key="`status-${index}`">
                         <div class="flex items-center gap-2">
-                            <input type="text" name="status_values" x-model="statusValues[index]" placeholder="open" class="block w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm shadow-sm focus:border-amber-500 focus:outline-none focus:ring-2 focus:ring-amber-500/20 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                            <input type="text" name="status_values" x-model="statusValues[index]" placeholder="open" class="block w-full rounded-lg border border-[var(--dmui-border-default,var(--border-default))] bg-[var(--dmui-surface-primary,var(--surface-primary))] px-3 py-2 text-sm shadow-sm focus-visible:outline-2 focus-visible:outline-offset-2">
                             <button type="button" @click="removeRow(statusValues, index)" class="rounded-lg border border-red-200 px-3 py-2 text-xs font-medium text-red-700 hover:bg-red-50 dark:border-red-800 dark:text-red-300 dark:hover:bg-red-900/30">Remove</button>
                         </div>
                     </template>
                 </div>
             </section>
-
-            <section class="rounded-xl border border-slate-200 bg-white p-5 shadow-sm dark:border-slate-700 dark:bg-slate-800">
+            <section class="rounded-xl border border-[var(--dmui-border-default,var(--border-default))] bg-[var(--dmui-surface-primary,var(--surface-primary))] p-5 shadow-sm">
                 <div class="flex items-start justify-between gap-3">
                     <div>
-                        <h2 class="text-lg font-semibold text-slate-900 dark:text-white">Priorities</h2>
-                        <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">These values are also normalized to lowercase keys.</p>
+                        <h2 class="text-lg font-semibold text-[var(--dmui-text-primary,var(--text-primary))]">Priorities</h2>
+                        <p class="mt-1 text-xs text-[var(--dmui-text-secondary,var(--text-secondary))]">These values are also normalized to lowercase keys.</p>
                     </div>
-                    <button type="button" @click="priorityValues.push('')" class="rounded-lg border border-slate-300 px-3 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-50 dark:border-slate-600 dark:text-slate-300 dark:hover:bg-slate-700">Add</button>
+                    <button type="button" @click="priorityValues.push('')" class="rounded-lg border border-[var(--dmui-border-default,var(--border-default))] px-3 py-1.5 text-xs font-medium text-[var(--dmui-text-primary,var(--text-primary))] hover:bg-[var(--dmui-surface-tertiary,var(--surface-tertiary))]">Add</button>
                 </div>
                 <div class="mt-4 space-y-2">
                     <template x-for="(value, index) in priorityValues" :key="`priority-${index}`">
                         <div class="flex items-center gap-2">
-                            <input type="text" name="priority_values" x-model="priorityValues[index]" placeholder="normal" class="block w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm shadow-sm focus:border-amber-500 focus:outline-none focus:ring-2 focus:ring-amber-500/20 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                            <input type="text" name="priority_values" x-model="priorityValues[index]" placeholder="normal" class="block w-full rounded-lg border border-[var(--dmui-border-default,var(--border-default))] bg-[var(--dmui-surface-primary,var(--surface-primary))] px-3 py-2 text-sm shadow-sm focus-visible:outline-2 focus-visible:outline-offset-2">
                             <button type="button" @click="removeRow(priorityValues, index)" class="rounded-lg border border-red-200 px-3 py-2 text-xs font-medium text-red-700 hover:bg-red-50 dark:border-red-800 dark:text-red-300 dark:hover:bg-red-900/30">Remove</button>
                         </div>
                     </template>
                 </div>
             </section>
-
-            <section class="rounded-xl border border-slate-200 bg-white p-5 shadow-sm dark:border-slate-700 dark:bg-slate-800">
+            <section class="rounded-xl border border-[var(--dmui-border-default,var(--border-default))] bg-[var(--dmui-surface-primary,var(--surface-primary))] p-5 shadow-sm">
                 <div class="flex items-start justify-between gap-3">
                     <div>
-                        <h2 class="text-lg font-semibold text-slate-900 dark:text-white">Ticket Types</h2>
-                        <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">Ticket types keep the exact text you enter.</p>
+                        <h2 class="text-lg font-semibold text-[var(--dmui-text-primary,var(--text-primary))]">Regions</h2>
+                        <p class="mt-1 text-xs text-[var(--dmui-text-secondary,var(--text-secondary))]">Regions are normalized to lowercase keys and used by routing rules.</p>
                     </div>
-                    <button type="button" @click="ticketTypeValues.push(''); infrastructureEnabled.push(false); infrastructureKindsByIndex.push([])" class="rounded-lg border border-slate-300 px-3 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-50 dark:border-slate-600 dark:text-slate-300 dark:hover:bg-slate-700">Add</button>
-                </div>
-                <div class="mt-4 space-y-2">
-                    <template x-for="(value, index) in ticketTypeValues" :key="`type-${index}`">
-                        <div class="rounded-lg border border-slate-200 p-3 dark:border-slate-700">
-                            <div class="flex items-center gap-2">
-                                <input type="text" name="ticket_type_values" x-model="ticketTypeValues[index]" placeholder="incident" class="block w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm shadow-sm focus:border-amber-500 focus:outline-none focus:ring-2 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
-                                <button type="button" @click="removeTicketType(index)" class="rounded-lg border border-red-200 px-3 py-2 text-xs font-medium text-red-700 dark:border-red-800">Remove</button>
-                            </div>
-                            <label class="mt-2 flex items-center gap-2 text-sm"><input type="checkbox" name="infrastructure_type_index" :value="index" x-model="infrastructureEnabled[index]" @change="if (infrastructureEnabled[index] && !infrastructureKindsByIndex[index].length) infrastructureKindsByIndex[index] = ['manual']">Infrastructure ticket type</label>
-                            <div x-show="infrastructureEnabled[index]" class="mt-2 flex flex-wrap gap-3 text-xs">
-                                <template x-for="kind in ['basestation', 'cabinet', 'node', 'access_point', 'manual']" :key="kind">
-                                    <label class="flex items-center gap-1"><input type="checkbox" :name="'infrastructure_kind_' + index" :value="kind" x-model="infrastructureKindsByIndex[index]"><span x-text="kind === 'access_point' ? 'Access point' : kind === 'basestation' ? 'Base station' : kind === 'node' ? 'Network node' : kind.charAt(0).toUpperCase() + kind.slice(1)"></span></label>
-                                </template>
-                            </div>
-                            <p x-show="infrastructureEnabled[index]" class="mt-1 text-xs text-slate-500">Choose Network node or Access point, not both. Manual allows a named target outside inventory.</p>
-                        </div>
-                    </template>
-                </div>
-            </section>
-        </div>
-
-        <div>
-            <section class="rounded-xl border border-slate-200 bg-white p-5 shadow-sm dark:border-slate-700 dark:bg-slate-800">
-                <div class="flex items-start justify-between gap-3">
-                    <div>
-                        <h2 class="text-lg font-semibold text-slate-900 dark:text-white">Regions</h2>
-                        <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">Regions are normalized to lowercase keys and used by routing rules.</p>
-                    </div>
-                    <button type="button" @click="regionValues.push('')" class="rounded-lg border border-slate-300 px-3 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-50 dark:border-slate-600 dark:text-slate-300 dark:hover:bg-slate-700">Add</button>
+                    <button type="button" @click="regionValues.push('')" class="rounded-lg border border-[var(--dmui-border-default,var(--border-default))] px-3 py-1.5 text-xs font-medium text-[var(--dmui-text-primary,var(--text-primary))] hover:bg-[var(--dmui-surface-tertiary,var(--surface-tertiary))]">Add</button>
                 </div>
                 <div class="mt-4 space-y-2">
                     <template x-for="(value, index) in regionValues" :key="`region-${index}`">
                         <div class="flex items-center gap-2">
-                            <input type="text" name="region_values" x-model="regionValues[index]" placeholder="north" class="block w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm shadow-sm focus:border-amber-500 focus:outline-none focus:ring-2 focus:ring-amber-500/20 dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                            <input type="text" name="region_values" x-model="regionValues[index]" placeholder="north" class="block w-full rounded-lg border border-[var(--dmui-border-default,var(--border-default))] bg-[var(--dmui-surface-primary,var(--surface-primary))] px-3 py-2 text-sm shadow-sm focus-visible:outline-2 focus-visible:outline-offset-2">
                             <button type="button" @click="removeRow(regionValues, index)" class="rounded-lg border border-red-200 px-3 py-2 text-xs font-medium text-red-700 hover:bg-red-50 dark:border-red-800 dark:text-red-300 dark:hover:bg-red-900/30">Remove</button>
                         </div>
                     </template>
                 </div>
             </section>
+            </div>
+            <div class="rounded-xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-800 dark:border-amber-800 dark:bg-amber-900/20 dark:text-amber-200">
+            Keep the built-in status keys <code>closed</code>, <code>canceled</code>, and <code>merged</code> configured if you want them available to administrators.
+        </div>
         </div>
 
-        <section class="rounded-xl border border-slate-200 bg-white p-5 shadow-sm dark:border-slate-700 dark:bg-slate-800">
+        <section id="ticket-settings-types" data-settings-section="types" x-show="section === 'types'" x-cloak
+                 class="rounded-xl border border-[var(--border-default)] bg-[var(--surface-secondary)] p-5">
+            <div class="flex flex-wrap items-end justify-between gap-3">
+                <h2 x-ref="ticketTypesHeading" tabindex="-1" class="text-lg font-semibold">Ticket Types</h2>
+                <div class="flex flex-wrap items-end gap-3">
+                    <label class="grid gap-1 text-sm">Search ticket types
+                        <input type="search" x-model="typeSearch" class="rounded-lg border border-[var(--border-default)] bg-[var(--surface-primary)] px-3 py-2">
+                    </label>
+                    <button type="button" @click="addTicketType()" class="rounded-lg border border-[var(--border-default)] px-3 py-2 text-sm">Add ticket type</button>
+                </div>
+            </div>
+            <div class="mt-4 overflow-x-auto">
+                <table class="w-full text-left text-sm">
+                    <thead class="bg-[var(--surface-tertiary)]">
+                        <tr>
+                            <th scope="col" class="px-3 py-2">Ticket type</th>
+                            {% if infrastructure_type_kinds is defined %}
+                            <th scope="col" class="px-3 py-2">Infrastructure</th>
+                            <th scope="col" class="px-3 py-2">Allowed targets</th>
+                            {% endif %}
+                            <th scope="col" class="px-3 py-2 text-right">Actions</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        <template x-for="(value, index) in ticketTypeValues" :key="index">
+                            <tr x-show="index === editingType || matches(value, typeSearch)" class="border-b border-[var(--border-default)]">
+                                <td class="break-words px-3 py-2">
+                                    <span x-show="index !== editingType" x-text="value || 'New ticket type'"></span>
+                                    <input x-show="index === editingType" type="text" name="ticket_type_values" x-model="ticketTypeValues[index]"
+                                           aria-label="Ticket type name" :id="'ticket-type-name-' + index"
+                                           class="w-full rounded-lg border border-[var(--border-default)] bg-[var(--surface-primary)] px-3 py-2">
+                                </td>
+                                {% if infrastructure_type_kinds is defined %}
+                                <td class="px-3 py-2">
+                                    <span x-show="index !== editingType" x-text="infrastructureEnabled[index] ? 'Yes' : 'No'"></span>
+                                    <label x-show="index === editingType" class="flex items-center gap-2">
+                                        <input type="checkbox" name="infrastructure_type_index" :value="index"
+                                               x-model="infrastructureEnabled[index]"
+                                               @change="enableDefaultTarget(index)">
+                                        Infrastructure ticket type
+                                    </label>
+                                </td>
+                                <td class="px-3 py-2">
+                                    <span x-show="index !== editingType || !infrastructureEnabled[index]"
+                                          x-text="infrastructureEnabled[index] ? (infrastructureKindsByIndex[index].map(targetLabel).join(', ') || 'None selected') : 'Not applicable'"></span>
+                                    <fieldset x-show="index === editingType && infrastructureEnabled[index]" class="space-y-2">
+                                        <legend class="sr-only">Allowed infrastructure targets</legend>
+                                        <div class="flex flex-wrap gap-3">
+                                            <template x-for="kind in infrastructureTargetKinds" :key="kind">
+                                                <label class="flex items-center gap-1">
+                                                    <input type="checkbox" :name="'infrastructure_kind_' + index"
+                                                           :value="kind" x-model="infrastructureKindsByIndex[index]">
+                                                    <span x-text="targetLabel(kind)"></span>
+                                                </label>
+                                            </template>
+                                        </div>
+                                        <p class="text-xs text-[var(--text-secondary)]">Choose either Network node or Access point. Manual allows a named target outside inventory.</p>
+                                    </fieldset>
+                                </td>
+                                {% endif %}
+                                <td class="whitespace-nowrap px-3 py-2 text-right">
+                                    <button type="button" x-show="index !== editingType" @click="editTicketType(index)"
+                                            :aria-label="'Edit ' + (value || 'new ticket type')" class="rounded-lg px-3 py-2 underline">Edit</button>
+                                    <div x-show="index === editingType" class="inline-flex gap-2">
+                                        <button type="button" @click="removeTicketType(index); $nextTick(() => $refs.ticketTypesHeading.focus())" class="rounded-lg px-3 py-2 underline">Remove</button>
+                                        <button type="button" @click="editingType = null; $nextTick(() => $refs.ticketTypesHeading.focus())" class="rounded-lg px-3 py-2 underline">Done</button>
+                                    </div>
+                                </td>
+                            </tr>
+                        </template>
+                    </tbody>
+                </table>
+                <p x-show="editingType === null && !ticketTypeValues.some(value => matches(value, typeSearch))" class="px-3 py-4 text-sm" role="status" x-text="typeSearch ? 'No matching ticket types.' : 'No ticket types configured.'"></p>
+            </div>
+        </section>
+
+        <div id="ticket-settings-sla" data-settings-section="sla" x-show="section === 'sla'" x-cloak class="space-y-4">
+            <section class="rounded-xl border border-[var(--dmui-border-default,var(--border-default))] bg-[var(--dmui-surface-primary,var(--surface-primary))] p-5 shadow-sm">
+                <div class="flex items-start justify-between gap-3">
+                    <div>
+                        <h2 class="text-lg font-semibold text-[var(--dmui-text-primary,var(--text-primary))]">SLA Policy</h2>
+                        <p class="mt-1 text-xs text-[var(--dmui-text-secondary,var(--text-secondary))]">Resolution hours drive automatic due dates when no manual due date is entered.</p>
+                    </div>
+                </div>
+                <div class="mt-4 space-y-2 overflow-x-auto">
+                    <div class="grid min-w-[25rem] grid-cols-4 gap-2 text-sm font-semibold">
+                        <span>Priority</span><span>Response (h)</span><span>Resolution (h)</span><span>Aging (h)</span>
+                    </div>
+                    <template x-for="(row, index) in slaRows" :key="row.priority">
+                        <div class="grid min-w-[25rem] grid-cols-4 gap-2">
+                            <input type="hidden" name="sla_priorities" x-model="row.priority">
+                            <div class="rounded-lg bg-[var(--dmui-surface-tertiary,var(--surface-tertiary))] px-3 py-2 text-sm font-medium text-[var(--dmui-text-primary,var(--text-primary))]" x-text="row.priority"></div>
+                            <input type="number" min="0" name="sla_response_hours" x-model="row.response_hours" :aria-label="row.priority + ' response hours'" class="rounded-lg border border-[var(--dmui-border-default,var(--border-default))] bg-[var(--dmui-surface-primary,var(--surface-primary))] px-3 py-2 text-sm">
+                            <input type="number" min="0" name="sla_resolution_hours" x-model="row.resolution_hours" :aria-label="row.priority + ' resolution hours'" class="rounded-lg border border-[var(--dmui-border-default,var(--border-default))] bg-[var(--dmui-surface-primary,var(--surface-primary))] px-3 py-2 text-sm">
+                            <input type="number" min="0" name="sla_aging_hours" x-model="row.aging_hours" :aria-label="row.priority + ' aging hours'" class="rounded-lg border border-[var(--dmui-border-default,var(--border-default))] bg-[var(--dmui-surface-primary,var(--surface-primary))] px-3 py-2 text-sm">
+                        </div>
+                    </template>
+                </div>
+            </section>
+            <section class="rounded-xl border border-[var(--dmui-border-default,var(--border-default))] bg-[var(--dmui-surface-primary,var(--surface-primary))] p-5 shadow-sm">
+                <div>
+                    <h2 class="text-lg font-semibold text-[var(--dmui-text-primary,var(--text-primary))]">Ticket Type SLA Overrides</h2>
+                    <p class="mt-1 text-xs text-[var(--dmui-text-secondary,var(--text-secondary))]">Optional resolution hours for operational ticket types. Zero uses the priority policy; there are no code-owned type defaults.</p>
+                </div>
+                <div class="mt-4 flex flex-wrap items-end gap-3">
+                    <label class="grid gap-1 text-sm">Search overrides
+                        <input type="search" x-model="overrideSearch" class="rounded-lg border border-[var(--border-default)] bg-[var(--surface-primary)] px-3 py-2">
+                    </label>
+                    <button type="button" @click="showAllOverrides = !showAllOverrides" :aria-expanded="showAllOverrides"
+                            class="rounded-lg border border-[var(--border-default)] px-3 py-2 text-sm"
+                            x-text="showAllOverrides ? 'Show active overrides' : 'View all ticket types'"></button>
+                </div>
+                <p x-show="!typeSlaRows.some(row => overrideVisible(row))" class="mt-4 text-sm" role="status"
+                   x-text="overrideSearch ? 'No matching ticket types.' : (showAllOverrides ? 'No ticket types available.' : 'No active overrides.')"></p>
+                <div class="mt-4 space-y-2">
+                    <template x-for="row in typeSlaRows" :key="row.ticket_type">
+                        <div x-show="focusedOverride === row.ticket_type || overrideVisible(row)" class="grid grid-cols-[minmax(0,1fr)_minmax(6rem,9rem)] items-center gap-2">
+                            <input type="hidden" name="sla_ticket_types" x-model="row.ticket_type">
+                            <div class="rounded-lg bg-[var(--dmui-surface-tertiary,var(--surface-tertiary))] px-3 py-2 text-sm font-medium text-[var(--dmui-text-primary,var(--text-primary))]" >
+                                <span x-text="row.ticket_type"></span>
+                                <span x-show="Number(row.resolution_hours) === 0" class="block text-xs text-[var(--text-secondary)]">Inherits priority policy</span>
+                            </div>
+                            <input type="number" min="0" name="sla_ticket_type_resolution_hours" x-model="row.resolution_hours" @focus="focusedOverride = row.ticket_type" @blur="focusedOverride = null" :aria-label="row.ticket_type + ' resolution hours'" class="rounded-lg border border-[var(--dmui-border-default,var(--border-default))] bg-[var(--dmui-surface-primary,var(--surface-primary))] px-3 py-2 text-sm">
+                        </div>
+                    </template>
+                </div>
+            </section>
+        </div>
+
+        <section id="ticket-settings-routing" x-show="section === 'routing'" x-cloak data-settings-section="routing" class="rounded-xl border border-[var(--dmui-border-default,var(--border-default))] bg-[var(--dmui-surface-primary,var(--surface-primary))] p-5 shadow-sm">
             <div class="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
                 <div>
-                    <h2 class="text-lg font-semibold text-slate-900 dark:text-white">Routing Rules</h2>
-                    <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">Region rules fill empty assignment fields when a ticket is created or manually auto-assigned.</p>
+                    <h2 class="text-lg font-semibold text-[var(--dmui-text-primary,var(--text-primary))]">Routing Rules</h2>
+                    <p class="mt-1 text-xs text-[var(--dmui-text-secondary,var(--text-secondary))]">Region rules fill empty assignment fields when a ticket is created or manually auto-assigned.</p>
                 </div>
                 <div class="flex items-center gap-3">
-                    <label class="inline-flex items-center gap-2 text-sm text-slate-700 dark:text-slate-200">
-                        <input type="checkbox" name="auto_assign_enabled" value="1" x-model="autoAssignEnabled" class="rounded border-slate-300 text-amber-600">
+                    <label class="inline-flex items-center gap-2 text-sm text-[var(--dmui-text-primary,var(--text-primary))]">
+                        <input type="checkbox" name="auto_assign_enabled" value="1" x-model="autoAssignEnabled" class="rounded border-[var(--dmui-border-default,var(--border-default))] accent-[var(--dmui-action-primary-default,var(--color-brand-600))]">
                         Auto-assign enabled
                     </label>
-                    <label class="inline-flex items-center gap-2 text-sm text-slate-700 dark:text-slate-200">
+                    <label class="inline-flex items-center gap-2 text-sm text-[var(--dmui-text-primary,var(--text-primary))]">
                         <span>Max open</span>
-                        <input type="number" name="auto_assign_max_open_tickets" min="0" x-model="autoAssignMaxOpenTickets" class="w-20 rounded-lg border border-slate-300 bg-white px-2 py-1.5 text-sm shadow-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                        <input type="number" name="auto_assign_max_open_tickets" min="0" x-model="autoAssignMaxOpenTickets" class="w-20 rounded-lg border border-[var(--dmui-border-default,var(--border-default))] bg-[var(--dmui-surface-primary,var(--surface-primary))] px-2 py-1.5 text-sm shadow-sm">
                     </label>
-                    <button type="button" @click="routingRules.push({region: '', ticket_manager_person_id: '', technician_person_id: '', service_team_id: '', assignee_person_ids: ''})" class="rounded-lg border border-slate-300 px-3 py-1.5 text-xs font-medium text-slate-700 hover:bg-slate-50 dark:border-slate-600 dark:text-slate-300 dark:hover:bg-slate-700">Add</button>
+                    <button type="button" @click="routingRules.push({region: '', ticket_manager_person_id: '', technician_person_id: '', service_team_id: '', assignee_person_ids: ''})" class="rounded-lg border border-[var(--dmui-border-default,var(--border-default))] px-3 py-1.5 text-xs font-medium text-[var(--dmui-text-primary,var(--text-primary))] hover:bg-[var(--dmui-surface-tertiary,var(--surface-tertiary))]">Add</button>
                 </div>
             </div>
             <div class="mt-4 space-y-3">
                 <template x-for="(rule, index) in routingRules" :key="`route-${index}`">
-                    <div class="grid gap-2 rounded-lg border border-slate-200 p-3 dark:border-slate-700 md:grid-cols-3">
-                        <select name="routing_regions" x-model="rule.region" class="rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                    <div class="grid gap-2 rounded-lg border border-[var(--dmui-border-default,var(--border-default))] p-3 md:grid-cols-3">
+                        <select name="routing_regions" x-model="rule.region" class="rounded-lg border border-[var(--dmui-border-default,var(--border-default))] bg-[var(--dmui-surface-primary,var(--surface-primary))] px-3 py-2 text-sm">
                             <option value="">Region</option>
                             {% for region in routing_region_options %}<option value="{{ region }}">{{ region }}</option>{% endfor %}
                         </select>
-                        <select name="routing_service_team_ids" x-model="rule.service_team_id" class="rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                        <select name="routing_service_team_ids" x-model="rule.service_team_id" class="rounded-lg border border-[var(--dmui-border-default,var(--border-default))] bg-[var(--dmui-surface-primary,var(--surface-primary))] px-3 py-2 text-sm">
                             <option value="">Service team</option>
                             {% for team in routing_service_team_options %}<option value="{{ team.id }}">{{ team.label }}</option>{% endfor %}
                         </select>
-                        <input type="text" name="routing_assignee_person_ids" x-model="rule.assignee_person_ids" placeholder="Assignee UUIDs, comma-separated" class="rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
-                        <select name="routing_technician_person_ids" x-model="rule.technician_person_id" class="rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                        <input type="text" name="routing_assignee_person_ids" x-model="rule.assignee_person_ids" placeholder="Assignee UUIDs, comma-separated" class="rounded-lg border border-[var(--dmui-border-default,var(--border-default))] bg-[var(--dmui-surface-primary,var(--surface-primary))] px-3 py-2 text-sm">
+                        <select name="routing_technician_person_ids" x-model="rule.technician_person_id" class="rounded-lg border border-[var(--dmui-border-default,var(--border-default))] bg-[var(--dmui-surface-primary,var(--surface-primary))] px-3 py-2 text-sm">
                             <option value="">Technician</option>
                             {% for person in staff_options %}<option value="{{ person.id }}">{{ person.label }}</option>{% endfor %}
                         </select>
-                        <select name="routing_ticket_manager_person_ids" x-model="rule.ticket_manager_person_id" class="rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+                        <select name="routing_ticket_manager_person_ids" x-model="rule.ticket_manager_person_id" class="rounded-lg border border-[var(--dmui-border-default,var(--border-default))] bg-[var(--dmui-surface-primary,var(--surface-primary))] px-3 py-2 text-sm">
                             <option value="">Project manager</option>
                             {% for person in staff_options %}<option value="{{ person.id }}">{{ person.label }}</option>{% endfor %}
                         </select>
@@ -170,67 +284,19 @@
                 </template>
             </div>
         </section>
-
-        <div class="grid gap-6 xl:grid-cols-2">
-            <section class="rounded-xl border border-slate-200 bg-white p-5 shadow-sm dark:border-slate-700 dark:bg-slate-800">
-                <div class="flex items-start justify-between gap-3">
-                    <div>
-                        <h2 class="text-lg font-semibold text-slate-900 dark:text-white">SLA Policy</h2>
-                        <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">Resolution hours drive automatic due dates when no manual due date is entered.</p>
-                    </div>
-                </div>
-                <div class="mt-4 space-y-2">
-                    <template x-for="(row, index) in slaRows" :key="row.priority">
-                        <div class="grid grid-cols-4 gap-2">
-                            <input type="hidden" name="sla_priorities" x-model="row.priority">
-                            <div class="rounded-lg bg-slate-50 px-3 py-2 text-sm font-medium text-slate-700 dark:bg-slate-700 dark:text-slate-200" x-text="row.priority"></div>
-                            <input type="number" min="0" name="sla_response_hours" x-model="row.response_hours" placeholder="Response" class="rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
-                            <input type="number" min="0" name="sla_resolution_hours" x-model="row.resolution_hours" placeholder="Resolution" class="rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
-                            <input type="number" min="0" name="sla_aging_hours" x-model="row.aging_hours" placeholder="Aging" class="rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
-                        </div>
-                    </template>
-                </div>
-            </section>
-
-            <section class="rounded-xl border border-slate-200 bg-white p-5 shadow-sm dark:border-slate-700 dark:bg-slate-800">
-                <div>
-                    <h2 class="text-lg font-semibold text-slate-900 dark:text-white">Ticket Type SLA Overrides</h2>
-                    <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">Optional resolution hours for operational ticket types. Zero uses the priority policy; there are no code-owned type defaults.</p>
-                </div>
-                <div class="mt-4 space-y-2">
-                    <template x-for="row in typeSlaRows" :key="row.ticket_type">
-                        <div class="grid grid-cols-[minmax(0,1fr)_9rem] gap-2">
-                            <input type="hidden" name="sla_ticket_types" x-model="row.ticket_type">
-                            <div class="rounded-lg bg-slate-50 px-3 py-2 text-sm font-medium text-slate-700 dark:bg-slate-700 dark:text-slate-200" x-text="row.ticket_type"></div>
-                            <input type="number" min="0" name="sla_ticket_type_resolution_hours" x-model="row.resolution_hours" placeholder="Resolution hours" class="rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
-                        </div>
-                    </template>
-                </div>
-            </section>
-
-        </div>
-
-        <div class="rounded-xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-800 dark:border-amber-800 dark:bg-amber-900/20 dark:text-amber-200">
-            Keep the built-in status keys <code>closed</code>, <code>canceled</code>, and <code>merged</code> configured if you want them available to administrators.
-        </div>
-
-        <div class="flex justify-end gap-3">
-            <a href="/admin/system/settings-hub" class="rounded-lg border border-slate-300 bg-white px-4 py-2 text-sm font-medium text-slate-700 hover:bg-slate-50 dark:hover:bg-slate-700 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-300">Cancel</a>
-            <button type="submit" class="rounded-lg bg-amber-600 px-4 py-2 text-sm font-medium text-white hover:bg-amber-700">Save Ticket Settings</button>
-        </div>
     </form>
 
-    <section class="rounded-xl border border-slate-200 bg-white p-5 shadow-sm dark:border-slate-700 dark:bg-slate-800">
+    <section x-show="section === 'routing'" x-cloak class="rounded-xl border border-[var(--dmui-border-default,var(--border-default))] bg-[var(--dmui-surface-primary,var(--surface-primary))] p-5 shadow-sm">
         <div class="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
             <div>
-                <h2 class="text-lg font-semibold text-slate-900 dark:text-white">Assignment Rules</h2>
-                <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">Rules are evaluated before legacy region routing and use the native CRM-style assignment engine.</p>
+                <h2 class="text-lg font-semibold text-[var(--dmui-text-primary,var(--text-primary))]">Assignment Rules</h2>
+                <p class="mt-1 text-xs text-[var(--dmui-text-secondary,var(--text-secondary))]">Rules are evaluated before legacy region routing and use the native CRM-style assignment engine.</p>
             </div>
         </div>
 
-        <div class="mt-4 overflow-hidden rounded-lg border border-slate-200 dark:border-slate-700">
-            <table class="min-w-full divide-y divide-slate-200 text-sm dark:divide-slate-700">
-                <thead class="bg-slate-50 text-left text-xs font-semibold uppercase tracking-wide text-slate-500 dark:bg-slate-900/40 dark:text-slate-400">
+        <div class="mt-4 overflow-x-auto rounded-lg border border-[var(--dmui-border-default,var(--border-default))]">
+            <table class="min-w-full divide-y divide-[var(--dmui-border-default,var(--border-default))] text-sm">
+                <thead class="bg-[var(--dmui-surface-tertiary,var(--surface-tertiary))] text-left text-xs font-semibold uppercase tracking-wide text-[var(--dmui-text-secondary,var(--text-secondary))]">
                     <tr>
                         <th class="px-3 py-2">Rule</th>
                         <th class="px-3 py-2">Match</th>
@@ -239,26 +305,26 @@
                         <th class="px-3 py-2 text-right">Actions</th>
                     </tr>
                 </thead>
-                <tbody class="divide-y divide-slate-100 dark:divide-slate-700/70">
+                <tbody class="divide-y divide-[var(--dmui-border-subtle,var(--border-subtle))]">
                     {% for rule in assignment_rules %}
                     <tr>
                         <td class="px-3 py-2">
-                            <div class="font-medium text-slate-900 dark:text-white">{{ rule.name }}</div>
-                            <div class="text-xs text-slate-500 dark:text-slate-400">Priority {{ rule.priority }} · {{ "Active" if rule.is_active else "Inactive" }}</div>
+                            <div class="font-medium text-[var(--dmui-text-primary,var(--text-primary))]">{{ rule.name }}</div>
+                            <div class="text-xs text-[var(--dmui-text-secondary,var(--text-secondary))]">Priority {{ rule.priority }} · {{ "Active" if rule.is_active else "Inactive" }}</div>
                         </td>
-                        <td class="px-3 py-2 text-slate-600 dark:text-slate-300">
+                        <td class="px-3 py-2 text-[var(--dmui-text-secondary,var(--text-secondary))]">
                             {% if rule.ticket_types %}<div>Types: {{ rule.ticket_types|join(", ") }}</div>{% endif %}
                             {% if rule.regions %}<div>Regions: {{ rule.regions|join(", ") }}</div>{% endif %}
-                            {% if not rule.ticket_types and not rule.regions %}<span class="text-slate-400">All tickets</span>{% endif %}
+                            {% if not rule.ticket_types and not rule.regions %}<span class="text-[var(--dmui-text-secondary,var(--text-secondary))]">All tickets</span>{% endif %}
                         </td>
-                        <td class="px-3 py-2 text-slate-600 dark:text-slate-300">
+                        <td class="px-3 py-2 text-[var(--dmui-text-secondary,var(--text-secondary))]">
                             <div>{{ rule.assignment_target|replace("_", " ")|title }}</div>
-                            {% if rule.team_label %}<div class="text-xs text-slate-500 dark:text-slate-400">Team: {{ rule.team_label }}</div>{% endif %}
-                            {% if rule.assignee_person_id %}<div class="text-xs text-slate-500 dark:text-slate-400">Direct: {{ rule.assignee_person_id }}</div>{% endif %}
+                            {% if rule.team_label %}<div class="text-xs text-[var(--dmui-text-secondary,var(--text-secondary))]">Team: {{ rule.team_label }}</div>{% endif %}
+                            {% if rule.assignee_person_id %}<div class="text-xs text-[var(--dmui-text-secondary,var(--text-secondary))]">Direct: {{ rule.assignee_person_id }}</div>{% endif %}
                         </td>
-                        <td class="px-3 py-2 text-slate-600 dark:text-slate-300">{{ rule.strategy|replace("_", " ")|title }}</td>
+                        <td class="px-3 py-2 text-[var(--dmui-text-secondary,var(--text-secondary))]">{{ rule.strategy|replace("_", " ")|title }}</td>
                         <td class="px-3 py-2 text-right">
-                            <form method="post" action="/admin/system/ticket-settings/assignment-rules/{{ rule.id }}/delete" onsubmit="return confirm('Delete this assignment rule?')">
+                            <form method="post" action="/admin/system/ticket-settings/assignment-rules/{{ rule.id }}/delete" @submit="if (!confirm('Delete this assignment rule?')) $event.preventDefault(); else confirmAssignmentSubmit($event)">
                                 {% include "components/forms/csrf_input.html" %}
                                 <button type="submit" class="rounded-lg border border-red-200 px-3 py-1.5 text-xs font-medium text-red-700 hover:bg-red-50 dark:border-red-800 dark:text-red-300 dark:hover:bg-red-900/30">Delete</button>
                             </form>
@@ -266,40 +332,45 @@
                     </tr>
                     {% else %}
                     <tr>
-                        <td colspan="5" class="px-3 py-5 text-center text-sm text-slate-500 dark:text-slate-400">No assignment rules configured.</td>
+                        <td colspan="5" class="px-3 py-5 text-center text-sm text-[var(--dmui-text-secondary,var(--text-secondary))]">No assignment rules configured.</td>
                     </tr>
                     {% endfor %}
                 </tbody>
             </table>
         </div>
 
-        <form method="post" action="/admin/system/ticket-settings/assignment-rules" class="mt-5 grid gap-3 rounded-lg border border-slate-200 p-4 dark:border-slate-700 lg:grid-cols-6">
+        <form method="post" action="/admin/system/ticket-settings/assignment-rules" @submit="confirmAssignmentSubmit($event)" class="mt-5 grid gap-3 rounded-lg border border-[var(--dmui-border-default,var(--border-default))] p-4 lg:grid-cols-6">
             {% include "components/forms/csrf_input.html" %}
-            <input type="text" name="name" required placeholder="Rule name" class="rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white lg:col-span-2">
-            <input type="number" min="0" name="priority" value="100" class="rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
-            <select name="strategy" class="rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+            <input type="text" name="name" required placeholder="Rule name" class="rounded-lg border border-[var(--dmui-border-default,var(--border-default))] bg-[var(--dmui-surface-primary,var(--surface-primary))] px-3 py-2 text-sm lg:col-span-2">
+            <input type="number" min="0" name="priority" value="100" class="rounded-lg border border-[var(--dmui-border-default,var(--border-default))] bg-[var(--dmui-surface-primary,var(--surface-primary))] px-3 py-2 text-sm">
+            <select name="strategy" class="rounded-lg border border-[var(--dmui-border-default,var(--border-default))] bg-[var(--dmui-surface-primary,var(--surface-primary))] px-3 py-2 text-sm">
                 {% for strategy in assignment_strategies %}<option value="{{ strategy }}">{{ strategy|replace("_", " ")|title }}</option>{% endfor %}
             </select>
-            <select name="team_id" class="rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white">
+            <select name="team_id" class="rounded-lg border border-[var(--dmui-border-default,var(--border-default))] bg-[var(--dmui-surface-primary,var(--surface-primary))] px-3 py-2 text-sm">
                 <option value="">No team</option>
                 {% for team in service_team_options %}<option value="{{ team.id }}">{{ team.label }}</option>{% endfor %}
             </select>
-            <label class="inline-flex items-center gap-2 rounded-lg border border-slate-200 px-3 py-2 text-sm text-slate-700 dark:border-slate-700 dark:text-slate-200">
-                <input type="checkbox" name="is_active" value="1" checked class="rounded border-slate-300 text-amber-600">
+            <label class="inline-flex items-center gap-2 rounded-lg border border-[var(--dmui-border-default,var(--border-default))] px-3 py-2 text-sm text-[var(--dmui-text-primary,var(--text-primary))]">
+                <input type="checkbox" name="is_active" value="1" checked class="rounded border-[var(--dmui-border-default,var(--border-default))] accent-[var(--dmui-action-primary-default,var(--color-brand-600))]">
                 Active
             </label>
-            <select name="assignment_target" class="rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white lg:col-span-2">
+            <select name="assignment_target" class="rounded-lg border border-[var(--dmui-border-default,var(--border-default))] bg-[var(--dmui-surface-primary,var(--surface-primary))] px-3 py-2 text-sm lg:col-span-2">
                 {% for target in assignment_targets %}<option value="{{ target }}">{{ target|replace("_", " ")|title }}</option>{% endfor %}
             </select>
-            <select name="assignee_person_id" class="rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white lg:col-span-2">
+            <select name="assignee_person_id" class="rounded-lg border border-[var(--dmui-border-default,var(--border-default))] bg-[var(--dmui-surface-primary,var(--surface-primary))] px-3 py-2 text-sm lg:col-span-2">
                 <option value="">Use team strategy</option>
                 {% for person in staff_options %}<option value="{{ person.id }}">{{ person.label }}</option>{% endfor %}
             </select>
-            <input type="text" name="ticket_types" placeholder="Ticket types, comma-separated" class="rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white lg:col-span-2">
-            <input type="text" name="regions" placeholder="Regions, comma-separated" class="rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-700 dark:text-white lg:col-span-2">
-            <button type="submit" class="rounded-lg bg-amber-600 px-4 py-2 text-sm font-medium text-white hover:bg-amber-700 lg:col-span-2">Create Assignment Rule</button>
+            <input type="text" name="ticket_types" placeholder="Ticket types, comma-separated" class="rounded-lg border border-[var(--dmui-border-default,var(--border-default))] bg-[var(--dmui-surface-primary,var(--surface-primary))] px-3 py-2 text-sm lg:col-span-2">
+            <input type="text" name="regions" placeholder="Regions, comma-separated" class="rounded-lg border border-[var(--dmui-border-default,var(--border-default))] bg-[var(--dmui-surface-primary,var(--surface-primary))] px-3 py-2 text-sm lg:col-span-2">
+            <button type="submit" class="rounded-lg bg-[var(--dmui-action-primary-default,var(--color-brand-600))] px-4 py-2 text-sm font-medium text-[var(--dmui-action-primary-on,white)] hover:bg-[var(--dmui-action-primary-hover,var(--color-brand-700))] lg:col-span-2">Create Assignment Rule</button>
         </form>
     </section>
+        <div class="sticky bottom-0 z-10 flex flex-wrap items-center justify-end gap-3 rounded-xl border border-[var(--border-default)] bg-[var(--surface-secondary)] p-3 shadow-sm">
+            <span class="mr-auto text-sm" role="status" x-text="dirty ? 'Unsaved changes' : ''"></span>
+            <a href="/admin/system/settings-hub" class="rounded-lg border border-[var(--dmui-border-default,var(--border-default))] bg-[var(--dmui-surface-primary,var(--surface-primary))] px-4 py-2 text-sm font-medium text-[var(--dmui-text-primary,var(--text-primary))] hover:bg-[var(--dmui-surface-tertiary,var(--surface-tertiary))]">Cancel</a>
+            <button type="submit" form="ticket-settings-form" class="rounded-lg bg-[var(--dmui-action-primary-default,var(--color-brand-600))] px-4 py-2 text-sm font-medium text-[var(--dmui-action-primary-on,white)] hover:bg-[var(--dmui-action-primary-hover,var(--color-brand-700))]">Save Ticket Settings</button>
+        </div>
 </div>
 
 <script>
@@ -307,13 +378,90 @@ function ticketSettingsPage() {
     const slaPolicy = {{ sla_policy|tojson }};
     const ticketTypeSlaPolicy = {{ ticket_type_sla_policy|tojson }};
     const ticketTypes = {{ ticket_type_options|tojson }};
-    const infrastructurePolicy = {{ infrastructure_type_kinds|tojson }};
+    const infrastructurePolicy = {{ infrastructure_type_kinds|default({})|tojson }};
     return {
+        section: {{ ('routing' if rule_saved or rule_deleted else 'general')|tojson }},
+        typeSearch: '',
+        editingType: null,
+        overrideSearch: '',
+        focusedOverride: null,
+        showAllOverrides: false,
+        initialDraft: '',
+        init() {
+            this.initialDraft = this.draftSnapshot();
+        },
+        draftSnapshot() {
+            return JSON.stringify([
+                this.statusValues, this.priorityValues, this.ticketTypeValues, this.regionValues,
+                this.infrastructureEnabled, this.infrastructureKindsByIndex,
+                this.autoAssignEnabled, this.autoAssignMaxOpenTickets, this.routingRules,
+                this.slaRows, this.typeSlaRows,
+            ]);
+        },
+        get dirty() {
+            return this.initialDraft !== this.draftSnapshot();
+        },
+        matches(value, search) {
+            return value.toLowerCase().includes(search.trim().toLowerCase());
+        },
+        editTicketType(index) {
+            this.editingType = index;
+            this.$nextTick(() => document.getElementById('ticket-type-name-' + index).focus());
+        },
+        addTicketType() {
+            this.ticketTypeValues.push('');
+            this.infrastructureEnabled.push(false);
+            this.infrastructureKindsByIndex.push([]);
+            this.editTicketType(this.ticketTypeValues.length - 1);
+        },
+        removeTicketType(index) {
+            if (this.ticketTypeValues.length === 1) {
+                this.ticketTypeValues[0] = '';
+                this.infrastructureEnabled[0] = false;
+                this.infrastructureKindsByIndex[0] = [];
+            } else {
+                this.ticketTypeValues.splice(index, 1);
+                this.infrastructureEnabled.splice(index, 1);
+                this.infrastructureKindsByIndex.splice(index, 1);
+            }
+            this.editingType = null;
+        },
+        enableDefaultTarget(index) {
+            if (this.infrastructureEnabled[index] && !this.infrastructureKindsByIndex[index].length) {
+                this.infrastructureKindsByIndex[index] = ['manual'];
+            }
+        },
+        targetLabel(kind) {
+            return {
+                basestation: 'Base station', cabinet: 'Cabinet', node: 'Network node',
+                access_point: 'Access point', manual: 'Manual',
+            }[kind] || kind;
+        },
+        confirmAssignmentSubmit(event) {
+            if (this.dirty && !window.confirm('Continue and discard unsaved ticket settings?')) {
+                event.preventDefault();
+            }
+        },
+        overrideVisible(row) {
+            return (this.showAllOverrides || Number(row.resolution_hours) !== 0)
+                && this.matches(row.ticket_type, this.overrideSearch);
+        },
+        revealInvalid(event) {
+            const panel = event.target.closest('[data-settings-section]');
+            if (!panel) return;
+            this.section = panel.dataset.settingsSection;
+            if (this.section === 'sla') {
+                this.showAllOverrides = true;
+                this.overrideSearch = '';
+            }
+            this.$nextTick(() => event.target.focus());
+        },
         statusValues: {{ status_options|tojson }},
         priorityValues: {{ priority_options|tojson }},
         ticketTypeValues: ticketTypes,
-        infrastructureEnabled: ticketTypes.map(type => !!infrastructurePolicy[type.trim().toLowerCase()]?.length),
+        infrastructureEnabled: ticketTypes.map(type => Boolean(infrastructurePolicy[type.trim().toLowerCase()]?.length)),
         infrastructureKindsByIndex: ticketTypes.map(type => [...(infrastructurePolicy[type.trim().toLowerCase()] || [])]),
+        infrastructureTargetKinds: ['basestation', 'cabinet', 'node', 'access_point', 'manual'],
         regionValues: {{ region_options|tojson }},
         autoAssignEnabled: {{ auto_assign_enabled|tojson }},
         autoAssignMaxOpenTickets: {{ auto_assign_max_open_tickets|tojson }},
@@ -328,17 +476,6 @@ function ticketSettingsPage() {
             ticket_type,
             resolution_hours: resolution_hours || 0,
         })),
-        removeTicketType(index) {
-            if (this.ticketTypeValues.length === 1) {
-                this.ticketTypeValues[0] = '';
-                this.infrastructureEnabled[0] = false;
-                this.infrastructureKindsByIndex[0] = [];
-                return;
-            }
-            this.ticketTypeValues.splice(index, 1);
-            this.infrastructureEnabled.splice(index, 1);
-            this.infrastructureKindsByIndex.splice(index, 1);
-        },
         removeRow(list, index) {
             if (list.length <= 1) {
                 if (typeof list[index] === 'string') {
