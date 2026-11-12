@@ -65,15 +65,10 @@ _SUBSCRIBER_REQUIRED_TICKET_TYPES = {
 
 _BASE_STATION_REQUIRED_TICKET_TYPES = {
     "cedar view (likely a site/location issue)",
-    "core link disconnection",
     "dell server down",
-    "multiple cabinet disconnection",
     "multiple customer link disconnection",
     "nextcloud service down",
     "subscriber-system issue",
-    "access point outage",
-    "multiple cabinet link disconnection",
-    "bts outage",
 }
 
 
@@ -95,6 +90,11 @@ def base_station_required_ticket_types() -> list[str]:
 
 def validate_ticket_creation(db: Session, payload: TicketCreate) -> None:
     """Reject invalid user-created tickets before any row is inserted."""
+    from app.services.support_ticket_settings import infrastructure_type_kinds
+
+    infrastructure_type = bool(
+        infrastructure_type_kinds(db).get(_normalize_ticket_type(payload.ticket_type))
+    )
     if (
         _created_by_is_customer(db, payload)
         and not str(payload.ticket_type or "").strip()
@@ -103,10 +103,14 @@ def validate_ticket_creation(db: Session, payload: TicketCreate) -> None:
             code="ticket_type_required", message="Ticket type is required."
         )
 
-    if ticket_type_requires_subscriber(payload.ticket_type) and not (
-        payload.subscriber_id
-        or payload.customer_account_id
-        or payload.customer_person_id
+    if (
+        not infrastructure_type
+        and ticket_type_requires_subscriber(payload.ticket_type)
+        and not (
+            payload.subscriber_id
+            or payload.customer_account_id
+            or payload.customer_person_id
+        )
     ):
         raise TicketValidationError(
             code="ticket_subscriber_required",

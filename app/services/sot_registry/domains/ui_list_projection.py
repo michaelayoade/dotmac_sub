@@ -1149,7 +1149,8 @@ DOMAIN = DomainSOT(
                 "Audit rows retain their recorded staff, customer, system, "
                 "service, or API-key attribution. Record-only activity is marked "
                 "Actor not recorded instead of inferring an actor from record "
-                "ownership or timestamps."
+                "ownership or timestamps. A typed page query reaches older "
+                "customer-linked records and audit evidence in newest-first order."
             ),
             contract=ServiceContract(
                 concerns=(

@@ -124,7 +124,7 @@ def test_network_charts_render_empty_inventory_and_configured_zero_use_pool(
     monkeypatch.setattr(
         web_reports.crm_reporting_service,
         "network_infrastructure_facts",
-        lambda *, db, hours=None: empty_facts,
+        lambda *, db, activity_start_at=None, activity_end_at=None: empty_facts,
     )
     empty = web_reports.get_network_report_data(object())
     assert empty.device_health_chart.is_empty
@@ -145,7 +145,7 @@ def test_network_charts_render_empty_inventory_and_configured_zero_use_pool(
     monkeypatch.setattr(
         web_reports.crm_reporting_service,
         "network_infrastructure_facts",
-        lambda *, db, hours=None: pool_facts,
+        lambda *, db, activity_start_at=None, activity_end_at=None: pool_facts,
     )
     configured = web_reports.get_network_report_data(object())
     assert configured.ip_pool_chart.is_present
@@ -202,12 +202,14 @@ def test_churn_reasons_keep_labels_below_chart_without_duplicate_legend() -> Non
     assert "{ plugins: { legend: { display: false } } }" not in source
 
 
-def test_recent_events_card_keeps_its_natural_height() -> None:
+def test_churn_reasons_and_events_share_a_bounded_height() -> None:
     source = Path("templates/admin/reports/churn.html").read_text()
 
     assert "grid grid-cols-1 items-start gap-6 lg:grid-cols-2" in source
-    assert "recent_events | length > 10" not in source
-    assert "max-height: 520px" not in source
+    assert source.count('class_name="flex flex-col lg:h-[520px]"') == 2
+    assert 'aria-label="Churn reason counts"' in source
+    assert 'aria-label="Recent churn events"' in source
+    assert "overflow-y-auto" in source
 
 
 def test_revenue_category_query_failure_is_unavailable_not_empty(

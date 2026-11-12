@@ -6249,7 +6249,7 @@
       "disposition": "Mapped to hub; preserve registered type, validation, tenant scope and owner-command writes",
       "source_references": [
         "app/services/catalog/offers.py:152",
-        "app/services/web_catalog_offers.py:927",
+        "app/services/web_catalog_offers.py:1049",
         "app/services/web_catalog_subscriptions.py:4378"
       ]
     },
@@ -6324,7 +6324,7 @@
       },
       "disposition": "Mapped to hub; preserve registered type, validation, tenant scope and owner-command writes",
       "source_references": [
-        "app/services/catalog/radius.py:44"
+        "app/services/catalog/radius.py:50"
       ]
     },
     {
@@ -6596,7 +6596,7 @@
       },
       "disposition": "Mapped to hub; preserve registered type, validation, tenant scope and owner-command writes",
       "source_references": [
-        "app/services/web_catalog_offers.py:180"
+        "app/services/web_catalog_offers.py:181"
       ]
     },
     {
@@ -6622,9 +6622,9 @@
       "source_references": [
         "app/services/catalog/plan_family_catalogues.py:175",
         "app/services/catalog/plan_family_catalogues.py:191",
-        "app/services/web_catalog_offers.py:1188",
-        "app/services/web_catalog_offers.py:905",
-        "app/services/web_catalog_offers.py:994",
+        "app/services/web_catalog_offers.py:1027",
+        "app/services/web_catalog_offers.py:1135",
+        "app/services/web_catalog_offers.py:1359",
         "templates/admin/catalog/settings/catalogues.html:26",
         "templates/admin/catalog/settings/catalogues.html:27"
       ]
@@ -7440,9 +7440,9 @@
       },
       "disposition": "Mapped to hub; preserve registered type, validation, tenant scope and owner-command writes",
       "source_references": [
-        "app/services/access_rate_profile.py:392",
-        "app/services/access_rate_profile.py:647",
-        "app/services/access_rate_profile.py:865",
+        "app/services/access_rate_profile.py:1048",
+        "app/services/access_rate_profile.py:393",
+        "app/services/access_rate_profile.py:830",
         "app/services/collections/_core.py:1195",
         "app/services/collections/_core.py:640"
       ]
@@ -8598,10 +8598,10 @@
         "app/services/crm_api.py:353",
         "app/services/crm_api.py:367",
         "app/services/crm_api.py:887",
-        "app/services/crm_reporting.py:849",
-        "app/services/crm_reporting.py:900",
-        "app/services/crm_reporting.py:925",
-        "app/services/crm_reporting.py:943",
+        "app/services/crm_reporting.py:852",
+        "app/services/crm_reporting.py:903",
+        "app/services/crm_reporting.py:928",
+        "app/services/crm_reporting.py:946",
         "app/services/customer_bulk_message_contracts.py:40",
         "app/services/customer_canonical_profile_patch.py:25",
         "app/services/customer_experience_handoffs.py:207",
@@ -8711,7 +8711,7 @@
         "app/services/sales/service.py:163",
         "app/services/sales/service.py:676",
         "app/services/sot_registry/domains/notifications_communications.py:5658",
-        "app/services/sot_registry/domains/support_operations.py:2168",
+        "app/services/sot_registry/domains/support_operations.py:2170",
         "app/services/sot_registry/domains/support_operations.py:71",
         "app/services/staff_provisioning.py:138",
         "app/services/staff_provisioning.py:435",
@@ -8724,8 +8724,8 @@
         "app/services/subscriber_summary.py:189",
         "app/services/subscriber_summary.py:56",
         "app/services/support.py:1303",
-        "app/services/support.py:5351",
-        "app/services/support.py:5369",
+        "app/services/support.py:5365",
+        "app/services/support.py:5383",
         "app/services/table_config.py:761",
         "app/services/table_config.py:913",
         "app/services/team_inbox_contact_context.py:271",
@@ -8820,8 +8820,8 @@
         "app/services/web_subscriber_details.py:522",
         "app/services/web_subscriber_details.py:538",
         "app/services/web_subscriber_lists.py:47",
-        "app/services/web_support_tickets.py:2136",
-        "app/services/web_support_tickets.py:2146",
+        "app/services/web_support_tickets.py:2142",
+        "app/services/web_support_tickets.py:2152",
         "app/services/web_system_common.py:54",
         "app/services/web_system_common.py:58",
         "app/services/web_system_import_wizard.py:159",
@@ -8838,10 +8838,10 @@
         "app/services/web_system_users.py:918",
         "app/services/web_vendors.py:230",
         "app/validators/bulk.py:26",
-        "app/web/admin/customers.py:1010",
-        "app/web/admin/customers.py:1026",
-        "app/web/admin/customers.py:1104",
-        "app/web/admin/customers.py:3260",
+        "app/web/admin/customers.py:1013",
+        "app/web/admin/customers.py:1029",
+        "app/web/admin/customers.py:1107",
+        "app/web/admin/customers.py:3265",
         "app/web/admin/inbox.py:1749",
         "app/web/admin/inbox.py:3889",
         "app/web/admin/network.py:101",
@@ -8849,8 +8849,8 @@
         "app/web/admin/network_monitoring.py:282",
         "app/web/admin/network_monitoring.py:283",
         "app/web/admin/notifications.py:1073",
-        "app/web/admin/reports.py:3271",
-        "app/web/admin/reports.py:3274",
+        "app/web/admin/reports.py:3300",
+        "app/web/admin/reports.py:3303",
         "app/web/admin/resellers.py:496",
         "app/web/admin/resellers.py:501",
         "app/web/admin/resellers.py:526",
@@ -8869,12 +8869,12 @@
         "templates/admin/customers/_wizard_step_basic.html:88",
         "templates/admin/customers/_wizard_step_basic.html:92",
         "templates/admin/customers/_wizard_step_contacts.html:70",
-        "templates/admin/customers/detail.html:2632",
-        "templates/admin/customers/detail.html:2913",
-        "templates/admin/customers/detail.html:2926",
+        "templates/admin/customers/detail.html:2643",
+        "templates/admin/customers/detail.html:2924",
+        "templates/admin/customers/detail.html:2937",
         "templates/admin/customers/detail.html:307",
-        "templates/admin/customers/detail.html:3082",
-        "templates/admin/customers/detail.html:3111",
+        "templates/admin/customers/detail.html:3093",
+        "templates/admin/customers/detail.html:3122",
         "templates/admin/customers/form.html:255",
         "templates/admin/customers/form.html:259",
         "templates/admin/customers/form.html:329",
@@ -9138,7 +9138,7 @@
         "app/services/scheduler.py:156",
         "app/services/sole_approver_exception.py:155",
         "app/services/support.py:1233",
-        "app/services/support_ticket_settings.py:694",
+        "app/services/support_ticket_settings.py:737",
         "app/services/team_inbox_receive.py:639",
         "app/services/topology/outage_notifications.py:327",
         "app/services/topology/outage_notifications.py:538",
@@ -9445,7 +9445,7 @@
         "app/services/web_integrations_whatsapp.py:74",
         "app/services/web_network_speedtests.py:248",
         "app/services/web_network_speedtests.py:94",
-        "app/services/web_reports.py:1267",
+        "app/services/web_reports.py:1315",
         "app/services/web_system_geocode_tool.py:326",
         "app/tasks/notifications.py:858",
         "app/tasks/notifications.py:901",
@@ -18619,7 +18619,7 @@
       },
       "disposition": "Mapped to hub; preserve registered type, validation, tenant scope and owner-command writes",
       "source_references": [
-        "app/services/access_rate_profile.py:78",
+        "app/services/access_rate_profile.py:79",
         "app/services/access_rate_switch.py:991",
         "app/services/radius_population.py:1249"
       ]
@@ -19511,7 +19511,7 @@
         "app/services/web_customer_actions.py:2818",
         "app/services/web_subscriber_actions.py:128",
         "app/services/workforce_attendance.py:110",
-        "app/web/admin/customers.py:1034",
+        "app/web/admin/customers.py:1037",
         "app/web/admin/inbox_sla.py:50",
         "templates/admin/notifications/oncall_form.html:55",
         "templates/admin/notifications/oncall_rotations.html:142",
@@ -23478,7 +23478,7 @@
     },
     {
       "domain": "workflow",
-      "key": "support_ticket_region_options",
+      "key": "support_ticket_infrastructure_type_kinds",
       "kind": "specialised",
       "tab": "operations",
       "section": "ticket-settings",
@@ -23496,7 +23496,7 @@
     },
     {
       "domain": "workflow",
-      "key": "support_ticket_auto_assign_enabled",
+      "key": "support_ticket_region_options",
       "kind": "specialised",
       "tab": "operations",
       "section": "ticket-settings",
@@ -23509,13 +23509,12 @@
       },
       "disposition": "Preserve specialised ticket configuration owner and typed commands",
       "source_references": [
-        "app/services/support.py:1128",
         "app/services/support_ticket_settings.py:36"
       ]
     },
     {
       "domain": "workflow",
-      "key": "support_ticket_auto_assign_max_open_tickets",
+      "key": "support_ticket_auto_assign_enabled",
       "kind": "specialised",
       "tab": "operations",
       "section": "ticket-settings",
@@ -23528,12 +23527,13 @@
       },
       "disposition": "Preserve specialised ticket configuration owner and typed commands",
       "source_references": [
+        "app/services/support.py:1128",
         "app/services/support_ticket_settings.py:37"
       ]
     },
     {
       "domain": "workflow",
-      "key": "support_region_assignment_rules",
+      "key": "support_ticket_auto_assign_max_open_tickets",
       "kind": "specialised",
       "tab": "operations",
       "section": "ticket-settings",
@@ -23546,13 +23546,12 @@
       },
       "disposition": "Preserve specialised ticket configuration owner and typed commands",
       "source_references": [
-        "app/services/support.py:1129",
         "app/services/support_ticket_settings.py:38"
       ]
     },
     {
       "domain": "workflow",
-      "key": "support_ticket_sla_policy",
+      "key": "support_region_assignment_rules",
       "kind": "specialised",
       "tab": "operations",
       "section": "ticket-settings",
@@ -23565,12 +23564,13 @@
       },
       "disposition": "Preserve specialised ticket configuration owner and typed commands",
       "source_references": [
+        "app/services/support.py:1129",
         "app/services/support_ticket_settings.py:39"
       ]
     },
     {
       "domain": "workflow",
-      "key": "support_ticket_type_sla_policy",
+      "key": "support_ticket_sla_policy",
       "kind": "specialised",
       "tab": "operations",
       "section": "ticket-settings",
@@ -23584,6 +23584,24 @@
       "disposition": "Preserve specialised ticket configuration owner and typed commands",
       "source_references": [
         "app/services/support_ticket_settings.py:40"
+      ]
+    },
+    {
+      "domain": "workflow",
+      "key": "support_ticket_type_sla_policy",
+      "kind": "specialised",
+      "tab": "operations",
+      "section": "ticket-settings",
+      "destination": "/admin/system/ticket-settings",
+      "source": "app/services/support_ticket_settings.py:41",
+      "metadata": {
+        "write_owner": "support.ticket_configuration",
+        "setting_domain_owner": "sales_referrals",
+        "previous_editor": "Specialised surface, bootstrap, or retired control; see source"
+      },
+      "disposition": "Preserve specialised ticket configuration owner and typed commands",
+      "source_references": [
+        "app/services/support_ticket_settings.py:41"
       ]
     },
     {
@@ -24432,7 +24450,7 @@
       "method": "GET",
       "path": "/admin/system/config/billing",
       "tab": "billing",
-      "source": "app/web/admin/system.py:5378",
+      "source": "app/web/admin/system.py:5395",
       "handler": "config_billing_page",
       "permissions": [],
       "calls": [
@@ -24444,7 +24462,7 @@
       "method": "POST",
       "path": "/admin/system/config/billing",
       "tab": "billing",
-      "source": "app/web/admin/system.py:5399",
+      "source": "app/web/admin/system.py:5416",
       "handler": "config_billing_save",
       "permissions": [
         "system:settings:write"
@@ -24459,7 +24477,7 @@
       "method": "GET",
       "path": "/admin/system/config/billing-notifications",
       "tab": "billing",
-      "source": "app/web/admin/system.py:5644",
+      "source": "app/web/admin/system.py:5661",
       "handler": "config_billing_notif_page",
       "permissions": [],
       "calls": [
@@ -24471,7 +24489,7 @@
       "method": "POST",
       "path": "/admin/system/config/billing-notifications",
       "tab": "billing",
-      "source": "app/web/admin/system.py:5665",
+      "source": "app/web/admin/system.py:5682",
       "handler": "config_billing_notif_save",
       "permissions": [
         "system:settings:write"
@@ -24486,7 +24504,7 @@
       "method": "GET",
       "path": "/admin/system/config/direct-bank-transfer",
       "tab": "billing",
-      "source": "app/web/admin/system.py:5444",
+      "source": "app/web/admin/system.py:5461",
       "handler": "config_direct_bank_transfer_page",
       "permissions": [],
       "calls": [
@@ -24498,7 +24516,7 @@
       "method": "POST",
       "path": "/admin/system/config/direct-bank-transfer",
       "tab": "billing",
-      "source": "app/web/admin/system.py:5466",
+      "source": "app/web/admin/system.py:5483",
       "handler": "config_direct_bank_transfer_save",
       "permissions": [
         "system:settings:write"
@@ -24513,7 +24531,7 @@
       "method": "GET",
       "path": "/admin/system/config/payment-methods",
       "tab": "billing",
-      "source": "app/web/admin/system.py:5506",
+      "source": "app/web/admin/system.py:5523",
       "handler": "config_payment_methods_page",
       "permissions": [],
       "calls": [
@@ -24525,7 +24543,7 @@
       "method": "GET",
       "path": "/admin/system/config/plan-change",
       "tab": "billing",
-      "source": "app/web/admin/system.py:5701",
+      "source": "app/web/admin/system.py:5718",
       "handler": "config_plan_change_page",
       "permissions": [],
       "calls": [
@@ -24537,7 +24555,7 @@
       "method": "POST",
       "path": "/admin/system/config/plan-change",
       "tab": "billing",
-      "source": "app/web/admin/system.py:5722",
+      "source": "app/web/admin/system.py:5739",
       "handler": "config_plan_change_save",
       "permissions": [
         "system:settings:write"
@@ -24552,7 +24570,7 @@
       "method": "GET",
       "path": "/admin/system/config/reminders",
       "tab": "billing",
-      "source": "app/web/admin/system.py:5593",
+      "source": "app/web/admin/system.py:5610",
       "handler": "config_reminders_page",
       "permissions": [],
       "calls": [
@@ -24564,7 +24582,7 @@
       "method": "POST",
       "path": "/admin/system/config/reminders",
       "tab": "billing",
-      "source": "app/web/admin/system.py:5614",
+      "source": "app/web/admin/system.py:5631",
       "handler": "config_reminders_save",
       "permissions": [
         "system:settings:write"
@@ -24579,7 +24597,7 @@
       "method": "GET",
       "path": "/admin/system/config/tax",
       "tab": "billing",
-      "source": "app/web/admin/system.py:5516",
+      "source": "app/web/admin/system.py:5533",
       "handler": "config_tax_page",
       "permissions": [],
       "calls": [
@@ -26515,7 +26533,7 @@
       "method": "GET",
       "path": "/admin/system/config/monitoring",
       "tab": "network",
-      "source": "app/web/admin/system.py:6110",
+      "source": "app/web/admin/system.py:6127",
       "handler": "config_monitoring_page",
       "permissions": [],
       "calls": [
@@ -26527,7 +26545,7 @@
       "method": "POST",
       "path": "/admin/system/config/monitoring",
       "tab": "network",
-      "source": "app/web/admin/system.py:6129",
+      "source": "app/web/admin/system.py:6146",
       "handler": "config_monitoring_save",
       "permissions": [
         "system:settings:write"
@@ -26541,7 +26559,7 @@
       "method": "GET",
       "path": "/admin/system/config/nas-types",
       "tab": "network",
-      "source": "app/web/admin/system.py:6158",
+      "source": "app/web/admin/system.py:6175",
       "handler": "config_nas_types_page",
       "permissions": [],
       "calls": [
@@ -26553,7 +26571,7 @@
       "method": "GET",
       "path": "/admin/system/config/radius",
       "tab": "network",
-      "source": "app/web/admin/system.py:5768",
+      "source": "app/web/admin/system.py:5785",
       "handler": "config_radius_page",
       "permissions": [],
       "calls": [
@@ -26565,7 +26583,7 @@
       "method": "POST",
       "path": "/admin/system/config/radius",
       "tab": "network",
-      "source": "app/web/admin/system.py:5797",
+      "source": "app/web/admin/system.py:5814",
       "handler": "config_radius_save",
       "permissions": [
         "system:settings:write"
@@ -26581,7 +26599,7 @@
       "method": "POST",
       "path": "/admin/system/config/radius/push-reject-rules",
       "tab": "network",
-      "source": "app/web/admin/system.py:5844",
+      "source": "app/web/admin/system.py:5861",
       "handler": "config_radius_push_reject_rules",
       "permissions": [
         "system:settings:write"
@@ -26595,7 +26613,7 @@
       "method": "GET",
       "path": "/admin/system/config/walled-garden",
       "tab": "network",
-      "source": "app/web/admin/system.py:5947",
+      "source": "app/web/admin/system.py:5964",
       "handler": "config_walled_garden_page",
       "permissions": [
         "system:settings:read"
@@ -26607,7 +26625,7 @@
       "method": "POST",
       "path": "/admin/system/config/walled-garden/entries",
       "tab": "network",
-      "source": "app/web/admin/system.py:5965",
+      "source": "app/web/admin/system.py:5982",
       "handler": "config_walled_garden_save_entry",
       "permissions": [
         "system:settings:write"
@@ -26625,7 +26643,7 @@
       "method": "POST",
       "path": "/admin/system/config/walled-garden/entries/{entry_key}/enabled",
       "tab": "network",
-      "source": "app/web/admin/system.py:6032",
+      "source": "app/web/admin/system.py:6049",
       "handler": "config_walled_garden_set_enabled",
       "permissions": [
         "system:settings:write"
@@ -26640,7 +26658,7 @@
       "method": "POST",
       "path": "/admin/system/config/walled-garden/entries/{entry_key}/remove",
       "tab": "network",
-      "source": "app/web/admin/system.py:6075",
+      "source": "app/web/admin/system.py:6092",
       "handler": "config_walled_garden_remove_entry",
       "permissions": [
         "system:settings:write"
@@ -27746,7 +27764,7 @@
       "method": "GET",
       "path": "/admin/system/config/email",
       "tab": "notifications",
-      "source": "app/web/admin/system.py:5308",
+      "source": "app/web/admin/system.py:5325",
       "handler": "config_email_page",
       "permissions": [],
       "calls": [],
@@ -27756,7 +27774,7 @@
       "method": "POST",
       "path": "/admin/system/config/email",
       "tab": "notifications",
-      "source": "app/web/admin/system.py:5317",
+      "source": "app/web/admin/system.py:5334",
       "handler": "config_email_save",
       "permissions": [
         "system:settings:write"
@@ -27768,7 +27786,7 @@
       "method": "GET",
       "path": "/admin/system/config/templates",
       "tab": "notifications",
-      "source": "app/web/admin/system.py:5268",
+      "source": "app/web/admin/system.py:5285",
       "handler": "config_templates_page",
       "permissions": [],
       "calls": [
@@ -27780,7 +27798,7 @@
       "method": "GET",
       "path": "/admin/system/email",
       "tab": "notifications",
-      "source": "app/web/admin/system.py:5221",
+      "source": "app/web/admin/system.py:5238",
       "handler": "email_page",
       "permissions": [
         "system:settings:read"
@@ -28204,7 +28222,7 @@
       "method": "GET",
       "path": "/admin/system/ticket-settings",
       "tab": "operations",
-      "source": "app/web/admin/system.py:4980",
+      "source": "app/web/admin/system.py:4983",
       "handler": "ticket_settings_page",
       "permissions": [
         "system:settings:read"
@@ -28216,12 +28234,13 @@
       "method": "POST",
       "path": "/admin/system/ticket-settings",
       "tab": "operations",
-      "source": "app/web/admin/system.py:4998",
+      "source": "app/web/admin/system.py:5001",
       "handler": "ticket_settings_update",
       "permissions": [
         "system:settings:write"
       ],
       "calls": [
+        "support_ticket_settings_service.InfrastructureTicketTypeUpdate",
         "support_ticket_settings_service.RegionRoutingRuleUpdate",
         "support_ticket_settings_service.TicketConfigurationUpdate",
         "support_ticket_settings_service.TicketSlaPolicyUpdate",
@@ -28234,7 +28253,7 @@
       "method": "POST",
       "path": "/admin/system/ticket-settings/assignment-rules",
       "tab": "operations",
-      "source": "app/web/admin/system.py:5131",
+      "source": "app/web/admin/system.py:5148",
       "handler": "ticket_assignment_rule_create",
       "permissions": [
         "system:settings:write"
@@ -28248,7 +28267,7 @@
       "method": "POST",
       "path": "/admin/system/ticket-settings/assignment-rules/{rule_id}/delete",
       "tab": "operations",
-      "source": "app/web/admin/system.py:5166",
+      "source": "app/web/admin/system.py:5183",
       "handler": "ticket_assignment_rule_delete",
       "permissions": [
         "system:settings:write"
@@ -28646,7 +28665,7 @@
       "method": "GET",
       "path": "/admin/system/secrets",
       "tab": "security",
-      "source": "app/web/admin/system.py:6177",
+      "source": "app/web/admin/system.py:6194",
       "handler": "secrets_management",
       "permissions": [
         "system:secrets:read"
@@ -28660,7 +28679,7 @@
       "method": "POST",
       "path": "/admin/system/secrets/create",
       "tab": "security",
-      "source": "app/web/admin/system.py:6246",
+      "source": "app/web/admin/system.py:6263",
       "handler": "secrets_create",
       "permissions": [
         "system:secrets:write"
@@ -28675,7 +28694,7 @@
       "method": "GET",
       "path": "/admin/system/secrets/new",
       "tab": "security",
-      "source": "app/web/admin/system.py:6234",
+      "source": "app/web/admin/system.py:6251",
       "handler": "secrets_new",
       "permissions": [
         "system:secrets:read"
@@ -28689,7 +28708,7 @@
       "method": "POST",
       "path": "/admin/system/secrets/{path:path}/delete",
       "tab": "security",
-      "source": "app/web/admin/system.py:6269",
+      "source": "app/web/admin/system.py:6286",
       "handler": "secrets_delete",
       "permissions": [
         "system:secrets:write"
@@ -28704,7 +28723,7 @@
       "method": "GET",
       "path": "/admin/system/secrets/{path:path}/edit",
       "tab": "security",
-      "source": "app/web/admin/system.py:6199",
+      "source": "app/web/admin/system.py:6216",
       "handler": "secrets_edit",
       "permissions": [
         "system:secrets:read"
@@ -28718,7 +28737,7 @@
       "method": "POST",
       "path": "/admin/system/secrets/{path:path}/save",
       "tab": "security",
-      "source": "app/web/admin/system.py:6214",
+      "source": "app/web/admin/system.py:6231",
       "handler": "secrets_save",
       "permissions": [
         "system:secrets:write"
@@ -29305,7 +29324,7 @@
       "method": "GET",
       "path": "/admin/system/about",
       "tab": "system",
-      "source": "app/web/admin/system.py:5253",
+      "source": "app/web/admin/system.py:5270",
       "handler": "system_about_page",
       "permissions": [],
       "calls": [
@@ -29317,7 +29336,7 @@
       "method": "GET",
       "path": "/admin/system/branding",
       "tab": "system",
-      "source": "app/web/admin/system.py:5179",
+      "source": "app/web/admin/system.py:5196",
       "handler": "branding_page",
       "permissions": [
         "system:settings:read"
@@ -29351,7 +29370,7 @@
       "method": "GET",
       "path": "/admin/system/company-info",
       "tab": "system",
-      "source": "app/web/admin/system.py:5232",
+      "source": "app/web/admin/system.py:5249",
       "handler": "company_info_page",
       "permissions": [],
       "calls": [
@@ -29363,7 +29382,7 @@
       "method": "POST",
       "path": "/admin/system/company-info",
       "tab": "system",
-      "source": "app/web/admin/system.py:5245",
+      "source": "app/web/admin/system.py:5262",
       "handler": "company_info_save",
       "permissions": [
         "system:settings:write"
@@ -29377,7 +29396,7 @@
       "method": "GET",
       "path": "/admin/system/config/outage-notifications",
       "tab": "system",
-      "source": "app/web/admin/system.py:5534",
+      "source": "app/web/admin/system.py:5551",
       "handler": "config_outage_auto_notify_page",
       "permissions": [],
       "calls": [
@@ -29389,7 +29408,7 @@
       "method": "POST",
       "path": "/admin/system/config/outage-notifications",
       "tab": "system",
-      "source": "app/web/admin/system.py:5551",
+      "source": "app/web/admin/system.py:5568",
       "handler": "config_outage_auto_notify_save",
       "permissions": [
         "system:settings:write"
@@ -29404,7 +29423,7 @@
       "method": "GET",
       "path": "/admin/system/config/portal",
       "tab": "system",
-      "source": "app/web/admin/system.py:5327",
+      "source": "app/web/admin/system.py:5344",
       "handler": "config_portal_page",
       "permissions": [],
       "calls": [
@@ -29416,7 +29435,7 @@
       "method": "POST",
       "path": "/admin/system/config/portal",
       "tab": "system",
-      "source": "app/web/admin/system.py:5346",
+      "source": "app/web/admin/system.py:5363",
       "handler": "config_portal_save",
       "permissions": [
         "system:settings:write"
@@ -29430,7 +29449,7 @@
       "method": "GET",
       "path": "/admin/system/config/preferences",
       "tab": "system",
-      "source": "app/web/admin/system.py:5278",
+      "source": "app/web/admin/system.py:5295",
       "handler": "config_preferences_page",
       "permissions": [],
       "calls": [
@@ -29442,7 +29461,7 @@
       "method": "POST",
       "path": "/admin/system/config/preferences",
       "tab": "system",
-      "source": "app/web/admin/system.py:5291",
+      "source": "app/web/admin/system.py:5308",
       "handler": "config_preferences_save",
       "permissions": [
         "system:settings:write"
@@ -29456,7 +29475,7 @@
       "method": "GET",
       "path": "/admin/system/control-relationships",
       "tab": "system",
-      "source": "app/web/admin/system.py:5194",
+      "source": "app/web/admin/system.py:5211",
       "handler": "control_relationship_diagnostics",
       "permissions": [
         "system:settings:read"
@@ -34925,6 +34944,12 @@
     },
     {
       "source": "templates/admin/system/ticket_settings.html",
+      "name": "'infrastructure_kind_' + index",
+      "tab": "operations",
+      "disposition": "Dynamic fields expand from registered specs; static fields stay with their specialised action"
+    },
+    {
+      "source": "templates/admin/system/ticket_settings.html",
       "name": "assignee_person_id",
       "tab": "operations",
       "disposition": "Dynamic fields expand from registered specs; static fields stay with their specialised action"
@@ -34944,6 +34969,12 @@
     {
       "source": "templates/admin/system/ticket_settings.html",
       "name": "auto_assign_max_open_tickets",
+      "tab": "operations",
+      "disposition": "Dynamic fields expand from registered specs; static fields stay with their specialised action"
+    },
+    {
+      "source": "templates/admin/system/ticket_settings.html",
+      "name": "infrastructure_type_index",
       "tab": "operations",
       "disposition": "Dynamic fields expand from registered specs; static fields stay with their specialised action"
     },
@@ -35324,7 +35355,7 @@
     "app/services/settings_spec.py": "0e4852a97137a72e58fd43cbc1d81ee586f7b158215c2b629499cdffa012b63a",
     "app/services/settings_specs/provisioning.py": "da877ea04ad11ad814570053aa49419f3d5dbad575a72fbabc2e09b2078578fc",
     "app/services/settings_specs/router_health.py": "8cb838c286d346e019539ec6970b3df20c2cb37e262a5e4690a395bc103aec27",
-    "app/services/support_ticket_settings.py": "f20011a1eef2d33bb7e5f0493aa0cbeb660c4666672e7da5185f79c25ee68145",
+    "app/services/support_ticket_settings.py": "ea96708a30545c9d17be2293f9f591c793752e6607213bee2992f3cbcc80cf33",
     "app/services/web_system_company_info.py": "d93a32dc1277c6f4c87fff8f4bff221bd169192de55d676b07b13ead85840a1e",
     "app/services/web_system_config.py": "d7aee6a36522e5e0a6ffe9473cdd29e00097f120415f6c71a3cfbb5d3a20eb3e",
     "app/services/web_system_restore_tool.py": "221ee6330e99f969df17c4285dea038d11041b79f8f070a2a457aacba4bc8473",
@@ -35343,7 +35374,7 @@
     "app/web/admin/payment_configuration_actions.py": "4f29a8e62f6d5bd5060476793af4a54e1132450e429064877ff1c4bcd74e916d",
     "app/web/admin/resellers.py": "753137e19ce85315bc822edaa49e642fa6907284b9d005b33835426443b3e114",
     "app/web/admin/service_teams.py": "59a1edbc51999206a97e974af33da8a65915601feef84d3b627519591e25fb05",
-    "app/web/admin/system.py": "4b00c01b86d2d7725a229a5d29c249b21b37d159f9e0aff4e57c4defb83cce47",
+    "app/web/admin/system.py": "fec966565c04c3c8ecc3a7771f6ce1344b4c04c05476046aa0734d2d8052679f",
     "app/web/admin/system_whats_new.py": "85ac32e4803e50f712512c9579a48a0740049fde397ab9740271f45dfee368e5"
   },
   "retired_routes": [

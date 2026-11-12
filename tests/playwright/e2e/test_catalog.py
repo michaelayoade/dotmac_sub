@@ -76,7 +76,7 @@ class TestServices:
         assert submitted_query["status"] == ["active"]
         assert submitted_query["search"] == ["catalog-submit-probe"]
 
-        admin_page.get_by_role("button", name="Clear", exact=True).click()
+        admin_page.get_by_role("button", name="Clear search", exact=True).click()
         expect(admin_page.get_by_label("Search tariffs")).to_have_value("")
         assert len(catalog_requests) == 2
         cleared_query = parse_qs(
@@ -98,6 +98,50 @@ class TestServices:
         expect(admin_page).to_have_url(
             re.compile(r"[?&]search=catalog-enter-probe(?:&|$)")
         )
+
+    def test_profile_selection_only_warns_and_does_not_change_tariff_speed(
+        self, admin_page: Page, settings
+    ):
+        admin_page.goto(f"{settings.base_url}/admin/catalog/offers/create")
+        download = admin_page.locator("#speed_download_mbps")
+        upload = admin_page.locator("#speed_upload_mbps")
+        download.fill("10")
+        upload.fill("5")
+        admin_page.locator("#radius_profile_id").evaluate(
+            """select => {
+                const option = new Option('Profile preview', 'preview-only');
+                option.dataset.downloadMbps = '20.0';
+                option.dataset.uploadMbps = '5';
+                option.dataset.rateSource = 'mikrotik_rate_limit';
+                option.dataset.rateNote = 'Its literal rate limit takes precedence when provisioning.';
+                option.dataset.blocksMismatch = 'true';
+                select.add(option);
+                select.value = option.value;
+                select.dispatchEvent(new Event('change', { bubbles: true }));
+            }"""
+        )
+        expect(download).to_have_value("10")
+        expect(upload).to_have_value("5")
+        notice = admin_page.locator("#profile-speed-notice")
+        expect(notice).to_contain_text("Profile speed: 20.0/5 Mbps")
+        expect(notice).to_contain_text("literal rate limit takes precedence")
+        expect(notice).to_contain_text("speeds differ")
+
+    def test_category_tabs_keep_submitted_filters(self, admin_page: Page, settings):
+        page = OffersPage(admin_page, settings.base_url)
+        page.goto()
+        page.expect_loaded()
+        admin_page.locator("#catalog-grid-search-form").get_by_label(
+            "Status"
+        ).select_option("active")
+        admin_page.get_by_label("Search tariffs").fill("fiber")
+        admin_page.get_by_role("button", name="Search", exact=True).click()
+        tab = admin_page.locator('[data-catalog-category="internet"]')
+        expect(tab).to_have_attribute("href", re.compile(r"status=active"))
+        expect(tab).to_have_attribute("href", re.compile(r"search=fiber"))
+        tab.click()
+        expect(admin_page).to_have_url(re.compile(r"[?&]plan_category=internet"))
+        expect(admin_page).to_have_url(re.compile(r"[?&]status=active"))
 
 
 class TestCatalogAPI:

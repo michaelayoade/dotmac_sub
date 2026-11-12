@@ -383,6 +383,65 @@ def test_network_route_wires_all_infrastructure_capacity_metrics(
         assert context[key] == getattr(report_data, key)
 
 
+def test_network_date_range_filters_updated_onts_without_changing_inventory(db_session):
+    db_session.add_all(
+        [
+            OntUnit(
+                serial_number="ONT-START",
+                olt_status=OnuOnlineStatus.online,
+                updated_at=datetime(2026, 11, 1, 0, 0, tzinfo=UTC),
+            ),
+            OntUnit(
+                serial_number="ONT-END",
+                olt_status=OnuOnlineStatus.offline,
+                updated_at=datetime(2026, 11, 2, 23, 59, tzinfo=UTC),
+            ),
+            OntUnit(
+                serial_number="ONT-OUTSIDE",
+                olt_status=OnuOnlineStatus.online,
+                updated_at=datetime(2026, 11, 3, 0, 0, tzinfo=UTC),
+            ),
+        ]
+    )
+    db_session.commit()
+
+    report = web_reports.get_network_report_data(
+        db_session,
+        query=web_reports.NetworkReportQuery(
+            date_from=date(2026, 11, 1), date_to=date(2026, 11, 2)
+        ),
+    )
+
+    assert report.total_onts == 3
+    assert report.connected_onts == 2
+    assert report.activity_total == 2
+    assert report.activity_online == 1
+    assert {ont.serial_number for ont in report.recent_ont_activity} == {
+        "ONT-START",
+        "ONT-END",
+    }
+    export = web_reports.build_network_export_csv(data=report)
+    assert "date_from,2026-11-01" in export
+    assert "date_to,2026-11-02" in export
+    assert "ONT-OUTSIDE" not in export
+
+
+@pytest.mark.parametrize(
+    ("date_from", "date_to"),
+    [
+        ("2026-11-01", None),
+        ("2026-11-03", "2026-11-02"),
+        ("invalid", "2026-11-02"),
+    ],
+)
+def test_network_date_range_rejects_invalid_pairs(date_from, date_to):
+    from fastapi import HTTPException
+
+    with pytest.raises(HTTPException) as error:
+        report_routes._network_report_query(date_from=date_from, date_to=date_to)
+    assert error.value.status_code == 422
+
+
 def test_online_activity_maps_the_internal_api_contract(monkeypatch, db_session):
     monkeypatch.setattr(
         crm_reporting.crm_api,

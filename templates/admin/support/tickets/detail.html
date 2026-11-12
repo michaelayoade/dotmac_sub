@@ -31,7 +31,13 @@
         {% if can(request, 'support:ticket:update') %}
         <a href="/admin/support/tickets/{{ ticket.id }}/resolution-confirmation" class="inline-flex items-center rounded-xl border border-amber-300 px-4 py-2.5 text-sm font-semibold">Customer confirmation</a>
         {% endif %}
-        {% if can(request, 'support:ticket:update') and can(request, 'operations:dispatch:write') %}
+        {% if infrastructure_work_order_surface and can(request, 'support:ticket:update') and can(request, 'monitoring:write') and can(request, 'operations:dispatch:write') %}
+            {% if infrastructure_work_order_surface.action.allowed %}
+            <button type="button" @click="$dispatch('open-infrastructure-work-order')" class="inline-flex items-center rounded-xl bg-amber-600 px-4 py-2.5 text-sm font-semibold text-white">Create Infrastructure Work Order</button>
+            {% else %}
+            <a href="#field-work-orders" class="inline-flex items-center rounded-xl border border-amber-300 px-4 py-2.5 text-sm font-semibold" title="{{ infrastructure_work_order_surface.action.reason }}">Work Order Requirements</a>
+            {% endif %}
+        {% elif not infrastructure_work_order_surface and can(request, 'support:ticket:update') and can(request, 'operations:dispatch:write') %}
             {% if issue_work_order_action.allowed %}
             <a href="#field-work-orders" class="inline-flex items-center rounded-xl bg-amber-600 px-4 py-2.5 text-sm font-semibold text-white shadow-sm transition hover:bg-amber-700">Create Work Order</a>
             {% else %}
@@ -92,7 +98,7 @@
             {% endif %}
 
             <span id="field-work-orders" class="block scroll-mt-24"></span>
-            {% call support_card(title='Field Work Orders', subtitle='Explicit field-action scopes issued by the assigned team.', icon='<svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 6h6M9 12h6m-6 6h6M5 4h14a2 2 0 012 2v12a2 2 0 01-2 2H5a2 2 0 01-2-2V6a2 2 0 012-2z"/></svg>') %}
+            {% call support_card(title='Field Work Orders', subtitle='Field work issued from this ticket.', icon='<svg class="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 6h6M9 12h6m-6 6h6M5 4h14a2 2 0 012 2v12a2 2 0 01-2 2H5a2 2 0 01-2-2V6a2 2 0 012-2z"/></svg>') %}
             <div class="space-y-3">
                 {% for work_order in linked_work_orders %}
                 <a href="/admin/dispatch/work-orders/{{ work_order.public_id }}" class="flex items-center justify-between gap-4 rounded-xl border border-slate-200 bg-white p-3 transition hover:border-amber-300 dark:border-slate-600 dark:bg-slate-700/30">
@@ -103,11 +109,37 @@
                     <span class="rounded-lg bg-slate-100 px-2 py-1 text-xs font-semibold text-slate-700 dark:bg-slate-700 dark:text-slate-200">{{ work_order.status | replace('_', ' ') | title }}</span>
                 </a>
                 {% else %}
-                <p class="text-sm text-slate-500 dark:text-slate-400">No field work has been issued from this incident.</p>
+                <p class="text-sm text-slate-500 dark:text-slate-400">No field work has been issued from this ticket.</p>
                 {% endfor %}
             </div>
 
-            {% if issue_work_order_action.allowed and can(request, 'support:ticket:update') and can(request, 'operations:dispatch:write') %}
+            {% if infrastructure_work_order_surface %}
+            {% if infrastructure_work_order_surface.action.allowed and can(request, 'support:ticket:update') and can(request, 'monitoring:write') and can(request, 'operations:dispatch:write') %}
+            <div x-data="{open:false}" @open-infrastructure-work-order.window="open=true">
+                <button type="button" @click="open=true" class="mt-4 rounded-xl bg-amber-600 px-4 py-2 text-sm font-semibold text-white">Create Infrastructure Work Order</button>
+                <div x-show="open" x-cloak class="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/70 p-4" @keydown.escape.window="open=false">
+                    <div role="dialog" aria-modal="true" aria-labelledby="infra-work-order-title" class="w-full max-w-xl rounded-2xl bg-white p-6 shadow-xl dark:bg-slate-800" @click.outside="open=false">
+                        <div class="flex items-center justify-between gap-3"><h2 id="infra-work-order-title" class="text-lg font-semibold">Create infrastructure work order</h2><button type="button" @click="open=false" aria-label="Close" class="text-2xl">&times;</button></div>
+                        <p class="mt-2 text-sm text-slate-500">Target: {{ infrastructure_work_order_surface.target_label }}. Technician assignment follows creation in dispatch.</p>
+                        <form method="post" action="/admin/support/tickets/{{ ticket.id }}/infrastructure-work-orders" class="mt-4 space-y-3">
+                            <input type="hidden" name="_csrf_token" value="{{ request.state.csrf_token }}"><input type="hidden" name="idempotency_key" value="{{ work_order_idempotency_key }}">
+                            {% if infrastructure_work_order_surface.expected_scope_revision_sequence %}<input type="hidden" name="expected_scope_revision_sequence" value="{{ infrastructure_work_order_surface.expected_scope_revision_sequence }}">{% endif %}
+                            {% if infrastructure_work_order_surface.manual_target_name is not none %}<label class="block text-sm font-semibold">Affected infrastructure<input name="manual_target_name" required minlength="3" maxlength="255" value="{{ infrastructure_work_order_surface.manual_target_name }}" class="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 dark:bg-slate-900"></label>{% endif %}
+                            {% set default_work_order_target = infrastructure_work_order_surface.target_label if infrastructure_work_order_surface.manual_target_name is none else (infrastructure_work_order_surface.manual_target_name or ticket.title) %}
+                            <label class="block text-sm font-semibold">Title<input name="title" required maxlength="200" value="Restore {{ default_work_order_target|truncate(192, True, '') }}" class="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 dark:bg-slate-900"></label>
+                            <label class="block text-sm font-semibold">Reason for field work<input name="reason" required maxlength="1000" class="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 dark:bg-slate-900"></label>
+                            <label class="block text-sm font-semibold">Instructions for the field team<textarea name="description" rows="3" class="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 dark:bg-slate-900"></textarea></label>
+                            <div class="grid gap-3 sm:grid-cols-2"><label class="block text-sm font-semibold">Priority<select name="priority" class="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 dark:bg-slate-900"><option value="high">High</option><option value="urgent">Urgent</option><option value="normal">Normal</option></select></label><label class="block text-sm font-semibold">Work type<select name="work_type" class="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 dark:bg-slate-900">{% for value in ['repair', 'survey', 'maintenance', 'install', 'disconnect', 'other'] %}<option value="{{ value }}">{{ value|title }}</option>{% endfor %}</select></label></div>
+                            <label class="block text-sm font-semibold">Site (optional)<input name="address" maxlength="255" class="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 dark:bg-slate-900"></label>
+                            <div class="flex justify-end gap-2"><button type="button" @click="open=false" class="rounded-lg border px-4 py-2">Cancel</button><button class="rounded-lg bg-amber-600 px-4 py-2 font-semibold text-white">Create Work Order</button></div>
+                        </form>
+                    </div>
+                </div>
+            </div>
+            {% elif can(request, 'support:ticket:update') and can(request, 'monitoring:write') and can(request, 'operations:dispatch:write') %}
+            <p class="mt-4 rounded-xl border border-slate-200 p-3 text-xs">{{ infrastructure_work_order_surface.action.reason }}</p>
+            {% endif %}
+            {% elif issue_work_order_action.allowed and can(request, 'support:ticket:update') and can(request, 'operations:dispatch:write') %}
             <form method="post" action="/admin/support/tickets/{{ ticket.id }}/work-orders" class="mt-5 grid gap-3 rounded-xl border border-amber-200 bg-amber-50/60 p-4 dark:border-amber-800 dark:bg-amber-900/15 sm:grid-cols-2">
                 <input type="hidden" name="_csrf_token" value="{{ request.state.csrf_token }}">
                 <input type="hidden" name="idempotency_key" value="{{ work_order_idempotency_key }}">
