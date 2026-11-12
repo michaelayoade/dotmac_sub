@@ -246,9 +246,11 @@ class MikroTikConnection:
                 timeout=DEVICE_IO_TIMEOUT_SEC + 3,
             )
             self._last_connected = datetime.now(UTC)
-            self._consecutive_failures = 0
-            self._last_error_category = None
-            self._last_error = None
+            # A successful login is not a successful observation. Some routers
+            # accept the API connection and then repeatedly time out while
+            # reading /queue/simple. Clearing the streak here kept those
+            # devices at the minimum backoff forever. get_queue_stats() clears
+            # the failure evidence only after the complete read succeeds.
             logger.info(f"Connected to MikroTik device {self.device_id} at {self.host}")
             return True
         except Exception as e:
