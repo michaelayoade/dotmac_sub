@@ -28,7 +28,6 @@ from app.models.team_inbox import (
     InboxConversationAssignment,
     InboxConversationReadState,
     InboxConversationStatus,
-    InboxConversationTeam,
     InboxRoutingEvent,
     InboxStatusTransitionEvent,
 )
@@ -1014,13 +1013,8 @@ def _assignment_counts(
     queue_metrics: team_inbox_operations.InboxQueueMetrics,
     needs_attention: int,
 ) -> InboxAssignmentCounts:
-    all_count = team_inbox_read.queue_conversation_count(db)
-    assigned_to_me = team_inbox_read.assigned_conversation_count(
-        db,
-        assigned_person_id=actor_person_id,
-    )
-    my_team = 0
     my_team_ids: tuple[str, ...] = ()
+    team_ids: list[UUID] = []
     if actor_person_id is not None:
         team_ids = [
             row[0]
@@ -1035,30 +1029,17 @@ def _assignment_counts(
             .all()
         ]
         my_team_ids = tuple(str(value) for value in team_ids)
-        if team_ids:
-            my_team = int(
-                db.query(func.count(func.distinct(InboxConversation.id)))
-                .join(
-                    InboxConversationTeam,
-                    InboxConversationTeam.conversation_id == InboxConversation.id,
-                )
-                .filter(InboxConversation.is_active.is_(True))
-                .filter(
-                    InboxConversation.status != InboxConversationStatus.resolved.value
-                )
-                .filter(~ai_conversation_ownership.ai_owned_conversation_clause())
-                .filter(InboxConversationTeam.is_active.is_(True))
-                .filter(InboxConversationTeam.service_team_id.in_(team_ids))
-                .scalar()
-                or 0
-            )
-    ai_handling = team_inbox_read.ai_handling_conversation_count(db)
+    cohort_counts = team_inbox_read.assignment_cohort_counts(
+        db,
+        actor_person_id=actor_person_id,
+        actor_team_ids=team_ids,
+    )
     return InboxAssignmentCounts(
-        all=all_count,
-        queued=team_inbox_read.queued_conversation_count(db),
-        assigned_to_me=assigned_to_me,
-        my_team=my_team,
-        ai_handling=ai_handling,
+        all=cohort_counts.all,
+        queued=cohort_counts.queued,
+        assigned_to_me=cohort_counts.assigned_to_actor,
+        my_team=cohort_counts.actor_teams,
+        ai_handling=cohort_counts.ai_handling,
         my_team_ids=my_team_ids,
         unassigned=queue_metrics.unassigned_open,
         unreplied=queue_metrics.needs_response,
