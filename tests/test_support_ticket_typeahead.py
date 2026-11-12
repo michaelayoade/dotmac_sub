@@ -321,7 +321,10 @@ def test_ticket_create_maps_existing_outage_ticket_conflict_to_409(
     )
 
     class RequestStub:
-        state = SimpleNamespace(auth={}, csrf_token="test-csrf-token")
+        state = SimpleNamespace(
+            auth={"principal_id": str(uuid4())},
+            csrf_token="test-csrf-token",
+        )
 
         async def form(self):
             return {}
@@ -340,6 +343,11 @@ def test_ticket_create_maps_existing_outage_ticket_conflict_to_409(
         lambda _request: str(uuid4()),
     )
     monkeypatch.setattr(admin_support_tickets, "can", lambda *_args: True)
+    monkeypatch.setattr(
+        admin_support_tickets,
+        "load_permission_keys",
+        lambda *_args, **_kwargs: frozenset(),
+    )
     monkeypatch.setattr(
         admin_support_tickets,
         "_ctx",
