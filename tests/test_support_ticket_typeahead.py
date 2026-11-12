@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from pathlib import Path
 from types import SimpleNamespace
 from uuid import uuid4
@@ -9,6 +10,11 @@ from app.models.system_user import SystemUser
 from app.services import support as support_service
 from app.services import support_ticket_settings, web_support_tickets
 from app.services import typeahead as typeahead_service
+from app.services.topology.outage_work_order_handoff import (
+    InfrastructureTicketConflict,
+    InfrastructureTicketConflictReason,
+    OutageWorkOrderHandoffError,
+)
 from app.web.admin import support_tickets as admin_support_tickets
 from tests.staff_identity_fixtures import add_bound_staff_user
 
@@ -215,6 +221,64 @@ def test_ticket_form_context_includes_authoritative_region_manager_preview(
     assert 'name="infrastructure_mode"' in html
     assert "Affected customers: Unable to determine" in html
 
+    conflict = InfrastructureTicketConflict(
+        reason=InfrastructureTicketConflictReason.ticket_type,
+        ticket_id=uuid4(),
+        ticket_number="T-OUTAGE-2",
+        ticket_title="Canonical shared outage",
+        existing_ticket_type="outage",
+        requested_ticket_type="Cabinet Disconnection",
+        existing_service_team_id=uuid4(),
+        requested_service_team_id=uuid4(),
+    )
+    conflict_html = admin_support_tickets.templates.env.get_template(
+        "admin/support/tickets/new.html"
+    ).render(
+        request=request,
+        csrf_token="test-csrf-token",
+        current_user={"name": "Test Admin", "email": "admin@example.com"},
+        sidebar_stats={},
+        active_menu="support",
+        active_page="support-tickets",
+        page_title="New Ticket",
+        form_mode="create",
+        ticket=None,
+        error="The active outage already has a ticket with a different type",
+        duplicate_warning=None,
+        existing_infrastructure_ticket_conflict=conflict,
+        can_view_existing_infrastructure_ticket=True,
+        **context,
+    )
+    assert "data-existing-infrastructure-ticket-conflict" in conflict_html
+    assert "#T-OUTAGE-2 - Canonical shared outage" in conflict_html
+    assert "Existing type: outage" in conflict_html
+    assert "Requested type: Cabinet Disconnection" in conflict_html
+    assert f'href="/admin/support/tickets/{conflict.ticket_id}"' in conflict_html
+
+    restricted_conflict_html = admin_support_tickets.templates.env.get_template(
+        "admin/support/tickets/new.html"
+    ).render(
+        request=request,
+        csrf_token="test-csrf-token",
+        current_user={"name": "Test Admin", "email": "admin@example.com"},
+        sidebar_stats={},
+        active_menu="support",
+        active_page="support-tickets",
+        page_title="New Ticket",
+        form_mode="create",
+        ticket=None,
+        error="The active outage already has a ticket with a different type",
+        duplicate_warning=None,
+        existing_infrastructure_ticket_conflict=conflict,
+        can_view_existing_infrastructure_ticket=False,
+        **context,
+    )
+    assert "data-existing-infrastructure-ticket-conflict" in restricted_conflict_html
+    assert "Canonical shared outage" not in restricted_conflict_html
+    assert (
+        f"/admin/support/tickets/{conflict.ticket_id}" not in restricted_conflict_html
+    )
+
     restricted_html = admin_support_tickets.templates.env.get_template(
         "admin/support/tickets/new.html"
     ).render(
@@ -235,6 +299,106 @@ def test_ticket_form_context_includes_authoritative_region_manager_preview(
     assert 'name="ticket_manager_person_id"' not in restricted_html
     assert 'name="service_team_id"' not in restricted_html
     assert 'name="assignee_person_ids"' not in restricted_html
+
+
+def test_ticket_create_maps_existing_outage_ticket_conflict_to_409(
+    monkeypatch,
+) -> None:
+    conflict = InfrastructureTicketConflict(
+        reason=InfrastructureTicketConflictReason.ticket_type,
+        ticket_id=uuid4(),
+        ticket_number="T-OUTAGE-3",
+        ticket_title="Existing outage ticket",
+        existing_ticket_type="outage",
+        requested_ticket_type="Cabinet Disconnection",
+        existing_service_team_id=uuid4(),
+        requested_service_team_id=uuid4(),
+    )
+    owner_error = OutageWorkOrderHandoffError(
+        "infrastructure_ticket_type_conflict",
+        "The active outage already has a ticket with a different type",
+        infrastructure_ticket_conflict=conflict,
+    )
+
+    class RequestStub:
+        state = SimpleNamespace(auth={}, csrf_token="test-csrf-token")
+
+        async def form(self):
+            return {}
+
+    rollback_calls: list[bool] = []
+    db = SimpleNamespace(rollback=lambda: rollback_calls.append(True))
+    rendered: dict[str, object] = {}
+
+    def render(_name, context, *, status_code=200):
+        rendered.update(context)
+        return SimpleNamespace(status_code=status_code)
+
+    monkeypatch.setattr(
+        admin_support_tickets,
+        "_infrastructure_actor_id",
+        lambda _request: str(uuid4()),
+    )
+    monkeypatch.setattr(admin_support_tickets, "can", lambda *_args: True)
+    monkeypatch.setattr(
+        admin_support_tickets,
+        "_ctx",
+        lambda request, _db: {"request": request},
+    )
+
+    def raise_conflict(*_args, **_kwargs):
+        raise owner_error
+
+    monkeypatch.setattr(web_support_tickets, "create_ticket_from_form", raise_conflict)
+    monkeypatch.setattr(
+        web_support_tickets,
+        "build_ticket_form_context",
+        lambda *_args, **_kwargs: {"prefill": {}},
+    )
+    monkeypatch.setattr(
+        admin_support_tickets.web_custom_fields_service,
+        "build_creation_form_context",
+        lambda *_args, **_kwargs: {},
+    )
+    monkeypatch.setattr(admin_support_tickets.templates, "TemplateResponse", render)
+
+    response = asyncio.run(
+        admin_support_tickets.ticket_create(
+            RequestStub(),
+            title="Cabinet link down",
+            description="Investigate cabinet connectivity",
+            publish_description=False,
+            subscriber_id=None,
+            customer_account_id=None,
+            customer_person_id=None,
+            region=None,
+            technician_person_id=None,
+            ticket_manager_person_id=None,
+            service_team_id=None,
+            ticket_type="Cabinet Disconnection",
+            base_station_details=None,
+            infrastructure_mode="existing",
+            infrastructure_kind="cabinet",
+            infrastructure_id=str(uuid4()),
+            manual_infrastructure_name=None,
+            infrastructure_request_key=str(uuid4()),
+            priority="urgent",
+            channel="web",
+            status="open",
+            due_at=None,
+            tags=None,
+            related_outage_ticket_id=None,
+            assignee_person_ids=[],
+            attachments=[],
+            duplicate_override=None,
+            db=db,
+        )
+    )
+
+    assert response.status_code == 409
+    assert rollback_calls == [True]
+    assert rendered["existing_infrastructure_ticket_conflict"] is conflict
+    assert rendered["can_view_existing_infrastructure_ticket"] is True
 
 
 def test_list_assignment_people_keeps_legacy_subscriber_assignments_visible(

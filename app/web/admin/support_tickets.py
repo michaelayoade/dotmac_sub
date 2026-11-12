@@ -649,12 +649,21 @@ async def ticket_create(
                 form=raw_form,
             )
         )
+        infrastructure_ticket_conflict = (
+            support_web_service.infrastructure_ticket_conflict_from_error(exc)
+        )
         context.update(
             {
                 "page_title": "New Ticket",
                 "form_mode": "create",
                 "ticket": None,
                 "error": _ticket_form_error(exc),
+                "existing_infrastructure_ticket_conflict": (
+                    infrastructure_ticket_conflict
+                ),
+                "can_view_existing_infrastructure_ticket": can(
+                    request, "support:ticket:read"
+                ),
                 "prefill": {
                     **(context.get("prefill") or {}),
                     "title": title,
@@ -663,12 +672,15 @@ async def ticket_create(
                 },
             }
         )
-        response_status = (
-            413
-            if isinstance(exc, support_web_service.TicketAttachmentValidationError)
+        if infrastructure_ticket_conflict is not None:
+            response_status = 409
+        elif (
+            isinstance(exc, support_web_service.TicketAttachmentValidationError)
             and exc.kind is support_web_service.TicketAttachmentValidationKind.too_large
-            else 400
-        )
+        ):
+            response_status = 413
+        else:
+            response_status = 400
         return templates.TemplateResponse(
             "admin/support/tickets/new.html", context, status_code=response_status
         )

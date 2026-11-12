@@ -171,7 +171,11 @@ def test_existing_outage_ticket_reports_conflicting_selected_team(monkeypatch):
     incident = SimpleNamespace(id=uuid4(), status="open")
     existing_link = SimpleNamespace(ticket_id=uuid4())
     existing_ticket = SimpleNamespace(
-        ticket_type="Cabinet Disconnection", service_team_id=uuid4()
+        id=existing_link.ticket_id,
+        number="T-OUTAGE-1",
+        title="Existing cabinet outage",
+        ticket_type="Cabinet Disconnection",
+        service_team_id=uuid4(),
     )
 
     class Query:
@@ -208,6 +212,75 @@ def test_existing_outage_ticket_reports_conflicting_selected_team(monkeypatch):
             ),
         )
     assert conflict.value.code == "infrastructure_ticket_team_conflict"
+    evidence = conflict.value.infrastructure_ticket_conflict
+    assert evidence is not None
+    assert evidence.reason is handoff.InfrastructureTicketConflictReason.service_team
+    assert evidence.ticket_id == existing_ticket.id
+    assert evidence.reference == existing_ticket.number
+    assert evidence.ticket_title == existing_ticket.title
+    assert evidence.existing_ticket_type == existing_ticket.ticket_type
+    assert evidence.requested_ticket_type == "Cabinet Disconnection"
+    assert evidence.existing_service_team_id == existing_ticket.service_team_id
+    assert evidence.requested_service_team_id is not None
+
+
+def test_existing_outage_ticket_type_conflict_preserves_ticket_identity(monkeypatch):
+    incident = SimpleNamespace(id=uuid4(), status="open")
+    existing_ticket = SimpleNamespace(
+        id=uuid4(),
+        number="T-OUTAGE-2",
+        title="Canonical shared outage",
+        ticket_type="outage",
+        service_team_id=uuid4(),
+    )
+    existing_link = SimpleNamespace(ticket_id=existing_ticket.id)
+
+    class Query:
+        def filter(self, *_args):
+            return self
+
+        def with_for_update(self):
+            return self
+
+        def one_or_none(self):
+            return incident
+
+    db = SimpleNamespace(
+        query=lambda _model: Query(), get=lambda _model, _id: existing_ticket
+    )
+    monkeypatch.setattr(
+        handoff, "infrastructure_link_for", lambda *_args: existing_link
+    )
+    actor_id = uuid4()
+    with pytest.raises(handoff.OutageWorkOrderHandoffError) as conflict:
+        handoff._create_infrastructure_ticket(
+            db,
+            handoff.OutageInfrastructureTicketIssueCommand(
+                incident_id=incident.id,
+                actor_id=actor_id,
+                permissions=handoff.TICKET_CREATE_PERMISSIONS,
+                context=CommandContext.system(
+                    actor=str(actor_id),
+                    scope=handoff.TICKET_CREATE_SCOPE,
+                    reason="Cabinet field repair",
+                    idempotency_key=str(uuid4()),
+                ),
+                ticket_payload=_payload(),
+            ),
+        )
+
+    evidence = conflict.value.infrastructure_ticket_conflict
+    assert conflict.value.code == "infrastructure_ticket_type_conflict"
+    assert evidence is not None
+    assert evidence.reason is handoff.InfrastructureTicketConflictReason.ticket_type
+    assert evidence.ticket_id == existing_ticket.id
+    assert evidence.reference == existing_ticket.number
+    assert evidence.ticket_title == existing_ticket.title
+    assert evidence.existing_ticket_type == "outage"
+    assert evidence.requested_ticket_type == "Cabinet Disconnection"
+    assert conflict.value.details["infrastructure_ticket_conflict"] == (
+        evidence.as_error_details()
+    )
 
 
 def test_manual_command_records_name_without_reconciliation(monkeypatch):
