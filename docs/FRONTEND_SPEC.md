@@ -214,6 +214,13 @@ consume the same contract. `NetworkDeviceRead` carries the binary
 `operational_status`, its `operational_reason`, and `status_presentation`.
 Freshness and retry-pending evidence stay inside the verification lifecycle and
 are not client-visible device states.
+
+The outage console's Down now root-cause table shows 20 devices per page from
+the typed reachability projection. Pagination replaces only that table; its
+current rows stay readable during loading, the controls show progress or a
+retry message, and the URL changes after a successful load. Ordinary links
+still work without JavaScript.
+
 Customer connection API/portal/reseller projections carry
 `status_presentation` beside the raw verdict; customer web and mobile map only
 its tone/icon to platform-native visuals. Raw RADIUS session indicators remain

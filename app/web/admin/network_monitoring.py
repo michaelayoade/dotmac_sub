@@ -4,7 +4,7 @@ import uuid
 from datetime import datetime
 from urllib.parse import quote
 
-from fastapi import APIRouter, Depends, Form, HTTPException, Query, Request
+from fastapi import APIRouter, Depends, Form, HTTPException, Query, Request, Response
 from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
 from sqlalchemy.orm import Session
@@ -16,6 +16,10 @@ from app.services import web_network_monitoring as web_network_monitoring_servic
 from app.services import web_network_noc as web_network_noc_service
 from app.services import web_network_noc_inspector as web_network_noc_inspector_service
 from app.services.auth_dependencies import require_any_permission, require_permission
+from app.services.topology.reachability import (
+    ReachabilityPageQuery,
+    get_reachability_page,
+)
 from app.web.request_parsing import parse_form_data_sync
 
 templates = Jinja2Templates(directory="templates")
@@ -439,26 +443,15 @@ def outages_console(
         list_for_incident,
         ticket_issue_action,
     )
-    from app.services.topology.reachability import reachability_overview
 
     context = _base_context(request, db, active_page="monitoring")
     context["error"] = error
     context["ticket_notice"] = request.query_params.get("ticket")
     # Root-cause view of everything currently down: devices behind a down
     # parent are unreachable, not independent outages (one failure, not N).
-    all_reachability = reachability_overview(db)
-    reachability_per_page = 20
-    reachability_total = len(all_reachability)
-    reachability_total_pages = max(
-        1, (reachability_total + reachability_per_page - 1) // reachability_per_page
+    context["reachability_page_data"] = get_reachability_page(
+        db, query=ReachabilityPageQuery(page=reachability_page)
     )
-    reachability_page = min(reachability_page, reachability_total_pages)
-    start = (reachability_page - 1) * reachability_per_page
-    context["reachability"] = all_reachability[start : start + reachability_per_page]
-    context["reachability_page"] = reachability_page
-    context["reachability_per_page"] = reachability_per_page
-    context["reachability_total"] = reachability_total
-    context["reachability_total_pages"] = reachability_total_pages
     context["basestations"] = list_basestations(db)
     context["fdh_cabinets"] = list_fdh_cabinets(db)
     context["network_nodes"] = list_network_nodes(db)
@@ -502,6 +495,26 @@ def outages_console(
         )
     context["incidents"] = rows
     return templates.TemplateResponse("admin/network/outages.html", context)
+
+
+@router.get(
+    "/outages/reachability",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("monitoring:read"))],
+)
+def outage_reachability_page(
+    request: Request,
+    reachability_page: int = Query(1, ge=1),
+    db: Session = Depends(get_db),
+) -> Response:
+    """Load only the root-cause table for outage console pagination."""
+    page = get_reachability_page(
+        db, query=ReachabilityPageQuery(page=reachability_page)
+    )
+    return templates.TemplateResponse(
+        "admin/network/_outage_reachability.html",
+        {"request": request, "reachability_page_data": page},
+    )
 
 
 @router.post(
