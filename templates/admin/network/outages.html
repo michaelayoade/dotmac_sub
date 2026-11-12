@@ -80,9 +80,6 @@
                         {% if row.impact.potentially_affected %}
                         <span class="ml-1 text-slate-500 dark:text-slate-400">{{ row.impact.potentially_affected }} potentially affected</span>
                         {% endif %}
-                        {% if row.infrastructure_link %}
-                        <a href="/admin/support/tickets/{{ row.infrastructure_link.ticket_id }}" class="ml-1 text-blue-600 underline hover:text-blue-700 dark:text-blue-400">infra ticket</a>
-                        {% endif %}
                         {% if row.infrastructure_work_orders %}
                         <div class="mt-1">
                             <span class="text-slate-500">Field work:</span>
@@ -116,7 +113,7 @@
                     <td class="text-slate-500">{{ row.incident.declared_by or '—' }}</td>
                     <td class="text-slate-500">{{ row.incident.note or '' }}</td>
                     <td>
-                                                {% if row.infrastructure_link %}
+                        {% if row.infrastructure_link %}
                         <a href="/admin/support/tickets/{{ row.infrastructure_link.ticket_id }}" class="mb-2 inline-block text-blue-600 underline hover:text-blue-700 dark:text-blue-400">View infrastructure ticket</a>
                         {% elif row.ticket_issue_action.allowed %}
                         <form method="post" action="/admin/network/outages/{{ row.incident.id }}/infrastructure-ticket" class="mb-2">
