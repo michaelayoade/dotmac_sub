@@ -587,6 +587,7 @@ def test_a105_sub_boot_does_not_construct_or_resolve_kernel_runtime() -> None:
                     sys.executable,
                     "-c",
                     "import faulthandler\n"
+                    "import os\n"
                     "import signal\n"
                     "import sys\n"
                     "diagnostics = open(int(sys.argv[1]), 'w', closefd=False)\n"
@@ -704,7 +705,9 @@ def test_a105_sub_boot_does_not_construct_or_resolve_kernel_runtime() -> None:
                     "runtime = sys.modules.get('dotmac_kernel.session_runtime')\n"
                     "assert runtime is not None, 'K105 session_runtime was not observed'\n"
                     "assert runtime._binding is None, runtime._binding\n"
-                    "assert runtime._reference_claimed is False, runtime._reference_claimed\n",
+                    "assert runtime._reference_claimed is False, runtime._reference_claimed\n"
+                    "print('K105 boot probe: assertions passed', file=diagnostics, flush=True)\n"
+                    "os._exit(0)\n",
                     str(diagnostics.fileno()),
                 ],
                 cwd=PROJECT_ROOT,
