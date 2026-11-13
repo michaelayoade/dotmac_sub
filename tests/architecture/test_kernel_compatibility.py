@@ -579,6 +579,8 @@ def test_a105_sub_boot_does_not_construct_or_resolve_kernel_runtime() -> None:
     Fixed phases and one stack-only dump precede the unchanged 120s deadline.
     Timeout reports read at most 32 KiB from a dedicated diagnostic stream;
     diagnostics never inspect local values or the process environment.
+    Successful assertions exit directly because interpreter teardown is outside
+    the boot-containment contract and may run cyclic garbage collection.
     """
     with TemporaryFile() as diagnostics:
         try:
@@ -707,6 +709,10 @@ def test_a105_sub_boot_does_not_construct_or_resolve_kernel_runtime() -> None:
                     "assert runtime._binding is None, runtime._binding\n"
                     "assert runtime._reference_claimed is False, runtime._reference_claimed\n"
                     "print('K105 boot probe: assertions complete', file=diagnostics, flush=True)\n"
+                    # The imported application graph contains cyclic objects whose
+                    # interpreter-shutdown collection can exceed the probe deadline
+                    # under xdist load. The assertions above are the complete probe;
+                    # exit directly so teardown GC cannot turn success into a timeout.
                     "os._exit(0)\n",
                     str(diagnostics.fileno()),
                 ],
