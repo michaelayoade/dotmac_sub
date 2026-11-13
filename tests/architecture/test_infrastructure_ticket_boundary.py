@@ -66,3 +66,21 @@ def test_support_create_adapter_passes_typed_form_command():
         "request",
         "attachments",
     }
+
+
+def test_support_create_adapter_maps_typed_ticket_conflict_without_orm_lookup():
+    source = (ROOT / "app/web/admin/support_tickets.py").read_text()
+    tree = ast.parse(source)
+    create = next(
+        node
+        for node in tree.body
+        if isinstance(node, ast.AsyncFunctionDef) and node.name == "ticket_create"
+    )
+    calls = {
+        ast.unparse(node.func)
+        for node in ast.walk(create)
+        if isinstance(node, ast.Call)
+    }
+    assert "support_web_service.infrastructure_ticket_conflict_from_error" in calls
+    assert "db.get" not in calls
+    assert "db.query" not in calls

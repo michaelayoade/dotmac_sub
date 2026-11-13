@@ -77,6 +77,11 @@ from `network.outage_impact`; it does not expose the audience list. The typed
 policy and delegates inventory search and exact reference checks to
 `network.infrastructure_catalogue`. Issuance locks the catalogue reference
 and rechecks type eligibility before it declares or reuses an incident.
+If the active outage already has a canonical ticket with a different requested
+type or service team, the owner refuses a replacement or duplicate and returns
+typed existing-ticket identity as conflict evidence. The staff form renders
+that conflict as HTTP 409 with the existing number, title, type, and a ticket
+detail link for principals who hold ticket-read permission.
 
 An operator can explicitly choose a manual name. The ticket owner
 records this as unlinked evidence in ticket metadata. It does not create an
