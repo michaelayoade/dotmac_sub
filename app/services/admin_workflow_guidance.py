@@ -468,7 +468,7 @@ WORKFLOW_GUIDANCE: tuple[AdminWorkflowGuidance, ...] = (
         (),
         "Review service lifecycle, active access, outage indicators, credentials, IP information, router or NAS, and service location.",
         "Open or update a ticket when the issue needs tracked follow-up or field work.",
-        "For a shared outage, open Network → Outages and select Create infrastructure ticket on the open outage row before issuing field work.",
+        "For a shared outage, open Network → Outages, use Previous and Next in Down now to inspect every root-cause page, and select Create infrastructure ticket on the open outage row before issuing field work; a failed page load keeps the current devices visible so you can retry.",
         "The infrastructure ticket has no subscriber and is linked to the outage; use the linked ticket and the outage row Resolve action for canonical follow-up.",
         "On Network Map, use Import Map to stage a KML or KMZ file for review, or Export Map to download the permitted layers; staging does not change the canonical map.",
         "On Network Map, use All layers or None to change layer visibility at once, or use an individual layer checkbox to show only the network assets needed for the investigation; wait for the asset count to finish loading before treating an empty view as evidence that data is missing.",

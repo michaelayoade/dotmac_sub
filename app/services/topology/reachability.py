@@ -18,6 +18,8 @@ from __future__ import annotations
 
 from collections import deque
 from dataclasses import dataclass
+from typing import Literal
+from uuid import UUID
 
 from sqlalchemy.orm import Session
 
@@ -25,16 +27,38 @@ from app.models.network_monitoring import NetworkDevice
 from app.services.topology.affected import forwarding_graph_projection
 from app.services.topology.live_status import DOWN
 
-CLASS_DOWN = "down"
-CLASS_UNREACHABLE_UPSTREAM = "unreachable_upstream"
+CLASS_DOWN: Literal["down"] = "down"
+CLASS_UNREACHABLE_UPSTREAM: Literal["unreachable_upstream"] = "unreachable_upstream"
 
 
 @dataclass(frozen=True)
 class Reachability:
     """Classification of one down device."""
 
-    classification: str  # CLASS_DOWN | CLASS_UNREACHABLE_UPSTREAM
-    root_cause_device_id: object  # the down device itself, or its topmost down ancestor
+    classification: Literal["down", "unreachable_upstream"]
+    root_cause_device_id: UUID
+
+
+@dataclass(frozen=True)
+class ReachabilityRow:
+    device: NetworkDevice
+    classification: Literal["down", "unreachable_upstream"]
+    root_cause: NetworkDevice | None
+
+
+@dataclass(frozen=True)
+class ReachabilityPageQuery:
+    page: int = 1
+    per_page: int = 20
+
+
+@dataclass(frozen=True)
+class ReachabilityPage:
+    rows: tuple[ReachabilityRow, ...]
+    page: int
+    per_page: int
+    total: int
+    total_pages: int
 
 
 def core_parent_map(
@@ -67,7 +91,7 @@ def classify_down_devices(
     *,
     adjacency: dict | None = None,
     root_ids: list | set | frozenset | None = None,
-) -> dict:
+) -> dict[UUID, Reachability]:
     """Classify every active down device as ``down`` or ``unreachable_upstream``.
 
     Returns ``{device_id: Reachability}`` — one entry per device whose cached
@@ -90,7 +114,7 @@ def classify_down_devices(
         root_ids=root_ids,
     )
 
-    result: dict = {}
+    result: dict[UUID, Reachability] = {}
     for device_id in down_ids:
         if device_id not in parent:
             result[device_id] = Reachability(CLASS_DOWN, device_id)
@@ -110,32 +134,49 @@ def classify_down_devices(
     return result
 
 
-def reachability_overview(session: Session) -> list[dict]:
+def reachability_overview(session: Session) -> tuple[ReachabilityRow, ...]:
     """Operator-facing rows for the outage console: every down device with its
     classification and root cause, root causes first. Read-only."""
     classified = classify_down_devices(session)
     if not classified:
-        return []
+        return ()
     devices = {
         d.id: d
         for d in session.query(NetworkDevice)
         .filter(NetworkDevice.id.in_(classified))
         .all()
     }
-    rows = []
+    rows: list[ReachabilityRow] = []
     for device_id, info in classified.items():
         device = devices.get(device_id)
         if device is None:
             continue
         root = devices.get(info.root_cause_device_id)
         rows.append(
-            {
-                "device": device,
-                "classification": info.classification,
-                "root_cause": root if info.root_cause_device_id != device_id else None,
-            }
+            ReachabilityRow(
+                device=device,
+                classification=info.classification,
+                root_cause=root if info.root_cause_device_id != device_id else None,
+            )
         )
-    rows.sort(
-        key=lambda r: (r["classification"] != CLASS_DOWN, str(r["device"].name or ""))
+    rows.sort(key=lambda r: (r.classification != CLASS_DOWN, str(r.device.name or "")))
+    return tuple(rows)
+
+
+def get_reachability_page(
+    session: Session, *, query: ReachabilityPageQuery
+) -> ReachabilityPage:
+    """Return one bounded page from the authoritative root-cause projection."""
+    if query.page < 1 or not 1 <= query.per_page <= 100:
+        raise ValueError("Invalid reachability page")
+    rows = reachability_overview(session)
+    total_pages = max(1, (len(rows) + query.per_page - 1) // query.per_page)
+    page = min(query.page, total_pages)
+    start = (page - 1) * query.per_page
+    return ReachabilityPage(
+        rows=rows[start : start + query.per_page],
+        page=page,
+        per_page=query.per_page,
+        total=len(rows),
+        total_pages=total_pages,
     )
-    return rows

@@ -708,7 +708,7 @@ def test_a105_sub_boot_does_not_construct_or_resolve_kernel_runtime() -> None:
                     "assert runtime is not None, 'K105 session_runtime was not observed'\n"
                     "assert runtime._binding is None, runtime._binding\n"
                     "assert runtime._reference_claimed is False, runtime._reference_claimed\n"
-                    "print('K105 boot probe: assertions complete', file=diagnostics, flush=True)\n"
+                    "print('K105 boot probe: assertions passed', file=diagnostics, flush=True)\n"
                     # The imported application graph contains cyclic objects whose
                     # interpreter-shutdown collection can exceed the probe deadline
                     # under xdist load. The assertions above are the complete probe;
@@ -717,23 +717,23 @@ def test_a105_sub_boot_does_not_construct_or_resolve_kernel_runtime() -> None:
                     str(diagnostics.fileno()),
                 ],
                 cwd=PROJECT_ROOT,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
+                stdout=subprocess.DEVNULL,
+                stderr=diagnostics,
                 text=True,
                 pass_fds=(diagnostics.fileno(),),
             )
-            _stdout, stderr = process.communicate(timeout=120)
+            process.wait(timeout=120)
         except subprocess.TimeoutExpired:
             # Stack-only dump from the child's own handler, then kill.
             process.send_signal(signal.SIGUSR1)
             time.sleep(2)
             process.kill()
-            process.communicate()
+            process.wait()
             raise AssertionError(
                 "K105 boot probe exceeded the unchanged 120s deadline:\n"
                 + _read_probe_diagnostics(diagnostics)
             ) from None
         assert process.returncode == 0, (
-            f"K105 boot probe exit {process.returncode}:\n{stderr}\n"
+            f"K105 boot probe exit {process.returncode}:\n"
             + _read_probe_diagnostics(diagnostics)
         )
