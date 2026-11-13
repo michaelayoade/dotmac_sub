@@ -484,11 +484,7 @@ def preview_account_adjustment(
     position = get_customer_financial_position(db, account_id)
     funding_before = round_money(
         position.prepaid_available_balance
-        if origin
-        in {
-            AccountAdjustmentOrigin.prepaid_service_renewal,
-            AccountAdjustmentOrigin.prepaid_plan_change,
-        }
+        if origin.value.startswith("prepaid_")
         else get_account_credit_balance(db, str(account_id), currency=currency)
     )
     shortfall = round_money(max(Decimal("0.00"), amount - funding_before))
