@@ -1260,6 +1260,7 @@ HELP_ONLY_GUIDANCE: tuple[AdminWorkflowGuidance, ...] = (
         "Open linked records when a total or exception needs investigation.",
         "Export only the filtered scope you are authorized to use.",
         "For Upcoming Charges, choose the postpaid or prepaid view, narrow the cohort with the available filters, and use the optional month/year or summary view when you need a focused planning period.",
+        "For Revenue, apply both calendar dates before comparing collections, invoices, and recent payments; Clear restores the last 30 days, and Export uses the applied period.",
         "For Network Usage, select both dates to limit ONT records by their last update. The infrastructure totals remain a current snapshot; clear the dates to see the latest available records.",
         "For Customers, apply the date and status filters before comparing KPIs; reveal the detailed cohort to inspect usage, growth, and regional breakdown, then export the same scope if authorized.",
         route_templates=("/admin/reports",),
@@ -2412,8 +2413,9 @@ _ACTION_SPECS: dict[str, tuple[_ActionSpec, ...]] = {
         _action(
             "export-report", "Export a report", 3, permission="reports:billing:export"
         ),
-        _action("review-network-report", "Review network report scope", 5),
-        _action("review-customer-report", "Review customer report details", 6),
+        _action("review-revenue-report", "Review revenue report scope", 5),
+        _action("review-network-report", "Review network report scope", 6),
+        _action("review-customer-report", "Review customer report details", 7),
     ),
     "churn-report": (
         _action("choose-churn-window", "Choose the churn date range", 0),

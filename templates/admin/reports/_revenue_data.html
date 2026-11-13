@@ -1,0 +1,91 @@
+{% from "components/ui/macros.html" import stats_card, card, report_chart_card, table_head, table_row, empty_state %}
+<div id="revenue-results" class="space-y-8" aria-live="polite" aria-busy="false">
+    {# KPI Cards #}
+    <div class="grid gap-4 sm:grid-cols-2 lg:grid-cols-4 animate-fade-in-up" style="animation-delay: 50ms;">
+        {{ stats_card("Total Collections", "₦" ~ "{:,.2f}".format(total_revenue), icon='<svg class="h-6 w-6 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8c-1.657 0-3 .895-3 2s1.343 2 3 2 3 .895 3 2-1.343 2-3 2m0-8c1.11 0 2.08.402 2.599 1M12 8V7m0 1v8m0 0v1m0-1c-1.11 0-2.08-.402-2.599-1M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>', color="emerald", color2="teal", change=revenue_growth, compact_value=True) }}
+        {{ stats_card("Recurring Revenue", ("₦" ~ "{:,.2f}".format(recurring_revenue)) if recurring_revenue is not none else "Unavailable", icon='<svg class="h-6 w-6 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/></svg>', color="blue", color2="indigo", compact_value=True) }}
+        {{ stats_card("Outstanding on selected invoices", "₦" ~ "{:,.2f}".format(outstanding_amount), icon='<svg class="h-6 w-6 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>', color="amber", color2="orange", compact_value=True) }}
+        {{ stats_card("Collection Rate", "%.1f"|format(collection_rate) ~ "%", icon='<svg class="h-6 w-6 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>', color="violet", color2="purple", compact_value=True) }}
+    </div>
+    <p class="text-xs text-slate-500 dark:text-slate-400">Recurring Revenue is the snapshot as of {{ recurring_as_of if recurring_as_of else 'an unavailable date' }}. Outstanding is the current balance on invoices issued in the selected dates.</p>
+
+    {# Compact report detail row #}
+    <section data-revenue-overview-grid class="grid gap-6 lg:grid-cols-2 lg:items-start">
+    <div class="min-w-0 animate-fade-in-up" style="animation-delay: 100ms;">
+    {% call report_chart_card("Revenue Trend", revenue_chart, "revenue-chart", color="teal", min_height=240) %}
+        <script>
+        (function() {
+            const ctx = document.getElementById('revenue-chart');
+            if (!ctx) return;
+            const chartData = {
+                labels: {{ revenue_chart.labels | tojson | safe }},
+                datasets: [
+                    {
+                        label: 'Collections',
+                        data: {{ revenue_chart.series[0].values | tojson | safe }},
+                        borderColor: '#14b8a6',
+                        backgroundColor: 'rgba(20, 184, 166, 0.1)',
+                        fill: true,
+                        tension: 0.4
+                    }
+                ]
+            };
+            const chart = DotmacCharts.createAreaChart(ctx, chartData, {});
+            DotmacCharts.registerChart('revenue-chart', chart);
+        })();
+        </script>
+    {% endcall %}
+    </div>
+
+    {# Recent Payments #}
+    <div class="min-w-0 animate-fade-in-up" style="animation-delay: 150ms;">
+    {% call card("Recent Payments", color="teal", padding=False) %}
+        {% if recent_payments %}
+        <div class="max-h-[288px] overflow-x-hidden overflow-y-auto">
+            <table class="w-full table-fixed divide-y divide-slate-200 dark:divide-slate-700">
+                <colgroup>
+                    <col class="w-[22%]">
+                    <col class="w-[32%]">
+                    <col class="w-[28%]">
+                    <col class="w-[18%]">
+                </colgroup>
+                {{ table_head([
+                    {"label": "Date"},
+                    {"label": "Account"},
+                    {"label": "Amount"},
+                    {"label": "Method"}
+                ]) }}
+                <tbody class="divide-y divide-slate-200 bg-white dark:divide-slate-700 dark:bg-slate-800">
+                    {% for payment in recent_payments %}
+                    {% call table_row(payment.id) %}
+                        <td class="truncate px-4 py-3 text-sm text-slate-900 dark:text-white">
+                            {{ payment.paid_at | app_datetime('%b %d, %Y', include_tz=False) if payment.paid_at else (payment.created_at | app_datetime('%b %d, %Y', '-', include_tz=False)) }}
+                        </td>
+                        <td class="truncate px-4 py-3 text-sm text-slate-600 dark:text-slate-300">
+                            {% if payment.account %}
+                                {{ payment.account.name }}
+                            {% else %}
+                                Account
+                            {% endif %}
+                        </td>
+                        <td class="truncate px-4 py-3 font-mono text-sm font-medium tabular-nums text-emerald-600 dark:text-emerald-400">₦{{ "{:,.2f}".format(payment.amount) }}</td>
+                        <td class="truncate px-4 py-3 text-sm text-slate-600 dark:text-slate-300">
+                            {% if payment.payment_method %}
+                                {{ payment.payment_method.label or payment.payment_method.method_type.value | title }}
+                            {% else %}
+                                -
+                            {% endif %}
+                        </td>
+                    {% endcall %}
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+        {% else %}
+        <table class="min-w-full"><tbody>{{ empty_state("No payments in this period", "Try another date range.") }}</tbody></table>
+        {% endif %}
+    {% endcall %}
+    </div>
+    </section>
+<section id="revenue-activity" hx-get="/admin/reports/revenue/activity" hx-trigger="load, every 20s" hx-swap="outerHTML" aria-live="polite" class="rounded-xl border border-slate-200 bg-white p-5 text-sm text-slate-500 dark:border-slate-700 dark:bg-slate-800">Loading report activity…</section>
+</div>

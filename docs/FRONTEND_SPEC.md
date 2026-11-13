@@ -1790,15 +1790,30 @@ full cohort count.
 
 #### Revenue Report
 
+`GET /admin/reports/revenue` renders the date controls and loading placeholders.
+`GET /admin/reports/revenue/data` loads the KPI cards, collections trend, and
+recent payments for the applied inclusive UTC date range. The activity panel
+loads separately from `/admin/reports/revenue/activity` and refreshes every
+20 seconds so a completed export appears without reloading the financial data. Both
+dates are required for a custom range; without parameters the page defaults to
+the last 30 calendar days. The date inputs retain the applied values. Export
+uses those same dates and keeps the existing payment CSV columns and statuses.
+Apply and Export request reads are recorded by the audit middleware and shown
+in Report Activity after the data fragment loads.
+
 ```python
 {
+    "date_from": str,                         # inclusive applied UTC date
+    "date_to": str,                           # inclusive applied UTC date
     "total_revenue": Decimal,
     "revenue_growth": float,
-    "recurring_revenue": Decimal,
+    "recurring_revenue": Decimal | None,
+    "recurring_as_of": date | None,
     "outstanding_amount": Decimal,
     "outstanding_count": int,
     "collection_rate": float,                   # percentage
-    "recent_payments": list[Payment],
+    "recent_payments": tuple[Payment, ...],
+    "revenue_chart": ChartProjection,
 }
 ```
 

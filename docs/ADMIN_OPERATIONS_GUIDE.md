@@ -1092,7 +1092,7 @@ Returns:
 
 | Report | URL | Filters |
 |--------|-----|---------|
-| Revenue | `/admin/reports/revenue` | 30/90/365 days, CSV export |
+| Revenue | `/admin/reports/revenue` | Inclusive start/end dates, Apply, Clear, CSV export |
 | Subscribers | `/admin/reports/subscribers` | Date range, CSV export |
 | Churn Analysis | `/admin/reports/churn` | Date range |
 | Bandwidth & Usage | `/admin/reports/bandwidth` | 7/30/90 days |

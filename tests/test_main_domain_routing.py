@@ -214,7 +214,7 @@ def test_audit_middleware_uses_stale_settings_without_db_refresh(monkeypatch):
     assert audit_calls == [("/portal/payments", 200)]
 
 
-def test_audit_middleware_records_customer_report_reads_only(monkeypatch):
+def test_audit_middleware_records_customer_and_revenue_report_reads(monkeypatch):
     monkeypatch.setattr(
         main,
         "_get_cached_audit_settings",
@@ -236,6 +236,7 @@ def test_audit_middleware_records_customer_report_reads_only(monkeypatch):
         "/admin/reports/customers/export",
         "/admin/reports/customers/content",
         "/admin/reports/revenue",
+        "/admin/reports/revenue/export",
     ):
         _run_async(
             main.audit_middleware(
@@ -245,6 +246,8 @@ def test_audit_middleware_records_customer_report_reads_only(monkeypatch):
     assert audit_calls == [
         "/admin/reports/customers",
         "/admin/reports/customers/export",
+        "/admin/reports/revenue",
+        "/admin/reports/revenue/export",
     ]
 
 

@@ -1,14 +1,19 @@
 from __future__ import annotations
 
 from dataclasses import replace
+from datetime import date
 from decimal import Decimal
 from pathlib import Path
 from types import SimpleNamespace
 from typing import NoReturn
 
 import pytest
+from fastapi import HTTPException
+from sqlalchemy import select
+from sqlalchemy.dialects import postgresql
 from sqlalchemy.exc import SQLAlchemyError
 
+from app.models.billing import Payment
 from app.models.catalog import ServiceType
 from app.services import (
     crm_reporting,
@@ -17,6 +22,7 @@ from app.services import (
     web_reports_extended,
 )
 from app.services.billing import reporting as billing_reporting
+from app.services.inclusive_date_range import InclusiveDateRange
 from app.services.ui_contracts import ChartProjection, ChartSeries, StateValue
 from app.web.admin import reports as report_routes
 
@@ -32,35 +38,29 @@ def test_revenue_chart_distinguishes_zero_value_observation_from_no_observation(
     def project(observation_count: int) -> ChartProjection:
         monkeypatch.setattr(
             billing_reporting,
-            "get_payments_revenue_summary",
-            lambda *, db: billing_reporting.PaymentsRevenueSummary(
-                total=Decimal("0"),
-                current_month=Decimal("0"),
-                previous_month=Decimal("0"),
-                monthly=billing_reporting.MonthlyPaymentsRevenueSeries(
-                    labels=("Jan", "Feb"),
-                    values=(0.0, 0.0),
-                    observation_count=observation_count,
-                ),
+            "get_admin_revenue_report_facts",
+            lambda *, db, query: billing_reporting.AdminRevenueReportFacts(
+                collections=Decimal("0"),
+                previous_collections=Decimal("0"),
+                invoiced=Decimal("0"),
+                outstanding=Decimal("0"),
+                outstanding_count=0,
+                recurring_revenue=None,
+                recurring_as_of=None,
+                trend_labels=("Jan", "Feb"),
+                trend_values=(0.0, 0.0),
+                trend_observations=observation_count,
             ),
         )
         monkeypatch.setattr(
-            billing_reporting,
-            "get_outstanding_receivables",
-            lambda *, db: billing_reporting.OutstandingReceivablesSummary(
-                amount=Decimal("0"), count=0
-            ),
+            billing_reporting, "list_admin_revenue_payments", lambda **_kwargs: ()
         )
-        monkeypatch.setattr(
-            billing_reporting, "get_total_invoiced", lambda *, db: Decimal("0")
+        query = billing_reporting.AdminRevenueReportQuery(
+            period=InclusiveDateRange.from_dates(
+                start_date=date(2026, 1, 1), end_date=date(2026, 2, 28)
+            )
         )
-        monkeypatch.setattr(
-            billing_reporting, "get_recurring_revenue", lambda *, db: Decimal("0")
-        )
-        monkeypatch.setattr(
-            web_reports.billing_service.payments, "list", lambda **_kwargs: []
-        )
-        return web_reports.get_revenue_report_data(object()).revenue_chart
+        return web_reports.get_revenue_report_data(object(), query=query).revenue_chart
 
     assert project(0).is_empty
     present = project(1)
@@ -69,7 +69,7 @@ def test_revenue_chart_distinguishes_zero_value_observation_from_no_observation(
 
 
 def test_revenue_report_uses_compact_side_by_side_chart_and_payments() -> None:
-    source = Path("templates/admin/reports/revenue.html").read_text()
+    source = Path("templates/admin/reports/_revenue_data.html").read_text()
 
     assert "data-revenue-overview-grid" in source
     assert "lg:grid-cols-2" in source
@@ -77,6 +77,53 @@ def test_revenue_report_uses_compact_side_by_side_chart_and_payments() -> None:
     assert "max-h-[288px] overflow-x-hidden overflow-y-auto" in source
     assert "w-full table-fixed" in source
     assert "{% call data_table() %}" not in source
+
+
+def test_revenue_report_period_requires_two_ordered_dates() -> None:
+    query = report_routes._revenue_report_query(
+        date_from="2026-10-01", date_to="2026-10-31"
+    )
+    assert query.period.start_value == "2026-10-01"
+    assert query.period.end_value == "2026-10-31"
+    assert query.period.end_before.date() == date(2026, 11, 1)
+    with pytest.raises(HTTPException) as missing:
+        report_routes._revenue_report_query(date_from="2026-10-01", date_to=None)
+    assert missing.value.status_code == 422
+    with pytest.raises(HTTPException) as reversed_range:
+        report_routes._revenue_report_query(
+            date_from="2026-11-01", date_to="2026-10-31"
+        )
+    assert reversed_range.value.status_code == 422
+
+
+def test_revenue_report_shell_loads_data_and_exports_applied_dates() -> None:
+    source = Path("templates/admin/reports/revenue.html").read_text()
+    assert 'name="date_from"' in source
+    assert 'name="date_to"' in source
+    assert 'hx-get="{{ lazy_data_url }}"' in source
+    assert 'href="{{ export_url }}"' in source
+    assert 'name="audit"' not in source
+    assert 'id="days"' not in source
+    activity = Path("templates/admin/reports/_revenue_activity.html").read_text()
+    assert 'hx-trigger="every 20s"' in activity
+    assert '"Reports Activity"' in activity
+
+
+def test_revenue_page_and_export_share_sql_payment_date_cohort() -> None:
+    query = report_routes._revenue_report_query(
+        date_from="2026-10-01", date_to="2026-10-31"
+    )
+    statement = select(Payment.id).where(
+        *billing_reporting.admin_revenue_payment_filters(query)
+    )
+    sql = str(statement.compile(dialect=postgresql.dialect()))
+    assert "payments.paid_at >=" in sql
+    assert "payments.paid_at <" in sql
+    assert "payments.is_active IS true" in sql
+    assert (
+        "list_admin_revenue_payments" in Path("app/services/web_reports.py").read_text()
+    )
+    assert "limit=5000" not in Path("app/services/web_reports.py").read_text()
 
 
 def test_admin_billing_revenue_trend_height_is_increased_by_twenty_percent() -> None:

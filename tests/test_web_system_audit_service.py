@@ -70,6 +70,51 @@ def test_recent_activity_feed_resolves_system_user_actor_names(db_session):
     assert feed[0]["message"].startswith("Audit Reviewer ")
 
 
+def test_revenue_report_activity_shows_applied_period_and_export(db_session):
+    user = SystemUser(
+        first_name="Finance",
+        last_name="Operator",
+        email="finance-operator@example.com",
+        user_type=SystemUserType.system_user,
+        is_active=True,
+    )
+    db_session.add(user)
+    db_session.flush()
+    for path in ("/admin/reports/revenue", "/admin/reports/revenue/export"):
+        db_session.add(
+            AuditEvent(
+                actor_type=AuditActorType.user,
+                actor_id=str(user.id),
+                action="GET",
+                entity_type=path,
+                is_success=True,
+                metadata_={
+                    "query": {"date_from": "2026-10-01", "date_to": "2026-10-31"}
+                },
+            )
+        )
+    db_session.commit()
+
+    feed = audit_helpers.recent_activity_for_paths(
+        db_session, ["/admin/reports/revenue"], success_only=True
+    )
+
+    assert len(feed) == 2
+    assert {item["message"] for item in feed} == {
+        "Finance Operator applied a revenue report date range",
+        "Finance Operator exported the revenue report",
+    }
+    assert all(item["detail"] == "2026-10-01 to 2026-10-31" for item in feed)
+
+
+def test_revenue_report_reads_are_always_audited():
+    middleware = Path("app/main.py").read_text(encoding="utf-8")
+    assert (
+        'path in {"/admin/reports/revenue", "/admin/reports/revenue/export"}'
+        in middleware
+    )
+
+
 def test_recent_activity_feed_uses_actor_name_metadata_for_unresolved_user(
     db_session,
 ):

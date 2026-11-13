@@ -114,9 +114,11 @@ class TestRevenueReports:
     def test_revenue_report_date_filter(self, admin_page: Page, settings):
         """Revenue report should have date filters."""
         _goto_report_page(admin_page, f"{settings.base_url}/admin/reports/revenue")
-        expect(admin_page.locator("#days")).to_be_visible()
+        expect(admin_page.locator("#date_from")).to_be_visible()
+        expect(admin_page.locator("#date_to")).to_be_visible()
+        expect(admin_page.get_by_role("button", name="Apply")).to_be_visible()
         expect(
-            admin_page.get_by_role("button", name="Export", exact=True)
+            admin_page.get_by_role("link", name="Export", exact=True)
         ).to_be_visible()
 
 

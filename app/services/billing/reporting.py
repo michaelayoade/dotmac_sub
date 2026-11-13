@@ -10,7 +10,7 @@ from __future__ import annotations
 import calendar
 import logging
 from dataclasses import dataclass
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
 from enum import StrEnum
 from typing import Any
@@ -28,7 +28,7 @@ from sqlalchemy import (
     select,
     tuple_,
 )
-from sqlalchemy.orm import Session, aliased, joinedload
+from sqlalchemy.orm import Session, aliased, joinedload, selectinload
 from sqlalchemy.sql import Select
 from sqlalchemy.sql.elements import ColumnElement
 
@@ -45,8 +45,10 @@ from app.models.billing import (
 )
 from app.models.catalog import ServiceType, Subscription
 from app.models.domain_settings import SettingDomain
+from app.models.mrr_snapshot import MrrSnapshot
 from app.models.subscriber import Subscriber, SubscriberStatus
 from app.services import display_format, settings_spec
+from app.services.inclusive_date_range import InclusiveDateRange
 from app.services.invoice_classification import collectible_ar_invoice_filter
 from app.services.subscription_lifecycle_policy import mrr_countable_service_filters
 
@@ -2069,6 +2071,171 @@ class RevenueByServiceTypeRow:
 class OutstandingReceivablesSummary:
     amount: Decimal
     count: int
+
+
+@dataclass(frozen=True, slots=True)
+class AdminRevenueReportQuery:
+    """One UTC calendar period for every admin revenue report read."""
+
+    period: InclusiveDateRange
+
+    def __post_init__(self) -> None:
+        if self.period.start_at is None or self.period.end_before is None:
+            raise ValueError("Start date and end date are required")
+
+
+@dataclass(frozen=True, slots=True)
+class AdminRevenueReportFacts:
+    collections: Decimal
+    previous_collections: Decimal
+    invoiced: Decimal
+    outstanding: Decimal
+    outstanding_count: int
+    recurring_revenue: Decimal | None
+    recurring_as_of: date | None
+    trend_labels: tuple[str, ...]
+    trend_values: tuple[float, ...]
+    trend_observations: int
+
+
+def admin_revenue_payment_filters(
+    query: AdminRevenueReportQuery,
+) -> tuple[ColumnElement[bool], ...]:
+    """Shared payment date and active-record cohort for page and CSV."""
+    return (
+        Payment.is_active.is_(True),
+        Payment.paid_at >= query.period.start_at,
+        Payment.paid_at < query.period.end_before,
+    )
+
+
+def get_admin_revenue_report_facts(
+    db: Session, *, query: AdminRevenueReportQuery
+) -> AdminRevenueReportFacts:
+    """Read period collections, invoice cohort, MRR snapshot, and trend."""
+    start = query.period.start_at
+    end = query.period.end_before
+    assert start is not None and end is not None
+    succeeded = (
+        *admin_revenue_payment_filters(query),
+        Payment.status == PaymentStatus.succeeded,
+    )
+    collections = db.scalar(
+        select(func.coalesce(func.sum(Payment.amount), 0)).where(*succeeded)
+    ) or Decimal("0")
+    duration = end - start
+    previous_collections = db.scalar(
+        select(func.coalesce(func.sum(Payment.amount), 0)).where(
+            Payment.is_active.is_(True),
+            Payment.status == PaymentStatus.succeeded,
+            Payment.paid_at >= start - duration,
+            Payment.paid_at < start,
+        )
+    ) or Decimal("0")
+    invoice_filters = (
+        Invoice.is_active.is_(True),
+        Invoice.status != InvoiceStatus.void,
+        Invoice.issued_at >= start,
+        Invoice.issued_at < end,
+    )
+    invoiced = db.scalar(
+        select(func.coalesce(func.sum(Invoice.total), 0)).where(*invoice_filters)
+    ) or Decimal("0")
+    outstanding, outstanding_count = db.execute(
+        select(
+            func.coalesce(func.sum(Invoice.balance_due), 0), func.count(Invoice.id)
+        ).where(
+            *invoice_filters,
+            Invoice.status.in_(
+                (
+                    InvoiceStatus.issued,
+                    InvoiceStatus.partially_paid,
+                    InvoiceStatus.overdue,
+                )
+            ),
+            Invoice.balance_due > 0,
+        )
+    ).one()
+    snapshot_date = db.scalar(
+        select(func.max(MrrSnapshot.snapshot_date)).where(
+            MrrSnapshot.snapshot_date <= query.period.end_date
+        )
+    )
+    recurring = (
+        db.scalar(
+            select(func.coalesce(func.sum(MrrSnapshot.mrr_amount), 0)).where(
+                MrrSnapshot.snapshot_date == snapshot_date
+            )
+        )
+        if snapshot_date
+        else None
+    )
+    daily = duration.days <= 90
+    bucket = func.date_trunc(
+        "day" if daily else "month", func.timezone("UTC", Payment.paid_at)
+    )
+    rows = db.execute(
+        select(bucket, func.sum(Payment.amount), func.count(Payment.id))
+        .where(*succeeded)
+        .group_by(bucket)
+        .order_by(bucket)
+    ).all()
+    observed = {row[0].date(): float(row[1]) for row in rows}
+    trend_dates: list[date] = []
+    point = query.period.start_date
+    final_date = query.period.end_date
+    assert point is not None and final_date is not None
+    if not daily:
+        point = point.replace(day=1)
+        final_date = final_date.replace(day=1)
+    while point <= final_date:
+        trend_dates.append(point)
+        if point == final_date:
+            break
+        if daily:
+            point += timedelta(days=1)
+        else:
+            point = (point + timedelta(days=32)).replace(day=1)
+    return AdminRevenueReportFacts(
+        collections=collections,
+        previous_collections=previous_collections,
+        invoiced=invoiced,
+        outstanding=outstanding or Decimal("0"),
+        outstanding_count=int(outstanding_count or 0),
+        recurring_revenue=recurring,
+        recurring_as_of=snapshot_date,
+        trend_labels=tuple(
+            point.strftime("%d %b %Y" if daily else "%b %Y") for point in trend_dates
+        ),
+        trend_values=tuple(observed.get(point, 0.0) for point in trend_dates),
+        trend_observations=sum(int(row[2]) for row in rows),
+    )
+
+
+def list_admin_revenue_payments(
+    db: Session,
+    *,
+    query: AdminRevenueReportQuery,
+    limit: int | None = None,
+    succeeded_only: bool = False,
+) -> tuple[Payment, ...]:
+    """SQL filtered payment cohort; CSV retains every status and all rows."""
+    stmt = (
+        select(Payment)
+        .options(
+            selectinload(Payment.account),
+            selectinload(Payment.allocations),
+            selectinload(Payment.payment_method),
+            selectinload(Payment.provider),
+        )
+        .where(*admin_revenue_payment_filters(query))
+    )
+    if succeeded_only:
+        stmt = stmt.where(Payment.status == PaymentStatus.succeeded)
+    stmt = stmt.order_by(Payment.paid_at.desc(), Payment.id.asc())
+    if limit is not None:
+        stmt = stmt.limit(limit)
+    return tuple(db.scalars(stmt).all())
 
 
 def get_payments_revenue_summary(
