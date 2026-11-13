@@ -6,7 +6,9 @@ from app.models.network_monitoring import DeviceRole, NetworkDevice
 from app.services.topology.reachability import (
     CLASS_DOWN,
     CLASS_UNREACHABLE_UPSTREAM,
+    ReachabilityPageQuery,
     classify_down_devices,
+    get_reachability_page,
     reachability_overview,
 )
 from tests.services.topology.forwarding_test_support import declare_forwarding_edge
@@ -101,6 +103,26 @@ def test_overview_lists_root_causes_first(db_session):
     _link(db_session, router, ap)
 
     rows = reachability_overview(db_session)
-    assert [r["device"].name for r in rows] == ["Router", "AP"]
-    assert rows[0]["root_cause"] is None  # its own root cause
-    assert rows[1]["root_cause"].id == router.id
+    assert [r.device.name for r in rows] == ["Router", "AP"]
+    assert rows[0].root_cause is None  # its own root cause
+    assert rows[1].root_cause.id == router.id
+
+
+def test_reachability_pages_keep_root_cause_order(db_session):
+    core = _dev(db_session, "Core", role=DeviceRole.core)
+    router = _dev(db_session, "Router", live_status="down")
+    ap = _dev(db_session, "AP", live_status="down")
+    _link(db_session, core, router)
+    _link(db_session, router, ap)
+
+    first = get_reachability_page(
+        db_session, query=ReachabilityPageQuery(page=1, per_page=1)
+    )
+    second = get_reachability_page(
+        db_session, query=ReachabilityPageQuery(page=2, per_page=1)
+    )
+
+    assert first.rows[0].device.id == router.id
+    assert second.rows[0].device.id == ap.id
+    assert first.total == second.total == 2
+    assert first.total_pages == second.total_pages == 2
