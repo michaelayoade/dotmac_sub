@@ -37,16 +37,20 @@ beyond the Integrator-issued API key, and stays disarmed
 the RADIUS single writer. At that flip the incumbent direct RADIUS writers
 retire and this count is expected to fall below 44 again.
 
+Lowered by the integrations admin cleanup: `app/services/web_integrations.py`
+no longer performs a provider health request or owns its retry loop.
+`outbound_transport` 45 to 44 and `delivery_retry` 7 to 6.
+
 | Category | Baseline |
 | --- | ---: |
-| `outbound_transport` | 45 |
+| `outbound_transport` | 44 |
 | `webhook_surface` | 4 |
 | `provider_credential` | 3 |
 | `connector_task` | 17 |
 | `sync_checkpoint` | 10 |
-| `delivery_retry` | 7 |
+| `delivery_retry` | 6 |
 
-### `outbound_transport` — 45 files
+### `outbound_transport` — 44 files
 
 `app/services/ai/client.py`, `app/services/ai/voice_transcription.py`,
 `app/services/bandwidth_metrics_adapter.py`, `app/services/core_router_metrics.py`,
@@ -70,7 +74,7 @@ retire and this count is expected to fall below 44 again.
 `app/services/push.py`, `app/services/router_management/connection.py`,
 `app/services/secrets.py`, `app/services/sms.py`,
 `app/services/team_inbox_media.py`, `app/services/uisp.py`,
-`app/services/web_integrations.py`, `app/services/web_network_monitoring.py`,
+`app/services/web_network_monitoring.py`,
 `app/services/web_system_export_tool.py`,
 `app/services/zeptomail_delivery_transport.py`, `app/tasks/tr069.py`,
 `app/team_inbox_smtp.py`, `scripts/network/bulk_tr069_rebind.py`,
@@ -110,11 +114,11 @@ retire and this count is expected to fall below 44 again.
 `app/services/field/material_catalog.py`, and
 `app/services/team_inbox_audit_reconstruction.py`.
 
-### `delivery_retry` — 7 files
+### `delivery_retry` — 6 files
 
 `app/services/ai/client.py`, `app/services/ai/voice_transcription.py`,
 `app/services/meta_pages.py`, `app/services/router_management/connection.py`,
-`app/services/web_integrations.py`, `app/tasks/tr069.py`, and
+`app/tasks/tr069.py`, and
 `app/web/admin/integrations.py`.
 
 ## Conserved findings

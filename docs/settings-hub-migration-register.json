@@ -8458,6 +8458,7 @@
       },
       "disposition": "Mapped to hub; preserve registered type, validation, tenant scope and owner-command writes",
       "source_references": [
+        "app/schemas/connector.py:56",
         "app/services/geocoding.py:134",
         "app/services/geocoding.py:169",
         "app/services/integrations/connectors/dotmac_crm.py:102",
@@ -8481,17 +8482,18 @@
         "app/services/provisioning_adapters.py:378",
         "app/services/provisioning_adapters.py:80",
         "app/services/provisioning_helpers.py:74",
-        "app/services/web_integrations.py:132",
+        "app/services/web_integrations.py:297",
+        "app/services/web_integrations.py:318",
+        "app/services/web_integrations.py:884",
+        "app/services/web_integrations.py:886",
         "app/services/web_network_tr069.py:245",
         "app/services/web_network_tr069.py:266",
         "app/services/web_network_tr069.py:272",
         "app/services/web_network_tr069.py:302",
         "app/services/web_network_tr069.py:327",
         "app/services/web_network_tr069.py:359",
-        "templates/admin/integrations/connectors/detail.html:92",
-        "templates/admin/integrations/connectors/detail.html:93",
-        "templates/admin/integrations/connectors/new.html:66",
-        "templates/admin/integrations/connectors/new.html:67",
+        "templates/admin/integrations/connectors/_fields.html:38",
+        "templates/admin/integrations/connectors/_fields.html:39",
         "templates/admin/network/tr069/acs_form.html:44",
         "templates/admin/network/tr069/acs_form.html:45"
       ]
@@ -9036,6 +9038,9 @@
         "app/services/channel_health_contracts.py:69",
         "app/services/channel_health_contracts.py:83",
         "app/services/channel_health_contracts.py:97",
+        "app/services/connector.py:159",
+        "app/services/connector.py:160",
+        "app/services/connector.py:48",
         "app/services/control_registry.py:105",
         "app/services/customer_experience_communications.py:141",
         "app/services/customer_experience_communications.py:87",
@@ -9163,7 +9168,7 @@
         "app/services/web_customer_details.py:1662",
         "app/services/web_customer_details.py:1682",
         "app/services/web_customer_details.py:1688",
-        "app/services/web_integrations.py:629",
+        "app/services/web_integrations.py:74",
         "app/services/web_integrations_webhooks.py:306",
         "app/services/web_integrations_webhooks.py:339",
         "app/services/web_network_core_devices_forms.py:1470",
@@ -9223,11 +9228,14 @@
         "templates/admin/inbox/email_routes.html:503",
         "templates/admin/inbox/partials/ai_testing.html:48",
         "templates/admin/inbox/partials/ai_testing.html:49",
-        "templates/admin/integrations/connectors/index.html:131",
-        "templates/admin/integrations/installed.html:100",
-        "templates/admin/integrations/installed.html:85",
-        "templates/admin/integrations/installed.html:97",
-        "templates/admin/integrations/installed.html:99",
+        "templates/admin/integrations/connectors/index.html:32",
+        "templates/admin/integrations/installed.html:26",
+        "templates/admin/integrations/installed.html:45",
+        "templates/admin/integrations/installed.html:65",
+        "templates/admin/integrations/installed.html:86",
+        "templates/admin/integrations/installed.html:87",
+        "templates/admin/integrations/installed.html:89",
+        "templates/admin/integrations/installed.html:90",
         "templates/admin/integrations/payment_gateways/config.html:23",
         "templates/admin/network/core-devices/backups.html:31",
         "templates/admin/network/olts/detail.html:183",
@@ -9455,7 +9463,7 @@
         "app/web/admin/inbox.py:3918",
         "app/web/admin/inbox.py:5509",
         "app/web/admin/inbox.py:5522",
-        "app/web/admin/integrations.py:1404",
+        "app/web/admin/integrations.py:1450",
         "app/web/customer/routes.py:211",
         "app/web/customer/routes.py:2634",
         "app/web/customer/routes.py:2802",
@@ -9507,17 +9515,17 @@
         "app/services/provisioning_adapters.py:387",
         "app/services/provisioning_adapters.py:94",
         "app/services/provisioning_helpers.py:76",
-        "app/services/web_integrations.py:133",
+        "app/services/web_integrations.py:298",
+        "app/services/web_integrations.py:319",
+        "app/services/web_integrations.py:878",
         "app/services/web_network_ont_actions/config_setters.py:400",
         "app/services/web_network_ont_actions/config_setters.py:521",
         "app/services/web_network_ont_actions/config_setters.py:584",
         "app/services/web_network_ont_actions/config_setters.py:644",
         "app/services/web_network_ont_actions/config_setters.py:983",
         "app/web/admin/network_onts_actions.py:1698",
-        "templates/admin/integrations/connectors/detail.html:106",
-        "templates/admin/integrations/connectors/detail.html:107",
-        "templates/admin/integrations/connectors/new.html:74",
-        "templates/admin/integrations/connectors/new.html:75"
+        "templates/admin/integrations/connectors/_fields.html:46",
+        "templates/admin/integrations/connectors/_fields.html:47"
       ]
     },
     {
@@ -25490,27 +25498,26 @@
       "method": "GET",
       "path": "/admin/integrations/",
       "tab": "integrations",
-      "source": "app/web/admin/integrations.py:129",
+      "source": "app/web/admin/integrations.py:176",
       "handler": "integrations_overview",
       "permissions": [
         "system:settings:read"
       ],
-      "calls": [
-        "web_integrations_service.build_connectors_list_data"
-      ],
+      "calls": [],
       "disposition": "Preserved specialised action"
     },
     {
       "method": "GET",
       "path": "/admin/integrations/connectors",
       "tab": "integrations",
-      "source": "app/web/admin/integrations.py:359",
+      "source": "app/web/admin/integrations.py:392",
       "handler": "connectors_list",
       "permissions": [
         "system:settings:read"
       ],
       "calls": [
-        "web_integrations_service.build_connectors_list_data"
+        "connector_service.connector_configs.list_page",
+        "connector_service.connector_list_query"
       ],
       "disposition": "Preserved specialised action"
     },
@@ -25518,7 +25525,7 @@
       "method": "POST",
       "path": "/admin/integrations/connectors",
       "tab": "integrations",
-      "source": "app/web/admin/integrations.py:473",
+      "source": "app/web/admin/integrations.py:572",
       "handler": "connector_create",
       "permissions": [
         "system:settings:write"
@@ -25533,9 +25540,11 @@
       "method": "GET",
       "path": "/admin/integrations/connectors/new",
       "tab": "integrations",
-      "source": "app/web/admin/integrations.py:461",
+      "source": "app/web/admin/integrations.py:560",
       "handler": "connector_new",
-      "permissions": [],
+      "permissions": [
+        "system:settings:write"
+      ],
       "calls": [
         "web_integrations_service.connector_form_options"
       ],
@@ -25545,13 +25554,15 @@
       "method": "GET",
       "path": "/admin/integrations/connectors/{connector_id}",
       "tab": "integrations",
-      "source": "app/web/admin/integrations.py:532",
+      "source": "app/web/admin/integrations.py:602",
       "handler": "connector_detail",
-      "permissions": [],
+      "permissions": [
+        "system:settings:read"
+      ],
       "calls": [
         "connector_service.connector_configs.get",
-        "web_integrations_service.connector_form_options",
-        "web_integrations_service.mask_secret_values"
+        "web_integrations_service.connector_edit_form",
+        "web_integrations_service.connector_form_options"
       ],
       "disposition": "Preserved specialised action"
     },
@@ -25559,12 +25570,15 @@
       "method": "POST",
       "path": "/admin/integrations/connectors/{connector_id}",
       "tab": "integrations",
-      "source": "app/web/admin/integrations.py:571",
+      "source": "app/web/admin/integrations.py:634",
       "handler": "connector_update",
       "permissions": [
         "system:settings:write"
       ],
       "calls": [
+        "connector_service.connector_configs.get",
+        "web_integrations_service.connector_error_state",
+        "web_integrations_service.connector_form_options",
         "web_integrations_service.update_connector_config"
       ],
       "disposition": "Preserved specialised action"
@@ -25573,19 +25587,19 @@
       "method": "GET",
       "path": "/admin/integrations/connectors/{connector_id}/embed",
       "tab": "integrations",
-      "source": "app/web/admin/integrations.py:603",
+      "source": "app/web/admin/integrations.py:667",
       "handler": "connector_embed",
-      "permissions": [],
-      "calls": [
-        "web_integrations_service.build_embedded_connector_data"
+      "permissions": [
+        "system:settings:read"
       ],
+      "calls": [],
       "disposition": "Preserved specialised action"
     },
     {
       "method": "GET",
       "path": "/admin/integrations/erp",
       "tab": "integrations",
-      "source": "app/web/admin/integrations.py:153",
+      "source": "app/web/admin/integrations.py:186",
       "handler": "erp_connector_config",
       "permissions": [
         "system:settings:read"
@@ -25599,7 +25613,7 @@
       "method": "POST",
       "path": "/admin/integrations/erp",
       "tab": "integrations",
-      "source": "app/web/admin/integrations.py:165",
+      "source": "app/web/admin/integrations.py:198",
       "handler": "erp_connector_config_save",
       "permissions": [
         "system:settings:write"
@@ -25616,7 +25630,7 @@
       "method": "GET",
       "path": "/admin/integrations/erp-material-catalog",
       "tab": "integrations",
-      "source": "app/web/admin/integrations.py:43",
+      "source": "app/web/admin/integrations.py:90",
       "handler": "erp_material_catalog",
       "permissions": [
         "system:settings:read"
@@ -25628,7 +25642,7 @@
       "method": "POST",
       "path": "/admin/integrations/erp-material-catalog/import",
       "tab": "integrations",
-      "source": "app/web/admin/integrations.py:65",
+      "source": "app/web/admin/integrations.py:112",
       "handler": "import_erp_material_catalog",
       "permissions": [
         "system:settings:write"
@@ -25640,7 +25654,7 @@
       "method": "POST",
       "path": "/admin/integrations/erp-material-catalog/{item_id}/eligibility",
       "tab": "integrations",
-      "source": "app/web/admin/integrations.py:74",
+      "source": "app/web/admin/integrations.py:121",
       "handler": "set_erp_material_eligibility",
       "permissions": [],
       "calls": [],
@@ -25650,7 +25664,7 @@
       "method": "POST",
       "path": "/admin/integrations/erp/run",
       "tab": "integrations",
-      "source": "app/web/admin/integrations.py:207",
+      "source": "app/web/admin/integrations.py:240",
       "handler": "erp_connector_run_now",
       "permissions": [
         "system:settings:write"
@@ -25662,11 +25676,14 @@
       "method": "GET",
       "path": "/admin/integrations/installed",
       "tab": "integrations",
-      "source": "app/web/admin/integrations.py:401",
+      "source": "app/web/admin/integrations.py:456",
       "handler": "integrations_installed",
-      "permissions": [],
+      "permissions": [
+        "system:settings:read"
+      ],
       "calls": [
-        "web_integrations_service.build_installed_integrations_data"
+        "web_integrations_service.build_installed_integrations_data",
+        "web_integrations_service.installed_list_query"
       ],
       "disposition": "Preserved specialised action"
     },
@@ -25674,7 +25691,7 @@
       "method": "POST",
       "path": "/admin/integrations/installed/bulk",
       "tab": "integrations",
-      "source": "app/web/admin/integrations.py:418",
+      "source": "app/web/admin/integrations.py:510",
       "handler": "integrations_installed_bulk",
       "permissions": [
         "system:settings:write"
@@ -25688,7 +25705,7 @@
       "method": "POST",
       "path": "/admin/integrations/installed/{connector_id}/toggle",
       "tab": "integrations",
-      "source": "app/web/admin/integrations.py:437",
+      "source": "app/web/admin/integrations.py:532",
       "handler": "integrations_installed_toggle",
       "permissions": [
         "system:settings:write"
@@ -25702,7 +25719,7 @@
       "method": "POST",
       "path": "/admin/integrations/installed/{connector_id}/uninstall",
       "tab": "integrations",
-      "source": "app/web/admin/integrations.py:455",
+      "source": "app/web/admin/integrations.py:550",
       "handler": "integrations_installed_uninstall",
       "permissions": [
         "system:settings:write"
@@ -25716,7 +25733,7 @@
       "method": "GET",
       "path": "/admin/integrations/jobs",
       "tab": "integrations",
-      "source": "app/web/admin/integrations.py:719",
+      "source": "app/web/admin/integrations.py:765",
       "handler": "jobs_list",
       "permissions": [],
       "calls": [
@@ -25728,7 +25745,7 @@
       "method": "POST",
       "path": "/admin/integrations/jobs",
       "tab": "integrations",
-      "source": "app/web/admin/integrations.py:746",
+      "source": "app/web/admin/integrations.py:792",
       "handler": "job_create",
       "permissions": [
         "system:settings:write"
@@ -25743,7 +25760,7 @@
       "method": "GET",
       "path": "/admin/integrations/jobs/new",
       "tab": "integrations",
-      "source": "app/web/admin/integrations.py:734",
+      "source": "app/web/admin/integrations.py:780",
       "handler": "job_new",
       "permissions": [],
       "calls": [
@@ -25755,7 +25772,7 @@
       "method": "GET",
       "path": "/admin/integrations/jobs/{job_id}",
       "tab": "integrations",
-      "source": "app/web/admin/integrations.py:813",
+      "source": "app/web/admin/integrations.py:859",
       "handler": "job_detail",
       "permissions": [],
       "calls": [
@@ -25769,7 +25786,7 @@
       "method": "POST",
       "path": "/admin/integrations/jobs/{job_id}/run",
       "tab": "integrations",
-      "source": "app/web/admin/integrations.py:851",
+      "source": "app/web/admin/integrations.py:897",
       "handler": "job_run",
       "permissions": [
         "system:settings:write"
@@ -25785,31 +25802,21 @@
       "method": "GET",
       "path": "/admin/integrations/marketplace",
       "tab": "integrations",
-      "source": "app/web/admin/integrations.py:376",
+      "source": "app/web/admin/integrations.py:443",
       "handler": "integrations_marketplace",
-      "permissions": [],
+      "permissions": [
+        "system:settings:read"
+      ],
       "calls": [
         "web_integrations_service.build_marketplace_data"
       ],
       "disposition": "Preserved specialised action"
     },
     {
-      "method": "POST",
-      "path": "/admin/integrations/marketplace/check-updates",
-      "tab": "integrations",
-      "source": "app/web/admin/integrations.py:394",
-      "handler": "integrations_marketplace_check_updates",
-      "permissions": [
-        "system:settings:write"
-      ],
-      "calls": [],
-      "disposition": "Preserved specialised action"
-    },
-    {
       "method": "GET",
       "path": "/admin/integrations/nextcloud-talk/{installation_id}",
       "tab": "integrations",
-      "source": "app/web/admin/integrations.py:1463",
+      "source": "app/web/admin/integrations.py:1509",
       "handler": "nextcloud_talk_credentials",
       "permissions": [
         "system:settings:read"
@@ -25821,7 +25828,7 @@
       "method": "POST",
       "path": "/admin/integrations/nextcloud-talk/{installation_id}",
       "tab": "integrations",
-      "source": "app/web/admin/integrations.py:1491",
+      "source": "app/web/admin/integrations.py:1537",
       "handler": "nextcloud_talk_credentials_save",
       "permissions": [
         "system:secrets:write",
@@ -25834,7 +25841,7 @@
       "method": "GET",
       "path": "/admin/integrations/payment-gateways/{provider_type}",
       "tab": "integrations",
-      "source": "app/web/admin/integrations.py:1148",
+      "source": "app/web/admin/integrations.py:1194",
       "handler": "payment_gateway_config_page",
       "permissions": [
         "system:settings:read"
@@ -25846,7 +25853,7 @@
       "method": "POST",
       "path": "/admin/integrations/payment-gateways/{provider_type}",
       "tab": "integrations",
-      "source": "app/web/admin/integrations.py:1166",
+      "source": "app/web/admin/integrations.py:1212",
       "handler": "payment_gateway_config_save",
       "permissions": [
         "system:settings:write"
@@ -25860,7 +25867,7 @@
       "method": "POST",
       "path": "/admin/integrations/payment-gateways/{provider_type}/disable",
       "tab": "integrations",
-      "source": "app/web/admin/integrations.py:1293",
+      "source": "app/web/admin/integrations.py:1339",
       "handler": "payment_gateway_disable",
       "permissions": [
         "system:settings:write"
@@ -25874,7 +25881,7 @@
       "method": "POST",
       "path": "/admin/integrations/payment-gateways/{provider_type}/enable",
       "tab": "integrations",
-      "source": "app/web/admin/integrations.py:1248",
+      "source": "app/web/admin/integrations.py:1294",
       "handler": "payment_gateway_enable",
       "permissions": [
         "system:settings:write"
@@ -25889,7 +25896,7 @@
       "method": "POST",
       "path": "/admin/integrations/payment-gateways/{provider_type}/webhook-policy",
       "tab": "integrations",
-      "source": "app/web/admin/integrations.py:1206",
+      "source": "app/web/admin/integrations.py:1252",
       "handler": "payment_gateway_webhook_policy_save",
       "permissions": [
         "system:settings:write"
@@ -25903,7 +25910,7 @@
       "method": "GET",
       "path": "/admin/integrations/runtime",
       "tab": "integrations",
-      "source": "app/web/admin/integrations.py:222",
+      "source": "app/web/admin/integrations.py:255",
       "handler": "integrations_runtime_posture",
       "permissions": [
         "system:settings:read"
@@ -25917,7 +25924,7 @@
       "method": "GET",
       "path": "/admin/integrations/syncs",
       "tab": "integrations",
-      "source": "app/web/admin/integrations.py:241",
+      "source": "app/web/admin/integrations.py:274",
       "handler": "syncs_list",
       "permissions": [
         "system:settings:read"
@@ -25931,7 +25938,7 @@
       "method": "GET",
       "path": "/admin/integrations/syncs/{job_id}",
       "tab": "integrations",
-      "source": "app/web/admin/integrations.py:270",
+      "source": "app/web/admin/integrations.py:303",
       "handler": "sync_detail",
       "permissions": [
         "system:settings:read"
@@ -25945,7 +25952,7 @@
       "method": "POST",
       "path": "/admin/integrations/syncs/{job_id}/configure",
       "tab": "integrations",
-      "source": "app/web/admin/integrations.py:310",
+      "source": "app/web/admin/integrations.py:343",
       "handler": "sync_configure",
       "permissions": [
         "system:settings:write"
@@ -25961,7 +25968,7 @@
       "method": "POST",
       "path": "/admin/integrations/syncs/{job_id}/run",
       "tab": "integrations",
-      "source": "app/web/admin/integrations.py:289",
+      "source": "app/web/admin/integrations.py:322",
       "handler": "sync_run",
       "permissions": [
         "system:settings:write"
@@ -25977,7 +25984,7 @@
       "method": "GET",
       "path": "/admin/integrations/targets",
       "tab": "integrations",
-      "source": "app/web/admin/integrations.py:629",
+      "source": "app/web/admin/integrations.py:675",
       "handler": "targets_list",
       "permissions": [],
       "calls": [
@@ -25989,7 +25996,7 @@
       "method": "POST",
       "path": "/admin/integrations/targets",
       "tab": "integrations",
-      "source": "app/web/admin/integrations.py:656",
+      "source": "app/web/admin/integrations.py:702",
       "handler": "target_create",
       "permissions": [
         "system:settings:write"
@@ -26004,7 +26011,7 @@
       "method": "GET",
       "path": "/admin/integrations/targets/new",
       "tab": "integrations",
-      "source": "app/web/admin/integrations.py:644",
+      "source": "app/web/admin/integrations.py:690",
       "handler": "target_new",
       "permissions": [],
       "calls": [
@@ -26016,7 +26023,7 @@
       "method": "GET",
       "path": "/admin/integrations/targets/{target_id}",
       "tab": "integrations",
-      "source": "app/web/admin/integrations.py:695",
+      "source": "app/web/admin/integrations.py:741",
       "handler": "target_detail",
       "permissions": [],
       "calls": [
@@ -26028,7 +26035,7 @@
       "method": "GET",
       "path": "/admin/integrations/webhooks",
       "tab": "integrations",
-      "source": "app/web/admin/integrations.py:872",
+      "source": "app/web/admin/integrations.py:918",
       "handler": "webhooks_list",
       "permissions": [],
       "calls": [
@@ -26040,7 +26047,7 @@
       "method": "POST",
       "path": "/admin/integrations/webhooks",
       "tab": "integrations",
-      "source": "app/web/admin/integrations.py:905",
+      "source": "app/web/admin/integrations.py:951",
       "handler": "webhook_create",
       "permissions": [
         "system:settings:write"
@@ -26055,7 +26062,7 @@
       "method": "GET",
       "path": "/admin/integrations/webhooks/new",
       "tab": "integrations",
-      "source": "app/web/admin/integrations.py:887",
+      "source": "app/web/admin/integrations.py:933",
       "handler": "webhook_new",
       "permissions": [],
       "calls": [
@@ -26067,7 +26074,7 @@
       "method": "GET",
       "path": "/admin/integrations/webhooks/{endpoint_id}",
       "tab": "integrations",
-      "source": "app/web/admin/integrations.py:1089",
+      "source": "app/web/admin/integrations.py:1135",
       "handler": "webhook_detail",
       "permissions": [],
       "calls": [
@@ -26079,7 +26086,7 @@
       "method": "POST",
       "path": "/admin/integrations/webhooks/{endpoint_id}",
       "tab": "integrations",
-      "source": "app/web/admin/integrations.py:981",
+      "source": "app/web/admin/integrations.py:1027",
       "handler": "webhook_update",
       "permissions": [
         "system:settings:write"
@@ -26094,7 +26101,7 @@
       "method": "POST",
       "path": "/admin/integrations/webhooks/{endpoint_id}/delete",
       "tab": "integrations",
-      "source": "app/web/admin/integrations.py:1081",
+      "source": "app/web/admin/integrations.py:1127",
       "handler": "webhook_delete",
       "permissions": [
         "system:settings:write"
@@ -26108,7 +26115,7 @@
       "method": "POST",
       "path": "/admin/integrations/webhooks/{endpoint_id}/disable",
       "tab": "integrations",
-      "source": "app/web/admin/integrations.py:1053",
+      "source": "app/web/admin/integrations.py:1099",
       "handler": "webhook_disable",
       "permissions": [
         "system:settings:write"
@@ -26122,7 +26129,7 @@
       "method": "GET",
       "path": "/admin/integrations/webhooks/{endpoint_id}/edit",
       "tab": "integrations",
-      "source": "app/web/admin/integrations.py:956",
+      "source": "app/web/admin/integrations.py:1002",
       "handler": "webhook_edit",
       "permissions": [],
       "calls": [
@@ -26134,7 +26141,7 @@
       "method": "POST",
       "path": "/admin/integrations/webhooks/{endpoint_id}/enable",
       "tab": "integrations",
-      "source": "app/web/admin/integrations.py:1040",
+      "source": "app/web/admin/integrations.py:1086",
       "handler": "webhook_enable",
       "permissions": [
         "system:settings:write"
@@ -26148,7 +26155,7 @@
       "method": "POST",
       "path": "/admin/integrations/webhooks/{endpoint_id}/test",
       "tab": "integrations",
-      "source": "app/web/admin/integrations.py:1066",
+      "source": "app/web/admin/integrations.py:1112",
       "handler": "webhook_test",
       "permissions": [
         "system:settings:write"
@@ -26162,7 +26169,7 @@
       "method": "GET",
       "path": "/admin/integrations/whatsapp",
       "tab": "integrations",
-      "source": "app/web/admin/integrations.py:1332",
+      "source": "app/web/admin/integrations.py:1378",
       "handler": "whatsapp_config_legacy_redirect",
       "permissions": [],
       "calls": [],
@@ -26172,7 +26179,7 @@
       "method": "GET",
       "path": "/admin/integrations/whatsapp/config",
       "tab": "integrations",
-      "source": "app/web/admin/integrations.py:1337",
+      "source": "app/web/admin/integrations.py:1383",
       "handler": "whatsapp_config_page",
       "permissions": [],
       "calls": [
@@ -26184,7 +26191,7 @@
       "method": "POST",
       "path": "/admin/integrations/whatsapp/config",
       "tab": "integrations",
-      "source": "app/web/admin/integrations.py:1358",
+      "source": "app/web/admin/integrations.py:1404",
       "handler": "whatsapp_config_save",
       "permissions": [
         "system:settings:write"
@@ -26199,7 +26206,7 @@
       "method": "POST",
       "path": "/admin/integrations/whatsapp/config/test-send",
       "tab": "integrations",
-      "source": "app/web/admin/integrations.py:1426",
+      "source": "app/web/admin/integrations.py:1472",
       "handler": "whatsapp_config_test_send",
       "permissions": [
         "system:settings:write"
@@ -32237,122 +32244,32 @@
       "disposition": "Dynamic fields expand from registered specs; static fields stay with their specialised action"
     },
     {
-      "source": "templates/admin/integrations/connectors/detail.html",
-      "name": "auth_config",
+      "source": "templates/admin/integrations/connectors/index.html",
+      "name": "dir",
       "tab": "system",
       "disposition": "Dynamic fields expand from registered specs; static fields stay with their specialised action"
     },
     {
-      "source": "templates/admin/integrations/connectors/detail.html",
-      "name": "auth_type",
+      "source": "templates/admin/integrations/connectors/index.html",
+      "name": "per_page",
       "tab": "system",
       "disposition": "Dynamic fields expand from registered specs; static fields stay with their specialised action"
     },
     {
-      "source": "templates/admin/integrations/connectors/detail.html",
-      "name": "base_url",
+      "source": "templates/admin/integrations/connectors/index.html",
+      "name": "search",
       "tab": "system",
       "disposition": "Dynamic fields expand from registered specs; static fields stay with their specialised action"
     },
     {
-      "source": "templates/admin/integrations/connectors/detail.html",
-      "name": "headers",
+      "source": "templates/admin/integrations/connectors/index.html",
+      "name": "sort",
       "tab": "system",
       "disposition": "Dynamic fields expand from registered specs; static fields stay with their specialised action"
     },
     {
-      "source": "templates/admin/integrations/connectors/detail.html",
-      "name": "is_active",
-      "tab": "system",
-      "disposition": "Dynamic fields expand from registered specs; static fields stay with their specialised action"
-    },
-    {
-      "source": "templates/admin/integrations/connectors/detail.html",
-      "name": "metadata",
-      "tab": "system",
-      "disposition": "Dynamic fields expand from registered specs; static fields stay with their specialised action"
-    },
-    {
-      "source": "templates/admin/integrations/connectors/detail.html",
-      "name": "notes",
-      "tab": "system",
-      "disposition": "Dynamic fields expand from registered specs; static fields stay with their specialised action"
-    },
-    {
-      "source": "templates/admin/integrations/connectors/detail.html",
-      "name": "retry_policy",
-      "tab": "system",
-      "disposition": "Dynamic fields expand from registered specs; static fields stay with their specialised action"
-    },
-    {
-      "source": "templates/admin/integrations/connectors/detail.html",
-      "name": "timeout_sec",
-      "tab": "system",
-      "disposition": "Dynamic fields expand from registered specs; static fields stay with their specialised action"
-    },
-    {
-      "source": "templates/admin/integrations/connectors/new.html",
-      "name": "auth_config",
-      "tab": "system",
-      "disposition": "Dynamic fields expand from registered specs; static fields stay with their specialised action"
-    },
-    {
-      "source": "templates/admin/integrations/connectors/new.html",
-      "name": "auth_type",
-      "tab": "system",
-      "disposition": "Dynamic fields expand from registered specs; static fields stay with their specialised action"
-    },
-    {
-      "source": "templates/admin/integrations/connectors/new.html",
-      "name": "base_url",
-      "tab": "system",
-      "disposition": "Dynamic fields expand from registered specs; static fields stay with their specialised action"
-    },
-    {
-      "source": "templates/admin/integrations/connectors/new.html",
-      "name": "connector_type",
-      "tab": "system",
-      "disposition": "Dynamic fields expand from registered specs; static fields stay with their specialised action"
-    },
-    {
-      "source": "templates/admin/integrations/connectors/new.html",
-      "name": "headers",
-      "tab": "system",
-      "disposition": "Dynamic fields expand from registered specs; static fields stay with their specialised action"
-    },
-    {
-      "source": "templates/admin/integrations/connectors/new.html",
-      "name": "is_active",
-      "tab": "system",
-      "disposition": "Dynamic fields expand from registered specs; static fields stay with their specialised action"
-    },
-    {
-      "source": "templates/admin/integrations/connectors/new.html",
-      "name": "metadata",
-      "tab": "system",
-      "disposition": "Dynamic fields expand from registered specs; static fields stay with their specialised action"
-    },
-    {
-      "source": "templates/admin/integrations/connectors/new.html",
-      "name": "name",
-      "tab": "system",
-      "disposition": "Dynamic fields expand from registered specs; static fields stay with their specialised action"
-    },
-    {
-      "source": "templates/admin/integrations/connectors/new.html",
-      "name": "notes",
-      "tab": "system",
-      "disposition": "Dynamic fields expand from registered specs; static fields stay with their specialised action"
-    },
-    {
-      "source": "templates/admin/integrations/connectors/new.html",
-      "name": "retry_policy",
-      "tab": "system",
-      "disposition": "Dynamic fields expand from registered specs; static fields stay with their specialised action"
-    },
-    {
-      "source": "templates/admin/integrations/connectors/new.html",
-      "name": "timeout_sec",
+      "source": "templates/admin/integrations/connectors/index.html",
+      "name": "status",
       "tab": "system",
       "disposition": "Dynamic fields expand from registered specs; static fields stay with their specialised action"
     },
@@ -32376,7 +32293,37 @@
     },
     {
       "source": "templates/admin/integrations/installed.html",
+      "name": "dir",
+      "tab": "system",
+      "disposition": "Dynamic fields expand from registered specs; static fields stay with their specialised action"
+    },
+    {
+      "source": "templates/admin/integrations/installed.html",
       "name": "enabled",
+      "tab": "system",
+      "disposition": "Dynamic fields expand from registered specs; static fields stay with their specialised action"
+    },
+    {
+      "source": "templates/admin/integrations/installed.html",
+      "name": "per_page",
+      "tab": "system",
+      "disposition": "Dynamic fields expand from registered specs; static fields stay with their specialised action"
+    },
+    {
+      "source": "templates/admin/integrations/installed.html",
+      "name": "search",
+      "tab": "system",
+      "disposition": "Dynamic fields expand from registered specs; static fields stay with their specialised action"
+    },
+    {
+      "source": "templates/admin/integrations/installed.html",
+      "name": "sort",
+      "tab": "system",
+      "disposition": "Dynamic fields expand from registered specs; static fields stay with their specialised action"
+    },
+    {
+      "source": "templates/admin/integrations/installed.html",
+      "name": "status",
       "tab": "system",
       "disposition": "Dynamic fields expand from registered specs; static fields stay with their specialised action"
     },
@@ -35369,7 +35316,7 @@
     "app/web/admin/customer_connection_types.py": "f551b8b7cb3d8fe040ebd67c02b293e9574e7a9abb575ed0508d40cb302cab38",
     "app/web/admin/customer_regions.py": "095747de4fa2bc91a8fae64b33561d923020f3fc40e515070db79d760b904dd5",
     "app/web/admin/inbox.py": "12d8b01ed37e3af4526e017e7be81718f72974f13f42e02aa54d8cab92ffbe24",
-    "app/web/admin/integrations.py": "25d48216689cc3b1d953d00dcf3659c9998f47505a77eb8eeeda7a099974e4b1",
+    "app/web/admin/integrations.py": "b33e735b268bd80ca92c65b87d6117dd2a7378e2eab375bbba30b3981bc7311e",
     "app/web/admin/notifications.py": "4cef64da29d92b150e6600a95a5fe4939589ee61a3aa6c69ed5874119ddf91bd",
     "app/web/admin/payment_configuration_actions.py": "4f29a8e62f6d5bd5060476793af4a54e1132450e429064877ff1c4bcd74e916d",
     "app/web/admin/resellers.py": "753137e19ce85315bc822edaa49e642fa6907284b9d005b33835426443b3e114",

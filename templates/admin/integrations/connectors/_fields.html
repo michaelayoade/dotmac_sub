@@ -1,0 +1,70 @@
+{% set fields = form if form is defined else {} %}
+{% set header_rows = fields.header_rows if fields.header_rows is defined else [{"name": "", "value": "", "secret": false}] %}
+<div class="grid gap-5 sm:grid-cols-2">
+    {% if not editing %}
+    <div class="sm:col-span-2">
+        <label for="name" class="block text-sm font-medium text-slate-700 dark:text-slate-300">Connection name</label>
+        <input id="name" name="name" required maxlength="160" value="{{ fields.name|default('') }}" class="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-800 dark:text-white">
+    </div>
+    <div>
+        <label for="connector_type" class="block text-sm font-medium text-slate-700 dark:text-slate-300">Type</label>
+        <select id="connector_type" name="connector_type" class="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-800 dark:text-white">
+            {% for connector_type in connector_types %}
+            <option value="{{ connector_type }}" {% if fields.connector_type|default('custom') == connector_type %}selected{% endif %}>{{ connector_type|replace('_', ' ')|title }}</option>
+            {% endfor %}
+        </select>
+    </div>
+    {% endif %}
+    <div x-data='{"authType": {{ fields.auth_type|default("none")|tojson }} }'>
+        <label for="auth_type" class="block text-sm font-medium text-slate-700 dark:text-slate-300">Authentication</label>
+        <select id="auth_type" name="auth_type" x-model="authType" class="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-800 dark:text-white">
+            {% for auth_type in auth_types %}
+            <option value="{{ auth_type }}" {% if fields.auth_type|default('none') == auth_type %}selected{% endif %}>{{ auth_type|replace('_', ' ')|title }}</option>
+            {% endfor %}
+        </select>
+        <div class="mt-4 space-y-3" x-show="authType === 'basic'" x-cloak>
+            <div><label for="auth_username" class="block text-sm font-medium text-slate-700 dark:text-slate-300">Username</label><input id="auth_username" name="auth_username" autocomplete="username" value="{{ fields.username|default('') }}" class="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-800 dark:text-white"></div>
+            <div><label for="auth_password" class="block text-sm font-medium text-slate-700 dark:text-slate-300">Password</label><input id="auth_password" name="auth_password" type="password" autocomplete="new-password" placeholder="{{ 'Leave blank to keep saved password' if editing else '' }}" class="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-800 dark:text-white"></div>
+        </div>
+        <div class="mt-4" x-show="authType === 'bearer'" x-cloak><label for="auth_token" class="block text-sm font-medium text-slate-700 dark:text-slate-300">Bearer token</label><input id="auth_token" name="auth_token" type="password" autocomplete="new-password" placeholder="{{ 'Leave blank to keep saved token' if editing else '' }}" class="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-800 dark:text-white"></div>
+        <div class="mt-4" x-show="authType === 'api_key'" x-cloak><label for="auth_api_key" class="block text-sm font-medium text-slate-700 dark:text-slate-300">API key</label><input id="auth_api_key" name="auth_api_key" type="password" autocomplete="new-password" placeholder="{{ 'Leave blank to keep saved key' if editing else '' }}" class="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-800 dark:text-white"></div>
+        <div class="mt-4" x-show="authType === 'hmac'" x-cloak><label for="auth_secret" class="block text-sm font-medium text-slate-700 dark:text-slate-300">Signing secret</label><input id="auth_secret" name="auth_secret" type="password" autocomplete="new-password" placeholder="{{ 'Leave blank to keep saved secret' if editing else '' }}" class="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-800 dark:text-white"></div>
+        <div class="mt-4 space-y-3" x-show="authType === 'oauth2'" x-cloak>
+            <div><label for="auth_client_id" class="block text-sm font-medium text-slate-700 dark:text-slate-300">Client ID</label><input id="auth_client_id" name="auth_client_id" value="{{ fields.client_id|default('') }}" class="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-800 dark:text-white"></div>
+            <div><label for="auth_client_secret" class="block text-sm font-medium text-slate-700 dark:text-slate-300">Client secret</label><input id="auth_client_secret" name="auth_client_secret" type="password" autocomplete="new-password" placeholder="{{ 'Leave blank to keep saved secret' if editing else '' }}" class="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-800 dark:text-white"></div>
+        </div>
+    </div>
+    <div class="sm:col-span-2">
+        <label for="base_url" class="block text-sm font-medium text-slate-700 dark:text-slate-300">HTTP(S) base URL</label>
+        <input id="base_url" name="base_url" type="url" maxlength="500" value="{{ fields.base_url|default('') }}" placeholder="{{ 'Leave blank to keep the saved endpoint' if editing else 'https://api.example.com' }}" class="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-800 dark:text-white">
+        <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">Do not include a password, token, or database connection string in this URL.</p>
+        {% if editing and connector.base_url %}
+        <label class="mt-2 flex items-center gap-2 text-sm text-slate-700 dark:text-slate-300"><input type="checkbox" name="clear_base_url" value="true">Clear the saved endpoint</label>
+        {% endif %}
+    </div>
+    <div>
+        <label for="timeout_sec" class="block text-sm font-medium text-slate-700 dark:text-slate-300">Timeout in seconds</label>
+        <input id="timeout_sec" name="timeout_sec" type="number" min="1" step="1" value="{{ fields.timeout_sec|default('') }}" class="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-800 dark:text-white">
+    </div>
+    <div class="sm:col-span-2" x-data='{"rows": {{ header_rows|tojson }} }'>
+        <h3 class="text-sm font-medium text-slate-700 dark:text-slate-300">Request headers</h3>
+        <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">Saved values are hidden. Leave a saved value unchanged to keep it.</p>
+        <template x-for="(row, index) in rows" :key="index">
+            <div class="mt-2 flex flex-wrap items-end gap-2">
+                <div class="min-w-40 flex-1"><label :for="'header-name-' + index" class="block text-xs text-slate-600 dark:text-slate-400">Name</label><input :id="'header-name-' + index" name="header_name" x-model="row.name" @input="if (row.secret) { row.value = ''; row.secret = false }" class="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-800 dark:text-white"></div>
+                <div class="min-w-40 flex-1"><label :for="'header-value-' + index" class="block text-xs text-slate-600 dark:text-slate-400">Value</label><input :id="'header-value-' + index" name="header_value" x-model="row.value" type="password" autocomplete="off" class="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-800 dark:text-white"></div>
+                <button type="button" @click="rows.splice(index, 1)" class="rounded-lg border border-slate-300 px-3 py-2 text-sm text-slate-700 dark:border-slate-600 dark:text-slate-300">Remove</button>
+            </div>
+        </template>
+        <button type="button" @click="rows.push({name: '', value: '', secret: false})" class="mt-3 text-sm font-medium text-primary-600 hover:underline dark:text-primary-400">Add header</button>
+    </div>
+    <details class="sm:col-span-2 rounded-lg border border-slate-200 p-4 dark:border-slate-700">
+        <summary class="cursor-pointer text-sm font-medium text-slate-700 dark:text-slate-300">Retry settings</summary>
+        <div class="mt-4 grid gap-4 sm:grid-cols-2">
+            <div><label for="retry_max_attempts" class="block text-sm text-slate-700 dark:text-slate-300">Maximum attempts</label><input id="retry_max_attempts" name="retry_max_attempts" type="number" min="1" max="10" value="{{ fields.retry_max_attempts|default('') }}" class="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-800 dark:text-white"></div>
+            <div><label for="retry_backoff_sec" class="block text-sm text-slate-700 dark:text-slate-300">Delay in seconds</label><input id="retry_backoff_sec" name="retry_backoff_sec" type="number" min="0" max="3600" value="{{ fields.retry_backoff_sec|default('') }}" class="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-800 dark:text-white"></div>
+        </div>
+    </details>
+    <div class="sm:col-span-2"><label for="notes" class="block text-sm font-medium text-slate-700 dark:text-slate-300">Notes</label><textarea id="notes" name="notes" rows="3" class="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-800 dark:text-white">{{ fields.notes|default('') }}</textarea></div>
+    <label class="sm:col-span-2 flex items-center gap-2 text-sm font-medium text-slate-700 dark:text-slate-300"><input type="checkbox" name="is_active" value="true" {% if fields.is_active|default(true) %}checked{% endif %}>Enabled for legacy targets</label>
+</div>

@@ -1,4 +1,5 @@
 from datetime import datetime
+from urllib.parse import urlparse
 from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, Field, field_serializer
@@ -52,14 +53,64 @@ class ConnectorConfigRead(ConnectorConfigBase):
     created_at: datetime
     updated_at: datetime
 
+    @field_serializer("base_url")
+    def _mask_credential_endpoint(self, value: str | None) -> str | None:
+        if not value:
+            return value
+        try:
+            parsed = urlparse(value)
+            hostname = parsed.hostname
+        except ValueError:
+            return None
+        if (
+            parsed.scheme not in {"http", "https"}
+            or not hostname
+            or parsed.username is not None
+            or parsed.password is not None
+            or parsed.query
+            or parsed.fragment
+        ):
+            return None
+        return value
+
+    @field_serializer("headers")
+    def _mask_headers(self, value: dict | None) -> dict | None:
+        return (
+            {key: "********" if item else item for key, item in value.items()}
+            if value
+            else value
+        )
+
+    @field_serializer("metadata_")
+    def _mask_sensitive_metadata(self, value: dict | None) -> dict | None:
+        if not value:
+            return value
+        hints = (
+            "authorization",
+            "token",
+            "secret",
+            "password",
+            "cookie",
+            "api_key",
+            "apikey",
+            "api-key",
+            "auth",
+            "credential",
+        )
+        return {
+            key: (
+                "********"
+                if any(hint in str(key).lower() for hint in hints) and item
+                else item
+            )
+            for key, item in value.items()
+        }
+
     @field_serializer("auth_config")
     def _mask_auth_config(self, value: dict | None):
         if not value:
             return value
-        masked = dict(value)
-        for key in ("secret", "token", "api_key", "password", "client_secret"):
-            if key in masked and masked[key]:
-                raw = str(masked[key])
-                suffix = raw[-4:]
-                masked[key] = f"{'*' * max(len(raw) - 4, 4)}{suffix}"
-        return masked
+        return {
+            key: item if key in {"username", "client_id"} or not item else "********"
+            for key, item in value.items()
+        }
