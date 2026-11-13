@@ -156,6 +156,50 @@ def test_connect_success_does_not_disconnect(monkeypatch):
     assert conn._pool is not None
 
 
+def test_successful_reconnect_does_not_clear_poll_failure_backoff(monkeypatch):
+    """A login-only recovery must not erase a failed queue observation.
+
+    Some routers accept RouterOS API login but time out on ``/queue/simple``.
+    Resetting the streak in connect() kept those devices at the minimum retry
+    delay and produced a continuous error storm instead of bounded backoff.
+    """
+
+    class _QueueResource:
+        def get(self):
+            raise TimeoutError
+
+    class _Api:
+        def get_resource(self, path):
+            assert path == "/queue/simple"
+            return _QueueResource()
+
+    class _Pool:
+        def __init__(self, host, **kwargs):
+            pass
+
+        def get_api(self):
+            return _Api()
+
+        def disconnect(self):
+            pass
+
+    monkeypatch.setattr(mikrotik_poller, "RouterOsApiPool", _Pool)
+    monkeypatch.setattr(mikrotik_poller, "require", lambda _effect: None)
+
+    conn = MikroTikConnection(
+        device_id=uuid4(),
+        host="192.0.2.10",
+        username="admin",
+        password="secret",
+    )
+    conn._consecutive_failures = 4
+
+    assert _run_async(conn.get_queue_stats()) == []
+    assert conn._consecutive_failures == 5
+    assert conn.retry_delay_seconds == 32
+    assert conn.should_retry is False
+
+
 def test_connect_handles_none_pool(monkeypatch):
     """A None pool from construction is handled without crashing."""
     monkeypatch.setattr(
