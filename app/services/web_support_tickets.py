@@ -10,7 +10,7 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime
 from enum import Enum
-from typing import BinaryIO, Protocol, runtime_checkable
+from typing import TYPE_CHECKING, BinaryIO, Protocol, runtime_checkable
 from uuid import UUID, uuid4
 
 from sqlalchemy import select
@@ -49,6 +49,11 @@ from app.schemas.support import (
     TicketMergeRequest,
     TicketUpdate,
 )
+
+if TYPE_CHECKING:
+    from app.services.topology.outage_work_order_handoff import (
+        InfrastructureTicketConflict,
+    )
 from app.services import (
     infrastructure_ticket_selection,
     service_address,
@@ -1168,6 +1173,20 @@ class TicketFormCreateCommand:
     ) = None
     infrastructure_permissions: frozenset[str] = frozenset()
     duplicate_override: bool = False
+
+
+def infrastructure_ticket_conflict_from_error(
+    exc: Exception,
+) -> InfrastructureTicketConflict | None:
+    """Expose typed canonical-ticket conflict evidence to the web adapter."""
+
+    from app.services.topology.outage_work_order_handoff import (
+        OutageWorkOrderHandoffError,
+    )
+
+    if not isinstance(exc, OutageWorkOrderHandoffError):
+        return None
+    return exc.infrastructure_ticket_conflict
 
 
 def _duplicate_input_from_payload(

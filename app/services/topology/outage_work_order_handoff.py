@@ -72,6 +72,51 @@ class HandoffActorType(StrEnum):
     SERVICE = "service"
 
 
+class InfrastructureTicketConflictReason(StrEnum):
+    ticket_type = "ticket_type"
+    service_team = "service_team"
+
+
+@dataclass(frozen=True, slots=True)
+class InfrastructureTicketConflict:
+    """Canonical ticket evidence returned when outage ticket creation conflicts."""
+
+    reason: InfrastructureTicketConflictReason
+    ticket_id: UUID
+    ticket_number: str | None
+    ticket_title: str
+    existing_ticket_type: str | None
+    requested_ticket_type: str | None
+    existing_service_team_id: UUID | None
+    requested_service_team_id: UUID | None
+
+    @property
+    def reference(self) -> str:
+        return self.ticket_number or str(self.ticket_id)
+
+    def as_error_details(self) -> dict[str, str | None]:
+        """Serialize typed conflict evidence at the domain-error boundary."""
+
+        return {
+            "reason": self.reason.value,
+            "ticket_id": str(self.ticket_id),
+            "ticket_number": self.ticket_number,
+            "ticket_title": self.ticket_title,
+            "existing_ticket_type": self.existing_ticket_type,
+            "requested_ticket_type": self.requested_ticket_type,
+            "existing_service_team_id": (
+                str(self.existing_service_team_id)
+                if self.existing_service_team_id is not None
+                else None
+            ),
+            "requested_service_team_id": (
+                str(self.requested_service_team_id)
+                if self.requested_service_team_id is not None
+                else None
+            ),
+        }
+
+
 @dataclass(frozen=True)
 class OutageWorkOrderIssueCommand:
     incident_id: UUID
@@ -267,9 +312,22 @@ def _create_ticket_for_infrastructure_asset(
 
 
 class OutageWorkOrderHandoffError(DomainError):
-    def __init__(self, code: str, message: str, *, kind: IssueErrorKind = "conflict"):
-        super().__init__(code=code, message=message, details={"kind": kind})
+    def __init__(
+        self,
+        code: str,
+        message: str,
+        *,
+        kind: IssueErrorKind = "conflict",
+        infrastructure_ticket_conflict: InfrastructureTicketConflict | None = None,
+    ) -> None:
+        details: dict[str, object] = {"kind": kind}
+        if infrastructure_ticket_conflict is not None:
+            details["infrastructure_ticket_conflict"] = (
+                infrastructure_ticket_conflict.as_error_details()
+            )
+        super().__init__(code=code, message=message, details=details)
         self.kind = kind
+        self.infrastructure_ticket_conflict = infrastructure_ticket_conflict
 
 
 @dataclass(frozen=True)
@@ -1044,6 +1102,16 @@ def _create_infrastructure_ticket(
                 "infrastructure_ticket_type_conflict",
                 "The active outage already has a ticket with a different type",
                 kind="conflict",
+                infrastructure_ticket_conflict=InfrastructureTicketConflict(
+                    reason=InfrastructureTicketConflictReason.ticket_type,
+                    ticket_id=ticket.id,
+                    ticket_number=ticket.number,
+                    ticket_title=ticket.title,
+                    existing_ticket_type=ticket.ticket_type,
+                    requested_ticket_type=command.ticket_payload.ticket_type,
+                    existing_service_team_id=ticket.service_team_id,
+                    requested_service_team_id=(command.ticket_payload.service_team_id),
+                ),
             )
         if (
             command.ticket_payload is not None
@@ -1054,6 +1122,16 @@ def _create_infrastructure_ticket(
                 "infrastructure_ticket_team_conflict",
                 "The active outage already has a ticket assigned to another service team",
                 kind="conflict",
+                infrastructure_ticket_conflict=InfrastructureTicketConflict(
+                    reason=InfrastructureTicketConflictReason.service_team,
+                    ticket_id=ticket.id,
+                    ticket_number=ticket.number,
+                    ticket_title=ticket.title,
+                    existing_ticket_type=ticket.ticket_type,
+                    requested_ticket_type=command.ticket_payload.ticket_type,
+                    existing_service_team_id=ticket.service_team_id,
+                    requested_service_team_id=(command.ticket_payload.service_team_id),
+                ),
             )
         return OutageInfrastructureTicketIssueResult(
             ticket=ticket, link=existing, replayed=True
