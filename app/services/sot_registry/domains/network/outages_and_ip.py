@@ -1274,7 +1274,10 @@ SERVICES: tuple[SOTService, ...] = (
                 "docs/SOT_RELATIONSHIP_MAP.md",
             ),
             test_refs=(
+                "tests/services/topology/test_infrastructure_ticket_creation_contract.py",
                 "tests/services/topology/test_outage_work_order_handoff_contract.py",
+                "tests/test_support_ticket_typeahead.py",
+                "tests/architecture/test_infrastructure_ticket_boundary.py",
                 "tests/architecture/test_ticket_work_order_handoff_boundary.py",
             ),
         ),
