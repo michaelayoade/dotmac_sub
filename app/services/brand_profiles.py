@@ -2,9 +2,12 @@
 
 from __future__ import annotations
 
+import base64
+import mimetypes
 import re
 import uuid
 from dataclasses import asdict, dataclass
+from pathlib import Path
 from typing import Any
 
 from sqlalchemy import select
@@ -217,6 +220,45 @@ def resolve_brand(
         values.pop("brand_name") or values["product_name"] or values["legal_name"]
     )
     return ResolvedBrand(**values)
+
+
+def resolve_brand_logo_source(
+    db: Session, *, configured_logo: str | None
+) -> str | None:
+    """Resolve the canonical brand logo to a renderer-safe source.
+
+    Stored branding assets and packaged static files are embedded as data URIs
+    so generated documents retain their identity without network access.
+    """
+    logo_value = str(configured_logo or "").strip()
+    if not logo_value:
+        return None
+    if logo_value.startswith("data:"):
+        return logo_value
+    if logo_value.startswith("/branding/assets/"):
+        from app.models.stored_file import StoredFile
+        from app.services import branding_storage as branding_storage_service
+        from app.services.file_storage import file_uploads
+
+        file_id = branding_storage_service.file_id_from_branding_url(logo_value)
+        if not file_id:
+            return None
+        record = db.get(StoredFile, file_id)
+        if not record or record.is_deleted:
+            return None
+        stream = file_uploads.stream_file(record)
+        content = b"".join(stream.chunks)
+        mime = record.content_type or "image/png"
+        encoded = base64.b64encode(content).decode("ascii")
+        return f"data:{mime};base64,{encoded}"
+    if logo_value.startswith("/static/"):
+        path = Path(logo_value.lstrip("/"))
+        if not path.exists():
+            return None
+        mime = mimetypes.guess_type(str(path))[0] or "image/png"
+        encoded = base64.b64encode(path.read_bytes()).decode("ascii")
+        return f"data:{mime};base64,{encoded}"
+    return logo_value
 
 
 def upsert_brand_profile(
