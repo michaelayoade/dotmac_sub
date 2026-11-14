@@ -135,4 +135,5 @@ Billing-summary.md
 
 # Local overrides for development/testing (never committed)
 *.local
+*.local.*
 .agents/
