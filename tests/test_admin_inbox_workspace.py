@@ -157,6 +157,32 @@ def test_inbox_workspace_templates_compile():
         assert environment.get_template(template_name) is not None
 
 
+def test_inbox_sidebar_distinguishes_unavailable_assignment_totals():
+    environment = Environment(loader=FileSystemLoader("templates"), autoescape=True)
+    assignment_count = environment.get_template(
+        "admin/inbox/_sidebar.html"
+    ).module.assignment_count
+    values = dict(
+        all=42,
+        queued=7,
+        assigned_to_me=3,
+        my_team=9,
+        ai_handling=2,
+        unassigned=5,
+        my_team_ids=(),
+        unreplied=4,
+        needs_attention=1,
+    )
+    available = team_inbox_projection.InboxAssignmentCounts(**values)
+    unavailable = team_inbox_projection.InboxAssignmentCounts(
+        **values,
+        state=team_inbox_projection.InboxAssignmentCountsState.unavailable,
+    )
+
+    assert str(assignment_count(available, available.all)) == "42"
+    assert str(assignment_count(unavailable, unavailable.all)) == "—"
+
+
 def test_manager_ai_filters_use_selects_and_conditional_custom_dates():
     template = Path("templates/admin/inbox/manager_ai.html").read_text()
 

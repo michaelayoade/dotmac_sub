@@ -1,5 +1,9 @@
 {% from "admin/inbox/_queue_macros.html" import conversation_queue_item, inbox_pagination %}
 
+{% macro assignment_count(counts, value) -%}
+    {{- value if counts.state == 'available' else '—' -}}
+{%- endmacro %}
+
 <div class="flex min-h-0 flex-1 flex-col" data-inbox-sidebar-content>
     <header class="space-y-2 border-b border-slate-200/60 px-5 py-3 dark:border-slate-700/60">
         <div class="flex items-center justify-between gap-2">
@@ -121,11 +125,16 @@
                    class="w-full rounded-xl border border-slate-200 bg-white py-2.5 pl-10 pr-4 text-sm text-slate-900 placeholder-slate-400 transition-all focus:border-amber-500 focus:ring-2 focus:ring-amber-500/20 dark:border-slate-600 dark:bg-slate-800/50 dark:text-white dark:placeholder-slate-500 dark:focus:border-amber-500">
         </label>
         <nav class="mt-2 grid grid-cols-4 gap-1 rounded-xl bg-slate-100 p-1 dark:bg-slate-800/60" aria-label="Conversation ownership views">
-            <a href="/admin/inbox?view=all" class="min-h-9 rounded-lg px-2 py-2 text-center text-[10px] font-semibold" :class="filterValue('view') === 'all' ? 'bg-white text-amber-700 shadow-sm dark:bg-slate-700 dark:text-amber-300' : 'text-slate-500 dark:text-slate-400'">All <span class="tabular-nums">{{ assignment_counts.all }}</span></a>
-            <a href="/admin/inbox?view=ai_intake" class="min-h-9 rounded-lg px-2 py-2 text-center text-[10px] font-semibold" :class="filterValue('view') === 'ai_intake' ? 'bg-white text-indigo-700 shadow-sm dark:bg-slate-700 dark:text-indigo-300' : 'text-slate-500 dark:text-slate-400'">AI Intake <span class="tabular-nums">{{ assignment_counts.ai_handling }}</span></a>
-            <a href="/admin/inbox?view=queue" class="min-h-9 rounded-lg px-2 py-2 text-center text-[10px] font-semibold" :class="filterValue('view') === 'queue' ? 'bg-white text-violet-700 shadow-sm dark:bg-slate-700 dark:text-violet-300' : 'text-slate-500 dark:text-slate-400'">Queue <span class="tabular-nums">{{ assignment_counts.queued }}</span></a>
+            <a href="/admin/inbox?view=all" class="min-h-9 rounded-lg px-2 py-2 text-center text-[10px] font-semibold" :class="filterValue('view') === 'all' ? 'bg-white text-amber-700 shadow-sm dark:bg-slate-700 dark:text-amber-300' : 'text-slate-500 dark:text-slate-400'">All <span class="tabular-nums">{{ assignment_count(assignment_counts, assignment_counts.all) }}</span></a>
+            <a href="/admin/inbox?view=ai_intake" class="min-h-9 rounded-lg px-2 py-2 text-center text-[10px] font-semibold" :class="filterValue('view') === 'ai_intake' ? 'bg-white text-indigo-700 shadow-sm dark:bg-slate-700 dark:text-indigo-300' : 'text-slate-500 dark:text-slate-400'">AI Intake <span class="tabular-nums">{{ assignment_count(assignment_counts, assignment_counts.ai_handling) }}</span></a>
+            <a href="/admin/inbox?view=queue" class="min-h-9 rounded-lg px-2 py-2 text-center text-[10px] font-semibold" :class="filterValue('view') === 'queue' ? 'bg-white text-violet-700 shadow-sm dark:bg-slate-700 dark:text-violet-300' : 'text-slate-500 dark:text-slate-400'">Queue <span class="tabular-nums">{{ assignment_count(assignment_counts, assignment_counts.queued) }}</span></a>
             <a href="/admin/inbox?view=history" class="min-h-9 rounded-lg px-2 py-2 text-center text-[10px] font-semibold" :class="filterValue('view') === 'history' ? 'bg-white text-slate-700 shadow-sm dark:bg-slate-700 dark:text-slate-200' : 'text-slate-500 dark:text-slate-400'">History</a>
         </nav>
+        {% if assignment_counts.state == 'unavailable' %}
+        <p class="mt-2 rounded-lg bg-amber-50 px-3 py-2 text-xs text-amber-800 dark:bg-amber-900/20 dark:text-amber-200" role="status">
+            Assignment totals are temporarily unavailable. Conversations remain available.
+        </p>
+        {% endif %}
     </div>
 
     <div data-inbox-refresh-status
@@ -268,17 +277,17 @@
                     <button type="button" @click="applyAssignmentFilter('')"
                             class="flex min-h-10 min-w-24 flex-1 items-center justify-between gap-2 rounded-lg px-2.5 text-xs font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-amber-500"
                             :class="assignmentFilterActive('all') ? 'bg-white text-slate-700 shadow-sm dark:bg-slate-700 dark:text-slate-300' : 'text-slate-500 hover:text-slate-700 dark:text-slate-400 dark:hover:text-slate-200'">
-                        <span>All</span><span class="tabular-nums">{{ assignment_counts.all }}</span>
+                        <span>All</span><span class="tabular-nums">{{ assignment_count(assignment_counts, assignment_counts.all) }}</span>
                     </button>
                     <button type="button" @click="applyAssignmentFilter('{{ actor_person_id }}')"
                             class="flex min-h-10 min-w-32 flex-1 items-center justify-between gap-2 rounded-lg px-2.5 text-xs font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-amber-500"
                             :class="assignmentFilterActive('mine') ? 'bg-white text-emerald-700 shadow-sm dark:bg-slate-700 dark:text-emerald-300' : 'text-slate-500 hover:text-slate-700 dark:text-slate-400 dark:hover:text-slate-200'">
-                        <span>Assigned to me</span><span class="tabular-nums">{{ assignment_counts.assigned_to_me }}</span>
+                        <span>Assigned to me</span><span class="tabular-nums">{{ assignment_count(assignment_counts, assignment_counts.assigned_to_me) }}</span>
                     </button>
                     <button type="button" @click="applyTeamFilter()"
                             class="flex min-h-10 min-w-24 flex-1 items-center justify-between gap-2 rounded-lg px-2.5 text-xs font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-amber-500"
                             :class="assignmentFilterActive('team') ? 'bg-white text-cyan-700 shadow-sm dark:bg-slate-700 dark:text-cyan-300' : 'text-slate-500 hover:text-slate-700 dark:text-slate-400 dark:hover:text-slate-200'">
-                        <span>My Team</span><span class="tabular-nums">{{ assignment_counts.my_team }}</span>
+                        <span>My Team</span><span class="tabular-nums">{{ assignment_count(assignment_counts, assignment_counts.my_team) }}</span>
                     </button>
                     <button type="button" @click="byAgentOpen = !byAgentOpen"
                             class="flex min-h-10 min-w-24 flex-1 items-center justify-between gap-2 rounded-lg px-2.5 text-xs font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-violet-500"

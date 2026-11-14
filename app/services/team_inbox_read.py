@@ -513,13 +513,16 @@ def assignment_cohort_counts(
         InboxConversation.status != InboxConversationStatus.resolved.value,
     )
     human_owned = ~ai_conversation_ownership.ai_owned_conversation_clause()
+    expired_whatsapp_conversations = (
+        team_inbox_reply_window.expired_whatsapp_conversation_ids_query().cte(
+            "expired_whatsapp_conversations"
+        )
+    )
     actionable_human = and_(
         active_unresolved,
         allowed_queue_channel,
         human_owned,
-        ~InboxConversation.id.in_(
-            team_inbox_reply_window.expired_whatsapp_conversation_ids_query()
-        ),
+        ~InboxConversation.id.in_(select(expired_whatsapp_conversations.c.id)),
     )
     queued_filter = exists(
         select(InboxConversationQueueEntry.id).where(

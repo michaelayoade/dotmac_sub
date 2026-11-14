@@ -14,6 +14,7 @@ from time import perf_counter
 from uuid import UUID
 
 from sqlalchemy import func, or_
+from sqlalchemy.exc import OperationalError
 from sqlalchemy.orm import Session, aliased
 
 from app.models.service_team import ServiceTeamMember
@@ -160,6 +161,12 @@ class InboxQueueComposition(StrEnum):
     full_workspace = "full_workspace"
     sidebar = "sidebar"
     queue_only = "queue_only"
+
+
+class InboxAssignmentCountsState(StrEnum):
+    available = "available"
+    unavailable = "unavailable"
+    not_requested = "not_requested"
 
 
 INBOX_LIST_DEFINITION = ListDefinition(
@@ -464,6 +471,7 @@ class InboxAssignmentCounts:
     my_team_ids: tuple[str, ...]
     unreplied: int
     needs_attention: int
+    state: InboxAssignmentCountsState = InboxAssignmentCountsState.available
 
 
 @dataclass(frozen=True, slots=True)
@@ -1029,11 +1037,34 @@ def _assignment_counts(
             .all()
         ]
         my_team_ids = tuple(str(value) for value in team_ids)
-    cohort_counts = team_inbox_read.assignment_cohort_counts(
-        db,
-        actor_person_id=actor_person_id,
-        actor_team_ids=team_ids,
-    )
+    try:
+        cohort_counts = team_inbox_read.assignment_cohort_counts(
+            db,
+            actor_person_id=actor_person_id,
+            actor_team_ids=team_ids,
+        )
+    except OperationalError as exc:
+        sqlstate = getattr(exc.orig, "sqlstate", None) or getattr(
+            exc.orig, "pgcode", None
+        )
+        if sqlstate != "57014":
+            raise
+        logger.warning(
+            "inbox_assignment_counts_unavailable",
+            extra={"reason": "statement_timeout"},
+        )
+        return InboxAssignmentCounts(
+            all=0,
+            queued=0,
+            assigned_to_me=0,
+            my_team=0,
+            ai_handling=0,
+            my_team_ids=my_team_ids,
+            unassigned=queue_metrics.unassigned_open,
+            unreplied=queue_metrics.needs_response,
+            needs_attention=needs_attention,
+            state=InboxAssignmentCountsState.unavailable,
+        )
     return InboxAssignmentCounts(
         all=cohort_counts.all,
         queued=cohort_counts.queued,
@@ -2699,6 +2730,17 @@ def build_queue_projection(
             snoozed_open=0,
         )
     )
+    social_comment_count = social_comment_thread_count(db) if include_sidebar else 0
+    operator_unread_count = (
+        team_inbox_read_state.unread_conversation_count(
+            db, person_id=request.actor_person_id
+        )
+        if include_sidebar and request.actor_person_id is not None
+        else 0
+    )
+    # Keep this last among projection database reads. A PostgreSQL statement
+    # timeout aborts the read transaction; the web adapter can then roll it
+    # back before rendering the explicitly unavailable count state.
     assignment_counts = (
         _assignment_counts(
             db,
@@ -2719,19 +2761,14 @@ def build_queue_projection(
             my_team_ids=(),
             unreplied=0,
             needs_attention=0,
+            state=InboxAssignmentCountsState.not_requested,
         )
     )
     projection = InboxQueueProjection(
         rows=tuple(result.items),
         queue_metrics=queue_metrics,
-        social_comment_count=social_comment_thread_count(db) if include_sidebar else 0,
-        operator_unread_count=(
-            team_inbox_read_state.unread_conversation_count(
-                db, person_id=request.actor_person_id
-            )
-            if include_sidebar and request.actor_person_id is not None
-            else 0
-        ),
+        social_comment_count=social_comment_count,
+        operator_unread_count=operator_unread_count,
         count=result.count,
         list_query=list_query,
         page_meta=page_meta,
