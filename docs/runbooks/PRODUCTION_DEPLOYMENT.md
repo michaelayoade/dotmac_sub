@@ -38,6 +38,10 @@ rollback boundary in one operation.
 - Docker daemon access and exact-container inventory are readable by the
   production runner. An existing `dotmac_sub_app` container carries a valid
   full-SHA `org.opencontainers.image.revision` label.
+- The production runner provides `python3` on `PATH`. Rollback and first-deploy
+  bootstrap authorization are generated with that explicit command; a
+  compatibility `python` alias is neither required nor part of the host
+  contract.
 
 The deployment refuses to start if the running Nginx configuration does not
 contain the warm candidate upstream.

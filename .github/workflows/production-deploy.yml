@@ -217,6 +217,10 @@ jobs:
           PRODUCTION_DEPLOY_DIR: ${{ vars.PRODUCTION_DEPLOY_DIR }}
         run: |
           set -euo pipefail
+          command -v python3 >/dev/null || {
+            echo "Production deployment runner requires python3 on PATH." >&2
+            exit 1
+          }
           test -n "$PRODUCTION_DEPLOY_DIR"
           test -f "$PRODUCTION_DEPLOY_DIR/.env"
           grep -Fqx 'APP_ENV=production' "$PRODUCTION_DEPLOY_DIR/.env"
@@ -259,7 +263,7 @@ jobs:
               echo "A rollback authorization requires from-revision, to-revision, change reference and reason." >&2
               exit 1
             fi
-            python -m scripts.release_candidate_evidence write-rollback-authorization \
+            python3 -m scripts.release_candidate_evidence write-rollback-authorization \
               --from-revision "$ROLLBACK_FROM" \
               --to-revision "$ROLLBACK_TO" \
               --change-reference "$ROLLBACK_REF" \
@@ -280,7 +284,7 @@ jobs:
               echo "Rollback and first-deployment bootstrap authorizations are mutually exclusive." >&2
               exit 1
             fi
-            python -m scripts.release_candidate_evidence write-bootstrap-authorization \
+            python3 -m scripts.release_candidate_evidence write-bootstrap-authorization \
               --target-revision "$BOOTSTRAP_TARGET" \
               --target-server "$TARGET_SERVER" \
               --change-reference "$BOOTSTRAP_REF" \
