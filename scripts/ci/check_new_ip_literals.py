@@ -10,10 +10,10 @@ A candidate is flagged only when ``ipaddress`` accepts it and it is globally
 routable (``is_global``). Private, loopback, link-local, CGNAT (100.64/10),
 unspecified, multicast, reserved and documentation ranges (192.0.2.0/24,
 198.51.100.0/24, 203.0.113.0/24, 2001:db8::/32) pass. A CIDR network written
-with a prefix is judged by its network address: private networks pass, public
-networks are flagged and need the inline marker.
+with a prefix is flagged when the host address is public or the network is
+public (an invalid prefix, as in a URL path, falls back to the host).
 
-Opt out on a single line with an inline marker and a reason::
+Opt out on a single line with an inline marker and a non-empty reason::
 
     ip-literal-ok: <reason>
 
@@ -31,6 +31,8 @@ import sys
 from dataclasses import dataclass
 
 MARKER = "ip-literal-ok:"
+# The marker only counts when it carries a non-empty reason.
+_MARKER = re.compile(r"ip-literal-ok:\s*\S")
 
 SKIPPED_NAMES = frozenset(
     {
@@ -40,25 +42,50 @@ SKIPPED_NAMES = frozenset(
         "yarn.lock",
         "pnpm-lock.yaml",
         "uv.lock",
-        "Pipfile.lock",
-        "Cargo.lock",
+        "pipfile.lock",
+        "cargo.lock",
         "composer.lock",
-        "Gemfile.lock",
+        "gemfile.lock",
+        "go.sum",
+        "podfile.lock",
     }
 )
 SKIPPED_SUFFIXES = (
     ".lock",
-    ".png", ".jpg", ".jpeg", ".gif", ".webp", ".ico", ".pdf", ".zip", ".gz",
-    ".tgz", ".woff", ".woff2", ".ttf", ".eot", ".otf", ".so", ".pyc", ".db",
-    ".sqlite", ".xlsx", ".mp4", ".mov", ".svg",
-)  # fmt: skip
+    ".png",
+    ".jpg",
+    ".jpeg",
+    ".gif",
+    ".webp",
+    ".ico",
+    ".pdf",
+    ".zip",
+    ".gz",
+    ".tgz",
+    ".woff",
+    ".woff2",
+    ".ttf",
+    ".eot",
+    ".otf",
+    ".so",
+    ".pyc",
+    ".db",
+    ".sqlite",
+    ".xlsx",
+    ".mp4",
+    ".mov",
+    ".svg",
+)
 
 # Dotted quad not glued to other word characters or extra dotted numbers, so
 # "1.2.3.4.5" and "v1.2.3.4" do not match. Optional /prefix for networks.
-_IPV4 = re.compile(r"(?<![\w.])(\d{1,3}(?:\.\d{1,3}){3})(?!\w)(?!\.\d)(?:/(\d{1,3})(?!\d))?")
-# Colon-hex candidate; real validation is done by ``ipaddress``.
+_IPV4 = re.compile(
+    r"(?<![\w.])(\d{1,3}(?:\.\d{1,3}){3})(?!\w)(?!\.\d)(?:/(\d{1,3})(?!\d))?"
+)
+# Colon-hex candidate (up to 8 groups); real validation is done by ``ipaddress``.
 _IPV6 = re.compile(
-    r"(?<![\w:.])((?:[0-9A-Fa-f]{0,4}:){2,7}[0-9A-Fa-f]{0,4})(?![\w:])(?:/(\d{1,3})(?!\d))?"
+    r"(?<![\w:.])((?:[0-9A-Fa-f]{0,4}:){2,8}[0-9A-Fa-f]{0,4})(?![\w:])"
+    r"(?:/(\d{1,3})(?!\d))?"
 )
 _HUNK = re.compile(r"^@@ -\d+(?:,\d+)? \+(\d+)(?:,(\d+))? @@")
 
@@ -76,22 +103,48 @@ def _mask(address: str) -> str:
     return address.split(".", 1)[0] + ".x.x.x"
 
 
-def _is_public(text: str, prefix: str | None) -> bool:
+def _normalise_v4(text: str) -> str | None:
+    """Strip leading zeros per octet; None when an octet exceeds 255."""
+    octets = [int(part) for part in text.split(".")]
+    if any(o > 255 for o in octets):
+        return None
+    return ".".join(str(o) for o in octets)
+
+
+def _public_address(text: str) -> bool:
     try:
         addr = ipaddress.ip_address(text)
-        if prefix is not None:
-            net = ipaddress.ip_network(f"{text}/{prefix}", strict=False)
-            addr = net.network_address
     except ValueError:
         return False
+    if isinstance(addr, ipaddress.IPv6Address) and addr.ipv4_mapped is not None:
+        addr = addr.ipv4_mapped
     if addr.is_multicast or addr.is_reserved:
         return False
     return bool(addr.is_global)
 
 
+def _is_public(text: str, prefix: str | None) -> bool:
+    """Public if the host address is public, or a valid prefix gives a public
+    network. An invalid prefix (a URL path such as /123) falls back to the host."""
+    if ":" not in text:
+        normalised = _normalise_v4(text)
+        if normalised is None:
+            return False
+        text = normalised
+    if _public_address(text):
+        return True
+    if prefix is None:
+        return False
+    try:
+        net = ipaddress.ip_network(f"{text}/{prefix}", strict=False)
+    except ValueError:
+        return False
+    return _public_address(str(net.network_address))
+
+
 def find_public_literals(line: str) -> list[str]:
     """Return masked forms of public addresses found in one line of text."""
-    if MARKER in line:
+    if _MARKER.search(line):
         return []
     found: list[str] = []
     for pattern in (_IPV4, _IPV6):
@@ -103,7 +156,8 @@ def find_public_literals(line: str) -> list[str]:
 
 def skipped_path(path: str) -> bool:
     name = path.rsplit("/", 1)[-1]
-    return name in SKIPPED_NAMES or name.lower().endswith(SKIPPED_SUFFIXES)
+    name = name.lower()
+    return name in SKIPPED_NAMES or name.endswith(SKIPPED_SUFFIXES)
 
 
 def scan_diff(diff_text: str) -> list[Finding]:
@@ -137,18 +191,46 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--base", required=True, help="base commit SHA or ref")
     parser.add_argument("--head", default="HEAD")
     args = parser.parse_args(argv)
+    base = args.base.strip()
+    if not base:
+        print("--base must be a non-empty commit", file=sys.stderr)
+        return 2
+    verify = subprocess.run(
+        [
+            "git",
+            "rev-parse",
+            "--verify",
+            "--quiet",
+            "--end-of-options",
+            f"{base}^{{commit}}",
+        ],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if verify.returncode != 0:
+        print("--base does not resolve to a commit", file=sys.stderr)
+        return 2
     result = subprocess.run(
         [
-            "git", "-c", "core.quotepath=false", "diff", "--unified=0",
-            "--no-color", "--no-ext-diff", "--no-renames",
-            f"{args.base}...{args.head}",
+            "git",
+            "-c",
+            "core.quotepath=false",
+            "diff",
+            "--unified=0",
+            "--no-color",
+            "--no-ext-diff",
+            "--text",
+            "--find-renames",
+            "--end-of-options",
+            f"{base}...{args.head}",
         ],
         capture_output=True,
         text=True,
         encoding="utf-8",
         errors="replace",
         check=False,
-    )  # fmt: skip
+    )
     if result.returncode != 0:
         print(f"git diff failed: {result.stderr.strip()}", file=sys.stderr)
         return 2
@@ -160,7 +242,7 @@ def main(argv: list[str] | None = None) -> int:
             f"\n{len(findings)} new public IP literal(s). Use a role name "
             "(code, docs) or a documentation range (tests: 192.0.2.0/24, "
             "198.51.100.0/24, 203.0.113.0/24, 2001:db8::/32); deploy addresses "
-            f"are supplied at deploy time. If a public address is genuinely "
+            "are supplied at deploy time. If a public address is genuinely "
             f"required, add the inline marker '{MARKER} <reason>' to that line."
         )
         return 1
