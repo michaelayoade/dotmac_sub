@@ -7,10 +7,11 @@ from pathlib import Path
 
 import psycopg
 import pytest
-from alembic import command
 from alembic.config import Config
 from psycopg import sql
 from sqlalchemy.engine import URL
+
+from alembic import command
 
 ROOT = Path(__file__).resolve().parents[2]
 PREDECESSOR = "710_inbox_reply_window_projection"
