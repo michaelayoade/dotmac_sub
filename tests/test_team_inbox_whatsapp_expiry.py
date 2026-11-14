@@ -197,10 +197,9 @@ def test_reply_window_projection_reconciler_audits_repairs_and_converges(
     assert applied.drift_found == 1
     assert applied.repaired == 1
     assert repeated.drift_found == 0
-    assert conversation.last_qualifying_inbound_at is not None
-    assert conversation.last_qualifying_inbound_at.replace(tzinfo=UTC) == NOW - timedelta(
-        hours=1
-    )
+    projected_at = conversation.last_qualifying_inbound_at
+    assert projected_at is not None
+    assert projected_at.replace(tzinfo=UTC) == NOW - timedelta(hours=1)
 
 
 def test_expiry_releases_assignment_and_queue_without_resolving(db_session):
