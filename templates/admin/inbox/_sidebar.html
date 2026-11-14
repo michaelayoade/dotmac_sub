@@ -1,4 +1,5 @@
 {% from "admin/inbox/_queue_macros.html" import conversation_queue_item, inbox_pagination %}
+{% from "admin/inbox/_sidebar_macros.html" import assignment_count %}
 
 {% macro assignment_count(counts, value) -%}
     {{- value if counts.state == 'available' else '—' -}}

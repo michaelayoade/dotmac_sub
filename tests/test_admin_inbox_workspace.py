@@ -160,7 +160,7 @@ def test_inbox_workspace_templates_compile():
 def test_inbox_sidebar_distinguishes_unavailable_assignment_totals():
     environment = Environment(loader=FileSystemLoader("templates"), autoescape=True)
     assignment_count = environment.get_template(
-        "admin/inbox/_sidebar.html"
+        "admin/inbox/_sidebar_macros.html"
     ).module.assignment_count
     values = dict(
         all=42,
