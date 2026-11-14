@@ -1,5 +1,6 @@
 import enum
 import uuid
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from decimal import Decimal
 
@@ -17,10 +18,12 @@ from sqlalchemy import (
     Text,
     UniqueConstraint,
     event,
+    inspect,
+    select,
     text,
 )
 from sqlalchemy.dialects.postgresql import JSONB, UUID
-from sqlalchemy.orm import Mapped, mapped_column, relationship
+from sqlalchemy.orm import Mapped, mapped_column, object_session, relationship
 
 from app.db import Base
 
@@ -510,6 +513,10 @@ class ConsolidatedCreditConsumptionReconciliationEvidence(Base):
 class Invoice(Base):
     __tablename__ = "invoices"
     __table_args__ = (
+        CheckConstraint(
+            "(starter_withholding_discharge_id IS NULL) = (starter_withholding_tax_set_id IS NULL)",
+            name="ck_invoice_native_withholding_source_pair",
+        ),
         Index(
             "uq_invoices_active_splynx_invoice_id",
             "splynx_invoice_id",
@@ -630,6 +637,19 @@ class Invoice(Base):
         DateTime(timezone=True)
     )
     discount_revision: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    # Source identities only. Monetary meaning remains owned by native Billing/Tax.
+    starter_withholding_discharge_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True)
+    )
+    starter_withholding_tax_set_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True)
+    )
+    withholding_tax_selected: Mapped[bool] = mapped_column(
+        Boolean, default=False, server_default=text("false"), nullable=False
+    )
+    withholding_tax_selection_version: Mapped[int] = mapped_column(
+        Integer, default=0, server_default="0", nullable=False
+    )
     tax_total: Mapped[Decimal] = mapped_column(Numeric(12, 2), default=Decimal("0.00"))
     total: Mapped[Decimal] = mapped_column(Numeric(12, 2), default=Decimal("0.00"))
     balance_due: Mapped[Decimal] = mapped_column(
@@ -3056,3 +3076,100 @@ class BankReconciliationItem(Base):
     )
 
     run = relationship("BankReconciliationRun", back_populates="items")
+
+
+INVOICE_WITHHOLDING_SELECTION_PERMIT_KEY = "_invoice_withholding_selection_permit"
+
+
+@dataclass(frozen=True, slots=True)
+class InvoiceWithholdingSelectionWritePermit:
+    invoice_id: uuid.UUID
+    selected: bool
+    version: int
+
+
+@event.listens_for(Invoice, "before_update")
+def _guard_invoice_withholding_selection(_mapper, connection, target: Invoice) -> None:
+    state = inspect(target)
+    if not (
+        state.attrs.withholding_tax_selected.history.has_changes()
+        or state.attrs.withholding_tax_selection_version.history.has_changes()
+    ):
+        return
+    prior = connection.execute(
+        select(
+            Invoice.status,
+            Invoice.withholding_tax_selected,
+            Invoice.withholding_tax_selection_version,
+        ).where(Invoice.id == target.id)
+    ).one()
+    session = object_session(target)
+    expected = InvoiceWithholdingSelectionWritePermit(
+        target.id,
+        target.withholding_tax_selected,
+        target.withholding_tax_selection_version,
+    )
+    if prior.status != InvoiceStatus.draft or target.status != InvoiceStatus.draft:
+        raise ValueError("Issued invoice withholding selection is immutable")
+    if (
+        session is None
+        or session.info.get(INVOICE_WITHHOLDING_SELECTION_PERMIT_KEY) != expected
+        or target.withholding_tax_selection_version
+        != prior.withholding_tax_selection_version + 1
+    ):
+        raise ValueError(
+            "Withholding selection requires the draft selection owner and current version"
+        )
+
+
+@event.listens_for(Invoice, "before_update")
+def _guard_native_withholding_projection(_mapper, connection, target: Invoice) -> None:
+    state = inspect(target)
+    if not (
+        state.attrs.starter_withholding_discharge_id.history.has_changes()
+        or state.attrs.starter_withholding_tax_set_id.history.has_changes()
+    ):
+        return
+    from app.services.owner_commands import owner_command_active
+
+    session = object_session(target)
+    if session is None or not (
+        owner_command_active(session, owner="financial.invoice_withholding")
+        or owner_command_active(session, owner="financial.invoice_withholding_issuance")
+    ):
+        raise ValueError(
+            "Native withholding source projection requires its registered owner"
+        )
+    prior = connection.execute(
+        select(
+            Invoice.starter_withholding_discharge_id,
+            Invoice.starter_withholding_tax_set_id,
+        ).where(Invoice.id == target.id)
+    ).one()
+    if (
+        prior.starter_withholding_discharge_id is not None
+        or prior.starter_withholding_tax_set_id is not None
+    ):
+        raise ValueError("Native withholding source identities are immutable")
+    if (
+        target.starter_withholding_discharge_id is None
+        or target.starter_withholding_tax_set_id is None
+        or not target.withholding_tax_selected
+        or target.status == InvoiceStatus.draft
+    ):
+        raise ValueError(
+            "Native withholding source identities require one selected issued invoice"
+        )
+
+
+@event.listens_for(Invoice, "before_insert")
+def _guard_native_withholding_projection_insert(
+    _mapper, _connection, target: Invoice
+) -> None:
+    if (
+        target.starter_withholding_discharge_id is not None
+        or target.starter_withholding_tax_set_id is not None
+    ):
+        raise ValueError(
+            "Native withholding projection must follow accepted source evidence"
+        )

@@ -5,10 +5,14 @@ from __future__ import annotations
 import hashlib
 import json
 from collections.abc import Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 from decimal import Decimal
+from typing import TYPE_CHECKING
 from uuid import UUID
+
+if TYPE_CHECKING:
+    from app.services.future_invoice_authoring import FutureInvoiceLineSelection
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -34,23 +38,50 @@ from app.services.billing._common import (
 )
 from app.services.billing.invoices import (
     DraftInvoiceLineReplacement,
+    DraftInvoiceNumberingMode,
     DraftInvoiceParticipantError,
     InvoiceLines,
     InvoiceOwnerError,
     Invoices,
     ProformaConversionInput,
     next_invoice_number,
+    verified_draft_issuance,
 )
 from app.services.common import round_money
 from app.services.customer_tax_policies import get_customer_vat_exemption_policy
 from app.services.domain_errors import DomainError
 from app.services.events import emit_event
 from app.services.events.types import EventType
+from app.services.form_contracts import FormConsequence, FormContract
+from app.services.form_contracts import register as register_form_contract
 from app.services.locking import lock_for_update
 from app.services.owner_commands import (
     CommandContext,
     OwnerCommandDefinition,
     execute_owner_command,
+)
+
+FUTURE_CATALOGUE_FORM = register_form_contract(
+    FormContract(
+        key="billing.future_catalogue_invoice",
+        title="Reserve future catalogue invoice charges",
+        entity="invoice",
+        command_owner="financial.invoice_draft_authoring",
+        consequences=(
+            FormConsequence(
+                key="reservation",
+                label="Saving the draft reserves selected service periods or one pending capped renewal against duplicate invoices.",
+            ),
+            FormConsequence(
+                key="no_activation",
+                label="Saving or issuing an invoice does not activate service; funded entitlement remains settlement-owned.",
+            ),
+            FormConsequence(
+                key="revalidation",
+                label="The server checks catalogue prices, VAT, exact service dates and availability again before saving.",
+            ),
+        ),
+    )
 )
 
 OWNER = "financial.invoice_draft_authoring"
@@ -106,6 +137,134 @@ def _error(suffix: str, message: str, **details: object) -> InvoiceDraftAuthorin
         code=f"{OWNER}.{suffix}",
         message=message,
         details=details,
+    )
+
+
+@dataclass(frozen=True, slots=True)
+class IssueAdministrativeInvoiceCommand:
+    invoice_id: UUID
+    announce: bool = False
+
+
+def issue_administrative_invoice(
+    db: Session, command: IssueAdministrativeInvoiceCommand, *, context: CommandContext
+) -> UUID:
+    """Issue a reviewed administrative draft through incumbent financial writers."""
+    definition = OwnerCommandDefinition(
+        owner=OWNER,
+        concern="administrative invoice issue coordination",
+        name="issue_administrative_invoice",
+    )
+
+    def operation() -> UUID:
+        from app.models.billing import StarterInvoiceLink
+        from app.services.billing import starter_issuance
+        from app.services.billing.starter_settlement import (
+            StarterInvoiceProjectionQuery,
+            apply_native_account_credit_for_invoice,
+        )
+        from app.services.manual_payment_recording import (
+            NativeAccountCashQuery,
+            uses_native_account_cash,
+        )
+        from app.services.prepaid_draft_reconciliation import (
+            preview_prepaid_draft_reconciliation,
+        )
+
+        if context.scope != "billing:invoice:update":
+            raise _error(
+                "invalid_issue_authority",
+                "Invoice issue requires invoice-update authority.",
+            )
+        invoice = db.get(Invoice, command.invoice_id)
+        if invoice is None or not invoice.is_active:
+            raise _error("invoice_not_found", "Invoice not found.")
+        lock_account(db, str(invoice.account_id))
+        db.refresh(invoice, with_for_update=True)
+        if invoice.withholding_tax_selected:
+            raise _error(
+                "withholding_review_required",
+                "Review the selected withholding settlement before issuing this invoice.",
+            )
+        if invoice.status != InvoiceStatus.draft:
+            if invoice.issued_at is not None and invoice.status not in {
+                InvoiceStatus.void,
+                InvoiceStatus.written_off,
+            }:
+                # Exact document issuance provenance makes a repeated Issue a no-op.
+                return invoice.id
+            raise _error("issue_rejected", "Only draft invoices can be issued.")
+        Invoices.assert_service_period_reservations_for_issue(db, invoice)
+        try:
+            reconciliation = preview_prepaid_draft_reconciliation(db, invoice.id)
+        except DomainError:
+            reconciliation = None
+        if (
+            reconciliation is not None
+            and reconciliation.invoice_issue_notice is not None
+        ):
+            raise _error(
+                "prepaid_coverage_conflict", reconciliation.invoice_issue_notice
+            )
+        native_cash = uses_native_account_cash(
+            db, NativeAccountCashQuery(invoice.account_id)
+        )
+        native_reason = starter_issuance.eligibility_reason(
+            db,
+            invoice,
+            administrative_policy=starter_issuance.AdministrativeEligibilityPolicy.FUTURE_CATALOGUE,
+        )
+        if native_reason is None:
+            starter_issuance.issue_admin_invoice_via_starter(
+                db,
+                invoice=invoice,
+                actor_ref=context.actor,
+                announce=command.announce,
+                administrative_policy=starter_issuance.AdministrativeEligibilityPolicy.FUTURE_CATALOGUE,
+            )
+            if native_cash:
+                link = db.scalar(
+                    select(StarterInvoiceLink).where(
+                        StarterInvoiceLink.invoice_id == invoice.id
+                    )
+                )
+                if link is None:
+                    raise _error(
+                        "native_invoice_unlinked",
+                        "Native issuance returned no structural invoice link.",
+                    )
+                apply_native_account_credit_for_invoice(
+                    db,
+                    query=StarterInvoiceProjectionQuery(
+                        invoice.id, link.document_id, datetime.now(UTC)
+                    ),
+                )
+        else:
+            if native_cash:
+                raise _error(
+                    "native_issue_required",
+                    "This account has native cash; its invoice must use the supported native issuance lane: "
+                    + native_reason,
+                )
+            issued_at = invoice.issued_at or datetime.now(UTC)
+            if issued_at.tzinfo is None:
+                issued_at = issued_at.replace(tzinfo=UTC)
+            Invoices.issue_draft_system(
+                db,
+                str(invoice.id),
+                issuance=verified_draft_issuance(
+                    invoice, issued_at=issued_at, reason="admin_invoice_detail_issue"
+                ),
+                announce=command.announce,
+                apply_available_credit=True,
+                require_full_available_credit=True,
+                commit=False,
+            )
+        db.flush()
+        return invoice.id
+
+    return execute_owner_command(
+        db, definition=definition, context=context, operation=operation
     )
 
 
@@ -196,6 +355,9 @@ class DraftLineCommand:
     tax_rate_id: UUID | None = None
     subscription_id: UUID | None = None
     line_id: UUID | None = None
+    catalogue_selection: FutureInvoiceLineSelection | None = None
+    resolved_tax_application: TaxApplication | None = None
+    resolved_metadata: dict[str, object] | str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -212,6 +374,7 @@ class CreateInvoiceDraftCommand:
     lines: tuple[DraftLineCommand, ...]
     discount: invoice_discounts.InvoiceDiscountInput | None = None
     actor_system_user_id: UUID | None = None
+    require_catalogue: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -312,6 +475,7 @@ def _normalized_key(context: CommandContext) -> str:
 def _create_fingerprint(command: CreateInvoiceDraftCommand) -> str:
     payload = {
         "account_id": str(command.account_id),
+        **({"require_catalogue": True} if command.require_catalogue else {}),
         "actor_system_user_id": (
             str(command.actor_system_user_id) if command.actor_system_user_id else None
         ),
@@ -323,6 +487,11 @@ def _create_fingerprint(command: CreateInvoiceDraftCommand) -> str:
         "is_proforma": command.is_proforma,
         "lines": [
             {
+                **(
+                    {"catalogue_selection": _catalogue_selection_wire(line)}
+                    if line.catalogue_selection is not None
+                    else {}
+                ),
                 "description": line.description.strip(),
                 "quantity": str(line.quantity),
                 "unit_price": str(line.unit_price),
@@ -398,11 +567,56 @@ def _validate_header(
     return normalized_number, normalized_currency
 
 
+def _catalogue_selection_wire(line: DraftLineCommand) -> dict[str, object] | None:
+    if line.catalogue_selection is None:
+        return None
+    from app.services.future_invoice_authoring import selection_to_wire
+
+    return selection_to_wire(line.catalogue_selection)
+
+
+def _resolve_catalogue_line(
+    db: Session,
+    *,
+    line: DraftLineCommand,
+    account_id: UUID,
+    currency: str,
+    invoice_id: UUID | None,
+) -> DraftLineCommand:
+    from app.services.future_invoice_authoring import (
+        confirm_future_invoice_line,
+        preview_line_metadata,
+    )
+
+    assert line.catalogue_selection is not None
+    preview = confirm_future_invoice_line(
+        db,
+        account_id=account_id,
+        currency=currency,
+        selection=line.catalogue_selection,
+        invoice_id=invoice_id,
+    )
+    return DraftLineCommand(
+        description=preview.description,
+        quantity=preview.quantity,
+        unit_price=preview.unit_price,
+        tax_rate_id=preview.tax_rate_id,
+        subscription_id=preview.subscription_id,
+        line_id=line.line_id,
+        catalogue_selection=line.catalogue_selection,
+        resolved_tax_application=preview.tax_application,
+        resolved_metadata=preview_line_metadata(preview),
+    )
+
+
 def _validated_lines(
     db: Session,
     *,
     account_id: UUID,
     lines: tuple[DraftLineCommand, ...],
+    currency: str = "NGN",
+    invoice_id: UUID | None = None,
+    require_catalogue: bool = False,
 ) -> tuple[tuple[DraftLineCommand, Decimal, TaxApplication], ...]:
     if not lines:
         raise _error(
@@ -411,6 +625,34 @@ def _validated_lines(
         )
     validated: list[tuple[DraftLineCommand, Decimal, TaxApplication]] = []
     for line in lines:
+        if line.catalogue_selection is not None:
+            line = _resolve_catalogue_line(
+                db,
+                line=line,
+                account_id=account_id,
+                currency=currency,
+                invoice_id=invoice_id,
+            )
+        elif require_catalogue:
+            raise _error(
+                "catalogue_selection_required",
+                "Every new invoice line must be selected from the catalogue.",
+            )
+        else:
+            previous = db.get(InvoiceLine, line.line_id) if line.line_id else None
+            if previous is not None and previous.invoice_id == invoice_id:
+                line = replace(
+                    line,
+                    subscription_id=previous.subscription_id,
+                    resolved_tax_application=previous.tax_application,
+                    resolved_metadata=previous.metadata_
+                    if isinstance(previous.metadata_, (dict, str))
+                    else None,
+                )
+            else:
+                line = replace(
+                    line, resolved_tax_application=None, resolved_metadata=None
+                )
         description = line.description.strip()
         if not description:
             raise _error("line_invalid", "Invoice line description is required.")
@@ -461,12 +703,27 @@ def _validated_lines(
                     tax_rate_id=line.tax_rate_id,
                     subscription_id=line.subscription_id,
                     line_id=line.line_id,
+                    catalogue_selection=line.catalogue_selection,
+                    resolved_tax_application=line.resolved_tax_application,
+                    resolved_metadata=line.resolved_metadata,
                 ),
                 amount,
-                TaxApplication.exclusive,
+                line.resolved_tax_application or TaxApplication.exclusive,
             )
         )
     return tuple(validated)
+
+
+def _is_capped_catalogue_line(line: DraftLineCommand) -> bool:
+    evidence = (
+        line.resolved_metadata.get("future_invoice")
+        if isinstance(line.resolved_metadata, dict)
+        else None
+    )
+    return (
+        isinstance(evidence, dict)
+        and evidence.get("period_kind") == "capped_pending_renewal"
+    )
 
 
 def _stage_lines(
@@ -474,8 +731,26 @@ def _stage_lines(
     *,
     invoice: Invoice,
     lines: tuple[DraftLineCommand, ...],
+    require_catalogue: bool = False,
+    preview_invoice_id: UUID | None = None,
 ) -> None:
-    validated = _validated_lines(db, account_id=invoice.account_id, lines=lines)
+    validated = _validated_lines(
+        db,
+        account_id=invoice.account_id,
+        lines=lines,
+        currency=invoice.currency,
+        invoice_id=preview_invoice_id,
+        require_catalogue=require_catalogue,
+    )
+    catalogue_lines = [
+        entry[0] for entry in validated if entry[0].catalogue_selection is not None
+    ]
+    capped_lines = [line for line in catalogue_lines if _is_capped_catalogue_line(line)]
+    if capped_lines and len(catalogue_lines) != 1:
+        raise _error(
+            "capped_renewal_single_line",
+            "A pending quota renewal must be the only invoice line.",
+        )
     account = db.get(Subscriber, invoice.account_id)
     if account is None:
         raise _error(
@@ -496,10 +771,13 @@ def _stage_lines(
                 tax_rate_id=(
                     None
                     if account_vat.vat_exempt
+                    else command.tax_rate_id
+                    if command.catalogue_selection is not None
                     else account_vat.tax_rate_id or command.tax_rate_id
                 ),
                 tax_application=tax_application,
                 subscription_id=command.subscription_id,
+                metadata_=command.resolved_metadata,
                 is_active=True,
             ),
         )
@@ -671,8 +949,18 @@ def _create_invoice_draft(
             balance_due=Decimal("0.00"),
             is_active=True,
         ),
+        numbering_mode=(
+            DraftInvoiceNumberingMode.AT_ISSUANCE
+            if command.require_catalogue and not command.is_proforma
+            else DraftInvoiceNumberingMode.AT_DRAFT
+        ),
     )
-    _stage_lines(db, invoice=invoice, lines=command.lines)
+    _stage_lines(
+        db,
+        invoice=invoice,
+        lines=command.lines,
+        require_catalogue=command.require_catalogue,
+    )
     if command.discount is not None:
         if command.actor_system_user_id is None:
             raise _error(
@@ -781,7 +1069,18 @@ def _update_invoice_draft(
             is_proforma=command.is_proforma,
         ),
     )
-    _stage_lines(db, invoice=invoice, lines=command.lines)
+    _stage_lines(
+        db,
+        invoice=invoice,
+        lines=command.lines,
+        require_catalogue=any(
+            isinstance(line.metadata_, dict)
+            and line.metadata_.get("future_catalogue_invoice") is True
+            for line in invoice.lines
+            if line.is_active
+        ),
+        preview_invoice_id=invoice.id,
+    )
     if command.discount is not None or invoice.discount_type is not None:
         if command.actor_system_user_id is None:
             raise _error(

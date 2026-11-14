@@ -21,6 +21,241 @@ from app.services.sot_manifest import (
 
 SERVICES: tuple[SOTService, ...] = (
     SOTService(
+        name="financial.invoice_withholding_issuance",
+        module="app.services.invoice_withholding_issuance",
+        owns=("invoice withholding issuance",),
+        depends_on=(
+            "financial.invoices",
+            "financial.invoice_withholding",
+            "financial.starter_issuance",
+            "financial.starter_settlement",
+        ),
+        contract=ServiceContract(
+            concerns=(
+                ConcernContract(
+                    name="invoice withholding issuance",
+                    role=OwnerRole.APPLICATION_COORDINATOR,
+                    input_names=(
+                        "verified draft and withholding basis",
+                        "native cash position",
+                    ),
+                ),
+            ),
+            authoritative_inputs=(
+                AuthorityInput(
+                    name="verified draft and withholding basis",
+                    owner="financial.invoice_withholding",
+                    kind=AuthorityKind.DERIVED_PROJECTION,
+                    source="snapshot_invoice_withholding_for_issue plus canonical invoice verified due provenance, frozen catalogue facts and period reservation checks.",
+                ),
+                AuthorityInput(
+                    name="native cash position",
+                    owner="external:dotmac_billing",
+                    kind=AuthorityKind.EXTERNAL_OBSERVATION,
+                    source="get_current_receivable_position returns native cash-backed available credit, completeness, source version and fingerprint; no legacy receipt is adopted by inference.",
+                ),
+            ),
+            transaction=TransactionContract(
+                mode=TransactionMode.COORDINATOR_MANAGED,
+                boundary="confirm_invoice_withholding_issue enters execute_owner_command once; existing Starter issuance, native Billing cash application/WHT acceptance and the incumbent settlement projection are flush-only participants in the same transaction.",
+                locking="Account lock then invoice row lock, then re-preview exact current funding and policy.",
+                idempotency="Fingerprint binds draft, genuine Tax preview and native cash position; exact replay checks stored native discharge and document receivable. Other issued evidence cannot issue again.",
+                retries="Stale preview requires operator review; failure rolls back issuance, cash allocation and WHT together.",
+            ),
+            errors=ErrorContract(
+                domain_codes=tuple(
+                    "financial.invoice_withholding_issuance." + code
+                    for code in (
+                        "invalid_authority",
+                        "invalid_evidence_reference",
+                        "invoice_not_found",
+                        "native_cash_shortfall",
+                        "native_invoice_unlinked",
+                        "native_issuance_required",
+                        "native_settlement_incomplete",
+                        "not_draft",
+                        "not_selected",
+                        "stale_preview",
+                    )
+                )
+                + owner_command_boundary_error_codes(
+                    "financial.invoice_withholding_issuance"
+                ),
+                mapping_owner="Billing web adapters",
+                fail_closed_on=(
+                    "insufficient or changed cash funding",
+                    "unsupported Starter authority",
+                    "stale catalogue or service periods",
+                    "missing withholding evidence",
+                ),
+            ),
+            events=None,
+            migration=MigrationContract(
+                state=AuthorityMigrationState.NATIVE,
+                new_owner="financial.invoice_withholding_issuance",
+                verification="Draft issue uses existing net cash and separate withholding discharge in one atomic transaction.",
+                cutover_gate="Unsupported Starter-native withholding authority fails before cash effects.",
+                fallback_retirement="No gross-payment substitute or parallel issue owner.",
+            ),
+            steward="billing operations",
+            design_refs=("docs/designs/INVOICE_WITHHOLDING_SETTLEMENT.md",),
+            test_refs=("tests/test_invoice_withholding_issuance.py",),
+        ),
+    ),
+    SOTService(
+        name="financial.invoice_withholding",
+        module="app.services.invoice_withholding",
+        owns=(
+            "draft invoice withholding selection",
+            "invoice withholding settlement",
+            "invoice cash and withholding presentation",
+        ),
+        depends_on=(
+            "financial.invoices",
+            "financial.starter_issuance",
+            "financial.starter_settlement",
+            "financial.tax_accounting",
+            "financial.customer_tax_policies",
+            "control.settings_spec",
+        ),
+        notes="Sub owns draft selection and documentary projection. Existing native Tax determines withholding; existing native Billing accepts noncash discharge. Legacy gross evidence remains unchanged; unsupported legacy cash adoption fails closed.",
+        contract=ServiceContract(
+            concerns=(
+                ConcernContract(
+                    name="draft invoice withholding selection",
+                    role=OwnerRole.APPLICATION_COORDINATOR,
+                    input_names=(
+                        "invoice settlement evidence",
+                        "customer withholding policy",
+                        "accepted withholding evidence",
+                    ),
+                ),
+                ConcernContract(
+                    name="invoice withholding settlement",
+                    role=OwnerRole.APPLICATION_COORDINATOR,
+                    input_names=(
+                        "invoice settlement evidence",
+                        "customer withholding policy",
+                        "accepted withholding evidence",
+                    ),
+                ),
+                ConcernContract(
+                    name="invoice cash and withholding presentation",
+                    role=OwnerRole.RESOLVER,
+                    input_names=(
+                        "invoice settlement evidence",
+                        "customer withholding policy",
+                        "accepted withholding evidence",
+                    ),
+                ),
+            ),
+            authoritative_inputs=(
+                AuthorityInput(
+                    name="invoice settlement evidence",
+                    owner="financial.invoices",
+                    kind=AuthorityKind.DERIVED_PROJECTION,
+                    source="Invoice totals and structural StarterInvoiceLink; document-grained native Billing receivable and cash allocation facts. Legacy settlement is observed only and cannot prove native cash.",
+                ),
+                AuthorityInput(
+                    name="customer withholding policy",
+                    owner="financial.customer_tax_policies",
+                    kind=AuthorityKind.CONTROL_INPUT,
+                    source="Customer enablement/version and explicit default-false draft selection with CAS. Existing configured native Tax jurisdiction/code and published rules determine amount; legacy scalar rate does not mint evidence.",
+                ),
+                AuthorityInput(
+                    name="accepted withholding evidence",
+                    owner="external:dotmac_billing",
+                    kind=AuthorityKind.EXTERNAL_OBSERVATION,
+                    source="Native withholding discharge and certificate observation backed by genuine dotmac-tax determination set/component seals. Historical WithholdingTaxRecord is read without a second discharge.",
+                ),
+            ),
+            transaction=TransactionContract(
+                mode=TransactionMode.COORDINATOR_MANAGED,
+                boundary="Selection and correction root commands enter execute_owner_command once. Native settlement participants flush inside correction/issue coordinators. Legacy receipt/proof adoption is refused. Queries and previews remain read-only.",
+                locking="Account lock then invoice row lock; exact cash/payment allocations and current policy revalidated before acceptance.",
+                idempotency="Native Billing deduplicates the stable invoice withholding source; native projection UUIDs bind that source. Selection uses versioned CAS. Changed evidence fails closed.",
+                retries="A stale preview requires a new review; never creates another cash payment to repair missing withholding.",
+            ),
+            errors=ErrorContract(
+                domain_codes=tuple(
+                    "financial.invoice_withholding." + code
+                    for code in (
+                        "already_accepted",
+                        "ambiguous_legacy_evidence",
+                        "invalid_command_context",
+                        "invoice_ineligible",
+                        "invoice_not_found",
+                        "native_capability_unavailable",
+                        "native_cash_adoption_required",
+                        "native_invoice_required",
+                        "native_owner_required",
+                        "native_projection_unlinked",
+                        "native_scope_mismatch",
+                        "native_settlement_changed",
+                        "native_tax_evidence_required",
+                        "native_tax_policy_required",
+                        "native_tax_refused",
+                        "native_transfer_adoption_required",
+                        "not_draft",
+                        "not_selected",
+                        "policy_disabled",
+                        "prior_legacy_settlement",
+                        "selection_immutable",
+                        "selection_invalid",
+                        "stale_selection",
+                        "stale_snapshot",
+                    )
+                )
+                + owner_command_boundary_error_codes("financial.invoice_withholding"),
+                mapping_owner="Billing web/API adapters",
+                fail_closed_on=(
+                    "stale policy or totals",
+                    "ambiguous or refunded cash evidence",
+                    "partial/mixed settlement",
+                    "duplicate withholding",
+                ),
+            ),
+            events=EventContract(
+                event_types=("invoice.withholding_selection_changed",),
+                schema_version=1,
+                delivery_owner="events.dispatcher",
+                compatibility="Selection emits version 1 selected/version and command provenance. Native Tax/Billing retain financial effects; no local receivable source event is synthesized.",
+                replay="Exact acceptance replay emits no second record or official event.",
+            ),
+            projections=(
+                ProjectionContract(
+                    name="invoice cash and withholding presentation",
+                    input_names=(
+                        "invoice settlement evidence",
+                        "customer withholding policy",
+                        "accepted withholding evidence",
+                    ),
+                    writer="financial.invoice_withholding",
+                    freshness="Rebuilt from current sources per query; source_updated_at invalidates PDF cache after evidence or policy changes.",
+                    stale_behavior="Commands revalidate locked sources; ambiguous records fail closed.",
+                    drift_signal="Canonical settlement and linked withholding source disagree or multiple records exist.",
+                    rebuild_operation="query_invoice_withholding",
+                    repair_owner="financial.invoice_withholding",
+                ),
+            ),
+            migration=MigrationContract(
+                state=AuthorityMigrationState.CUT_OVER,
+                new_owner="financial.invoice_withholding",
+                old_owner="financial.payment_proofs",
+                verification="Cash remains net, separate withholding closes receivable; legacy gross evidence is not rewritten.",
+                cutover_gate="Requires qualified native APIs, existing published Tax binding and genuine native cash. Legacy receipt/proof adoption remains explicitly unsupported.",
+                fallback_retirement="No local separate-noncash ledger, fake gross Payment or fallback Tax determination; historical gross rows retain their existing interpretation.",
+            ),
+            steward="billing operations",
+            design_refs=("docs/designs/INVOICE_WITHHOLDING_SETTLEMENT.md",),
+            test_refs=(
+                "tests/test_invoice_withholding.py",
+                "tests/test_payment_proof_action_forms.py",
+                "tests/test_billing_invoice_pdf_storage.py",
+            ),
+        ),
+    ),
+    SOTService(
         name="financial.invoices.opening_export",
         module="app.services.billing.opening_export",
         implementation_modules=("app.services.billing.opening_export_contracts",),
@@ -487,7 +722,14 @@ SERVICES: tuple[SOTService, ...] = (
             "service invoice markers retain historical-only settlement and "
             "refund/reversal semantics after the #3605 creation workflows are "
             "retired; see docs/designs/REVERT_3605_BILLING.md and "
-            "tests/test_retired_manual_service_invoicing.py."
+            "tests/test_retired_manual_service_invoicing.py. Future catalogue "
+            "monthly periods are preserved at settlement; capped renewals bind "
+            "verified complete payment allocations to the existing quota resolver "
+            "and initializer. financial.entitlements.capped_policy_changed and "
+            "financial.entitlements.capped_funding_unproven refuse unsafe capped "
+            "activation without inventing service dates. See "
+            "docs/designs/FUTURE_CATALOGUE_INVOICING.md and "
+            "tests/test_catalogue_capped_settlement.py."
         ),
     ),
     SOTService(
@@ -915,18 +1157,27 @@ SERVICES: tuple[SOTService, ...] = (
     SOTService(
         name="financial.invoice_draft_authoring",
         module="app.services.invoice_draft_authoring",
+        implementation_modules=("app.services.web_billing_invoices",),
         owns=(
             "administrative invoice draft authoring coordination",
             "administrative proforma conversion coordination",
+            "administrative invoice issue coordination",
         ),
         depends_on=(
             "control.settings_spec",
             "customer.accounts",
             "financial.invoices",
+            "financial.starter_issuance",
+            "financial.starter_settlement",
+            "financial.manual_payment_recording",
             "financial.invoice_discounts",
             "financial.customer_tax_policies",
             "financial.tax_configuration",
             "events.dispatcher",
+            "financial.billing_tax_resolution",
+            "financial.prepaid_service_renewals",
+            "financial.service_extensions",
+            "service_intent.subscription_billing_cadence",
         ),
         notes=(
             "This coordinator is the only administrative writer for a "
@@ -942,10 +1193,26 @@ SERVICES: tuple[SOTService, ...] = (
             "prepaid reconciliation owner retains documentary adoption, "
             "settlement, entitlement, and billing-anchor decisions. Void, "
             "write-off, settlement, and repair remain with their named "
-            "financial owners."
+            "financial owners. Future catalogue selections are resolved by "
+            "app.services.future_invoice_authoring under this owner: typed "
+            "catalogue/price identity, actual owner-derived future periods, "
+            "price/VAT provenance and a fresh preview fingerprint replace "
+            "browser prices. Active invoice lines reserve economic charge "
+            "intervals through the shared financial.invoices account lock; "
+            "capped renewal drafts reserve a request, never fabricated dates "
+            "or entitlement. Historical gaps remain outside this flow."
         ),
         contract=ServiceContract(
             concerns=(
+                ConcernContract(
+                    name="administrative invoice issue coordination",
+                    role=OwnerRole.APPLICATION_COORDINATOR,
+                    input_names=(
+                        "canonical customer account",
+                        "canonical invoice draft aggregate",
+                        "qualified native account deposit observation",
+                    ),
+                ),
                 ConcernContract(
                     name="administrative invoice draft authoring coordination",
                     role=OwnerRole.APPLICATION_COORDINATOR,
@@ -969,6 +1236,12 @@ SERVICES: tuple[SOTService, ...] = (
                 ),
             ),
             authoritative_inputs=(
+                AuthorityInput(
+                    name="qualified native account deposit observation",
+                    owner="financial.manual_payment_recording",
+                    kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                    source="Committed manual_payment_recorded outbox fact explicitly identifying a qualified native deposit confirmation. Existing native Billing owns available credit and exact document outcomes; legacy accounts retain incumbent issue behavior.",
+                ),
                 AuthorityInput(
                     name="authenticated administrative draft command",
                     owner="financial.invoice_draft_authoring",
@@ -1056,7 +1329,38 @@ SERVICES: tuple[SOTService, ...] = (
             ),
             errors=ErrorContract(
                 domain_codes=(
+                    "financial.invoice_draft_authoring.invalid_issue_authority",
+                    "financial.invoice_draft_authoring.withholding_review_required",
+                    "financial.invoice_draft_authoring.issue_rejected",
+                    "financial.invoice_draft_authoring.prepaid_coverage_conflict",
+                    "financial.invoice_draft_authoring.native_invoice_unlinked",
+                    "financial.invoice_draft_authoring.native_issue_required",
                     "financial.invoice_draft_authoring.account_not_found",
+                    "financial.invoice_draft_authoring.capped_dates_unavailable",
+                    "financial.invoice_draft_authoring.capped_policy_unavailable",
+                    "financial.invoice_draft_authoring.catalogue_preview_mismatch",
+                    "financial.invoice_draft_authoring.catalogue_price_unavailable",
+                    "financial.invoice_draft_authoring.contract_price_unavailable",
+                    "financial.invoice_draft_authoring.invalid_catalogue_selection",
+                    "financial.invoice_draft_authoring.invalid_preview_date",
+                    "financial.invoice_draft_authoring.one_time_period_invalid",
+                    "financial.invoice_draft_authoring.pending_service_change",
+                    "financial.invoice_draft_authoring.period_reserved",
+                    "financial.invoice_draft_authoring.quantity_invalid",
+                    "financial.invoice_draft_authoring.service_period_no_longer_future",
+                    "financial.invoice_draft_authoring.service_period_required",
+                    "financial.invoice_draft_authoring.service_period_unavailable",
+                    "financial.invoice_draft_authoring.service_selection_required",
+                    "financial.invoice_draft_authoring.stale_catalogue_preview",
+                    "financial.invoice_draft_authoring.subscription_account_mismatch",
+                    "financial.invoice_draft_authoring.subscription_not_active",
+                    "financial.invoice_draft_authoring.subscription_offer_mismatch",
+                    "financial.invoice_draft_authoring.tax_rate_unavailable",
+                    "financial.invoice_draft_authoring.unsupported_cadence",
+                    "financial.invoice_draft_authoring.unsupported_capped_mode",
+                    "financial.invoice_draft_authoring.catalogue_selection_required",
+                    "financial.invoice_draft_authoring.mixed_service_invoice_unsupported",
+                    "financial.invoice_draft_authoring.capped_renewal_single_line",
                     "financial.invoice_draft_authoring.currency_invalid",
                     "financial.invoice_draft_authoring.invoice_number_conflict",
                     "financial.invoice_draft_authoring.line_required",
@@ -1132,9 +1436,13 @@ SERVICES: tuple[SOTService, ...] = (
             design_refs=(
                 "docs/SOT_RELATIONSHIP_MAP.md",
                 "docs/designs/INVOICE_DRAFT_AUTHORING.md",
+                "docs/designs/FUTURE_CATALOGUE_INVOICING.md",
             ),
             test_refs=(
                 "tests/test_invoice_draft_authoring.py",
+                "tests/test_future_invoice_authoring.py",
+                "tests/integration/test_native_invoice_withholding_flow.py",
+                "tests/test_invoice_period_reservations.py",
                 "tests/test_web_billing_invoice_forms.py",
                 "tests/integration/test_proforma_conversion_concurrency.py",
                 "tests/architecture/test_invoice_draft_authoring_ownership.py",
@@ -2433,6 +2741,7 @@ SERVICES: tuple[SOTService, ...] = (
                     "financial.payment_proofs.prepaid_funding_baseline_missing",
                     "financial.payment_proofs.billing_account_not_found",
                     "financial.payment_proofs.withholding_tax_basis_unavailable",
+                    "financial.payment_proofs.native_transfer_adoption_required",
                     "financial.payment_proofs.verified_amount_conflict",
                     "financial.payment_proofs.verified_net_exceeds_gross",
                     "financial.payment_proofs.rejection_reason_required",
@@ -2552,6 +2861,7 @@ SERVICES: tuple[SOTService, ...] = (
             "locked administrative manual-payment confirmation",
         ),
         depends_on=(
+            "financial.starter_manual_settlement",
             "customer.accounts",
             "events.dispatcher",
             "financial.payment_proofs",
@@ -2564,7 +2874,7 @@ SERVICES: tuple[SOTService, ...] = (
             "submitted proof with that reference, and presents bounded same-amount "
             "payment/proof evidence for explicit acknowledgement. Confirmation "
             "locks the account, rebuilds both financial and duplicate-control "
-            "previews, and delegates all money effects to financial.payments."
+            "previews, and delegates legacy effects to financial.payments or qualified native cash to the incumbent Starter manual participant. The retired secondary WHT flag is rejected; withholding is selected on invoices."
         ),
         contract=ServiceContract(
             concerns=(
@@ -2675,6 +2985,8 @@ SERVICES: tuple[SOTService, ...] = (
                     "financial.manual_payment_recording.stale_payment_preview",
                     "financial.manual_payment_recording.stale_duplicate_evidence",
                     "financial.manual_payment_recording.duplicate_risk_acknowledgement_required",
+                    "financial.manual_payment_recording.withholding_invoice_flow_required",
+                    "financial.manual_payment_recording.native_cash_lane_required",
                     *owner_command_boundary_error_codes(
                         "financial.manual_payment_recording"
                     ),
@@ -3607,7 +3919,6 @@ SERVICES: tuple[SOTService, ...] = (
     SOTService(
         name="financial.starter_issuance",
         module="app.services.billing.starter_issuance",
-        implementation_modules=("app.services.web_billing_invoices",),
         owns=(
             "Starter-issued admin invoice mirror and structural link",
             "Starter issuance eligibility decision for admin drafts",
@@ -3628,10 +3939,12 @@ SERVICES: tuple[SOTService, ...] = (
             "issued by pinned dotmac-billing as sole ledger writer. Sub "
             "retains only the invoice-row mirror (number, status, issued_at), "
             "the structural StarterInvoiceLink, the audit row, and the "
-            "announce event. app.services.web_billing_invoices is an "
-            "implementation module because its only direct persistence "
-            "mutation is committing this lane's transaction; its remaining "
-            "flows delegate to incumbent owners. The scheduled-cycle lane "
+            "announce event. Administrative adapters delegate transaction ownership "
+            "to financial.invoice_draft_authoring. Its explicit future-catalogue "
+            "policy admits actual advance collection timing only with verified "
+            "monthly or period-independent evidence, or one pending capped package "
+            "whose dates remain unresolved until settlement. Default recurring "
+            "and legacy eligibility remain unchanged. The scheduled-cycle lane "
             "reuses the same core as a caller: app.services.billing_automation stages "
             "cycle drafts, appends lines, and at end-of-run issues eligible "
             "drafts (single-subscription homogeneous line sets with no "
@@ -4382,11 +4695,13 @@ SERVICES: tuple[SOTService, ...] = (
     SOTService(
         name="financial.starter_manual_settlement",
         module="app.services.billing.starter_manual_settlement",
-        owns=("Staff-recorded manual payment settlement of Starter invoices",),
+        owns=(
+            "Staff-recorded manual payment settlement of Starter invoices",
+            "Staff-confirmed native account deposit coordination",
+        ),
         depends_on=(
             "control.settings_spec",
             "financial.invoices",
-            "financial.manual_payment_recording",
             "financial.starter_issuance",
             "financial.starter_settlement",
         ),
@@ -4406,10 +4721,19 @@ SERVICES: tuple[SOTService, ...] = (
         contract=ServiceContract(
             concerns=(
                 ConcernContract(
+                    name="Staff-confirmed native account deposit coordination",
+                    role=OwnerRole.TRANSPORT,
+                    input_names=(
+                        "authorized staff receipt command",
+                        "canonical Starter manual settlement policies",
+                        "native confirmed deposit cash",
+                    ),
+                ),
+                ConcernContract(
                     name="Staff-recorded manual payment settlement of Starter invoices",
                     role=OwnerRole.COMMAND_WRITER,
                     input_names=(
-                        "confirmed manual payment recording preview",
+                        "authorized staff receipt command",
                         "Starter-issued invoice and structural link",
                         "canonical Starter manual settlement policies",
                     ),
@@ -4418,13 +4742,21 @@ SERVICES: tuple[SOTService, ...] = (
             ),
             authoritative_inputs=(
                 AuthorityInput(
-                    name="confirmed manual payment recording preview",
-                    owner="financial.manual_payment_recording",
-                    kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                    name="native confirmed deposit cash",
+                    owner="external:dotmac_payments",
+                    kind=AuthorityKind.EXTERNAL_OBSERVATION,
+                    source="Payments owns ACCOUNT_CREDIT_DEPOSIT intent and actual staff confirmation. Confirmed cash is matched to the intent/currency/amount before Billing accepts AVAILABLE_CREDIT; historical local receipts are not adopted as new cash.",
+                ),
+                AuthorityInput(
+                    name="authorized staff receipt command",
+                    owner="external:staff_bank_receipt",
+                    kind=AuthorityKind.EXTERNAL_OBSERVATION,
                     source=(
-                        "duplicate-reviewed, fingerprint-confirmed "
-                        "preview allocating one succeeded payment in "
-                        "full to the named Starter-linked invoice"
+                        "Typed staff-observed amount, bank reference and receipt time. "
+                        "The manual recording coordinator validates permission, duplicate "
+                        "evidence and preview before this participant; Payments owns the "
+                        "resulting confirmed-cash observation. The participant does not "
+                        "consume or own the coordinator's preview."
                     ),
                 ),
                 AuthorityInput(
@@ -4479,6 +4811,9 @@ SERVICES: tuple[SOTService, ...] = (
                     "financial.starter_manual_settlement.amount_unrepresentable",
                     "financial.starter_manual_settlement.configuration_invalid",
                     "financial.starter_manual_settlement.starter_refused",
+                    "financial.starter_manual_settlement.owner_required",
+                    "financial.starter_manual_settlement.evidence_required",
+                    "financial.starter_manual_settlement.cash_binding_mismatch",
                 ),
                 mapping_owner="manual payment recording owner",
                 retryable_codes=(),

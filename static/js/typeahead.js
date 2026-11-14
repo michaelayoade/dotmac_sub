@@ -146,7 +146,15 @@
             var controller = activeController;
             activeRequestId += 1;
             var requestId = activeRequestId;
-            var requestUrl = url + "?q=" + encodeURIComponent(query) + "&limit=" + limit;
+            var requestUrl = new URL(url, window.location.origin);
+            var queryParam = container.getAttribute("data-typeahead-query-param") || "q";
+            requestUrl.searchParams.set(queryParam, query);
+            requestUrl.searchParams.set("limit", limit);
+            var contextParams = JSON.parse(container.getAttribute("data-typeahead-params") || "{}");
+            Object.keys(contextParams).forEach(function (key) {
+                if (contextParams[key] !== null && contextParams[key] !== "") requestUrl.searchParams.set(key, contextParams[key]);
+            });
+            requestUrl = requestUrl.toString();
             var didTimeout = false;
             var timeout = controller
                 ? window.setTimeout(function () {
@@ -347,6 +355,12 @@
         });
 
         syncClearButton();
+        if (typeof MutationObserver !== "undefined") {
+            new MutationObserver(function () {
+                abortActiveRequest(); activeRequestId += 1; initialItems = null;
+                input.value = ""; updateHiddenValue(""); clearResults();
+            }).observe(container, {attributes: true, attributeFilter: ["data-typeahead-params"]});
+        }
 
         if (validateSelection && input.form) {
             input.form.addEventListener("submit", function (event) {

@@ -40,6 +40,33 @@ from app.models.subscriber import SubscriberCategory, SubscriberStatus
 from app.schemas.status_presentation import StatusPresentation
 
 
+def _reject_invoice_withholding_selection_fields(value: object) -> object:
+    if isinstance(value, dict) and set(value).intersection(
+        {
+            "withholding_tax_selected",
+            "withholding_tax_selection_version",
+            "withholding_tax",
+            "invoice_withholding",
+            "wht_selected",
+        }
+    ):
+        raise ValueError(
+            "Withholding selection requires the dedicated draft selection command"
+        )
+    return value
+
+
+def _reject_withholding_shadow_metadata(value: object) -> object:
+    if isinstance(value, dict):
+        _reject_invoice_withholding_selection_fields(value)
+        for nested in value.values():
+            _reject_withholding_shadow_metadata(nested)
+    elif isinstance(value, list):
+        for nested in value:
+            _reject_withholding_shadow_metadata(nested)
+    return value
+
+
 class InvoiceBase(BaseModel):
     account_id: UUID
     invoice_number: str | None = Field(default=None, max_length=80)
@@ -66,6 +93,16 @@ class InvoiceBase(BaseModel):
 
 
 class InvoiceCreate(InvoiceBase):
+    @model_validator(mode="before")
+    @classmethod
+    def _reject_unowned_withholding_selection(cls, value: object) -> object:
+        _reject_invoice_withholding_selection_fields(value)
+        if isinstance(value, dict):
+            _reject_withholding_shadow_metadata(
+                value.get("metadata_", value.get("metadata"))
+            )
+        return value
+
     # Create-side money bounds (kept off the shared base — see InvoiceBase).
     subtotal: Decimal = Field(default=Decimal("0.00"), ge=0)
     tax_total: Decimal = Field(default=Decimal("0.00"), ge=0)
@@ -109,6 +146,16 @@ class InvoiceCreate(InvoiceBase):
 
 
 class InvoiceUpdate(BaseModel):
+    @model_validator(mode="before")
+    @classmethod
+    def _reject_unowned_withholding_selection(cls, value: object) -> object:
+        _reject_invoice_withholding_selection_fields(value)
+        if isinstance(value, dict):
+            _reject_withholding_shadow_metadata(
+                value.get("metadata_", value.get("metadata"))
+            )
+        return value
+
     account_id: UUID | None = None
     invoice_number: str | None = Field(default=None, max_length=80)
     status: InvoiceStatus | None = None
@@ -157,6 +204,16 @@ class InvoiceLineBase(BaseModel):
 
 
 class InvoiceLineCreate(InvoiceLineBase):
+    @model_validator(mode="before")
+    @classmethod
+    def _reject_unowned_withholding_metadata(cls, value: object) -> object:
+        if isinstance(value, dict):
+            _reject_invoice_withholding_selection_fields(value)
+            _reject_withholding_shadow_metadata(
+                value.get("metadata_", value.get("metadata"))
+            )
+        return value
+
     # Create-side bounds (kept off the shared base — see InvoiceLineBase).
     quantity: Decimal = Field(default=Decimal("1.000"), gt=0)
     unit_price: Decimal = Field(default=Decimal("0.00"), ge=0)
@@ -170,6 +227,16 @@ class SystemInvoiceLineCreate(InvoiceLineCreate):
 
 
 class InvoiceLineUpdate(BaseModel):
+    @model_validator(mode="before")
+    @classmethod
+    def _reject_unowned_withholding_metadata(cls, value: object) -> object:
+        if isinstance(value, dict):
+            _reject_invoice_withholding_selection_fields(value)
+            _reject_withholding_shadow_metadata(
+                value.get("metadata_", value.get("metadata"))
+            )
+        return value
+
     model_config = ConfigDict(populate_by_name=True)
     invoice_id: UUID | None = None
     description: str | None = Field(default=None, min_length=1, max_length=255)
@@ -784,6 +851,12 @@ class PaymentCreationConfirm(PaymentCreationPreviewRequest):
 class ManualPaymentRecordingPreviewRequest(PaymentCreationPreviewRequest):
     """Administrative payment request assessed against proof/payment evidence."""
 
+    withholding_tax: bool = False
+    withholding_preview_fingerprint: str | None = Field(
+        default=None, min_length=64, max_length=64
+    )
+    withholding_evidence_reference: str | None = Field(default=None, max_length=160)
+
 
 class ManualPaymentDuplicateRiskRead(BaseModel):
     kind: str
@@ -795,11 +868,35 @@ class ManualPaymentDuplicateRiskRead(BaseModel):
     observed_at: datetime
 
 
+class InvoiceWithholdingSnapshotRead(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    invoice_id: UUID
+    account_id: UUID
+    currency: str
+    gross_amount: Decimal
+    net_amount: Decimal
+    wht_amount: Decimal
+    wht_rate: Decimal
+    vat_exclusive_amount: Decimal
+    vat_amount: Decimal
+    policy_version: int
+
+
+class InvoiceWithholdingPreviewRead(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    snapshot: InvoiceWithholdingSnapshotRead
+    fingerprint: str
+    existing_payment_id: UUID | None
+
+
 class ManualPaymentRecordingPreviewRead(BaseModel):
     payment_preview: PaymentCreationPreviewRead
     duplicate_risks: list[ManualPaymentDuplicateRiskRead]
     requires_duplicate_acknowledgement: bool
     control_fingerprint: str
+    withholding: InvoiceWithholdingPreviewRead | None = None
 
 
 class ManualPaymentRecordingConfirm(ManualPaymentRecordingPreviewRequest):
@@ -1822,6 +1919,9 @@ class TaxRateRead(TaxRateBase):
 
 class InvoiceRead(InvoiceBase):
     model_config = ConfigDict(from_attributes=True)
+
+    withholding_tax_selected: bool = False
+    withholding_tax_selection_version: int = 0
 
     # Money fields inherit unbounded from InvoiceBase (bounds are create-only),
     # so stored signed/zero values serialize without a per-field override.

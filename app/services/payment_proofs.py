@@ -30,6 +30,7 @@ from sqlalchemy.orm import Session
 from app.models.audit import AuditActorType
 from app.models.billing import (
     BillingAccount,
+    Invoice,
     Payment,
     PaymentSettlementOrigin,
     PaymentStatus,
@@ -1396,6 +1397,13 @@ def _verify_proof(
                     "Direct-transfer intent is missing valid invoice evidence",
                     invoice_id=invoice_id_raw,
                 ) from exc
+            invoice = db.get(Invoice, invoice_uuid)
+            if invoice is not None and invoice.withholding_tax_selected:
+                raise _error(
+                    "native_transfer_adoption_required",
+                    "Selected invoice withholding requires verified native cash. Use the account deposit and reviewed Issue workflow; this legacy proof cannot create another receipt.",
+                    proof_id=str(proof.id),
+                )
             if withholding_tax_snapshot:
                 expected_net = round_money(
                     to_decimal(withholding_tax_snapshot.get("net_amount") or 0)
@@ -1585,6 +1593,13 @@ def _verify_consolidated_proof(
             "Proof already reviewed",
             proof_id=str(proof.id),
             status=proof.status.value,
+        )
+
+    if round_money(to_decimal(proof.wht_amount or 0)) != Decimal("0.00"):
+        raise _error(
+            "withholding_tax_basis_unavailable",
+            "Consolidated reseller withholding requires invoice-scoped tax and cash-allocation evidence. This proof cannot create a gross cash payment; reconcile it through the supported invoice workflow.",
+            proof_id=str(proof.id),
         )
 
     try:

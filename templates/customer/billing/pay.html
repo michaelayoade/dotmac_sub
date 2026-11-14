@@ -11,8 +11,6 @@
 {% set pay_provider_values = pay_options|map(attribute="provider_type")|list %}
 {% set default_pay_provider = provider_type if provider_type in pay_provider_values else (pay_options[0].provider_type if pay_options else "") %}
 {% set default_payment_choice = ("provider:" ~ default_pay_provider) if default_pay_provider else (("card:" ~ payment_methods[0].id) if payment_methods|default([]) else "") %}
-{% set invoice_currency = invoice.currency or default_currency|default('NGN') %}
-{% set payable_amount = amount or invoice.balance_due or invoice.total or 0 %}
 {% set has_customer_email = customer_email|default('', true)|trim|length > 0 %}
 <div class="space-y-6" x-data="paymentPage()">
     <div>
@@ -43,11 +41,13 @@
             <div class="text-right">
                 <p class="text-sm font-medium text-stone-500 dark:text-stone-400">Amount Due</p>
                 <p class="mt-1 text-3xl font-bold text-stone-900 dark:text-white" style="font-family: var(--font-display);">
-                    {{ invoice_currency }} {{ "{:,.2f}".format(payable_amount) }}
+                    {{ amount_display }}
                 </p>
             </div>
         </div>
     </div>
+
+    {% include "billing/_invoice_withholding.html" %}
 
     <!-- Step 2: payment method chooser -->
     <div class="rounded-2xl border border-stone-200 bg-white p-6 shadow-sm dark:border-stone-700 dark:bg-stone-800">
@@ -114,7 +114,7 @@
         <dl class="mt-5 divide-y divide-stone-200 rounded-xl border border-stone-200 bg-white px-4 dark:divide-stone-700 dark:border-stone-700 dark:bg-stone-800">
             <div class="flex items-center justify-between gap-4 py-3"><dt class="text-sm text-stone-500 dark:text-stone-400">Invoice</dt><dd class="text-sm font-semibold text-stone-900 dark:text-white">#{{ invoice.invoice_number or invoice.id[:8] }}</dd></div>
             <div class="flex items-center justify-between gap-4 py-3"><dt class="text-sm text-stone-500 dark:text-stone-400">Payment method</dt><dd class="text-right text-sm font-semibold text-stone-900 dark:text-white" x-text="selectedPaymentLabel()"></dd></div>
-            <div class="flex items-center justify-between gap-4 py-3"><dt class="text-sm text-stone-500 dark:text-stone-400">Amount to pay</dt><dd class="text-lg font-bold text-stone-900 dark:text-white">{{ invoice_currency }} {{ "{:,.2f}".format(payable_amount) }}</dd></div>
+            <div class="flex items-center justify-between gap-4 py-3"><dt class="text-sm text-stone-500 dark:text-stone-400">Amount to pay</dt><dd class="text-lg font-bold text-stone-900 dark:text-white">{{ amount_display }}</dd></div>
         </dl>
         <p x-show="errorMessage" x-cloak role="alert" class="mt-4 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700 dark:border-red-900/50 dark:bg-red-900/20 dark:text-red-300" x-text="errorMessage"></p>
         <div class="mt-6 flex flex-col gap-3 sm:flex-row sm:items-center">
@@ -197,7 +197,7 @@ function paymentPage() {
             if (choice === 'provider:direct_bank_transfer') {
                 return 'Confirm and continue to bank transfer';
             }
-            return 'Confirm and pay {{ invoice_currency }} {{ "{:,.2f}".format(payable_amount) }}';
+            return 'Confirm and pay ' + {{ amount_display|tojson }};
         },
         async startPayment() {
             if (!this.reviewing || this.processing) {
@@ -250,13 +250,16 @@ function paymentPage() {
                     self.errorMessage = 'Add an email address to your account before paying with Paystack.';
                     return;
                 }
+                if (!intent.currency || !Number.isFinite(Number(intent.amount)) || Number(intent.amount) <= 0) {
+                    throw new Error('The server did not return a payable checkout amount. Refresh and review this invoice.');
+                }
                 const handler = PaystackPop.setup({
                     key: intent.provider_public_key,
                     email: checkoutEmail,
                     // Charge the server-authoritative intent amount, not the (possibly
                     // stale) amount rendered at page load.
-                    amount: Math.round((intent.amount || {{ (amount or invoice.balance_due or invoice.total or 0) | float }}) * 100),
-                    currency: intent.currency || 'NGN',
+                    amount: Math.round(Number(intent.amount) * 100),
+                    currency: intent.currency,
                     ref: intent.reference,
                     metadata: intent.checkout_metadata || {
                         invoice_id: '{{ invoice.id }}',

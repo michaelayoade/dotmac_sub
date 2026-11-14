@@ -224,8 +224,8 @@
     "classification": "business_debt",
     "owner": "financial.invoices",
     "reason": "Existing paid-status business predicate; retire with exact settlement/coverage authority at coupled cutover.",
-    "remaining_count": 1,
-    "state": "active"
+    "remaining_count": 0,
+    "state": "retired"
   },
   {
     "path": "app/services/billing/invoices.py",
@@ -236,8 +236,8 @@
     "classification": "business_debt",
     "owner": "financial.invoices",
     "reason": "Existing paid-status business predicate; retire with exact settlement/coverage authority at coupled cutover.",
-    "remaining_count": 1,
-    "state": "active"
+    "remaining_count": 0,
+    "state": "retired"
   },
   {
     "path": "app/services/billing/invoices.py",

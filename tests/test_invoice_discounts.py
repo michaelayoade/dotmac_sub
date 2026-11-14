@@ -8,7 +8,6 @@ from decimal import Decimal
 from uuid import uuid4
 
 import pytest
-from fastapi import HTTPException
 
 from app.models.billing import (
     Invoice,
@@ -27,7 +26,10 @@ from app.models.system_user import SystemUser
 from app.schemas.billing import InvoiceCreate, InvoiceLineCreate, InvoiceUpdate
 from app.services import billing as billing_service
 from app.services import invoice_discounts, invoice_draft_authoring, quote_deposits
-from app.services.billing.invoices import InvoiceIssuanceInput
+from app.services.billing.invoices import (
+    InvoiceIssuanceInput,
+    InvoicePeriodReservationError,
+)
 from app.services.db_session_adapter import db_session_adapter
 from app.services.owner_commands import CommandContext
 from app.timezone import APP_TIMEZONE
@@ -292,7 +294,7 @@ def test_direct_line_change_is_blocked_while_discount_is_active(
     actor = _actor(db_session)
     invoice = _create_discounted_draft(db_session, subscriber, actor)
 
-    with pytest.raises(HTTPException) as exc:
+    with pytest.raises(InvoicePeriodReservationError) as exc:
         billing_service.invoice_lines.create(
             db_session,
             InvoiceLineCreate(
@@ -302,15 +304,15 @@ def test_direct_line_change_is_blocked_while_discount_is_active(
                 unit_price=Decimal("10.00"),
             ),
         )
-    assert exc.value.status_code == 409
+    assert exc.value.code.endswith("catalogue_line_owner_required")
 
-    with pytest.raises(HTTPException) as totals_exc:
+    with pytest.raises(InvoicePeriodReservationError) as totals_exc:
         billing_service.invoices.update(
             db_session,
             str(invoice.id),
             InvoiceUpdate(subtotal=Decimal("2000.00")),
         )
-    assert totals_exc.value.status_code == 409
+    assert totals_exc.value.code.endswith("catalogue_draft_owner_required")
 
 
 def test_quote_inherited_discount_is_locked_against_second_discount(

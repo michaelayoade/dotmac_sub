@@ -1328,15 +1328,29 @@ def test_create_invoice_payment_intent_bank_transfer_hands_off(
     assert intent.metadata_["payment_flow"] == "invoice_payment"
 
 
-def test_direct_transfer_topup_page_surfaces_server_calculated_wht(
+def test_direct_transfer_page_blocks_old_reduced_wht_quote_without_native_proof_adoption(
     monkeypatch, db_session, subscriber
 ):
+    from app.models.billing import Invoice, InvoiceStatus
     from app.services.customer_portal_flow_payments import (
         get_direct_transfer_topup_page,
     )
     from app.services.topup_intents import DIRECT_TRANSFER_PROVIDER, TopupIntentStatus
 
+    invoice = Invoice(
+        account_id=subscriber.id,
+        status=InvoiceStatus.issued,
+        currency="NGN",
+        subtotal=Decimal("100000"),
+        tax_total=Decimal("7500"),
+        total=Decimal("107500"),
+        balance_due=Decimal("107500"),
+        withholding_tax_selected=True,
+    )
+    db_session.add(invoice)
+    db_session.flush()
     intent = TopupIntent(
+        invoice_id=invoice.id,
         account_id=subscriber.id,
         reference="TRF-WHT-PAGE",
         provider_type=DIRECT_TRANSFER_PROVIDER,
@@ -1345,12 +1359,12 @@ def test_direct_transfer_topup_page_surfaces_server_calculated_wht(
         status=TopupIntentStatus.pending.value,
         metadata_={
             "payment_flow": "invoice_payment",
-            "invoice_id": "11111111-1111-1111-1111-111111111111",
+            "invoice_id": str(invoice.id),
             "withholding_tax": {
                 "schema_version": 1,
                 "account_id": str(subscriber.id),
                 "policy_version": 3,
-                "source_invoice_id": "11111111-1111-1111-1111-111111111111",
+                "source_invoice_id": str(invoice.id),
                 "currency": "NGN",
                 "vat_exclusive_amount": "100000.00",
                 "vat_amount": "7500.00",
@@ -1372,18 +1386,13 @@ def test_direct_transfer_topup_page_surfaces_server_calculated_wht(
         lambda _db: [],
     )
 
-    page = get_direct_transfer_topup_page(
-        db_session,
-        _invoice_customer(subscriber),
-    )
+    from app.services.direct_transfer_intents import DirectTransferIntentError
 
-    assert page["intent"].reference == "TRF-WHT-PAGE"
-    assert page["withholding_tax"]["gross_amount"] == "107500.00"
-    assert page["withholding_tax"]["vat_exclusive_amount"] == "100000.00"
-    assert page["withholding_tax"]["vat_amount"] == "7500.00"
-    assert page["withholding_tax"]["withholding_tax_rate_percent"] == "5.00"
-    assert page["withholding_tax"]["withholding_tax_amount"] == "5000.00"
-    assert page["withholding_tax"]["net_amount"] == "102500.00"
+    with pytest.raises(DirectTransferIntentError) as raised:
+        get_direct_transfer_topup_page(db_session, _invoice_customer(subscriber))
+    assert raised.value.code.endswith("invoice_withholding_selection_changed")
+    assert "do not transfer again" in raised.value.message
+    assert db_session.query(TopupIntent).count() == 1
 
 
 def test_create_invoice_payment_intent_bank_transfer_allows_below_topup_min(

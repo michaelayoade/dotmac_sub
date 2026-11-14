@@ -126,6 +126,118 @@ def _access_signal_already_emitted(
     return existing is not None
 
 
+@dataclass(frozen=True, slots=True)
+class StarterInvoiceProjectionQuery:
+    invoice_id: UUID
+    document_id: UUID
+    settled_at: datetime
+
+
+def project_starter_invoice_receivable(
+    db: Session, *, query: StarterInvoiceProjectionQuery
+) -> Invoice:
+    """Mirror one document's authoritative balance; never an account total."""
+    try:
+        from dotmac_billing.contracts import GetCurrentInvoiceReceivableV1
+        from dotmac_billing.queries import get_current_invoice_receivable_v1
+    except ImportError as exc:
+        raise _error(
+            "native_capability_unavailable",
+            "The document-grained native Billing reader is required; an account balance cannot stand in for an invoice.",
+        ) from exc
+
+    invoice = db.get(Invoice, query.invoice_id)
+    link = db.scalar(
+        select(StarterInvoiceLink).where(
+            StarterInvoiceLink.invoice_id == query.invoice_id
+        )
+    )
+    if invoice is None or link is None or link.document_id != query.document_id:
+        raise _error(
+            "invoice_binding_mismatch", "Native invoice projection has no matching link"
+        )
+    current = get_current_invoice_receivable_v1(
+        db,
+        scope=_SCOPE,
+        request=GetCurrentInvoiceReceivableV1(_SCOPE, query.document_id),
+    )
+    if current.billing_account_id != link.billing_account_id:
+        raise _error(
+            "invoice_binding_mismatch", "Native document belongs to another account"
+        )
+    if not current.active:
+        raise _error("inactive_invoice", "Native invoice is inactive")
+    invoice.balance_due = current.outstanding.amount
+    if current.outstanding.amount == 0:
+        invoice.status = InvoiceStatus.paid
+        invoice.paid_at = current.settlement_effective_at or query.settled_at
+    elif current.cash_applied.amount or current.withholding_applied.amount:
+        invoice.status = InvoiceStatus.partially_paid
+    return invoice
+
+
+def apply_native_account_credit_for_invoice(
+    db: Session, *, query: StarterInvoiceProjectionQuery
+) -> Invoice:
+    """Apply existing real cash through Billing's writer, then mirror its fact.
+
+    The administrative issue coordinator calls this only for accounts with a
+    qualified native deposit observation. The incumbent provider path is unchanged.
+    As with the incumbent Issue policy, insufficient credit remains untouched.
+    """
+    from dotmac_billing.commands import ApplyAvailableCreditCommand
+    from dotmac_billing.contracts import GetCurrentReceivablePositionV1
+    from dotmac_billing.queries import get_current_receivable_position
+    from dotmac_billing.service import apply_available_credit
+
+    from app.services.billing.starter_policies import resolve_starter_billing_policies
+
+    policies = resolve_starter_billing_policies(db)
+    invoice = db.get(Invoice, query.invoice_id)
+    link = db.scalar(
+        select(StarterInvoiceLink).where(
+            StarterInvoiceLink.invoice_id == query.invoice_id
+        )
+    )
+    if invoice is None or link is None or link.document_id != query.document_id:
+        raise _error(
+            "invoice_binding_mismatch",
+            "Native cash cannot be applied without the invoice link",
+        )
+    currency = Currency(invoice.currency, policies.default_minor_units)
+    position = get_current_receivable_position(
+        db,
+        scope=_SCOPE,
+        request=GetCurrentReceivablePositionV1(
+            _SCOPE, link.billing_account_id, currency
+        ),
+    )
+    if (
+        position.position is not None
+        and position.position.completeness == "complete"
+        and position.position.available_credit.amount >= invoice.total
+        and invoice.total > 0
+    ):
+        apply_available_credit(
+            db,
+            scope=_SCOPE,
+            command=ApplyAvailableCreditCommand(
+                link.billing_account_id,
+                link.document_id,
+                Money(invoice.total, currency),
+                query.settled_at,
+                f"sub-invoice:{invoice.id}:native-credit",
+            ),
+        )
+        project_starter_invoice_receivable(db, query=query)
+        from app.services.service_entitlements import (
+            ensure_prepaid_entitlements_for_paid_invoice,
+        )
+
+        ensure_prepaid_entitlements_for_paid_invoice(db, invoice)
+    return invoice
+
+
 def settle_starter_invoice_payment(
     db: Session,
     *,

@@ -1,0 +1,11 @@
+{% extends "layouts/admin.html" %}
+{% from "components/ui/macros.html" import page_header %}
+{% from "components/forms/action_form.html" import action_form with context %}
+{% block title %}Review withholding evidence - Admin{% endblock %}
+{% block content %}
+<div class="mx-auto max-w-3xl space-y-5">
+    {{ page_header("Review withholding evidence", subtitle=invoice_label ~ " · " ~ account_label) }}
+    <a href="/admin/billing/invoices/{{ invoice_id }}" class="text-sm text-primary-600 underline">Back to invoice</a>
+    {{ action_form(correction_action_form) }}
+</div>
+{% endblock %}

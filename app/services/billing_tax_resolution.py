@@ -279,3 +279,97 @@ __all__ = [
     "resolve_subscription_tax",
     "resolve_subscription_taxes",
 ]
+
+
+@dataclass(frozen=True, slots=True)
+class StandaloneCatalogueTaxQuery:
+    """Price VAT basis for a one-time item without a subscription."""
+
+    account_id: UUID
+    offer_id: UUID | None
+    price_tax_application: TaxApplication
+
+
+@dataclass(frozen=True, slots=True)
+class StandaloneCatalogueTaxResolution:
+    tax_rate_id: UUID | None
+    tax_rate_percent: Decimal | None
+    tax_application: TaxApplication
+    source: BillingTaxSource
+    customer_tax_policy_version: int
+
+
+def resolve_standalone_catalogue_tax(
+    db: Session, query: StandaloneCatalogueTaxQuery
+) -> StandaloneCatalogueTaxResolution:
+    """Apply the subscription resolver's customer/catalogue precedence to one-time sales.
+
+    No service address exists on this boundary. Add-ons have no offer VAT
+    compatibility fields, so after customer policy they use the configured rate.
+    """
+    from app.services.customer_tax_policies import get_customer_vat_exemption_policy
+    from app.services.domain_errors import DomainError
+
+    try:
+        from dotmac_tax.contracts import (
+            LegacyCommercialTaxFactsV1,
+            LegacyTaxRateFactV1,
+        )
+        from dotmac_tax.service import resolve_legacy_commercial_tax_v1
+    except ImportError as exc:
+        raise DomainError(
+            code="financial.billing_tax_resolution.catalogue_capability_unavailable",
+            message="Catalogue invoicing requires a qualified Starter Tax package upgrade.",
+            retryable=False,
+        ) from exc
+
+    account = db.get(Subscriber, query.account_id)
+    if account is None:
+        raise DomainError(
+            code="financial.billing_tax_resolution.account_not_found",
+            message="Customer account was not found.",
+            retryable=False,
+        )
+    policy = get_customer_vat_exemption_policy(db, account_id=account.id)
+    offer = db.get(CatalogOffer, query.offer_id) if query.offer_id else None
+    if query.offer_id and offer is None:
+        raise DomainError(
+            code="financial.billing_tax_resolution.offer_not_found",
+            message="Catalogue offer was not found.",
+            retryable=False,
+        )
+    rates = tuple(
+        LegacyTaxRateFactV1(rate.id, Decimal(str(rate.rate)))
+        for rate in db.scalars(select(TaxRate).where(TaxRate.is_active.is_(True)))
+    )
+    decision = resolve_legacy_commercial_tax_v1(
+        LegacyCommercialTaxFactsV1(
+            policy.vat_exempt,
+            policy.version,
+            None,
+            account.tax_rate_id,
+            offer is not None,
+            bool(offer.with_vat) if offer else False,
+            offer.vat_percent if offer else None,
+            resolve_default_tax_rate_id(db),
+            query.price_tax_application.value,
+            rates,
+            query.price_tax_application is TaxApplication.exempt,
+        )
+    )
+    if decision.tax_rate_id is None and decision.source not in {
+        BillingTaxSource.customer_vat_exemption,
+        BillingTaxSource.catalog_offer_exempt,
+    }:
+        raise DomainError(
+            code="financial.billing_tax_resolution.tax_policy_unavailable",
+            message="The catalogue item requires VAT but no active VAT rate is configured.",
+            retryable=False,
+        )
+    return StandaloneCatalogueTaxResolution(
+        decision.tax_rate_id,
+        decision.tax_rate_percent,
+        TaxApplication(decision.tax_application),
+        BillingTaxSource(decision.source.value),
+        decision.customer_tax_policy_version,
+    )

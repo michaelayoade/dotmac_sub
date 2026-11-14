@@ -68,6 +68,7 @@ from app.services.billing._common import (
     _validate_invoice_totals,
 )
 from app.services.billing.configuration import _parse_json
+from app.services.billing.invoices import InvoicePeriodReservationError
 from app.services.billing.reporting import BillingReporting
 from app.services.events.handlers.prepaid_renewal import PrepaidRenewalHandler
 from app.services.events.types import Event, EventType
@@ -228,34 +229,33 @@ class TestInvoiceCRUD:
         for inv in results:
             assert inv.status == InvoiceStatus.draft
 
-    def test_update_invoice(self, db_session, subscriber):
+    def test_retired_header_update_does_not_change_memo(self, db_session, subscriber):
         invoice = _make_invoice(db_session, subscriber.id)
-        updated = billing_service.invoices.update(
-            db_session,
-            str(invoice.id),
-            InvoiceUpdate(memo="Updated memo"),
-        )
-        assert updated.memo == "Updated memo"
-
-    def test_update_invoice_not_found(self, db_session):
-        with pytest.raises(HTTPException) as exc:
+        before = invoice.memo
+        with pytest.raises(InvoicePeriodReservationError) as exc:
             billing_service.invoices.update(
-                db_session,
-                str(uuid.uuid4()),
-                InvoiceUpdate(memo="nope"),
+                db_session, str(invoice.id), InvoiceUpdate(memo="Updated memo")
             )
-        assert exc.value.status_code == 404
+        assert exc.value.code.endswith("catalogue_draft_owner_required")
+        db_session.refresh(invoice)
+        assert invoice.memo == before
 
-    def test_update_invoice_currency_mismatch(self, db_session, subscriber):
+    def test_retired_header_update_does_not_probe_existence(self, db_session):
+        with pytest.raises(InvoicePeriodReservationError) as exc:
+            billing_service.invoices.update(
+                db_session, str(uuid.uuid4()), InvoiceUpdate(memo="nope")
+            )
+        assert exc.value.code.endswith("catalogue_draft_owner_required")
+
+    def test_retired_header_update_cannot_change_currency(self, db_session, subscriber):
         invoice = _make_invoice(db_session, subscriber.id, currency="USD")
-        with pytest.raises(HTTPException) as exc:
+        with pytest.raises(InvoicePeriodReservationError) as exc:
             billing_service.invoices.update(
-                db_session,
-                str(invoice.id),
-                InvoiceUpdate(currency="EUR"),
+                db_session, str(invoice.id), InvoiceUpdate(currency="EUR")
             )
-        assert exc.value.status_code == 400
-        assert "Currency" in exc.value.detail
+        assert exc.value.code.endswith("catalogue_draft_owner_required")
+        db_session.refresh(invoice)
+        assert invoice.currency == "USD"
 
     def test_delete_invoice_soft(self, db_session, subscriber):
         invoice = _make_invoice(db_session, subscriber.id)

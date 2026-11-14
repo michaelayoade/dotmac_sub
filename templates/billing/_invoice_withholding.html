@@ -1,0 +1,22 @@
+{% from "components/ui/macros.html" import status_presentation_badge %}
+{% if invoice_withholding is defined and (invoice_withholding.expected_wht_amount is not none or invoice_withholding.record_id or invoice_withholding.native_discharge_id) %}
+<section class="mt-4 rounded-lg border border-slate-200 bg-slate-50 p-4 text-sm text-slate-800 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-100" aria-label="Withholding tax breakdown">
+    <h3 class="font-semibold">Invoice cash and withholding tax</h3>
+    <p class="mt-1">The invoice total includes VAT. Withholding tax does not reduce that total.</p>
+    <dl class="mt-3 space-y-2">
+        {% if invoice_withholding.eligible and invoice_withholding.expected_net_amount is not none %}
+        <div class="flex justify-between gap-3"><dt>Expected cash allocation</dt><dd>{{ invoice_withholding_display.expected_net_amount }}</dd></div>
+        <div class="flex justify-between gap-3"><dt>Expected withholding tax</dt><dd>{{ invoice_withholding_display.expected_wht_amount }}</dd></div>
+        {% endif %}
+        {% if invoice_withholding.record_id or invoice_withholding.native_discharge_id %}
+        <div class="flex justify-between gap-3"><dt>Accepted cash</dt><dd>{{ invoice_withholding_display.accepted_cash_amount }}</dd></div>
+        <div class="flex justify-between gap-3"><dt>Accepted withholding tax</dt><dd>{{ invoice_withholding_display.accepted_wht_amount }}</dd></div>
+        <div class="flex justify-between gap-3"><dt>Certificate status</dt><dd>{{ status_presentation_badge(invoice_withholding_display.status) }}</dd></div>
+        <div class="flex justify-between gap-3"><dt>Certificate outstanding</dt><dd>{{ invoice_withholding_display.certificate_outstanding_amount }}</dd></div>
+        {% if invoice_withholding.certificate_reference %}<div><dt>Certificate reference</dt><dd>{{ invoice_withholding.certificate_reference }}</dd></div>{% endif %}
+        {% endif %}
+    </dl>
+    {% if invoice_withholding.eligible and invoice_withholding.expected_net_amount is not none %}<p class="mt-3 text-xs">These amounts describe the cash and withholding needed to settle this invoice. Follow the instructions supplied by a supported payment flow; this estimate is not a bank-transfer instruction.</p>{% endif %}
+    {% if invoice_withholding_admin|default(false) and invoice_withholding.record_id %}<a class="mt-3 inline-block underline" href="/admin/billing/tax-accounting">Review withholding tax evidence</a>{% endif %}
+</section>
+{% endif %}

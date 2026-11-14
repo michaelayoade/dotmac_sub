@@ -15,9 +15,11 @@ literal is inlined here.
 from __future__ import annotations
 
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, fields
 from datetime import UTC, date, datetime
 from decimal import ROUND_HALF_UP, Decimal
+from enum import Enum
+from typing import TYPE_CHECKING
 from uuid import UUID
 
 from dotmac_billing import (
@@ -54,13 +56,18 @@ from dotmac_numbering import NumberingError, SeriesConfiguration, configure_seri
 from dotmac_numbering import allocate as numbering_allocate
 from sqlalchemy.orm import Session
 
+if TYPE_CHECKING:
+    from dotmac_billing.models import BillingDocument, PlatformBillingDocument
+
 from app.models.billing import (
     Invoice,
     InvoiceLine,
     InvoiceStatus,
     StarterInvoiceLineLink,
     StarterInvoiceLink,
+    TaxApplication,
 )
+from app.models.catalog import Subscription
 from app.models.subscriber import Subscriber
 from app.schemas.audit import AuditEventCreate
 from app.services.audit import AuditEvents
@@ -81,6 +88,7 @@ from app.services.invoice_bank_details import get_invoice_bank_details
 from app.services.operator_tenant import OPERATOR_TENANT_ID
 
 __all__ = [
+    "AdministrativeEligibilityPolicy",
     "StarterIssuanceError",
     "eligibility_reason",
     "issue_admin_invoice_via_starter",
@@ -91,6 +99,11 @@ __all__ = [
 ]
 
 _SCOPE = TenantScope(OPERATOR_TENANT_ID)
+
+
+class AdministrativeEligibilityPolicy(Enum):
+    LEGACY_ARREARS = "legacy_arrears"
+    FUTURE_CATALOGUE = "future_catalogue"
 
 
 class StarterIssuanceError(DomainError, ValueError):
@@ -192,13 +205,51 @@ def _line_tax_amount(line: InvoiceLine, minor_units: int) -> Decimal | None:
     the legacy lane.
     """
 
+    if line.tax_application is TaxApplication.exempt:
+        return Decimal("0.00")
     percent = line.tax_rate_percent_snapshot
     code = _clean(line.tax_rate_code_snapshot)
     if percent is None:
         return Decimal("0.00") if not code else None
     if not code:
         return None
-    return _quantize(line.amount * percent / Decimal("100"), minor_units)
+    fraction = percent / Decimal("100")
+    if line.tax_application is TaxApplication.inclusive:
+        return _quantize(
+            line.amount - line.amount / (Decimal("1") + fraction), minor_units
+        )
+    return _quantize(line.amount * fraction, minor_units)
+
+
+def _line_pre_tax_amount(line: InvoiceLine, minor_units: int) -> Decimal:
+    tax = _line_tax_amount(line, minor_units)
+    if tax is None:
+        raise _error(
+            "line_tax_incomplete", "Invoice line lacks complete frozen tax evidence"
+        )
+    return (
+        line.amount - tax
+        if line.tax_application is TaxApplication.inclusive
+        else line.amount
+    )
+
+
+def _line_net_unit_amount(line: InvoiceLine, minor_units: int) -> Decimal:
+    net = _line_pre_tax_amount(line, minor_units)
+    unit = _quantize(net / line.quantity, minor_units)
+    if _quantize(unit * line.quantity, minor_units) != net:
+        raise _error(
+            "line_unit_unrepresentable",
+            "Net unit price cannot represent this quantity at the currency scale",
+        )
+    return unit
+
+
+def _future_catalogue_line(line: InvoiceLine) -> bool:
+    return (
+        isinstance(line.metadata_, dict)
+        and line.metadata_.get("future_catalogue_invoice") is True
+    )
 
 
 def _clean(value: object) -> str:
@@ -271,6 +322,7 @@ def eligibility_reason(
     *,
     allow_numbered: bool = False,
     require_timing: str = "arrears",
+    administrative_policy: AdministrativeEligibilityPolicy = AdministrativeEligibilityPolicy.LEGACY_ARREARS,
 ) -> str | None:
     """Return why this draft cannot take the Starter lane yet, else None.
 
@@ -305,8 +357,6 @@ def eligibility_reason(
             != line.amount
         ):
             return "line amounts do not reconcile for Starter issuance"
-    if sum((line.amount for line in lines), Decimal("0.00")) != invoice.subtotal:
-        return "line amounts do not reconcile for Starter issuance"
     if invoice.total != invoice.subtotal + invoice.tax_total:
         return "invoice totals do not reconcile for Starter issuance"
     if invoice.tax_total < 0 or invoice.total <= 0:
@@ -320,7 +370,25 @@ def eligibility_reason(
         invoice.tax_total
     ):
         return "line taxes do not reconcile for Starter issuance"
-    if len({line.subscription_id for line in lines}) != 1:
+    if (
+        sum(
+            (
+                _line_pre_tax_amount(line, policies.default_minor_units)
+                for line in lines
+            ),
+            Decimal("0.00"),
+        )
+        != invoice.subtotal
+    ):
+        return "line net amounts do not reconcile for Starter issuance"
+    try:
+        for line in lines:
+            _line_net_unit_amount(line, policies.default_minor_units)
+    except StarterIssuanceError:
+        return "line net unit prices cannot be represented for Starter issuance"
+    if len({line.subscription_id for line in lines}) != 1 and not all(
+        _future_catalogue_line(line) for line in lines
+    ):
         return "lines spanning multiple services stay on the legacy lane"
     subscriber = db.get(Subscriber, invoice.account_id)
     if subscriber is None:
@@ -329,8 +397,23 @@ def eligibility_reason(
         timing = collection_timing_for_billing_mode(subscriber.billing_mode)
     except StarterBillingPolicyError:
         return "billing mode has no Starter collection timing mapping"
-    if timing != require_timing:
+    if (
+        timing == "advance"
+        and administrative_policy is AdministrativeEligibilityPolicy.FUTURE_CATALOGUE
+    ):
+        reason = _administrative_advance_evidence_reason(invoice, lines)
+        if reason is not None:
+            return reason
+    elif timing != require_timing:
         return "prepaid issuance stays on the legacy lane in this slice"
+    for line in lines:
+        if not _future_catalogue_line(line) or line.subscription_id is None:
+            continue
+        subscription = db.get(Subscription, line.subscription_id)
+        if subscription is None or subscription.subscriber_id != invoice.account_id:
+            return "catalogue line service does not belong to the invoice account"
+        if collection_timing_for_billing_mode(subscription.billing_mode) != timing:
+            return "catalogue service collection timing differs from the account lane"
     if _seller_snapshot(db, policies, subscriber.id) is None:
         return "seller legal identity or address is incomplete"
     if _customer_snapshot(policies, subscriber) is None:
@@ -340,7 +423,37 @@ def eligibility_reason(
     return None
 
 
-def _service_period(invoice: Invoice) -> ServicePeriodEvidenceV1:
+def _service_period(
+    invoice: Invoice, line: InvoiceLine | None = None
+) -> ServicePeriodEvidenceV1:
+    metadata = line.metadata_ if line is not None else None
+    if (
+        isinstance(metadata, dict)
+        and metadata.get("future_catalogue_invoice") is True
+        and metadata.get("kind") == "catalogue_one_time"
+    ):
+        return ServicePeriodEvidenceV1(status=ServicePeriodStatus.NOT_APPLICABLE)
+    if isinstance(metadata, dict) and (
+        "billing_period_start" in metadata or "billing_period_end" in metadata
+    ):
+        try:
+            start = datetime.fromisoformat(str(metadata["billing_period_start"]))
+            end = datetime.fromisoformat(str(metadata["billing_period_end"]))
+            if (
+                start.tzinfo is None
+                or start.utcoffset() is None
+                or end.tzinfo is None
+                or end.utcoffset() is None
+                or end <= start
+            ):
+                raise ValueError("invalid period")
+        except (KeyError, TypeError, ValueError) as exc:
+            raise _error(
+                "line_period_invalid", "Invoice line service period evidence is invalid"
+            ) from exc
+        return ServicePeriodEvidenceV1(
+            status=ServicePeriodStatus.VERIFIED, starts_at=start, ends_at=end
+        )
     if invoice.billing_period_start is not None and (
         invoice.billing_period_end is not None
     ):
@@ -352,12 +465,66 @@ def _service_period(invoice: Invoice) -> ServicePeriodEvidenceV1:
     return ServicePeriodEvidenceV1(status=ServicePeriodStatus.UNKNOWN_UNVERIFIED)
 
 
+def _administrative_advance_evidence_reason(
+    invoice: Invoice, lines: list[InvoiceLine]
+) -> str | None:
+    """Admit only periods resolved by the existing future catalogue owner."""
+    refusal = (
+        "prepaid administrative issuance requires supported future catalogue evidence"
+    )
+    for line in lines:
+        if not _future_catalogue_line(line):
+            return refusal
+        metadata = line.metadata_
+        future = metadata.get("future_invoice")
+        if not isinstance(future, dict):
+            return refusal
+        kind = future.get("period_kind")
+        if kind == "one_time":
+            if (
+                line.subscription_id is not None
+                or metadata.get("kind") != "catalogue_one_time"
+            ):
+                return refusal
+        elif kind == "monthly":
+            if line.subscription_id is None or not all(
+                key in metadata
+                for key in ("billing_period_start", "billing_period_end")
+            ):
+                return refusal
+            try:
+                if (
+                    _service_period(invoice, line).status
+                    is not ServicePeriodStatus.VERIFIED
+                ):
+                    return refusal
+            except StarterIssuanceError:
+                return refusal
+        elif kind == "capped_pending_renewal":
+            if (
+                len(lines) != 1
+                or line.quantity != Decimal("1")
+                or line.subscription_id is None
+                or "billing_period_start" in metadata
+                or "billing_period_end" in metadata
+                or invoice.billing_period_start is not None
+                or invoice.billing_period_end is not None
+            ):
+                return refusal
+        else:
+            return refusal
+    return None
+
+
 def _tax_snapshots_for_line(
     policies: StarterBillingPolicies,
     line: InvoiceLine,
     currency: Currency,
 ) -> tuple[AppliedTaxSnapshotV1, ...]:
-    if line.tax_rate_percent_snapshot is None:
+    if (
+        line.tax_rate_percent_snapshot is None
+        or line.tax_application is TaxApplication.exempt
+    ):
         return ()
     tax_amount = _line_tax_amount(line, policies.default_minor_units)
     assert tax_amount is not None  # eligibility proved a complete snapshot
@@ -372,7 +539,9 @@ def _tax_snapshots_for_line(
                 else policies.tax_policy_version
             ),
             rate=percent_to_fraction(line.tax_rate_percent_snapshot),
-            taxable_basis=_money(line.amount, currency),
+            taxable_basis=_money(
+                _line_pre_tax_amount(line, policies.default_minor_units), currency
+            ),
             tax_amount=_money(tax_amount, currency),
         ),
     )
@@ -409,14 +578,23 @@ def _obligation_for_line(
         subject_ref=policies.subject_ref(
             party_id=subscriber.party_id, subscriber_id=subscriber.id
         ),
-        service_ref=policies.service_ref(
-            subscription_id=line.subscription_id, subscriber_id=subscriber.id
+        service_ref=(
+            None
+            if _future_catalogue_line(line) and line.subscription_id is None
+            else policies.service_ref(
+                subscription_id=line.subscription_id, subscriber_id=subscriber.id
+            )
         ),
-        service_period=_service_period(invoice),
+        service_period=_service_period(invoice, line),
         collection_timing=collection_timing_for_billing_mode(subscriber.billing_mode),
-        pre_tax_amount=_money(line.amount, currency),
+        pre_tax_amount=_money(
+            _line_pre_tax_amount(line, policies.default_minor_units), currency
+        ),
         tax_amount=_money(tax_amount, currency),
-        total_amount=_money(line.amount + tax_amount, currency),
+        total_amount=_money(
+            _line_pre_tax_amount(line, policies.default_minor_units) + tax_amount,
+            currency,
+        ),
         rated_at=issued_at,
         price_version_id=price_version,
         tax_snapshots=_tax_snapshots_for_line(policies, line, currency),
@@ -477,6 +655,33 @@ class _IssuanceFlavor:
     contract_version: str
     price_version: str
     audit_reason: str
+
+
+def _create_period_document(
+    db: Session, *, command: CreateMultiLineDraftDocument, multi_period: bool
+) -> BillingDocument | PlatformBillingDocument:
+    """Leave the released a8 import surface usable; new issuance fails closed.
+
+    Source preparation does not pretend that an unreleased API is installed.
+    No legacy writer is invoked when the explicit multi-period lane refuses.
+    """
+    if not multi_period:
+        return create_multi_line_draft_document(db, scope=_SCOPE, command=command)
+    try:
+        from dotmac_billing.commands import CreateMultiPeriodDraftDocumentV1
+        from dotmac_billing.service import create_multi_period_draft_document_v1
+    except ImportError as exc:
+        raise _error(
+            "multi_period_billing_unavailable",
+            "Multi-period issuance requires the qualified Billing multi-period package and migration",
+        ) from exc
+    return create_multi_period_draft_document_v1(
+        db,
+        scope=_SCOPE,
+        command=CreateMultiPeriodDraftDocumentV1(
+            **{field.name: getattr(command, field.name) for field in fields(command)}
+        ),
+    )
 
 
 def _issue_via_starter(
@@ -602,9 +807,22 @@ def _issue_via_starter(
                 )
                 for line in lines
             ]
-            draft = create_multi_line_draft_document(
+            distinct_periods = {
+                (
+                    _service_period(invoice, line).status,
+                    _service_period(invoice, line).starts_at,
+                    _service_period(invoice, line).ends_at,
+                )
+                for line in lines
+            }
+            multi_period = (
+                len(distinct_periods) > 1
+                or len({line.subscription_id for line in lines}) > 1
+                or len(lines) == 1
+            )
+            draft = _create_period_document(
                 db,
-                scope=_SCOPE,
+                multi_period=multi_period,
                 command=CreateMultiLineDraftDocument(
                     billing_account_id=account.id,
                     idempotency_key=invoice_source_fact_id,
@@ -614,7 +832,12 @@ def _issue_via_starter(
                             description=line.description,
                             quantity=line.quantity,
                             unit_code=policies.default_unit_code,
-                            unit_amount=_money(line.unit_price, currency),
+                            unit_amount=_money(
+                                _line_net_unit_amount(
+                                    line, policies.default_minor_units
+                                ),
+                                currency,
+                            ),
                         )
                         for line, row in zip(lines, accepted, strict=True)
                     ),
@@ -736,12 +959,32 @@ def _issue_via_starter(
     return link
 
 
+def _lock_and_refresh_issue_evidence(db: Session, invoice: Invoice) -> None:
+    """Use the shared account fence before deciding the financial lane.
+
+    The reservation owner refreshes membership, totals and scalar state after
+    waiting for the lock. No eligibility computed before that refresh can
+    authorize issuance.
+    """
+    from app.services.billing.invoices import Invoices
+
+    Invoices.assert_service_period_reservations_for_issue(db, invoice)
+
+
 def issue_admin_invoice_via_starter(
-    db: Session, *, invoice: Invoice, actor_ref: str, announce: bool = False
+    db: Session,
+    *,
+    invoice: Invoice,
+    actor_ref: str,
+    announce: bool = False,
+    administrative_policy: AdministrativeEligibilityPolicy = AdministrativeEligibilityPolicy.LEGACY_ARREARS,
 ) -> StarterInvoiceLink:
     """Issue one eligible admin draft through Starter as sole ledger writer."""
 
-    reason = eligibility_reason(db, invoice)
+    _lock_and_refresh_issue_evidence(db, invoice)
+    reason = eligibility_reason(
+        db, invoice, administrative_policy=administrative_policy
+    )
     if reason is not None:
         raise _error("ineligible", reason, invoice_id=str(invoice.id))
     policies = resolve_starter_billing_policies(db)
@@ -805,6 +1048,7 @@ def issue_recurring_invoice_via_starter(
 ) -> StarterInvoiceLink:
     """Issue one eligible scheduled-cycle draft through Starter."""
 
+    _lock_and_refresh_issue_evidence(db, invoice)
     reason = recurring_eligibility_reason(db, invoice)
     if reason is not None:
         raise _error("ineligible", reason, invoice_id=str(invoice.id))
@@ -866,6 +1110,7 @@ def issue_prepaid_invoice_via_starter(
 ) -> StarterInvoiceLink:
     """Issue one earmark-funded prepaid period draft through Starter."""
 
+    _lock_and_refresh_issue_evidence(db, invoice)
     reason = prepaid_eligibility_reason(db, invoice, billing_line_key=billing_line_key)
     if reason is not None:
         raise _error("ineligible", reason, invoice_id=str(invoice.id))

@@ -23,18 +23,26 @@ from app.models.subscriber import Subscriber
 from app.schemas.billing import PaymentSettlementReconciliationRequest
 from app.services import billing as billing_service
 from app.services import billing_payment_receipts as payment_receipts_service
+from app.services import (
+    invoice_withholding,
+    web_invoice_withholding,
+)
 from app.services import web_billing_customers as web_billing_customers_service
+from app.services import web_billing_invoices as invoice_views
 from app.services import web_billing_payment_forms as web_billing_payment_forms_service
 from app.services import web_billing_payments as web_billing_payments_service
 from app.services import (
     web_billing_reconciliation as web_billing_reconciliation_service,
 )
+from app.services.action_forms import ActionHiddenValue
 from app.services.audit_helpers import build_audit_activities
 from app.services.auth_dependencies import has_permission, require_permission
 from app.services.db_session_adapter import db_session_adapter
+from app.services.domain_errors import DomainError
 from app.services.inclusive_date_range import InclusiveDateRangeError
 from app.services.invoice_draft_authoring import resolve_account_vat_selection
 from app.services.list_query import ListQuery
+from app.services.owner_commands import CommandContext
 from app.web.request_parsing import parse_json_body
 
 templates = Jinja2Templates(directory="templates")
@@ -180,6 +188,224 @@ def payments_unallocated(
         end_date=end_date,
         unallocated_only=True,
         db=db,
+    )
+
+
+@router.post(
+    "/invoices/{invoice_id}/withholding-selection",
+    dependencies=[Depends(require_permission("billing:invoice:update"))],
+)
+def invoice_withholding_selection_update(
+    request: Request,
+    invoice_id: UUID,
+    selected: bool = Form(False),
+    expected_version: int = Form(..., ge=0),
+    auth: dict = Depends(require_permission("billing:invoice:update")),
+    db: Session = Depends(get_db),
+):
+    principal = str(auth.get("principal_id") or "").strip()
+    if not principal:
+        raise HTTPException(
+            status_code=403, detail="An authenticated staff principal is required."
+        )
+    context = CommandContext.system(
+        actor=f"user:{principal}",
+        scope="billing:invoice:update",
+        reason="Set the optional invoice WHT treatment before issuance.",
+        idempotency_key=f"invoice-wht-selection:{invoice_id}:{expected_version}:{int(selected)}",
+    )
+    error = None
+    try:
+        db_session_adapter.release_read_transaction(db)
+        invoice_withholding.set_draft_invoice_withholding_selection(
+            db,
+            invoice_withholding.SetDraftInvoiceWithholdingSelection(
+                invoice_id=invoice_id,
+                selected=selected,
+                expected_version=expected_version,
+            ),
+            context=context,
+        )
+    except DomainError as exc:
+        error = exc.message
+    if request.headers.get("HX-Request", "").lower() == "true":
+        state = invoice_views.load_invoice_detail_data(db, invoice_id=str(invoice_id))
+        if state is None:
+            raise HTTPException(status_code=404, detail="Invoice not found")
+        # An error fragment restores the authoritative checkbox and displays the reason.
+        return templates.TemplateResponse(
+            "admin/billing/_invoice_tax_details.html",
+            {
+                "request": request,
+                **state,
+                "can_select_invoice_withholding": True,
+                "wht_selection_error": error,
+            },
+        )
+    from urllib.parse import urlencode
+
+    query = "?" + urlencode({"error": error}) if error else ""
+    return RedirectResponse(
+        url=f"/admin/billing/invoices/{invoice_id}{query}", status_code=303
+    )
+
+
+def _withholding_correction_response(
+    request: Request,
+    db: Session,
+    *,
+    invoice_id: UUID,
+    payment_id: UUID | None = None,
+    evidence_reference: str = "",
+    idempotency_token: str | None = None,
+    error: str | None = None,
+) -> Response:
+    from app.web.admin import get_current_user, get_sidebar_stats
+
+    state = web_invoice_withholding.correction_state(
+        db,
+        web_invoice_withholding.WithholdingCorrectionQuery(invoice_id, payment_id),
+    )
+    identity = web_invoice_withholding.invoice_identity(
+        db, invoice_withholding.InvoiceWithholdingQuery(invoice_id)
+    )
+    token = (
+        idempotency_token
+        or web_billing_payment_forms_service.new_manual_payment_idempotency_token()
+    )
+    action = web_invoice_withholding.correction_action_form(
+        db,
+        query=web_invoice_withholding.WithholdingCorrectionQuery(
+            invoice_id, payment_id
+        ),
+        state=state,
+        idempotency_token=token,
+        evidence_reference=evidence_reference,
+        error=error,
+    )
+    return templates.TemplateResponse(
+        "admin/billing/withholding_correction.html",
+        {
+            "request": request,
+            "state": state,
+            "correction_action_form": action,
+            "invoice_id": invoice_id,
+            "invoice_label": identity.invoice_label,
+            "account_label": identity.account_label,
+            "evidence_reference": evidence_reference,
+            "error": error,
+            "idempotency_token": token,
+            "current_user": get_current_user(request),
+            "sidebar_stats": get_sidebar_stats(db),
+            "active_page": "invoices",
+            "active_menu": "billing",
+        },
+        status_code=400 if error else 200,
+    )
+
+
+@router.get(
+    "/invoices/{invoice_id}/withholding",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("billing:payment:create"))],
+)
+def invoice_withholding_correction(
+    request: Request, invoice_id: UUID, db: Session = Depends(get_db)
+):
+    return _withholding_correction_response(request, db, invoice_id=invoice_id)
+
+
+@router.post(
+    "/invoices/{invoice_id}/withholding/preview",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("billing:payment:create"))],
+)
+def invoice_withholding_correction_preview(
+    request: Request,
+    invoice_id: UUID,
+    payment_id: UUID = Form(...),
+    evidence_reference: str = Form(..., min_length=1, max_length=160),
+    idempotency_token: str = Form(..., min_length=8, max_length=120),
+    db: Session = Depends(get_db),
+):
+    try:
+        return _withholding_correction_response(
+            request,
+            db,
+            invoice_id=invoice_id,
+            payment_id=payment_id,
+            evidence_reference=evidence_reference,
+            idempotency_token=idempotency_token,
+        )
+    except DomainError as exc:
+        return _withholding_correction_response(
+            request,
+            db,
+            invoice_id=invoice_id,
+            evidence_reference=evidence_reference,
+            idempotency_token=idempotency_token,
+            error=exc.message,
+        )
+
+
+@router.post(
+    "/invoices/{invoice_id}/withholding/confirm",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("billing:payment:create"))],
+)
+def invoice_withholding_correction_confirm(
+    request: Request,
+    invoice_id: UUID,
+    payment_id: UUID = Form(...),
+    evidence_reference: str = Form(..., min_length=1, max_length=160),
+    preview_fingerprint: str = Form(..., min_length=64, max_length=64),
+    idempotency_token: str = Form(..., min_length=8, max_length=120),
+    confirmed: str | None = Form(None),
+    db: Session = Depends(get_db),
+):
+    from app.web.admin import get_current_user
+
+    current_user = get_current_user(request)
+    principal = current_user.get("principal_id") if current_user else None
+    if not principal:
+        raise HTTPException(
+            status_code=403, detail="An authenticated staff principal is required."
+        )
+    if confirmed != "yes":
+        raise HTTPException(
+            status_code=422,
+            detail="Review and confirm the existing withholding evidence.",
+        )
+    context = CommandContext.system(
+        actor=f"user:{principal}",
+        scope="billing:payment:create",
+        reason="Accept evidenced invoice withholding against an existing net bank receipt.",
+        idempotency_key=f"invoice-wht:{invoice_id}:{idempotency_token}",
+    )
+    try:
+        db_session_adapter.release_read_transaction(db)
+        invoice_withholding.confirm_invoice_withholding(
+            db,
+            invoice_withholding.InvoiceWithholdingConfirm(
+                request=invoice_withholding.InvoiceWithholdingPreviewRequest(
+                    invoice_id, payment_id
+                ),
+                preview_fingerprint=preview_fingerprint,
+                evidence_reference=evidence_reference,
+            ),
+            context=context,
+        )
+    except DomainError as exc:
+        return _withholding_correction_response(
+            request,
+            db,
+            invoice_id=invoice_id,
+            evidence_reference=evidence_reference,
+            idempotency_token=idempotency_token,
+            error=exc.message,
+        )
+    return RedirectResponse(
+        url=f"/admin/billing/invoices/{invoice_id}", status_code=303
     )
 
 
@@ -496,8 +722,14 @@ def payment_create_preview(
     memo: str | None = Form(None),
     payment_date: date | None = Form(None),
     idempotency_token: str | None = Form(None),
+    withholding_tax: bool = Form(False),
     db: Session = Depends(get_db),
 ):
+    if withholding_tax is True:
+        raise HTTPException(
+            status_code=410,
+            detail="Select withholding on the invoice, then use the existing Issue action with account credit.",
+        )
     try:
         result = web_billing_payments_service.preview_payment_create(
             db,
@@ -511,6 +743,7 @@ def payment_create_preview(
             reference=reference,
             memo=memo,
             payment_date=payment_date,
+            withholding_tax=withholding_tax,
         )
     except Exception as exc:
         db.rollback()
@@ -531,10 +764,36 @@ def payment_create_preview(
     )
     from app.web.admin import get_current_user, get_sidebar_stats
 
+    hidden = tuple(
+        ActionHiddenValue(key, str(value))
+        for key, value in (
+            ("account_id", account_id),
+            ("amount", amount),
+            ("currency", currency),
+            ("status", status),
+            ("invoice_id", invoice_id),
+            ("collection_account_id", collection_account_id),
+            ("payment_method_id", payment_method_id),
+            ("reference", reference),
+            ("memo", memo),
+            ("payment_date", payment_date.isoformat() if payment_date else None),
+            ("idempotency_token", idempotency_token),
+        )
+        if value not in (None, "")
+    )
+    review = web_billing_payment_forms_service.payment_create_review(
+        db,
+        query=web_billing_payment_forms_service.PaymentCreateReviewQuery(
+            control=result["preview"],
+            hidden_values=hidden,
+            reference=reference or "",
+        ),
+    )
     return templates.TemplateResponse(
         "admin/billing/payment_create_confirm.html",
         {
             "request": request,
+            "payment_review": review,
             "preview": result["preview"].payment_preview,
             "duplicate_control": result["preview"],
             "account_id": account_id,
@@ -577,8 +836,20 @@ def payment_create(
     preview_fingerprint: str = Form(...),
     control_fingerprint: str = Form(...),
     duplicate_risk_acknowledged: bool = Form(False),
+    withholding_tax: bool = Form(False),
+    confirmed: str | None = Form(None),
     db: Session = Depends(get_db),
 ):
+    if withholding_tax is True:
+        raise HTTPException(
+            status_code=410,
+            detail="Select withholding on the invoice, then use the existing Issue action with account credit.",
+        )
+    if confirmed != "yes":
+        raise HTTPException(
+            status_code=422,
+            detail="Review and confirm the payment financial effects before saving.",
+        )
     resolved_invoice = None
     balance_value = None
     balance_display = None
@@ -600,6 +871,7 @@ def payment_create(
             preview_fingerprint=preview_fingerprint,
             control_fingerprint=control_fingerprint,
             duplicate_risk_acknowledged=duplicate_risk_acknowledged,
+            withholding_tax=withholding_tax,
         )
         payment = cast(Payment, result["payment"])
         resolved_invoice = result["resolved_invoice"]

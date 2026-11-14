@@ -19,11 +19,11 @@ from datetime import UTC, datetime
 from enum import StrEnum
 from uuid import UUID
 
-from sqlalchemy import select
+from sqlalchemy import or_, select
 from sqlalchemy.orm import Session
 
 from app.models.billing import ServiceEntitlement, ServiceEntitlementStatus
-from app.models.catalog import Subscription
+from app.models.catalog import BillingMode, Subscription
 from app.models.service_extension import (
     ServiceExtension,
     ServiceExtensionEntry,
@@ -80,6 +80,7 @@ class PrepaidCoverageInterval:
     source_id: UUID
     starts_at: datetime
     ends_at: datetime
+    source_invoice_id: UUID | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -279,6 +280,7 @@ def prepaid_coverage_history_for_period(
     *,
     period_start: datetime,
     period_end: datetime,
+    exclude_invoice_id: UUID | None = None,
 ) -> PrepaidCoveragePeriodHistory:
     """Return exact entitlement/grant intervals overlapping one SLA period.
 
@@ -294,14 +296,20 @@ def prepaid_coverage_history_for_period(
         raise ValueError("Prepaid coverage history requires a positive UTC period")
 
     intervals: list[PrepaidCoverageInterval] = []
-    entitlements = db.scalars(
-        select(ServiceEntitlement).where(
-            ServiceEntitlement.subscription_id == subscription.id,
-            ServiceEntitlement.status == ServiceEntitlementStatus.active,
-            ServiceEntitlement.starts_at < end,
-            ServiceEntitlement.ends_at > start,
+    entitlement_query = select(ServiceEntitlement).where(
+        ServiceEntitlement.subscription_id == subscription.id,
+        ServiceEntitlement.status == ServiceEntitlementStatus.active,
+        ServiceEntitlement.starts_at < end,
+        ServiceEntitlement.ends_at > start,
+    )
+    if exclude_invoice_id is not None:
+        entitlement_query = entitlement_query.where(
+            or_(
+                ServiceEntitlement.source_invoice_id.is_(None),
+                ServiceEntitlement.source_invoice_id != exclude_invoice_id,
+            )
         )
-    ).all()
+    entitlements = db.scalars(entitlement_query).all()
     intervals.extend(
         PrepaidCoverageInterval(
             subscription_id=subscription.id,
@@ -309,28 +317,34 @@ def prepaid_coverage_history_for_period(
             source_id=row.id,
             starts_at=max(_as_utc(row.starts_at), start),
             ends_at=min(_as_utc(row.ends_at), end),
+            source_invoice_id=row.source_invoice_id,
         )
         for row in entitlements
     )
 
-    extensions = db.execute(
-        select(
-            ServiceExtensionEntry.id,
-            ServiceExtensionEntry.grant_starts_at,
-            ServiceExtensionEntry.grant_ends_at,
-        )
-        .join(
-            ServiceExtension, ServiceExtension.id == ServiceExtensionEntry.extension_id
-        )
-        .where(
-            ServiceExtensionEntry.subscription_id == subscription.id,
-            ServiceExtension.status == ServiceExtensionStatus.applied,
-            ServiceExtensionEntry.grant_starts_at.isnot(None),
-            ServiceExtensionEntry.grant_starts_at < end,
-            ServiceExtensionEntry.grant_ends_at.isnot(None),
-            ServiceExtensionEntry.grant_ends_at > start,
-        )
-    ).all()
+    extensions = (
+        db.execute(
+            select(
+                ServiceExtensionEntry.id,
+                ServiceExtensionEntry.grant_starts_at,
+                ServiceExtensionEntry.grant_ends_at,
+            )
+            .join(
+                ServiceExtension,
+                ServiceExtension.id == ServiceExtensionEntry.extension_id,
+            )
+            .where(
+                ServiceExtensionEntry.subscription_id == subscription.id,
+                ServiceExtension.status == ServiceExtensionStatus.applied,
+                ServiceExtensionEntry.grant_starts_at.isnot(None),
+                ServiceExtensionEntry.grant_starts_at < end,
+                ServiceExtensionEntry.grant_ends_at.isnot(None),
+                ServiceExtensionEntry.grant_ends_at > start,
+            )
+        ).all()
+        if subscription.billing_mode is BillingMode.prepaid
+        else ()
+    )
     for row in extensions:
         assert row.grant_starts_at is not None
         assert row.grant_ends_at is not None
