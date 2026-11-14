@@ -17,8 +17,8 @@ message chronology.
 
 ## Deployment sequence
 
-1. Confirm migration `710_inbox_reply_window_projection` is the single Alembic
-   head for the release.
+1. Confirm migration `711_repair_inbox_reply_window_index` is the effective
+   local Alembic head for the release, following revision 710.
 2. Apply the migration. It adds the nullable column, backfills qualifying Meta
    inbound timestamps in batches of 5,000, verifies exact parity, and builds
    `ix_inbox_conversations_reply_window` concurrently. A parity error blocks the
