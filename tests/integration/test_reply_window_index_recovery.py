@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
+from dataclasses import replace
 from pathlib import Path
+from uuid import uuid4
 
 import psycopg
 import pytest
@@ -12,6 +14,7 @@ from psycopg import sql
 from sqlalchemy.engine import URL
 
 from alembic import command
+from scripts.ci import template_database
 
 ROOT = Path(__file__).resolve().parents[2]
 PREDECESSOR = "710_inbox_reply_window_projection"
@@ -45,6 +48,45 @@ def _state(connection: psycopg.Connection) -> tuple[int, bool, bool]:
     ).fetchone()
     assert row is not None
     return int(row[0]), bool(row[1]), bool(row[2])
+
+
+@pytest.fixture
+def fresh_migration_database(
+    template_base_url: URL, monkeypatch: pytest.MonkeyPatch
+) -> Iterator[URL]:
+    """Replay the real chain from an empty disposable PostgreSQL database."""
+    from app import config as app_config
+
+    name = "dotmac_test_reply_window_" + uuid4().hex
+    maintenance = template_base_url.set(drivername="postgresql", database="postgres")
+    with psycopg.connect(_url(maintenance), autocommit=True) as admin:
+        admin.execute(sql.SQL("CREATE DATABASE {}").format(sql.Identifier(name)))
+    target = template_base_url.set(database=name)
+    monkeypatch.setattr(
+        app_config,
+        "settings",
+        replace(
+            app_config.settings,
+            database_url=target.render_as_string(hide_password=False),
+            migration_database_url=target.render_as_string(hide_password=False),
+        ),
+    )
+    try:
+        template_database.bootstrap_database_local_prerequisites(target)
+        yield target
+    finally:
+        template_database.drop_database(template_base_url, name)
+
+
+def test_fresh_chain_builds_valid_reply_window_index(
+    fresh_migration_database: URL,
+) -> None:
+    _upgrade("heads")
+    with psycopg.connect(_url(fresh_migration_database)) as catalog:
+        assert _state(catalog)[1:] == (True, True)
+        assert catalog.execute(
+            "SELECT count(*) FROM alembic_version WHERE version_num=%s", (REPAIR,)
+        ).fetchone() == (1,)
 
 
 def test_repair_rebuilds_invalid_index_left_by_concurrent_lock_timeout(
