@@ -7,6 +7,7 @@ from uuid import uuid4
 import pytest
 from fastapi import BackgroundTasks, HTTPException
 from sqlalchemy import event
+from sqlalchemy.exc import OperationalError
 
 from app.api import support as support_api
 from app.models.notification import Notification
@@ -31,7 +32,12 @@ from app.models.team_inbox import (
     InboxTeamRole,
     InboxTeamSource,
 )
-from app.services import service_team_composition, team_inbox_read
+from app.services import (
+    service_team_composition,
+    team_inbox_operations,
+    team_inbox_projection,
+    team_inbox_read,
+)
 from app.web.admin import inbox as admin_inbox
 from tests.staff_identity_fixtures import add_bound_staff_user
 from tests.team_inbox_presence_fixtures import add_active_presence_lease
@@ -354,6 +360,8 @@ def test_assignment_sidebar_cohorts_share_one_aggregate(db_session):
         event.remove(db_session.bind, "before_cursor_execute", capture_statement)
 
     assert len(statements) == 1
+    assert "WITH expired_whatsapp_conversations AS" in statements[0]
+    assert statements[0].count("FROM inbox_messages") == 1
     assert counts.all == team_inbox_read.queue_conversation_count(db_session)
     assert counts.queued == team_inbox_read.queued_conversation_count(db_session)
     assert counts.assigned_to_actor == team_inbox_read.assigned_conversation_count(
@@ -364,6 +372,93 @@ def test_assignment_sidebar_cohorts_share_one_aggregate(db_session):
     assert counts.ai_handling == team_inbox_read.ai_handling_conversation_count(
         db_session
     )
+
+
+class _StatementTimeout:
+    sqlstate = "57014"
+
+
+def test_admin_inbox_timeout_renders_without_assignment_totals(db_session, monkeypatch):
+    support = _team(db_session, "Timeout support")
+    _conversation(db_session, support, subject="Still visible")
+    db_session.commit()
+    captured: dict[str, object] = {}
+
+    def timeout(*_args, **_kwargs):
+        raise OperationalError("SELECT assignment counts", {}, _StatementTimeout())
+
+    def fake_template_response(
+        template_name: str,
+        context: dict[str, object],
+        *,
+        headers: dict[str, str] | None = None,
+    ) -> dict[str, object]:
+        captured["template_name"] = template_name
+        captured["headers"] = headers
+        return context
+
+    monkeypatch.setattr(team_inbox_read, "assignment_cohort_counts", timeout)
+    monkeypatch.setattr(
+        admin_inbox.templates,
+        "TemplateResponse",
+        fake_template_response,
+    )
+
+    context = admin_inbox.team_inbox_queue(
+        request=SimpleNamespace(state=SimpleNamespace()),
+        search=None,
+        status=None,
+        channel_type=None,
+        service_team_id=None,
+        assigned_person_id=None,
+        needs_response=False,
+        contact_resolution_status=None,
+        priority_at_most=None,
+        muted=None,
+        snoozed=None,
+        open_only=False,
+        unassigned=False,
+        sort_by=None,
+        sort_dir=None,
+        page=1,
+        per_page=25,
+        db=db_session,
+    )
+
+    assert captured["template_name"] == "admin/inbox/index.html"
+    assert context["rows"][0].subject == "Still visible"
+    assert (
+        context["assignment_counts"].state
+        is team_inbox_projection.InboxAssignmentCountsState.unavailable
+    )
+
+
+def test_assignment_count_fallback_does_not_hide_other_database_errors(
+    db_session, monkeypatch
+):
+    class ConnectionFailure:
+        sqlstate = "08006"
+
+    def unavailable(*_args, **_kwargs):
+        raise OperationalError("SELECT assignment counts", {}, ConnectionFailure())
+
+    monkeypatch.setattr(team_inbox_read, "assignment_cohort_counts", unavailable)
+    queue_metrics = team_inbox_operations.InboxQueueMetrics(
+        total_open=0,
+        needs_response=0,
+        failed_outbound=0,
+        unassigned_open=0,
+        muted_open=0,
+        snoozed_open=0,
+    )
+
+    with pytest.raises(OperationalError):
+        team_inbox_projection._assignment_counts(
+            db_session,
+            actor_person_id=None,
+            queue_metrics=queue_metrics,
+            needs_attention=0,
+        )
 
 
 def test_search_maps_historical_message_hit_to_current_continuous_episode(

@@ -7891,7 +7891,7 @@
         "app/services/team_inbox_widget.py:217",
         "app/services/team_inbox_widget.py:218",
         "app/services/team_inbox_widget.py:84",
-        "app/web/admin/inbox.py:3970",
+        "app/web/admin/inbox.py:3979",
         "templates/admin/inbox/email_routes.html:254"
       ]
     },
@@ -7920,7 +7920,7 @@
         "app/services/team_inbox_widget.py:175",
         "app/services/team_inbox_widget.py:177",
         "app/services/team_inbox_widget.py:77",
-        "app/web/admin/inbox.py:3963",
+        "app/web/admin/inbox.py:3972",
         "templates/admin/inbox/email_routes.html:247"
       ]
     },
@@ -7948,7 +7948,7 @@
       "source_references": [
         "app/services/team_inbox_widget.py:191",
         "app/services/team_inbox_widget.py:76",
-        "app/web/admin/inbox.py:3962",
+        "app/web/admin/inbox.py:3971",
         "templates/admin/inbox/email_routes.html:246"
       ]
     },
@@ -7977,7 +7977,7 @@
         "app/services/team_inbox_widget.py:212",
         "app/services/team_inbox_widget.py:213",
         "app/services/team_inbox_widget.py:83",
-        "app/web/admin/inbox.py:3969",
+        "app/web/admin/inbox.py:3978",
         "templates/admin/inbox/email_routes.html:253"
       ]
     },
@@ -8007,7 +8007,7 @@
       "source_references": [
         "app/services/team_inbox_widget.py:196",
         "app/services/team_inbox_widget.py:79",
-        "app/web/admin/inbox.py:3965",
+        "app/web/admin/inbox.py:3974",
         "templates/admin/inbox/email_routes.html:249"
       ]
     },
@@ -8037,7 +8037,7 @@
       "source_references": [
         "app/services/team_inbox_widget.py:199",
         "app/services/team_inbox_widget.py:80",
-        "app/web/admin/inbox.py:3966",
+        "app/web/admin/inbox.py:3975",
         "templates/admin/inbox/email_routes.html:250"
       ]
     },
@@ -8067,7 +8067,7 @@
         "app/services/team_inbox_widget.py:178",
         "app/services/team_inbox_widget.py:180",
         "app/services/team_inbox_widget.py:78",
-        "app/web/admin/inbox.py:3964",
+        "app/web/admin/inbox.py:3973",
         "templates/admin/inbox/email_routes.html:248"
       ]
     },
@@ -8096,7 +8096,7 @@
         "app/services/team_inbox_widget.py:207",
         "app/services/team_inbox_widget.py:208",
         "app/services/team_inbox_widget.py:82",
-        "app/web/admin/inbox.py:3968",
+        "app/web/admin/inbox.py:3977",
         "templates/admin/inbox/email_routes.html:252"
       ]
     },
@@ -8125,7 +8125,7 @@
         "app/services/team_inbox_widget.py:202",
         "app/services/team_inbox_widget.py:203",
         "app/services/team_inbox_widget.py:81",
-        "app/web/admin/inbox.py:3967",
+        "app/web/admin/inbox.py:3976",
         "templates/admin/inbox/email_routes.html:251"
       ]
     },
@@ -8154,7 +8154,7 @@
         "app/services/team_inbox_widget.py:186",
         "app/services/team_inbox_widget.py:187",
         "app/services/team_inbox_widget.py:75",
-        "app/web/admin/inbox.py:3961",
+        "app/web/admin/inbox.py:3970",
         "templates/admin/inbox/email_routes.html:245"
       ]
     },
@@ -8182,7 +8182,7 @@
       "source_references": [
         "app/services/team_inbox_widget.py:183",
         "app/services/team_inbox_widget.py:74",
-        "app/web/admin/inbox.py:3960",
+        "app/web/admin/inbox.py:3969",
         "templates/admin/inbox/email_routes.html:244"
       ]
     },
@@ -8739,9 +8739,9 @@
         "app/services/team_inbox_observations.py:400",
         "app/services/team_inbox_operations.py:662",
         "app/services/team_inbox_processing.py:348",
-        "app/services/team_inbox_projection.py:1107",
-        "app/services/team_inbox_projection.py:1110",
-        "app/services/team_inbox_projection.py:944",
+        "app/services/team_inbox_projection.py:1138",
+        "app/services/team_inbox_projection.py:1141",
+        "app/services/team_inbox_projection.py:952",
         "app/services/team_inbox_support_identity.py:22",
         "app/services/ticket_mentions.py:129",
         "app/services/ticket_mentions.py:155",
@@ -8842,8 +8842,8 @@
         "app/web/admin/customers.py:1030",
         "app/web/admin/customers.py:1108",
         "app/web/admin/customers.py:3298",
-        "app/web/admin/inbox.py:1749",
-        "app/web/admin/inbox.py:3889",
+        "app/web/admin/inbox.py:1758",
+        "app/web/admin/inbox.py:3898",
         "app/web/admin/network.py:101",
         "app/web/admin/network_monitoring.py:272",
         "app/web/admin/network_monitoring.py:286",
@@ -9195,12 +9195,12 @@
         "app/services/web_walled_garden_settings.py:98",
         "app/tasks/ont_bulk.py:109",
         "app/tasks/ont_bulk.py:89",
-        "app/web/admin/inbox.py:4292",
-        "app/web/admin/inbox.py:4296",
-        "app/web/admin/inbox.py:4307",
-        "app/web/admin/inbox.py:4385",
-        "app/web/admin/inbox.py:4387",
-        "app/web/admin/inbox.py:4449",
+        "app/web/admin/inbox.py:4301",
+        "app/web/admin/inbox.py:4305",
+        "app/web/admin/inbox.py:4316",
+        "app/web/admin/inbox.py:4394",
+        "app/web/admin/inbox.py:4396",
+        "app/web/admin/inbox.py:4458",
         "app/web/admin/network_onts_actions.py:1003",
         "app/web/admin/network_onts_actions.py:1008",
         "app/web/admin/network_onts_actions.py:1903",
@@ -9437,7 +9437,7 @@
         "app/services/team_inbox_processing.py:127",
         "app/services/team_inbox_processing.py:407",
         "app/services/team_inbox_processing.py:444",
-        "app/services/team_inbox_read.py:1420",
+        "app/services/team_inbox_read.py:1423",
         "app/services/team_inbox_read.py:280",
         "app/services/team_inbox_receive.py:374",
         "app/services/team_inbox_widget.py:1060",
@@ -9450,11 +9450,11 @@
         "app/tasks/notifications.py:858",
         "app/tasks/notifications.py:901",
         "app/tasks/notifications.py:955",
-        "app/web/admin/inbox.py:2423",
-        "app/web/admin/inbox.py:2484",
-        "app/web/admin/inbox.py:3918",
-        "app/web/admin/inbox.py:5509",
-        "app/web/admin/inbox.py:5522",
+        "app/web/admin/inbox.py:2432",
+        "app/web/admin/inbox.py:2493",
+        "app/web/admin/inbox.py:3927",
+        "app/web/admin/inbox.py:5518",
+        "app/web/admin/inbox.py:5531",
         "app/web/admin/integrations.py:1404",
         "app/web/customer/routes.py:211",
         "app/web/customer/routes.py:2634",
@@ -10207,8 +10207,8 @@
       "disposition": "Mapped to hub; preserve registered type, validation, tenant scope and owner-command writes",
       "source_references": [
         "app/services/team_inbox_ai_polish.py:235",
-        "app/web/admin/inbox.py:3843",
-        "app/web/admin/inbox.py:4966",
+        "app/web/admin/inbox.py:3852",
+        "app/web/admin/inbox.py:4975",
         "templates/admin/inbox/email_routes.html:980"
       ]
     },
@@ -10234,8 +10234,8 @@
       "disposition": "Mapped to hub; preserve registered type, validation, tenant scope and owner-command writes",
       "source_references": [
         "app/services/team_inbox_ai_polish.py:240",
-        "app/web/admin/inbox.py:3849",
-        "app/web/admin/inbox.py:4967",
+        "app/web/admin/inbox.py:3858",
+        "app/web/admin/inbox.py:4976",
         "templates/admin/inbox/email_routes.html:983"
       ]
     },
@@ -21201,7 +21201,7 @@
         "app/services/reseller_portal.py:150",
         "app/services/subscriber_data_completeness.py:463",
         "app/services/subscriber_summary.py:48",
-        "app/services/team_inbox_projection.py:1706",
+        "app/services/team_inbox_projection.py:1737",
         "app/services/topology/affected.py:622",
         "app/services/web_customer_actions.py:1275",
         "app/services/web_customer_actions.py:1278",
@@ -25466,7 +25466,7 @@
       "method": "GET",
       "path": "/admin/crm/inbox/settings",
       "tab": "integrations",
-      "source": "app/web/admin/inbox.py:4103",
+      "source": "app/web/admin/inbox.py:4112",
       "handler": "team_inbox_settings_entrypoint",
       "permissions": [
         "support:ticket:read"
@@ -25478,7 +25478,7 @@
       "method": "GET",
       "path": "/admin/crm/inbox/settings/partials/ai-testing",
       "tab": "integrations",
-      "source": "app/web/admin/inbox.py:4122",
+      "source": "app/web/admin/inbox.py:4131",
       "handler": "team_inbox_ai_testing_partial",
       "permissions": [
         "support:ticket:read"
@@ -27093,7 +27093,7 @@
       "method": "GET",
       "path": "/admin/inbox/settings/email-routes",
       "tab": "notifications",
-      "source": "app/web/admin/inbox.py:3820",
+      "source": "app/web/admin/inbox.py:3829",
       "handler": "team_inbox_email_routes",
       "permissions": [
         "support:ticket:read"
@@ -27105,7 +27105,7 @@
       "method": "POST",
       "path": "/admin/inbox/settings/email-routes",
       "tab": "notifications",
-      "source": "app/web/admin/inbox.py:4985",
+      "source": "app/web/admin/inbox.py:4994",
       "handler": "team_inbox_email_route_create",
       "permissions": [
         "support:ticket:update"
@@ -27117,7 +27117,7 @@
       "method": "POST",
       "path": "/admin/inbox/settings/email-routes/{route_id}",
       "tab": "notifications",
-      "source": "app/web/admin/inbox.py:5014",
+      "source": "app/web/admin/inbox.py:5023",
       "handler": "team_inbox_email_route_update",
       "permissions": [
         "support:ticket:update"
@@ -27129,7 +27129,7 @@
       "method": "POST",
       "path": "/admin/inbox/settings/email-routes/{route_id}/delete",
       "tab": "notifications",
-      "source": "app/web/admin/inbox.py:5094",
+      "source": "app/web/admin/inbox.py:5103",
       "handler": "team_inbox_email_route_delete",
       "permissions": [
         "support:ticket:update"
@@ -35368,7 +35368,7 @@
     "app/web/admin/custom_fields.py": "dfa41084e38514ccb5ffcb1b067301de6127740980b1abcc8e4927aa3472122e",
     "app/web/admin/customer_connection_types.py": "f551b8b7cb3d8fe040ebd67c02b293e9574e7a9abb575ed0508d40cb302cab38",
     "app/web/admin/customer_regions.py": "095747de4fa2bc91a8fae64b33561d923020f3fc40e515070db79d760b904dd5",
-    "app/web/admin/inbox.py": "12d8b01ed37e3af4526e017e7be81718f72974f13f42e02aa54d8cab92ffbe24",
+    "app/web/admin/inbox.py": "336813a9d7e894c6f4ab1f0f56abb8b8e97ccd42e9bcb6382b34b7344124c80b",
     "app/web/admin/integrations.py": "25d48216689cc3b1d953d00dcf3659c9998f47505a77eb8eeeda7a099974e4b1",
     "app/web/admin/notifications.py": "4cef64da29d92b150e6600a95a5fe4939589ee61a3aa6c69ed5874119ddf91bd",
     "app/web/admin/payment_configuration_actions.py": "4f29a8e62f6d5bd5060476793af4a54e1132450e429064877ff1c4bcd74e916d",

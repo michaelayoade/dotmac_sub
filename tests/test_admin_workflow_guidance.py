@@ -390,6 +390,17 @@ def test_team_inbox_guidance_explains_lazy_customer_link_search() -> None:
     assert "link customer" in content
 
 
+def test_team_inbox_guidance_explains_unavailable_assignment_totals() -> None:
+    guide = guidance_for_path("/admin/inbox")
+
+    assert guide is not None
+    assert guide.id == "team-inbox"
+    content = " ".join((*guide.steps, *guide.notes)).lower()
+    assert "assignment totals" in content
+    assert "show as unavailable" in content
+    assert "conversations remain accessible" in content
+
+
 def test_smtp_sender_guidance_explains_keyring_and_mailbox_route_mapping() -> None:
     guide = guidance_for_path("/admin/system/email")
 
