@@ -151,14 +151,16 @@ def _open_whatsapp_window(
     *,
     at: datetime | None = None,
 ) -> InboxMessage:
+    observed_at = at or datetime.now(UTC)
     inbound = InboxMessage(
         conversation_id=conversation.id,
         channel_type=InboxChannelType.whatsapp.value,
         direction=InboxMessageDirection.inbound.value,
         body="Hello",
-        received_at=at or datetime.now(UTC),
+        received_at=observed_at,
     )
     db_session.add(inbound)
+    conversation.last_qualifying_inbound_at = observed_at
     db_session.flush()
     return inbound
 
@@ -559,6 +561,7 @@ def test_worker_delivers_metadata_template_instead_of_placeholder_text(
 
 def test_whatsapp_free_form_reply_requires_open_customer_window(db_session):
     conversation = _whatsapp_conversation(db_session)
+    conversation.last_qualifying_inbound_at = datetime(2026, 7, 10, 8, 0, tzinfo=UTC)
     db_session.add(
         InboxMessage(
             conversation_id=conversation.id,
@@ -639,6 +642,7 @@ def test_nonqualifying_inbound_message_does_not_reopen_whatsapp_window(db_sessio
 def test_staff_and_internal_messages_do_not_extend_meta_reply_window(db_session):
     conversation = _whatsapp_conversation(db_session)
     opened_at = datetime(2026, 7, 10, 8, 0, tzinfo=UTC)
+    conversation.last_qualifying_inbound_at = opened_at
     db_session.add_all(
         [
             InboxMessage(

@@ -3,16 +3,24 @@ from __future__ import annotations
 from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 from unittest.mock import MagicMock
+from uuid import UUID
 
 import pytest
 
-from app.services import team_inbox_operations, team_inbox_sidebar_metrics
+from app.services import (
+    team_inbox_operations,
+    team_inbox_read,
+    team_inbox_sidebar_metrics,
+)
 
 
 @pytest.fixture(autouse=True)
 def _reset_local_cache_state(monkeypatch) -> None:
     monkeypatch.setattr(team_inbox_sidebar_metrics, "_fallback_snapshot", None)
     monkeypatch.setattr(team_inbox_sidebar_metrics, "_fallback_retry_after", None)
+    monkeypatch.setattr(
+        team_inbox_sidebar_metrics, "_assignment_fallback_snapshots", {}
+    )
 
 
 def test_inbox_read_budget_is_below_the_browser_deadline(monkeypatch) -> None:
@@ -254,3 +262,100 @@ def test_failed_local_producer_opens_a_bounded_circuit_breaker(monkeypatch) -> N
 
     assert attempts == 1
     assert snapshot.queue_metrics.total_open == 0
+
+
+def test_assignment_totals_are_cached_by_actor_scope(monkeypatch) -> None:
+    now = datetime(2026, 11, 14, 9, 30, tzinfo=UTC)
+    actor_id = UUID("00000000-0000-0000-0000-000000000101")
+    team_id = UUID("00000000-0000-0000-0000-000000000201")
+    expected = team_inbox_read.InboxAssignmentCohortCounts(
+        all=10,
+        queued=8,
+        assigned_to_actor=3,
+        actor_teams=5,
+        ai_handling=2,
+    )
+    db = MagicMock()
+    db.get_bind.return_value.dialect.name = "postgresql"
+    calls = 0
+
+    def compute(*_args, **_kwargs):
+        nonlocal calls
+        calls += 1
+        return expected
+
+    monkeypatch.setattr(
+        team_inbox_sidebar_metrics.app_cache,
+        "get_cache_redis",
+        lambda: None,
+    )
+    monkeypatch.setattr(team_inbox_read, "assignment_cohort_counts", compute)
+
+    first = team_inbox_sidebar_metrics.get_assignment_cohort_counts(
+        db,
+        actor_person_id=actor_id,
+        actor_team_ids=(team_id,),
+        now=now,
+    )
+    second = team_inbox_sidebar_metrics.get_assignment_cohort_counts(
+        db,
+        actor_person_id=actor_id,
+        actor_team_ids=(team_id,),
+        now=now + timedelta(seconds=10),
+    )
+
+    assert first == expected
+    assert second == expected
+    assert calls == 1
+
+
+def test_assignment_totals_serve_stale_while_another_worker_refreshes(
+    monkeypatch,
+) -> None:
+    now = datetime(2026, 11, 14, 9, 30, tzinfo=UTC)
+    actor_id = UUID("00000000-0000-0000-0000-000000000101")
+    expected = team_inbox_read.InboxAssignmentCohortCounts(
+        all=10,
+        queued=8,
+        assigned_to_actor=3,
+        actor_teams=5,
+        ai_handling=2,
+    )
+    scope = team_inbox_sidebar_metrics._assignment_scope(actor_id, ())
+    stale = team_inbox_sidebar_metrics.InboxAssignmentMetricsSnapshot(
+        counts=expected,
+        observed_at=now - timedelta(seconds=31),
+    )
+    db = MagicMock()
+    db.get_bind.return_value.dialect.name = "postgresql"
+    monkeypatch.setattr(
+        team_inbox_sidebar_metrics,
+        "_assignment_fallback_snapshots",
+        {scope: stale},
+    )
+    monkeypatch.setattr(
+        team_inbox_sidebar_metrics.app_cache,
+        "get_json",
+        lambda _key: None,
+    )
+    monkeypatch.setattr(
+        team_inbox_sidebar_metrics.app_cache,
+        "get_cache_redis",
+        lambda: _LeaseClient(claimed=False),
+    )
+    monkeypatch.setattr(
+        team_inbox_read,
+        "assignment_cohort_counts",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("unexpected refresh")
+        ),
+    )
+
+    counts = team_inbox_sidebar_metrics.get_assignment_cohort_counts(
+        db,
+        actor_person_id=actor_id,
+        actor_team_ids=(),
+        now=now,
+    )
+
+    assert counts == expected

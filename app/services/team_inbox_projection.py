@@ -1038,7 +1038,7 @@ def _assignment_counts(
         ]
         my_team_ids = tuple(str(value) for value in team_ids)
     try:
-        cohort_counts = team_inbox_read.assignment_cohort_counts(
+        cohort_counts = team_inbox_sidebar_metrics.get_assignment_cohort_counts(
             db,
             actor_person_id=actor_person_id,
             actor_team_ids=team_ids,
@@ -1052,6 +1052,23 @@ def _assignment_counts(
         logger.warning(
             "inbox_assignment_counts_unavailable",
             extra={"reason": "statement_timeout"},
+        )
+        return InboxAssignmentCounts(
+            all=0,
+            queued=0,
+            assigned_to_me=0,
+            my_team=0,
+            ai_handling=0,
+            my_team_ids=my_team_ids,
+            unassigned=queue_metrics.unassigned_open,
+            unreplied=queue_metrics.needs_response,
+            needs_attention=needs_attention,
+            state=InboxAssignmentCountsState.unavailable,
+        )
+    if cohort_counts is None:
+        logger.warning(
+            "inbox_assignment_counts_unavailable",
+            extra={"reason": "refresh_in_progress"},
         )
         return InboxAssignmentCounts(
             all=0,
@@ -2738,9 +2755,9 @@ def build_queue_projection(
         if include_sidebar and request.actor_person_id is not None
         else 0
     )
-    # Keep this last among projection database reads. A PostgreSQL statement
-    # timeout aborts the read transaction; the web adapter can then roll it
-    # back before rendering the explicitly unavailable count state.
+    # Keep this last among projection database reads. A cold-cache PostgreSQL
+    # timeout aborts the read transaction; the web adapter can then recover it
+    # before rendering the explicitly unavailable count state.
     assignment_counts = (
         _assignment_counts(
             db,

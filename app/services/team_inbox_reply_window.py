@@ -2,22 +2,18 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from enum import StrEnum
 from uuid import UUID
 
-from sqlalchemy import func, or_, select
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 from sqlalchemy.sql import Select
-from sqlalchemy.sql.elements import ColumnElement
 
 from app.models.team_inbox import (
     InboxChannelType,
     InboxConversation,
-    InboxMessage,
-    InboxMessageDirection,
 )
 
 OWNER = "communications.team_inbox_reply_window"
@@ -68,36 +64,6 @@ def _aware(value: datetime | None) -> datetime | None:
     return value.astimezone(UTC)
 
 
-def _message_time() -> object:
-    return func.coalesce(InboxMessage.received_at, InboxMessage.created_at)
-
-
-def qualifying_inbound_clause() -> tuple[ColumnElement[bool], ...]:
-    """Return the one persisted-message predicate for Meta window evidence."""
-
-    return (
-        InboxMessage.direction == InboxMessageDirection.inbound.value,
-        or_(
-            InboxMessage.metadata_["reply_window_qualifying"].as_boolean().isnot(False),
-            InboxMessage.metadata_["reply_window_qualifying"].is_(None),
-        ),
-    )
-
-
-def latest_qualifying_inbound_subquery():
-    """Project the latest qualifying customer inbound per conversation."""
-
-    return (
-        select(
-            InboxMessage.conversation_id.label("conversation_id"),
-            func.max(_message_time()).label("last_inbound_at"),
-        )
-        .where(*qualifying_inbound_clause())
-        .group_by(InboxMessage.conversation_id)
-        .subquery()
-    )
-
-
 def expiry_cutoff(now: datetime | None = None) -> datetime:
     return (_aware(now) or datetime.now(UTC)) - WINDOW_DURATION
 
@@ -109,23 +75,16 @@ def expired_whatsapp_conversation_ids_query(
 ) -> Select[tuple[UUID]]:
     """Return the canonical SQL worklist for expired WhatsApp conversations."""
 
-    latest_inbound = latest_qualifying_inbound_subquery()
-    statement = (
-        select(InboxConversation.id)
-        .join(
-            latest_inbound,
-            latest_inbound.c.conversation_id == InboxConversation.id,
-        )
-        .where(
-            InboxConversation.channel_type == InboxChannelType.whatsapp.value,
-            latest_inbound.c.last_inbound_at.isnot(None),
-            latest_inbound.c.last_inbound_at <= expiry_cutoff(now),
-        )
+    statement = select(InboxConversation.id).where(
+        InboxConversation.channel_type == InboxChannelType.whatsapp.value,
+        InboxConversation.last_qualifying_inbound_at.isnot(None),
+        InboxConversation.last_qualifying_inbound_at <= expiry_cutoff(now),
     )
     managed_after = _aware(expired_after)
     if managed_after is not None:
         statement = statement.where(
-            latest_inbound.c.last_inbound_at >= managed_after - WINDOW_DURATION
+            InboxConversation.last_qualifying_inbound_at
+            >= managed_after - WINDOW_DURATION
         )
     return statement
 
@@ -137,38 +96,6 @@ def coerce_conversation_id(value: str | UUID | None) -> UUID | None:
         return UUID(str(value))
     except (TypeError, ValueError):
         return None
-
-
-def latest_qualifying_inbound_at(
-    db: Session,
-    *,
-    conversation_id: UUID,
-) -> datetime | None:
-    """Return the latest customer message that can open a Meta reply window.
-
-    Internal notes, staff replies, receipts, scheduled rows, comments, and audit
-    events are excluded by using only authoritative inbound Inbox messages.
-    """
-
-    rows = (
-        db.query(
-            InboxMessage.received_at,
-            InboxMessage.created_at,
-            InboxMessage.metadata_,
-        )
-        .filter(InboxMessage.conversation_id == conversation_id)
-        .filter(*qualifying_inbound_clause())
-        .all()
-    )
-    timestamps = []
-    for received_at, created_at, metadata in rows:
-        if (
-            isinstance(metadata, Mapping)
-            and metadata.get("reply_window_qualifying") is False
-        ):
-            continue
-        timestamps.append(_aware(received_at or created_at))
-    return max((value for value in timestamps if value is not None), default=None)
 
 
 def decide_reply_window(
@@ -197,7 +124,8 @@ def decide_reply_window(
             whatsapp_template_available=False,
         )
 
-    last_inbound = latest_qualifying_inbound_at(db, conversation_id=conversation.id)
+    del db  # The transaction-current conversation projection is authoritative.
+    last_inbound = _aware(conversation.last_qualifying_inbound_at)
     if last_inbound is None:
         return ReplyWindowDecision(
             channel_type=channel_type,

@@ -362,6 +362,15 @@ class InboxConversation(Base):
         ),
         Index("ix_inbox_conversations_status_last", "status", "last_message_at"),
         Index(
+            "ix_inbox_conversations_reply_window",
+            "channel_type",
+            "last_qualifying_inbound_at",
+            "status",
+            "id",
+            sqlite_where=text("last_qualifying_inbound_at IS NOT NULL"),
+            postgresql_where=text("last_qualifying_inbound_at IS NOT NULL"),
+        ),
+        Index(
             "ix_inbox_conversations_external_thread",
             "channel_type",
             "external_thread_id",
@@ -411,6 +420,9 @@ class InboxConversation(Base):
     )
     first_message_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     last_message_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    last_qualifying_inbound_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True)
+    )
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
     metadata_: Mapped[dict | None] = mapped_column(
         "metadata", MutableDict.as_mutable(JSON())

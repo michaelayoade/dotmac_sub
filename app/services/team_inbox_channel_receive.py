@@ -46,6 +46,7 @@ from app.services import (
     team_inbox_participants,
     team_inbox_realtime,
     team_inbox_reply_window,
+    team_inbox_reply_window_projection,
     team_inbox_routing,
     team_inbox_status,
 )
@@ -1459,6 +1460,14 @@ def receive_inbound_channel(
     )
     db.add(message)
     db.flush()
+    team_inbox_reply_window_projection.project_qualifying_inbound(
+        conversation,
+        team_inbox_reply_window_projection.ProjectQualifyingInboundCommand(
+            conversation_id=conversation.id,
+            occurred_at=received_at,
+            message_metadata=metadata,
+        ),
+    )
     # Shadow projection: record which endpoints took part. Nothing reads it for
     # a threading or export decision yet, so a failure here must not cost us an
     # ingested message.

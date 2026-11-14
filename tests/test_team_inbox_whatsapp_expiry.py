@@ -25,6 +25,7 @@ from app.services import (
     team_inbox_operations,
     team_inbox_projection,
     team_inbox_reply_window,
+    team_inbox_reply_window_projection,
     team_inbox_status,
 )
 from app.services.owner_commands import CommandContext
@@ -82,6 +83,7 @@ def _whatsapp(
         primary_service_team_id=team_id,
         first_message_at=inbound_at,
         last_message_at=inbound_at,
+        last_qualifying_inbound_at=inbound_at,
     )
     db_session.add(conversation)
     db_session.flush()
@@ -110,6 +112,92 @@ def _assign(db_session, conversation, team_id, person_id):
     db_session.add(assignment)
     db_session.flush()
     return assignment
+
+
+def test_reply_window_projection_advances_monotonically_for_qualifying_inbound(
+    db_session,
+):
+    opened_at = NOW - timedelta(hours=2)
+    conversation = _whatsapp(db_session, inbound_at=opened_at)
+
+    ignored = team_inbox_reply_window_projection.project_qualifying_inbound(
+        conversation,
+        team_inbox_reply_window_projection.ProjectQualifyingInboundCommand(
+            conversation_id=conversation.id,
+            occurred_at=NOW,
+            message_metadata={"reply_window_qualifying": False},
+        ),
+    )
+    advanced = team_inbox_reply_window_projection.project_qualifying_inbound(
+        conversation,
+        team_inbox_reply_window_projection.ProjectQualifyingInboundCommand(
+            conversation_id=conversation.id,
+            occurred_at=NOW - timedelta(hours=1),
+            message_metadata={},
+        ),
+    )
+    late = team_inbox_reply_window_projection.project_qualifying_inbound(
+        conversation,
+        team_inbox_reply_window_projection.ProjectQualifyingInboundCommand(
+            conversation_id=conversation.id,
+            occurred_at=opened_at,
+            message_metadata={},
+        ),
+    )
+
+    assert ignored.changed is False
+    assert advanced.changed is True
+    assert late.changed is False
+    assert conversation.last_qualifying_inbound_at == NOW - timedelta(hours=1)
+
+
+def test_reply_window_projection_reconciler_audits_repairs_and_converges(
+    db_session,
+):
+    conversation = _whatsapp(
+        db_session,
+        inbound_at=NOW - timedelta(hours=25),
+    )
+    db_session.add(
+        InboxMessage(
+            conversation_id=conversation.id,
+            channel_type="whatsapp",
+            direction=InboxMessageDirection.inbound.value,
+            body="New qualifying evidence",
+            received_at=NOW - timedelta(hours=1),
+            metadata_={"reply_window_qualifying": True},
+        )
+    )
+    db_session.flush()
+
+    preview = team_inbox_maintenance.reconcile_reply_window_projection(
+        db_session,
+        team_inbox_maintenance.ReconcileReplyWindowProjectionCommand(
+            context=_context("reply_window_projection_preview"),
+            dry_run=True,
+        ),
+    )
+    applied = team_inbox_maintenance.reconcile_reply_window_projection(
+        db_session,
+        team_inbox_maintenance.ReconcileReplyWindowProjectionCommand(
+            context=_context("reply_window_projection_apply"),
+            dry_run=False,
+        ),
+    )
+    repeated = team_inbox_maintenance.reconcile_reply_window_projection(
+        db_session,
+        team_inbox_maintenance.ReconcileReplyWindowProjectionCommand(
+            context=_context("reply_window_projection_verify"),
+            dry_run=True,
+        ),
+    )
+
+    assert preview.drift_found == 1
+    assert preview.repaired == 0
+    assert applied.drift_found == 1
+    assert applied.repaired == 1
+    assert repeated.drift_found == 0
+    assert conversation.last_qualifying_inbound_at == NOW - timedelta(hours=1)
 
 
 def test_expiry_releases_assignment_and_queue_without_resolving(db_session):

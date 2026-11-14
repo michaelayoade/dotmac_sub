@@ -9,7 +9,7 @@ from datetime import UTC, datetime
 from functools import partial
 from uuid import UUID
 
-from sqlalchemy import or_, select
+from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session
 
 from app.models.ai_intake import AiIntakePolicyVersion, AiIntakeSession
@@ -119,6 +119,24 @@ class RepairExpiredWhatsAppAssignmentsOutcome:
     already_correct: int
     conflicts: int
     errors: int
+
+
+@dataclass(frozen=True, slots=True)
+class ReconcileReplyWindowProjectionCommand:
+    context: CommandContext
+    dry_run: bool = True
+    limit: int = 500
+    after_conversation_id: UUID | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class ReconcileReplyWindowProjectionOutcome:
+    examined: int
+    drift_found: int
+    repaired: int
+    next_conversation_id: UUID | None
+    has_more: bool
+    dry_run: bool
 
 
 @dataclass(frozen=True, slots=True)
@@ -1025,6 +1043,103 @@ def _expired_whatsapp_ids(
         db.scalars(
             statement.order_by(InboxConversation.id).limit(max(1, int(limit)))
         ).all()
+    )
+
+
+def _utc(value: datetime | None) -> datetime | None:
+    if value is None:
+        return None
+    if value.tzinfo is None or value.utcoffset() is None:
+        return value.replace(tzinfo=UTC)
+    return value.astimezone(UTC)
+
+
+def reconcile_reply_window_projection(
+    db: Session,
+    command: ReconcileReplyWindowProjectionCommand,
+) -> ReconcileReplyWindowProjectionOutcome:
+    """Audit or repair one bounded projection batch from message chronology."""
+
+    batch_limit = max(1, min(int(command.limit), 5000))
+
+    def operation() -> ReconcileReplyWindowProjectionOutcome:
+        query = db.query(InboxConversation).filter(
+            InboxConversation.channel_type.in_(
+                tuple(team_inbox_reply_window.META_FREE_FORM_CHANNELS)
+            )
+        )
+        if command.after_conversation_id is not None:
+            query = query.filter(InboxConversation.id > command.after_conversation_id)
+        query = query.order_by(InboxConversation.id).limit(batch_limit + 1)
+        if not command.dry_run:
+            query = query.with_for_update(
+                of=InboxConversation,
+                skip_locked=True,
+            )
+        conversations = query.all()
+        has_more = len(conversations) > batch_limit
+        conversations = conversations[:batch_limit]
+        conversation_ids = tuple(item.id for item in conversations)
+
+        expected_by_id: dict[UUID, datetime] = {}
+        if conversation_ids:
+            expected_by_id = {
+                conversation_id: projected_at
+                for conversation_id, projected_at in (
+                    db.query(
+                        InboxMessage.conversation_id,
+                        func.max(
+                            func.coalesce(
+                                InboxMessage.received_at,
+                                InboxMessage.created_at,
+                            )
+                        ),
+                    )
+                    .filter(
+                        InboxMessage.conversation_id.in_(conversation_ids),
+                        InboxMessage.direction == InboxMessageDirection.inbound.value,
+                        or_(
+                            InboxMessage.metadata_["reply_window_qualifying"]
+                            .as_boolean()
+                            .isnot(False),
+                            InboxMessage.metadata_["reply_window_qualifying"].is_(None),
+                        ),
+                    )
+                    .group_by(InboxMessage.conversation_id)
+                    .all()
+                )
+                if projected_at is not None
+            }
+
+        drift = repaired = 0
+        for conversation in conversations:
+            expected = _utc(expected_by_id.get(conversation.id))
+            current = _utc(conversation.last_qualifying_inbound_at)
+            if current == expected:
+                continue
+            drift += 1
+            if not command.dry_run:
+                conversation.last_qualifying_inbound_at = expected
+                repaired += 1
+        if repaired:
+            db.flush()
+
+        return ReconcileReplyWindowProjectionOutcome(
+            examined=len(conversations),
+            drift_found=drift,
+            repaired=repaired,
+            next_conversation_id=(
+                conversations[-1].id if conversations else command.after_conversation_id
+            ),
+            has_more=has_more,
+            dry_run=command.dry_run,
+        )
+
+    return execute_owner_command(
+        db,
+        definition=_MAINTENANCE_COMMAND,
+        context=command.context,
+        operation=operation,
     )
 
 

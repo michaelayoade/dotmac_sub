@@ -11,9 +11,12 @@ def _source(relative: str) -> str:
 
 def test_reply_window_is_the_only_expiry_definition() -> None:
     reply_window = _source("app/services/team_inbox_reply_window.py")
+    projection_writer = _source("app/services/team_inbox_reply_window_projection.py")
     assignment = _source("app/services/team_inbox_assignment.py")
     assert "WINDOW_HOURS = 24" in reply_window
-    assert "latest_qualifying_inbound_subquery" in reply_window
+    assert "InboxMessage" not in reply_window
+    assert "conversation.last_qualifying_inbound_at" in reply_window
+    assert "def project_qualifying_inbound" in projection_writer
     assert "expired_whatsapp_conversation_ids_query" in assignment
     assert "timedelta(hours=24)" not in assignment
 
@@ -34,6 +37,19 @@ def test_expiry_release_is_a_scheduled_typed_owner_path() -> None:
     assert "managed_after rollout watermark is required" in tasks
     assert 'name="team_inbox_whatsapp_window_expiry"' in scheduler
     assert "release_expired_whatsapp_conversation" in receive
+
+
+def test_reply_window_projection_has_one_writer_and_a_bounded_reconciler() -> None:
+    receive = _source("app/services/team_inbox_channel_receive.py")
+    maintenance = _source("app/services/team_inbox_maintenance.py")
+    tasks = _source("app/tasks/team_inbox.py")
+    migration = _source("alembic/versions/710_inbox_reply_window_projection.py")
+    assert receive.count("project_qualifying_inbound(") == 1
+    assert "class ReconcileReplyWindowProjectionCommand" in maintenance
+    assert "def reconcile_reply_window_projection" in maintenance
+    assert "reconcile_reply_window_projection" in tasks
+    assert "_verify_projection()" in migration
+    assert "CREATE INDEX CONCURRENTLY" in migration
 
 
 def test_expired_resolution_is_separate_from_customer_completion() -> None:
