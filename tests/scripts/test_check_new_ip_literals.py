@@ -62,7 +62,8 @@ def test_zero_padded_octets_are_normalised() -> None:
 
 
 def test_ipv6_seven_groups_with_trailing_double_colon() -> None:
-    assert find_public_literals("a = 2606:4700:1:2:3:4:5::")
+    groups = ":".join(PUBLIC_V6.split(":")[:1] + ["1", "2", "3", "4", "5", "6"])
+    assert find_public_literals(f"a = {groups}::")
 
 
 def test_marker_requires_a_reason() -> None:
