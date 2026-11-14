@@ -961,12 +961,14 @@ def test_instagram_notification_uploads_attachment_and_checkpoints_each_leg(
         MetaMessageAttachmentType,
     )
 
+    inbound_at = datetime.now(UTC)
     conversation = InboxConversation(
         channel_type=InboxChannelType.instagram_dm.value,
         subject="Instagram support",
         contact_address="customer-ig",
         external_thread_id="instagram_dm:customer-ig",
         status=InboxConversationStatus.open.value,
+        last_qualifying_inbound_at=inbound_at,
     )
     db_session.add(conversation)
     db_session.flush()
@@ -977,7 +979,7 @@ def test_instagram_notification_uploads_attachment_and_checkpoints_each_leg(
             direction=InboxMessageDirection.inbound.value,
             body="Can you show me?",
             external_message_id="inbound-instagram-1",
-            received_at=datetime.now(UTC),
+            received_at=inbound_at,
             metadata_={"provider_account_scope": "ig-123"},
         )
     )
@@ -1536,11 +1538,13 @@ def test_meta_direct_intake_followups_use_normal_outbound_dispatcher(
         ),
     )
     for channel_type, _notification_channel, account_id, recipient in expected_channels:
+        inbound_at = datetime.now(UTC)
         conversation = InboxConversation(
             channel_type=channel_type,
             contact_address=recipient,
             external_thread_id=f"{channel_type}:{recipient}",
             status=InboxConversationStatus.open.value,
+            last_qualifying_inbound_at=inbound_at,
         )
         db_session.add(conversation)
         db_session.flush()
@@ -1550,6 +1554,7 @@ def test_meta_direct_intake_followups_use_normal_outbound_dispatcher(
             direction=InboxMessageDirection.inbound.value,
             body="Please help",
             external_message_id=f"inbound-{recipient}",
+            received_at=inbound_at,
             metadata_={"provider_account_scope": account_id},
         )
         db_session.add(inbound)

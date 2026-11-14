@@ -168,7 +168,7 @@ def test_reply_window_projection_reconciler_audits_repairs_and_converges(
             metadata_={"reply_window_qualifying": True},
         )
     )
-    db_session.flush()
+    db_session.commit()
 
     preview = team_inbox_maintenance.reconcile_reply_window_projection(
         db_session,

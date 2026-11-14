@@ -968,6 +968,7 @@ def test_whatsapp_reply_to_explicit_contact_ignores_canceled_subscriber_match(
         channel_type="whatsapp",
         contact_address="+2348183750805",
         status=InboxConversationStatus.open.value,
+        last_qualifying_inbound_at=opened_at,
     )
     db_session.add_all([subscriber, conversation])
     db_session.flush()
