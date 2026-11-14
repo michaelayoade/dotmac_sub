@@ -799,6 +799,15 @@ TASK_RELIABILITY_CONTRACTS: dict[str, TaskReliabilityContract] = {
         "ends at most one active assignment, and settles at most one FIFO "
         "generation; repeated runs are no-ops.",
     ),
+    "app.tasks.team_inbox.reconcile_reply_window_projection": _c(
+        "support",
+        MANUAL,
+        IDEMP,
+        LOG,
+        "Operator-invoked bounded batches compare message chronology with the "
+        "conversation projection. Dry-run is the default; repair converges on "
+        "replay and failures are logged for manual retry from the last cursor.",
+    ),
     "app.tasks.team_inbox.send_queue_position_notifications": _c(
         "support",
         SWEEP,

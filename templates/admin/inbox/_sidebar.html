@@ -1,6 +1,10 @@
 {% from "admin/inbox/_queue_macros.html" import conversation_queue_item, inbox_pagination %}
 {% from "admin/inbox/_sidebar_macros.html" import assignment_count %}
 
+{% macro assignment_count(counts, value) -%}
+    {{- value if counts.state == 'available' else '—' -}}
+{%- endmacro %}
+
 <div class="flex min-h-0 flex-1 flex-col" data-inbox-sidebar-content>
     <header class="space-y-2 border-b border-slate-200/60 px-5 py-3 dark:border-slate-700/60">
         <div class="flex items-center justify-between gap-2">

@@ -3160,6 +3160,7 @@ DOMAIN = DomainSOT(
             owns=(
                 "conversation identity and threading",
                 "authoritative conversation and message records",
+                "latest qualifying Meta inbound timestamp projection",
             ),
             depends_on=(
                 "communications.team_inbox_observations",
@@ -3172,6 +3173,10 @@ DOMAIN = DomainSOT(
                     (
                         "authoritative conversation and message records",
                         OwnerRole.AUTHORITATIVE_RECORD,
+                    ),
+                    (
+                        "latest qualifying Meta inbound timestamp projection",
+                        OwnerRole.PROJECTION_WRITER,
                     ),
                 ),
                 inputs=(
@@ -3192,6 +3197,9 @@ DOMAIN = DomainSOT(
                 event_types=(
                     "team_inbox.message_recorded.v1",
                     "team_inbox.conversation_opened.v1",
+                ),
+                projections=(
+                    "transaction-current latest qualifying Meta inbound timestamp",
                 ),
             ),
         ),
@@ -3958,10 +3966,14 @@ DOMAIN = DomainSOT(
                 ),
                 inputs=(
                     AuthorityInput(
-                        name="message chronology",
+                        name="latest qualifying Meta inbound projection",
                         owner="communications.team_inbox_threads",
-                        kind=AuthorityKind.AUTHORITATIVE_RECORD,
-                        source="Latest qualifying inbound customer Inbox message timestamp for WhatsApp, Facebook Messenger, and Instagram DM.",
+                        kind=AuthorityKind.DERIVED_PROJECTION,
+                        source=(
+                            "Transaction-current, monotonically advanced conversation "
+                            "timestamp derived from qualifying WhatsApp, Facebook "
+                            "Messenger, and Instagram DM customer messages."
+                        ),
                     ),
                 ),
                 transaction_mode=TransactionMode.READ_ONLY,
@@ -5125,6 +5137,7 @@ DOMAIN = DomainSOT(
             owns=(
                 "scheduled Inbox projection maintenance and repair",
                 "WhatsApp expiry routing-state convergence",
+                "Meta reply-window timestamp projection reconciliation",
             ),
             depends_on=(
                 "ai.intake",
@@ -5147,6 +5160,10 @@ DOMAIN = DomainSOT(
                         "WhatsApp expiry routing-state convergence",
                         OwnerRole.RECONCILER,
                     ),
+                    (
+                        "Meta reply-window timestamp projection reconciliation",
+                        OwnerRole.RECONCILER,
+                    ),
                 ),
                 inputs=(
                     AuthorityInput(
@@ -5164,6 +5181,16 @@ DOMAIN = DomainSOT(
                         owner="communications.team_inbox_threads",
                         kind=AuthorityKind.AUTHORITATIVE_RECORD,
                         source="Current conversation, message, lifecycle, and attachment metadata.",
+                    ),
+                    AuthorityInput(
+                        name="reply-window projection and message chronology",
+                        owner="communications.team_inbox_threads",
+                        kind=AuthorityKind.DERIVED_PROJECTION,
+                        source=(
+                            "Persisted latest qualifying Meta inbound timestamp "
+                            "compared in bounded batches with authoritative inbound "
+                            "message chronology."
+                        ),
                     ),
                     AuthorityInput(
                         name="outbound intent state",
@@ -5234,6 +5261,7 @@ DOMAIN = DomainSOT(
                     "repairable Inbox worklists and media projection",
                     "verified historical WhatsApp location attachment repair",
                     "Meta contact profile repair and failed reply retry",
+                    "dry-run-first Meta reply-window projection reconciliation",
                 ),
             ),
         ),

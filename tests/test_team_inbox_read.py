@@ -360,8 +360,8 @@ def test_assignment_sidebar_cohorts_share_one_aggregate(db_session):
         event.remove(db_session.bind, "before_cursor_execute", capture_statement)
 
     assert len(statements) == 1
-    assert "WITH expired_whatsapp_conversations AS" in statements[0]
-    assert statements[0].count("FROM inbox_messages") == 1
+    assert "last_qualifying_inbound_at" in statements[0]
+    assert "FROM inbox_messages" not in statements[0]
     assert counts.all == team_inbox_read.queue_conversation_count(db_session)
     assert counts.queued == team_inbox_read.queued_conversation_count(db_session)
     assert counts.assigned_to_actor == team_inbox_read.assigned_conversation_count(
