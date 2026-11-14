@@ -259,6 +259,21 @@ class InboxConversationListResult:
     offset: int
 
 
+@dataclass(frozen=True, slots=True)
+class InboxQueuePositionEvidence:
+    entry: InboxConversationQueueEntry
+    current_visible_position: int
+
+
+@dataclass(frozen=True, slots=True)
+class InboxAssignmentCohortCounts:
+    all: int
+    queued: int
+    assigned_to_actor: int
+    actor_teams: int
+    ai_handling: int
+
+
 class InboxContactDisplaySource(StrEnum):
     party = "party"
     subscriber = "subscriber"
@@ -470,6 +485,95 @@ def ai_handling_conversation_count(db: Session) -> int:
         .with_entities(func.count(InboxConversation.id))
         .scalar()
         or 0
+    )
+
+
+def assignment_cohort_counts(
+    db: Session,
+    *,
+    actor_person_id: UUID | None,
+    actor_team_ids: Sequence[UUID],
+) -> InboxAssignmentCohortCounts:
+    """Compute the assignment sidebar cohorts in one aggregate statement.
+
+    Each cohort deliberately retains its existing eligibility rules. In
+    particular, My Team includes all active unresolved human-owned work for the
+    actor's teams, while AI Handling does not apply the WhatsApp reply-window
+    exclusion used by the actionable human queue.
+    """
+
+    allowed_queue_channel = or_(
+        InboxConversation.channel_type != InboxChannelType.field_job.value,
+        InboxConversation.metadata_[team_inbox_field_job.QUEUE_FOLLOWUP_KEY]
+        .as_boolean()
+        .is_(True),
+    )
+    active_unresolved = and_(
+        InboxConversation.is_active.is_(True),
+        InboxConversation.status != InboxConversationStatus.resolved.value,
+    )
+    human_owned = ~ai_conversation_ownership.ai_owned_conversation_clause()
+    actionable_human = and_(
+        active_unresolved,
+        allowed_queue_channel,
+        human_owned,
+        ~InboxConversation.id.in_(
+            team_inbox_reply_window.expired_whatsapp_conversation_ids_query()
+        ),
+    )
+    queued_filter = exists(
+        select(InboxConversationQueueEntry.id).where(
+            InboxConversationQueueEntry.conversation_id == InboxConversation.id,
+            InboxConversationQueueEntry.status == InboxQueueEntryStatus.queued.value,
+        )
+    )
+    assigned_filter = (
+        exists(
+            select(InboxConversationAssignment.id).where(
+                InboxConversationAssignment.conversation_id == InboxConversation.id,
+                InboxConversationAssignment.person_id == actor_person_id,
+                InboxConversationAssignment.is_active.is_(True),
+            )
+        )
+        if actor_person_id is not None
+        else false()
+    )
+    actor_team_filter = (
+        exists(
+            select(InboxConversationTeam.id).where(
+                InboxConversationTeam.conversation_id == InboxConversation.id,
+                InboxConversationTeam.is_active.is_(True),
+                InboxConversationTeam.service_team_id.in_(tuple(actor_team_ids)),
+            )
+        )
+        if actor_team_ids
+        else false()
+    )
+    row = db.query(
+        func.count(InboxConversation.id).filter(actionable_human).label("all_count"),
+        func.count(InboxConversation.id)
+        .filter(actionable_human, queued_filter)
+        .label("queued_count"),
+        func.count(InboxConversation.id)
+        .filter(actionable_human, assigned_filter)
+        .label("assigned_to_actor_count"),
+        func.count(InboxConversation.id)
+        .filter(active_unresolved, human_owned, actor_team_filter)
+        .label("actor_teams_count"),
+        func.count(InboxConversation.id)
+        .filter(
+            active_unresolved,
+            allowed_queue_channel,
+            ai_conversation_ownership.ai_owned_conversation_clause(),
+        )
+        .label("ai_handling_count"),
+    ).one()
+    return InboxAssignmentCohortCounts(
+        all=int(row.all_count or 0),
+        queued=int(row.queued_count or 0),
+        assigned_to_actor=int(row.assigned_to_actor_count or 0),
+        actor_teams=int(row.actor_teams_count or 0),
+        ai_handling=int(row.ai_handling_count or 0),
     )
 
 
@@ -774,7 +878,15 @@ def _response_cohorts_by_conversation(
     ranked = (
         select(
             InboxMessage.conversation_id.label("conversation_id"),
-            func.row_number()
+            func.sum(
+                case(
+                    (
+                        InboxMessage.direction != InboxMessageDirection.internal.value,
+                        1,
+                    ),
+                    else_=0,
+                )
+            )
             .over(
                 partition_by=InboxMessage.conversation_id,
                 order_by=(
@@ -786,10 +898,12 @@ def _response_cohorts_by_conversation(
             .label("message_rank"),
             InboxMessage.direction.label("direction"),
             case((_valid_agent_reply_clause(), 1), else_=0).label("is_valid_reply"),
+            case((_social_comment_message_clause(), 1), else_=0).label(
+                "is_social_comment"
+            ),
         )
         .where(InboxMessage.conversation_id.in_(conversation_ids))
-        .where(InboxMessage.direction != InboxMessageDirection.internal.value)
-        .subquery()
+        .cte("inbox_response_ranked")
     )
     bounds = (
         select(
@@ -813,39 +927,50 @@ def _response_cohorts_by_conversation(
             func.max(case((ranked.c.is_valid_reply == 1, ranked.c.message_rank))).label(
                 "latest_valid_reply_rank"
             ),
+            func.max(ranked.c.is_social_comment).label("is_social_comment"),
         )
         .group_by(ranked.c.conversation_id)
-        .subquery()
+        .cte("inbox_response_bounds")
     )
-    bound_rows = db.execute(select(bounds)).all()
-    completed_exchange_ids = {
-        row[0]
-        for row in db.execute(
-            select(ranked.c.conversation_id)
-            .join(bounds, bounds.c.conversation_id == ranked.c.conversation_id)
-            .where(ranked.c.is_valid_reply == 1)
-            .where(ranked.c.message_rank > bounds.c.first_inbound_rank)
-            .where(ranked.c.message_rank < bounds.c.latest_inbound_rank)
-            .distinct()
-        ).all()
-    }
-    social_message_ids = {
-        row[0]
-        for row in db.query(InboxMessage.conversation_id)
-        .filter(InboxMessage.conversation_id.in_(conversation_ids))
-        .filter(_social_comment_message_clause())
-        .distinct()
-        .all()
-    }
+    evidence_rows = db.execute(
+        select(
+            bounds.c.conversation_id,
+            bounds.c.first_inbound_rank,
+            bounds.c.latest_inbound_rank,
+            bounds.c.latest_valid_reply_rank,
+            func.max(
+                case(
+                    (
+                        and_(
+                            ranked.c.is_valid_reply == 1,
+                            ranked.c.message_rank > bounds.c.first_inbound_rank,
+                            ranked.c.message_rank < bounds.c.latest_inbound_rank,
+                        ),
+                        1,
+                    ),
+                    else_=0,
+                )
+            ).label("has_completed_exchange"),
+            bounds.c.is_social_comment,
+        )
+        .join(ranked, ranked.c.conversation_id == bounds.c.conversation_id)
+        .group_by(
+            bounds.c.conversation_id,
+            bounds.c.first_inbound_rank,
+            bounds.c.latest_inbound_rank,
+            bounds.c.latest_valid_reply_rank,
+            bounds.c.is_social_comment,
+        )
+    ).all()
     evidence_by_id = {
         row.conversation_id: InboxResponseCohortEvidence(
             first_inbound_rank=row.first_inbound_rank,
             latest_inbound_rank=row.latest_inbound_rank,
             latest_valid_reply_rank=row.latest_valid_reply_rank,
-            has_completed_exchange=row.conversation_id in completed_exchange_ids,
-            is_social_comment=row.conversation_id in social_message_ids,
+            has_completed_exchange=bool(row.has_completed_exchange),
+            is_social_comment=bool(row.is_social_comment),
         )
-        for row in bound_rows
+        for row in evidence_rows
     }
     result: dict[UUID, InboxResponseCohort] = {}
     for conversation in conversations:
@@ -1396,6 +1521,60 @@ def _continuous_search_head_ids(
     return tuple(dict.fromkeys(heads.values()))
 
 
+def _queue_positions_by_conversation(
+    db: Session,
+    *,
+    conversation_ids: Sequence[UUID],
+    service_team_ids: Sequence[UUID],
+) -> dict[UUID, InboxQueuePositionEvidence]:
+    """Project live FIFO ranks while hydrating only entries on this page.
+
+    The window includes every active entry for the represented teams so ranks
+    remain authoritative, but the outer query returns only requested
+    conversations. This avoids loading an entire team backlog for each page.
+    """
+
+    page_conversation_ids = tuple(dict.fromkeys(conversation_ids))
+    represented_team_ids = tuple(dict.fromkeys(service_team_ids))
+    if not page_conversation_ids or not represented_team_ids:
+        return {}
+    ranked = (
+        select(
+            InboxConversationQueueEntry.id.label("entry_id"),
+            func.row_number()
+            .over(
+                partition_by=InboxConversationQueueEntry.service_team_id,
+                order_by=(
+                    InboxConversationQueueEntry.entered_at.asc(),
+                    InboxConversationQueueEntry.queue_position.asc(),
+                ),
+            )
+            .label("current_visible_position"),
+        )
+        .where(
+            InboxConversationQueueEntry.status == InboxQueueEntryStatus.queued.value,
+            InboxConversationQueueEntry.service_team_id.in_(represented_team_ids),
+        )
+        .subquery("inbox_live_queue_ranks")
+    )
+    rows = (
+        db.query(
+            InboxConversationQueueEntry,
+            ranked.c.current_visible_position,
+        )
+        .join(ranked, ranked.c.entry_id == InboxConversationQueueEntry.id)
+        .filter(InboxConversationQueueEntry.conversation_id.in_(page_conversation_ids))
+        .all()
+    )
+    return {
+        entry.conversation_id: InboxQueuePositionEvidence(
+            entry=entry,
+            current_visible_position=int(current_visible_position),
+        )
+        for entry, current_visible_position in rows
+    }
+
+
 def list_conversations(
     db: Session,
     *,
@@ -1863,66 +2042,49 @@ def list_conversations(
         conversations,
         ticketed_conversation_ids=ticketed_conversation_ids,
     )
-    queue_entries = (
-        db.query(InboxConversationQueueEntry)
-        .filter(
-            InboxConversationQueueEntry.status == InboxQueueEntryStatus.queued.value
+    queue_by_conversation = _queue_positions_by_conversation(
+        db,
+        conversation_ids=conversation_ids,
+        service_team_ids=[
+            conversation.primary_service_team_id
+            for conversation in conversations
+            if conversation.primary_service_team_id is not None
+        ],
+    )
+    queued_team_ids = tuple(
+        dict.fromkeys(
+            evidence.entry.service_team_id
+            for evidence in queue_by_conversation.values()
         )
-        .filter(
-            InboxConversationQueueEntry.service_team_id.in_(
-                [
-                    conversation.primary_service_team_id
-                    for conversation in conversations
-                    if conversation.primary_service_team_id is not None
-                ]
-            )
+    )
+    capacity_by_team = team_inbox_assignment.team_capacity_snapshots(
+        db, queued_team_ids
+    )
+    assignment_rows = (
+        db.query(InboxConversationAssignment, SystemUser)
+        .join(
+            InboxConversation,
+            InboxConversation.id == InboxConversationAssignment.conversation_id,
         )
-        .order_by(
-            InboxConversationQueueEntry.service_team_id.asc(),
-            InboxConversationQueueEntry.entered_at.asc(),
-            InboxConversationQueueEntry.queue_position.asc(),
+        .outerjoin(
+            SystemUser,
+            SystemUser.id == InboxConversationAssignment.person_id,
         )
+        .filter(InboxConversationAssignment.conversation_id.in_(conversation_ids))
+        .filter(*team_inbox_assignment.countable_active_assignment_clauses())
         .all()
-        if conversations
+        if conversation_ids
         else []
     )
-    queue_by_conversation: dict[UUID, tuple[InboxConversationQueueEntry, int]] = {}
-    team_rank: dict[UUID, int] = {}
-    for entry in queue_entries:
-        rank = team_rank.get(entry.service_team_id, 0) + 1
-        team_rank[entry.service_team_id] = rank
-        queue_by_conversation[entry.conversation_id] = (entry, rank)
-    capacity_by_team = team_inbox_assignment.team_capacity_snapshots(
-        db, list(team_rank)
-    )
-    active_assignments = (
-        {
-            assignment.conversation_id: assignment
-            for assignment in db.query(InboxConversationAssignment)
-            .join(
-                InboxConversation,
-                InboxConversation.id == InboxConversationAssignment.conversation_id,
-            )
-            .filter(InboxConversationAssignment.conversation_id.in_(conversation_ids))
-            .filter(*team_inbox_assignment.countable_active_assignment_clauses())
-            .all()
-        }
-        if conversation_ids
-        else {}
-    )
-    assigned_person_ids = {
-        assignment.person_id for assignment in active_assignments.values()
+    active_assignments = {
+        assignment.conversation_id: assignment
+        for assignment, _assigned_person in assignment_rows
     }
-    assigned_people = (
-        {
-            user.id: user
-            for user in db.query(SystemUser)
-            .filter(SystemUser.id.in_(assigned_person_ids))
-            .all()
-        }
-        if assigned_person_ids
-        else {}
-    )
+    assigned_people = {
+        assigned_person.id: assigned_person
+        for _assignment, assigned_person in assignment_rows
+        if assigned_person is not None
+    }
     team_counts = (
         {
             conversation_id: count
@@ -2050,17 +2212,23 @@ def list_conversations(
                 if assigned_person is not None
                 else None,
                 current_visible_position=(
-                    queue_projection[1] if queue_projection else None
+                    queue_projection.current_visible_position
+                    if queue_projection
+                    else None
                 ),
-                queued_at=queue_projection[0].entered_at if queue_projection else None,
+                queued_at=(
+                    queue_projection.entry.entered_at if queue_projection else None
+                ),
                 estimated_wait_minutes=(
                     team_inbox_assignment.estimate_queue_wait_minutes(
-                        current_visible_position=queue_projection[1],
+                        current_visible_position=(
+                            queue_projection.current_visible_position
+                        ),
                         active_assignments=capacity_by_team[
-                            queue_projection[0].service_team_id
+                            queue_projection.entry.service_team_id
                         ].active_assignments,
                         total_capacity=capacity_by_team[
-                            queue_projection[0].service_team_id
+                            queue_projection.entry.service_team_id
                         ].total_capacity,
                     )
                     if queue_projection

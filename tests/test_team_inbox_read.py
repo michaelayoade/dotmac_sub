@@ -1,11 +1,12 @@
 from __future__ import annotations
 
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 from uuid import uuid4
 
 import pytest
 from fastapi import BackgroundTasks, HTTPException
+from sqlalchemy import event
 
 from app.api import support as support_api
 from app.models.notification import Notification
@@ -21,10 +22,12 @@ from app.models.team_inbox import (
     InboxAgentPresence,
     InboxConversation,
     InboxConversationAssignment,
+    InboxConversationQueueEntry,
     InboxConversationStatus,
     InboxConversationTeam,
     InboxMessage,
     InboxMessageDirection,
+    InboxQueueEntryStatus,
     InboxTeamRole,
     InboxTeamSource,
 )
@@ -213,6 +216,154 @@ def test_list_conversations_filters_by_team_search_and_response_need(db_session)
     assert result.items[0].primary_service_team_capabilities == ("customer_support",)
     assert result.items[0].latest_message_body == "Router is down"
     assert result.items[0].needs_response is True
+
+
+def test_queue_position_query_hydrates_only_requested_entries(db_session):
+    team = _team(db_session, "Ranked queue")
+    start = datetime(2026, 11, 12, 6, 0, tzinfo=UTC)
+    conversations = [
+        _conversation(
+            db_session,
+            team,
+            subject=f"Queued conversation {index}",
+            first_at=start + timedelta(minutes=index),
+        )
+        for index in range(4)
+    ]
+    db_session.add_all(
+        [
+            InboxConversationQueueEntry(
+                conversation_id=conversation.id,
+                service_team_id=team.id,
+                queue_position=index + 1,
+                status=(
+                    InboxQueueEntryStatus.cancelled.value
+                    if index == 1
+                    else InboxQueueEntryStatus.queued.value
+                ),
+                entered_at=start + timedelta(minutes=index),
+            )
+            for index, conversation in enumerate(conversations)
+        ]
+    )
+    db_session.flush()
+
+    evidence = team_inbox_read._queue_positions_by_conversation(
+        db_session,
+        conversation_ids=(conversations[3].id,),
+        service_team_ids=(team.id,),
+    )
+
+    assert tuple(evidence) == (conversations[3].id,)
+    assert evidence[conversations[3].id].current_visible_position == 3
+    assert evidence[conversations[3].id].entry.conversation_id == conversations[3].id
+
+
+def test_response_cohort_evidence_uses_one_database_statement(db_session):
+    team = _team(db_session, "Response evidence")
+    conversation = _conversation(
+        db_session,
+        team,
+        subject="Follow-up",
+    )
+    start = datetime(2026, 11, 12, 7, 0, tzinfo=UTC)
+    _message(
+        db_session,
+        conversation,
+        direction=InboxMessageDirection.inbound.value,
+        body="Initial question",
+        at=start,
+    )
+    reply = _message(
+        db_session,
+        conversation,
+        direction=InboxMessageDirection.outbound.value,
+        body="Agent answer",
+        at=start + timedelta(minutes=1),
+    )
+    reply.metadata_ = {
+        "sent_by_person_id": str(uuid4()),
+        "delivery_status": "delivered",
+    }
+    _message(
+        db_session,
+        conversation,
+        direction=InboxMessageDirection.inbound.value,
+        body="Customer follow-up",
+        at=start + timedelta(minutes=2),
+    )
+    db_session.flush()
+    statements: list[str] = []
+
+    def capture_statement(*args):
+        statements.append(str(args[2]))
+
+    event.listen(db_session.bind, "before_cursor_execute", capture_statement)
+    try:
+        cohorts = team_inbox_read._response_cohorts_by_conversation(
+            db_session,
+            (conversation,),
+            ticketed_conversation_ids=set(),
+        )
+    finally:
+        event.remove(db_session.bind, "before_cursor_execute", capture_statement)
+
+    assert (
+        cohorts[conversation.id] is team_inbox_read.InboxResponseCohort.needs_attention
+    )
+    assert len(statements) == 1
+
+
+def test_assignment_sidebar_cohorts_share_one_aggregate(db_session):
+    team = _team(db_session, "Sidebar cohorts")
+    actor = _online_reply_agent(db_session, team)
+    assigned = _conversation(db_session, team, subject="Assigned")
+    queued = _conversation(db_session, team, subject="Queued")
+    db_session.add_all(
+        [
+            InboxConversationAssignment(
+                conversation_id=assigned.id,
+                service_team_id=team.id,
+                person_id=actor.id,
+                is_active=True,
+            ),
+            InboxConversationQueueEntry(
+                conversation_id=queued.id,
+                service_team_id=team.id,
+                queue_position=1,
+                status=InboxQueueEntryStatus.queued.value,
+                entered_at=datetime(2026, 11, 12, 8, 0, tzinfo=UTC),
+            ),
+        ]
+    )
+    db_session.flush()
+
+    statements: list[str] = []
+
+    def capture_statement(*args):
+        statements.append(str(args[2]))
+
+    event.listen(db_session.bind, "before_cursor_execute", capture_statement)
+    try:
+        counts = team_inbox_read.assignment_cohort_counts(
+            db_session,
+            actor_person_id=actor.id,
+            actor_team_ids=(team.id,),
+        )
+    finally:
+        event.remove(db_session.bind, "before_cursor_execute", capture_statement)
+
+    assert len(statements) == 1
+    assert counts.all == team_inbox_read.queue_conversation_count(db_session)
+    assert counts.queued == team_inbox_read.queued_conversation_count(db_session)
+    assert counts.assigned_to_actor == team_inbox_read.assigned_conversation_count(
+        db_session,
+        assigned_person_id=actor.id,
+    )
+    assert counts.actor_teams == 2
+    assert counts.ai_handling == team_inbox_read.ai_handling_conversation_count(
+        db_session
+    )
 
 
 def test_search_maps_historical_message_hit_to_current_continuous_episode(
