@@ -1,14 +1,17 @@
 import json
 import re
 import uuid
+from collections.abc import Sequence
 from datetime import UTC, date, datetime
 from decimal import Decimal
 from pathlib import Path
 from types import SimpleNamespace
+from uuid import UUID
 
 import pytest
 from fastapi import HTTPException
 from fastapi.routing import APIRoute
+from sqlalchemy.orm import Session
 from starlette.requests import Request
 
 
@@ -71,6 +74,10 @@ from app.models.system_user import SystemUser, SystemUserType
 from app.services import web_billing_ledger as web_billing_ledger_service
 from app.services.credential_crypto import encrypt_credential
 from app.services.customer_financial_ledger import CustomerFinancialEvent
+from app.services.customer_timeline import (
+    CustomerTimelinePage,
+    CustomerTimelinePageQuery,
+)
 from app.services.web_billing_ledger import CustomerLedgerQuery
 from app.services.web_customer_details import (
     CustomerDetailNetworkQuery,
@@ -90,6 +97,48 @@ def _billing_setting(key: str, value: str) -> DomainSetting:
         value_text=value,
         is_active=True,
     )
+
+
+def test_customer_timeline_fragment_uses_typed_owner_query(
+    db_session, subscriber, monkeypatch
+):
+    from app.web.admin import customers as customer_routes
+
+    subscriber.user_type = UserType.customer
+    db_session.flush()
+    seen: list[CustomerTimelinePageQuery] = []
+
+    def get_page(
+        db: Session,
+        *,
+        customer_id: str,
+        account_ids: Sequence[UUID],
+        query: CustomerTimelinePageQuery,
+    ) -> CustomerTimelinePage:
+        assert db is db_session
+        assert customer_id == str(subscriber.id)
+        assert account_ids == (subscriber.id,)
+        seen.append(query)
+        return CustomerTimelinePage(
+            items=(), page=query.page, per_page=20, has_next=False
+        )
+
+    monkeypatch.setattr(
+        customer_routes.customer_timeline_service,
+        "get_customer_timeline_page",
+        get_page,
+    )
+    response = customer_routes.customer_timeline_page(
+        request=_bare_request(f"/admin/customers/person/{subscriber.id}/timeline"),
+        customer_id=subscriber.id,
+        timeline_page=3,
+        db=db_session,
+    )
+
+    assert seen == [CustomerTimelinePageQuery(page=3)]
+    assert 'data-page="3"' in response.body.decode("utf-8")
+    assert "No activity on this page" in response.body.decode("utf-8")
+    assert "<html" not in response.body.decode("utf-8")
 
 
 def test_person_detail_includes_billing_policy_override_snapshot(

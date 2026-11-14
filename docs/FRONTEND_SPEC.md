@@ -883,7 +883,12 @@ record-only activity displays `Actor not recorded` and `Recorded` rather than
 inventing a person or claiming a successful action. The timeline shows the
 existing customer-linked activity types newest first, 20 items per page.
 Previous and Next links preserve the Timeline tab and reach older records and
-their audit evidence. It has no filters, search, date controls, or grouping.
+their audit evidence. Pagination loads only the timeline fragment while the
+current activity remains readable. The controls show a loading message during
+the request and a retry message on failure. The URL changes after a successful
+load; ordinary links remain available when JavaScript is unavailable. Direct
+links to `#timeline` open the tab. It has no filters, search, date controls,
+or grouping.
 
 The **All Subscriptions** work surface exposes one visible `Restore` row action
 for blocked, suspended, stopped, or disabled services only when the authenticated
