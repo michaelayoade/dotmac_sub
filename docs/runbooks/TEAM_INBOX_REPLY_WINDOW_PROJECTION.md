@@ -23,6 +23,11 @@ message chronology.
    inbound timestamps in batches of 5,000, verifies exact parity, and builds
    `ix_inbox_conversations_reply_window` concurrently. A parity error blocks the
    migration and must be investigated; do not force the version table forward.
+   Revision `711_repair_inbox_reply_window_index` checks the installed index and
+   rebuilds only an invalid or unready index with the exact expected shape. It
+   preserves a valid index. The repair is needed when a concurrent build in
+   revision 710 times out after PostgreSQL creates an invalid catalog entry;
+   `CREATE INDEX IF NOT EXISTS` cannot repair that entry.
 3. Deploy the application containing the transactional writer and indexed
    reader.
 4. Run `app.tasks.team_inbox.reconcile_reply_window_projection` with
@@ -68,6 +73,12 @@ WHERE c.last_qualifying_inbound_at IS DISTINCT FROM expected.projected_at;
 
 - Migration parity failure: stop the deployment and inspect the mismatched
   chronology. The application has not cut over.
+- Concurrent index lock timeout: do not rerun the approval-gated production
+  job or force Alembic forward. A retry of revision 710 can leave an invalid
+  index even when Alembic advances. Merge the forward repair, build and accept
+  a new candidate through staging, then authorize and deploy that digest. The
+  new deployment takes a fresh production backup. Verify `indisvalid=true` and
+  `indisready=true` with the query above before declaring the cutover healthy.
 - Post-deploy drift: stop rollout progression, run the bounded reconciler in
   apply mode for the affected batches, and repeat the full dry run.
 - Application rollback: roll back the application first. The additive column
