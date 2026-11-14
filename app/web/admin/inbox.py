@@ -452,12 +452,11 @@ def team_inbox_queue(
     if (
         projection.assignment_counts.state
         is team_inbox_projection.InboxAssignmentCountsState.unavailable
-        and db.in_transaction()
     ):
         # PostgreSQL leaves the read transaction aborted after statement
-        # timeout. The adapter owns session recovery; no business writes have
-        # occurred on this GET route.
-        db.rollback()
+        # timeout. Recover through the shared read-transaction boundary; no
+        # business writes have occurred on this GET route.
+        finish_read_transaction(db)
         team_inbox_sidebar_metrics.apply_read_budget(db)
     projection_finished_at = perf_counter()
     if projection.canonical_url is not None:
