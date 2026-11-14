@@ -461,6 +461,7 @@ def test_rejected_apply_is_audited_after_rollback_and_shown_in_activity(db_sessi
         )
     )
     extension = _extension(db_session, created_by=str(actor_id))
+    extension_id = extension.id
     db_session.commit()
     context = CommandContext.system(
         actor=f"user:{actor_id}",
@@ -472,7 +473,7 @@ def test_rejected_apply_is_audited_after_rollback_and_shown_in_activity(db_sessi
         service_extensions.apply_service_extension(
             db_session,
             service_extensions.ApplyServiceExtensionCommand(
-                context=context, extension_id=extension.id
+                context=context, extension_id=extension_id
             ),
         )
     assert error.value.code.endswith("self_approval_forbidden")
@@ -489,10 +490,10 @@ def test_rejected_apply_is_audited_after_rollback_and_shown_in_activity(db_sessi
                 idempotency_key=str(uuid4()),
             ),
             request_id=request_id,
-            extension_id=extension.id,
+            extension_id=extension_id,
             reason=service_extensions.ApplyRejectionReason.self_approval_forbidden,
             source_code=error.value.code,
-            submitted_path=f"/admin/billing/service-extensions/{extension.id}/apply",
+            submitted_path=f"/admin/billing/service-extensions/{extension_id}/apply",
             key_present=True,
             response_status=409,
             creator_id=str(actor_id),
@@ -507,12 +508,12 @@ def test_rejected_apply_is_audited_after_rollback_and_shown_in_activity(db_sessi
     assert audit.request_id == request_id
     assert audit.metadata_["failure_code"] == "self_approval_forbidden"
     assert (
-        db_session.get(ServiceExtension, extension.id).status
+        db_session.get(ServiceExtension, extension_id).status
         == ServiceExtensionStatus.pending
     )
 
     detail = build_service_extension_detail(
-        db_session, extension_id=extension.id, auth=_ADMIN_AUTH
+        db_session, extension_id=extension_id, auth=_ADMIN_AUTH
     )
     assert detail.activity[0].action_label == "Apply blocked"
     assert "different authorized staff" in detail.activity[0].details
