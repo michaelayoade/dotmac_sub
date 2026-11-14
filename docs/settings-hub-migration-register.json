@@ -8959,7 +8959,9 @@
         "templates/customer/referrals/index.html:72",
         "templates/layouts/customer.html:280",
         "templates/layouts/customer.html:284",
-        "templates/public/referrals/signup.html:40",
+        "templates/public/referrals/signup.html:109",
+        "templates/public/referrals/signup.html:110",
+        "templates/public/referrals/signup.html:180",
         "templates/reseller/auth/forgot-password.html:39",
         "templates/reseller/auth/forgot-password.html:43",
         "templates/reseller/auth/forgot-password.html:44",
@@ -9215,7 +9217,8 @@
         "app/web/admin/network_onts_actions.py:949",
         "app/web/admin/system.py:1338",
         "app/web/admin/system.py:1569",
-        "app/web/public/referrals.py:24",
+        "app/web/public/referrals.py:29",
+        "app/web/public/referrals.py:53",
         "templates/admin/customers/detail.html:1356",
         "templates/admin/inbox/email_routes.html:441",
         "templates/admin/inbox/email_routes.html:442",
@@ -19671,7 +19674,7 @@
       },
       "disposition": "Mapped to hub; preserve registered type, validation, tenant scope and owner-command writes",
       "source_references": [
-        "app/services/subscriber.py:1743"
+        "app/services/subscriber.py:1742"
       ]
     },
     {
@@ -19897,7 +19900,7 @@
       },
       "disposition": "Mapped to hub; preserve registered type, validation, tenant scope and owner-command writes",
       "source_references": [
-        "app/services/referral_account_conversion.py:190"
+        "app/services/referral_account_conversion.py:194"
       ]
     },
     {

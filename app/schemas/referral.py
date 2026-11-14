@@ -15,7 +15,14 @@ from decimal import Decimal
 from typing import Literal
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, EmailStr, Field
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    EmailStr,
+    Field,
+    field_validator,
+    model_validator,
+)
 
 from app.schemas.subscriber import SubscriberCreate
 
@@ -118,13 +125,13 @@ class ReferralSelfServiceSignupRead(ReferralAccountConversionRead):
 class ReferralSelfServiceAccountCreate(BaseModel):
     """Narrow public account payload with no lifecycle or billing controls."""
 
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(extra="forbid", frozen=True)
 
     first_name: str = Field(min_length=1, max_length=80)
     last_name: str = Field(min_length=1, max_length=80)
     email: EmailStr
     phone: str | None = Field(default=None, max_length=40)
-    address_line1: str | None = Field(default=None, max_length=120)
+    address_line1: str = Field(min_length=1, max_length=120)
     address_line2: str | None = Field(default=None, max_length=120)
     city: str | None = Field(default=None, max_length=80)
     region: str | None = Field(default=None, max_length=80)
@@ -133,6 +140,19 @@ class ReferralSelfServiceAccountCreate(BaseModel):
     country_code: str | None = Field(default=None, max_length=2)
     locale: str | None = Field(default=None, max_length=16)
     timezone: str | None = Field(default=None, max_length=64)
+    latitude: float | None = Field(default=None, ge=-90, le=90)
+    longitude: float | None = Field(default=None, ge=-180, le=180)
+
+    @field_validator("address_line1", mode="before")
+    @classmethod
+    def _normalize_required_address(cls, value: object) -> object:
+        return value.strip() if isinstance(value, str) else value
+
+    @model_validator(mode="after")
+    def _require_coordinate_pair(self) -> ReferralSelfServiceAccountCreate:
+        if (self.latitude is None) != (self.longitude is None):
+            raise ValueError("Latitude and longitude must be provided together")
+        return self
 
 
 class ReferralSelfServiceSignupRequest(BaseModel):

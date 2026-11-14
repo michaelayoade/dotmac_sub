@@ -1,60 +1,245 @@
-<!doctype html>
-<html lang="en">
-<head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
+{% extends "base.html" %}
+
+{% block title %}Join {{ brand.name }} · Refer &amp; Earn{% endblock %}
+
+{% block head %}
   <meta name="referrer" content="no-referrer">
-  <title>Join Dotmac · Refer &amp; Earn</title>
   <style>
-    :root { font-family: system-ui, -apple-system, Segoe UI, sans-serif; color: #17231f; background: #f4f7f5; }
-    * { box-sizing: border-box; }
-    body { margin: 0; min-height: 100vh; }
-    main { max-width: 36rem; margin: 4rem auto; padding: 0 1.25rem; }
-    .brand { color: #11694d; font-size: .9rem; font-weight: 800; letter-spacing: .12em; text-transform: uppercase; }
-    .card { margin-top: 1rem; padding: clamp(1.5rem, 5vw, 2.5rem); background: white; border: 1px solid #dce7e0; border-radius: 1.25rem; box-shadow: 0 12px 40px #173d2610; }
-    h1 { margin: 0 0 .75rem; font-size: clamp(1.8rem, 5vw, 2.5rem); line-height: 1.15; }
-    p { line-height: 1.55; color: #526159; }
-    form { display: grid; gap: 1rem; margin-top: 1.75rem; }
-    label { display: grid; gap: .35rem; font-size: .9rem; font-weight: 650; }
-    input { width: 100%; padding: .8rem .9rem; border: 1px solid #b9c9bf; border-radius: .65rem; font: inherit; }
-    input:focus { outline: 2px solid #13835e; outline-offset: 2px; }
-    button { padding: .9rem 1rem; border: 0; border-radius: .65rem; background: #11694d; color: white; font: inherit; font-weight: 700; cursor: pointer; }
-    button:hover { background: #0d543d; }
-    button:disabled { opacity: .65; cursor: wait; }
-    .message { margin-top: 1rem; padding: .85rem 1rem; border-radius: .65rem; }
-    .error { background: #fff0ef; color: #842c26; }
-    .success { background: #e9f7ef; color: #145c39; }
+    .referral-page { max-width: 36rem; margin: 4rem auto; padding: 0 1.25rem; }
+    .referral-page .brand-shell { display: flex; align-items: center; gap: .65rem; }
+    .referral-page .brand-logo { width: 2.25rem; height: 2.25rem; border-radius: .6rem; object-fit: contain; outline: 1px solid rgba(0, 0, 0, .1); outline-offset: -1px; }
+    .referral-page .brand-fallback { display: grid; place-items: center; background: var(--color-brand-600); color: white; font-weight: 800; }
+    .referral-page .brand { color: var(--color-brand-700); font-size: .9rem; font-weight: 800; letter-spacing: .12em; text-transform: uppercase; }
+    .referral-page .card { margin-top: 1rem; padding: clamp(1.5rem, 5vw, 2.5rem); background: white; border: 1px solid var(--color-slate-200); border-radius: 1.25rem; box-shadow: 0 12px 40px rgb(15 23 42 / .07); }
+    .referral-page h1 { margin: 0 0 .75rem; font-size: clamp(1.8rem, 5vw, 2.5rem); line-height: 1.15; text-wrap: balance; }
+    .referral-page p { line-height: 1.55; color: var(--color-slate-600); text-wrap: pretty; }
+    .referral-page form { display: grid; gap: 1rem; margin-top: 1.75rem; }
+    .referral-page .field, .referral-page .field-row { display: grid; gap: .35rem; }
+    .referral-page .field-row { gap: 1rem; }
+    .referral-page label { font-size: .9rem; font-weight: 650; }
+    .referral-page input { width: 100%; min-height: 44px; padding: .8rem .9rem; border: 1px solid var(--color-slate-300); border-radius: .65rem; background: white; color: var(--color-slate-900); font: inherit; }
+    .referral-page input:focus { outline: 2px solid var(--color-brand-500); outline-offset: 2px; }
+    .referral-page button { display: inline-flex; min-height: 44px; align-items: center; justify-content: center; gap: .55rem; padding: .9rem 1rem; border: 0; border-radius: .65rem; background: var(--color-brand-600); color: white; font: inherit; font-weight: 700; cursor: pointer; transition: background-color 150ms ease-out, box-shadow 150ms ease-out, transform 150ms ease-out; }
+    .referral-page button:hover { background: var(--color-brand-700); }
+    .referral-page button:active:not(:disabled) { transform: scale(.98); }
+    .referral-page button:disabled { opacity: .65; cursor: not-allowed; }
+    .referral-page button[aria-busy="true"] { cursor: wait; }
+    .referral-page button.secondary { background: var(--color-brand-50); color: var(--color-brand-800); border: 1px solid var(--color-brand-200); }
+    .referral-page button.secondary:hover { background: var(--color-brand-100); }
+    .referral-page button:focus-visible { outline: 2px solid var(--color-brand-500); outline-offset: 2px; }
+    .referral-page .location { display: grid; gap: .75rem; padding: 1rem; border: 1px solid var(--color-slate-200); border-radius: .8rem; }
+    .referral-page .location legend { padding: 0 .25rem; font-size: .9rem; font-weight: 700; }
+    .referral-page .hint, .referral-page .location-status, .referral-page .field-error { margin: 0; font-size: .82rem; }
+    .referral-page .location-status { padding: .65rem .75rem; border-radius: .55rem; font-weight: 650; }
+    .referral-page .location-status[data-state="neutral"] { background: var(--color-slate-100); color: var(--color-slate-700); }
+    .referral-page .location-status[data-state="loading"] { background: var(--color-semantic-info-50); color: var(--color-semantic-info-800); }
+    .referral-page .location-status[data-state="success"] { background: var(--color-semantic-positive-50); color: var(--color-semantic-positive-800); }
+    .referral-page .location-status[data-state="error"] { background: var(--color-semantic-negative-50); color: var(--color-semantic-negative-800); }
+    .referral-page .field-error { color: var(--color-semantic-negative-700); font-weight: 650; }
+    .referral-page input[aria-invalid="true"] { border-color: var(--color-semantic-negative-600); }
+    .referral-page .spinner { width: 1rem; height: 1rem; flex: 0 0 auto; border: 2px solid currentColor; border-right-color: transparent; border-radius: 50%; animation: spin .7s linear infinite; }
+    .referral-page .message { margin-top: 1rem; padding: .85rem 1rem; border-radius: .65rem; }
+    .referral-page .error { background: var(--color-semantic-negative-50); color: var(--color-semantic-negative-800); }
+    .referral-page .success { background: var(--color-semantic-positive-50); color: var(--color-semantic-positive-800); }
+    .referral-page .support { margin: 1rem 0 0; text-align: center; font-size: .85rem; }
+    .referral-page .support a { color: var(--color-brand-700); font-weight: 700; text-underline-offset: 3px; }
+    .dark .referral-page .brand { color: var(--color-brand-300); }
+    .dark .referral-page .card { background: var(--color-slate-800); border-color: var(--color-slate-700); box-shadow: 0 12px 40px rgb(0 0 0 / .2); }
+    .dark .referral-page p { color: var(--color-slate-300); }
+    .dark .referral-page input { border-color: var(--color-slate-600); background: var(--color-slate-900); color: var(--color-slate-100); }
+    .dark .referral-page button.secondary { background: var(--color-brand-900); color: var(--color-brand-200); border-color: var(--color-brand-700); }
+    .dark .referral-page button.secondary:hover { background: var(--color-brand-800); }
+    .dark .referral-page .location { border-color: var(--color-slate-700); }
+    .dark .referral-page .location-status[data-state="neutral"] { background: var(--color-slate-700); color: var(--color-slate-200); }
+    .dark .referral-page .location-status[data-state="loading"] { background: var(--color-semantic-info-900); color: var(--color-semantic-info-200); }
+    .dark .referral-page .location-status[data-state="success"] { background: var(--color-semantic-positive-900); color: var(--color-semantic-positive-200); }
+    .dark .referral-page .location-status[data-state="error"], .dark .referral-page .error { background: var(--color-semantic-negative-900); color: var(--color-semantic-negative-200); }
+    .dark .referral-page .success { background: var(--color-semantic-positive-900); color: var(--color-semantic-positive-200); }
+    .dark .referral-page .field-error { color: var(--color-semantic-negative-300); }
+    .dark .referral-page .support a { color: var(--color-brand-300); }
+    @keyframes spin { to { transform: rotate(360deg); } }
     [hidden] { display: none !important; }
+    @media (min-width: 38rem) {
+      .referral-page .field-row { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    }
+    @media (max-width: 40rem) {
+      .referral-page { margin: 1.5rem auto; padding: 0 .9rem; }
+      .referral-page .card { padding: 1.25rem; border-radius: 1rem; }
+    }
+    @media (prefers-reduced-motion: reduce) {
+      .referral-page button { transition: none; }
+      .referral-page button:active:not(:disabled) { transform: none; }
+      .referral-page .spinner { animation: none; }
+    }
   </style>
-</head>
-<body>
-  <main>
-    <div class="brand">Dotmac · Refer &amp; Earn</div>
+{% endblock %}
+
+{% block body %}
+  <main class="referral-page">
+    <div class="brand-shell">
+      {% if brand.logo_url %}
+      <img class="brand-logo{% if brand.dark_logo_url %} dark:hidden{% endif %}" src="{{ brand.logo_url }}" alt="{{ brand.name }} logo">
+      {% if brand.dark_logo_url %}
+      <img class="brand-logo hidden dark:block" src="{{ brand.dark_logo_url }}" alt="{{ brand.name }} logo">
+      {% endif %}
+      {% else %}
+      <span class="brand-logo brand-fallback" aria-hidden="true">{{ brand.name[:1] | upper }}</span>
+      {% endif %}
+      <div class="brand">{{ brand.name }} · Refer &amp; Earn</div>
+    </div>
     <section class="card">
       {% if code %}
-      <h1>You've been invited to Dotmac</h1>
+      <h1 class="font-display">You've been invited to {{ brand.name }}</h1>
       <p>Sign up using your friend's referral link. We'll email you instructions to access your new customer account.</p>
-      <form id="signup-form">
-        <label>First name <input name="first_name" autocomplete="given-name" maxlength="80" required></label>
-        <label>Last name <input name="last_name" autocomplete="family-name" maxlength="80" required></label>
-        <label>Email address <input name="email" type="email" autocomplete="email" maxlength="255" required></label>
-        <label>Phone number (optional) <input name="phone" type="tel" autocomplete="tel" maxlength="40"></label>
-        <button type="submit">Create my account</button>
+      <form id="signup-form" novalidate>
+        <div class="field-row">
+          <div class="field">
+            <label for="first-name">First name</label>
+            <input id="first-name" name="first_name" autocomplete="given-name" maxlength="80" aria-describedby="first-name-error" required>
+            <p id="first-name-error" class="field-error" role="alert" hidden></p>
+          </div>
+          <div class="field">
+            <label for="last-name">Last name</label>
+            <input id="last-name" name="last_name" autocomplete="family-name" maxlength="80" aria-describedby="last-name-error" required>
+            <p id="last-name-error" class="field-error" role="alert" hidden></p>
+          </div>
+        </div>
+        <div class="field-row">
+          <div class="field">
+            <label for="email">Email address</label>
+            <input id="email" name="email" type="email" autocomplete="email" maxlength="255" aria-describedby="email-error" required>
+            <p id="email-error" class="field-error" role="alert" hidden></p>
+          </div>
+          <div class="field">
+            <label for="phone">Phone number (optional)</label>
+            <input id="phone" name="phone" type="tel" autocomplete="tel" maxlength="40" aria-describedby="phone-error">
+            <p id="phone-error" class="field-error" role="alert" hidden></p>
+          </div>
+        </div>
+        <fieldset class="location">
+          <legend>Service address (required)</legend>
+          <p id="location-help" class="hint">Type your service address, or use your current location to fill it in. Check the address before continuing.</p>
+          <div class="field">
+            <label for="service-address">Service address</label>
+            <input id="service-address" name="address_line1" autocomplete="street-address" maxlength="120" placeholder="House number, street and area" aria-describedby="location-help address-error" required>
+            <p id="address-error" class="field-error" role="alert" hidden></p>
+          </div>
+          <button id="capture-location" class="secondary" type="button" aria-describedby="location-help location-status">
+            <span id="location-spinner" class="spinner" aria-hidden="true" hidden></span>
+            <span id="location-button-label">Use my current location (optional)</span>
+          </button>
+          <p id="location-status" class="location-status" data-state="neutral" role="status" aria-live="polite">Location not captured.</p>
+          <input id="latitude" name="latitude" type="hidden">
+          <input id="longitude" name="longitude" type="hidden">
+        </fieldset>
+        <button type="submit">
+          <span id="submit-spinner" class="spinner" aria-hidden="true" hidden></span>
+          <span id="submit-button-label">Create my account</span>
+        </button>
       </form>
       <p id="message" class="message" role="status" aria-live="polite" hidden></p>
       {% else %}
-      <h1>This referral link is unavailable</h1>
-      <p>Ask your friend for a current link, or contact Dotmac for help.</p>
+      <h1 class="font-display">This referral link is unavailable</h1>
+      <p>Ask your friend for a current link, or contact {{ brand.name }} for help.</p>
       {% endif %}
     </section>
+    <p class="support">Need help? <a href="mailto:{{ brand.support_email }}">Contact support</a></p>
   </main>
   {% if code %}
   <script>
     (() => {
       const code = {{ code | tojson }};
+      const brandName = {{ brand.name | tojson }};
       const form = document.getElementById('signup-form');
       const message = document.getElementById('message');
-      const button = form.querySelector('button');
+      const submitButton = form.querySelector('button[type="submit"]');
+      const submitButtonLabel = document.getElementById('submit-button-label');
+      const submitSpinner = document.getElementById('submit-spinner');
+      const locationButton = document.getElementById('capture-location');
+      const locationButtonLabel = document.getElementById('location-button-label');
+      const locationSpinner = document.getElementById('location-spinner');
+      const locationStatus = document.getElementById('location-status');
+      const latitude = document.getElementById('latitude');
+      const longitude = document.getElementById('longitude');
+      const addressInput = document.getElementById('service-address');
+      const formControls = Array.from(form.elements);
+      const fieldRules = {
+        first_name: {
+          input: document.getElementById('first-name'),
+          error: document.getElementById('first-name-error'),
+          required: 'Enter your first name.',
+          invalid: 'Enter a valid first name.'
+        },
+        last_name: {
+          input: document.getElementById('last-name'),
+          error: document.getElementById('last-name-error'),
+          required: 'Enter your last name.',
+          invalid: 'Enter a valid last name.'
+        },
+        email: {
+          input: document.getElementById('email'),
+          error: document.getElementById('email-error'),
+          required: 'Enter your email address.',
+          invalid: 'Enter a valid email address.'
+        },
+        phone: {
+          input: document.getElementById('phone'),
+          error: document.getElementById('phone-error'),
+          invalid: 'Enter a valid phone number.'
+        },
+        address_line1: {
+          input: document.getElementById('service-address'),
+          error: document.getElementById('address-error'),
+          required: 'Enter the service address.',
+          invalid: 'Enter a valid service address.'
+        }
+      };
+      function setLocationState(state, text) {
+        locationStatus.dataset.state = state;
+        locationStatus.setAttribute('role', state === 'error' ? 'alert' : 'status');
+        locationStatus.setAttribute('aria-live', state === 'error' ? 'assertive' : 'polite');
+        locationStatus.textContent = text;
+      }
+      function setFormBusy(busy) {
+        form.setAttribute('aria-busy', String(busy));
+        formControls.forEach((control) => { control.disabled = busy; });
+        submitSpinner.hidden = !busy;
+        submitButtonLabel.textContent = busy ? 'Creating account...' : 'Create my account';
+      }
+      function clearFieldError(rule) {
+        rule.input.removeAttribute('aria-invalid');
+        rule.error.hidden = true;
+        rule.error.textContent = '';
+      }
+      function showFieldError(rule, text) {
+        rule.input.setAttribute('aria-invalid', 'true');
+        rule.error.textContent = text;
+        rule.error.hidden = false;
+      }
+      function validateField(rule) {
+        clearFieldError(rule);
+        const value = rule.input.value.trim();
+        if (rule.input.required && !value) {
+          showFieldError(rule, rule.required);
+          return false;
+        }
+        if (rule.input.validity.typeMismatch || rule.input.validity.tooLong) {
+          showFieldError(rule, rule.invalid);
+          return false;
+        }
+        return true;
+      }
+      Object.values(fieldRules).forEach((rule) => {
+        rule.input.addEventListener('input', () => clearFieldError(rule));
+        rule.input.addEventListener('blur', () => validateField(rule));
+      });
+      addressInput.addEventListener('input', () => {
+        if (latitude.value || longitude.value) {
+          latitude.value = '';
+          longitude.value = '';
+          setLocationState('neutral', 'Address edited. Your typed address will be used.');
+        }
+      });
       async function post(path, payload) {
         const response = await fetch(path, {
           method: 'POST',
@@ -65,29 +250,102 @@
         });
         const data = await response.json().catch(() => ({}));
         if (!response.ok) {
-          throw new Error(typeof data.detail === 'string' ? data.detail : 'Please check your details and try again.');
+          const error = new Error(typeof data.detail === 'string' ? data.detail : 'Please check your details and try again.');
+          error.details = data.detail;
+          throw error;
         }
         return data;
       }
+      locationButton.addEventListener('click', () => {
+        if (!navigator.geolocation) {
+          setLocationState('error', 'This browser does not support location access. Type your service address to continue.');
+          return;
+        }
+        locationButton.disabled = true;
+        submitButton.disabled = true;
+        locationSpinner.hidden = false;
+        locationButton.setAttribute('aria-busy', 'true');
+        setLocationState('loading', 'Getting your current location...');
+        navigator.geolocation.getCurrentPosition(
+          async (position) => {
+            try {
+              const lat = position.coords.latitude.toFixed(7);
+              const lon = position.coords.longitude.toFixed(7);
+              const response = await fetch(`/r/${encodeURIComponent(code)}/reverse-geocode?latitude=${encodeURIComponent(lat)}&longitude=${encodeURIComponent(lon)}`);
+              if (!response.ok) throw new Error('Address lookup failed');
+              const result = await response.json();
+              if (typeof result.display_name !== 'string' || !result.display_name.trim()) throw new Error('Address unavailable');
+              addressInput.value = result.display_name.trim().slice(0, 120);
+              clearFieldError(fieldRules.address_line1);
+              latitude.value = lat;
+              longitude.value = lon;
+              setLocationState('success', 'Address filled from your current location. Check and edit it if needed.');
+              locationButtonLabel.textContent = 'Update my current location';
+            } catch (_) {
+              latitude.value = '';
+              longitude.value = '';
+              setLocationState('error', 'We could not fill your address. Type it yourself to continue.');
+              locationButtonLabel.textContent = 'Try location again';
+            } finally {
+              locationSpinner.hidden = true;
+              locationButton.removeAttribute('aria-busy');
+              locationButton.disabled = false;
+              submitButton.disabled = false;
+            }
+          },
+          (error) => {
+            latitude.value = '';
+            longitude.value = '';
+            setLocationState('error', error.code === error.PERMISSION_DENIED
+              ? 'Location access was denied. Type your service address to continue.'
+              : error.code === error.TIMEOUT
+                ? 'Location request timed out. Type your service address or try again.'
+                : 'Your location could not be found. Type your service address or try again.');
+            locationButtonLabel.textContent = 'Try location again';
+            locationSpinner.hidden = true;
+            locationButton.removeAttribute('aria-busy');
+            locationButton.disabled = false;
+            submitButton.disabled = false;
+          },
+          { enableHighAccuracy: true, timeout: 15000, maximumAge: 0 }
+        );
+      });
       form.addEventListener('submit', async (event) => {
         event.preventDefault();
-        button.disabled = true;
+        let firstInvalidField = null;
+        Object.values(fieldRules).forEach((rule) => {
+          if (!validateField(rule) && firstInvalidField === null) {
+            firstInvalidField = rule.input;
+          }
+        });
+        if (firstInvalidField !== null) {
+          message.hidden = true;
+          firstInvalidField.focus();
+          return;
+        }
+        const values = Object.fromEntries(new FormData(form));
+        setFormBusy(true);
         message.hidden = false;
         message.className = 'message';
         message.textContent = 'Creating your account…';
-        const values = Object.fromEntries(new FormData(form));
         const account = {
           first_name: values.first_name.trim(),
           last_name: values.last_name.trim(),
           email: values.email.trim(),
-          phone: values.phone.trim() || null
+          phone: values.phone.trim() || null,
+          address_line1: values.address_line1.trim()
         };
+        if (values.latitude && values.longitude) {
+          account.latitude = Number(values.latitude);
+          account.longitude = Number(values.longitude);
+        }
         try {
           const capture = await post('/api/v1/referrals/capture', {
             code,
             name: `${account.first_name} ${account.last_name}`,
             email: account.email,
-            phone: account.phone
+            phone: account.phone,
+            address: account.address_line1
           });
           const signup = await post('/api/v1/referrals/signup', {
             conversion_token: capture.conversion_token,
@@ -99,15 +357,33 @@
             ? 'Your account was created. Check your email for access instructions.'
             : signup.enrollment_status === 'already_enrolled'
               ? 'Your account is ready. You can sign in to the customer portal.'
-              : 'Your account was created. Please contact Dotmac for access instructions.';
+              : `Your account was created. Please contact ${brandName} for access instructions.`;
         } catch (error) {
-          message.className = 'message error';
-          message.textContent = error.message || 'We could not complete your signup. Please try again.';
-          button.disabled = false;
+          const details = Array.isArray(error.details) ? error.details : [];
+          const invalidFields = Object.keys(fieldRules).filter((fieldName) => (
+            details.some((detail) => Array.isArray(detail.loc) && detail.loc.includes(fieldName))
+          ));
+          const invalidLocation = details.some((detail) => Array.isArray(detail.loc) && (detail.loc.includes('latitude') || detail.loc.includes('longitude')));
+          invalidFields.forEach((fieldName) => showFieldError(fieldRules[fieldName], fieldRules[fieldName].invalid));
+          if (invalidLocation) {
+            latitude.value = '';
+            longitude.value = '';
+            locationButtonLabel.textContent = 'Try location again';
+            setLocationState('error', 'The captured location was not accepted. Your typed address can still be used.');
+          }
+          setFormBusy(false);
+          if (invalidFields.length || invalidLocation) {
+            message.hidden = true;
+            if (invalidFields.length) fieldRules[invalidFields[0]].input.focus();
+            else locationButton.focus();
+          } else {
+            message.hidden = false;
+            message.className = 'message error';
+            message.textContent = error.message || 'We could not complete your signup. Please try again.';
+          }
         }
       });
     })();
   </script>
   {% endif %}
-</body>
-</html>
+{% endblock %}
