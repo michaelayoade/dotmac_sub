@@ -24,7 +24,8 @@ def test_customer_detail_delegates_timeline_projection_to_registered_owner():
 
 
 def test_customer_timeline_ui_shows_attribution_result_evidence_and_pagination():
-    template = _source("templates/admin/customers/detail.html")
+    detail = _source("templates/admin/customers/detail.html")
+    template = _source("templates/admin/customers/_timeline_page.html")
 
     assert "data-customer-timeline-item" in template
     assert "data-timeline-actor-kind" in template
@@ -39,3 +40,6 @@ def test_customer_timeline_ui_shows_attribution_result_evidence_and_pagination()
     assert "timeline-filter" not in template
     assert "timeline-search" not in template
     assert "Load more" not in template
+    assert 'include "admin/customers/_timeline_page.html"' in detail
+    assert "'timeline'].includes(hash)" in detail
+    assert "customer_timeline_page(" in _source("app/web/admin/customers.py")

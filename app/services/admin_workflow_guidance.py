@@ -354,7 +354,7 @@ WORKFLOW_GUIDANCE: tuple[AdminWorkflowGuidance, ...] = (
         "In Payment intents, Cancel stale intent appears only for an expired bank-transfer intent whose exact submitted proof is still unreviewed and has not created a payment.",
         "Open the linked proof, confirm from bank evidence that no payment was received, enter a clear reason, and confirm the cancellation.",
         "For portal access, confirm the contact details and impersonate only when a valid support reason requires it.",
-        "Use Timeline to review recent events, use Previous and Next to reach older activity, then open linked records for the detail behind a change.",
+        "Use Timeline to review recent events. Previous and Next replace only the timeline while keeping the customer page in place; if loading fails, keep the visible evidence and retry before acting.",
         "Open the specific record before performing a state-changing action.",
         "After confirming a customer message, use the send status panel to follow recipient preparation and delivery. If confirmation is lost, keep the send reference and choose Check status before submitting another send.",
         "If a prepaid funding quarantine banner appears, prepaid service cannot be created or activated until Finance captures the account's opening balance through the runbook the banner names. Only when the customer must be connected first, an admin may grant an activation override with a clear reason; revoke it once the opening is captured.",
