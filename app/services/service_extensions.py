@@ -48,11 +48,13 @@ from app.models.service_extension import (
     ServiceExtensionScope,
     ServiceExtensionStatus,
 )
+from app.models.service_period_purchase import CompensatedServiceTime
 from app.models.subscriber import Subscriber
 from app.schemas.audit import AuditEventCreate
 from app.services import settings_spec
 from app.services.account_lifecycle import (
     BillingAnchorProjectionCommand,
+    BillingAnchorProjectionError,
     BillingAnchorProjectionSource,
     stage_subscription_billing_anchor,
 )
@@ -91,6 +93,11 @@ _APPLY_COMMAND = OwnerCommandDefinition(
     owner="financial.service_extensions",
     concern="service-extension lifecycle and exact grant intervals",
     name="apply_service_extension",
+)
+_APPLY_REJECTION_COMMAND = OwnerCommandDefinition(
+    owner="financial.service_extensions",
+    concern="service-extension lifecycle and exact grant intervals",
+    name="record_service_extension_apply_rejection",
 )
 _CANCEL_COMMAND = OwnerCommandDefinition(
     owner="financial.service_extensions",
@@ -136,6 +143,62 @@ class CreateServiceExtensionCommand:
 class ApplyServiceExtensionCommand:
     context: CommandContext
     extension_id: uuid.UUID
+
+
+class ApplyRejectionReason(str, enum.Enum):
+    missing_form_key = "missing_form_key"
+    invalid_application_key = "invalid_application_key"
+    invalid_extension_id = "invalid_extension_id"
+    self_approval_forbidden = "self_approval_forbidden"
+    time_credit_conflict = "time_credit_conflict"
+    incomplete_scope = "incomplete_scope"
+    access_restoration_failed = "access_restoration_failed"
+    billing_anchor_conflict = "billing_anchor_conflict"
+    other = "other"
+
+
+def classify_apply_rejection(code: str) -> ApplyRejectionReason:
+    suffix = code.rsplit(".", 1)[-1]
+    if suffix in {"missing_idempotency_key", "invalid_idempotency_key"}:
+        return ApplyRejectionReason.invalid_application_key
+    if suffix == "invalid_extension_id":
+        return ApplyRejectionReason.invalid_extension_id
+    if suffix == "self_approval_forbidden":
+        return ApplyRejectionReason.self_approval_forbidden
+    if suffix == "time_credit_conflict":
+        return ApplyRejectionReason.time_credit_conflict
+    if suffix in {"missing_scope_id", "empty_subscriber_scope"}:
+        return ApplyRejectionReason.incomplete_scope
+    if suffix == "access_restoration_failed":
+        return ApplyRejectionReason.access_restoration_failed
+    if suffix == "billing_anchor_conflict":
+        return ApplyRejectionReason.billing_anchor_conflict
+    return ApplyRejectionReason.other
+
+
+@dataclass(frozen=True, slots=True)
+class RecordApplyRejectionCommand:
+    context: CommandContext
+    request_id: str
+    extension_id: uuid.UUID | None
+    reason: ApplyRejectionReason
+    source_code: str
+    submitted_path: str
+    key_present: bool
+    response_status: int
+    scope_type: ServiceExtensionScope | None = None
+    scope_selection_present: bool | None = None
+    subscription_id: uuid.UUID | None = None
+    conflicting_evidence_ref: str | None = None
+    access_failure_category: str | None = None
+    expected_billing_at: datetime | None = None
+    observed_billing_at: datetime | None = None
+    creator_id: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class RecordApplyRejectionOutcome:
+    audit_id: uuid.UUID
 
 
 @dataclass(frozen=True, slots=True)
@@ -1182,11 +1245,17 @@ def _scope_filters(
     ]
     if scope_type == ServiceExtensionScope.nas_device:
         if not scope_id:
-            _error("missing_scope_id", "NAS device is required.")
+            _error(
+                "missing_scope_id",
+                "NAS device is required.",
+                scope_type=scope_type.value,
+            )
         filters.append(Subscription.provisioning_nas_device_id == coerce_uuid(scope_id))
     elif scope_type == ServiceExtensionScope.pop_site:
         if not scope_id:
-            _error("missing_scope_id", "POP site is required.")
+            _error(
+                "missing_scope_id", "POP site is required.", scope_type=scope_type.value
+            )
         filters.append(
             Subscription.provisioning_nas_device.has(
                 NasDevice.pop_site_id == coerce_uuid(scope_id)
@@ -1204,6 +1273,7 @@ def _scope_filters(
             _error(
                 "empty_subscriber_scope",
                 "At least one customer is required.",
+                scope_type=scope_type.value,
             )
         filters.append(Subscription.subscriber_id.in_(ids))
     return filters
@@ -2348,6 +2418,71 @@ def _resume_billing_suspension(
     return False
 
 
+def record_apply_rejection(
+    db: Session, command: RecordApplyRejectionCommand
+) -> RecordApplyRejectionOutcome:
+    """Persist a rejected attempt after the failed apply transaction rolls back."""
+
+    def operation() -> RecordApplyRejectionOutcome:
+        from app.services.audit_adapter import stage_audit_event
+        from app.services.audit_helpers import resolve_actor_label_from_db
+
+        _require_command_context(command.context, expected_scope=APPLY_SCOPE)
+        actor_type, actor_id = _actor(command.context)
+        actor_label = resolve_actor_label_from_db(db, actor_id, actor_type)
+        if actor_type == AuditActorType.user and not actor_label:
+            _error(
+                "missing_actor_identity", "The staff identity could not be verified."
+            )
+        metadata: dict[str, object] = {
+            "schema_version": 1,
+            "command_id": str(command.context.command_id),
+            "correlation_id": str(command.context.correlation_id),
+            "failure_code": command.reason.value,
+            "source_code": command.source_code,
+            "key_present": command.key_present,
+            "submitted_path": command.submitted_path[:255],
+        }
+        if command.scope_type is not None:
+            metadata["scope_type"] = command.scope_type.value
+        if command.scope_selection_present is not None:
+            metadata["scope_selection_present"] = command.scope_selection_present
+        if command.subscription_id is not None:
+            metadata["subscription_id"] = str(command.subscription_id)
+        if command.conflicting_evidence_ref is not None:
+            metadata["conflicting_evidence_ref"] = command.conflicting_evidence_ref
+        if command.access_failure_category is not None:
+            metadata["access_failure_category"] = command.access_failure_category
+        if command.expected_billing_at is not None:
+            metadata["expected_billing_at"] = command.expected_billing_at.isoformat()
+        if command.observed_billing_at is not None:
+            metadata["observed_billing_at"] = command.observed_billing_at.isoformat()
+        if command.creator_id is not None:
+            metadata["creator_id"] = command.creator_id
+        audit = stage_audit_event(
+            db,
+            action="billing.service_extension_apply_rejected",
+            entity_type="service_extension",
+            entity_id=str(command.extension_id) if command.extension_id else None,
+            actor_type=actor_type,
+            actor_id=actor_id,
+            actor_label=actor_label,
+            request_id=command.request_id,
+            status_code=command.response_status,
+            is_success=False,
+            metadata=metadata,
+        )
+        db.flush()
+        return RecordApplyRejectionOutcome(audit_id=audit.id)
+
+    return execute_owner_command(
+        db,
+        definition=_APPLY_REJECTION_COMMAND,
+        context=command.context,
+        operation=operation,
+    )
+
+
 def apply_service_extension(
     db: Session,
     command: ApplyServiceExtensionCommand,
@@ -2432,9 +2567,42 @@ def apply_service_extension(
                 intersect_seconds(clock, (item.interval,))
                 for item in history.unresolved
             ):
+                credited_evidence = next(
+                    (
+                        row.evidence_ref
+                        for row in db.scalars(
+                            select(CompensatedServiceTime).where(
+                                CompensatedServiceTime.subscription_id
+                                == subscription.id
+                            )
+                        )
+                        if intersect_seconds(
+                            clock,
+                            (
+                                TimeInterval(
+                                    _as_utc(row.starts_at), _as_utc(row.ends_at)
+                                ),
+                            ),
+                        )
+                    ),
+                    None,
+                )
+                conflicting = next(
+                    (
+                        item
+                        for item in history.unresolved
+                        if intersect_seconds(clock, (item.interval,))
+                    ),
+                    None,
+                )
                 _error(
                     "time_credit_conflict",
                     "This outage window has previous or unresolved compensation; review the exact remaining downtime before applying another extension.",
+                    subscription_id=str(subscription.id),
+                    conflicting_evidence_ref=(
+                        credited_evidence
+                        or (str(conflicting.source_id) if conflicting else None)
+                    ),
                 )
             previous = subscription.next_billing_at
             if previous is None:
@@ -2448,17 +2616,34 @@ def apply_service_extension(
                 applied_at=now,
                 days=extension.days,
             )
-            stage_subscription_billing_anchor(
-                db,
-                subscription,
-                BillingAnchorProjectionCommand(
-                    subscription_id=subscription.id,
-                    expected_previous=previous,
-                    target=interval.ends_at,
-                    source=BillingAnchorProjectionSource.service_extension,
-                    evidence_ref=f"service-extension:{extension.id}",
-                ),
-            )
+            try:
+                stage_subscription_billing_anchor(
+                    db,
+                    subscription,
+                    BillingAnchorProjectionCommand(
+                        subscription_id=subscription.id,
+                        expected_previous=previous,
+                        target=interval.ends_at,
+                        source=BillingAnchorProjectionSource.service_extension,
+                        evidence_ref=f"service-extension:{extension.id}",
+                    ),
+                )
+            except BillingAnchorProjectionError as exc:
+                observed = db.scalar(
+                    select(Subscription.next_billing_at).where(
+                        Subscription.id == subscription.id
+                    )
+                )
+                _error(
+                    "billing_anchor_conflict",
+                    "The billing date changed while this extension was being applied.",
+                    subscription_id=str(subscription.id),
+                    expected_billing_at=previous.isoformat(),
+                    observed_billing_at=(
+                        observed.isoformat() if observed is not None else None
+                    ),
+                    failure_category=type(exc).__name__,
+                )
             entry = ServiceExtensionEntry(
                 extension_id=extension.id,
                 subscription_id=subscription.id,

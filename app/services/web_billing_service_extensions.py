@@ -35,12 +35,68 @@ _ACTIVITY_ACTIONS = {
     "billing.service_extension_applied",
     "billing.service_extension_canceled",
     "billing.service_extension_reversed",
+    "billing.service_extension_apply_rejected",
 }
 
 
 class ServiceExtensionActivityProvenance(StrEnum):
     canonical = "canonical"
     legacy_reconstructed = "legacy_reconstructed"
+
+
+@dataclass(frozen=True, slots=True)
+class ServiceExtensionApplyFailurePresentation:
+    message: str
+    next_step: str
+
+
+_APPLY_FAILURE_PRESENTATION: dict[
+    service_extensions_service.ApplyRejectionReason,
+    ServiceExtensionApplyFailurePresentation,
+] = {
+    service_extensions_service.ApplyRejectionReason.missing_form_key: ServiceExtensionApplyFailurePresentation(
+        "The Apply form is incomplete. Reload the page and try again.",
+        "If it happens again, contact support with the reference ID.",
+    ),
+    service_extensions_service.ApplyRejectionReason.invalid_application_key: ServiceExtensionApplyFailurePresentation(
+        "The application request is invalid. Refresh the page and try again.",
+        "Contact support with the reference ID if it repeats.",
+    ),
+    service_extensions_service.ApplyRejectionReason.invalid_extension_id: ServiceExtensionApplyFailurePresentation(
+        "This extension link is invalid.",
+        "Return to the extension list and open the record again.",
+    ),
+    service_extensions_service.ApplyRejectionReason.self_approval_forbidden: ServiceExtensionApplyFailurePresentation(
+        "You created this extension. A different authorized staff member must apply it.",
+        "Ask another staff member with Apply access.",
+    ),
+    service_extensions_service.ApplyRejectionReason.time_credit_conflict: ServiceExtensionApplyFailurePresentation(
+        "A selected customer has a previous compensation record for this outage period.",
+        "Review the customer's compensation history; create a corrected request if needed.",
+    ),
+    service_extensions_service.ApplyRejectionReason.incomplete_scope: ServiceExtensionApplyFailurePresentation(
+        "This extension has no valid customer, POP site, or NAS device selection.",
+        "Create a corrected extension request; do not apply this one.",
+    ),
+    service_extensions_service.ApplyRejectionReason.access_restoration_failed: ServiceExtensionApplyFailurePresentation(
+        "We couldn't apply this extension because service access could not be safely restored for an affected customer.",
+        "Refer the reference ID to billing or operations for review.",
+    ),
+    service_extensions_service.ApplyRejectionReason.billing_anchor_conflict: ServiceExtensionApplyFailurePresentation(
+        "The customer's billing date changed while this extension was being applied. Review it before trying again.",
+        "Review the current billing date and extension impact.",
+    ),
+    service_extensions_service.ApplyRejectionReason.other: ServiceExtensionApplyFailurePresentation(
+        "We couldn't apply this extension.",
+        "Contact billing with the reference ID before trying again.",
+    ),
+}
+
+
+def present_apply_failure(
+    reason: service_extensions_service.ApplyRejectionReason,
+) -> ServiceExtensionApplyFailurePresentation:
+    return _APPLY_FAILURE_PRESENTATION[reason]
 
 
 @dataclass(frozen=True, slots=True)
@@ -207,6 +263,7 @@ _ACTION_LABELS = {
     "billing.service_extension_applied": "Applied",
     "billing.service_extension_canceled": "Canceled",
     "billing.service_extension_reversed": "Reversed",
+    "billing.service_extension_apply_rejected": "Apply blocked",
 }
 
 _ACTION_TONES = {
@@ -214,6 +271,7 @@ _ACTION_TONES = {
     "billing.service_extension_applied": StatusTone.positive,
     "billing.service_extension_canceled": StatusTone.neutral,
     "billing.service_extension_reversed": StatusTone.negative,
+    "billing.service_extension_apply_rejected": StatusTone.negative,
 }
 
 
@@ -302,6 +360,18 @@ def _metadata_count(metadata: dict[object, object], key: str) -> int:
 
 def _activity_details(event: AuditEvent, extension: ServiceExtension) -> str:
     metadata = event.metadata_ or {}
+    if event.action == "billing.service_extension_apply_rejected":
+        reason = service_extensions_service.classify_apply_rejection(
+            str(metadata.get("source_code") or "")
+        )
+        if reason is service_extensions_service.ApplyRejectionReason.other:
+            try:
+                reason = service_extensions_service.ApplyRejectionReason(
+                    str(metadata.get("failure_code"))
+                )
+            except ValueError:
+                pass
+        return present_apply_failure(reason).message
     if event.action == "billing.service_extension_created":
         return (
             f"{extension.days}-day extension created for "

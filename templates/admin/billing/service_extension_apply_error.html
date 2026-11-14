@@ -1,0 +1,31 @@
+{% extends "layouts/admin.html" %}
+{% from "components/ui/macros.html" import page_header, card %}
+
+{% block title %}Service Extension - Action Needs Attention{% endblock %}
+
+{% block content %}
+<div class="space-y-6">
+    {% call(content) page_header(
+        title="Service extension was not applied",
+        subtitle="Review the reason and next step below.",
+        breadcrumbs=[
+            {"label": "Billing", "href": "/admin/billing"},
+            {"label": "Service Extensions", "href": "/admin/billing/service-extensions"},
+            {"label": "Apply result"}
+        ]
+    ) %}{% endcall %}
+
+    {% call card(color="amber") %}
+    <div role="alert" class="space-y-3 text-sm text-slate-800 dark:text-slate-100">
+        <p class="font-semibold">{{ failure.message }}</p>
+        <p>{{ failure.next_step }}</p>
+        <p class="text-xs text-slate-600 dark:text-slate-300">Reference ID: {{ reference_id }}</p>
+    </div>
+    {% endcall %}
+
+    <a href="{% if extension_id %}/admin/billing/service-extensions/{{ extension_id }}{% else %}/admin/billing/service-extensions{% endif %}"
+       class="inline-flex rounded-lg bg-amber-600 px-4 py-2.5 text-sm font-semibold text-white hover:bg-amber-700">
+        {% if extension_id %}Back to extension{% else %}View service extensions{% endif %}
+    </a>
+</div>
+{% endblock %}
