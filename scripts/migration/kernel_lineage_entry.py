@@ -446,7 +446,7 @@ def observe_fixture_plan(connection: Connection) -> KernelEntryFixturePlan:
             text("SELECT version_num FROM public.alembic_version ORDER BY version_num")
         )
     )
-    if "710_inbox_reply_window_projection" not in heads:
+    if "711_repair_inbox_reply_window_index" not in heads:
         raise KernelEntryRefused("Fixture lacks the reviewed actual Sub source head")
     return KernelEntryFixturePlan(
         FixtureCatalog(
