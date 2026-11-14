@@ -1,0 +1,33 @@
+name: No new public IP literals
+
+# CI hygiene guard (approved by Michael, 2026-11-14): refuse NEW public IP
+# address literals added by a pull request. Existing content is not touched.
+on:
+  pull_request:
+    branches: [main]
+    types: [opened, synchronize, reopened]
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    name: No new public IP literals
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Check out the PR head with history for the base diff
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Set up Python
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
+        with:
+          python-version: "3.12"
+
+      - name: Refuse new public IP address literals
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: python3 -I scripts/ci/check_new_ip_literals.py --base "$BASE_SHA"
