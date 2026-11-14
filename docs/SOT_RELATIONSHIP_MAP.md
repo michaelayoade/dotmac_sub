@@ -1766,6 +1766,17 @@ Edit the owning domain shard and regenerate; do not hand-edit these rows.
 | `migration.cohort_export` | cohort export contract version admission | `policy` | accepted Governance cohort definition ← `external:dotmac_governance` | `read_only` | `inventoried` | Dotmac Sub technical owner | `docs/adr/0012-isp-cohort-source-readiness.md`<br>`docs/ISP_COHORT1_SOURCE_OWNERSHIP.md`<br>`tests/test_isp_cohort_export_contract.py`<br>`tests/architecture/test_migration_export_boundary.py`<br>`tests/integration/test_isp_cohort_export_postgres.py` |
 <!-- END GENERATED SOT MANIFEST -->
 
+## Service Extension Apply Failures
+
+`financial.service_extensions` owns the decision to reject an Apply attempt.
+The failed grant transaction rolls back before its separate typed
+`RecordApplyRejectionCommand` records a failed, exact-entity audit through
+`observability.audit_log`. An invalid extension link has no entity and remains
+searchable by request ID. `ui.service_extension_detail_projection` owns the
+operator message and next step, plus the rejected-attempt activity label.
+The route only translates form evidence and owner outcomes into that
+presentation; it never records a successful grant for a rejected attempt.
+
 
 ## Party Identity, Roles, and Relationships
 

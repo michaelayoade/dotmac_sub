@@ -931,7 +931,7 @@ SERVICES: tuple[SOTService, ...] = (
             "observability.audit_log",
         ),
         notes=(
-            "Typed create, apply, cancel, reverse, and anchor-repair commands are "
+            "Typed create, apply, apply-rejection audit, cancel, reverse, and anchor-repair commands are "
             "the "
             "only lifecycle writers. They stage immutable extension evidence, "
             "exact entity-linked audit records, and aggregate/per-subscription "
@@ -1006,6 +1006,7 @@ SERVICES: tuple[SOTService, ...] = (
                     source=(
                         "CreateServiceExtensionCommand, "
                         "ApplyServiceExtensionCommand, "
+                        "RecordApplyRejectionCommand, "
                         "CancelServiceExtensionCommand, or "
                         "ReverseServiceExtensionCommand, "
                         "RepairServiceExtensionAnchorProjectionCommand with "
@@ -1087,7 +1088,7 @@ SERVICES: tuple[SOTService, ...] = (
             transaction=TransactionContract(
                 mode=TransactionMode.OWNER_MANAGED,
                 boundary=(
-                    "Each public create, apply, cancel, reverse, anchor-repair, or "
+                    "Each public create, apply, rejected-apply audit, cancel, reverse, anchor-repair, or "
                     "historical "
                     "duplicate reconciliation command enters execute_owner_command "
                     "exactly once on a transaction-free session. Internal mutation, "
@@ -1122,6 +1123,7 @@ SERVICES: tuple[SOTService, ...] = (
             errors=ErrorContract(
                 domain_codes=(
                     "financial.service_extensions.access_restoration_failed",
+                    "financial.service_extensions.billing_anchor_conflict",
                     "financial.service_extensions.ambiguous_customer_identifier",
                     "financial.service_extensions.blank_customer_identifier",
                     "financial.service_extensions.customer_not_found",
@@ -1146,6 +1148,7 @@ SERVICES: tuple[SOTService, ...] = (
                     "financial.service_extensions.invalid_window",
                     "financial.service_extensions.invalid_reversal_preview",
                     "financial.service_extensions.missing_idempotency_key",
+                    "financial.service_extensions.missing_actor_identity",
                     "financial.service_extensions.missing_reason",
                     "financial.service_extensions.missing_reversal_reason",
                     "financial.service_extensions.missing_scope_id",

@@ -25,6 +25,7 @@ from app.services.web_billing_service_extensions import (
     ServiceExtensionActivityProvenance,
     build_customer_service_extension_history,
     build_service_extension_detail,
+    present_apply_failure,
 )
 from app.web.admin.billing_extensions import templates
 
@@ -446,6 +447,89 @@ def test_actor_label_snapshot_survives_staff_rename_and_deletion(
 
     assert detail.summary.created_by_label == "Amina Okafor"
     assert detail.activity[0].actor_label == "Amina Okafor"
+
+
+def test_rejected_apply_is_audited_after_rollback_and_shown_in_activity(db_session):
+    actor_id = uuid4()
+    db_session.add(
+        SystemUser(
+            id=actor_id,
+            first_name="Amina",
+            last_name="Okafor",
+            display_name="Amina Okafor",
+            email=f"rejected-extension-{uuid4().hex}@example.com",
+        )
+    )
+    extension = _extension(db_session, created_by=str(actor_id))
+    extension_id = extension.id
+    db_session.commit()
+    context = CommandContext.system(
+        actor=f"user:{actor_id}",
+        scope=service_extensions.APPLY_SCOPE,
+        reason="Apply extension",
+        idempotency_key=str(uuid4()),
+    )
+    with pytest.raises(service_extensions.ServiceExtensionError) as error:
+        service_extensions.apply_service_extension(
+            db_session,
+            service_extensions.ApplyServiceExtensionCommand(
+                context=context, extension_id=extension_id
+            ),
+        )
+    assert error.value.code.endswith("self_approval_forbidden")
+    assert not db_session.in_transaction()
+
+    request_id = str(uuid4())
+    receipt = service_extensions.record_apply_rejection(
+        db_session,
+        service_extensions.RecordApplyRejectionCommand(
+            context=CommandContext.system(
+                actor=f"user:{actor_id}",
+                scope=service_extensions.APPLY_SCOPE,
+                reason="Record rejected application",
+                idempotency_key=str(uuid4()),
+            ),
+            request_id=request_id,
+            extension_id=extension_id,
+            reason=service_extensions.ApplyRejectionReason.self_approval_forbidden,
+            source_code=error.value.code,
+            submitted_path=f"/admin/billing/service-extensions/{extension_id}/apply",
+            key_present=True,
+            response_status=409,
+            creator_id=str(actor_id),
+        ),
+    )
+    audit = db_session.get(AuditEvent, receipt.audit_id)
+    assert audit is not None
+    assert audit.is_success is False
+    assert audit.status_code == 409
+    assert audit.actor_id == str(actor_id)
+    assert audit.actor_label == "Amina Okafor"
+    assert audit.request_id == request_id
+    assert audit.metadata_["failure_code"] == "self_approval_forbidden"
+    assert (
+        db_session.get(ServiceExtension, extension_id).status
+        == ServiceExtensionStatus.pending
+    )
+
+    detail = build_service_extension_detail(
+        db_session, extension_id=extension_id, auth=_ADMIN_AUTH
+    )
+    assert detail.activity[0].action_label == "Apply blocked"
+    assert "different authorized staff" in detail.activity[0].details
+
+
+def test_apply_failure_messages_cover_all_rejection_reasons():
+    for reason in service_extensions.ApplyRejectionReason:
+        presentation = present_apply_failure(reason)
+        assert presentation.message
+        assert presentation.next_step
+    assert (
+        "previous compensation record"
+        in present_apply_failure(
+            service_extensions.ApplyRejectionReason.time_credit_conflict
+        ).message
+    )
 
 
 def test_canceled_legacy_record_does_not_invent_cancellation_activity(db_session):

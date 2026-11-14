@@ -78,6 +78,9 @@ The lifecycle audits are:
 - `billing.service_extension_applied`
 - `billing.service_extension_canceled`
 - `billing.service_extension_reversed`
+- `billing.service_extension_apply_rejected` for a failed Apply attempt after
+  the original apply transaction has rolled back; `is_success=false` and the
+  HTTP status distinguish it from a completed grant.
 
 They use `entity_type=service_extension` and the exact extension UUID. Metadata
 contains bounded operational evidence: command and correlation IDs, hashed
@@ -85,6 +88,18 @@ idempotency evidence, previous/resulting state, days, scope type, and outcome
 counts. It excludes emails, phone numbers, pasted identifiers, secrets, and
 subscriber lists. The existing per-subscription `billing.service_extended`
 events remain distinct customer consequences.
+
+The Apply form renders a specific explanation and next step for missing or
+invalid form evidence, an invalid extension link, self-approval, overlapping
+compensation, incomplete scope, access-restoration failure, and a changed
+billing anchor. The route maps typed owner failure codes through the UI
+projection. A separate `RecordApplyRejectionCommand` on a clean session
+records the rejected attempt only after the failed apply has rolled back.
+It stages an exact entity-linked audit row when the extension ID is valid;
+invalid links remain searchable in the central audit by request ID. The audit
+stores the authenticated principal and canonical staff name, failure code,
+bounded non-secret evidence, and request ID. It never records a raw form key,
+customer contact data, or a false successful apply event.
 
 ## Idempotency and concurrency
 

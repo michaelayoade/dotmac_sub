@@ -123,7 +123,13 @@ def _command_context(
         if principal_type == "service"
         else "user"
     )
-    actor_id = web_admin_service.get_actor_id(request) or "unknown"
+    actor_id = str(
+        auth.get("principal_id") or web_admin_service.get_actor_id(request) or ""
+    ).strip()
+    if not actor_id:
+        raise HTTPException(
+            status_code=403, detail="The authenticated staff identity is unavailable."
+        )
     return CommandContext(
         command_id=command_id,
         correlation_id=correlation_id,
@@ -387,9 +393,156 @@ def service_extension_detail(
 def service_extension_apply(
     request: Request,
     extension_id: str,
-    idempotency_key: str = Form(...),
+    idempotency_key: str | None = Form(None),
     db: Session = Depends(get_db),
 ):
+    def rejected(
+        reason: service_extensions_service.ApplyRejectionReason,
+        *,
+        source_code: str,
+        resolved_id: uuid.UUID | None,
+        details: dict[str, object] | None = None,
+    ):
+        evidence = details or {}
+
+        def optional_uuid(value: object) -> uuid.UUID | None:
+            try:
+                return uuid.UUID(str(value))
+            except (TypeError, ValueError):
+                return None
+
+        def optional_datetime(value: object) -> datetime | None:
+            try:
+                return datetime.fromisoformat(str(value)) if value else None
+            except (TypeError, ValueError):
+                return None
+
+        scope_value = evidence.get("scope_type")
+        try:
+            scope_type = ServiceExtensionScope(str(scope_value))
+        except ValueError:
+            scope_type = None
+        if (
+            reason
+            == service_extensions_service.ApplyRejectionReason.extension_not_found
+        ):
+            status_code = 404
+        elif reason in {
+            service_extensions_service.ApplyRejectionReason.missing_form_key,
+            service_extensions_service.ApplyRejectionReason.invalid_application_key,
+            service_extensions_service.ApplyRejectionReason.invalid_extension_id,
+            service_extensions_service.ApplyRejectionReason.incomplete_scope,
+        }:
+            status_code = 422
+        else:
+            status_code = 409
+        request_id = str(getattr(request.state, "request_id", "") or uuid.uuid4())
+        service_extensions_service.record_apply_rejection(
+            db,
+            service_extensions_service.RecordApplyRejectionCommand(
+                context=_command_context(
+                    request,
+                    scope=service_extensions_service.APPLY_SCOPE,
+                    reason="Record rejected service-extension application",
+                    idempotency_key=str(uuid.uuid4()),
+                ),
+                request_id=request_id,
+                extension_id=resolved_id,
+                reason=reason,
+                source_code=source_code,
+                submitted_path=str(request.url.path),
+                key_present=idempotency_key is not None,
+                response_status=status_code,
+                scope_type=scope_type,
+                scope_selection_present=(
+                    False
+                    if reason
+                    == service_extensions_service.ApplyRejectionReason.incomplete_scope
+                    else None
+                ),
+                subscription_id=optional_uuid(evidence.get("subscription_id")),
+                conflicting_evidence_ref=(
+                    str(evidence["conflicting_evidence_ref"])
+                    if evidence.get("conflicting_evidence_ref")
+                    else None
+                ),
+                access_failure_category=(
+                    str(evidence["reason"])
+                    if reason
+                    == service_extensions_service.ApplyRejectionReason.access_restoration_failed
+                    and evidence.get("reason")
+                    else None
+                ),
+                expected_billing_at=optional_datetime(
+                    evidence.get("expected_billing_at")
+                ),
+                observed_billing_at=optional_datetime(
+                    evidence.get("observed_billing_at")
+                ),
+                creator_id=(
+                    str(evidence["created_by"]) if evidence.get("created_by") else None
+                ),
+            ),
+        )
+        logger.warning(
+            "service_extension_apply_rejected",
+            extra={
+                "request_id": request_id,
+                "extension_id": str(resolved_id) if resolved_id else None,
+                "failure_code": reason.value,
+                "source_code": source_code,
+                "status": status_code,
+            },
+        )
+        return templates.TemplateResponse(
+            "admin/billing/service_extension_apply_error.html",
+            _context(
+                request,
+                db,
+                {
+                    "failure": web_billing_service_extensions.present_apply_failure(
+                        reason
+                    ),
+                    "reference_id": request_id,
+                    "extension_id": resolved_id,
+                    "return_to_list": reason
+                    in {
+                        service_extensions_service.ApplyRejectionReason.invalid_extension_id,
+                        service_extensions_service.ApplyRejectionReason.extension_not_found,
+                    },
+                },
+            ),
+            status_code=status_code,
+        )
+
+    try:
+        resolved_id = uuid.UUID(extension_id)
+    except ValueError:
+        return rejected(
+            service_extensions_service.ApplyRejectionReason.invalid_extension_id,
+            source_code="invalid_extension_id",
+            resolved_id=None,
+        )
+    if idempotency_key is None:
+        return rejected(
+            service_extensions_service.ApplyRejectionReason.missing_form_key,
+            source_code="missing_form_key",
+            resolved_id=resolved_id,
+        )
+    if not idempotency_key.strip():
+        return rejected(
+            service_extensions_service.ApplyRejectionReason.invalid_application_key,
+            source_code="empty_idempotency_key",
+            resolved_id=resolved_id,
+        )
+    try:
+        uuid.UUID(idempotency_key.strip())
+    except ValueError:
+        return rejected(
+            service_extensions_service.ApplyRejectionReason.invalid_application_key,
+            source_code="invalid_idempotency_key",
+            resolved_id=resolved_id,
+        )
     try:
         service_extensions_service.apply_service_extension(
             db,
@@ -400,16 +553,16 @@ def service_extension_apply(
                     reason="Apply service extension",
                     idempotency_key=idempotency_key,
                 ),
-                extension_id=uuid.UUID(extension_id),
+                extension_id=resolved_id,
             ),
         )
-    except ValueError as exc:
-        raise HTTPException(
-            status_code=400,
-            detail="Service extension identifier is invalid.",
-        ) from exc
     except DomainError as exc:
-        raise _extension_http_error(exc) from exc
+        return rejected(
+            service_extensions_service.classify_apply_rejection(exc.code),
+            source_code=exc.code,
+            resolved_id=resolved_id,
+            details=exc.details,
+        )
     return RedirectResponse(
         url=f"/admin/billing/service-extensions/{extension_id}", status_code=303
     )
