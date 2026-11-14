@@ -417,6 +417,17 @@ def test_workflow_change_without_guidance_update_fails_gate() -> None:
     )
 
 
+def test_service_extension_guidance_explains_blocked_apply() -> None:
+    guide = guidance_for_path("/admin/billing/service-extensions/example/apply")
+
+    assert guide is not None
+    assert guide.id == "service-extension"
+    content = " ".join(guide.steps).lower()
+    assert "different authorized staff member" in content
+    assert "reference id" in content
+    assert "prior compensation" in content
+
+
 def test_regional_performance_guidance_explains_blank_region_scope() -> None:
     guide = guidance_for_path("/admin/reports/regional-performance")
 
