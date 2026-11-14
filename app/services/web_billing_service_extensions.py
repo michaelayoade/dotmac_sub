@@ -66,6 +66,14 @@ _APPLY_FAILURE_PRESENTATION: dict[
         "This extension link is invalid.",
         "Return to the extension list and open the record again.",
     ),
+    service_extensions_service.ApplyRejectionReason.extension_not_found: ServiceExtensionApplyFailurePresentation(
+        "This extension could not be found.",
+        "Return to the extension list and open the record again.",
+    ),
+    service_extensions_service.ApplyRejectionReason.transition_conflict: ServiceExtensionApplyFailurePresentation(
+        "This extension is no longer pending and cannot be applied.",
+        "Review its current status before taking another action.",
+    ),
     service_extensions_service.ApplyRejectionReason.self_approval_forbidden: ServiceExtensionApplyFailurePresentation(
         "You created this extension. A different authorized staff member must apply it.",
         "Ask another staff member with Apply access.",

@@ -23,9 +23,9 @@
     </div>
     {% endcall %}
 
-    <a href="{% if extension_id %}/admin/billing/service-extensions/{{ extension_id }}{% else %}/admin/billing/service-extensions{% endif %}"
+    <a href="{% if return_to_list %}/admin/billing/service-extensions{% else %}/admin/billing/service-extensions/{{ extension_id }}{% endif %}"
        class="inline-flex rounded-lg bg-amber-600 px-4 py-2.5 text-sm font-semibold text-white hover:bg-amber-700">
-        {% if extension_id %}Back to extension{% else %}View service extensions{% endif %}
+        {% if return_to_list %}View service extensions{% else %}Back to extension{% endif %}
     </a>
 </div>
 {% endblock %}

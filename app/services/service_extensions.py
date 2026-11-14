@@ -149,6 +149,8 @@ class ApplyRejectionReason(str, enum.Enum):
     missing_form_key = "missing_form_key"
     invalid_application_key = "invalid_application_key"
     invalid_extension_id = "invalid_extension_id"
+    extension_not_found = "extension_not_found"
+    transition_conflict = "transition_conflict"
     self_approval_forbidden = "self_approval_forbidden"
     time_credit_conflict = "time_credit_conflict"
     incomplete_scope = "incomplete_scope"
@@ -163,6 +165,10 @@ def classify_apply_rejection(code: str) -> ApplyRejectionReason:
         return ApplyRejectionReason.invalid_application_key
     if suffix == "invalid_extension_id":
         return ApplyRejectionReason.invalid_extension_id
+    if suffix == "extension_not_found":
+        return ApplyRejectionReason.extension_not_found
+    if suffix == "transition_conflict":
+        return ApplyRejectionReason.transition_conflict
     if suffix == "self_approval_forbidden":
         return ApplyRejectionReason.self_approval_forbidden
     if suffix == "time_credit_conflict":

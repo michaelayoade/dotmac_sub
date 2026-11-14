@@ -422,17 +422,20 @@ def service_extension_apply(
             scope_type = ServiceExtensionScope(str(scope_value))
         except ValueError:
             scope_type = None
-        status_code = (
-            422
-            if reason
-            in {
-                service_extensions_service.ApplyRejectionReason.missing_form_key,
-                service_extensions_service.ApplyRejectionReason.invalid_application_key,
-                service_extensions_service.ApplyRejectionReason.invalid_extension_id,
-                service_extensions_service.ApplyRejectionReason.incomplete_scope,
-            }
-            else 409
-        )
+        if (
+            reason
+            == service_extensions_service.ApplyRejectionReason.extension_not_found
+        ):
+            status_code = 404
+        elif reason in {
+            service_extensions_service.ApplyRejectionReason.missing_form_key,
+            service_extensions_service.ApplyRejectionReason.invalid_application_key,
+            service_extensions_service.ApplyRejectionReason.invalid_extension_id,
+            service_extensions_service.ApplyRejectionReason.incomplete_scope,
+        }:
+            status_code = 422
+        else:
+            status_code = 409
         request_id = str(getattr(request.state, "request_id", "") or uuid.uuid4())
         service_extensions_service.record_apply_rejection(
             db,
@@ -502,6 +505,11 @@ def service_extension_apply(
                     ),
                     "reference_id": request_id,
                     "extension_id": resolved_id,
+                    "return_to_list": reason
+                    in {
+                        service_extensions_service.ApplyRejectionReason.invalid_extension_id,
+                        service_extensions_service.ApplyRejectionReason.extension_not_found,
+                    },
                 },
             ),
             status_code=status_code,
