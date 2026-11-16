@@ -32,10 +32,12 @@ session. The coordinator performs one transaction in this order:
 1. lock and validate the exact Referral/Party/Lead context;
 2. ask `customer.accounts` to prepare a new Subscriber, or lock the exact
    existing Subscriber selected by an operator;
-3. ask `party.registry` to bind that account to the exact referred Party;
-4. ask `referrals.program` to attach the Subscriber, which delegates the Lead
+3. for public signup, ask `customer.accounts` to create the required primary
+   service address, with coordinates only when the customer used location lookup;
+4. ask `party.registry` to bind that account to the exact referred Party;
+5. ask `referrals.program` to attach the Subscriber, which delegates the Lead
    account link to `sales.lead_lifecycle`;
-5. stage `subscriber.created`, `referral_account.converted`, and PII-free audit
+6. stage `subscriber.created`, `referral_account.converted`, and PII-free audit
    evidence for a new conversion, then commit once.
 
 The coordinator owns the root business transaction; collaborators never
@@ -60,11 +62,15 @@ token is a sensitive bearer value: adapters must not log it, persist it as
 business data, place it in URLs, or copy it into Referral/Lead metadata.
 
 `POST /referrals/signup` accepts that bearer capability and a narrow account
-payload. The public schema permits basic name, contact, address, locale, and
-timezone fields only. It forbids caller-selected lifecycle status, reseller,
+payload. The public schema requires a service address. Browser location is an
+optional aid that fills an editable address; latitude and longitude must be
+provided together when used. It also permits basic name, contact, additional address,
+locale, and timezone fields. It forbids caller-selected lifecycle status, reseller,
 verification, billing, numbering, authorization, marketing-consent, and
 existing-person controls. Public accounts enter the existing account owner
 with requested status `new`; the lifecycle owner derives the resulting state.
+The account and its primary service-address record are created in the same
+transaction, so either both are saved or neither is saved.
 
 The capability establishes continuity with the exact capture; it is not
 identity verification. Submitted signup email and phone are deliberately not

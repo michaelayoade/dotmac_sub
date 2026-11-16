@@ -26,7 +26,11 @@ from app.models.referral_native import Referral, ReferralStatus
 from app.models.sales import Lead
 from app.models.subscriber import Subscriber, SubscriberStatus
 from app.schemas.referral import ReferralSelfServiceAccountCreate
-from app.schemas.subscriber import SubscriberCreate
+from app.schemas.subscriber import (
+    AddressCreate,
+    CustomerServiceLocationUpdate,
+    SubscriberCreate,
+)
 from app.services import context_signing
 from app.services import party as party_service
 from app.services import subscriber as subscriber_service
@@ -43,7 +47,7 @@ from app.services.party import PartyInvariantError
 from app.services.referrals import ReferralAttachmentError
 from app.services.referrals import referrals as referrals_service
 from app.services.settings_spec import resolve_value
-from app.services.subscriber import SubscriberAccountPreparationError
+from app.services.subscriber import AddressOwnerError, SubscriberAccountPreparationError
 
 ReferralAccountOutcome = Literal["created", "attached", "already_attached"]
 ResultT = TypeVar("ResultT")
@@ -454,6 +458,8 @@ def _execute_conversion(
         )
     except SubscriberAccountPreparationError as exc:
         raise _error("invalid_command", str(exc)) from exc
+    except AddressOwnerError as exc:
+        raise _error("invalid_command", exc.message, **exc.details) from exc
     except ReferralAttachmentError as exc:
         allowed_codes = {
             "account_conflict",
@@ -482,6 +488,7 @@ def _create_operation(
     referred_party_id: UUID,
     referred_lead_id: UUID,
     subscriber_payload: SubscriberCreate,
+    service_address: ReferralSelfServiceAccountCreate | None = None,
 ) -> ReferralAccountConversionResult:
     source, reason = _validate_command_context(command_context)
     if subscriber_payload.person_id is not None:
@@ -522,6 +529,45 @@ def _create_operation(
     subscriber = subscriber_service.subscribers.prepare_new_account(
         db, subscriber_payload
     )
+    if (
+        service_address is not None
+        and service_address.latitude is not None
+        and service_address.longitude is not None
+    ):
+        subscriber_service.update_customer_service_location(
+            db,
+            CustomerServiceLocationUpdate(
+                subscriber_id=subscriber.id,
+                label="Primary service",
+                address_line1=service_address.address_line1,
+                address_line2=service_address.address_line2,
+                city=service_address.city,
+                region=service_address.region,
+                lga=service_address.lga,
+                postal_code=service_address.postal_code,
+                country_code=service_address.country_code,
+                latitude=service_address.latitude,
+                longitude=service_address.longitude,
+                is_primary=True,
+            ),
+        )
+    elif service_address is not None:
+        subscriber_service.create_address(
+            db,
+            AddressCreate(
+                subscriber_id=subscriber.id,
+                label="Primary service",
+                address_line1=service_address.address_line1,
+                address_line2=service_address.address_line2,
+                city=service_address.city,
+                region=service_address.region,
+                lga=service_address.lga,
+                postal_code=service_address.postal_code,
+                country_code=service_address.country_code,
+                is_primary=True,
+            ),
+            geocode=False,
+        )
     _bind_and_attach(
         db,
         referral=referral,
@@ -578,7 +624,7 @@ def create_public_account(
     def operation() -> ReferralAccountConversionResult:
         context = decode_public_signup_context(db, command.conversion_token)
         subscriber_payload = SubscriberCreate(
-            **command.account_payload.model_dump(),
+            **command.account_payload.model_dump(exclude={"latitude", "longitude"}),
             status=SubscriberStatus.new,
         )
         return _create_operation(
@@ -588,6 +634,7 @@ def create_public_account(
             referred_party_id=context.referred_party_id,
             referred_lead_id=context.referred_lead_id,
             subscriber_payload=subscriber_payload,
+            service_address=command.account_payload,
         )
 
     return _execute_conversion(

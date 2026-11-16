@@ -1721,9 +1721,8 @@ def create_address(
     adapter translates.
 
     `geocode=False` is for a caller that already holds an authoritative
-    coordinate — an approved map pin, or its own geocode result. Without it,
-    routing those callers through this owner would spend an external geocoder
-    call on a value about to be overwritten.
+    coordinate or intentionally saves a customer-provided address without a
+    verified pin. It avoids an external lookup during that transaction.
     """
 
     subscriber = db.get(Subscriber, payload.subscriber_id)
