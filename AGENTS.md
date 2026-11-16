@@ -116,7 +116,7 @@ authoritative documents in the same change that updates the contract.
 - `main` is the machine-owned integration and release branch: it is the
   repository default branch and the ONLY protected branch. Its protection is
   what makes the trunk machine-owned rather than a convention: repository
-  ruleset `24078272` requires 15 status contexts and an up-to-date branch,
+  ruleset `24078272` requires 16 status contexts and an up-to-date branch,
   with no bypass actors, including administrators. Branch protection also
   requires one approving review; Michael's temporary admin review exception
   is recorded in Governance decision 53, with review due 2026-10-27

@@ -680,6 +680,8 @@ def test_ticket_settings_guidance_explains_infrastructure_policy() -> None:
     content = " ".join((*guide.steps, *guide.notes)).lower()
     assert "manual target" in content
     assert "saved explicit manual origin" in content
+    assert "correct the retained draft" in content
+    assert "cancel reloads the saved settings" in content
     actions = {action.id: action for action in help_actions_for(guide)}
     assert (
         actions["configure-infrastructure-types"].permission == "system:settings:write"
