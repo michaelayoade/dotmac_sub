@@ -1462,7 +1462,12 @@ HELP_ONLY_GUIDANCE: tuple[AdminWorkflowGuidance, ...] = (
         ("/admin/system/ticket-settings",),
         "Review the Ticket Types list and its Infrastructure ticket type checkboxes. The existing infrastructure categories appear here even before settings have been saved.",
         "Add or remove a ticket type, then mark each infrastructure category and choose its allowed target kinds: base station, cabinet, network node, access point, or manual name. Choose either network node or access point for one category.",
-        "Save Ticket Settings and reopen the ticket form to confirm the available categories and infrastructure choices.",
+        (
+            "Save and Cancel appear after a draft change or an inline ticket-type edit. "
+            "Save Ticket Settings submits the full draft; Cancel reloads the saved settings. "
+            "If saving fails, correct the retained draft in the selected section and save again. "
+            "Reopen the ticket form to confirm the available categories and infrastructure choices."
+        ),
         notes=(
             "A manual target permits an unlinked customerless ticket and a ticket-backed infrastructure work order. An inventory selection uses the canonical outage ticket and audience.",
             "Removing a type or its manual kind affects new selection and legacy fallback. Tickets with saved explicit manual origin and tickets linked to an outage retain their infrastructure identity.",
@@ -2598,7 +2603,7 @@ _ACTION_SPECS: dict[str, tuple[_ActionSpec, ...]] = {
             1,
             permission="system:settings:write",
         ),
-        _action("verify-ticket-types", "Verify ticket form choices", 2),
+        _action("verify-ticket-types", "Save and verify ticket settings", 2),
     ),
     "settings": (
         _action("choose-settings-area", "Choose a settings area", 0),

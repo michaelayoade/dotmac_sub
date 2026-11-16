@@ -32,6 +32,7 @@ from fastapi.responses import (
 from fastapi.templating import Jinja2Templates
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
+from starlette.datastructures import FormData
 
 from app.db import get_db
 from app.models.audit import AuditActorType
@@ -4839,6 +4840,7 @@ def _ticket_settings_page_values(
         support_ticket_settings_service.RegionRoutingRuleUpdate, ...
     ]
     | None = None,
+    submitted_form: FormData | None = None,
 ) -> dict[str, object]:
     routing_rules = support_ticket_settings_service.region_assignment_rules(db)
     visible_routing_rules = (
@@ -4851,11 +4853,33 @@ def _ticket_settings_page_values(
         for rule in visible_routing_rules
         for person_id in (
             rule.ticket_manager_person_id,
+            rule.site_coordinator_person_id,
             rule.technician_person_id,
             *rule.assignee_person_ids,
         )
         if person_id is not None
     )
+    submitted_person_ids: list[UUID] = []
+    submitted_team_ids: list[UUID] = []
+    if submitted_form is not None:
+        for name in (
+            "routing_ticket_manager_person_ids",
+            "routing_site_coordinator_person_ids",
+            "routing_technician_person_ids",
+            "routing_assignee_person_ids",
+        ):
+            for value in submitted_form.getlist(name):
+                for item in str(value).split(","):
+                    try:
+                        submitted_person_ids.append(UUID(item.strip()))
+                    except ValueError:
+                        pass
+        for value in submitted_form.getlist("routing_service_team_ids"):
+            try:
+                submitted_team_ids.append(UUID(str(value).strip()))
+            except ValueError:
+                pass
+    saved_person_ids = tuple(dict.fromkeys((*saved_person_ids, *submitted_person_ids)))
     active_staff_ids = {
         str(person_id)
         for person_id in support_ticket_settings_service.active_routing_staff_ids(db)
@@ -4879,10 +4903,13 @@ def _ticket_settings_page_values(
         option.as_template_value()
         for option in support_ticket_settings_service.list_routing_service_team_options(
             db,
-            include_ids=tuple(
-                rule.service_team_id
-                for rule in visible_routing_rules
-                if rule.service_team_id is not None
+            include_ids=(
+                *(
+                    rule.service_team_id
+                    for rule in visible_routing_rules
+                    if rule.service_team_id is not None
+                ),
+                *submitted_team_ids,
             ),
         )
     ]
@@ -4891,12 +4918,13 @@ def _ticket_settings_page_values(
         support_ticket_settings_service.infrastructure_type_kinds(db)
     )
     ticket_type_options = support_ticket_settings_service.list_ticket_type_options(db)
-    return {
+    values: dict[str, object] = {
         "active_page": "ticket-settings",
         "status_options": support_ticket_settings_service.list_status_options(db),
         "priority_options": support_ticket_settings_service.list_priority_options(db),
         "ticket_type_options": ticket_type_options,
         "infrastructure_type_kinds": infrastructure_type_kinds,
+        "infrastructure_enabled_indices": None,
         "region_options": region_options,
         "routing_region_options": list(
             dict.fromkeys(
@@ -4924,6 +4952,9 @@ def _ticket_settings_page_values(
                     rule.region
                 ),
                 "ticket_manager_person_id": str(rule.ticket_manager_person_id or ""),
+                "site_coordinator_person_id": str(
+                    rule.site_coordinator_person_id or ""
+                ),
                 "technician_person_id": str(rule.technician_person_id or ""),
                 "service_team_id": str(rule.service_team_id or ""),
                 "assignee_person_ids": ", ".join(
@@ -4948,7 +4979,91 @@ def _ticket_settings_page_values(
         "rule_saved": rule_saved,
         "rule_deleted": rule_deleted,
         "errors": errors or [],
+        "selected_section": "routing" if rule_saved or rule_deleted else "general",
     }
+    if submitted_form is not None:
+
+        def submitted(name: str) -> list[str]:
+            return [str(value) for value in submitted_form.getlist(name)]
+
+        ticket_types = submitted("ticket_type_values")
+        routing_regions = submitted("routing_regions")
+        routing_fields = (
+            "ticket_manager_person_id",
+            "site_coordinator_person_id",
+            "technician_person_id",
+            "service_team_id",
+            "assignee_person_ids",
+        )
+        routing_names = {
+            "ticket_manager_person_id": submitted("routing_ticket_manager_person_ids"),
+            "site_coordinator_person_id": submitted(
+                "routing_site_coordinator_person_ids"
+            ),
+            "technician_person_id": submitted("routing_technician_person_ids"),
+            "service_team_id": submitted("routing_service_team_ids"),
+            "assignee_person_ids": submitted("routing_assignee_person_ids"),
+        }
+        submitted_section = str(submitted_form.get("settings_section") or "")
+        response_hours = submitted("sla_response_hours")
+        resolution_hours = submitted("sla_resolution_hours")
+        aging_hours = submitted("sla_aging_hours")
+        type_resolution_hours = submitted("sla_ticket_type_resolution_hours")
+        infrastructure_indices = set(submitted("infrastructure_type_index"))
+        # Preserve the form draft without bypassing the typed owner command.
+        values.update(
+            selected_section=(
+                submitted_section
+                if submitted_section in {"general", "types", "sla", "routing"}
+                else "general"
+            ),
+            status_options=submitted("status_values"),
+            priority_options=submitted("priority_values"),
+            ticket_type_options=ticket_types,
+            region_options=submitted("region_values"),
+            routing_region_options=list(
+                dict.fromkeys([*submitted("region_values"), *routing_regions])
+            ),
+            infrastructure_type_kinds={
+                ticket_type.strip().casefold(): submitted(
+                    f"infrastructure_kind_{index}"
+                )
+                for index, ticket_type in enumerate(ticket_types)
+                if str(index) in infrastructure_indices
+            },
+            infrastructure_enabled_indices=[
+                index
+                for index in range(len(ticket_types))
+                if str(index) in infrastructure_indices
+            ],
+            auto_assign_enabled=submitted_form.get("auto_assign_enabled") == "1",
+            auto_assign_max_open_tickets=str(
+                submitted_form.get("auto_assign_max_open_tickets") or ""
+            ),
+            routing_rule_rows=[
+                {
+                    "region": region,
+                    **{
+                        field: _indexed(routing_names[field], index) or ""
+                        for field in routing_fields
+                    },
+                }
+                for index, region in enumerate(routing_regions)
+            ],
+            sla_policy={
+                priority: {
+                    "response_hours": _indexed(response_hours, index) or "",
+                    "resolution_hours": _indexed(resolution_hours, index) or "",
+                    "aging_hours": _indexed(aging_hours, index) or "",
+                }
+                for index, priority in enumerate(submitted("sla_priorities"))
+            },
+            ticket_type_sla_policy={
+                ticket_type: _indexed(type_resolution_hours, index) or ""
+                for index, ticket_type in enumerate(submitted("sla_ticket_types"))
+            },
+        )
+    return values
 
 
 def _ticket_configuration_uuid(value: object | None) -> UUID | None:
@@ -5124,6 +5239,7 @@ def ticket_settings_update(
                 db,
                 errors=errors,
                 submitted_routing_rules=routing_rules,
+                submitted_form=form,
             ),
         ),
         status_code=400,
