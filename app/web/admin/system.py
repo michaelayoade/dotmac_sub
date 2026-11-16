@@ -4982,6 +4982,7 @@ def _ticket_settings_page_values(
         "selected_section": "routing" if rule_saved or rule_deleted else "general",
     }
     if submitted_form is not None:
+
         def submitted(name: str) -> list[str]:
             return [str(value) for value in submitted_form.getlist(name)]
 
@@ -5021,9 +5022,7 @@ def _ticket_settings_page_values(
             ticket_type_options=ticket_types,
             region_options=submitted("region_values"),
             routing_region_options=list(
-                dict.fromkeys(
-                    [*submitted("region_values"), *routing_regions]
-                )
+                dict.fromkeys([*submitted("region_values"), *routing_regions])
             ),
             infrastructure_type_kinds={
                 ticket_type.strip().casefold(): submitted(
