@@ -1784,25 +1784,24 @@ def person_detail_stats(
     )
     availability_stats = None
     availability_message = None
-    if getattr(usage_result, "effective_start_at", None) and getattr(
-        usage_result, "effective_end_at", None
-    ):
+    availability_start = getattr(usage_result, "effective_start_at", None)
+    availability_end = getattr(usage_result, "effective_end_at", None)
+    if availability_start is not None and availability_end is not None:
         from app.services.topology.customer_availability import (
             CustomerAvailabilityQuery,
             query_customer_availability,
         )
 
-        availability_end = (
-            usage_result.date_range.end_at + timedelta(microseconds=1)
-            if usage_result.date_range
-            else usage_result.effective_end_at
-        )
+        if usage_result.date_range:
+            availability_end = usage_result.date_range.end_at + timedelta(
+                microseconds=1
+            )
         try:
             availability_stats = query_customer_availability(
                 db,
                 CustomerAvailabilityQuery(
                     customer_id=UUID(str(subscriber.id)),
-                    period_start=usage_result.effective_start_at,
+                    period_start=availability_start,
                     period_end=availability_end,
                 ),
             )

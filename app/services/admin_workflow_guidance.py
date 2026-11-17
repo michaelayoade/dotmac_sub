@@ -350,6 +350,7 @@ WORKFLOW_GUIDANCE: tuple[AdminWorkflowGuidance, ...] = (
         "Use one page to review customer, service, network, billing, ticket, and timeline context.",
         (),
         "Use Account for profile and portal access, Service for subscriptions, Network for access, Billing for financial evidence, Tickets for support, and Timeline for history.",
+        "In Statistics, select the reporting dates to compare data usage with provider-side Uptime and Downtime in days. Check the availability explanation when monitoring is incomplete or the result is estimated.",
         "In Billing, use Extensions to review pending, applied, canceled, and reversed service-extension requests; billing-date impact appears when an extension has been applied.",
         "In Payment intents, Cancel stale intent appears only for an expired bank-transfer intent whose exact submitted proof is still unreviewed and has not created a payment.",
         "Open the linked proof, confirm from bank evidence that no payment was received, enter a clear reason, and confirm the cancellation.",
