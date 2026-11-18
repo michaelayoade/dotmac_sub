@@ -8828,14 +8828,14 @@
         "app/services/web_system_user_edit.py:30",
         "app/services/web_system_users.py:103",
         "app/services/web_system_users.py:144",
-        "app/services/web_system_users.py:468",
-        "app/services/web_system_users.py:469",
-        "app/services/web_system_users.py:514",
-        "app/services/web_system_users.py:664",
-        "app/services/web_system_users.py:719",
+        "app/services/web_system_users.py:470",
+        "app/services/web_system_users.py:471",
+        "app/services/web_system_users.py:516",
+        "app/services/web_system_users.py:666",
+        "app/services/web_system_users.py:721",
         "app/services/web_system_users.py:76",
-        "app/services/web_system_users.py:888",
-        "app/services/web_system_users.py:918",
+        "app/services/web_system_users.py:890",
+        "app/services/web_system_users.py:920",
         "app/services/web_vendors.py:230",
         "app/validators/bulk.py:26",
         "app/web/admin/customers.py:1014",
@@ -8929,8 +8929,8 @@
         "templates/admin/system/profile.html:50",
         "templates/admin/system/profile.html:51",
         "templates/admin/system/users/edit.html:57",
-        "templates/admin/system/users/index.html:364",
-        "templates/admin/system/users/index.html:509",
+        "templates/admin/system/users/index.html:369",
+        "templates/admin/system/users/index.html:514",
         "templates/admin/vendors/detail.html:161",
         "templates/admin/vendors/detail.html:204",
         "templates/admin/vendors/vendor_form.html:48",
@@ -35123,6 +35123,54 @@
       "disposition": "Dynamic fields expand from registered specs; static fields stay with their specialised action"
     },
     {
+      "source": "templates/admin/system/users/_table_content.html",
+      "name": "filters",
+      "tab": "system",
+      "disposition": "Dynamic fields expand from registered specs; static fields stay with their specialised action"
+    },
+    {
+      "source": "templates/admin/system/users/_table_content.html",
+      "name": "limit",
+      "tab": "system",
+      "disposition": "Dynamic fields expand from registered specs; static fields stay with their specialised action"
+    },
+    {
+      "source": "templates/admin/system/users/_table_content.html",
+      "name": "offset",
+      "tab": "system",
+      "disposition": "Dynamic fields expand from registered specs; static fields stay with their specialised action"
+    },
+    {
+      "source": "templates/admin/system/users/_table_content.html",
+      "name": "order_by",
+      "tab": "system",
+      "disposition": "Dynamic fields expand from registered specs; static fields stay with their specialised action"
+    },
+    {
+      "source": "templates/admin/system/users/_table_content.html",
+      "name": "order_dir",
+      "tab": "system",
+      "disposition": "Dynamic fields expand from registered specs; static fields stay with their specialised action"
+    },
+    {
+      "source": "templates/admin/system/users/_table_content.html",
+      "name": "role",
+      "tab": "system",
+      "disposition": "Dynamic fields expand from registered specs; static fields stay with their specialised action"
+    },
+    {
+      "source": "templates/admin/system/users/_table_content.html",
+      "name": "search",
+      "tab": "system",
+      "disposition": "Dynamic fields expand from registered specs; static fields stay with their specialised action"
+    },
+    {
+      "source": "templates/admin/system/users/_table_content.html",
+      "name": "status",
+      "tab": "system",
+      "disposition": "Dynamic fields expand from registered specs; static fields stay with their specialised action"
+    },
+    {
       "source": "templates/admin/system/users/detail.html",
       "name": "installation_id",
       "tab": "system",
@@ -35268,6 +35316,12 @@
     },
     {
       "source": "templates/admin/system/users/index.html",
+      "name": "role",
+      "tab": "system",
+      "disposition": "Dynamic fields expand from registered specs; static fields stay with their specialised action"
+    },
+    {
+      "source": "templates/admin/system/users/index.html",
       "name": "role_id",
       "tab": "system",
       "disposition": "Dynamic fields expand from registered specs; static fields stay with their specialised action"
@@ -35281,6 +35335,12 @@
     {
       "source": "templates/admin/system/users/index.html",
       "name": "send_invite",
+      "tab": "system",
+      "disposition": "Dynamic fields expand from registered specs; static fields stay with their specialised action"
+    },
+    {
+      "source": "templates/admin/system/users/index.html",
+      "name": "status",
       "tab": "system",
       "disposition": "Dynamic fields expand from registered specs; static fields stay with their specialised action"
     },
@@ -35386,7 +35446,7 @@
     "app/web/admin/payment_configuration_actions.py": "4f29a8e62f6d5bd5060476793af4a54e1132450e429064877ff1c4bcd74e916d",
     "app/web/admin/resellers.py": "753137e19ce85315bc822edaa49e642fa6907284b9d005b33835426443b3e114",
     "app/web/admin/service_teams.py": "59a1edbc51999206a97e974af33da8a65915601feef84d3b627519591e25fb05",
-    "app/web/admin/system.py": "4889c97de838f74d84318130f229f9105e87acb5995c0db2c66c089d34f89652",
+    "app/web/admin/system.py": "331db7fdaa30f69ca19de8eb5e4451c039d02e728be1b14c88808d341314274d",
     "app/web/admin/system_whats_new.py": "85ac32e4803e50f712512c9579a48a0740049fde397ab9740271f45dfee368e5"
   },
   "retired_routes": [
