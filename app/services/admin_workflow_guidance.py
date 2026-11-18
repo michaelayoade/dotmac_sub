@@ -1422,6 +1422,23 @@ HELP_ONLY_GUIDANCE: tuple[AdminWorkflowGuidance, ...] = (
         excluded_route_prefixes=("/admin/system/email",),
     ),
     _guide(
+        "system-users-list",
+        "System Overview",
+        "Find and review system users",
+        "System and security administrators",
+        "Find staff and reseller portal users before opening an account or taking an access action.",
+        (),
+        "Search by name or email, or apply role, status, and other filters to narrow the list.",
+        "Review the matching total and use Next or Previous to move through the results; each page shows 25 users by default.",
+        "Choose a different rows-per-page size when needed. Search, filters, and sort order stay active while moving between pages.",
+        "Open the intended account from its row, then review its details before changing access.",
+        route_templates=("/admin/system/users",),
+        notes=(
+            "Page links keep the current search and filters in the address, so refresh, Back, and Forward return to the selected page.",
+            "If a page cannot load, the current rows remain visible; retry the request after reviewing the error.",
+        ),
+    ),
+    _guide(
         "system-user-mfa-removal",
         "System Overview",
         "Remove a staff member's MFA after a lost device",
@@ -2575,6 +2592,12 @@ _ACTION_SPECS: dict[str, tuple[_ActionSpec, ...]] = {
         ),
         _action("verify-system-change", "Verify and audit a system change", 3),
     ),
+    "system-users-list": (
+        _action("find-system-users", "Find users", 0),
+        _action("page-system-users", "Move between user pages", 1),
+        _action("size-system-users", "Choose a page size", 2),
+        _action("open-system-user", "Review a user account", 3),
+    ),
     "system-user-mfa-removal": (
         _action("verify-staff-requester", "Verify the requester", 0),
         _action(
@@ -2826,7 +2849,12 @@ HELP_NAVIGATION: tuple[AdminHelpNavigationSection, ...] = (
     AdminHelpNavigationSection(
         "system",
         "System Overview",
-        ("system-overview", "system-user-mfa-removal", "reseller-user-mfa-removal"),
+        (
+            "system-overview",
+            "system-users-list",
+            "system-user-mfa-removal",
+            "reseller-user-mfa-removal",
+        ),
         "system:settings:read",
     ),
     AdminHelpNavigationSection(
@@ -2854,6 +2882,7 @@ HELP_NAVIGATION: tuple[AdminHelpNavigationSection, ...] = (
 # Only sections containing pages with different read scopes need an override.
 # Other pages inherit their Admin-sidebar section's visibility.
 HELP_GUIDE_VIEW_PERMISSIONS: dict[str, tuple[str, ...]] = {
+    "system-users-list": ("rbac:roles:read",),
     "billing-accounts": ("billing:account:read",),
     "invoice": ("billing:invoice:read",),
     "credit": ("billing:credit_note:read",),

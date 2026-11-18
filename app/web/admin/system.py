@@ -1425,7 +1425,7 @@ def users_list(
     order_by: str | None = Query("last_name"),
     order_dir: str | None = Query("asc"),
     page: int = Query(1, ge=1),
-    per_page: int = Query(500, ge=10, le=500),
+    per_page: int = Query(25, ge=10, le=500),
     offset: int | None = Query(None, ge=0),
     limit: int | None = Query(None, ge=5, le=500),
     db: Session = Depends(get_db),
@@ -1454,7 +1454,7 @@ def users_list(
             {
                 "request": request,
                 **state,
-                "htmx_url": "/admin/system/users/filter",
+                "htmx_url": "/admin/system/users",
                 "htmx_target": "users-table-content",
             },
         )
@@ -1466,7 +1466,7 @@ def users_list(
         {
             "request": request,
             **state,
-            "htmx_url": "/admin/system/users/filter",
+            "htmx_url": "/admin/system/users",
             "htmx_target": "users-table-content",
             "active_page": "users",
             "active_menu": "system",
@@ -1491,7 +1491,7 @@ def users_search(
     order_by: str | None = Query("last_name"),
     order_dir: str | None = Query("asc"),
     offset: int = Query(0, ge=0),
-    limit: int = Query(500, ge=5, le=500),
+    limit: int = Query(25, ge=5, le=500),
     db: Session = Depends(get_db),
 ):
     state = web_system_users_service.build_users_page_state(
@@ -1530,7 +1530,7 @@ def users_filter(
     order_by: str | None = Query("last_name"),
     order_dir: str | None = Query("asc"),
     offset: int = Query(0, ge=0),
-    limit: int = Query(500, ge=5, le=500),
+    limit: int = Query(25, ge=5, le=500),
     db: Session = Depends(get_db),
 ):
     state = web_system_users_service.build_users_page_state(
