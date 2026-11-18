@@ -728,6 +728,14 @@ def test_mfa_removal_guides_state_the_controls() -> None:
     assert "portal access" in " ".join(reseller.steps).lower()
 
 
+def test_system_users_list_guidance_explains_pagination() -> None:
+    guide = guidance_for_path("/admin/system/users")
+    assert guide is not None and guide.id == "system-users-list"
+    content = " ".join((*guide.steps, *guide.notes)).lower()
+    for phrase in ("25 users", "next", "previous", "filters", "back"):
+        assert phrase in content
+
+
 def test_router_health_guidance_covers_badge_shadow_and_read_only_boundary() -> None:
     guide = guidance_for_path("/admin/network/routers")
 
