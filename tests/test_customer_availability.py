@@ -17,6 +17,7 @@ class _Snap:
         self.snapshot_date = day
         self.downtime_seconds = downtime
         self.uptime_percent = uptime_percent
+        self.window_seconds = 86400
 
 
 class _Ticket:
@@ -28,6 +29,7 @@ class _Ticket:
         self.created_at = created_at
         self.resolved_at = resolved_at
         self.closed_at = None
+        self.status = "open"
 
 
 class _Query:
@@ -66,6 +68,28 @@ class _Sub:
     def __init__(self):
         self.id = uuid.uuid4()
         self.subscriber_id = uuid.uuid4()
+        self.start_at = NOW - timedelta(days=90)
+        self.created_at = self.start_at
+        self.end_at = None
+        self.canceled_at = None
+        self.status = type("Status", (), {"value": "active"})()
+
+
+class _StatsSession(_Session):
+    def __init__(self, subscription, snaps=(), tickets=()):
+        super().__init__(snaps=snaps, tickets=tickets)
+        self.subscription = subscription
+
+    def query(self, model):
+        if getattr(model, "__name__", "") == "Subscription":
+            return _Query([self.subscription])
+        return super().query(model)
+
+
+def _stats_query(sub, start, end):
+    return ca.CustomerAvailabilityQuery(
+        customer_id=sub.subscriber_id, period_start=start, period_end=end
+    )
 
 
 def _elements(monkeypatch, elements, gap=None):
@@ -295,3 +319,66 @@ def test_customer_device_and_session_downtime_are_never_counted():
         "OntUnit",
     ):
         assert forbidden not in source, f"{forbidden} must not feed availability"
+
+
+def test_stats_use_wall_clock_percent_and_deduplicate_tickets(monkeypatch):
+    sub = _Sub()
+    pop = _pop()
+    _elements(monkeypatch, [pop])
+    start = datetime(2026, 7, 22, tzinfo=UTC)
+    end = start + timedelta(days=2)
+    first = _Snap("pop_site", pop.element_id, start, 172800, uptime_percent=50)
+    first.window_seconds = 172800  # two devices at the same site
+    second = _Snap("pop_site", pop.element_id, start + timedelta(days=1), 0)
+    tickets = [
+        _Ticket(
+            title="Fiber cut", created_at=start, resolved_at=start + timedelta(hours=2)
+        ),
+        _Ticket(
+            title="Fiber cut",
+            created_at=start + timedelta(hours=1),
+            resolved_at=start + timedelta(hours=3),
+        ),
+    ]
+    report = ca.query_customer_availability(
+        _StatsSession(sub, [first, second], tickets), _stats_query(sub, start, end)
+    )
+    assert report.state is ca.AvailabilityState.estimated
+    assert "Historical network path" in (report.reason or "")
+    assert report.downtime_days == 0.5
+    assert report.uptime_days == 1.5
+    assert report.uptime_days + report.downtime_days == 2
+
+
+def test_stats_missing_day_is_partial_and_never_assumed_up(monkeypatch):
+    sub = _Sub()
+    pop = _pop()
+    _elements(monkeypatch, [pop])
+    start = datetime(2026, 7, 22, tzinfo=UTC)
+    end = start + timedelta(days=2)
+    report = ca.query_customer_availability(
+        _StatsSession(sub, [_Snap("pop_site", pop.element_id, start, 0)]),
+        _stats_query(sub, start, end),
+    )
+    assert report.state is ca.AvailabilityState.partial
+    assert report.observed_days == 1
+    assert report.uptime_days is None
+    assert report.downtime_days is None
+
+
+def test_stats_pon_is_estimated_and_canceled_ticket_without_close_is_excluded(
+    monkeypatch,
+):
+    sub = _Sub()
+    port = ca.ServingElement("pon_port", uuid.uuid4(), "PON", "PON port")
+    _elements(monkeypatch, [port])
+    start = datetime(2026, 7, 22, tzinfo=UTC)
+    end = start + timedelta(days=1)
+    ticket = _Ticket(title="Fiber cut", created_at=start)
+    ticket.status = "canceled"
+    report = ca.query_customer_availability(
+        _StatsSession(sub, [_Snap("pon_port", port.element_id, start, 0)], [ticket]),
+        _stats_query(sub, start, end),
+    )
+    assert report.state is ca.AvailabilityState.estimated
+    assert report.downtime_days == 0
