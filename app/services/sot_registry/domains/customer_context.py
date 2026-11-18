@@ -3646,7 +3646,10 @@ DOMAIN = DomainSOT(
                 "result rather than the visible page. Admin report usage "
                 "prefers RADIUS session bytes over imported daily bytes on "
                 "overlapping days, with a labeled bandwidth estimate for "
-                "days without either recorded source."
+                "days without either recorded source. The admin Statistics "
+                "adapter sends the resolved window to the separate legacy "
+                "topology.customer_availability typed read query; usage "
+                "summary does not interpret outage evidence."
             ),
             contract=ServiceContract(
                 concerns=tuple(

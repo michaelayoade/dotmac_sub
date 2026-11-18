@@ -6,7 +6,7 @@ import json
 import logging
 import uuid
 from collections.abc import Mapping
-from datetime import date
+from datetime import date, timedelta
 from typing import Annotated, Any, Literal
 from urllib.parse import quote_plus
 from uuid import UUID, uuid4
@@ -1782,6 +1782,32 @@ def person_detail_stats(
         db,
         usage_subscription.id if usage_subscription else None,
     )
+    availability_stats = None
+    availability_message = None
+    availability_start = getattr(usage_result, "effective_start_at", None)
+    availability_end = getattr(usage_result, "effective_end_at", None)
+    if availability_start is not None and availability_end is not None:
+        from app.services.topology.customer_availability import (
+            CustomerAvailabilityQuery,
+            query_customer_availability,
+        )
+
+        if usage_result.date_range:
+            availability_end = usage_result.date_range.end_at + timedelta(
+                microseconds=1
+            )
+        try:
+            availability_stats = query_customer_availability(
+                db,
+                CustomerAvailabilityQuery(
+                    customer_id=UUID(str(subscriber.id)),
+                    period_start=availability_start,
+                    period_end=availability_end,
+                ),
+            )
+        except Exception:
+            logger.exception("Customer Statistics availability query failed")
+            availability_message = "Availability evidence could not be loaded."
 
     return templates.TemplateResponse(
         "admin/customers/_stats_panel.html",
@@ -1789,6 +1815,8 @@ def person_detail_stats(
             "request": request,
             "customer_id": str(subscriber.id),
             "usage_portal": usage_portal,
+            "availability_stats": availability_stats,
+            "availability_message": availability_message,
             "bandwidth_chart_initial_stats": initial_bandwidth_stats,
             "usage_subscription_id": (
                 str(usage_subscription.id) if usage_subscription else None

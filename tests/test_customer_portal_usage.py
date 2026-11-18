@@ -64,6 +64,12 @@ class TestCustomerPortalUsagePage:
             "usage_subscription_id": None,
             "bandwidth_chart_initial_stats": None,
             "usage_view": "table",
+            "availability_stats": SimpleNamespace(
+                uptime_days=2.5,
+                downtime_days=0.5,
+                state="estimated",
+                reason="PON availability uses daily working-ONT ratios rather than continuous outage history.",
+            ),
         }
         html = template.render(usage_portal=result.to_template_context(), **context)
         for expected in (
@@ -75,6 +81,9 @@ class TestCustomerPortalUsagePage:
             "3.00",
             "Daily average",
             "2.50",
+            "Uptime",
+            "Downtime",
+            "Estimated: PON availability",
             "2026-05-01 to 2026-05-03",
         ):
             assert expected in html
@@ -85,6 +94,23 @@ class TestCustomerPortalUsagePage:
         )
         assert "Usage summary is unavailable" in unavailable_html
         assert "Total data used" not in unavailable_html
+
+        partial_html = template.render(
+            usage_portal=result.to_template_context(),
+            **{
+                **context,
+                "availability_stats": SimpleNamespace(
+                    uptime_days=None,
+                    downtime_days=None,
+                    state="partial",
+                    reason="Monitoring data exists for only 1 of 3 days.",
+                ),
+            },
+        )
+        assert (
+            "Availability unavailable: Monitoring data exists for only 1 of 3 days."
+            in partial_html
+        )
 
     def test_typed_custom_date_range_is_inclusive(
         self, db_session, subscriber, subscription

@@ -68,6 +68,17 @@ What we add (deltas, no parallel tables):
 ## 5. Data model
 
 ### 5.1 New: `AvailabilitySnapshot`
+
+Admin customer Statistics reads this daily projection through
+`topology.customer_availability` for the selected usage window. The device
+snapshot is derived from merged uptime-alert intervals. POP raw
+`downtime_seconds` can be scaled by device count, so the customer wall-clock
+calculation uses `uptime_percent` over each covered calendar day. It takes the
+worst affected serving element per day, unions overlapping qualifying
+provider-fault tickets, and takes the larger daily amount to avoid counting
+the same outage twice. PON snapshots represent daily working-ONT ratios and
+are displayed as estimates. Incomplete monitoring or an unprovable service
+path returns no numeric uptime or downtime.
 One row per element per day, so historical ranking/trends don't recompute interval merges over
 the whole `Alert` table on every page load (the on-the-fly path is fine for a single ad-hoc
 window but not for 365-day trend charts).
