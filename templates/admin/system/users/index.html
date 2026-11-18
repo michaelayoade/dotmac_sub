@@ -112,8 +112,8 @@
             <input type="hidden" name="filters" x-bind:value="filtersJson">
             <input type="hidden" name="order_by" value="{{ order_by | default('last_name') }}">
             <input type="hidden" name="order_dir" value="{{ order_dir | default('asc') }}">
-            <input type="hidden" name="role" value="{{ role or '' }}">
-            <input type="hidden" name="status" value="{{ status or '' }}">
+            <input type="hidden" name="role" x-ref="roleFilter" value="{{ role or '' }}">
+            <input type="hidden" name="status" x-ref="statusFilter" value="{{ status or '' }}">
 
             <div class="relative">
                 <input type="text" name="search"
@@ -640,6 +640,8 @@ function usersFilterBuilder() {
         clearAndApply() {
             this.setSearchValue('');
             this.clearRows();
+            this.$refs.roleFilter.value = '';
+            this.$refs.statusFilter.value = '';
             this.persistState();
             this.$nextTick(() => {
                 if (this.$refs.applyButton) {
