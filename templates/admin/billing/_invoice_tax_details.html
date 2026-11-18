@@ -1,0 +1,41 @@
+{% from "components/ui/macros.html" import metric_row %}
+{% set status = invoice.status|default('draft') %}
+{% set status_val = status.value if status is not string else status %}
+{% set invoice_currency = invoice.currency or 'NGN' %}
+                <div id="invoice-tax-details" class="border-t border-slate-200 dark:border-slate-700 pt-4 mt-4">
+                    {{ metric_row("Subtotal", invoice_tax_display.subtotal, color="slate", mono=True) }}
+                    {% if invoice.discount_amount and invoice.discount_amount > 0 %}
+                    {{ metric_row("Discount", "-" ~ invoice_tax_display.discount, color="emerald", mono=True) }}
+                    <div class="rounded-lg bg-cyan-50 px-3 py-2 text-xs text-slate-600 dark:bg-cyan-950/20 dark:text-slate-300">
+                        {{ invoice.discount_type | replace('_', ' ') | title }}{% if invoice.discount_value is not none %}: {{ invoice_tax_display.discount_value }}{% endif %}
+                        {% if invoice.discount_reason %} · {{ invoice.discount_reason }}{% endif %}
+                        <br>Applied by {{ invoice.discount_applied_by.display_name if invoice.discount_applied_by and invoice.discount_applied_by.display_name else 'staff user' }} on {{ invoice_tax_display.discount_applied_at }}.
+                        {% if invoice.discount_source == 'quote' and invoice.discount_source_quote_id %}
+                        <a href="/admin/sales/quotes/{{ invoice.discount_source_quote_id }}" class="font-semibold text-cyan-700 hover:underline dark:text-cyan-300">View source Quote</a>
+                        {% endif %}
+                    </div>
+                    {% endif %}
+                    {{ metric_row("VAT", invoice_tax_display.vat, color="slate", mono=True) }}
+                    {% if invoice_withholding_selection is defined and (invoice_withholding_selection.eligible or invoice_withholding_selection.selected) %}
+                    <form method="post" action="/admin/billing/invoices/{{ invoice.id }}/withholding-selection" hx-post="/admin/billing/invoices/{{ invoice.id }}/withholding-selection" hx-trigger="change" hx-disabled-elt="#invoice-issue-button" hx-target="#invoice-tax-details" hx-swap="outerHTML" hx-on::after-request="if (!event.detail.successful) { this.querySelector('[data-wht-save-error]').hidden = false; this.querySelector('[name=selected]').disabled = true; setTimeout(() => { const issue = document.getElementById('invoice-issue-button'); if (issue) issue.disabled = true; }, 0); }" hx-on::send-error="this.querySelector('[data-wht-save-error]').hidden = false; this.querySelector('[name=selected]').disabled = true; setTimeout(() => { const issue = document.getElementById('invoice-issue-button'); if (issue) issue.disabled = true; }, 0);" class="my-3 rounded-lg border border-slate-200 p-3 dark:border-slate-600">
+                        {% include "components/forms/csrf_input.html" %}
+                        <input type="hidden" name="expected_version" value="{{ invoice_withholding_selection.version }}">
+                        <label for="invoice-wht-selected" class="flex items-start gap-2 text-sm font-medium">
+                            <input id="invoice-wht-selected" name="selected" type="checkbox" value="true" {% if invoice_withholding_selection.selected %}checked{% endif %} {% if not invoice_withholding_selection.editable or not can_select_invoice_withholding|default(false) %}disabled{% endif %} onchange="if (!window.htmx) { const issue = document.getElementById('invoice-issue-button'); if (issue) issue.disabled = true; this.form.requestSubmit(); }" class="mt-0.5 rounded border-slate-300">
+                            <span>Apply withholding tax (WHT) to this invoice</span>
+                        </label>
+                        <p data-wht-save-error hidden role="alert" class="mt-2 text-sm text-red-700">WHT selection was not saved. Reload this invoice before issuing it.</p>
+                        <span class="htmx-indicator text-xs text-slate-500" role="status">Saving WHT selection…</span>
+                        {% if not invoice_withholding_selection.editable %}<p class="mt-1 text-xs text-slate-500">The WHT selection is locked because this invoice has been issued.</p>{% else %}<p class="mt-1 text-xs text-slate-500">Optional for eligible customers. Checking this does not record payment. The selection is locked when you issue the invoice.</p>{% endif %}
+                    </form>
+                    {% endif %}
+                    {% if wht_selection_error|default(none) %}<p role="alert" class="text-sm text-red-700">{{ wht_selection_error }}</p>{% endif %}
+                    {% if invoice_withholding is defined and invoice_withholding.expected_wht_amount is not none %}
+                    {{ metric_row("WHT", invoice_withholding_display.expected_wht_amount, color="slate", mono=True) }}
+                    {{ metric_row("Net cash required", invoice_withholding_display.expected_net_amount, color="emerald", mono=True) }}
+                    {% endif %}
+                    <div class="flex items-center justify-between py-2.5 mt-2">
+                        <span class="text-base font-semibold text-slate-900 dark:text-white">Total</span>
+                        <span class="text-base font-bold text-slate-900 dark:text-white font-mono tabular-nums">{{ invoice_tax_display.total }}</span>
+                    </div>
+                </div>

@@ -17,9 +17,11 @@ from app.models.billing import (
     LedgerSource,
     ServiceEntitlement,
     ServiceEntitlementStatus,
+    StarterInvoiceLink,
 )
 from app.models.catalog import BillingMode, Subscription
 from app.services.common import round_money, to_decimal
+from app.services.domain_errors import DomainError
 from app.services.prepaid_service_coverage import (
     PrepaidPauseCompensationBlocker,
     PrepaidPauseCompensationCoverageQuery,
@@ -255,6 +257,16 @@ def ensure_prepaid_entitlement_for_paid_invoice_line(
     )
     db.add(entitlement)
     db.flush()
+    line_metadata = line.metadata_ if isinstance(line.metadata_, dict) else {}
+    future = line_metadata.get("future_invoice")
+    if (
+        line_metadata.get("future_catalogue_invoice") is True
+        and isinstance(future, dict)
+        and future.get("period_kind") == "capped_pending_renewal"
+    ):
+        from app.services.usage import initialize_renewal_quota_cycle
+
+        initialize_renewal_quota_cycle(db, subscription, starts_at)
     return entitlement
 
 
@@ -516,6 +528,16 @@ def _line_period(
     line: InvoiceLine,
     subscription: Subscription,
 ) -> tuple[datetime | None, datetime | None]:
+    metadata = line.metadata_ if isinstance(line.metadata_, dict) else {}
+    future = metadata.get("future_invoice")
+    if (
+        metadata.get("future_catalogue_invoice") is True
+        and isinstance(future, dict)
+        and future.get("period_kind") == "capped_pending_renewal"
+    ):
+        return _capped_catalogue_settlement_period(
+            db, invoice=invoice, line=line, subscription=subscription
+        )
     starts_at, ends_at = _stored_line_period(invoice, line)
     if starts_at is not None and ends_at is not None:
         return starts_at, ends_at
@@ -525,6 +547,127 @@ def _line_period(
         line=line,
         subscription=subscription,
     )
+
+
+def _capped_catalogue_settlement_period(
+    db: Session,
+    *,
+    invoice: Invoice,
+    line: InvoiceLine,
+    subscription: Subscription,
+) -> tuple[datetime, datetime]:
+    """Bind one pending quota renewal to verified settlement, not invoice creation.
+
+    Existing entitlement dates remain the activation identity on retries and
+    funding restoration. Quota validity deliberately may overlap prior coverage.
+    The original invoice has no promised service dates; activation is recorded
+    separately in line evidence without rewriting its financial header.
+    """
+    previous = db.scalar(
+        select(ServiceEntitlement)
+        .where(
+            ServiceEntitlement.source_invoice_line_id == line.id,
+        )
+        .order_by(ServiceEntitlement.created_at, ServiceEntitlement.id)
+    )
+    if previous is not None:
+        return _ensure_utc(previous.starts_at), _ensure_utc(previous.ends_at)
+    from app.services.prepaid_service_renewals import _renewal_cycle_allowance
+
+    allowance = _renewal_cycle_allowance(subscription)
+    metadata = line.metadata_ if isinstance(line.metadata_, dict) else {}
+    future = metadata.get("future_invoice")
+    snapshot = future if isinstance(future, dict) else {}
+    if (
+        allowance is None
+        or not allowance.is_active
+        or not allowance.validity_days
+        or allowance.validity_days != snapshot.get("validity_days")
+        or to_decimal(allowance.included_gb) != to_decimal(snapshot.get("allowance_gb"))
+    ):
+        raise DomainError(
+            code="financial.entitlements.capped_policy_changed",
+            message="The capped renewal policy changed. Review this invoice before settlement.",
+            retryable=False,
+        )
+    link = db.scalar(
+        select(StarterInvoiceLink).where(StarterInvoiceLink.invoice_id == invoice.id)
+    )
+    funding_refs: dict[str, object] = {}
+    if link is not None:
+        from dotmac_billing.contracts import GetCurrentInvoiceReceivableV1
+        from dotmac_billing.queries import get_current_invoice_receivable_v1
+        from dotmac_kernel.cache import TenantScope
+
+        scope = TenantScope(link.tenant_id)
+        funding = get_current_invoice_receivable_v1(
+            db,
+            scope=scope,
+            request=GetCurrentInvoiceReceivableV1(scope, link.document_id),
+        )
+        verified = (
+            funding.billing_account_id == link.billing_account_id
+            and funding.cash_and_withholding_settled
+        )
+        effective_at = funding.settlement_effective_at
+        funding_refs = {
+            "capped_activation_document_id": str(link.document_id),
+            "capped_activation_source_version": funding.source_version,
+            "capped_activation_allocation_ids": [
+                str(value) for value in funding.cash_allocation_ids
+            ],
+            "capped_activation_withholding_ids": [
+                str(value) for value in funding.withholding_discharge_ids
+            ],
+        }
+    else:
+        from app.services.billing._common import resolve_invoice_settlement_amounts
+
+        settlement = resolve_invoice_settlement_amounts(db, invoice.id)
+        verified = (
+            settlement.payments_applied >= to_decimal(invoice.total)
+            and to_decimal(invoice.total) > 0
+        )
+        effective_at = invoice.paid_at
+        funding_refs = {"capped_activation_legacy_invoice_id": str(invoice.id)}
+    if not verified or effective_at is None:
+        raise DomainError(
+            code="financial.entitlements.capped_funding_unproven",
+            message="Capped renewal requires complete verified settlement before activation.",
+            retryable=False,
+        )
+    effective_at = _ensure_utc(effective_at)
+    from app.services.catalog.subscriptions import _resolve_billing_cycle
+    from app.services.prepaid_service_renewals import (
+        PrepaidSubscriptionSettlementPeriodQuery,
+        resolve_prepaid_subscription_settlement_period,
+    )
+
+    decision = resolve_prepaid_subscription_settlement_period(
+        db,
+        PrepaidSubscriptionSettlementPeriodQuery(
+            subscription_id=subscription.id,
+            account_id=invoice.account_id,
+            effective_at=effective_at,
+            billing_cycle=_resolve_billing_cycle(
+                db,
+                str(subscription.offer_id),
+                str(subscription.offer_version_id)
+                if subscription.offer_version_id
+                else None,
+                override=subscription.billing_cycle,
+            ),
+        ),
+    )
+    metadata = dict(line.metadata_) if isinstance(line.metadata_, dict) else {}
+    metadata.update(
+        billing_period_start=decision.period.starts_at.isoformat(),
+        billing_period_end=decision.period.ends_at.isoformat(),
+        billing_period_source="capped_catalogue_settlement",
+        **funding_refs,
+    )
+    line.metadata_ = metadata
+    return decision.period.starts_at, decision.period.ends_at
 
 
 def _stored_line_period(

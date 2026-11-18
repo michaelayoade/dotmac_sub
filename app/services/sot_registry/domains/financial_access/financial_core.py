@@ -27,6 +27,7 @@ SERVICES: tuple[SOTService, ...] = (
             "ledger reversal invariants",
             "financial transaction history",
         ),
+        notes="stage_invoice_withholding accepts typed InvoiceWithholdingLedgerCredit as a flush-only participant: unique source record, exact invoice/account/currency, noncash credit with invoice_id; never reusable account cash. Existing lifecycle/reversal authority remains here.",
     ),
     SOTService(
         name="financial.prepaid_funding_reconstruction",

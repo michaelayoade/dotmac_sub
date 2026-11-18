@@ -12,9 +12,9 @@ from uuid import UUID
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
-from app.models.billing import Invoice, InvoiceStatus
+from app.models.billing import Invoice, InvoiceStatus, TopupIntent
 from app.models.domain_settings import SettingDomain
-from app.services import customer_tax_policies, topup_intents
+from app.services import topup_intents
 from app.services.account_credit_deposits import (
     SUPPORTED_CURRENCY,
     AccountCreditDeposits,
@@ -122,63 +122,72 @@ def _withholding_tax_rate_percent(db: Session) -> Decimal:
     return value
 
 
+def validate_invoice_transfer_selection(db: Session, *, intent: TopupIntent) -> None:
+    """Reject obsolete WHT instructions; selection never changes an old snapshot."""
+    metadata = intent.metadata_ or {}
+    if not metadata.get("withholding_tax"):
+        return
+    invoice_reference = intent.invoice_id or metadata.get("invoice_id")
+    try:
+        invoice_id = UUID(str(invoice_reference))
+    except (TypeError, ValueError) as exc:
+        raise _error(
+            "invoice_withholding_selection_changed",
+            "Start a new invoice bank transfer payment.",
+        ) from exc
+    invoice = db.get(Invoice, invoice_id)
+    if invoice is None or not invoice.withholding_tax_selected:
+        raise _error(
+            "invoice_withholding_selection_changed",
+            "This transfer used withholding tax that is not selected on the invoice. If you already transferred money, do not transfer again; contact staff to review the existing receipt. Otherwise restart the invoice bank transfer payment.",
+            invoice_id=str(invoice_id),
+        )
+    from app.services.invoice_withholding import (
+        InvoiceWithholdingQuery,
+        snapshot_invoice_withholding_for_transfer,
+    )
+
+    try:
+        snapshot_invoice_withholding_for_transfer(
+            db, InvoiceWithholdingQuery(invoice_id)
+        )
+    except DomainError as exc:
+        raise _error(
+            "invoice_withholding_selection_changed",
+            "These withholding transfer instructions require staff review. If you already transferred money, do not transfer again; contact staff with the existing receipt.",
+            invoice_id=str(invoice_id),
+            reason=exc.code,
+        ) from exc
+
+
 def _invoice_withholding_tax_snapshot(
     db: Session,
     *,
     account_id: UUID,
     invoice: Invoice,
 ) -> dict[str, object] | None:
-    policy = customer_tax_policies.get_customer_withholding_tax_policy(
-        db,
-        account_id=account_id,
-    )
-    if not policy.withholding_tax_enabled:
+    if not invoice.withholding_tax_selected:
         return None
+    from app.services.invoice_withholding import (
+        InvoiceWithholdingQuery,
+        snapshot_invoice_withholding_for_transfer,
+    )
 
-    subtotal = round_money(invoice.subtotal or 0)
-    vat_amount = round_money(invoice.tax_total or 0)
-    total = round_money(invoice.total or 0)
-    balance_due = round_money(invoice.balance_due or total)
-    if subtotal <= Decimal("0.00") or total <= Decimal("0.00"):
-        raise _error(
-            "invoice_withholding_tax_basis_unavailable",
-            "Invoice cannot use automatic withholding tax because the tax basis is unavailable",
-            invoice_id=str(invoice.id),
-        )
-    if total != round_money(subtotal + vat_amount):
-        raise _error(
-            "invoice_withholding_tax_basis_unavailable",
-            "Invoice cannot use automatic withholding tax because the tax basis is inconsistent",
-            invoice_id=str(invoice.id),
-        )
-    if balance_due != total:
-        raise _error(
-            "invoice_withholding_tax_basis_unavailable",
-            "Invoice cannot use automatic withholding tax after partial settlement or adjustments",
-            invoice_id=str(invoice.id),
-        )
-
-    rate_percent = _withholding_tax_rate_percent(db)
-    wht_amount = round_money(subtotal * rate_percent / Decimal("100.00"))
-    net_amount = round_money(total - wht_amount)
-    if wht_amount <= Decimal("0.00") or net_amount <= Decimal("0.00"):
-        raise _error(
-            "invoice_withholding_tax_basis_unavailable",
-            "Invoice cannot use automatic withholding tax with the current configuration",
-            invoice_id=str(invoice.id),
-        )
+    snapshot = snapshot_invoice_withholding_for_transfer(
+        db, InvoiceWithholdingQuery(invoice.id)
+    )
     return {
         "schema_version": 1,
         "account_id": str(account_id),
-        "policy_version": policy.version,
-        "source_invoice_id": str(invoice.id),
-        "currency": str(invoice.currency or "").strip().upper(),
-        "vat_exclusive_amount": str(subtotal),
-        "vat_amount": str(vat_amount),
-        "gross_amount": str(total),
-        "withholding_tax_rate_percent": str(rate_percent),
-        "withholding_tax_amount": str(wht_amount),
-        "net_amount": str(net_amount),
+        "policy_version": snapshot.policy_version,
+        "source_invoice_id": str(snapshot.invoice_id),
+        "currency": snapshot.currency,
+        "vat_exclusive_amount": str(snapshot.vat_exclusive_amount),
+        "vat_amount": str(snapshot.vat_amount),
+        "gross_amount": str(snapshot.gross_amount),
+        "withholding_tax_rate_percent": str(snapshot.wht_rate),
+        "withholding_tax_amount": str(snapshot.wht_amount),
+        "net_amount": str(snapshot.net_amount),
     }
 
 
@@ -318,6 +327,7 @@ def _create_direct_transfer_intent(
             context=context,
         )
         intent = staged.intent
+        validate_invoice_transfer_selection(db, intent=intent)
         preview_fingerprint = None
         replayed = staged.replayed
         replaced_intent_ids = staged.replaced_intent_ids

@@ -126,7 +126,87 @@ SUPPORT_RESOLUTION_FORM = register(
 )
 
 
+INVOICE_WHT_CORRECTION_FORM = register(
+    FormContract(
+        key="billing.invoice_wht_correction",
+        title="Accept invoice withholding",
+        entity="invoice",
+        command_owner="financial.invoice_withholding",
+        consequences=(
+            FormConsequence(
+                "noncash_discharge",
+                "Accepts evidenced withholding against exact existing cash allocations without creating another bank payment or spendable credit.",
+            ),
+            FormConsequence(
+                "certificate_pending",
+                "The withholding certificate remains pending until the separate tax-evidence workflow certifies it.",
+            ),
+        ),
+    )
+)
+INVOICE_WHT_ISSUE_FORM = register(
+    FormContract(
+        key="billing.invoice_wht_issue",
+        title="Issue using account cash and WHT",
+        entity="invoice",
+        command_owner="financial.invoice_withholding_issuance",
+        consequences=(
+            FormConsequence(
+                "atomic_issue",
+                "Issues the draft, applies only the exact net payment-backed account credit and accepts its withholding in one atomic operation.",
+            ),
+            FormConsequence(
+                "cash_separation",
+                "Creates no new bank cash or customer credit; the certificate remains pending and service follows existing settlement rules.",
+            ),
+        ),
+    )
+)
+MANUAL_WHT_PAYMENT_FORM = register(
+    FormContract(
+        key="billing.manual_wht_payment",
+        title="Record bank cash with withholding",
+        entity="payment",
+        command_owner="financial.manual_payment_recording",
+        consequences=(
+            FormConsequence(
+                "net_cash",
+                "Records only verified net bank cash as the payment, with distinct evidenced withholding against the selected invoice.",
+            ),
+            FormConsequence(
+                "duplicate_checks",
+                "Rechecks cash references, policy, invoice state and withholding evidence before recording anything.",
+            ),
+        ),
+    )
+)
+
+
 HIGH_IMPACT_EDITORS: tuple[HighImpactEditor, ...] = (
+    HighImpactEditor(
+        key="billing.invoice_wht_correction",
+        surface="admin invoice withholding correction",
+        status="contracted",
+        contract_key="billing.invoice_wht_correction",
+    ),
+    HighImpactEditor(
+        key="billing.invoice_wht_issue",
+        surface="admin draft issue using cash account credit and WHT",
+        status="contracted",
+        contract_key="billing.invoice_wht_issue",
+    ),
+    HighImpactEditor(
+        key="billing.manual_wht_payment",
+        surface="admin bank payment with withholding",
+        status="contracted",
+        contract_key="billing.manual_wht_payment",
+    ),
+    HighImpactEditor(
+        key="billing.future_catalogue_invoice",
+        surface="admin catalogue future invoice authoring",
+        status="contracted",
+        contract_key="billing.future_catalogue_invoice",
+    ),
     HighImpactEditor(
         key="integrations.nextcloud_talk.credentials",
         surface="admin installed Nextcloud Talk credential setup",

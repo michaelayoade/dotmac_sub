@@ -25,7 +25,7 @@
     <div class="relative z-40">
         {% call detail_header(
             title="Invoice",
-            subtitle="Invoice Number: " ~ (invoice.invoice_number | default('N/A')),
+            subtitle=("Invoice Number: " ~ invoice.invoice_number) if invoice.invoice_number else ("Draft reference: " ~ (invoice.id | string)),
             icon=icon_invoice(),
             color="emerald",
             color2="teal",
@@ -57,9 +57,9 @@
                 </a>
                 {% endif %}
                 {% if status_val == 'draft' and not is_proforma and can(request, 'billing:invoice:update') %}
-                <form method="post" action="/admin/billing/invoices/{{ invoice.id }}/issue" onsubmit="this.querySelector('button[type=submit]').disabled = true;">
+                <form id="invoice-issue-form" method="post" action="/admin/billing/invoices/{{ invoice.id }}/issue" onsubmit="this.querySelector('button[type=submit]').disabled = true;">
                     {% include "components/forms/csrf_input.html" %}
-                    <button type="submit"
+                    <button id="invoice-issue-button" type="submit"
                             class="flex w-full items-center gap-3 px-3 py-2 text-left text-sm font-medium text-emerald-700 transition hover:bg-emerald-50 disabled:cursor-not-allowed disabled:opacity-60 dark:text-emerald-300 dark:hover:bg-emerald-900/20">
                         <svg class="h-4 w-4 text-emerald-500" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m4 5v2a2 2 0 01-2 2H7a2 2 0 01-2-2V7a2 2 0 012-2h7m1-3h6m0 0v6m0-6L10 13"/></svg>
                         Issue invoice
@@ -245,25 +245,7 @@
                     {% endcall %}
                 {% endcall %}
 
-                <div class="border-t border-slate-200 dark:border-slate-700 pt-4 mt-4">
-                    {{ metric_row("Subtotal", invoice_currency ~ " " ~ '{:,.2f}'.format(invoice.subtotal or 0), color="slate", mono=True) }}
-                    {% if invoice.discount_amount and invoice.discount_amount > 0 %}
-                    {{ metric_row("Discount", "-" ~ invoice_currency ~ " " ~ '{:,.2f}'.format(invoice.discount_amount), color="emerald", mono=True) }}
-                    <div class="rounded-lg bg-cyan-50 px-3 py-2 text-xs text-slate-600 dark:bg-cyan-950/20 dark:text-slate-300">
-                        {{ invoice.discount_type | replace('_', ' ') | title }}{% if invoice.discount_value is not none %}: {{ '{:,.2f}'.format(invoice.discount_value) }}{% if invoice.discount_type == 'percentage' %}%{% endif %}{% endif %}
-                        {% if invoice.discount_reason %} · {{ invoice.discount_reason }}{% endif %}
-                        <br>Applied by {{ invoice.discount_applied_by.display_name if invoice.discount_applied_by and invoice.discount_applied_by.display_name else 'staff user' }} on {{ invoice.discount_applied_at | app_datetime('%b %d, %Y', '-', include_tz=False) }}.
-                        {% if invoice.discount_source == 'quote' and invoice.discount_source_quote_id %}
-                        <a href="/admin/sales/quotes/{{ invoice.discount_source_quote_id }}" class="font-semibold text-cyan-700 hover:underline dark:text-cyan-300">View source Quote</a>
-                        {% endif %}
-                    </div>
-                    {% endif %}
-                    {{ metric_row("Tax", invoice_currency ~ " " ~ '{:,.2f}'.format(invoice.tax_total or 0), color="slate", mono=True) }}
-                    <div class="flex items-center justify-between py-2.5 mt-2">
-                        <span class="text-base font-semibold text-slate-900 dark:text-white">Total</span>
-                        <span class="text-base font-bold text-slate-900 dark:text-white font-mono tabular-nums">{{ invoice_currency }} {{ '{:,.2f}'.format(invoice.total or 0) }}</span>
-                    </div>
-                </div>
+                {% include "admin/billing/_invoice_tax_details.html" %}
             {% endcall %}
 
             {# Line Items #}
@@ -355,6 +337,8 @@
                 </div>
                 {{ metric_row("Payments applied", invoice_financial_summary.currency ~ " " ~ '{:,.2f}'.format(invoice_financial_summary.payments_applied), color="emerald", mono=True) }}
                 {{ metric_row("Credit notes applied", invoice_financial_summary.currency ~ " " ~ '{:,.2f}'.format(invoice_financial_summary.credits_applied), color="blue", mono=True) }}
+                {% set invoice_withholding_admin = true %}
+                {% include "billing/_invoice_withholding.html" %}
                 <p class="mt-3 text-xs text-slate-500 dark:text-slate-400">This receivable is separate from prepaid service funding and service-access state.</p>
             {% endcall %}
 

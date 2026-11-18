@@ -30,6 +30,12 @@ DOMAIN = DomainSOT(
         ),
     ),
     entrypoints=(
+        "app.services.web_billing_invoice_forms",
+        "app.services.web_invoice_withholding",
+        "app.services.web_billing_payment_forms",
+        "app.services.customer_portal_flow_billing",
+        "app.services.customer_portal_flow_payments",
+        "app.services.billing_invoice_pdf",
         "app.services.web_billing_overview",
         "app.services.web_billing_payments",
         "app.services.web_billing_ledger",

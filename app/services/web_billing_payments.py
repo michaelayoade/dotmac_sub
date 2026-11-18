@@ -1457,6 +1457,7 @@ def preview_payment_create(
     reference: str | None,
     memo: str | None,
     payment_date: date | None = None,
+    withholding_tax: bool = False,
 ) -> PaymentCreatePreviewResult:
     prepared = _prepare_payment_create(
         db,
@@ -1477,6 +1478,7 @@ def preview_payment_create(
         ManualPaymentRecordingPreviewRequest(
             **payload.model_dump(),
             auto_allocate=True,
+            withholding_tax=withholding_tax,
         ),
     )
     return {
@@ -1506,6 +1508,7 @@ def process_payment_create(
     control_fingerprint: str | None = None,
     duplicate_risk_acknowledged: bool = False,
     context: CommandContext | None = None,
+    withholding_tax: bool = False,
 ) -> PaymentCreateResult:
     """Confirm a reviewed payment through the duplicate-control coordinator."""
     prepared = _prepare_payment_create(
@@ -1540,6 +1543,7 @@ def process_payment_create(
                 ManualPaymentRecordingPreviewRequest(
                     **payload.model_dump(),
                     auto_allocate=True,
+                    withholding_tax=withholding_tax,
                 ),
             )
             preview_fingerprint = preview.payment_preview.fingerprint
@@ -1563,6 +1567,7 @@ def process_payment_create(
                 request=ManualPaymentRecordingConfirm(
                     **payload.model_dump(),
                     auto_allocate=True,
+                    withholding_tax=withholding_tax,
                     preview_fingerprint=preview_fingerprint,
                     idempotency_key=owner_key,
                     control_fingerprint=control_fingerprint,
@@ -1607,16 +1612,16 @@ def process_payment_create_with_audit(
     preview_fingerprint: str | None = None,
     control_fingerprint: str | None = None,
     duplicate_risk_acknowledged: bool = False,
+    withholding_tax: bool = False,
 ) -> PaymentCreateResult:
     from app.web.admin import get_current_user
 
     current_user = get_current_user(request)
-    actor_id = str(
-        current_user.get("principal_id")
-        or current_user.get("subscriber_id")
-        or current_user.get("id")
-        or "admin"
-    )
+    actor_id = current_user.get("principal_id") if current_user else None
+    if not actor_id:
+        raise ValueError(
+            "An authenticated staff principal is required to record a payment."
+        )
     resolved_token = idempotency_token or secrets.token_urlsafe(24)
     owner_key = _owner_payment_idempotency_key(resolved_token)
     context = CommandContext.system(
@@ -1642,6 +1647,7 @@ def process_payment_create_with_audit(
         control_fingerprint=control_fingerprint,
         duplicate_risk_acknowledged=duplicate_risk_acknowledged,
         context=context,
+        withholding_tax=withholding_tax,
     )
     return result
 

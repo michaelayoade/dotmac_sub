@@ -87,7 +87,13 @@ def get_customer_withholding_tax_policy(
     account_id: UUID,
 ) -> CustomerWithholdingTaxPolicy:
     row = (
-        db.query(CustomerTaxPolicy)
+        db.query(
+            CustomerTaxPolicy.account_id,
+            CustomerTaxPolicy.withholding_tax_enabled,
+            CustomerTaxPolicy.version,
+            CustomerTaxPolicy.updated_by,
+            CustomerTaxPolicy.updated_at,
+        )
         .filter(CustomerTaxPolicy.account_id == account_id)
         .first()
     )

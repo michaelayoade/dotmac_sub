@@ -790,6 +790,7 @@ SERVICES: tuple[SOTService, ...] = (
         module="app.services.direct_transfer_intents",
         owns=("customer direct-transfer intent creation coordination",),
         depends_on=(
+            "financial.invoice_withholding",
             "control.settings_spec",
             "customer.accounts",
             "financial.customer_tax_policies",
@@ -844,7 +845,7 @@ SERVICES: tuple[SOTService, ...] = (
                     kind=AuthorityKind.AUTHORITATIVE_RECORD,
                     source=(
                         "locked invoice account, lifecycle status, currency, and "
-                        "current outstanding balance"
+                        "current outstanding balance and explicit withholding_tax_selected instruction (default false), never inferred from customer eligibility"
                     ),
                 ),
                 AuthorityInput(
@@ -921,6 +922,8 @@ SERVICES: tuple[SOTService, ...] = (
                     "financial.direct_transfer_intent_commands.configuration_invalid",
                     "financial.direct_transfer_intent_commands.invoice_not_found",
                     "financial.direct_transfer_intent_commands.invoice_not_payable",
+                    "financial.direct_transfer_intent_commands.invoice_withholding_tax_basis_unavailable",
+                    "financial.direct_transfer_intent_commands.invoice_withholding_selection_changed",
                     "financial.direct_transfer_intent_commands.currency_unsupported",
                     "financial.direct_transfer_intent_commands.amount_invalid",
                     "financial.direct_transfer_intent_commands.deposit_rejected",
@@ -941,7 +944,7 @@ SERVICES: tuple[SOTService, ...] = (
                     "unsupported-currency invoice",
                     "missing customer WHT policy, missing authoritative VAT-exclusive "
                     "invoice basis, partial settlement, or inconsistent invoice tax "
-                    "evidence for an enabled WHT customer",
+                    "evidence for an explicitly selected WHT invoice",
                     "deposit policy rejection or concurrent intent conflict",
                     "active caller transaction or manifest mismatch",
                 ),

@@ -23,6 +23,7 @@ from app.models.billing import (
 from app.models.payment_arrangement import ArrangementStatus, PaymentArrangement
 from app.models.subscriber import Subscriber
 from app.services import billing as billing_service
+from app.services import display_format
 from app.services.collections import get_available_balance
 from app.services.common import coerce_uuid
 from app.services.common import validate_enum as _validate_enum
@@ -37,6 +38,10 @@ from app.services.customer_portal_context import (
     get_outstanding_balance,
 )
 from app.services.customer_portal_flow_common import _compute_total_pages
+from app.services.invoice_withholding import (
+    InvoiceWithholdingQuery,
+    query_invoice_withholding,
+)
 from app.services.status_presentation import invoice_status_presentation
 
 logger = logging.getLogger(__name__)
@@ -603,8 +608,28 @@ def get_invoice_detail(
 
     billing_contact = get_invoice_billing_contact(db, invoice, customer)
 
+    from app.services.web_invoice_withholding import (
+        invoice_tax_display,
+        withholding_display,
+    )
+
+    withholding = query_invoice_withholding(
+        db, InvoiceWithholdingQuery(invoice_id=invoice.id)
+    )
     return {
         "invoice": invoice,
+        "invoice_withholding": withholding,
+        "invoice_tax_display": invoice_tax_display(db, invoice=invoice),
+        "invoice_balance_display": display_format.format_money(
+            invoice.balance_due, db=db, currency=invoice.currency
+        ),
+        "invoice_line_amounts": {
+            line.id: display_format.format_money(
+                line.amount, db=db, currency=invoice.currency
+            )
+            for line in invoice.lines
+        },
+        "invoice_withholding_display": withholding_display(db, summary=withholding),
         "invoice_status_presentation": invoice_status_presentation(invoice.status),
         "billing_name": billing_contact["billing_name"],
         "billing_email": billing_contact["billing_email"],

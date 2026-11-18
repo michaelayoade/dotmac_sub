@@ -1,0 +1,12 @@
+{% from "components/forms/action_form.html" import action_form with context %}
+<div class="space-y-4">
+    <ul class="divide-y divide-slate-200 dark:divide-slate-700">
+        {% for line in review.lines %}
+        <li class="py-3 text-sm"><p class="font-semibold">{{ line.description }}</p>
+            {% if line.starts_at %}<p>{{ line.starts_at_display }} → {{ line.ends_at_display }}</p>{% elif line.period_kind.value == 'capped_pending_renewal' %}<p>Renewal dates follow the existing confirmed-payment rules.</p>{% else %}<p>Quantity {{ line.quantity }}</p>{% endif %}
+            <p>{{ line.total_display }} · VAT {{ line.tax_total_display }}</p>
+        </li>
+        {% endfor %}
+    </ul>
+    {{ action_form(review.action) }}
+</div>

@@ -23,6 +23,7 @@ from app.schemas.billing import (
 from app.services.billing.invoices import (
     InvoiceLines,
     InvoiceOwnerError,
+    InvoicePeriodReservationError,
     Invoices,
     _assert_controlled_draft_ready_for_issue,
     _controlled_draft_document_fingerprint,
@@ -159,9 +160,9 @@ def test_existing_controlled_draft_keeps_its_seal_and_edit_refusal(
     db_session.commit()
     assert is_controlled_invoice_draft(invoice)
     _assert_controlled_draft_ready_for_issue(db_session, invoice)
-    with pytest.raises(HTTPException) as denied:
+    with pytest.raises(InvoicePeriodReservationError) as denied:
         Invoices.update(db_session, str(invoice.id), InvoiceUpdate(memo="Changed"))
-    assert denied.value.status_code == 409
+    assert denied.value.code.endswith("catalogue_draft_owner_required")
     invoice.memo = "Unexpected direct mutation"
     db_session.flush()
     with pytest.raises(InvoiceOwnerError) as drift:

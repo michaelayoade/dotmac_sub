@@ -858,3 +858,40 @@ def test_verify_and_reject_emit_audit_events(db_session):
     assert verify_meta.get("claimed_amount") == "5000.00"
     reject_meta = by_action["reject"].metadata_ or {}
     assert reject_meta.get("reason") == "No match"
+
+
+def test_native_selected_invoice_proof_cannot_create_legacy_cash(db_session):
+    sub = _account(db_session)
+    invoice = Invoice(
+        account_id=sub.id,
+        status=InvoiceStatus.issued,
+        withholding_tax_selected=True,
+        withholding_tax_selection_version=1,
+        currency="NGN",
+        subtotal=Decimal("100000"),
+        tax_total=Decimal("7500"),
+        total=Decimal("107500"),
+        balance_due=Decimal("107500"),
+    )
+    db_session.add(invoice)
+    db_session.flush()
+    intent = TopupIntent(
+        account_id=sub.id,
+        reference="TRF-NATIVE-UNADOPTED",
+        provider_type=DIRECT_TRANSFER_PROVIDER,
+        currency="NGN",
+        requested_amount=Decimal("102500"),
+        status=TopupIntentStatus.pending.value,
+        metadata_={
+            "payment_method": "bank_transfer",
+            "payment_flow": "invoice_payment",
+            "invoice_id": str(invoice.id),
+        },
+    )
+    db_session.add(intent)
+    db_session.commit()
+    proof = _submit_direct_transfer(db_session, sub, intent)
+    with pytest.raises(svc.PaymentProofReviewError) as caught:
+        _verify(db_session, str(proof.id), verified_by="admin-1")
+    assert caught.value.code.endswith("native_transfer_adoption_required")
+    assert db_session.query(Payment).filter(Payment.account_id == sub.id).count() == 0

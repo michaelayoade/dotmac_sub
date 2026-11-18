@@ -1282,6 +1282,15 @@ def _reanchor_paid_prepaid_invoice_if_lapsed(
     computing a fact and a second formula silently overwriting it is exactly
     the class of defect this guard removes.
     """
+    # Catalogue-selected exact future dates are documentary commitments. A
+    # capped line has no dates until its own verified settlement participant.
+    if any(
+        isinstance(line.metadata_, dict)
+        and line.metadata_.get("future_catalogue_invoice") is True
+        for line in invoice.lines
+        if line.is_active
+    ):
+        return False
     if isinstance(invoice.metadata_, dict) and invoice.metadata_.get(
         "renewal_period_authoritative"
     ):
@@ -1510,6 +1519,19 @@ def _finalize_invoice_payment_effects(
         _repair_paid_prepaid_invoice_identity_after_settlement(db, invoice)
         _reanchor_paid_prepaid_invoice_if_lapsed(db, invoice)
         ensure_prepaid_entitlements_for_paid_invoice(db, invoice)
+        if any(
+            isinstance(line.metadata_, dict)
+            and line.metadata_.get("future_catalogue_invoice") is True
+            for line in invoice.lines
+            if line.is_active
+        ):
+            from app.services.prepaid_service_renewals import (
+                project_prepaid_billing_anchor_for_invoice,
+            )
+
+            project_prepaid_billing_anchor_for_invoice(
+                db, invoice, evidence_ref=f"catalogue-invoice-settlement:{invoice.id}"
+            )
 
         from app.services import collections as collections_service
 
@@ -1573,6 +1595,19 @@ def _finalize_invoice_application(
             fallback_effective_at=effective_at,
         )
         ensure_prepaid_entitlements_for_paid_invoice(db, invoice)
+        if any(
+            isinstance(line.metadata_, dict)
+            and line.metadata_.get("future_catalogue_invoice") is True
+            for line in invoice.lines
+            if line.is_active
+        ):
+            from app.services.prepaid_service_renewals import (
+                project_prepaid_billing_anchor_for_invoice,
+            )
+
+            project_prepaid_billing_anchor_for_invoice(
+                db, invoice, evidence_ref=f"catalogue-invoice-settlement:{invoice.id}"
+            )
         # The billing anchor is deliberately NOT written here. Advancing
         # `Subscription.next_billing_at` is owned by
         # `financial.prepaid_service_renewals`; this owner only commits exact
@@ -1597,6 +1632,16 @@ def _repair_paid_prepaid_invoice_identity_after_settlement(
     invoice: Invoice,
 ) -> None:
     """Let the prepaid reconciler adopt exact paid-but-unlinked invoices."""
+
+    if any(
+        isinstance(line.metadata_, dict)
+        and line.metadata_.get("future_catalogue_invoice") is True
+        for line in invoice.lines
+        if line.is_active
+    ):
+        # These lines already have exact catalogue/subscription provenance;
+        # the legacy historical adoption path must not reinterpret them.
+        return
 
     from app.services.prepaid_draft_reconciliation import (
         AutoRepairPaidPrepaidInvoiceAfterSettlementCommand,

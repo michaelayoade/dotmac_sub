@@ -21,6 +21,110 @@ DOMAIN = DomainSOT(
     domain="ui_action_forms",
     services=(
         SOTService(
+            name="ui.invoice_authoring_projection",
+            module="app.services.web_billing_invoice_forms",
+            implementation_modules=(
+                "app.services.web_invoice_withholding",
+                "app.services.web_billing_payment_forms",
+            ),
+            owns=(
+                "catalogue invoice shared-control display projection",
+                "server-reviewed invoice and withholding action forms",
+                "manual payment shared-review presentation",
+            ),
+            depends_on=(
+                "financial.invoice_draft_authoring",
+                "financial.invoice_withholding",
+                "financial.invoice_withholding_issuance",
+                "financial.manual_payment_recording",
+                "ui.action_form_contracts",
+                "ui.display_formatting",
+                "ui.status_presentation",
+                "auth.permission_gate",
+            ),
+            contract=ServiceContract(
+                concerns=tuple(
+                    ConcernContract(
+                        name=name,
+                        role=OwnerRole.RESOLVER,
+                        input_names=(
+                            "canonical catalogue and draft previews",
+                            "canonical withholding and payment previews",
+                            "shared display and form contracts",
+                            "authorized billing staff scope",
+                        ),
+                    )
+                    for name in (
+                        "catalogue invoice shared-control display projection",
+                        "server-reviewed invoice and withholding action forms",
+                        "manual payment shared-review presentation",
+                    )
+                ),
+                authoritative_inputs=(
+                    AuthorityInput(
+                        name="canonical catalogue and draft previews",
+                        owner="financial.invoice_draft_authoring",
+                        kind=AuthorityKind.DERIVED_PROJECTION,
+                        source="Typed catalogue choices, service candidates, confirmed line selections and authoritative Decimal amounts; the UI does not determine price, tax, dates or duplicate claims.",
+                    ),
+                    AuthorityInput(
+                        name="canonical withholding and payment previews",
+                        owner="financial.invoice_withholding",
+                        kind=AuthorityKind.DERIVED_PROJECTION,
+                        source="Typed invoice selection, expected/accepted withholding, actual cash evidence and certificate status, plus manual-payment exact-source previews from their canonical financial owners.",
+                    ),
+                    AuthorityInput(
+                        name="shared display and form contracts",
+                        owner="ui.action_form_contracts",
+                        kind=AuthorityKind.CONTROL_INPUT,
+                        source="ActionForm fields, required confirmation and opaque hidden evidence; display_format money/time and canonical StatusPresentation. Existing typeahead/modal render the same contract.",
+                    ),
+                    AuthorityInput(
+                        name="authorized billing staff scope",
+                        owner="auth.permission_gate",
+                        kind=AuthorityKind.CONTROL_INPUT,
+                        source="The invoking adapter checks invoice create/update and payment-create permission; final owners revalidate command authority.",
+                    ),
+                ),
+                transaction=TransactionContract(
+                    mode=TransactionMode.READ_ONLY,
+                    boundary="Read-only previews and interaction projections use adapter session; never flush, commit, roll back or execute financial commands.",
+                    locking="Read preview may drift; financial mutation owners lock and validate the final source identities/fingerprints.",
+                    idempotency="Projection is deterministic for its observed sources; carries owner-produced replay tokens unchanged.",
+                    retries="Failed restore remains unresolved and blocks client review until retry or explicit removal; stale final facts require a fresh owner review.",
+                ),
+                errors=ErrorContract(
+                    domain_codes=(),
+                    mapping_owner="Billing web adapters map canonical source errors and invalid submitted forms.",
+                    fail_closed_on=(
+                        "missing catalogue source selection",
+                        "stale preview",
+                        "unresolved existing line",
+                        "unsupported native financial authority",
+                    ),
+                ),
+                migration=MigrationContract(
+                    state=AuthorityMigrationState.CUT_OVER,
+                    new_owner="ui.invoice_authoring_projection",
+                    old_owner="browser-generated invoice and withholding confirmation",
+                    verification="Shared-control architecture guards, authoritative hidden-selection review test and editor restore regression tests.",
+                    cutover_gate="Catalogue modal, WHT issue/correction and payment review render actual ActionForm objects; browser does not calculate totals or format money/time.",
+                    fallback_retirement="Bespoke catalogue combobox/modal, raw financial confirmation forms and local currency/time formatting are retired.",
+                ),
+                steward="billing operations UI",
+                design_refs=(
+                    "docs/FRONTEND_SPEC.md",
+                    "docs/designs/INVOICE_WITHHOLDING_SETTLEMENT.md",
+                ),
+                test_refs=(
+                    "tests/architecture/test_invoice_authoring_ui_reuse.py",
+                    "tests/test_invoice_review_projection.py",
+                    "tests/test_invoice_withholding_presentation.py",
+                    "tests/frontend/test_future_invoice_authoring.cjs",
+                ),
+            ),
+        ),
+        SOTService(
             name="ui.action_form_contracts",
             module="app.services.action_forms",
             owns=(

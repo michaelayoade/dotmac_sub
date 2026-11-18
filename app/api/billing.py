@@ -166,6 +166,9 @@ from app.services.auth_dependencies import (
     require_user_auth,
 )
 from app.services.billing import adjustments as account_adjustment_service
+from app.services.billing.invoices import (
+    InvoicePeriodReservationError,
+)
 from app.services.customer_context import require_customer_account_id
 from app.services.db_session_adapter import db_session_adapter
 from app.services.domain_errors import DomainError
@@ -246,7 +249,11 @@ def billing_dashboard(db: Session = Depends(get_db)) -> dict:
     dependencies=[Depends(require_permission("billing:invoice:create"))],
 )
 def create_invoice(payload: InvoiceCreate, db: Session = Depends(get_db)):
-    return billing_service.invoices.create(db, payload)
+    del payload, db
+    raise HTTPException(
+        status_code=409,
+        detail="Create invoices through catalogue draft authoring; raw header creation cannot bypass catalogue prices and service-period claims.",
+    )
 
 
 @router.get(
@@ -428,7 +435,10 @@ def list_invoices(
 def update_invoice(
     invoice_id: str, payload: InvoiceUpdate, db: Session = Depends(get_db)
 ):
-    return billing_service.invoices.update(db, invoice_id, payload)
+    try:
+        return billing_service.invoices.update(db, invoice_id, payload)
+    except InvoicePeriodReservationError as exc:
+        raise HTTPException(status_code=409, detail=exc.message) from exc
 
 
 @router.post(
@@ -456,7 +466,10 @@ def write_off_invoice(
     dependencies=[Depends(require_permission("billing:invoice:update"))],
 )
 def preview_write_off_invoice(invoice_id: str, db: Session = Depends(get_db)):
-    return billing_service.invoices.preview_write_off(db, invoice_id)
+    try:
+        return billing_service.invoices.preview_write_off(db, invoice_id)
+    except DomainError as exc:
+        raise HTTPException(status_code=409, detail=exc.message) from exc
 
 
 @router.post(
@@ -468,7 +481,10 @@ def preview_write_off_invoice(invoice_id: str, db: Session = Depends(get_db)):
 def confirm_write_off_invoice(
     invoice_id: str, payload: InvoiceClosureConfirm, db: Session = Depends(get_db)
 ):
-    return billing_service.invoices.confirm_write_off(db, invoice_id, payload)
+    try:
+        return billing_service.invoices.confirm_write_off(db, invoice_id, payload)
+    except DomainError as exc:
+        raise HTTPException(status_code=409, detail=exc.message) from exc
 
 
 @router.post(
@@ -478,7 +494,10 @@ def confirm_write_off_invoice(
     dependencies=[Depends(require_permission("billing:invoice:update"))],
 )
 def preview_void_invoice(invoice_id: str, db: Session = Depends(get_db)):
-    return billing_service.invoices.preview_void(db, invoice_id)
+    try:
+        return billing_service.invoices.preview_void(db, invoice_id)
+    except DomainError as exc:
+        raise HTTPException(status_code=409, detail=exc.message) from exc
 
 
 @router.post(
@@ -490,7 +509,10 @@ def preview_void_invoice(invoice_id: str, db: Session = Depends(get_db)):
 def confirm_void_invoice(
     invoice_id: str, payload: InvoiceClosureConfirm, db: Session = Depends(get_db)
 ):
-    return billing_service.invoices.confirm_void(db, invoice_id, payload)
+    try:
+        return billing_service.invoices.confirm_void(db, invoice_id, payload)
+    except DomainError as exc:
+        raise HTTPException(status_code=409, detail=exc.message) from exc
 
 
 @router.get(
@@ -1253,7 +1275,10 @@ def get_credit_note_application(application_id: str, db: Session = Depends(get_d
     dependencies=[Depends(require_permission("billing:invoice:update"))],
 )
 def create_invoice_line(payload: InvoiceLineCreate, db: Session = Depends(get_db)):
-    return billing_service.invoice_lines.create(db, payload)
+    try:
+        return billing_service.invoice_lines.create(db, payload)
+    except InvoicePeriodReservationError as exc:
+        raise HTTPException(status_code=409, detail=exc.message) from exc
 
 
 @router.get(
@@ -1295,7 +1320,10 @@ def list_invoice_lines(
 def update_invoice_line(
     line_id: str, payload: InvoiceLineUpdate, db: Session = Depends(get_db)
 ):
-    return billing_service.invoice_lines.update(db, line_id, payload)
+    try:
+        return billing_service.invoice_lines.update(db, line_id, payload)
+    except InvoicePeriodReservationError as exc:
+        raise HTTPException(status_code=409, detail=exc.message) from exc
 
 
 @router.delete(
@@ -1305,7 +1333,10 @@ def update_invoice_line(
     dependencies=[Depends(require_permission("billing:invoice:update"))],
 )
 def delete_invoice_line(line_id: str, db: Session = Depends(get_db)):
-    billing_service.invoice_lines.delete(db, line_id)
+    try:
+        billing_service.invoice_lines.delete(db, line_id)
+    except InvoicePeriodReservationError as exc:
+        raise HTTPException(status_code=409, detail=exc.message) from exc
 
 
 # --- Payment Methods ---

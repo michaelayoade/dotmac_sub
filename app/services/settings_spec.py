@@ -2564,6 +2564,22 @@ SETTINGS_SPECS: list[SettingSpec] = [
     ),
     SettingSpec(
         domain=SettingDomain.billing,
+        key="starter_billing_withholding_tax_jurisdiction_id",
+        env_var="BILLING_STARTER_BILLING_WITHHOLDING_TAX_JURISDICTION_ID",
+        value_type=SettingValueType.string,
+        default=None,
+        label="Existing native Tax jurisdiction UUID for invoice withholding",
+    ),
+    SettingSpec(
+        domain=SettingDomain.billing,
+        key="starter_billing_withholding_tax_code",
+        env_var="BILLING_STARTER_BILLING_WITHHOLDING_TAX_CODE",
+        value_type=SettingValueType.string,
+        default=None,
+        label="Existing native Tax code for invoice withholding",
+    ),
+    SettingSpec(
+        domain=SettingDomain.billing,
         key="starter_billing_tax_jurisdiction",
         env_var="BILLING_STARTER_BILLING_TAX_JURISDICTION",
         value_type=SettingValueType.string,

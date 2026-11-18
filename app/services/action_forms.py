@@ -20,6 +20,7 @@ if TYPE_CHECKING:
 class ActionFieldKind(StrEnum):
     """Supported field controls for the first shared action-form renderer."""
 
+    checkbox = "checkbox"
     decimal = "decimal"
     select = "select"
     text = "text"

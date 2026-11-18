@@ -26,7 +26,7 @@
     </div>
     {% endif %}
 
-    <div class="overflow-visible rounded-xl border border-slate-200 bg-white shadow-sm dark:border-slate-700 dark:bg-slate-800">
+    <div class="overflow-visible rounded-lg border border-slate-200 bg-white shadow-sm dark:border-slate-700 dark:bg-slate-800">
         <form method="post" action="{{ action_url }}" class="space-y-6 p-6">
             {% include "components/forms/csrf_input.html" %}
             {% if idempotency_token %}
@@ -40,7 +40,7 @@
                     <span class="text-sm font-medium text-primary-700 dark:text-primary-300">Recording payment for Invoice {{ prefill.invoice_number }}</span>
                 </div>
                 {% if prefill.amount %}
-                <p class="mt-1 text-xs text-primary-600 dark:text-primary-400">Amount due: {{ prefill.currency|default('NGN') }} {{ '{:,.2f}'.format(prefill.amount) }}</p>
+                <p class="mt-1 text-xs text-primary-600 dark:text-primary-400">Amount due: {{ prefill_amount_display }}</p>
                 {% endif %}
             </div>
             {% endif %}

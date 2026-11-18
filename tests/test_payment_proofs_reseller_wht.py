@@ -108,3 +108,35 @@ def test_verify_consolidated_without_wht_credits_verified_cash_only(db_session):
         db_session,
         billing_account_id=str(ba.id),
     )
+
+
+def test_historical_consolidated_withholding_submission_cannot_create_new_gross_cash(
+    db_session,
+):
+    from app.models.payment_proof import PaymentProof, PaymentProofStatus
+
+    _, ba = _reseller_account(db_session)
+    submitted = _submit(
+        db_session,
+        None,
+        submitted_by=None,
+        amount="95000",
+        billing_account_id=str(ba.id),
+        reference="OLD-WHT",
+        file_path="uploads/payment_proofs/old.png",
+    )
+    from uuid import UUID
+
+    proof = db_session.get(PaymentProof, UUID(str(submitted["id"])))
+    proof.wht_amount = Decimal("5000")
+    proof.gross_amount = Decimal("100000")
+    proof.wht_rate = Decimal("5")
+    db_session.commit()
+    with pytest.raises(svc.PaymentProofReviewError) as exc:
+        _verify(db_session, submitted["id"], verified_by="admin-1")
+    assert (
+        exc.value.code == "financial.payment_proofs.withholding_tax_basis_unavailable"
+    )
+    assert db_session.query(Payment).count() == 0
+    assert db_session.query(WithholdingTaxRecord).count() == 0
+    assert db_session.get(PaymentProof, proof.id).status == PaymentProofStatus.submitted

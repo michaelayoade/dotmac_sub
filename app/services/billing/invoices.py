@@ -10,7 +10,13 @@ from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from enum import Enum
+from typing import TYPE_CHECKING
 from uuid import UUID
+
+if TYPE_CHECKING:
+    from dotmac_billing.contracts import (
+        ServiceChargePeriodV1 as ServicePeriodCharge,
+    )
 
 from fastapi import HTTPException
 from sqlalchemy import select
@@ -32,6 +38,7 @@ from app.models.billing import (
     PaymentAllocation,
     ServiceEntitlement,
     ServiceEntitlementStatus,
+    StarterInvoiceLink,
     TaxApplication,
     TaxRate,
 )
@@ -59,7 +66,6 @@ from app.services.billing._common import (
     _validate_account,
     _validate_invoice_line_amount,
     _validate_invoice_totals,
-    assert_legal_invoice_transition,
     lock_account,
     resolve_invoice_settlement_amounts,
 )
@@ -707,6 +713,11 @@ class DraftInvoiceParticipantError(ValueError):
         self.reason = reason
 
 
+class DraftInvoiceNumberingMode(Enum):
+    AT_DRAFT = "at_draft"
+    AT_ISSUANCE = "at_issuance"
+
+
 @dataclass(frozen=True, slots=True)
 class InvoiceLineTaxSnapshot:
     """Reviewed tax facts retained by a quote-owning command."""
@@ -734,6 +745,26 @@ def _assert_backdated_service_line_evidence_owner(
         raise InvoiceOwnerError(
             code="financial.invoice.backdated_service_owner_required",
             message="Backdated service line evidence requires its active owner.",
+        )
+
+
+def _assert_catalogue_draft_authoring_owner(
+    db: Session, invoice: Invoice, *, incoming_metadata: object = None
+) -> None:
+    """Raw line endpoints cannot turn a resolved catalogue draft into free text."""
+    has_catalogue = is_catalogue_period_claim(incoming_metadata) or any(
+        is_catalogue_period_claim(metadata)
+        for metadata in db.scalars(
+            select(InvoiceLine.metadata_).where(InvoiceLine.invoice_id == invoice.id)
+        ).all()
+    )
+    if has_catalogue and not owner_command_active(
+        db, owner="financial.invoice_draft_authoring"
+    ):
+        raise InvoicePeriodReservationError(
+            reason="catalogue_line_owner_required",
+            message="Edit catalogue invoice lines from the complete invoice form.",
+            invoice_id=invoice.id,
         )
 
 
@@ -1069,6 +1100,23 @@ def _build_closure_preview(
     invoice: Invoice,
     closure_type: InvoiceClosureType,
 ) -> InvoiceClosurePreview:
+    from app.services.invoice_withholding import (
+        InvoiceWithholdingError,
+        InvoiceWithholdingQuery,
+        query_invoice_withholding,
+    )
+
+    if (
+        query_invoice_withholding(
+            db, InvoiceWithholdingQuery(invoice.id)
+        ).accepted_wht_amount
+        > 0
+    ):
+        raise InvoiceWithholdingError(
+            code="financial.invoice_withholding.coordinated_correction_required",
+            message="This invoice has accepted withholding tax. Closing it requires a coordinated tax correction; generic void and write-off are unavailable.",
+            retryable=False,
+        )
     if invoice.closure is not None:
         raise HTTPException(
             status_code=409, detail="Invoice already has closure evidence"
@@ -1253,7 +1301,398 @@ def _stage_invoice_closure_audit(
     )
 
 
+class InvoicePeriodReservationError(DomainError, ValueError):
+    def __init__(
+        self, *, reason: str, message: str, invoice_id: UUID | None = None
+    ) -> None:
+        super().__init__(
+            code=f"financial.invoice.{reason}",
+            message=message,
+            details={"invoice_id": str(invoice_id)} if invoice_id else {},
+            retryable=False,
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class InvoicePeriodConflict:
+    reason: str
+    message: str
+    invoice_id: UUID | None = None
+
+
+def _claim_metadata(value: object) -> dict[str, object]:
+    if isinstance(value, str):
+        try:
+            value = json.loads(value)
+        except (ValueError, TypeError):
+            return {}
+    return value if isinstance(value, dict) else {}
+
+
+def is_catalogue_period_claim(metadata: object) -> bool:
+    return _claim_metadata(metadata).get("future_catalogue_invoice") is True
+
+
+def service_period_charge(
+    *,
+    subscription_id: UUID | None,
+    metadata: object,
+    header_starts_at: datetime | None,
+    header_ends_at: datetime | None,
+) -> ServicePeriodCharge | None:
+    """Decode Sub line provenance; shared Billing owns admission and overlap."""
+    values = _claim_metadata(metadata)
+    marker = values.get("future_catalogue_invoice")
+    kind = values.get("kind")
+    if (marker is not None and not isinstance(marker, bool)) or (
+        marker is True and kind is not None and not isinstance(kind, str)
+    ):
+        raise InvoicePeriodReservationError(
+            reason="period_invalid", message="Service claim metadata is invalid."
+        )
+    if kind is not None and not isinstance(kind, str):
+        kind = None
+    try:
+        from dotmac_billing.contracts import (
+            ServiceChargeComponentV1 as ServiceChargeComponent,
+        )
+        from dotmac_billing.errors import BillingRuleViolation
+        from dotmac_billing.service import service_charge_period_v1
+    except ImportError as exc:
+        if marker is not True:
+            # Released clients retain their incumbent legacy line path. A new
+            # catalogue claim cannot be admitted without the shared policy.
+            return None
+        raise InvoicePeriodReservationError(
+            reason="catalogue_capability_unavailable",
+            message="Catalogue period reservations require a qualified Starter Billing package upgrade.",
+        ) from exc
+    component = (
+        ServiceChargeComponent.addon
+        if kind == "recurring_addon"
+        else ServiceChargeComponent.base
+        if kind is None or kind in ("base_subscription", "capped_pending_renewal")
+        else ServiceChargeComponent.other
+    )
+    component_id = (
+        str(values.get("subscription_add_on_id") or "")
+        if component is ServiceChargeComponent.addon
+        else "base"
+        if component is ServiceChargeComponent.base
+        else str(kind)
+    )
+
+    def wire_date(value: object) -> str | datetime | None:
+        if value is None or isinstance(value, (str, datetime)):
+            return value
+        if marker is True:
+            raise InvoicePeriodReservationError(
+                reason="period_invalid", message="Service period dates are invalid."
+            )
+        return str(value)
+
+    future = values.get("future_invoice")
+    try:
+        return service_charge_period_v1(
+            service_ref=str(subscription_id) if subscription_id else None,
+            component=component,
+            component_id=component_id,
+            line_start=wire_date(values.get("billing_period_start")),
+            line_end=wire_date(values.get("billing_period_end")),
+            header_start=header_starts_at,
+            header_end=header_ends_at,
+            catalogue_claim=marker is True,
+            pending_capped_renewal=kind == "capped_pending_renewal"
+            or isinstance(future, dict)
+            and future.get("period_kind") == "capped_pending_renewal",
+        )
+    except BillingRuleViolation as exc:
+        raise InvoicePeriodReservationError(
+            reason="period_invalid", message=exc.message
+        ) from exc
+
+
+def charges_overlap(left: ServicePeriodCharge, right: ServicePeriodCharge) -> bool:
+    from dotmac_billing.service import service_charge_periods_overlap_v1
+
+    return service_charge_periods_overlap_v1(left, right)
+
+
+def _invoice_claim_financially_settled(
+    db: Session, invoice_id: UUID, total: Decimal
+) -> bool:
+    link = db.scalar(
+        select(StarterInvoiceLink).where(StarterInvoiceLink.invoice_id == invoice_id)
+    )
+    if link is not None:
+        from dotmac_billing.contracts import GetCurrentInvoiceReceivableV1
+        from dotmac_billing.queries import get_current_invoice_receivable_v1
+        from dotmac_kernel.cache import TenantScope
+
+        observation = get_current_invoice_receivable_v1(
+            db,
+            scope=TenantScope(link.tenant_id),
+            request=GetCurrentInvoiceReceivableV1(
+                TenantScope(link.tenant_id), link.document_id
+            ),
+        )
+        return (
+            observation.active
+            and observation.invoice_total.amount > 0
+            and observation.outstanding.amount == 0
+        )
+    return (
+        total > 0
+        and resolve_invoice_settlement_amounts(db, invoice_id).total_applied >= total
+    )
+
+
+def invoice_period_conflict(
+    db: Session,
+    *,
+    account_id: UUID,
+    charge: ServicePeriodCharge,
+    exclude_invoice_id: UUID | None = None,
+    exclude_line_id: UUID | None = None,
+) -> InvoicePeriodConflict | None:
+    """Read authoritative Sub facts; delegate all claim decisions to Billing."""
+    from dotmac_billing.contracts import (
+        ServiceChargeComponentV1 as ServiceChargeComponent,
+    )
+    from dotmac_billing.contracts import (
+        ServiceChargeDocumentFactV1,
+        ServiceClaimDocumentPhaseV1,
+        ServiceCoverageIntervalV1,
+    )
+    from dotmac_billing.service import resolve_service_charge_conflict_v1
+
+    from app.models.catalog import Subscription
+    from app.services.prepaid_service_coverage import (
+        PrepaidCoverageSource,
+        prepaid_coverage_history_for_period,
+    )
+    from app.services.purchased_service_coverage import (
+        PurchasedCoverageQuery,
+        resolve_purchased_coverage,
+    )
+
+    service_id = UUID(charge.service_ref)
+    rows = db.execute(
+        select(
+            InvoiceLine.id,
+            InvoiceLine.metadata_,
+            Invoice.id,
+            Invoice.invoice_number,
+            Invoice.status,
+            Invoice.total,
+            Invoice.billing_period_start,
+            Invoice.billing_period_end,
+        )
+        .join(Invoice, Invoice.id == InvoiceLine.invoice_id)
+        .where(
+            Invoice.account_id == account_id,
+            Invoice.is_active.is_(True),
+            Invoice.status != InvoiceStatus.void,
+            InvoiceLine.subscription_id == service_id,
+            InvoiceLine.is_active.is_(True),
+        )
+        .order_by(Invoice.created_at, Invoice.id, InvoiceLine.id)
+    ).all()
+    documents = []
+    settled: dict[UUID, bool] = {}
+    for row in rows:
+        line_id, metadata, invoice_id, number, status, total, start, end = row
+        if invoice_id == exclude_invoice_id or line_id == exclude_line_id:
+            continue
+        other = service_period_charge(
+            subscription_id=service_id,
+            metadata=metadata,
+            header_starts_at=start,
+            header_ends_at=end,
+        )
+        if other is None:
+            continue
+        if invoice_id not in settled:
+            # Status is not evidence of cash or settlement. Unknown history is
+            # deliberately unresolved until the existing settlement owner proves it.
+            settled[invoice_id] = _invoice_claim_financially_settled(
+                db, invoice_id, to_decimal(total)
+            )
+        phase = (
+            ServiceClaimDocumentPhaseV1.closed
+            if status == InvoiceStatus.written_off or settled[invoice_id]
+            else ServiceClaimDocumentPhaseV1.draft
+            if status == InvoiceStatus.draft
+            else ServiceClaimDocumentPhaseV1.open
+        )
+        documents.append(
+            ServiceChargeDocumentFactV1(str(invoice_id), number, phase, other)
+        )
+    coverage: list[ServiceCoverageIntervalV1] = []
+    if (
+        charge.catalogue_claim
+        and not charge.pending_capped_renewal
+        and charge.starts_at is not None
+        and charge.ends_at is not None
+    ):
+        subscription = db.get(Subscription, service_id)
+        if subscription is not None and subscription.subscriber_id == account_id:
+            history = prepaid_coverage_history_for_period(
+                db,
+                subscription,
+                period_start=charge.starts_at,
+                period_end=charge.ends_at,
+                exclude_invoice_id=exclude_invoice_id,
+            )
+            coverage = [
+                ServiceCoverageIntervalV1(
+                    row.starts_at,
+                    row.ends_at,
+                    str(row.source_invoice_id) if row.source_invoice_id else None,
+                    "extension"
+                    if row.source is PrepaidCoverageSource.service_extension_grant
+                    else "coverage",
+                )
+                for row in history.intervals
+            ]
+    purchased = (
+        resolve_purchased_coverage(
+            db, PurchasedCoverageQuery(subscription_id=service_id)
+        )
+        if charge.catalogue_claim and charge.component is ServiceChargeComponent.base
+        else None
+    )
+    conflict = resolve_service_charge_conflict_v1(
+        charge,
+        documents=tuple(documents),
+        coverage=tuple(coverage),
+        unresolved_purchase=purchased.has_unsettled_purchase if purchased else False,
+    )
+    if conflict is None:
+        return None
+    reference = conflict.document_number or conflict.document_ref
+    message = (
+        (
+            f"This service period is reserved on draft invoice {reference}."
+            if conflict.draft
+            else f"This service period has already been billed on invoice {reference}."
+        )
+        if conflict.reason == "period_reserved"
+        else "This service has an unresolved period purchase. Complete or reconcile that checkout first."
+        if conflict.reason == "period_purchase_pending"
+        else "An applied service extension overlaps this period."
+        if conflict.coverage_source == "extension"
+        else "Existing funded or granted service coverage overlaps this period."
+    )
+    return InvoicePeriodConflict(
+        conflict.reason,
+        message,
+        UUID(conflict.document_ref) if conflict.document_ref else None,
+    )
+
+
+def assert_invoice_period_available(
+    db: Session,
+    *,
+    account_id: UUID,
+    charge: ServicePeriodCharge | None,
+    exclude_invoice_id: UUID | None = None,
+    exclude_line_id: UUID | None = None,
+) -> None:
+    if charge is None:
+        return
+    from app.models.catalog import Subscription
+
+    subscription = db.get(Subscription, UUID(charge.service_ref))
+    if subscription is None or subscription.subscriber_id != account_id:
+        raise InvoicePeriodReservationError(
+            reason="period_invalid", message="Service does not belong to this customer."
+        )
+    conflict = invoice_period_conflict(
+        db,
+        account_id=account_id,
+        charge=charge,
+        exclude_invoice_id=exclude_invoice_id,
+        exclude_line_id=exclude_line_id,
+    )
+    if conflict:
+        raise InvoicePeriodReservationError(
+            reason=conflict.reason,
+            message=conflict.message,
+            invoice_id=conflict.invoice_id,
+        )
+
+
 class Invoices(ListResponseMixin):
+    @staticmethod
+    def assert_service_period_reservations_for_issue(
+        db: Session, invoice: Invoice
+    ) -> None:
+        """Recheck catalogue claims before either legacy or Starter issuance."""
+        lock_account(db, str(invoice.account_id))
+        # Preserve staged totals/lines in the caller transaction before refresh;
+        # a waiter may have cached membership before another draft edit committed.
+        db.flush()
+        db.refresh(invoice)
+        db.refresh(invoice, attribute_names=["lines"])
+        Invoices.validate_service_period_reservations(db, invoice)
+
+    @staticmethod
+    def validate_service_period_reservations(db: Session, invoice: Invoice) -> None:
+        """Optimistic read validation; issue owners fence and recheck separately."""
+        if db.new or db.dirty or db.deleted:
+            raise InvoicePeriodReservationError(
+                reason="preview_requires_clean_session",
+                message="Preview requires a clean session; pending changes must be completed by their owner.",
+            )
+        if not invoice.is_active or invoice.status is not InvoiceStatus.draft:
+            raise InvoicePeriodReservationError(
+                reason="invoice_not_editable",
+                message="This invoice is no longer an active draft; refresh before issuing.",
+                invoice_id=invoice.id,
+            )
+        lines = tuple(
+            db.scalars(
+                select(InvoiceLine).where(
+                    InvoiceLine.invoice_id == invoice.id,
+                    InvoiceLine.is_active.is_(True),
+                )
+            ).all()
+        )
+        if any(is_catalogue_period_claim(line.metadata_) for line in lines):
+            from app.services.future_invoice_authoring import (
+                validate_catalogue_draft_for_issue,
+            )
+
+            validate_catalogue_draft_for_issue(db, invoice)
+        charges = tuple(
+            service_period_charge(
+                subscription_id=line.subscription_id,
+                metadata=line.metadata_,
+                header_starts_at=invoice.billing_period_start,
+                header_ends_at=invoice.billing_period_end,
+            )
+            for line in lines
+        )
+        for index, charge in enumerate(charges):
+            assert_invoice_period_available(
+                db,
+                account_id=invoice.account_id,
+                charge=charge,
+                exclude_invoice_id=invoice.id,
+            )
+            if charge is not None and any(
+                other is not None
+                and (charge.catalogue_claim or other.catalogue_claim)
+                and charges_overlap(charge, other)
+                for other in charges[:index]
+            ):
+                raise InvoicePeriodReservationError(
+                    reason="period_reserved",
+                    message="This draft contains duplicate service periods.",
+                    invoice_id=invoice.id,
+                )
+
     @staticmethod
     def create_with_lines(
         db: Session,
@@ -1369,16 +1808,25 @@ class Invoices(ListResponseMixin):
             raise
 
     @staticmethod
-    def stage_admin_draft(db: Session, payload: InvoiceCreate) -> Invoice:
+    def stage_admin_draft(
+        db: Session,
+        payload: InvoiceCreate,
+        *,
+        numbering_mode: DraftInvoiceNumberingMode = DraftInvoiceNumberingMode.AT_DRAFT,
+    ) -> Invoice:
         """Stage one draft header for the contracted authoring coordinator."""
         if payload.status != InvoiceStatus.draft:
             raise DraftInvoiceParticipantError(
                 "invoice_not_editable",
                 "Administrative authoring can stage only draft invoices",
             )
+        lock_account(db, str(payload.account_id))
         _validate_account(db, str(payload.account_id))
         data = payload.model_dump()
-        if not data.get("invoice_number"):
+        if (
+            not data.get("invoice_number")
+            and numbering_mode is DraftInvoiceNumberingMode.AT_DRAFT
+        ):
             data["invoice_number"] = next_invoice_number(db)
         _validate_invoice_totals(data)
         invoice = Invoice(**data)
@@ -1393,6 +1841,9 @@ class Invoices(ListResponseMixin):
         payload: InvoiceUpdate,
     ) -> Invoice:
         """Stage explicit editable header fields without completing a transaction."""
+        observed = db.get(Invoice, invoice_id)
+        if observed is not None:
+            lock_account(db, str(observed.account_id))
         invoice = lock_for_update(db, Invoice, invoice_id)
         if invoice is None or not invoice.is_active:
             raise DraftInvoiceParticipantError(
@@ -1489,6 +1940,8 @@ class Invoices(ListResponseMixin):
             Invoices.preview_void(db, invoice_id)
         except HTTPException as exc:
             return InvoiceClosureCapability(allowed=False, reason=str(exc.detail))
+        except DomainError as exc:
+            return InvoiceClosureCapability(allowed=False, reason=exc.message)
         return InvoiceClosureCapability(allowed=True)
 
     @staticmethod
@@ -1497,6 +1950,8 @@ class Invoices(ListResponseMixin):
             Invoices.preview_write_off(db, invoice_id)
         except HTTPException as exc:
             return InvoiceClosureCapability(allowed=False, reason=str(exc.detail))
+        except DomainError as exc:
+            return InvoiceClosureCapability(allowed=False, reason=exc.message)
         return InvoiceClosureCapability(allowed=True)
 
     @staticmethod
@@ -2246,6 +2701,7 @@ class Invoices(ListResponseMixin):
                 detail="System invoice creation starts only as draft or issued",
             )
         _reject_unverified_native_invoice(payload)
+        lock_account(db, str(payload.account_id))
         _validate_account(db, str(payload.account_id))
         data = payload.model_dump()
         target_status = payload.status
@@ -2365,6 +2821,21 @@ class Invoices(ListResponseMixin):
         invoice = lock_for_update(db, Invoice, invoice_id)
         if invoice is None:
             raise HTTPException(status_code=404, detail="Invoice not found")
+        # A checkbox change may have committed while this caller waited for
+        # the shared account fence. Keep staged invoice work, then read intent.
+        db.flush()
+        db.refresh(invoice)
+        if invoice.withholding_tax_selected:
+            from app.services.owner_commands import owner_command_active
+
+            if not owner_command_active(
+                db, owner="financial.invoice_withholding_issuance"
+            ):
+                raise InvoiceOwnerError(
+                    code="financial.invoice.withholding_issue_owner_required",
+                    message="This invoice selected withholding tax; issue it through the invoice withholding settlement owner.",
+                    retryable=False,
+                )
         if invoice.status == InvoiceStatus.issued:
             if (
                 _evidence_utc(invoice.issued_at) != _evidence_utc(issuance.issued_at)
@@ -2390,6 +2861,7 @@ class Invoices(ListResponseMixin):
                 detail="Convert the proforma before issuing an invoice",
             )
         _assert_controlled_draft_ready_for_issue(db, invoice)
+        Invoices.assert_service_period_reservations_for_issue(db, invoice)
         issuance_funding = None
         if apply_available_credit:
             from app.services.billing.account_credit import AccountCreditApplications
@@ -2400,6 +2872,8 @@ class Invoices(ListResponseMixin):
             issuance_funding = (
                 AccountCreditApplications.preview_invoice_issuance_funding(db, invoice)
             )
+        if not invoice.invoice_number:
+            invoice.invoice_number = next_invoice_number(db)
         invoice.status = InvoiceStatus.issued
         invoice.issued_at = issuance.issued_at
         invoice.due_at = issuance.due_at
@@ -3536,6 +4010,7 @@ class Invoices(ListResponseMixin):
         commit: bool = True,
         _allow_unverified_due_date: bool = False,
     ):
+        lock_account(db, str(payload.account_id))
         _validate_account(db, str(payload.account_id))
         data = payload.model_dump()
         fields_set = payload.model_fields_set
@@ -3967,123 +4442,10 @@ class Invoices(ListResponseMixin):
 
     @staticmethod
     def update(db: Session, invoice_id: str, payload: InvoiceUpdate):
-        invoice = get_by_id(db, Invoice, invoice_id)
-        if not invoice:
-            raise HTTPException(status_code=404, detail="Invoice not found")
-        _assert_generic_draft_mutation_allowed(invoice)
-        previous_status = invoice.status
-        data = payload.model_dump(exclude_unset=True)
-        if invoice.status in {InvoiceStatus.void, InvoiceStatus.written_off}:
-            raise HTTPException(
-                status_code=409,
-                detail="Terminal invoices are immutable financial evidence",
-            )
-        documentary_fields = set(data) - {"status"}
-        if invoice.status != InvoiceStatus.draft and documentary_fields:
-            raise HTTPException(
-                status_code=409,
-                detail="Issued invoices are immutable; use an exact lifecycle action",
-            )
-        if invoice.discount_type and set(data).intersection(
-            {"subtotal", "tax_total", "total", "balance_due"}
-        ):
-            raise HTTPException(
-                status_code=409,
-                detail=(
-                    "Discounted Invoice totals are owner-derived; use Edit Invoice "
-                    "to change its Line Items and discount together"
-                ),
-            )
-        if data.get("status") in {
-            InvoiceStatus.issued,
-            InvoiceStatus.overdue,
-            InvoiceStatus.partially_paid,
-            InvoiceStatus.paid,
-            InvoiceStatus.void,
-            InvoiceStatus.written_off,
-        }:
-            raise HTTPException(
-                status_code=409,
-                detail=(
-                    "Invoice issue, overdue, settlement, void, and write-off states "
-                    "require their named owner workflows"
-                ),
-            )
-        if "balance_due" in data and round_money(
-            to_decimal(data["balance_due"])
-        ) != round_money(to_decimal(invoice.balance_due)):
-            raise HTTPException(
-                status_code=409,
-                detail="Invoice balance_due is owner-derived and cannot be edited",
-            )
-        if "account_id" in data and data["account_id"] != invoice.account_id:
-            raise HTTPException(
-                status_code=400,
-                detail="Cannot change account on an existing invoice",
-            )
-        if "currency" in data and data["currency"] != invoice.currency:
-            raise HTTPException(
-                status_code=400, detail="Currency does not match invoice"
-            )
-        merged = {
-            "subtotal": data.get("subtotal", invoice.subtotal),
-            "discount_amount": invoice.discount_amount,
-            "tax_total": data.get("tax_total", invoice.tax_total),
-            "total": data.get("total", invoice.total),
-            "balance_due": data.get("balance_due", invoice.balance_due),
-        }
-        _validate_invoice_totals(merged)
-        if "status" in data:
-            assert_legal_invoice_transition(previous_status, data["status"])
-        for key, value in data.items():
-            setattr(invoice, key, value)
-
-        # Emit invoice events based on status transitions
-        new_status = invoice.status
-        if previous_status != new_status:
-            payload_dict = {
-                "invoice_id": str(invoice.id),
-                "invoice_number": invoice.invoice_number,
-                "amount": str(invoice.total) if invoice.total else None,
-                "total": str(invoice.total) if invoice.total else None,
-                "due_date": (
-                    invoice.due_at.date().isoformat() if invoice.due_at else None
-                ),
-                "currency": invoice.currency,
-                "from_status": previous_status.value if previous_status else None,
-                "to_status": new_status.value if new_status else None,
-            }
-
-            if new_status == InvoiceStatus.issued:
-                emit_event(
-                    db,
-                    EventType.invoice_sent,
-                    payload_dict,
-                    account_id=invoice.account_id,
-                    invoice_id=invoice.id,
-                )
-                _apply_available_account_credit(db, invoice)
-            elif new_status == InvoiceStatus.paid:
-                emit_event(
-                    db,
-                    EventType.invoice_paid,
-                    payload_dict,
-                    account_id=invoice.account_id,
-                    invoice_id=invoice.id,
-                )
-            elif new_status == InvoiceStatus.overdue:
-                emit_event(
-                    db,
-                    EventType.invoice_overdue,
-                    payload_dict,
-                    account_id=invoice.account_id,
-                    invoice_id=invoice.id,
-                )
-
-        db.commit()
-        db.refresh(invoice)
-
-        return invoice
+        raise InvoicePeriodReservationError(
+            reason="catalogue_draft_owner_required",
+            message="Standalone invoice updates are retired. Edit the complete invoice through catalogue draft authoring.",
+        )
 
     @staticmethod
     def delete(db: Session, invoice_id: str):
@@ -4220,6 +4582,9 @@ class InvoiceLines(ListResponseMixin):
         allow_discount_reprice: bool = False,
     ) -> None:
         """Stage the complete active line set for an administrative draft."""
+        observed = db.get(Invoice, invoice_id)
+        if observed is not None:
+            lock_account(db, str(observed.account_id))
         invoice = lock_for_update(db, Invoice, invoice_id)
         if invoice is None or not invoice.is_active:
             raise DraftInvoiceParticipantError(
@@ -4250,6 +4615,35 @@ class InvoiceLines(ListResponseMixin):
                 .with_for_update()
             ).all()
         }
+        charges = tuple(
+            service_period_charge(
+                subscription_id=replacement.payload.subscription_id,
+                metadata=replacement.payload.metadata_,
+                header_starts_at=invoice.billing_period_start,
+                header_ends_at=invoice.billing_period_end,
+            )
+            if replacement.payload.is_active
+            else None
+            for replacement in replacements
+        )
+        for index, charge in enumerate(charges):
+            assert_invoice_period_available(
+                db,
+                account_id=invoice.account_id,
+                charge=charge,
+                exclude_invoice_id=invoice.id,
+            )
+            if charge is not None and any(
+                other is not None
+                and (charge.catalogue_claim or other.catalogue_claim)
+                and charges_overlap(charge, other)
+                for other in charges[:index]
+            ):
+                raise InvoicePeriodReservationError(
+                    reason="period_reserved",
+                    message="This service period is already selected on this draft.",
+                    invoice_id=invoice.id,
+                )
         seen: set[UUID] = set()
         for replacement in replacements:
             payload = replacement.payload
@@ -4280,13 +4674,16 @@ class InvoiceLines(ListResponseMixin):
                 _apply_invoice_line_tax_snapshot(line, tax_rate)
                 db.add(line)
                 continue
-            existing_line = existing.get(replacement.line_id)
+            existing_line: InvoiceLine | None = existing.get(replacement.line_id)
             if existing_line is None:
                 raise DraftInvoiceParticipantError(
                     "line_not_found",
                     "Invoice line not found",
                 )
             seen.add(existing_line.id)
+            existing_line.subscription_id = payload.subscription_id
+            existing_line.metadata_ = payload.metadata_
+            existing_line.is_active = payload.is_active
             existing_line.description = payload.description
             existing_line.quantity = payload.quantity
             existing_line.unit_price = payload.unit_price
@@ -4310,9 +4707,18 @@ class InvoiceLines(ListResponseMixin):
         tax_snapshot: InvoiceLineTaxSnapshot | None = None,
     ) -> InvoiceLine:
         """Stage one automation-produced invoice line in its caller transaction."""
+        observed = db.get(Invoice, payload.invoice_id)
+        if observed is not None:
+            lock_account(db, str(observed.account_id))
         invoice = lock_for_update(db, Invoice, payload.invoice_id)
         if not invoice or not invoice.is_active:
             raise HTTPException(status_code=404, detail="Invoice not found")
+        if invoice.withholding_tax_selected and invoice.status != InvoiceStatus.draft:
+            raise InvoiceOwnerError(
+                code="financial.invoice.withholding_issued_lines_immutable",
+                message="An issued invoice with selected withholding has immutable line items.",
+                retryable=False,
+            )
         if invoice.status not in {InvoiceStatus.draft, InvoiceStatus.issued}:
             raise HTTPException(
                 status_code=409,
@@ -4378,6 +4784,17 @@ class InvoiceLines(ListResponseMixin):
                 status_code=409,
                 detail="Invoice lines cannot change after a discount is applied",
             )
+        if payload.is_active:
+            assert_invoice_period_available(
+                db,
+                account_id=invoice.account_id,
+                charge=service_period_charge(
+                    subscription_id=payload.subscription_id,
+                    metadata=payload.metadata_,
+                    header_starts_at=invoice.billing_period_start,
+                    header_ends_at=invoice.billing_period_end,
+                ),
+            )
         line = InvoiceLine(
             **data,
             amount=amount,
@@ -4432,53 +4849,10 @@ class InvoiceLines(ListResponseMixin):
 
     @staticmethod
     def create(db: Session, payload: InvoiceLineCreate):
-        invoice = get_by_id(db, Invoice, payload.invoice_id)
-        if not invoice:
-            raise HTTPException(status_code=404, detail="Invoice not found")
-        if invoice.status != InvoiceStatus.draft:
-            raise HTTPException(
-                status_code=409,
-                detail="Invoice lines can be edited only while the invoice is a draft",
-            )
-        try:
-            _assert_backdated_service_line_evidence_owner(db, payload.metadata_)
-        except InvoiceOwnerError as exc:
-            raise HTTPException(status_code=409, detail=exc.message) from exc
-        _assert_generic_draft_mutation_allowed(invoice)
-        if invoice.discount_type:
-            raise HTTPException(
-                status_code=409,
-                detail="Change Invoice lines and its discount together from Edit Invoice",
-            )
-        tax_rate = _resolve_tax_rate(
-            db, str(payload.tax_rate_id) if payload.tax_rate_id else None
+        raise InvoicePeriodReservationError(
+            reason="catalogue_line_owner_required",
+            message="Incremental line mutation is retired. Edit the complete invoice through catalogue draft authoring.",
         )
-        data = payload.model_dump(exclude={"amount"})
-        fields_set = payload.model_fields_set
-        if "tax_application" not in fields_set:
-            default_tax_application = settings_spec.resolve_value(
-                db, SettingDomain.billing, "default_tax_application"
-            )
-            if default_tax_application:
-                data["tax_application"] = validate_enum(
-                    default_tax_application, TaxApplication, "tax_application"
-                )
-        amount = _validate_invoice_line_amount(
-            payload.quantity, payload.unit_price, payload.amount
-        )
-        line = InvoiceLine(**data, amount=amount)
-        _apply_invoice_line_tax_snapshot(line, tax_rate)
-        try:
-            db.add(line)
-            db.flush()
-            _recalculate_invoice_totals(db, invoice)
-            invoice.updated_at = datetime.now(UTC)
-            db.commit()
-        except SQLAlchemyError:
-            db.rollback()
-            raise
-        db.refresh(line)
-        return line
 
     @staticmethod
     def get(db: Session, line_id: str):
@@ -4514,66 +4888,14 @@ class InvoiceLines(ListResponseMixin):
 
     @staticmethod
     def update(db: Session, line_id: str, payload: InvoiceLineUpdate):
-        line = get_by_id(db, InvoiceLine, line_id)
-        if not line:
-            raise HTTPException(status_code=404, detail="Invoice line not found")
-        invoice = get_by_id(db, Invoice, line.invoice_id)
-        if invoice is None or invoice.status != InvoiceStatus.draft:
-            raise HTTPException(
-                status_code=409,
-                detail="Invoice lines can be edited only while the invoice is a draft",
-            )
-        _assert_generic_draft_mutation_allowed(invoice)
-        if invoice.discount_type:
-            raise HTTPException(
-                status_code=409,
-                detail="Change Invoice lines and its discount together from Edit Invoice",
-            )
-        data = payload.model_dump(exclude_unset=True)
-        if "tax_rate_id" in data:
-            tax_rate = _resolve_tax_rate(
-                db, str(data["tax_rate_id"]) if data["tax_rate_id"] else None
-            )
-        quantity = data.get("quantity", line.quantity)
-        unit_price = data.get("unit_price", line.unit_price)
-        amount = data.get("amount")
-        data["amount"] = _validate_invoice_line_amount(quantity, unit_price, amount)
-        for key, value in data.items():
-            setattr(line, key, value)
-        if "tax_rate_id" in data:
-            _apply_invoice_line_tax_snapshot(line, tax_rate)
-        try:
-            if invoice:
-                db.flush()
-                _recalculate_invoice_totals(db, invoice)
-                invoice.updated_at = datetime.now(UTC)
-            db.commit()
-        except SQLAlchemyError:
-            db.rollback()
-            raise
-        db.refresh(line)
-        return line
+        raise InvoicePeriodReservationError(
+            reason="catalogue_line_owner_required",
+            message="Incremental line mutation is retired. Edit the complete invoice through catalogue draft authoring.",
+        )
 
     @staticmethod
     def delete(db: Session, line_id: str):
-        line = get_by_id(db, InvoiceLine, line_id)
-        if not line:
-            raise HTTPException(status_code=404, detail="Invoice line not found")
-        invoice = get_by_id(db, Invoice, line.invoice_id)
-        if invoice is None or invoice.status != InvoiceStatus.draft:
-            raise HTTPException(
-                status_code=409,
-                detail="Invoice lines can be edited only while the invoice is a draft",
-            )
-        _assert_generic_draft_mutation_allowed(invoice)
-        if invoice.discount_type:
-            raise HTTPException(
-                status_code=409,
-                detail="Change Invoice lines and its discount together from Edit Invoice",
-            )
-        line.is_active = False
-        if invoice:
-            db.flush()
-            _recalculate_invoice_totals(db, invoice)
-            invoice.updated_at = datetime.now(UTC)
-        db.commit()
+        raise InvoicePeriodReservationError(
+            reason="catalogue_line_owner_required",
+            message="Incremental line mutation is retired. Edit the complete invoice through catalogue draft authoring.",
+        )

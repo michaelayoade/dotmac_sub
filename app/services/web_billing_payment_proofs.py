@@ -205,15 +205,17 @@ def _review_actions(
 
     eligibility = payment_proofs_service.review_eligibility(proof, duplicates)
     consolidated = proof.billing_account_id is not None
+    invoice_wht = proof.wht_amount is not None and proof.wht_amount > 0
+    has_wht = consolidated or invoice_wht
     amount_label = (
         f"Confirmed net cash ({proof.currency})"
-        if consolidated
+        if has_wht
         else f"Confirmed amount ({proof.currency})"
     )
     amount_help = (
         "Confirm the net cash on the bank statement. The submitted gross less "
         "this amount becomes the WHT receivable."
-        if consolidated
+        if has_wht
         else "Confirm the cash received on the bank statement. The payment is "
         "created for this amount."
     )
@@ -241,20 +243,42 @@ def _review_actions(
     )
 
     verify_impact = (
-        "The billing account will be credited with the gross settlement. Any "
+        "The gross settlement combines confirmed cash and withholding tax. Any "
         "difference between gross and confirmed net cash will become a tracked "
         "WHT receivable."
-        if consolidated
+        if has_wht
         else "A succeeded payment will be created for the confirmed amount. "
         "Invoice allocation follows the selection below."
     )
     verify_confirmation = (
         "Record the confirmed net cash, credit the gross settlement, and create "
         "the resulting WHT receivable?"
-        if consolidated
+        if has_wht
         else "Record a succeeded payment for the confirmed amount and apply the "
         "selected allocation policy?"
     )
+    if invoice_wht and not consolidated:
+        amount_help = (
+            "Confirm the net cash on the bank statement. It must match the "
+            "invoice transfer snapshot; the accepted WHT is recorded separately."
+        )
+        verify_fields[0] = ActionField(
+            key="amount",
+            label=amount_label,
+            kind=ActionFieldKind.decimal,
+            value=f"{proof.amount:.2f}",
+            required=True,
+            min_value="0.01",
+            step="0.01",
+            help_text=amount_help,
+        )
+        verify_impact = (
+            "Record confirmed cash and the snapshotted withholding tax separately. "
+            "Together they discharge the invoice; the certificate remains tracked."
+        )
+        verify_confirmation = (
+            "Accept the cash and withholding tax evidence for this invoice?"
+        )
     # `allowed`/`disabled_reason` are derived from the readiness transport
     # shape rather than set as literals, but the underlying decision is still
     # `payment_proofs_service.review_eligibility` above — `.gated_by(...)`

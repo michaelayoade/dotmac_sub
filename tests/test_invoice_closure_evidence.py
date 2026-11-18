@@ -30,6 +30,7 @@ from app.schemas.billing import (
     PaymentCreate,
 )
 from app.services import billing as billing_service
+from app.services.billing.invoices import InvoicePeriodReservationError
 from app.services.customer_financial_ledger import (
     calculate_customer_balance,
     customer_financial_balances_by_currency,
@@ -372,18 +373,18 @@ def test_generic_invoice_update_cannot_set_financial_state_or_balance(
 ):
     invoice = _invoice(db_session, subscriber)
 
-    with pytest.raises(HTTPException) as state_exc:
+    with pytest.raises(InvoicePeriodReservationError) as state_exc:
         billing_service.invoices.update(
             db_session,
             str(invoice.id),
             InvoiceUpdate(status=InvoiceStatus.written_off),
         )
-    with pytest.raises(HTTPException) as balance_exc:
+    with pytest.raises(InvoicePeriodReservationError) as balance_exc:
         billing_service.invoices.update(
             db_session,
             str(invoice.id),
             InvoiceUpdate(balance_due=Decimal("1.00")),
         )
 
-    assert state_exc.value.status_code == 409
-    assert balance_exc.value.status_code == 409
+    assert state_exc.value.code.endswith("catalogue_draft_owner_required")
+    assert balance_exc.value.code.endswith("catalogue_draft_owner_required")

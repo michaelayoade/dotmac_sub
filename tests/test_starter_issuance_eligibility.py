@@ -318,3 +318,69 @@ def test_recurring_line_without_subscription_stays_legacy(monkeypatch) -> None:
         invoice,
     )
     assert reason is not None and "subscription" in reason
+
+
+@pytest.mark.parametrize(
+    "period_kind", ["monthly", "capped_pending_renewal", "one_time"]
+)
+def test_administrative_policy_accepts_supported_prepaid_catalogue(
+    monkeypatch, period_kind
+):
+    monkeypatch.setattr(issuance, "_seller_snapshot", lambda *_a, **_k: object())
+    monkeypatch.setattr(
+        issuance, "get_invoice_bank_details", lambda *_a, **_k: object()
+    )
+    invoice = _invoice()
+    line = invoice.lines[0]
+    line.subscription_id = None if period_kind == "one_time" else uuid4()
+    line.metadata_ = {
+        "future_catalogue_invoice": True,
+        "kind": "catalogue_one_time"
+        if period_kind == "one_time"
+        else "base_subscription",
+        "future_invoice": {"period_kind": period_kind},
+    }
+    if period_kind == "monthly":
+        line.metadata_.update(
+            billing_period_start="2026-12-01T00:00:00+00:00",
+            billing_period_end="2027-01-01T00:00:00+00:00",
+        )
+    subscription = _subscription(
+        subscriber_id=invoice.account_id, billing_mode=BillingMode.prepaid
+    )
+    db = _Db(_subscriber(billing_mode=BillingMode.prepaid), subscription)
+    assert issuance.eligibility_reason(db, invoice) is not None
+    assert (
+        issuance.eligibility_reason(
+            db,
+            invoice,
+            administrative_policy=issuance.AdministrativeEligibilityPolicy.FUTURE_CATALOGUE,
+        )
+        is None
+    )
+    if period_kind == "capped_pending_renewal":
+        assert (
+            issuance._service_period(invoice, line).status.value == "unknown_unverified"
+        )
+
+
+@pytest.mark.parametrize(
+    "metadata",
+    [
+        None,
+        {"future_catalogue_invoice": True},
+        {
+            "future_catalogue_invoice": True,
+            "future_invoice": {"period_kind": "monthly"},
+        },
+    ],
+)
+def test_administrative_policy_rejects_unproven_prepaid(metadata):
+    invoice = _invoice()
+    invoice.lines[0].metadata_ = metadata
+    reason = issuance.eligibility_reason(
+        _Db(_subscriber(billing_mode=BillingMode.prepaid)),
+        invoice,
+        administrative_policy=issuance.AdministrativeEligibilityPolicy.FUTURE_CATALOGUE,
+    )
+    assert reason is not None and "catalogue evidence" in reason

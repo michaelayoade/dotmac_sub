@@ -1648,7 +1648,13 @@ def run_invoice_cycle(
             "owned by canonical prepaid renewals",
         )
 
-    subscriptions = active_subscriptions + pending_subscriptions
+    # Period reservations serialize with manual drafts on the account row.
+    # Acquire multi-account run locks in one order even when pending and active
+    # query plans return different row orders.
+    subscriptions = sorted(
+        active_subscriptions + pending_subscriptions,
+        key=lambda row: (str(row.subscriber_id), str(row.id)),
+    )
 
     from app.services.subscription_billing_grants import (
         SubscriptionBillingGrantError,

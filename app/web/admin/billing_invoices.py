@@ -1,17 +1,24 @@
 """Admin billing management web routes."""
 
 from datetime import UTC, datetime
+from decimal import Decimal
 from typing import Literal
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, Form, HTTPException, Query, Request
-from fastapi.responses import HTMLResponse, RedirectResponse, StreamingResponse
+from fastapi.responses import (
+    HTMLResponse,
+    RedirectResponse,
+    Response,
+    StreamingResponse,
+)
 from fastapi.templating import Jinja2Templates
 from sqlalchemy.orm import Session
 
 from app.db import get_db
 from app.http_query import OptionalDateQuery
 from app.models.billing import Invoice, InvoiceStatus
+from app.services import future_invoice_authoring as future_invoices
 from app.services import web_billing_customers as web_billing_customers_service
 from app.services import web_billing_documents as web_billing_documents_service
 from app.services import (
@@ -23,9 +30,11 @@ from app.services import web_billing_invoices as web_billing_invoices_service
 from app.services import web_billing_overview as web_billing_overview_service
 from app.services.auth_dependencies import (
     has_permission,
+    require_any_permission,
     require_permission,
 )
 from app.services.billing.invoices import is_controlled_invoice_draft
+from app.services.domain_errors import DomainError
 from app.services.inclusive_date_range import InclusiveDateRangeError
 from app.services.invoice_draft_authoring import resolve_account_vat_selection
 from app.services.list_query import ListQuery
@@ -34,13 +43,143 @@ templates = Jinja2Templates(directory="templates")
 router = APIRouter(prefix="/billing", tags=["web-admin-billing"])
 
 
+@router.get(
+    "/future-invoice/catalogue",
+    dependencies=[
+        Depends(
+            require_any_permission("billing:invoice:create", "billing:invoice:update")
+        )
+    ],
+)
+def future_invoice_catalogue(
+    account_id: UUID,
+    currency: str = Query("NGN", min_length=3, max_length=3),
+    search: str = Query("", max_length=160),
+    db: Session = Depends(get_db),
+) -> web_billing_invoice_forms_service.CatalogueTypeaheadResult:
+    try:
+        return web_billing_invoice_forms_service.CatalogueTypeaheadResult(
+            items=web_billing_invoice_forms_service.catalogue_display_choices(
+                db,
+                query=future_invoices.CatalogueQuery(
+                    account_id=account_id, currency=currency, search=search
+                ),
+            )
+        )
+    except DomainError as exc:
+        raise HTTPException(status_code=409, detail=exc.message) from exc
+
+
+@router.get(
+    "/future-invoice/subscriptions",
+    dependencies=[
+        Depends(
+            require_any_permission("billing:invoice:create", "billing:invoice:update")
+        )
+    ],
+)
+def future_invoice_subscriptions(
+    account_id: UUID,
+    offer_id: UUID,
+    db: Session = Depends(get_db),
+) -> tuple[future_invoices.SubscriptionChoice, ...]:
+    try:
+        return future_invoices.subscriptions_for_offer(
+            db,
+            future_invoices.SubscriptionChoicesQuery(
+                account_id=account_id, offer_id=offer_id
+            ),
+        )
+    except DomainError as exc:
+        raise HTTPException(status_code=409, detail=exc.message) from exc
+
+
+@router.get(
+    "/future-invoice/periods",
+    dependencies=[
+        Depends(
+            require_any_permission("billing:invoice:create", "billing:invoice:update")
+        )
+    ],
+)
+def future_invoice_periods(
+    account_id: UUID,
+    subscription_id: UUID,
+    invoice_id: UUID | None = None,
+    db: Session = Depends(get_db),
+) -> tuple[web_billing_invoice_forms_service.FutureInvoicePeriodDisplay, ...]:
+    try:
+        return web_billing_invoice_forms_service.future_display_periods(
+            db,
+            query=future_invoices.FutureInvoicePeriodsQuery(
+                account_id=account_id,
+                subscription_id=subscription_id,
+                as_of=datetime.now(UTC),
+                invoice_id=invoice_id,
+            ),
+        )
+    except DomainError as exc:
+        raise HTTPException(status_code=409, detail=exc.message) from exc
+
+
+@router.get(
+    "/future-invoice/preview",
+    dependencies=[
+        Depends(
+            require_any_permission("billing:invoice:create", "billing:invoice:update")
+        )
+    ],
+)
+def future_invoice_preview(
+    account_id: UUID,
+    currency: str,
+    item_kind: future_invoices.CatalogueItemKind,
+    item_id: UUID,
+    price_id: UUID,
+    quantity: Decimal = Query(Decimal("1"), gt=0),
+    subscription_id: UUID | None = None,
+    period_start: datetime | None = None,
+    invoice_id: UUID | None = None,
+    db: Session = Depends(get_db),
+) -> web_billing_invoice_forms_service.FutureInvoiceLineDisplay:
+    try:
+        return web_billing_invoice_forms_service.preview_future_display_line(
+            db,
+            query=future_invoices.PreviewFutureInvoiceLineQuery(
+                account_id=account_id,
+                currency=currency,
+                item_kind=item_kind,
+                item_id=item_id,
+                price_id=price_id,
+                quantity=quantity,
+                subscription_id=subscription_id,
+                period_start=period_start,
+                as_of=datetime.now(UTC),
+                invoice_id=invoice_id,
+            ),
+        )
+    except DomainError as exc:
+        raise HTTPException(status_code=409, detail=exc.message) from exc
+
+
+def _invoice_editor_template(state: dict[str, object]) -> str:
+    config = state.get("invoice_config")
+    if isinstance(config, dict) and config.get("initialSelections"):
+        return "admin/billing/future_invoice_form.html"
+    return "admin/billing/invoice_form.html"
+
+
 def _actor_id(request: Request) -> str | None:
     from app.web.admin import get_current_user
 
     current_user = get_current_user(request)
     if not current_user:
         return None
-    value = current_user.get("actor_id") or current_user.get("subscriber_id")
+    value = (
+        current_user.get("principal_id")
+        or current_user.get("actor_id")
+        or current_user.get("id")
+    )
     return str(value) if value else None
 
 
@@ -373,12 +512,13 @@ def invoice_new(
     from app.web.admin import get_current_user, get_sidebar_stats
 
     return templates.TemplateResponse(
-        "admin/billing/invoice_form.html",
+        "admin/billing/future_invoice_form.html",
         {
             "request": request,
             **state,
             "invoice": None,
             "action_url": "/admin/billing/invoices/create",
+            "review_url": "/admin/billing/invoices/new/review",
             "form_title": "New Invoice",
             "submit_label": "Create Invoice",
             "show_line_items": True,
@@ -415,12 +555,19 @@ def invoice_create(
     line_unit_price: list[str] = Form([]),
     line_tax_rate_id: list[str] = Form([]),
     line_items_json: str | None = Form(None),
+    confirmed: str | None = Form(None),
+    future_confirmed: str | None = Form(None),
     draft_idempotency_key: str | None = Form(None),
     issue_immediately: str | None = Form(None),
     send_notification: str | None = Form(None),
     db: Session = Depends(get_db),
     auth: dict = Depends(require_permission("billing:invoice:create")),
 ):
+    if future_confirmed != "yes" or confirmed != "yes":
+        raise HTTPException(
+            status_code=422,
+            detail="Review and confirm the catalogue invoice before saving.",
+        )
     today_iso = datetime.now(UTC).date().isoformat()
     if (
         issued_at
@@ -463,14 +610,17 @@ def invoice_create(
             account_id=locals().get("resolved_account_id") or account_id,
         )
         _apply_account_vat_to_form_state(db, state)
+        if draft_idempotency_key:
+            state["draft_idempotency_key"] = draft_idempotency_key
         from app.web.admin import get_current_user, get_sidebar_stats
 
         return templates.TemplateResponse(
-            "admin/billing/invoice_form.html",
+            "admin/billing/future_invoice_form.html",
             {
                 "request": request,
                 **state,
                 "action_url": "/admin/billing/invoices/create",
+                "review_url": "/admin/billing/invoices/new/review",
                 "form_title": "New Invoice",
                 "submit_label": "Create Invoice",
                 "error": str(exc),
@@ -531,11 +681,12 @@ def invoice_edit(request: Request, invoice_id: UUID, db: Session = Depends(get_d
     from app.web.admin import get_current_user, get_sidebar_stats
 
     return templates.TemplateResponse(
-        "admin/billing/invoice_form.html",
+        _invoice_editor_template(state),
         {
             "request": request,
             **state,
             "action_url": f"/admin/billing/invoices/{invoice_id}/edit",
+            "review_url": f"/admin/billing/invoices/{invoice_id}/edit/review",
             "form_title": "Edit Invoice",
             "submit_label": "Save Changes",
             "active_page": "invoices",
@@ -566,9 +717,23 @@ def invoice_update(
     discount_reason: str | None = Form(None),
     proforma_invoice: str | None = Form(None),
     line_items_json: str | None = Form(None),
+    confirmed: str | None = Form(None),
     draft_idempotency_key: str | None = Form(None),
     db: Session = Depends(get_db),
 ):
+    if (
+        confirmed != "yes"
+        and web_billing_invoice_forms_service.catalogue_edit_requires_review(
+            db,
+            query=web_billing_invoice_forms_service.InvoiceEditReviewRequirementQuery(
+                invoice_id, line_items_json
+            ),
+        )
+    ):
+        raise HTTPException(
+            status_code=422,
+            detail="Review and confirm the catalogue invoice before saving.",
+        )
     try:
         web_billing_invoices_service.update_invoice_web(
             db,
@@ -598,11 +763,12 @@ def invoice_update(
         from app.web.admin import get_current_user, get_sidebar_stats
 
         return templates.TemplateResponse(
-            "admin/billing/invoice_form.html",
+            _invoice_editor_template(state or {}),
             {
                 "request": request,
                 **(state or {}),
                 "action_url": f"/admin/billing/invoices/{invoice_id}/edit",
+                "review_url": f"/admin/billing/invoices/{invoice_id}/edit/review",
                 "form_title": "Edit Invoice",
                 "submit_label": "Save Changes",
                 "show_line_items": False,
@@ -662,3 +828,132 @@ def billing_documents(
     }
     context.update(web_billing_documents_service.billing_documents_data(db, facet))
     return templates.TemplateResponse("admin/billing/documents.html", context)
+
+
+def _future_invoice_review_response(
+    request: Request,
+    db: Session,
+    *,
+    account_id: UUID,
+    currency: str,
+    line_items_json: str,
+    draft_idempotency_key: str,
+    due_at: str,
+    issued_at: str = "",
+    memo: str = "",
+    invoice_number: str = "",
+    invoice_id: UUID | None = None,
+) -> Response:
+    from app.web.admin import get_current_user, get_sidebar_stats
+
+    action_url = (
+        f"/admin/billing/invoices/{invoice_id}/edit"
+        if invoice_id
+        else "/admin/billing/invoices/create"
+    )
+    headers = {"HX-Trigger": '{"open-modal":{"name":"future-invoice-review"}}'}
+    try:
+        review = web_billing_invoice_forms_service.build_future_invoice_review(
+            db,
+            query=web_billing_invoice_forms_service.FutureInvoiceReviewRequest(
+                account_id=account_id,
+                currency=currency,
+                line_items_json=line_items_json,
+                draft_idempotency_key=draft_idempotency_key,
+                action_url=action_url,
+                due_at=due_at,
+                issued_at=issued_at,
+                memo=memo,
+                invoice_id=invoice_id,
+                invoice_number=invoice_number,
+            ),
+        )
+    except (DomainError, ValueError) as exc:
+        if request.headers.get("HX-Request") == "true":
+            return templates.TemplateResponse(
+                "components/feedback/form_error.html",
+                {"request": request, "error": str(exc)},
+                headers=headers,
+            )
+        return templates.TemplateResponse(
+            "admin/errors/409.html",
+            {"request": request, "message": str(exc)},
+            status_code=409,
+        )
+    fragment = request.headers.get("HX-Request") == "true"
+    return templates.TemplateResponse(
+        "admin/billing/_future_invoice_review.html"
+        if fragment
+        else "admin/billing/future_invoice_review.html",
+        {
+            "request": request,
+            "review": review,
+            "current_user": get_current_user(request),
+            "sidebar_stats": get_sidebar_stats(db),
+            "active_page": "invoices",
+            "active_menu": "billing",
+        },
+        headers=headers if fragment else None,
+    )
+
+
+@router.post(
+    "/invoices/new/review",
+    dependencies=[Depends(require_permission("billing:invoice:create"))],
+)
+def invoice_new_review(
+    request: Request,
+    account_id: UUID = Form(...),
+    currency: str = Form(...),
+    line_items_json: str = Form(...),
+    draft_idempotency_key: str = Form(..., min_length=8),
+    due_at: str = Form(...),
+    issued_at: str = Form(""),
+    memo: str = Form(""),
+    invoice_number: str = Form(""),
+    db: Session = Depends(get_db),
+) -> Response:
+    return _future_invoice_review_response(
+        request,
+        db,
+        account_id=account_id,
+        currency=currency,
+        line_items_json=line_items_json,
+        draft_idempotency_key=draft_idempotency_key,
+        due_at=due_at,
+        issued_at=issued_at,
+        memo=memo,
+        invoice_number=invoice_number,
+    )
+
+
+@router.post(
+    "/invoices/{invoice_id:uuid}/edit/review",
+    dependencies=[Depends(require_permission("billing:invoice:update"))],
+)
+def invoice_edit_review(
+    request: Request,
+    invoice_id: UUID,
+    account_id: UUID = Form(...),
+    currency: str = Form(...),
+    line_items_json: str = Form(...),
+    draft_idempotency_key: str = Form(..., min_length=8),
+    due_at: str = Form(...),
+    issued_at: str = Form(""),
+    memo: str = Form(""),
+    invoice_number: str = Form(""),
+    db: Session = Depends(get_db),
+) -> Response:
+    return _future_invoice_review_response(
+        request,
+        db,
+        account_id=account_id,
+        currency=currency,
+        line_items_json=line_items_json,
+        draft_idempotency_key=draft_idempotency_key,
+        due_at=due_at,
+        issued_at=issued_at,
+        memo=memo,
+        invoice_number=invoice_number,
+        invoice_id=invoice_id,
+    )

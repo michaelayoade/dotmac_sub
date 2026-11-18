@@ -69,6 +69,19 @@ def currency_symbol_for(db) -> str:
     return currency_symbol(default_currency(db))
 
 
+def format_amount(
+    amount: Decimal | int | float | str | None, *, missing: str = MISSING_DISPLAY
+) -> str:
+    """Currency-free numeric rendering for labelled columns and text exports."""
+    if amount in (None, ""):
+        return missing
+    try:
+        value = Decimal(str(amount))
+    except (InvalidOperation, ValueError, TypeError):
+        return missing
+    return f"{value:,.2f}" if value.is_finite() else missing
+
+
 def format_money(
     amount,
     *,
@@ -98,7 +111,7 @@ def format_money(
         return missing
     if not value.is_finite():
         return missing
-    return f"{symbol}{value:,.2f}"
+    return f"{symbol}{format_amount(value, missing=missing)}"
 
 
 def format_currency_amount(amount: object, currency: object | None) -> str:

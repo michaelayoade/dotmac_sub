@@ -16,8 +16,8 @@ from app.models.billing import (
 )
 from app.models.domain_settings import DomainSetting, SettingDomain, SettingValueType
 from app.models.event_store import EventStore
+from app.services import customer_tax_policies, invoice_withholding, topup_intents
 from app.services import direct_transfer_intents as svc
-from app.services import topup_intents
 from app.services.account_credit_deposits import AccountCreditDeposits
 from app.services.db_session_adapter import db_session_adapter
 from app.services.owner_commands import CommandContext
@@ -395,60 +395,36 @@ def test_creation_fails_closed_when_feature_has_no_available_configuration(
     assert db_session.query(TopupIntent).count() == 0
 
 
-def test_invoice_creation_snapshots_customer_wht_from_vat_exclusive_basis(
+def test_selected_wht_transfer_requires_native_receipt_adoption_before_quote(
     db_session, subscriber, monkeypatch
 ):
+    from app.services.domain_errors import DomainError
+
     _patch_policy(monkeypatch)
-    monkeypatch.setattr(
-        svc.customer_tax_policies,
-        "get_customer_withholding_tax_policy",
-        lambda *_args, **_kwargs: (
-            svc.customer_tax_policies.CustomerWithholdingTaxPolicy(
-                account_id=subscriber.id,
-                withholding_tax_enabled=True,
-                version=3,
-                updated_by="admin-1",
-                updated_at=None,
-            )
-        ),
-    )
     invoice = Invoice(
+        withholding_tax_selected=True,
         account_id=subscriber.id,
         status=InvoiceStatus.issued,
         currency="NGN",
-        subtotal=Decimal("100000.00"),
-        tax_total=Decimal("7500.00"),
-        total=Decimal("107500.00"),
-        balance_due=Decimal("107500.00"),
+        subtotal=Decimal("100000"),
+        tax_total=Decimal("7500"),
+        total=Decimal("107500"),
+        balance_due=Decimal("107500"),
     )
     db_session.add(invoice)
     db_session.commit()
-
-    result = _create(
-        db_session,
-        account_id=subscriber.id,
-        invoice_id=invoice.id,
-        idempotency_key="invoice-wht-snapshot",
+    with pytest.raises(DomainError) as raised:
+        _create(
+            db_session,
+            account_id=subscriber.id,
+            invoice_id=invoice.id,
+            idempotency_key="unsupported-native-transfer",
+        )
+    assert (
+        raised.value.code
+        == "financial.invoice_withholding.native_transfer_adoption_required"
     )
-
-    intent = db_session.get(TopupIntent, result.intent_id)
-    assert result.requested_amount == Decimal("102500.00")
-    assert intent is not None
-    assert intent.metadata_["payment_flow"] == "invoice_payment"
-    assert intent.metadata_["invoice_id"] == str(invoice.id)
-    assert intent.metadata_["withholding_tax"] == {
-        "schema_version": 1,
-        "account_id": str(subscriber.id),
-        "policy_version": 3,
-        "source_invoice_id": str(invoice.id),
-        "currency": "NGN",
-        "vat_exclusive_amount": "100000.00",
-        "vat_amount": "7500.00",
-        "gross_amount": "107500.00",
-        "withholding_tax_rate_percent": "5.00",
-        "withholding_tax_amount": "5000.00",
-        "net_amount": "102500.00",
-    }
+    assert db_session.query(TopupIntent).count() == 0
 
 
 def test_invoice_creation_omits_wht_snapshot_when_customer_policy_disabled(
@@ -456,16 +432,14 @@ def test_invoice_creation_omits_wht_snapshot_when_customer_policy_disabled(
 ):
     _patch_policy(monkeypatch)
     monkeypatch.setattr(
-        svc.customer_tax_policies,
+        invoice_withholding,
         "get_customer_withholding_tax_policy",
-        lambda *_args, **_kwargs: (
-            svc.customer_tax_policies.CustomerWithholdingTaxPolicy(
-                account_id=subscriber.id,
-                withholding_tax_enabled=False,
-                version=0,
-                updated_by=None,
-                updated_at=None,
-            )
+        lambda *_args, **_kwargs: customer_tax_policies.CustomerWithholdingTaxPolicy(
+            account_id=subscriber.id,
+            withholding_tax_enabled=False,
+            version=0,
+            updated_by=None,
+            updated_at=None,
         ),
     )
     invoice = Invoice(
@@ -493,63 +467,102 @@ def test_invoice_creation_omits_wht_snapshot_when_customer_policy_disabled(
     assert "withholding_tax" not in (intent.metadata_ or {})
 
 
-def test_invoice_creation_snapshot_survives_later_setting_change(
+def test_repeated_selected_wht_transfer_attempts_never_create_reduced_quotes(
+    db_session, subscriber, monkeypatch
+):
+    from app.services.domain_errors import DomainError
+
+    _patch_policy(monkeypatch)
+    invoice = Invoice(
+        withholding_tax_selected=True,
+        account_id=subscriber.id,
+        status=InvoiceStatus.issued,
+        currency="NGN",
+        subtotal=Decimal("100000"),
+        tax_total=Decimal("7500"),
+        total=Decimal("107500"),
+        balance_due=Decimal("107500"),
+    )
+    db_session.add(invoice)
+    db_session.commit()
+    for _ in range(2):
+        with pytest.raises(DomainError) as raised:
+            _create(
+                db_session,
+                account_id=subscriber.id,
+                invoice_id=invoice.id,
+                idempotency_key="repeat-unsupported-native-transfer",
+            )
+        assert raised.value.code.endswith("native_transfer_adoption_required")
+    assert db_session.query(TopupIntent).count() == 0
+
+
+def test_customer_wht_policy_does_not_select_an_unchecked_invoice(
     db_session, subscriber, monkeypatch
 ):
     _patch_policy(monkeypatch)
     monkeypatch.setattr(
-        svc.customer_tax_policies,
+        invoice_withholding,
         "get_customer_withholding_tax_policy",
-        lambda *_args, **_kwargs: (
-            svc.customer_tax_policies.CustomerWithholdingTaxPolicy(
-                account_id=subscriber.id,
-                withholding_tax_enabled=True,
-                version=7,
-                updated_by="admin-1",
-                updated_at=None,
-            )
+        lambda *_args, **_kwargs: customer_tax_policies.CustomerWithholdingTaxPolicy(
+            account_id=subscriber.id,
+            withholding_tax_enabled=True,
+            version=3,
+            updated_by="admin-1",
+            updated_at=None,
         ),
     )
     invoice = Invoice(
         account_id=subscriber.id,
         status=InvoiceStatus.issued,
         currency="NGN",
-        subtotal=Decimal("100000.00"),
-        tax_total=Decimal("7500.00"),
-        total=Decimal("107500.00"),
-        balance_due=Decimal("107500.00"),
+        subtotal=Decimal("100000"),
+        tax_total=Decimal("7500"),
+        total=Decimal("107500"),
+        balance_due=Decimal("107500"),
+        withholding_tax_selected=False,
     )
     db_session.add(invoice)
     db_session.commit()
-    first = _create(
+    result = _create(
         db_session,
         account_id=subscriber.id,
         invoice_id=invoice.id,
-        idempotency_key="invoice-snapshot-stable",
+        idempotency_key="invoice-unchecked-full-cash",
     )
+    intent = db_session.get(TopupIntent, result.intent_id)
+    assert result.requested_amount == Decimal("107500")
+    assert "withholding_tax" not in (intent.metadata_ or {})
 
-    monkeypatch.setattr(
-        svc,
-        "resolve_value",
-        lambda _db, _domain, key: {
-            "topup_min_amount": 1000,
-            "topup_max_amount": 500000,
-            "direct_bank_transfer_intent_ttl_days": 7,
-            "withholding_tax_rate_percent": "10.00",
-        }[key],
+
+def test_obsolete_pending_wht_intent_does_not_instruct_unchecked_invoice_to_pay_again(
+    db_session, subscriber
+):
+    invoice = Invoice(
+        account_id=subscriber.id,
+        status=InvoiceStatus.issued,
+        currency="NGN",
+        total=Decimal("107500"),
+        balance_due=Decimal("107500"),
+        withholding_tax_selected=False,
     )
-
-    same = _create(
-        db_session,
+    db_session.add(invoice)
+    db_session.flush()
+    intent = TopupIntent(
         account_id=subscriber.id,
         invoice_id=invoice.id,
-        idempotency_key="invoice-snapshot-stable",
+        reference="STALE-WHT-INSTRUCTION",
+        provider_type="direct_bank_transfer",
+        currency="NGN",
+        requested_amount=Decimal("102500"),
+        status="pending",
+        metadata_={
+            "invoice_id": str(invoice.id),
+            "withholding_tax": {"net_amount": "102500"},
+        },
     )
-
-    persisted = db_session.get(TopupIntent, first.intent_id)
-    assert same.intent_id == first.intent_id
-    assert persisted is not None
-    assert (
-        persisted.metadata_["withholding_tax"]["withholding_tax_rate_percent"] == "5.00"
-    )
-    assert persisted.metadata_["withholding_tax"]["withholding_tax_amount"] == "5000.00"
+    with pytest.raises(svc.DirectTransferIntentError) as raised:
+        svc.validate_invoice_transfer_selection(db_session, intent=intent)
+    assert raised.value.code.endswith("invoice_withholding_selection_changed")
+    assert "do not transfer again" in raised.value.message
+    assert db_session.query(TopupIntent).count() == 0

@@ -2,6 +2,7 @@
 
 import logging
 import uuid
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from decimal import Decimal
 
@@ -27,7 +28,7 @@ from app.models.service_period_purchase import PrepaidPeriodPurchase
 from app.models.subscriber import Subscriber
 from app.services import billing as billing_service
 from app.services import customer_portal_flow_payment_methods as customer_cards
-from app.services import gateway_topup_intents
+from app.services import display_format, gateway_topup_intents
 from app.services.account_credit_deposits import (
     SETTLEMENT_SCOPE,
     AccountCreditDeposits,
@@ -58,6 +59,10 @@ from app.services.customer_portal_context import (
 from app.services.db_session_adapter import db_session_adapter
 from app.services.integrations import payment_capability
 from app.services.integrations.runtime_execution import RuntimeExecutionError
+from app.services.invoice_withholding import (
+    InvoiceWithholdingQuery,
+    query_invoice_withholding,
+)
 from app.services.owner_commands import CommandContext
 from app.services.payment_gateway_adapter import (
     PaymentGatewayContext,
@@ -835,9 +840,20 @@ def get_payment_page(
         invoice_number=getattr(invoice, "invoice_number", None),
     )
     gateway_context = runtime_ready_gateways[0][1] if runtime_ready_gateways else None
+    from app.services.web_invoice_withholding import withholding_display
+
+    withholding = query_invoice_withholding(
+        db, InvoiceWithholdingQuery(invoice_id=invoice.id)
+    )
     return {
         "invoice": invoice,
+        "invoice_withholding": withholding,
+        "invoice_withholding_display": withholding_display(db, summary=withholding),
         "amount": amount_due,
+        "amount_display": display_format.format_money(
+            amount_due, db=db, currency=invoice.currency
+        ),
+        "invoice_currency": display_format.currency_code(invoice.currency),
         "provider_type": (
             gateway_context.provider_type
             if gateway_context
@@ -2150,6 +2166,38 @@ def create_direct_transfer_topup_intent(
     }
 
 
+@dataclass(frozen=True, slots=True)
+class DirectTransferAmountDisplay:
+    requested_amount: str
+    gross_amount: str
+    vat_exclusive_amount: str
+    vat_amount: str
+    withholding_tax_amount: str
+
+
+def direct_transfer_amount_display(
+    db: Session, *, intent: TopupIntent
+) -> DirectTransferAmountDisplay:
+    wht = dict((intent.metadata_ or {}).get("withholding_tax") or {})
+    return DirectTransferAmountDisplay(
+        display_format.format_money(
+            intent.requested_amount, db=db, currency=intent.currency
+        ),
+        display_format.format_money(
+            wht.get("gross_amount"), db=db, currency=intent.currency
+        ),
+        display_format.format_money(
+            wht.get("vat_exclusive_amount"), db=db, currency=intent.currency
+        ),
+        display_format.format_money(
+            wht.get("vat_amount"), db=db, currency=intent.currency
+        ),
+        display_format.format_money(
+            wht.get("withholding_tax_amount"), db=db, currency=intent.currency
+        ),
+    )
+
+
 def get_direct_transfer_topup_page(db: Session, customer: dict) -> dict:
     """Build context for the customer direct-transfer instruction page."""
     if not customer_direct_bank_transfer_enabled(db):
@@ -2158,7 +2206,13 @@ def get_direct_transfer_topup_page(db: Session, customer: dict) -> dict:
     intent = _latest_pending_direct_transfer_intent(db, account_id)
     if not intent:
         raise ValueError("Start a direct bank transfer payment first")
+    from app.services.direct_transfer_intents import validate_invoice_transfer_selection
+
+    validate_invoice_transfer_selection(db, intent=intent)
+    instructions = direct_transfer_amount_display(db, intent=intent)
     return {
+        "transfer_amount_display": instructions.requested_amount,
+        "transfer_wht_display": instructions,
         "intent": intent,
         "bank_transfer": direct_bank_transfer_settings(db),
         "bank_transfer_accounts": enabled_direct_bank_transfer_accounts(db),
@@ -2184,6 +2238,9 @@ async def submit_direct_transfer_topup(
     intent = _latest_pending_direct_transfer_intent(db, account_id)
     if not intent:
         raise ValueError("Start a direct bank transfer payment first")
+    from app.services.direct_transfer_intents import validate_invoice_transfer_selection
+
+    validate_invoice_transfer_selection(db, intent=intent)
     accounts = enabled_direct_bank_transfer_accounts(db)
     if not accounts:
         raise ValueError("Direct bank transfer is not configured")

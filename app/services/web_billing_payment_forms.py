@@ -3,25 +3,38 @@
 from __future__ import annotations
 
 import logging
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from decimal import Decimal, InvalidOperation
 from typing import cast
 from uuid import uuid4
 
+from sqlalchemy.orm import Session
+
 from app.models.billing import InvoiceStatus
-from app.models.domain_settings import SettingDomain
 from app.models.subscriber import Subscriber
+from app.schemas.status_presentation import StatusPresentation
 from app.services import billing as billing_service
-from app.services import settings_spec
+from app.services import display_format
 from app.services import subscriber as subscriber_service
+from app.services.action_forms import (
+    ActionConfirmation,
+    ActionField,
+    ActionFieldKind,
+    ActionForm,
+    ActionHiddenValue,
+)
+from app.services.manual_payment_recording import (
+    ManualPaymentDuplicateRiskKind,
+    ManualPaymentRecordingPreview,
+)
+from app.services.status_presentation import payment_status_presentation
 
 logger = logging.getLogger(__name__)
 
 
 def _default_currency(db) -> str:
-    value = settings_spec.resolve_value(db, SettingDomain.billing, "default_currency")
-    code = str(value or "NGN").strip().upper()
-    return code or "NGN"
+    return display_format.default_currency(db)
 
 
 def new_manual_payment_idempotency_token() -> str:
@@ -165,6 +178,11 @@ def build_new_form_state(
 
     return {
         "prefill": prefill,
+        "prefill_amount_display": display_format.format_money(
+            prefill.get("amount"),
+            db=db,
+            currency=str(prefill.get("currency") or _default_currency(db)),
+        ),
         "selected_account": selected_account,
         "invoice_label": invoice_label,
         "balance_value": balance_value,
@@ -454,3 +472,92 @@ def load_edit_dependencies(
         "balance_value": balance_value,
         "balance_display": balance_display,
     }
+
+
+@dataclass(frozen=True, slots=True)
+class PaymentCreateReviewQuery:
+    control: ManualPaymentRecordingPreview
+    hidden_values: tuple[ActionHiddenValue, ...]
+    reference: str
+
+
+@dataclass(frozen=True, slots=True)
+class PaymentRiskDisplay:
+    href: str
+    label: str
+    detail: str
+
+
+@dataclass(frozen=True, slots=True)
+class PaymentCreateReview:
+    amount: str
+    status: StatusPresentation
+    effects: tuple[str, ...]
+    risks: tuple[PaymentRiskDisplay, ...]
+    action: ActionForm
+
+
+def payment_create_review(
+    db: Session, *, query: PaymentCreateReviewQuery
+) -> PaymentCreateReview:
+    preview = query.control.payment_preview
+
+    def money(value: Decimal) -> str:
+        return display_format.format_money(value, db=db, currency=preview.currency)
+
+    effects = [
+        f"Prepaid funding: {money(preview.prepaid_funding_before)} → {money(preview.prepaid_funding_after)}.",
+        f"Unallocated account credit: {money(preview.account_credit_before)} → {money(preview.account_credit_after)}.",
+        f"Access consequence: {preview.access_consequence}.",
+    ]
+    for effect in preview.allocation_effects:
+        effects.append(
+            f"Invoice {effect.invoice_number or effect.invoice_id}: receivable {money(effect.receivable_before)}, cash allocation {money(effect.allocation_amount)}, after cash {money(effect.receivable_after)}."
+        )
+    risks = tuple(
+        PaymentRiskDisplay(
+            f"/admin/billing/payments/{risk.evidence_id}"
+            if risk.kind is ManualPaymentDuplicateRiskKind.existing_payment_same_amount
+            else f"/admin/billing/payment-proofs/{risk.evidence_id}",
+            risk.reference or str(risk.evidence_id),
+            f"{display_format.format_money(risk.amount, db=db, currency=risk.currency)} · {display_format.format_timestamp(risk.observed_at, db)}",
+        )
+        for risk in query.control.duplicate_risks
+    )
+    fields = (
+        (
+            ActionField(
+                key="duplicate_risk_acknowledged",
+                label="I reviewed the matching records and confirm this is a distinct receipt",
+                kind=ActionFieldKind.checkbox,
+                required=True,
+            ),
+        )
+        if query.control.requires_duplicate_acknowledgement
+        else ()
+    )
+    hidden = query.hidden_values + (
+        ActionHiddenValue("preview_fingerprint", preview.fingerprint),
+        ActionHiddenValue("control_fingerprint", query.control.control_fingerprint),
+    )
+    action = ActionForm(
+        key="payment.create",
+        title="Confirm payment",
+        description=f"Reference: {query.reference or 'Pending intent'}.",
+        action_url="/admin/billing/payments/create",
+        submit_label="Confirm and record",
+        fields=fields,
+        hidden_values=hidden,
+        impact=" ".join(effects),
+        confirmation=ActionConfirmation(
+            "I reviewed the cash receipt and its financial effects",
+            "Record this payment using the exact reviewed sources. The owner rechecks current amounts and duplicate evidence before saving.",
+        ),
+    )
+    return PaymentCreateReview(
+        money(preview.amount),
+        payment_status_presentation(preview.status),
+        tuple(effects),
+        risks,
+        action,
+    )

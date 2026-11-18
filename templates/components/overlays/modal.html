@@ -21,11 +21,11 @@
     'full': 'max-w-full mx-4'
 } %}
 
-<div x-data="{ open: false, focusables: [], first: null, last: null }"
-     x-on:open-modal.window="if ($event.detail.name === '{{ name }}') { open = true; $nextTick(() => { focusables = $refs.modal.querySelectorAll('a,button,input,select,textarea,[tabindex]:not([tabindex=\'-1\'])'); first = focusables[0]; last = focusables[focusables.length - 1]; ($refs.modal)?.focus(); if (first) first.focus(); }) }"
+<div x-data="{ open: false }"
+     x-on:open-modal.window="if ($event.detail.name === '{{ name }}') open = true"
      x-on:close-modal.window="if ($event.detail.name === '{{ name }}') open = false"
      x-on:keydown.escape.window="open = false"
-     x-on:keydown.tab.prevent="if (!open) return; if (!first || !last) { $event.preventDefault(); return; } if ($event.shiftKey && document.activeElement === first) { last.focus(); return; } if (!$event.shiftKey && document.activeElement === last) { first.focus(); }"
+     {% if not allow_background_interaction %}x-trap.inert.noscroll="open"{% endif %}
      x-show="open"
      x-cloak
      class="fixed inset-0 z-50 overflow-y-auto {% if allow_background_interaction %}pointer-events-none{% endif %}"
@@ -64,7 +64,7 @@
              x-on:click.stop
              x-ref="modal"
              tabindex="-1"
-             class="relative w-full {{ sizes[size | default('md')] }} rounded-2xl bg-white shadow-2xl dark:bg-slate-800 {% if slide_from == 'right' %}h-full rounded-none sm:rounded-l-2xl{% endif %} {% if allow_background_interaction %}pointer-events-auto{% endif %}">
+             class="relative w-full {{ sizes[size | default('md')] }} {% if compact|default(false) %}rounded-lg bg-white shadow-sm{% else %}rounded-2xl bg-white shadow-2xl{% endif %} dark:bg-slate-800 {% if slide_from == 'right' %}h-full rounded-none sm:rounded-l-2xl{% endif %} {% if allow_background_interaction %}pointer-events-auto{% endif %}">
 
             <!-- Header -->
             <div class="flex items-center justify-between border-b border-slate-200 px-6 py-4 dark:border-slate-700">

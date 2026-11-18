@@ -90,3 +90,12 @@ lines, idempotent replay, draft-only updates, non-payable drafts/proformas,
 concurrent payment/conversion status preservation, and complete notification
 event context. Architecture tests pin the owner contract and prevent the admin
 adapter from returning to direct invoice/line writers or unlocked conversion.
+
+## Future catalogue authoring
+
+The future catalogue flow is specified in `FUTURE_CATALOGUE_INVOICING.md`. New
+administrative web drafts use typed catalogue selections and owner-derived
+prices, VAT and future dates. Legacy complete-draft commands remain compatible;
+catalogue drafts cannot be edited through raw line endpoints. Active lines
+reserve service charge identities under the shared account lock. Capped renewal
+lines promise a configured package, not dates before verified settlement.

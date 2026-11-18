@@ -67,20 +67,20 @@
                 </div>
                 <div class="grid gap-1 px-5 py-4 sm:grid-cols-[11rem,1fr]">
                     <dt class="text-sm font-medium text-stone-500 dark:text-stone-400">Amount to pay</dt>
-                    <dd class="text-xl font-bold text-emerald-700 dark:text-emerald-300">{{ intent.currency }} {{ "{:,.2f}".format(intent.requested_amount) }}</dd>
+                    <dd class="text-xl font-bold text-emerald-700 dark:text-emerald-300">{{ transfer_amount_display }}</dd>
                 </div>
                 {% if wht %}
                 <div class="grid gap-1 px-5 py-4 sm:grid-cols-[11rem,1fr]">
                     <dt class="text-sm font-medium text-stone-500 dark:text-stone-400">Invoice total</dt>
-                    <dd class="text-sm font-semibold text-stone-900 dark:text-white">{{ wht.currency }} {{ "{:,.2f}".format(wht.gross_amount|float) }}</dd>
+                    <dd class="text-sm font-semibold text-stone-900 dark:text-white">{{ transfer_wht_display.gross_amount }}</dd>
                 </div>
                 <div class="grid gap-1 px-5 py-4 sm:grid-cols-[11rem,1fr]">
                     <dt class="text-sm font-medium text-stone-500 dark:text-stone-400">VAT-exclusive basis</dt>
-                    <dd class="text-sm font-semibold text-stone-900 dark:text-white">{{ wht.currency }} {{ "{:,.2f}".format(wht.vat_exclusive_amount|float) }}</dd>
+                    <dd class="text-sm font-semibold text-stone-900 dark:text-white">{{ transfer_wht_display.vat_exclusive_amount }}</dd>
                 </div>
                 <div class="grid gap-1 px-5 py-4 sm:grid-cols-[11rem,1fr]">
                     <dt class="text-sm font-medium text-stone-500 dark:text-stone-400">VAT amount</dt>
-                    <dd class="text-sm font-semibold text-stone-900 dark:text-white">{{ wht.currency }} {{ "{:,.2f}".format(wht.vat_amount|float) }}</dd>
+                    <dd class="text-sm font-semibold text-stone-900 dark:text-white">{{ transfer_wht_display.vat_amount }}</dd>
                 </div>
                 <div class="grid gap-1 px-5 py-4 sm:grid-cols-[11rem,1fr]">
                     <dt class="text-sm font-medium text-stone-500 dark:text-stone-400">WHT rate</dt>
@@ -88,15 +88,15 @@
                 </div>
                 <div class="grid gap-1 px-5 py-4 sm:grid-cols-[11rem,1fr]">
                     <dt class="text-sm font-medium text-stone-500 dark:text-stone-400">WHT deduction</dt>
-                    <dd class="text-sm font-semibold text-stone-900 dark:text-white">{{ wht.currency }} {{ "{:,.2f}".format(wht.withholding_tax_amount|float) }}</dd>
+                    <dd class="text-sm font-semibold text-stone-900 dark:text-white">{{ transfer_wht_display.withholding_tax_amount }}</dd>
                 </div>
                 <div class="grid gap-1 px-5 py-4 sm:grid-cols-[11rem,1fr]">
-                    <dt class="text-sm font-medium text-stone-500 dark:text-stone-400">Gross credit after verification</dt>
-                    <dd class="text-sm font-semibold text-stone-900 dark:text-white">{{ wht.currency }} {{ "{:,.2f}".format(wht.gross_amount|float) }}</dd>
+                    <dt class="text-sm font-medium text-stone-500 dark:text-stone-400">Invoice settlement after verification</dt>
+                    <dd class="text-sm font-semibold text-stone-900 dark:text-white">{{ transfer_wht_display.gross_amount }}</dd>
                 </div>
                 <div class="grid gap-1 px-5 py-4 sm:grid-cols-[11rem,1fr]">
-                    <dt class="text-sm font-medium text-stone-500 dark:text-stone-400">Certificate amount outstanding</dt>
-                    <dd class="text-sm font-semibold text-stone-900 dark:text-white">{{ wht.currency }} {{ "{:,.2f}".format(wht.withholding_tax_amount|float) }}</dd>
+                    <dt class="text-sm font-medium text-stone-500 dark:text-stone-400">Expected certificate amount</dt>
+                    <dd class="text-sm font-semibold text-stone-900 dark:text-white">{{ transfer_wht_display.withholding_tax_amount }}</dd>
                 </div>
                 {% endif %}
                 <div class="grid gap-1 px-5 py-4 sm:grid-cols-[11rem,1fr]" x-data="{ copied: false, copyRef() { const text = '{{ intent.reference }}'; (navigator.clipboard ? navigator.clipboard.writeText(text) : Promise.reject()).then(() => { this.copied = true; setTimeout(() => this.copied = false, 2000); }).catch(() => {}); } }">

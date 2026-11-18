@@ -51,7 +51,15 @@
                 {% if field.required %}<span aria-hidden="true">*</span><span class="sr-only"> (required)</span>{% endif %}
             </label>
 
-            {% if field.kind.value == 'select' %}
+            {% if field.kind.value == 'checkbox' %}
+            <input id="{{ field_id }}" type="checkbox" name="{{ field.key }}" value="true"
+                   class="mt-2 rounded border-slate-300 text-primary-600"
+                   {% if field.value == 'true' %}checked{% endif %}
+                   {% if field.required %}required aria-required="true"{% endif %}
+                   aria-invalid="{{ 'true' if field.error else 'false' }}"
+                   {% if field.help_text or field.error %}aria-describedby="{% if field.help_text %}{{ help_id }}{% endif %}{% if field.error %} {{ error_id }}{% endif %}"{% endif %}
+                   {% if not form.allowed %}disabled{% endif %}>
+            {% elif field.kind.value == 'select' %}
             <select id="{{ field_id }}"
                     name="{{ field.key }}"
                     class="mt-1 block w-full rounded-lg border bg-white px-3 py-2 text-sm text-slate-900 shadow-sm focus:border-primary-500 focus:outline-none focus:ring-2 focus:ring-primary-500 dark:bg-slate-700 dark:text-white {% if field.error %}action-form-field-error{% else %}border-slate-300 dark:border-slate-600{% endif %}"

@@ -177,6 +177,7 @@ class EventType(enum.Enum):
     customer_subledger_authority_activated = "customer_subledger.authority_activated"
 
     # Billing - Bank-transfer evidence lifecycle
+    invoice_withholding_selection_changed = "invoice.withholding_selection_changed"
     payment_proof_submitted = "payment_proof.submitted"
     payment_proof_verified = "payment_proof.verified"
     payment_proof_rejected = "payment_proof.rejected"

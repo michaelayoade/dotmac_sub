@@ -22,8 +22,17 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.models.audit import AuditActorType
-from app.models.billing import Invoice, Payment, PaymentStatus, StarterInvoiceLink
-from app.models.payment_proof import PaymentProof, PaymentProofStatus
+from app.models.billing import (
+    Invoice,
+    Payment,
+    PaymentStatus,
+    StarterInvoiceLink,
+)
+from app.models.event_store import EventStore
+from app.models.payment_proof import (
+    PaymentProof,
+    PaymentProofStatus,
+)
 from app.schemas.audit import AuditEventCreate
 from app.schemas.billing import (
     ManualPaymentRecordingConfirm,
@@ -59,6 +68,27 @@ _CONFIRM_COMMAND = OwnerCommandDefinition(
     concern="locked administrative manual-payment confirmation",
     name="confirm_manual_payment_recording",
 )
+
+
+@dataclass(frozen=True, slots=True)
+class NativeAccountCashQuery:
+    account_id: UUID
+
+
+def uses_native_account_cash(db: Session, query: NativeAccountCashQuery) -> bool:
+    """Observe this owner's committed native-receipt event, not a cash balance."""
+    return (
+        db.scalar(
+            select(EventStore.id)
+            .where(
+                EventStore.event_type == EventType.manual_payment_recorded.value,
+                EventStore.account_id == query.account_id,
+                EventStore.payload["native_account_deposit"].as_boolean().is_(True),
+            )
+            .limit(1)
+        )
+        is not None
+    )
 
 
 class ManualPaymentDuplicateRiskKind(StrEnum):
@@ -274,6 +304,11 @@ def preview_manual_payment_recording(
     db: Session,
     request: ManualPaymentRecordingPreviewRequest,
 ) -> ManualPaymentRecordingPreview:
+    if request.withholding_tax:
+        raise _error(
+            "withholding_invoice_flow_required",
+            "Record the actual account deposit, then select WHT on the invoice and use Issue. This payment form cannot accept withholding.",
+        )
     payment_preview = Payments.preview_creation(db, request)
     assert request.account_id is not None
     assessment = _assessment(
@@ -296,6 +331,9 @@ def _request_payload(request: ManualPaymentRecordingConfirm) -> PaymentCreate:
     return PaymentCreate(
         **request.model_dump(
             exclude={
+                "withholding_tax",
+                "withholding_preview_fingerprint",
+                "withholding_evidence_reference",
                 "auto_allocate",
                 "preview_fingerprint",
                 "idempotency_key",
@@ -335,6 +373,11 @@ def _validate_command(
     context: CommandContext,
     request: ManualPaymentRecordingConfirm,
 ) -> None:
+    if request.withholding_tax:
+        raise _error(
+            "withholding_invoice_flow_required",
+            "Use the invoice WHT selection and existing Issue workflow.",
+        )
     if context.scope != MANUAL_PAYMENT_RECORDING_SCOPE:
         raise _error(
             "invalid_scope",
@@ -408,7 +451,8 @@ def _starter_manual_target(
 
 def _starter_payment_result(
     request: ManualPaymentRecordingConfirm,
-    manual: starter_manual_settlement.StarterManualSettlement,
+    manual: starter_manual_settlement.StarterManualSettlement
+    | starter_manual_settlement.StarterManualAccountDeposit,
     *,
     occurred_at: datetime,
     preview: ManualPaymentRecordingPreview,
@@ -493,8 +537,62 @@ def confirm_manual_payment_recording(
                 risk_count=len(preview.duplicate_risks),
             )
 
+        native_cash_account = uses_native_account_cash(
+            db, NativeAccountCashQuery(request.account_id)
+        )
+        native_deposit_shape = (
+            request.status == PaymentStatus.succeeded
+            and request.provider_id is None
+            and not request.provider_fee
+            and not request.allocations
+            and request.billing_account_id is None
+            and not request.withholding_tax
+            and not preview.payment_preview.allocation_effects
+            and preview.payment_preview.unallocated_amount == request.amount
+        )
+        if native_cash_account:
+            from app.services.billing.starter_policies import (
+                starter_ledger_live_enabled,
+            )
+
+            if not native_deposit_shape or not starter_ledger_live_enabled(db):
+                raise _error(
+                    "native_cash_lane_required",
+                    "This account uses native cash. Record an unallocated confirmed "
+                    "receipt through its enabled native payment lane; cash cannot "
+                    "be redirected into the legacy ledger.",
+                )
+        native_deposit = native_deposit_shape and (
+            native_cash_account
+            or starter_manual_settlement.native_account_deposit_enabled(
+                db, account_id=request.account_id
+            )
+        )
+        if native_deposit:
+            manual_deposit = (
+                starter_manual_settlement.record_manual_starter_account_deposit(
+                    db,
+                    command=starter_manual_settlement.ManualStarterAccountDeposit(
+                        request.account_id,
+                        request.amount,
+                        request.currency,
+                        request.external_id or "",
+                        request.idempotency_key,
+                        request.paid_at,
+                    ),
+                )
+            )
+            payment_result = _starter_payment_result(
+                request,
+                manual_deposit,
+                occurred_at=manual_deposit.settlement.observed_at,
+                preview=preview,
+            )
+        else:
+            payment_result = None
+
         starter_target = _starter_manual_target(db, preview, request)
-        if starter_target is not None:
+        if payment_result is None and starter_target is not None:
             # Starter lane (ADR 0031): pay-then-record through
             # dotmac-payments confirmation into dotmac-billing. No
             # legacy Payment or ledger entry is written; consumers
@@ -513,7 +611,7 @@ def confirm_manual_payment_recording(
             payment_result = _starter_payment_result(
                 request, manual, occurred_at=occurred_at, preview=preview
             )
-        else:
+        elif payment_result is None:
             payment_result = Payments.stage_confirm_creation(
                 db,
                 PaymentCreationConfirm(
@@ -522,6 +620,29 @@ def confirm_manual_payment_recording(
                     preview_fingerprint=preview.payment_preview.fingerprint,
                     idempotency_key=request.idempotency_key,
                 ),
+            )
+        if (
+            native_deposit
+            and db.scalar(
+                select(EventStore.id)
+                .where(
+                    EventStore.event_type == EventType.manual_payment_recorded.value,
+                    EventStore.account_id == request.account_id,
+                    EventStore.payload["aggregate_id"].as_string()
+                    == str(payment_result.payment.id),
+                )
+                .limit(1)
+            )
+            is not None
+        ):
+            return ManualPaymentRecordingResult(
+                payment_result=PaymentCreationResult(
+                    payment_result.payment,
+                    payment_result.settlement,
+                    payment_result.preview,
+                    idempotent_replay=True,
+                ),
+                preview=preview,
             )
         actor_type, actor_id = _audit_actor(context)
         risk_ids = [str(risk.evidence_id) for risk in preview.duplicate_risks]
@@ -549,6 +670,7 @@ def confirm_manual_payment_recording(
             {
                 "aggregate_type": "payment",
                 "aggregate_id": str(payment_result.payment.id),
+                **({"native_account_deposit": True} if native_deposit else {}),
                 "aggregate_version": str(context.command_id),
                 "account_id": str(request.account_id),
                 "control_fingerprint": preview.control_fingerprint,
