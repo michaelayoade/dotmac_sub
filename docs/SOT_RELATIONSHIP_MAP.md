@@ -3521,6 +3521,16 @@ network summary composition.
    and calendar-day average from the complete filtered daily set before
    pagination. An authoritative zero is a valid value, not a missing-data
    sentinel; unavailable observations do not become numeric zero.
+   The admin Statistics page also queries `topology.customer_availability` for
+   provider-side uptime and downtime over the same resolved window. That owner
+   resolves one subscription and network path, reads daily availability
+   snapshots (derived from uptime-alert intervals for devices) and qualifying
+   provider-fault tickets, and returns a typed evidence state. Daily downtime
+   comes from `uptime_percent`; overlapping elements and ticket intervals are
+   counted once. PON results are estimated. Missing monitoring, ambiguous
+   subscriptions, and incomplete topology produce no numeric days. RADIUS
+   session gaps are never provider downtime. The admin route and template only
+   adapt this read-only result; usage CSV remains usage-only.
 9. `customer.reseller_status_actions` (`app/services/reseller_portal.py`) owns
    the reseller-scoped impact preview for deactivate, restore, and disable. It
    evaluates current subscription state, active enforcement locks, duplicate-

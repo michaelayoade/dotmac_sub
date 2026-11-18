@@ -28,7 +28,8 @@ from __future__ import annotations
 import logging
 import uuid
 from dataclasses import dataclass, field
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, date, datetime, timedelta
+from enum import StrEnum
 
 from sqlalchemy import tuple_
 from sqlalchemy.orm import Session
@@ -160,8 +161,10 @@ def _serving_elements(
 
     _add(ELEMENT_POP_SITE, path.basestation, "Base station")
     _add(ELEMENT_PON_PORT, path.pon_port, "PON port")
-    if path.access_device_kind in {"olt", "ap"}:
-        _add(ELEMENT_DEVICE, path.access_device, f"Access {path.access_device_kind}")
+    # Snapshot device IDs are NetworkDevice IDs. A raw OLTDevice ID is a
+    # different namespace; the matching access node is path.node below.
+    if path.access_device_kind == "ap":
+        _add(ELEMENT_DEVICE, path.access_device, "Access ap")
     _add(ELEMENT_DEVICE, path.node, "Access node")
     for hop in path.upstream_chain:
         _add(ELEMENT_DEVICE, hop, "Upstream")
@@ -336,4 +339,244 @@ def customer_availability(
         tickets=tickets,
         ticket_downtime_seconds=ticket_downtime,
         path_gap=gap,
+    )
+
+
+class AvailabilityState(StrEnum):
+    confirmed = "confirmed"
+    estimated = "estimated"
+    partial = "partial"
+    unavailable = "unavailable"
+
+
+@dataclass(frozen=True, slots=True)
+class CustomerAvailabilityQuery:
+    customer_id: uuid.UUID
+    period_start: datetime
+    period_end: datetime  # exclusive
+    subscription_id: uuid.UUID | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class CustomerAvailabilityResult:
+    state: AvailabilityState
+    expected_days: int
+    observed_days: int
+    period_seconds: float
+    downtime_seconds: float | None
+    subscription_id: uuid.UUID | None
+    subscription_status: str | None
+    reason: str | None
+    evidence_sources: tuple[str, ...]
+
+    @property
+    def downtime_days(self) -> float | None:
+        return (
+            round(self.downtime_seconds / 86400, 2)
+            if self.downtime_seconds is not None
+            else None
+        )
+
+    @property
+    def uptime_days(self) -> float | None:
+        if self.downtime_days is None:
+            return None
+        return round(self.period_seconds / 86400, 2) - self.downtime_days
+
+
+def _union_seconds(intervals: list[tuple[datetime, datetime]]) -> float:
+    """Return the wall-clock union of clipped ticket intervals."""
+    total = 0.0
+    latest: datetime | None = None
+    for start, end in sorted(intervals):
+        if latest is None or start >= latest:
+            total += (end - start).total_seconds()
+            latest = end
+        elif end > latest:
+            total += (end - latest).total_seconds()
+            latest = end
+    return total
+
+
+def query_customer_availability(
+    session: Session, query: CustomerAvailabilityQuery
+) -> CustomerAvailabilityResult:
+    """Read provider-side evidence for the admin Statistics cards.
+
+    Daily snapshots are the materialized uptime-alert evidence for devices.
+    A missing snapshot is unknown monitoring, never positive uptime evidence.
+    """
+    from app.models.catalog import Subscription
+    from app.models.support import Ticket, TicketStatus
+    from app.services.customer_service_state import is_infrastructure_down_ticket
+
+    start = _as_utc(query.period_start)
+    end = _as_utc(query.period_end)
+    if start is None or end is None or end <= start:
+        raise ValueError("Availability period must have a positive duration")
+    period_seconds = (end - start).total_seconds()
+    expected_days = ((end - timedelta(microseconds=1)).date() - start.date()).days + 1
+
+    def unavailable(
+        reason: str,
+        *,
+        state: AvailabilityState = AvailabilityState.unavailable,
+        observed: int = 0,
+        subscription: Subscription | None = None,
+    ) -> CustomerAvailabilityResult:
+        return CustomerAvailabilityResult(
+            state=state,
+            expected_days=expected_days,
+            observed_days=observed,
+            period_seconds=period_seconds,
+            downtime_seconds=None,
+            subscription_id=subscription.id if subscription else None,
+            subscription_status=(subscription.status.value if subscription else None),
+            reason=reason,
+            evidence_sources=("customer_path", "availability_snapshots"),
+        )
+
+    subscriptions = (
+        session.query(Subscription)
+        .filter(Subscription.subscriber_id == query.customer_id)
+        .all()
+    )
+    if query.subscription_id is not None:
+        subscriptions = [
+            sub for sub in subscriptions if sub.id == query.subscription_id
+        ]
+    covering: list[Subscription] = []
+    for sub in subscriptions:
+        activated = _as_utc(sub.start_at or sub.created_at)
+        ended = _as_utc(sub.canceled_at or sub.end_at)
+        if activated is not None and activated <= start and (ended or end) >= end:
+            covering.append(sub)
+    if len(covering) != 1:
+        return unavailable(
+            "No single subscription covers this period."
+            if not covering
+            else "Multiple subscriptions cover this period; availability is service-specific."
+        )
+    subscription = covering[0]
+    if subscription.status.value == "canceled" and subscription.canceled_at is None:
+        return unavailable(
+            "The canceled subscription has no dated closure evidence.",
+            subscription=subscription,
+        )
+    try:
+        elements, gap = _serving_elements(session, subscription)
+    except Exception:
+        logger.exception("Customer Statistics availability path resolution failed")
+        return unavailable(
+            "The service network path could not be resolved.", subscription=subscription
+        )
+    if not elements or gap:
+        return unavailable(
+            "The service network path is incomplete.", subscription=subscription
+        )
+
+    keys = {(element.element_type, element.element_id) for element in elements}
+    rows = (
+        session.query(AvailabilitySnapshot)
+        .filter(
+            AvailabilitySnapshot.snapshot_date
+            >= start.replace(hour=0, minute=0, second=0, microsecond=0)
+        )
+        .filter(AvailabilitySnapshot.snapshot_date < end)
+        .filter(
+            tuple_(
+                AvailabilitySnapshot.element_type, AvailabilitySnapshot.element_id
+            ).in_(keys)
+        )
+        .all()
+    )
+    by_day: dict[date, dict[tuple[str, uuid.UUID], float]] = {}
+    cursor = start.replace(hour=0, minute=0, second=0, microsecond=0)
+    while cursor < end:
+        next_day = cursor + timedelta(days=1)
+        covered = max(0.0, (min(next_day, end) - max(cursor, start)).total_seconds())
+        if covered:
+            by_day[cursor.date()] = {}
+        cursor = next_day
+    for row in rows:
+        key = (row.element_type, row.element_id)
+        day = (_as_utc(row.snapshot_date) or row.snapshot_date).date()
+        if key not in keys or day not in by_day:
+            continue
+        pct = row.uptime_percent
+        if pct is None or not 0 <= pct <= 100 or row.window_seconds < 86400:
+            continue
+        day_start = datetime.combine(day, datetime.min.time(), tzinfo=UTC)
+        covered = (
+            min(day_start + timedelta(days=1), end) - max(day_start, start)
+        ).total_seconds()
+        by_day[day][key] = covered * (100 - pct) / 100
+
+    observed = sum(1 for values in by_day.values() if keys <= values.keys())
+    if observed != len(by_day):
+        return unavailable(
+            f"Monitoring data exists for only {observed} of {expected_days} days.",
+            state=AvailabilityState.partial
+            if observed
+            else AvailabilityState.unavailable,
+            observed=observed,
+            subscription=subscription,
+        )
+
+    ticket_rows = (
+        session.query(Ticket)
+        .filter(Ticket.subscriber_id == query.customer_id)
+        .filter(Ticket.created_at < end)
+        .all()
+    )
+    ticket_intervals: list[tuple[datetime, datetime]] = []
+    for ticket in ticket_rows:
+        if not is_infrastructure_down_ticket(ticket):
+            continue
+        closed = _as_utc(ticket.resolved_at or ticket.closed_at)
+        if ticket.status == TicketStatus.canceled.value and closed is None:
+            continue
+        opened = _as_utc(ticket.created_at)
+        if opened is None or (closed is not None and closed <= opened):
+            continue
+        interval = (max(opened, start), min(closed or end, end))
+        if interval[1] > interval[0]:
+            ticket_intervals.append(interval)
+
+    downtime = 0.0
+    for day, values in by_day.items():
+        day_start = datetime.combine(day, datetime.min.time(), tzinfo=UTC)
+        day_end = day_start + timedelta(days=1)
+        covered = (min(day_end, end) - max(day_start, start)).total_seconds()
+        clipped = [
+            (max(a, day_start, start), min(b, day_end, end))
+            for a, b in ticket_intervals
+            if a < day_end and b > day_start
+        ]
+        downtime += min(covered, max(max(values.values()), _union_seconds(clipped)))
+    pon_estimate = any(k[0] == ELEMENT_PON_PORT for k in keys)
+    historical_path = end < datetime.now(UTC) - timedelta(days=1)
+    estimate_reasons = []
+    if pon_estimate:
+        estimate_reasons.append(
+            "PON availability uses daily working-ONT ratios rather than continuous outage history."
+        )
+    if historical_path:
+        estimate_reasons.append(
+            "Historical network path is not recorded; the current service path was used."
+        )
+    return CustomerAvailabilityResult(
+        state=(
+            AvailabilityState.estimated
+            if estimate_reasons
+            else AvailabilityState.confirmed
+        ),
+        expected_days=expected_days,
+        observed_days=observed,
+        period_seconds=period_seconds,
+        downtime_seconds=min(period_seconds, max(0.0, downtime)),
+        subscription_id=subscription.id,
+        subscription_status=subscription.status.value,
+        reason=" ".join(estimate_reasons) or None,
+        evidence_sources=("customer_path", "availability_snapshots", "support_tickets"),
     )
