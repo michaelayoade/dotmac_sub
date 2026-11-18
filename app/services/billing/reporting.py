@@ -1277,17 +1277,16 @@ class BillingReporting:
 
         def _scope_payment_stmt(stmt: Any, *, subscriber_joined: bool = False) -> Any:
             """Apply partner/location scope to a payment query."""
-            if selected_partner_id or selected_location:
-                if not subscriber_joined:
-                    stmt = stmt.join(Subscriber, Payment.account_id == Subscriber.id)
-                if selected_partner_id:
-                    stmt = stmt.where(
-                        cast(Subscriber.reseller_id, String) == selected_partner_id
-                    )
-                if selected_location:
-                    stmt = stmt.where(
-                        _subscriber_location_expr() == selected_location.lower()
-                    )
+            if (selected_partner_id or selected_location) and not subscriber_joined:
+                stmt = stmt.join(Subscriber, Payment.account_id == Subscriber.id)
+            if selected_partner_id:
+                stmt = stmt.where(
+                    cast(Subscriber.reseller_id, String) == selected_partner_id
+                )
+            if selected_location:
+                stmt = stmt.where(
+                    _subscriber_location_expr() == selected_location.lower()
+                )
             return stmt
 
         def _scope_credit_note_stmt(stmt: Any) -> Any:
