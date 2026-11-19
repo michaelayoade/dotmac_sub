@@ -448,11 +448,13 @@ def _sort_value(value: Any) -> Any:
     return normalized
 
 
-def _user_sort_key(row: dict[str, Any], sort_field: str) -> tuple[Any, Any, Any]:
+def _user_sort_key(
+    row: dict[str, Any], sort_field: str
+) -> tuple[bool, Any, Any, Any, str]:
     primary = _sort_value(row.get(sort_field))
     secondary = _sort_value(row.get("last_name"))
     tertiary = _sort_value(row.get("first_name"))
-    return (primary is None, primary, secondary, tertiary)
+    return (primary is None, primary, secondary, tertiary, row["id"])
 
 
 USER_FILTER_SPECS: dict[str, FilterFieldSpec] = {

@@ -113,6 +113,49 @@ def expire_whatsapp_service_windows(
         return payload
 
 
+@celery_app.task(name="app.tasks.team_inbox.reconcile_reply_window_projection")
+def reconcile_reply_window_projection(
+    *,
+    dry_run: bool = True,
+    limit: int = 500,
+    after_conversation_id: str | None = None,
+) -> dict[str, int | bool | str | None]:
+    """Audit or repair one resumable reply-window projection batch."""
+
+    cursor = UUID(after_conversation_id) if after_conversation_id else None
+    with db_session_adapter.owner_command_session() as session:
+        result = team_inbox_maintenance.reconcile_reply_window_projection(
+            session,
+            team_inbox_maintenance.ReconcileReplyWindowProjectionCommand(
+                context=CommandContext.system(
+                    actor="task:team-inbox-reply-window-reconciler",
+                    scope="team-inbox:maintenance",
+                    reason="audit and repair the indexed reply-window projection",
+                ),
+                dry_run=dry_run,
+                limit=limit,
+                after_conversation_id=cursor,
+            ),
+        )
+    payload: dict[str, int | bool | str | None] = {
+        "examined": result.examined,
+        "drift_found": result.drift_found,
+        "repaired": result.repaired,
+        "next_conversation_id": (
+            str(result.next_conversation_id)
+            if result.next_conversation_id is not None
+            else None
+        ),
+        "has_more": result.has_more,
+        "dry_run": result.dry_run,
+    }
+    logger.info(
+        "team inbox reply-window projection reconciliation complete",
+        extra={"event": "team_inbox_reply_window_projection_reconciled", **payload},
+    )
+    return payload
+
+
 @celery_app.task(name="app.tasks.team_inbox.repair_whatsapp_locations")
 def repair_whatsapp_locations(
     *,

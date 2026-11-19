@@ -390,6 +390,17 @@ def test_team_inbox_guidance_explains_lazy_customer_link_search() -> None:
     assert "link customer" in content
 
 
+def test_team_inbox_guidance_explains_unavailable_assignment_totals() -> None:
+    guide = guidance_for_path("/admin/inbox")
+
+    assert guide is not None
+    assert guide.id == "team-inbox"
+    content = " ".join((*guide.steps, *guide.notes)).lower()
+    assert "assignment totals" in content
+    assert "show as unavailable" in content
+    assert "conversations remain accessible" in content
+
+
 def test_smtp_sender_guidance_explains_keyring_and_mailbox_route_mapping() -> None:
     guide = guidance_for_path("/admin/system/email")
 
@@ -586,7 +597,7 @@ def test_period_review_guidance_explains_manual_approval_and_reserved_cash() -> 
 
 def test_every_help_guide_has_complete_action_sections() -> None:
     guides = (*WORKFLOW_GUIDANCE, *HELP_ONLY_GUIDANCE)
-    assert len(guides) == 70
+    assert len(guides) == 71
     for guide in guides:
         actions = help_actions_for(guide)
         assert actions, guide.id
@@ -669,6 +680,8 @@ def test_ticket_settings_guidance_explains_infrastructure_policy() -> None:
     content = " ".join((*guide.steps, *guide.notes)).lower()
     assert "manual target" in content
     assert "saved explicit manual origin" in content
+    assert "correct the retained draft" in content
+    assert "cancel reloads the saved settings" in content
     actions = {action.id: action for action in help_actions_for(guide)}
     assert (
         actions["configure-infrastructure-types"].permission == "system:settings:write"
@@ -713,6 +726,14 @@ def test_mfa_removal_guides_state_the_controls() -> None:
     reseller = guidance_for_path("/admin/resellers/abc")
     assert reseller is not None and reseller.id == "reseller-user-mfa-removal"
     assert "portal access" in " ".join(reseller.steps).lower()
+
+
+def test_system_users_list_guidance_explains_pagination() -> None:
+    guide = guidance_for_path("/admin/system/users")
+    assert guide is not None and guide.id == "system-users-list"
+    content = " ".join((*guide.steps, *guide.notes)).lower()
+    for phrase in ("25 users", "next", "previous", "filters", "back"):
+        assert phrase in content
 
 
 def test_router_health_guidance_covers_badge_shadow_and_read_only_boundary() -> None:

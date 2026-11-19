@@ -1,8 +1,10 @@
 import json
 import uuid
+from html import unescape
 
 import pytest
 from fastapi import HTTPException
+from starlette.requests import Request
 
 from app.models.auth import UserCredential
 from app.models.rbac import Role, SystemUserRole
@@ -14,6 +16,7 @@ from app.services.dynamic_filters import (
     parse_filter_payload,
 )
 from app.services.web_system_users import USER_DOCTYPE, USER_FILTER_SPECS, list_users
+from app.web.admin.system import templates
 
 
 def _system_user(
@@ -156,3 +159,75 @@ def test_users_list_includes_reseller_users(db_session):
     assert users[0]["source_type"] == "reseller"
     assert users[0]["user_type"] == UserType.reseller.value
     assert users[0]["is_bulk_actionable"] is False
+
+
+def test_users_list_pages_do_not_repeat_users_with_the_same_name(db_session):
+    marker = uuid.uuid4().hex
+    users = [
+        _system_user("Same", "Name", f"page-{marker}-{index:02d}@example.com")
+        for index in range(27)
+    ]
+    db_session.add_all(users)
+    db_session.commit()
+
+    page_one, first_total = list_users(
+        db_session,
+        search=marker,
+        role_id=None,
+        status=None,
+        filters=None,
+        order_by="last_name",
+        order_dir="asc",
+        offset=0,
+        limit=25,
+    )
+    page_two, second_total = list_users(
+        db_session,
+        search=marker,
+        role_id=None,
+        status=None,
+        filters=None,
+        order_by="last_name",
+        order_dir="asc",
+        offset=25,
+        limit=25,
+    )
+
+    assert first_total == second_total == 27
+    assert len(page_one) == 25
+    assert len(page_two) == 2
+    assert {row["id"] for row in page_one}.isdisjoint({row["id"] for row in page_two})
+
+
+def test_users_table_page_links_preserve_filters_and_page_size():
+    request = Request(
+        {
+            "type": "http",
+            "scheme": "https",
+            "server": ("selfcare.example.test", 443),
+            "headers": [],
+            "path": "/admin/system/users",
+            "query_string": b"search=Alex&status=active&offset=25&limit=25",
+        }
+    )
+    markup = unescape(
+        templates.get_template("admin/system/users/_table_content.html").render(
+            request=request,
+            users=[],
+            total=55,
+            offset=25,
+            limit=25,
+            search="Alex",
+            role=None,
+            status="active",
+            filters=None,
+            order_by="last_name",
+            order_dir="asc",
+        )
+    )
+
+    assert "Showing 26–50 of 55 users" in markup
+    assert "Page 2 of 3" in markup
+    assert "search=Alex&status=active&offset=0&limit=25" in markup
+    assert "search=Alex&status=active&offset=50&limit=25" in markup
+    assert 'hx-push-url="true"' in markup

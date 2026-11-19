@@ -81,6 +81,12 @@ authoritative documents in the same change that updates the contract.
   `adapter_keyword_service_call_baseline.txt`). When you add a parameter to a
   widely called service, append it last or make it keyword-only, and convert
   the positional callers in the same change.
+- Do not add public IP address literals. Use role names in code and docs and
+  documentation ranges (192.0.2.0/24, 198.51.100.0/24, 203.0.113.0/24,
+  2001:db8::/32) in tests; deploy addresses are supplied at deploy time. The
+  `No new public IP literals` CI check (`scripts/ci/check_new_ip_literals.py`)
+  refuses added lines only; a justified exception carries an inline
+  `ip-literal-ok: <reason>` marker.
 - Never mass-assign untrusted mappings to ORM entities. Update an explicit set
   of fields from a validated command.
 - State-changing commands define locking, idempotency, audit, event, and retry
@@ -110,7 +116,7 @@ authoritative documents in the same change that updates the contract.
 - `main` is the machine-owned integration and release branch: it is the
   repository default branch and the ONLY protected branch. Its protection is
   what makes the trunk machine-owned rather than a convention: repository
-  ruleset `24078272` requires 15 status contexts and an up-to-date branch,
+  ruleset `24078272` requires 16 status contexts and an up-to-date branch,
   with no bypass actors, including administrators. Branch protection also
   requires one approving review; Michael's temporary admin review exception
   is recorded in Governance decision 53, with review due 2026-10-27

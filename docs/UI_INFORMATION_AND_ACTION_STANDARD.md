@@ -210,6 +210,10 @@ Tables are the primary work surface for repeated operational workflows.
 - Search by domain identifiers used in real operations.
 - Use server-side filtering, sorting, pagination, totals, and exports for large
   datasets.
+- The System Users table defaults to 25 rows. Its page and page-size requests
+  preserve active search, role, status, filters, and sorting. Page links update
+  the table without rebuilding the page, keep a usable direct URL and browser
+  history, and retain the current rows when a request fails.
 - Apply RBAC and tenant scope to the query and export, not only the rendered
   controls.
 - Keep numeric and financial values aligned and units/currency explicit.
@@ -367,7 +371,21 @@ implementation.
 
 ## OLT Operational Health Contract
 
+## Admin Customer Statistics Availability Cards
+
+- The customer Statistics view shows Uptime and Downtime in days beside the four
+  usage totals. Both use the same operator-selected reporting period.
+- `topology.customer_availability` owns the read-only provider availability
+  result. The route passes a typed query; the template displays its state.
+- Complete current-path device evidence shows numeric days. PON evidence and
+  historical periods evaluated through the current path show numeric days with
+  an Estimated explanation. Uptime plus downtime equals the period length.
+- Partial or unavailable evidence shows a dash on both cards and one reason
+  below the grid. Missing monitoring is never displayed as uptime.
+- The cards are admin-only and refresh with the existing Statistics filter.
+
 ## Customer Portal Profile Contract
+
 
 - Audience and task: an authenticated customer maintains identity, biodata, and
   the contact address used for correspondence and account notices from
