@@ -21,7 +21,7 @@ from app.services.communication_intents import (
 from app.services.customer_account_statement import (
     CustomerStatementError,
     CustomerStatementQuery,
-    read_customer_statement,
+    read_customer_statement_document,
     render_statement_pdf,
 )
 from app.services.events import EventType, emit_event
@@ -106,7 +106,9 @@ def request_customer_statement_email(
                 code="customer.account_statement.email_unverified",
                 message="Verify your email before emailing a statement.",
             )
-        pdf = render_statement_pdf(read_customer_statement(db, query=command.query))
+        pdf = render_statement_pdf(
+            read_customer_statement_document(db, query=command.query)
+        )
         if len(pdf) > MAX_EMAIL_ATTACHMENT_BYTES:
             raise CustomerStatementError(
                 code="customer.account_statement.email_attachment_too_large",

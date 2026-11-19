@@ -17,7 +17,29 @@ from app.services.communication_attachments import (
 )
 from app.services.customer_financial_ledger import CustomerFinancialEvent
 from app.services.owner_commands import CommandContext
-from app.web.customer import routes as customer_routes
+
+
+def _document(
+    statement: statements.CustomerStatement,
+) -> statements.CustomerStatementDocument:
+    return statements.CustomerStatementDocument(
+        statement=statement,
+        brand=statements.CustomerStatementBrand(
+            legal_name="Dotmac Technologies Limited",
+            product_name="Dotmac",
+            tagline="Connecting possibilities",
+            primary_color="#206a07",
+            primary_dark_color="#103504",
+            primary_tint_color="#f1f7ef",
+            secondary_color="#06b6d4",
+            logo_source="data:image/svg+xml;base64,PHN2Zy8+",
+            support_email="support@example.com",
+            support_phone="+234 800 000 0000",
+            address_lines=("1 Example Street", "Abuja", "Nigeria"),
+            source_scope="platform",
+            source_scope_id=None,
+        ),
+    )
 
 
 def test_statement_range_accepts_older_history_without_twelve_month_limit() -> None:
@@ -95,7 +117,7 @@ def test_canonical_rows_start_from_reviewed_opening_and_keep_debt_separate(
     assert not statement.before_opening_available
 
 
-def test_pdf_text_marks_older_history_unavailable_and_escapes_customer_text() -> None:
+def test_pdf_uses_official_brand_template_and_escapes_customer_text() -> None:
     statement = statements.CustomerStatement(
         account_id=uuid4(),
         account_label="A&B <account>",
@@ -115,12 +137,89 @@ def test_pdf_text_marks_older_history_unavailable_and_escapes_customer_text() ->
         rows=(),
         generated_at=datetime(2026, 2, 1, tzinfo=UTC),
     )
-    html = statements.render_statement_html(statement)
+    document = _document(statement)
+    html = statements.render_statement_html(document)
     assert "History before the reviewed opening" in html
     assert "Older transaction history is not included" in html
-    assert "Current amount owed</th><th>Current prepaid credit" in html
+    assert "Current amount owed" in html
+    assert "Current prepaid credit" in html
     assert "A&amp;B &lt;account&gt;" in html
-    assert statements.render_statement_pdf(statement).startswith(b"%PDF-")
+    assert "Dotmac Technologies Limited" in html
+    assert "data:image/svg+xml;base64,PHN2Zy8+" in html
+    assert "support@example.com" in html
+    assert "--brand: #206a07" in html
+    assert 'content: "Page " counter(page) " of " counter(pages)' in html
+    assert statements.render_statement_pdf(document).startswith(b"%PDF-")
+
+
+def test_statement_document_resolves_customer_brand_and_embeds_logo(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from app.services import brand_profiles as brand_profiles_service
+
+    account_id = uuid4()
+    statement = statements.CustomerStatement(
+        account_id=account_id,
+        account_label="ACC-2",
+        period=statements.CustomerStatementRange(
+            start_date=date(2026, 1, 1), end_date=date(2026, 1, 31)
+        ),
+        balances=(),
+        rows=(),
+        generated_at=datetime(2026, 2, 1, tzinfo=UTC),
+    )
+    monkeypatch.setattr(
+        statements, "read_customer_statement", lambda *_a, **_k: statement
+    )
+    monkeypatch.setattr(
+        brand_profiles_service,
+        "resolve_brand",
+        lambda *_a, **_k: SimpleNamespace(
+            legal_name="Example & Co",
+            product_name="Example",
+            name="Example",
+            tagline="Official service",
+            primary_color="#123456",
+            secondary_color="#654321",
+            logo_url="/branding/assets/logo-id",
+            support_email="help@example.com",
+            support_phone="+234123",
+            legal_address={
+                "street1": "10 Main Road",
+                "street2": "",
+                "city": "Abuja",
+                "postal_code": "900001",
+                "country": "Nigeria",
+            },
+            source_scope="organization",
+            source_scope_id=str(uuid4()),
+        ),
+    )
+    seen_logo: list[str | None] = []
+
+    def logo_source(_db: object, *, configured_logo: str | None) -> str:
+        seen_logo.append(configured_logo)
+        return "data:image/png;base64,example"
+
+    monkeypatch.setattr(
+        brand_profiles_service, "resolve_brand_logo_source", logo_source
+    )
+    document = statements.read_customer_statement_document(
+        object(),  # type: ignore[arg-type]
+        query=statements.CustomerStatementQuery(
+            account_id=account_id, period=statement.period
+        ),
+    )
+    assert document.statement is statement
+    assert document.brand.legal_name == "Example & Co"
+    assert document.brand.address_lines == (
+        "10 Main Road",
+        "Abuja 900001",
+        "Nigeria",
+    )
+    assert document.brand.logo_source == "data:image/png;base64,example"
+    assert document.brand.source_scope == "organization"
+    assert seen_logo == ["/branding/assets/logo-id"]
 
 
 @pytest.mark.parametrize("refusal", ("wrong_account", "unverified", "changed_email"))
@@ -182,7 +281,7 @@ def test_email_attachment_uses_the_selected_account_and_date_window(
         seen.append(query)
         return object()
 
-    monkeypatch.setattr(statements, "read_customer_statement", read_statement)
+    monkeypatch.setattr(statements, "read_customer_statement_document", read_statement)
     monkeypatch.setattr(
         statements, "render_statement_pdf", lambda _statement: b"%PDF-1.4 example"
     )
@@ -254,7 +353,7 @@ def test_email_request_targets_verified_account_and_replay_writes_no_new_audit(
         lambda _db, **kwargs: kwargs["operation"](),
     )
     monkeypatch.setattr(
-        statement_email, "read_customer_statement", lambda *_a, **_k: object()
+        statement_email, "read_customer_statement_document", lambda *_a, **_k: object()
     )
     monkeypatch.setattr(
         statement_email, "render_statement_pdf", lambda _statement: b"%PDF-1.4"
@@ -355,6 +454,8 @@ def test_email_replay_does_not_reread_changed_email(
 def test_statement_route_refuses_another_account(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    from app.web.customer import routes as customer_routes
+
     owned_id = uuid4()
     other_id = uuid4()
     context = SimpleNamespace(

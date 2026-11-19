@@ -29,9 +29,14 @@ Status: implemented on the customer-statement feature branch; hosted CI pending.
 ## Ownership boundary
 
 The customer-statement read owner selects the customer's account, date
-window, reviewed opening, and canonical later events. PDF rendering is
-presentation of that typed result. Download and email routes are adapters.
-The archive is not read or imported for this feature.
+window, reviewed opening, and canonical later events. It composes those facts
+with the customer-facing legal identity resolved by `customer.branding` into a
+typed document contract. The PDF uses that identity's logo, legal name,
+address, support contacts, and brand colors in its header and page footer; it
+embeds managed logo assets so downloads and email attachments do not depend on
+network access. PDF rendering is presentation of that typed result. Download
+and email routes are adapters. The archive is not read or imported for this
+feature.
 
 The email owner queues only to the signed-in customer's verified email. The
 communication attachment reader checks the address, principal, and selected
