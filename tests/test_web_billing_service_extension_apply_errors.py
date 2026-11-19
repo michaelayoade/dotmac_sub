@@ -106,7 +106,7 @@ def test_apply_domain_failure_keeps_specific_message_and_audit(monkeypatch):
     )
 
     assert response.status_code == 409
-    assert b"different authorized staff member" in response.body
+    assert b"blocks the requester from applying their own extension" in response.body
     assert (
         audited[0].reason
         is service_extensions.ApplyRejectionReason.self_approval_forbidden

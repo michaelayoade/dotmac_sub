@@ -848,7 +848,7 @@ WORKFLOW_GUIDANCE: tuple[AdminWorkflowGuidance, ...] = (
         ("/admin/billing/service-extensions",),
         "Set the reason, dates or days, and affected customer or subscription scope.",
         "Review billing-date and access effects before confirming.",
-        "A different authorized staff member must apply an extension you created. If Apply is blocked, read the reason and next step on the result page; review prior compensation or the current billing date before retrying, and give billing or operations the reference ID when asked.",
+        "The system currently blocks the requester from applying their own extension. If Apply is blocked, read the reason and next step on the result page; review prior compensation or the current billing date before retrying, and give billing or operations the reference ID when asked.",
         "Use cancellation for pending extensions and reversal for applied extensions.",
         "Verify the request state and any recorded billing-date impact from the customer Billing tab under Extensions.",
         notes=("Do not manually edit billing dates to undo an extension.",),

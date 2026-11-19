@@ -519,7 +519,7 @@ def test_rejected_apply_is_audited_after_rollback_and_shown_in_activity(db_sessi
         db_session, extension_id=extension_id, auth=_ADMIN_AUTH
     )
     assert detail.activity[0].action_label == "Apply blocked"
-    assert "different authorized staff" in detail.activity[0].details
+    assert "blocks the requester from applying their own extension" in detail.activity[0].details
 
 
 def test_apply_failure_messages_cover_all_rejection_reasons():

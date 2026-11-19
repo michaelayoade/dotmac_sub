@@ -75,7 +75,7 @@ _APPLY_FAILURE_PRESENTATION: dict[
         "Review its current status before taking another action.",
     ),
     service_extensions_service.ApplyRejectionReason.self_approval_forbidden: ServiceExtensionApplyFailurePresentation(
-        "You created this extension. A different authorized staff member must apply it.",
+        "You created this extension, and the system currently blocks the requester from applying their own extension.",
         "Ask another staff member with Apply access.",
     ),
     service_extensions_service.ApplyRejectionReason.time_credit_conflict: ServiceExtensionApplyFailurePresentation(

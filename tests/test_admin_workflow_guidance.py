@@ -434,7 +434,7 @@ def test_service_extension_guidance_explains_blocked_apply() -> None:
     assert guide is not None
     assert guide.id == "service-extension"
     content = " ".join(guide.steps).lower()
-    assert "different authorized staff member" in content
+    assert "blocks the requester from applying their own extension" in content
     assert "reference id" in content
     assert "prior compensation" in content
 
