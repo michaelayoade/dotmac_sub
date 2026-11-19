@@ -42,9 +42,7 @@ class _CreateTicketScreenState extends ConsumerState<CreateTicketScreen> {
     if (!_formKey.currentState!.validate()) return;
     setState(() => _submitting = true);
     try {
-      final ticket = await ref
-          .read(supportRepositoryProvider)
-          .createTicket(
+      final ticket = await ref.read(supportRepositoryProvider).createTicket(
             title: _title.text.trim(),
             description: _description.text.trim().isEmpty
                 ? null

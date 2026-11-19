@@ -45,8 +45,8 @@ class ApiException implements Exception {
           details: data['details'] is Map
               ? Map<String, dynamic>.from(data['details'] as Map)
               : data['detail'] is Map
-              ? Map<String, dynamic>.from(data['detail'] as Map)
-              : null,
+                  ? Map<String, dynamic>.from(data['detail'] as Map)
+                  : null,
         );
       }
       final detail = data['detail'];
@@ -72,7 +72,8 @@ class ApiException implements Exception {
     final fallback = switch (e.type) {
       DioExceptionType.connectionTimeout ||
       DioExceptionType.sendTimeout ||
-      DioExceptionType.receiveTimeout => 'The server took too long to respond.',
+      DioExceptionType.receiveTimeout =>
+        'The server took too long to respond.',
       DioExceptionType.connectionError =>
         'Could not reach the server. Check your connection.',
       _ => 'Something went wrong (${status ?? 'network error'}).',

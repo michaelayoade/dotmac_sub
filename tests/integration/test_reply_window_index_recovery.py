@@ -19,6 +19,7 @@ from scripts.ci import template_database
 ROOT = Path(__file__).resolve().parents[2]
 PREDECESSOR = "710_inbox_reply_window_projection"
 REPAIR = "711_repair_inbox_reply_window_index"
+CURRENT_HEAD = "712_customer_ticket_submission_idempotency"
 INDEX = "public.ix_inbox_conversations_reply_window"
 CREATE = (
     "CREATE INDEX CONCURRENTLY ix_inbox_conversations_reply_window "
@@ -85,7 +86,7 @@ def test_fresh_chain_builds_valid_reply_window_index(
     with psycopg.connect(_url(fresh_migration_database)) as catalog:
         assert _state(catalog)[1:] == (True, True)
         assert catalog.execute(
-            "SELECT count(*) FROM alembic_version WHERE version_num=%s", (REPAIR,)
+            "SELECT count(*) FROM alembic_version WHERE version_num=%s", (CURRENT_HEAD,)
         ).fetchone() == (1,)
 
 
