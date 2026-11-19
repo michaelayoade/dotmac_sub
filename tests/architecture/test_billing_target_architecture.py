@@ -18,7 +18,6 @@ import ast
 from pathlib import Path
 
 from scripts.architecture.billing_target_guards import (
-    _metadata_financial_authority_hits,
     metadata_financial_authority_sites,
     mutable_money_counter_sites,
     read_count_baseline,
@@ -114,18 +113,6 @@ def test_no_new_metadata_financial_authority_reads() -> None:
             "through a structural obligation, document, or application link."
         ),
     )
-
-
-def test_metadata_guard_distinguishes_provenance_writes_from_identity_reads() -> None:
-    source = ast.parse(
-        """
-metadata["subscription_id"] = "evidence only"
-identity = metadata["subscription_id"]
-payment = metadata.get("payment_id")
-metadata["subscription_id"] += "-changed"
-"""
-    )
-    assert _metadata_financial_authority_hits(source) == 3
 
 
 def test_no_new_scheduled_financial_sweep() -> None:

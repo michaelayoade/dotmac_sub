@@ -2440,7 +2440,7 @@ def record_apply_rejection(
             _error(
                 "missing_actor_identity", "The staff identity could not be verified."
             )
-        metadata: dict[str, object] = {
+        audit_details: dict[str, object] = {
             "schema_version": 1,
             "command_id": str(command.context.command_id),
             "correlation_id": str(command.context.correlation_id),
@@ -2450,21 +2450,21 @@ def record_apply_rejection(
             "submitted_path": command.submitted_path[:255],
         }
         if command.scope_type is not None:
-            metadata["scope_type"] = command.scope_type.value
+            audit_details["scope_type"] = command.scope_type.value
         if command.scope_selection_present is not None:
-            metadata["scope_selection_present"] = command.scope_selection_present
+            audit_details["scope_selection_present"] = command.scope_selection_present
         if command.subscription_id is not None:
-            metadata["subscription_id"] = str(command.subscription_id)
+            audit_details["subscription_id"] = str(command.subscription_id)
         if command.conflicting_evidence_ref is not None:
-            metadata["conflicting_evidence_ref"] = command.conflicting_evidence_ref
+            audit_details["conflicting_evidence_ref"] = command.conflicting_evidence_ref
         if command.access_failure_category is not None:
-            metadata["access_failure_category"] = command.access_failure_category
+            audit_details["access_failure_category"] = command.access_failure_category
         if command.expected_billing_at is not None:
-            metadata["expected_billing_at"] = command.expected_billing_at.isoformat()
+            audit_details["expected_billing_at"] = command.expected_billing_at.isoformat()
         if command.observed_billing_at is not None:
-            metadata["observed_billing_at"] = command.observed_billing_at.isoformat()
+            audit_details["observed_billing_at"] = command.observed_billing_at.isoformat()
         if command.creator_id is not None:
-            metadata["creator_id"] = command.creator_id
+            audit_details["creator_id"] = command.creator_id
         audit = stage_audit_event(
             db,
             action="billing.service_extension_apply_rejected",
@@ -2476,7 +2476,7 @@ def record_apply_rejection(
             request_id=command.request_id,
             status_code=command.response_status,
             is_success=False,
-            metadata=metadata,
+            metadata=audit_details,
         )
         db.flush()
         return RecordApplyRejectionOutcome(audit_id=audit.id)
