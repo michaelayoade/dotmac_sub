@@ -157,7 +157,10 @@ def test_adjustment_evidence_has_events_and_a_drift_signal() -> None:
 
 def test_plan_change_debit_uses_reviewed_funding_position() -> None:
     owner = _source(OWNER)
-    assert 'origin.value.startswith("prepaid_")' in owner
+    assert "if origin in _PREPAID_FUNDING_ORIGINS" in owner
+    assert "AccountAdjustmentOrigin.prepaid_plan_change" in owner
+    assert "AccountAdjustmentOrigin.prepaid_service_renewal" in owner
+    assert 'startswith("prepaid_")' not in owner
     assert 'prepaid_plan_change = "prepaid_plan_change"' in owner
     assert 'prepaid_service_renewal = "prepaid_service_renewal"' in owner
     assert "position.prepaid_available_balance" in owner
