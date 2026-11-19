@@ -2430,7 +2430,7 @@ def record_apply_rejection(
     """Persist a rejected attempt after the failed apply transaction rolls back."""
 
     def operation() -> RecordApplyRejectionOutcome:
-        from app.services.audit_adapter import stage_audit_event
+        from app.services.audit_adapter import AuditActor, stage_audit_event
         from app.services.audit_helpers import resolve_actor_label_from_db
 
         _require_command_context(command.context, expected_scope=APPLY_SCOPE)
@@ -2470,9 +2470,9 @@ def record_apply_rejection(
             action="billing.service_extension_apply_rejected",
             entity_type="service_extension",
             entity_id=str(command.extension_id) if command.extension_id else None,
-            actor_type=actor_type,
-            actor_id=actor_id,
-            actor_label=actor_label,
+            actor=AuditActor(
+                actor_type=actor_type, actor_id=actor_id, label=actor_label
+            ),
             request_id=command.request_id,
             status_code=command.response_status,
             is_success=False,

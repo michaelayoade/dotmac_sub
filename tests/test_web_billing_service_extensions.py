@@ -480,6 +480,7 @@ def test_rejected_apply_is_audited_after_rollback_and_shown_in_activity(db_sessi
     assert not db_session.in_transaction()
 
     request_id = str(uuid4())
+    affected_subscription_id = uuid4()
     receipt = service_extensions.record_apply_rejection(
         db_session,
         service_extensions.RecordApplyRejectionCommand(
@@ -497,6 +498,7 @@ def test_rejected_apply_is_audited_after_rollback_and_shown_in_activity(db_sessi
             key_present=True,
             response_status=409,
             creator_id=str(actor_id),
+            subscription_id=affected_subscription_id,
         ),
     )
     audit = db_session.get(AuditEvent, receipt.audit_id)
@@ -507,6 +509,7 @@ def test_rejected_apply_is_audited_after_rollback_and_shown_in_activity(db_sessi
     assert audit.actor_label == "Amina Okafor"
     assert audit.request_id == request_id
     assert audit.metadata_["failure_code"] == "self_approval_forbidden"
+    assert audit.metadata_["subscription_id"] == str(affected_subscription_id)
     assert (
         db_session.get(ServiceExtension, extension_id).status
         == ServiceExtensionStatus.pending

@@ -100,6 +100,8 @@ invalid links remain searchable in the central audit by request ID. The audit
 stores the authenticated principal and canonical staff name, failure code,
 bounded non-secret evidence, and request ID. It never records a raw form key,
 customer contact data, or a false successful apply event.
+An affected subscription ID, when available, is retained only as audit
+provenance. No financial owner reads that metadata to decide identity or state.
 
 ## Idempotency and concurrency
 
