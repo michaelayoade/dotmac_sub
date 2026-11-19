@@ -345,7 +345,7 @@ def test_ci_test_jobs_fail_closed_instead_of_hanging_indefinitely() -> None:
     ]
 
     assert "    timeout-minutes: 30\n" in unit_job
-    assert "    timeout-minutes: 30\n" in architecture_job
+    assert "    timeout-minutes: 45\n" in architecture_job
     assert "CI_UNIT_TEST_WORKERS ?= 4" in makefile
     assert "CI_TEST_TIMEOUT_SECONDS ?= 180" in makefile
     assert "-n $(CI_UNIT_TEST_WORKERS)" in makefile

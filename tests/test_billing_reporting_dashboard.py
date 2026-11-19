@@ -3,6 +3,8 @@ from __future__ import annotations
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 
+from sqlalchemy.orm import Session
+
 from app.models.billing import (
     CreditNote,
     CreditNoteStatus,
@@ -13,6 +15,7 @@ from app.models.billing import (
     PaymentMethodType,
     PaymentStatus,
 )
+from app.models.subscriber import Reseller, Subscriber
 from app.services.billing.reporting import billing_reporting
 
 
@@ -284,3 +287,42 @@ def test_dashboard_stats_recent_invoices_follow_selected_period(db_session, subs
 
     assert [invoice.id for invoice in this_month["invoices"]] == [current_invoice.id]
     assert [invoice.id for invoice in last_month["invoices"]] == [previous_invoice.id]
+
+
+def test_dashboard_stats_top_payers_with_partner_filter(
+    db_session: Session, subscriber: Subscriber
+) -> None:
+    now = datetime.now(UTC)
+    partner = Reseller(name="Dashboard filter partner")
+    other_partner = Reseller(name="Other dashboard partner")
+    db_session.add_all([partner, other_partner])
+    db_session.flush()
+    subscriber.reseller_id = partner.id
+    other_subscriber = Subscriber(
+        first_name="Other",
+        last_name="Payer",
+        email="other-dashboard-payer@example.com",
+        reseller_id=other_partner.id,
+    )
+    db_session.add(other_subscriber)
+    db_session.commit()
+    _create_payment(
+        db_session,
+        account_id=subscriber.id,
+        status=PaymentStatus.succeeded,
+        amount="40.00",
+        created_at=now,
+    )
+    _create_payment(
+        db_session,
+        account_id=other_subscriber.id,
+        status=PaymentStatus.succeeded,
+        amount="90.00",
+        created_at=now,
+    )
+
+    result = billing_reporting.get_dashboard_stats(
+        db_session, partner_id=str(partner.id)
+    )
+
+    assert result["top_payers"]["values"] == [40.0]

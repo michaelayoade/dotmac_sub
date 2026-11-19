@@ -1275,18 +1275,18 @@ class BillingReporting:
                     )
             return stmt
 
-        def _scope_payment_stmt(stmt: Any) -> Any:
-            """Apply partner/location scope to a payment query via JOIN."""
-            if selected_partner_id or selected_location:
+        def _scope_payment_stmt(stmt: Any, *, subscriber_joined: bool = False) -> Any:
+            """Apply partner/location scope to a payment query."""
+            if (selected_partner_id or selected_location) and not subscriber_joined:
                 stmt = stmt.join(Subscriber, Payment.account_id == Subscriber.id)
-                if selected_partner_id:
-                    stmt = stmt.where(
-                        cast(Subscriber.reseller_id, String) == selected_partner_id
-                    )
-                if selected_location:
-                    stmt = stmt.where(
-                        _subscriber_location_expr() == selected_location.lower()
-                    )
+            if selected_partner_id:
+                stmt = stmt.where(
+                    cast(Subscriber.reseller_id, String) == selected_partner_id
+                )
+            if selected_location:
+                stmt = stmt.where(
+                    _subscriber_location_expr() == selected_location.lower()
+                )
             return stmt
 
         def _scope_credit_note_stmt(stmt: Any) -> Any:
@@ -1941,7 +1941,7 @@ class BillingReporting:
                 func.coalesce(Payment.paid_at, Payment.created_at) < current_end,
             )
         )
-        tp_stmt = _scope_payment_stmt(tp_stmt)
+        tp_stmt = _scope_payment_stmt(tp_stmt, subscriber_joined=True)
         tp_stmt = (
             tp_stmt.group_by(Payment.account_id)
             .order_by(func.sum(Payment.amount).desc())
