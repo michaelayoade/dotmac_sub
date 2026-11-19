@@ -12,6 +12,8 @@ from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
 from app.models.billing import (
+    AccountAdjustment,
+    LedgerCategory,
     LedgerEntry,
     LedgerEntryType,
     LedgerSource,
@@ -25,11 +27,26 @@ from app.models.prepaid_funding import (
 )
 from app.models.splynx_transaction import SplynxBillingTransaction
 from app.models.subscriber import Subscriber
+from app.schemas.billing import (
+    AccountAdjustmentConfirm,
+    AccountAdjustmentPreviewRequest,
+)
 from app.services import customer_financial_ledger, prepaid_funding_attestation
+from app.services.billing._common import get_account_credit_balance
+from app.services.billing.adjustments import (
+    ACCOUNT_ADJUSTMENT_SCOPE,
+    AccountAdjustmentOrigin,
+    ConfirmAccountAdjustmentCommand,
+    PreviewAccountAdjustmentQuery,
+    confirm_account_adjustment,
+    preview_account_adjustment,
+)
 from app.services.customer_financial_position import (
     prepaid_available_balance,
     prepaid_available_balances,
 )
+from app.services.db_session_adapter import db_session_adapter
+from app.services.owner_commands import CommandContext
 from app.services.prepaid_funding_reconstruction import (
     LEGACY_FINANCIAL_HANDOFF_AT,
     PrepaidFundingBaselineMissingError,
@@ -394,6 +411,56 @@ def test_runtime_uses_baseline_plus_native_events_and_never_splynx(
     db_session.commit()
 
     assert prepaid_available_balance(db_session, subscriber.id) == Decimal("115.00")
+
+
+def test_plan_change_debit_uses_reviewed_opening_funding(db_session, subscriber):
+    subscriber.billing_mode = BillingMode.prepaid
+    position_at = datetime.now(UTC) - timedelta(days=1)
+    _apply(db_session, position_at, {subscriber.id: "100.00"})
+
+    assert get_account_credit_balance(db_session, str(subscriber.id)) == Decimal("0.00")
+    request = AccountAdjustmentPreviewRequest(
+        account_id=subscriber.id,
+        category=LedgerCategory.internet_service,
+        amount=Decimal("60.00"),
+        currency="NGN",
+        memo="Prepaid plan change charge",
+        reason="Immediate prepaid plan-change proration",
+    )
+    preview = preview_account_adjustment(
+        db_session,
+        PreviewAccountAdjustmentQuery(
+            request=request,
+            origin=AccountAdjustmentOrigin.prepaid_plan_change,
+            origin_ref="reviewed-opening-plan-change",
+        ),
+    )
+    assert preview.allowed is True
+    assert preview.prepaid_funding_before == Decimal("100.00")
+    assert preview.prepaid_funding_after == Decimal("40.00")
+
+    db_session_adapter.release_read_transaction(db_session)
+    result = confirm_account_adjustment(
+        db_session,
+        ConfirmAccountAdjustmentCommand(
+            context=CommandContext.system(
+                actor="system:prepaid_plan_changes",
+                scope=ACCOUNT_ADJUSTMENT_SCOPE,
+                reason="Confirm reviewed-opening plan-change debit",
+                idempotency_key="reviewed-opening-plan-change",
+            ),
+            confirmation=AccountAdjustmentConfirm(
+                **request.model_dump(),
+                preview_fingerprint=preview.fingerprint,
+                idempotency_key="reviewed-opening-plan-change",
+            ),
+            origin=AccountAdjustmentOrigin.prepaid_plan_change,
+            origin_ref="reviewed-opening-plan-change",
+        ),
+    )
+    assert isinstance(result.adjustment, AccountAdjustment)
+    assert result.adjustment.prepaid_funding_before == Decimal("100.00")
+    assert prepaid_available_balance(db_session, subscriber.id) == Decimal("40.00")
 
 
 def test_runtime_batches_accounts_that_share_a_reviewed_position(
