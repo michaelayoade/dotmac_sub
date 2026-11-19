@@ -145,28 +145,40 @@ def metadata_financial_authority_sites() -> dict[str, int]:
         tree = _tree(path)
         if tree is None:
             continue
-        hits = 0
-        for node in ast.walk(tree):
-            key: str | None = None
-            receiver: ast.expr | None = None
-            if isinstance(node, ast.Subscript):
-                receiver = node.value
-                key = _literal_key(node.slice)
-            elif (
-                isinstance(node, ast.Call)
-                and isinstance(node.func, ast.Attribute)
-                and node.func.attr == "get"
-                and node.args
-            ):
-                receiver = node.func.value
-                key = _literal_key(node.args[0])
-            if key is None or receiver is None:
-                continue
-            if key in FINANCIAL_AUTHORITY_KEYS and _is_metadata_receiver(receiver):
-                hits += 1
+        hits = _metadata_financial_authority_hits(tree)
         if hits:
             counts[_relative(path)] = hits
     return counts
+
+
+def _metadata_financial_authority_hits(tree: ast.Module) -> int:
+    """Count reads, leaving metadata writes as provenance rather than authority."""
+
+    hits = 0
+    for node in ast.walk(tree):
+        key: str | None = None
+        receiver: ast.expr | None = None
+        if isinstance(node, ast.Subscript) and isinstance(node.ctx, ast.Load):
+            receiver = node.value
+            key = _literal_key(node.slice)
+        elif isinstance(node, ast.AugAssign) and isinstance(node.target, ast.Subscript):
+            receiver = node.target.value
+            key = _literal_key(node.target.slice)
+        elif (
+            isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Attribute)
+            and node.func.attr == "get"
+            and node.args
+        ):
+            receiver = node.func.value
+            key = _literal_key(node.args[0])
+        if (
+            key in FINANCIAL_AUTHORITY_KEYS
+            and receiver is not None
+            and _is_metadata_receiver(receiver)
+        ):
+            hits += 1
+    return hits
 
 
 @cache

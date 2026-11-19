@@ -32,9 +32,10 @@ def test_service_extension_owner_contract_is_complete() -> None:
 def test_service_extension_public_writes_use_one_owner_boundary_each() -> None:
     source = OWNER.read_text(encoding="utf-8")
 
-    # Six: create, apply, cancel, reverse, the anchor-projection repair command, and
-    # the duplicate-entry reconciliation command.
-    assert source.count("execute_owner_command(") == 6
+    # Seven: create, apply, rejected-apply audit, cancel, reverse, anchor repair,
+    # and duplicate-entry reconciliation.
+    assert source.count("execute_owner_command(") == 7
+    assert "record_apply_rejection" in source
     assert "db.commit(" not in source
     assert "db.rollback(" not in source
     assert ".begin_nested(" not in source
