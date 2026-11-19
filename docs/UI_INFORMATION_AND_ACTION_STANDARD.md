@@ -210,6 +210,10 @@ Tables are the primary work surface for repeated operational workflows.
 - Search by domain identifiers used in real operations.
 - Use server-side filtering, sorting, pagination, totals, and exports for large
   datasets.
+- The System Users table defaults to 25 rows. Its page and page-size requests
+  preserve active search, role, status, filters, and sorting. Page links update
+  the table without rebuilding the page, keep a usable direct URL and browser
+  history, and retain the current rows when a request fails.
 - Apply RBAC and tenant scope to the query and export, not only the rendered
   controls.
 - Keep numeric and financial values aligned and units/currency explicit.

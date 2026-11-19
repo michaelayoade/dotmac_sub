@@ -25,9 +25,50 @@
         </table>
     </div>
 
-    {% if pagination %}
-    <div class="border-t border-slate-200 bg-white px-4 py-3 dark:border-slate-700 dark:bg-slate-800 sm:px-6">
-        {% include "components/data/table_pagination.html" %}
+    {% set current_page = (offset // limit) + 1 %}
+    {% set total_pages = ((total - 1) // limit) + 1 if total else 1 %}
+    <div class="flex flex-wrap items-center justify-between gap-3 border-t border-slate-200 bg-white px-4 py-3 text-sm dark:border-slate-700 dark:bg-slate-800 sm:px-6"
+         hx-on:htmx:before-request="this.querySelector('[data-page-error]').textContent = ''"
+         hx-on:htmx:response-error="this.querySelector('[data-page-error]').textContent = 'Could not load users. Try again.'"
+         hx-on:htmx:send-error="this.querySelector('[data-page-error]').textContent = 'Could not load users. Try again.'">
+        <p class="text-slate-500 dark:text-slate-400">
+            Showing {{ offset + 1 if total else 0 }}–{{ [offset + limit, total] | min }} of {{ total }} users
+        </p>
+        <span data-page-error role="status" aria-live="polite" class="text-red-700 dark:text-red-300"></span>
+        <form action="/admin/system/users" method="get" hx-get="/admin/system/users" hx-target="#users-table-content" hx-push-url="true" hx-indicator="#users-loading" class="flex items-center gap-2">
+            <input type="hidden" name="offset" value="0">
+            <input type="hidden" name="search" value="{{ search or '' }}">
+            <input type="hidden" name="role" value="{{ role or '' }}">
+            <input type="hidden" name="status" value="{{ status or '' }}">
+            <input type="hidden" name="filters" value="{{ filters or '' }}">
+            <input type="hidden" name="order_by" value="{{ order_by }}">
+            <input type="hidden" name="order_dir" value="{{ order_dir }}">
+            <label for="users-page-size">Rows per page</label>
+            <select id="users-page-size" name="limit" class="rounded-lg border border-slate-300 bg-white px-2 py-1.5 text-slate-700 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-200">
+                {% for size in [10, 25, 50, 100, 500] %}
+                <option value="{{ size }}" {% if limit == size %}selected{% endif %}>{{ size }}</option>
+                {% endfor %}
+            </select>
+            <button type="submit" class="rounded-lg border border-slate-300 px-3 py-1.5 font-medium text-slate-700 hover:bg-slate-50 dark:border-slate-600 dark:text-slate-200 dark:hover:bg-slate-700">Apply</button>
+        </form>
+        <nav class="flex items-center gap-3" aria-label="User pages">
+            <span class="text-slate-500 dark:text-slate-400">Page {{ current_page }} of {{ total_pages }}</span>
+            {% if offset > 0 %}
+            <a href="{{ request.url.include_query_params(offset=offset - limit, limit=limit) }}"
+               hx-get="{{ request.url.include_query_params(offset=offset - limit, limit=limit) }}"
+               hx-target="#users-table-content" hx-push-url="true" hx-indicator="#users-loading"
+               class="rounded-lg border border-slate-300 px-3 py-2 font-medium text-slate-700 hover:bg-slate-50 dark:border-slate-600 dark:text-slate-200 dark:hover:bg-slate-700">Previous</a>
+            {% else %}
+            <span aria-disabled="true" class="rounded-lg border border-slate-200 px-3 py-2 text-slate-400 dark:border-slate-700">Previous</span>
+            {% endif %}
+            {% if offset + limit < total %}
+            <a href="{{ request.url.include_query_params(offset=offset + limit, limit=limit) }}"
+               hx-get="{{ request.url.include_query_params(offset=offset + limit, limit=limit) }}"
+               hx-target="#users-table-content" hx-push-url="true" hx-indicator="#users-loading"
+               class="rounded-lg border border-slate-300 px-3 py-2 font-medium text-slate-700 hover:bg-slate-50 dark:border-slate-600 dark:text-slate-200 dark:hover:bg-slate-700">Next</a>
+            {% else %}
+            <span aria-disabled="true" class="rounded-lg border border-slate-200 px-3 py-2 text-slate-400 dark:border-slate-700">Next</span>
+            {% endif %}
+        </nav>
     </div>
-    {% endif %}
 </div>
