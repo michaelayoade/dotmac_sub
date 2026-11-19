@@ -1,6 +1,7 @@
 import 'dart:typed_data';
 
 import 'package:dio/dio.dart';
+import 'package:uuid/uuid.dart';
 
 import '../core/api_exception.dart';
 import '../core/http.dart';
@@ -119,12 +120,16 @@ class SupportRepository {
     String priority = 'normal',
     String? ticketType,
     List<String>? attachmentPaths,
+    String? submissionId,
+    bool duplicateOverride = false,
   }) async {
     final fields = <String, String>{
       'title': title,
       if (description != null) 'description': description,
       'priority': priority,
       if (ticketType != null) 'ticket_type': ticketType,
+      'submission_id': submissionId ?? const Uuid().v4(),
+      if (duplicateOverride) 'duplicate_override': 'true',
     };
     final data = await guard(
       () => dio.post(

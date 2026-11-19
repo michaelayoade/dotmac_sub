@@ -18910,6 +18910,7 @@
   },
   "POST /api/v1/support/tickets": {
    "params": [
+    "header:X-Duplicate-Override",
     "header:authorization",
     "header:x-api-key"
    ],
@@ -20146,7 +20147,7 @@
   "BlockerEvidence": "760552fac09e",
   "Body_import_subscriber_custom_fields_api_v1_imports_subscriber_custom_fields_post": "5a91e05ec795",
   "Body_my_add_ticket_comment_api_v1_me_support_tickets__ticket_id__comments_post": "d1a3a0cea554",
-  "Body_my_create_ticket_api_v1_me_support_tickets_post": "2ae0ec94443b",
+  "Body_my_create_ticket_api_v1_me_support_tickets_post": "a0a5fa9b8fd4",
   "Body_submit_account_payment_proof_api_v1_payment_proofs_reseller_accounts__account_id__post": "ccea971d58ff",
   "Body_submit_identity_api_v1_field_identity__subject_id__post": "9faaead45e70",
   "Body_submit_my_payment_proof_api_v1_payment_proofs_me_post": "9b733ca2d165",

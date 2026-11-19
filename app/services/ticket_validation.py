@@ -24,7 +24,6 @@ from app.schemas.support import TicketCreate
 from app.services.customer_support_links import (
     ticket_customer_any_link_filter,
     ticket_has_customer_link,
-    ticket_links_customer,
     ticket_unlinked_customer_filter,
 )
 from app.services.domain_errors import DomainError
@@ -32,6 +31,18 @@ from app.services.domain_errors import DomainError
 
 class TicketValidationError(DomainError):
     """Transport-neutral Ticket creation policy failure."""
+
+
+class TicketDuplicateWarningError(DomainError):
+    """A human must confirm creation despite similar open tickets."""
+
+    def __init__(self, result: TicketDuplicateResult):
+        self.result = result
+        super().__init__(
+            code="ticket_duplicate_warning",
+            message="A similar ticket already exists. Review it or choose Create anyway.",
+            retryable=False,
+        )
 
 
 _OPEN_STATUSES = {
@@ -218,6 +229,7 @@ class TicketDuplicateInput:
     base_station_details: str | None = None
     tags: list[str] | None = None
     region: str | None = None
+    customer_visible_only: bool = False
 
 
 @dataclass(frozen=True)
@@ -276,6 +288,70 @@ class TicketDuplicateResult:
             "has_likely_duplicate": self.has_likely_duplicate,
             "matches": [match.as_dict() for match in self.matches],
         }
+
+    def as_customer_dict(self) -> dict[str, object]:
+        return {
+            "code": "ticket_duplicate_warning",
+            "message": "A similar ticket already exists. Review it or choose Create anyway.",
+            "has_warning": self.has_warning,
+            "matches": [
+                {
+                    "ticket_id": match.ticket_id,
+                    "reference": match.reference,
+                    "title": match.title,
+                    "status": match.status,
+                }
+                for match in self.matches
+            ],
+        }
+
+
+def prepare_human_ticket_creation(
+    db: Session,
+    payload: TicketCreate,
+    *,
+    duplicate_override: bool,
+    customer_visible_only: bool = False,
+) -> TicketCreate:
+    """Apply the shared human confirmation policy before issuing a Ticket."""
+    metadata = payload.metadata_ if isinstance(payload.metadata_, dict) else {}
+    result = find_duplicate_ticket_candidates(
+        db,
+        TicketDuplicateInput(
+            title=payload.title,
+            description=payload.description,
+            subscriber_id=payload.subscriber_id,
+            customer_account_id=payload.customer_account_id,
+            customer_person_id=payload.customer_person_id,
+            lead_id=payload.lead_id,
+            ticket_type=payload.ticket_type,
+            base_station_details=str(metadata.get("base_station_details") or "")
+            or None,
+            tags=payload.tags,
+            region=payload.region,
+            customer_visible_only=customer_visible_only,
+        ),
+    )
+    if not result.has_warning:
+        return payload
+    if not duplicate_override:
+        raise TicketDuplicateWarningError(result)
+    prepared = payload.model_copy(deep=True)
+    prepared.metadata_ = {
+        **metadata,
+        "duplicate_override": True,
+        "possible_duplicate_tickets": [
+            {
+                "ticket_id": match.ticket_id,
+                "reference": match.reference,
+                "score": match.score,
+                "confidence": match.confidence,
+                "reasons": match.reasons,
+            }
+            for match in result.matches
+        ],
+    }
+    return prepared
 
 
 def _coerce_optional_uuid(value: UUID | str | None) -> UUID | None:
@@ -384,6 +460,10 @@ def find_duplicate_ticket_candidates(
         if identity_filters
         else unassigned_candidate_filter
     )
+    if payload.customer_visible_only:
+        if subscriber_id is None:
+            return TicketDuplicateResult(matches=[])
+        candidate_filter = Ticket.subscriber_id == subscriber_id
 
     candidates_query = (
         db.query(Ticket)
@@ -445,6 +525,13 @@ def find_duplicate_ticket_candidates(
         description_similarity = _text_similarity(
             incoming_description, ticket.description
         )
+        if (
+            ticket_has_identity
+            and title_similarity < 0.40
+            and description_similarity < 0.40
+            and not (incoming_base_station and existing_base_station)
+        ):
+            continue
         if description_similarity >= 0.70:
             score += 20
             reasons.append("very similar description")
@@ -474,13 +561,6 @@ def find_duplicate_ticket_candidates(
 
         score += 10
         reasons.append("ticket is still active")
-        subscriber_match = any(
-            ticket_links_customer(ticket, customer_id)
-            for customer_id in (subscriber_id, customer_account_id, customer_person_id)
-        )
-        if subscriber_match and score < DUPLICATE_WARNING_THRESHOLD:
-            score = DUPLICATE_WARNING_THRESHOLD
-            reasons.append("subscriber already has an active ticket")
         if not ticket_has_identity:
             strong_issue_match = (
                 (

@@ -12,7 +12,7 @@ from datetime import UTC, datetime, timedelta
 from enum import Enum
 from functools import wraps
 from typing import TYPE_CHECKING, Any, Literal, ParamSpec, TypeVar
-from uuid import UUID
+from uuid import UUID, uuid4
 
 from fastapi.encoders import jsonable_encoder
 from sqlalchemy import false, func, or_, select
@@ -131,6 +131,8 @@ from app.services.support_ticket_contracts import (
 
 if TYPE_CHECKING:
     from app.services.field.completion_review_contracts import TicketCompletionBasis
+    from app.services.file_storage import PreparedFileUpload
+    from app.services.web_support_tickets import TicketAttachmentUpload
 
 logger = logging.getLogger(__name__)
 
@@ -167,6 +169,30 @@ class TicketCreationConsequenceMode(str, Enum):
 
     standard = "standard"
     silent_internal = "silent_internal"
+
+
+class CustomerTicketSubmissionSource(str, Enum):
+    web_portal = "web_portal"
+    mobile_api = "mobile_api"
+
+
+@dataclass(frozen=True, slots=True)
+class CustomerTicketSubmissionCommand:
+    context: CommandContext
+    payload: TicketCreate
+    submission_id: UUID
+    source: CustomerTicketSubmissionSource
+    attachments: tuple[TicketAttachmentUpload, ...] = ()
+    duplicate_override: bool = False
+    actor_id: str | None = None
+    routing_mode: TicketCreationRoutingMode = TicketCreationRoutingMode.evaluate_policy
+    dispatch_event_after_commit: bool = False
+
+
+@dataclass(frozen=True, slots=True)
+class CustomerTicketSubmissionOutcome:
+    ticket: Ticket
+    replayed: bool
 
 
 class CustomerReplyStaffNotificationSource(str, Enum):
@@ -244,6 +270,42 @@ def _schedule_customer_comment_realtime_hint(
 
 def _ticket_error(code: str, message: str, **details: object) -> SupportTicketError:
     return SupportTicketError(code=code, message=message, details=details)
+
+
+def _customer_submission_fingerprint(
+    payload: TicketCreate, attachments: Sequence[TicketAttachmentUpload]
+) -> str:
+    files: list[dict[str, str]] = []
+    for attachment in attachments:
+        if not attachment.filename:
+            continue
+        position = attachment.file.tell()
+        digest = hashlib.sha256()
+        try:
+            attachment.file.seek(0)
+            while chunk := attachment.file.read(1024 * 1024):
+                digest.update(chunk)
+        finally:
+            attachment.file.seek(position)
+        files.append(
+            {
+                "name": attachment.filename,
+                "type": attachment.content_type or "",
+                "sha256": digest.hexdigest(),
+            }
+        )
+    material = {
+        "subscriber_id": str(payload.subscriber_id),
+        "title": payload.title,
+        "description": payload.description or "",
+        "priority": payload.priority,
+        "ticket_type": payload.ticket_type,
+        "region": payload.region,
+        "attachments": files,
+    }
+    return hashlib.sha256(
+        json.dumps(material, sort_keys=True, separators=(",", ":")).encode()
+    ).hexdigest()
 
 
 def _command_idempotency_key(request: object | None) -> str | None:
@@ -325,6 +387,12 @@ def ticket_owner_command(name: str):
             )
             if name == "create" and isinstance(result, Ticket):
                 _notify_workqueue(result, "added")
+            elif (
+                name == "create_customer_submission"
+                and isinstance(result, CustomerTicketSubmissionOutcome)
+                and not result.replayed
+            ):
+                _notify_workqueue(result.ticket, "added")
             elif (
                 name == "create_infrastructure_manual"
                 and isinstance(result, ManualInfrastructureTicketCreateResult)
@@ -3095,6 +3163,9 @@ class Tickets:
         consequence_mode: TicketCreationConsequenceMode = (
             TicketCreationConsequenceMode.standard
         ),
+        customer_submission_id: UUID | None = None,
+        customer_submission_fingerprint: str | None = None,
+        ticket_id: UUID | None = None,
     ) -> Ticket:
         """Stage Ticket creation inside the canonical owner transaction.
 
@@ -3158,6 +3229,10 @@ class Tickets:
                 }
             }
         )
+        if ticket_id is not None:
+            ticket.id = ticket_id
+        ticket.customer_submission_id = customer_submission_id
+        ticket.customer_submission_fingerprint = customer_submission_fingerprint
         if origin_conversation_id is not None:
             ticket.origin_conversation_id = origin_conversation_id
         ticket.number = Tickets._resolve_ticket_number(db)
@@ -3407,6 +3482,114 @@ class Tickets:
             acknowledgement_mode=acknowledgement_mode,
             consequence_mode=TicketCreationConsequenceMode.standard,
         )
+
+    @staticmethod
+    @ticket_owner_command("create_customer_submission")
+    def create_customer_submission(
+        db: Session,
+        *,
+        command: CustomerTicketSubmissionCommand,
+        request: object | None = None,
+    ) -> CustomerTicketSubmissionOutcome:
+        """Issue or replay one customer submission under the Ticket owner."""
+        subscriber_id = command.payload.subscriber_id
+        if subscriber_id is None:
+            raise _ticket_error("subscriber_not_found", "Subscriber is required.")
+        fingerprint = _customer_submission_fingerprint(
+            command.payload, command.attachments
+        )
+        if db.get(Subscriber, subscriber_id) is None:
+            raise _ticket_error("subscriber_not_found", "Subscriber not found.")
+
+        def existing_outcome() -> CustomerTicketSubmissionOutcome | None:
+            existing = (
+                db.query(Ticket)
+                .filter(
+                    Ticket.subscriber_id == subscriber_id,
+                    Ticket.customer_submission_id == command.submission_id,
+                )
+                .one_or_none()
+            )
+            if existing is None:
+                return None
+            if existing.customer_submission_fingerprint != fingerprint:
+                raise _ticket_error(
+                    "ticket_submission_conflict",
+                    "This ticket submission was already used with different details.",
+                )
+            return CustomerTicketSubmissionOutcome(ticket=existing, replayed=True)
+
+        replay = existing_outcome()
+        if replay is not None:
+            return replay
+        ticket_validation.prepare_human_ticket_creation(
+            db,
+            command.payload,
+            duplicate_override=command.duplicate_override,
+            customer_visible_only=True,
+        )
+
+        ticket_id = uuid4()
+        prepared_attachments: tuple[PreparedFileUpload, ...] = ()
+        if command.attachments:
+            from app.services import web_support_tickets
+
+            prepared_attachments = web_support_tickets.prepare_ticket_attachments(
+                ticket_id=ticket_id,
+                attachments=command.attachments,
+                entity_type=web_support_tickets.TicketAttachmentEntityType.ticket,
+                uploaded_by=subscriber_id,
+            )
+
+        subscriber = (
+            db.query(Subscriber)
+            .filter(Subscriber.id == subscriber_id)
+            .with_for_update()
+            .one_or_none()
+        )
+        if subscriber is None:
+            raise _ticket_error("subscriber_not_found", "Subscriber not found.")
+        replay = existing_outcome()
+        if replay is not None:
+            return replay
+
+        payload = ticket_validation.prepare_human_ticket_creation(
+            db,
+            command.payload,
+            duplicate_override=command.duplicate_override,
+            customer_visible_only=True,
+        )
+        ticket = Tickets._stage_create(
+            db,
+            payload,
+            actor_id=command.actor_id,
+            request=request,
+            dispatch_event_after_commit=command.dispatch_event_after_commit,
+            routing_mode=command.routing_mode,
+            customer_submission_id=command.submission_id,
+            customer_submission_fingerprint=fingerprint,
+            ticket_id=ticket_id,
+        )
+        if prepared_attachments:
+            uploaded = web_support_tickets.stage_prepared_ticket_attachments(
+                db, prepared=prepared_attachments
+            )
+            Tickets.add_attachments(db, str(ticket.id), uploaded)
+        if command.source is CustomerTicketSubmissionSource.web_portal:
+            emit_event(
+                db,
+                EventType.customer_ticket_created,
+                {
+                    "ticket_id": str(ticket.id),
+                    "subscriber_id": str(subscriber_id),
+                    "ticket_number": str(ticket.number or ticket.id),
+                },
+                actor="customer",
+                subscriber_id=subscriber_id,
+                account_id=subscriber_id,
+                dispatch_after_commit=False,
+            )
+        return CustomerTicketSubmissionOutcome(ticket=ticket, replayed=False)
 
     @staticmethod
     def stage_internal_creation_participant(

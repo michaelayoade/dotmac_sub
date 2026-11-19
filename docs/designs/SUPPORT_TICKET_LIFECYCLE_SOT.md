@@ -311,6 +311,22 @@ staff command explicitly publishes them. Portal adapters consume these stored
 decisions; they never infer publication from subscriber linkage, CRM metadata,
 or the absence of an internal-note checkbox.
 
+Customer web and mobile ticket forms carry one UUID per draft and a typed source.
+The Ticket owner fingerprints the submitted fields and attachments, checks for
+an exact replay, and prepares object uploads before locking the subscriber.
+It then rechecks the unique `(subscriber_id, customer_submission_id)` pair and
+similar open tickets under that lock. An exact retry
+returns the original Ticket without repeating its consequences; reuse with
+changed content conflicts. Before issuing a new Ticket, the owner checks
+similar open tickets linked to that subscriber by issue content as well as
+identity. The first submission returns
+only customer-visible match details, and the customer may then choose **Create
+anyway** for a separate ticket. Staff form and staff JSON ticket creation use
+the same warning and override policy. Server-side checks are authoritative;
+the browser or app may disable its submit control only for convenience.
+The web portal acknowledgement event is staged with the new Ticket in the
+owner transaction; exact replays do not stage it again.
+
 Customer-facing comment projections carry the closed `TicketCommentAuthorType`
 vocabulary (`customer`, `staff`, `system`) alongside the stored publication
 decision. Web and mobile adapters may render that provenance as audience-safe

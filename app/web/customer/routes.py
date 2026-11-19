@@ -51,6 +51,7 @@ from app.services import (
     portal_ticket_deflection,
     support_ticket_settings,
     team_inbox_widget,
+    ticket_validation,
     web_support_tickets,
 )
 from app.services import customer_account_statement as statement_service
@@ -388,6 +389,7 @@ def customer_support_new(
             url="/portal/auth/login?next=/portal/support/new", status_code=303
         )
     context = crm_portal.ticket_create_context(request, db, customer)
+    context["submission_id"] = str(uuid4())
     # Tell the customer what we already know before asking them to describe it.
     # Informational only — the form still accepts the report.
     context.update(
@@ -409,6 +411,8 @@ def customer_support_create(
     description: str = Form(""),
     priority: str = Form("normal"),
     region: str = Form(""),
+    submission_id: UUID | None = Form(None),
+    duplicate_override: bool = Form(False),
     attachments: list[UploadFile] = File(default=[]),
     db: Session = Depends(get_db),
 ) -> Response:
@@ -418,9 +422,11 @@ def customer_support_create(
     if _is_read_only_customer(customer):
         return _read_only_response(request, customer, active_page="support")
 
+    submission_id = submission_id or uuid4()
     canonical_region = support_ticket_settings.canonical_region_option(db, region)
     if canonical_region is None:
         context = crm_portal.ticket_create_context(request, db, customer)
+        context["submission_id"] = str(submission_id)
         context["crm_error"] = True
         context["crm_error_message"] = "Select a valid Region."
         context["form_values"] = {
@@ -441,35 +447,52 @@ def customer_support_create(
     subscriber_lookup = str(
         subscriber_id or optional_customer_subscriber_id(db, customer) or ""
     )
-    result = crm_portal.handle_ticket_create(
-        db,
-        customer,
-        subscriber_lookup,
-        title,
-        description,
-        priority,
-        canonical_region,
-        support_ticket_settings.resolve_portal_ticket_team_routing(db),
-        attachments=attachments,
-    )
-    if result["success"]:
-        ticket = result["ticket"]
-        ticket_id = ticket.get("id", "")
-        emit_customer_event(
+    try:
+        resolved_subscriber_id = UUID(subscriber_lookup)
+    except (TypeError, ValueError):
+        resolved_subscriber_id = None
+    try:
+        result = crm_portal.handle_ticket_create(
             db,
-            "customer_ticket_created",
-            {
-                "ticket_id": str(ticket_id),
-                "subscriber_id": subscriber_lookup,
-                # The acknowledgement template renders {ticket_number}; fall
-                # back to the id so the message never ships an empty ref.
-                "ticket_number": str(ticket.get("number") or ticket_id),
-            },
+            command=crm_portal.PortalTicketCreateCommand(
+                subscriber_id=resolved_subscriber_id,
+                title=title,
+                description=description,
+                priority=priority,
+                region=canonical_region,
+                team_routing=support_ticket_settings.resolve_portal_ticket_team_routing(
+                    db
+                ),
+                submission_id=submission_id,
+                duplicate_override=duplicate_override,
+                attachments=tuple(attachments),
+            ),
         )
-        return RedirectResponse(url=f"/portal/support/{ticket_id}", status_code=303)
+    except ticket_validation.TicketDuplicateWarningError as exc:
+        db.rollback()
+        context = crm_portal.ticket_create_context(request, db, customer)
+        context["submission_id"] = str(submission_id)
+        context["crm_error"] = True
+        context["crm_error_message"] = exc.message
+        context["duplicate_warning"] = exc.result.as_customer_dict()
+        context["form_values"] = {
+            "title": title,
+            "description": description,
+            "priority": priority,
+            "region": canonical_region,
+        }
+        return templates.TemplateResponse(
+            "customer/support/new.html", context, status_code=409
+        )
+    if result.ticket is not None:
+        ticket = result.ticket
+        return RedirectResponse(url=f"/portal/support/{ticket.id}", status_code=303)
     context = crm_portal.ticket_create_context(request, db, customer)
+    context["submission_id"] = str(
+        uuid4() if result.error_code == "ticket_submission_conflict" else submission_id
+    )
     context["crm_error"] = True
-    context["crm_error_message"] = result.get("error") or "Unable to create ticket."
+    context["crm_error_message"] = result.error or "Unable to create ticket."
     context["form_values"] = {
         "title": title,
         "description": description,
@@ -479,7 +502,7 @@ def customer_support_create(
     return templates.TemplateResponse(
         "customer/support/new.html",
         context,
-        status_code=400,
+        status_code=409 if result.error_code == "ticket_submission_conflict" else 400,
     )
 
 

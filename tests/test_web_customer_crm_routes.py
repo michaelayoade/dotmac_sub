@@ -100,6 +100,8 @@ def test_support_create_maps_invalid_region_to_safe_preserved_form_error(
         description="Please investigate",
         priority="normal",
         region=submitted,
+        submission_id=None,
+        duplicate_override=False,
         attachments=[],
         db=object(),
     )

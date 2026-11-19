@@ -74,7 +74,7 @@ from app.services.field.note_commands import (
     StaffFieldNoteAccess,
     list_staff_field_work_order_notes,
 )
-from app.services.file_storage import file_uploads
+from app.services.file_storage import PreparedFileUpload, file_uploads
 from app.services.list_query import (
     ListDefinition,
     ListFieldDefinition,
@@ -776,35 +776,50 @@ def upload_ticket_attachments(
     entity_type: TicketAttachmentEntityType,
     actor_id: UUID | None,
 ) -> tuple[AttachmentMeta, ...]:
-    uploaded_metadata: list[AttachmentMeta] = []
     uploaded_by = _resolve_uploaded_by_subscriber_id(db, actor_id)
-    try:
-        for attachment in attachments or []:
-            filename = (getattr(attachment, "filename", "") or "").strip()
-            if not filename:
-                continue
-            payload = attachment.file.read()
-            if not payload:
-                continue
-            if len(payload) > MAX_ATTACHMENT_BYTES:
-                max_mb = max(1, MAX_ATTACHMENT_BYTES // 1048576)
-                raise TicketAttachmentValidationError(
-                    kind=TicketAttachmentValidationKind.too_large,
-                    filename=filename,
-                    message=f"{filename}: max file size is {max_mb} MB",
-                )
-            content_type = (
-                getattr(attachment, "content_type", None) or "application/octet-stream"
-            ).lower()
-            if content_type not in ALLOWED_ATTACHMENT_TYPES:
-                raise TicketAttachmentValidationError(
-                    kind=TicketAttachmentValidationKind.unsupported_type,
-                    filename=filename,
-                    message=f"{filename}: unsupported file type",
-                )
+    prepared = prepare_ticket_attachments(
+        ticket_id=ticket_id,
+        attachments=attachments,
+        entity_type=entity_type,
+        uploaded_by=uploaded_by,
+    )
+    return stage_prepared_ticket_attachments(db, prepared=prepared)
 
-            record = file_uploads.stage_upload(
-                db=db,
+
+def prepare_ticket_attachments(
+    *,
+    ticket_id: UUID,
+    attachments: Sequence[TicketAttachmentUpload],
+    entity_type: TicketAttachmentEntityType,
+    uploaded_by: UUID | None,
+) -> tuple[PreparedFileUpload, ...]:
+    prepared: list[PreparedFileUpload] = []
+    for attachment in attachments:
+        filename = (getattr(attachment, "filename", "") or "").strip()
+        if not filename:
+            continue
+        attachment.file.seek(0)
+        payload = attachment.file.read()
+        if not payload:
+            continue
+        if len(payload) > MAX_ATTACHMENT_BYTES:
+            max_mb = max(1, MAX_ATTACHMENT_BYTES // 1048576)
+            raise TicketAttachmentValidationError(
+                kind=TicketAttachmentValidationKind.too_large,
+                filename=filename,
+                message=f"{filename}: max file size is {max_mb} MB",
+            )
+        content_type = (
+            getattr(attachment, "content_type", None) or "application/octet-stream"
+        ).lower()
+        if content_type not in ALLOWED_ATTACHMENT_TYPES:
+            raise TicketAttachmentValidationError(
+                kind=TicketAttachmentValidationKind.unsupported_type,
+                filename=filename,
+                message=f"{filename}: unsupported file type",
+            )
+        prepared.append(
+            file_uploads.prepare_upload(
                 domain="attachments",
                 entity_type=entity_type.value,
                 entity_id=str(ticket_id),
@@ -814,21 +829,26 @@ def upload_ticket_attachments(
                 uploaded_by=str(uploaded_by) if uploaded_by else None,
                 owner_subscriber_id=None,
             )
-            uploaded_metadata.append(
-                AttachmentMeta(
-                    file_name=record.original_filename,
-                    content_type=record.content_type or content_type,
-                    file_size=int(record.file_size),
-                    storage_key=record.storage_key_or_relative_path,
-                    stored_file_id=record.id,
-                )
+        )
+    return tuple(prepared)
+
+
+def stage_prepared_ticket_attachments(
+    db: Session, *, prepared: Sequence[PreparedFileUpload]
+) -> tuple[AttachmentMeta, ...]:
+    uploaded_metadata: list[AttachmentMeta] = []
+    for item in prepared:
+        record = file_uploads.stage_prepared_upload(db=db, prepared=item)
+        uploaded_metadata.append(
+            AttachmentMeta(
+                file_name=record.original_filename,
+                content_type=record.content_type or item.content_type,
+                file_size=int(record.file_size),
+                storage_key=record.storage_key_or_relative_path,
+                stored_file_id=record.id,
             )
-        return tuple(uploaded_metadata)
-    except Exception:
-        # Database metadata is rolled back by the Ticket owner. Object keys are
-        # content-addressed; an interrupted command is repaired by the storage
-        # orphan reconciler described in the Support lifecycle runbook.
-        raise
+        )
+    return tuple(uploaded_metadata)
 
 
 def build_ticket_form_context(
@@ -1142,13 +1162,7 @@ def build_ticket_comment_payload(
     )
 
 
-class DuplicateTicketWarningError(Exception):
-    """A create submission matches existing open tickets and the operator has
-    not ticked the ``duplicate_override`` checkbox yet."""
-
-    def __init__(self, result: ticket_validation.TicketDuplicateResult):
-        super().__init__("A similar ticket already exists.")
-        self.result = result
+DuplicateTicketWarningError = ticket_validation.TicketDuplicateWarningError
 
 
 @dataclass(frozen=True, slots=True)
@@ -1187,24 +1201,6 @@ def infrastructure_ticket_conflict_from_error(
     if not isinstance(exc, OutageWorkOrderHandoffError):
         return None
     return exc.infrastructure_ticket_conflict
-
-
-def _duplicate_input_from_payload(
-    payload: TicketCreate,
-) -> ticket_validation.TicketDuplicateInput:
-    metadata = payload.metadata_ if isinstance(payload.metadata_, dict) else {}
-    return ticket_validation.TicketDuplicateInput(
-        title=payload.title,
-        description=payload.description,
-        subscriber_id=payload.subscriber_id,
-        customer_account_id=payload.customer_account_id,
-        customer_person_id=payload.customer_person_id,
-        lead_id=payload.lead_id,
-        ticket_type=payload.ticket_type,
-        base_station_details=str(metadata.get("base_station_details") or "") or None,
-        tags=payload.tags,
-        region=payload.region,
-    )
 
 
 def create_ticket_from_form(
@@ -1346,25 +1342,9 @@ def create_ticket_from_form(
             )
             support_service.tickets.add_attachments(db, str(result.ticket.id), uploaded)
         return result.ticket
-    duplicate_result = ticket_validation.find_duplicate_ticket_candidates(
-        db, _duplicate_input_from_payload(payload)
+    payload = ticket_validation.prepare_human_ticket_creation(
+        db, payload, duplicate_override=command.duplicate_override
     )
-    if duplicate_result.has_warning:
-        if not command.duplicate_override:
-            raise DuplicateTicketWarningError(duplicate_result)
-        metadata = dict(payload.metadata_ or {})
-        metadata["duplicate_override"] = True
-        metadata["possible_duplicate_tickets"] = [
-            {
-                "ticket_id": match.ticket_id,
-                "reference": match.reference,
-                "score": match.score,
-                "confidence": match.confidence,
-                "reasons": match.reasons,
-            }
-            for match in duplicate_result.matches
-        ]
-        payload.metadata_ = metadata
     db_session_adapter.release_read_transaction(db)
     ticket = support_service.tickets.create(
         db,

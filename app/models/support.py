@@ -103,6 +103,16 @@ class TicketCommentAuthorType(enum.Enum):
 class Ticket(Base):
     __tablename__ = "support_tickets"
     __table_args__ = (
+        UniqueConstraint(
+            "subscriber_id",
+            "customer_submission_id",
+            name="uq_support_tickets_customer_submission",
+        ),
+        CheckConstraint(
+            "customer_submission_id IS NULL OR "
+            "(subscriber_id IS NOT NULL AND customer_submission_fingerprint IS NOT NULL)",
+            name="ck_support_tickets_customer_submission_evidence",
+        ),
         Index("ix_support_tickets_number", "number"),
         Index("ix_support_tickets_status", "status"),
         Index("ix_support_tickets_priority", "priority"),
@@ -117,6 +127,12 @@ class Ticket(Base):
 
     id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    customer_submission_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), nullable=True
+    )
+    customer_submission_fingerprint: Mapped[str | None] = mapped_column(
+        String(64), nullable=True
     )
 
     # Optional relations

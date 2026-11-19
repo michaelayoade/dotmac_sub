@@ -70,9 +70,9 @@ def test_portal_ticket_create_supplies_ticket_number():
     """A template placeholder with no payload key ships an empty reference."""
     from pathlib import Path
 
-    routes = Path(scheduler_config.__file__).parent.parent / "web/customer/routes.py"
-    body = routes.read_text()
-    marker = body.index('"customer_ticket_created"')
+    owner = Path(scheduler_config.__file__).parent / "support.py"
+    body = owner.read_text()
+    marker = body.index("EventType.customer_ticket_created")
     assert "ticket_number" in body[marker : marker + 500]
 
 
