@@ -4564,6 +4564,7 @@ def _payment_allocation_fingerprint(
     account_credit_before: Decimal,
     receivable_before: Decimal,
     funding_position_at: datetime | None,
+    finalization_mode: PaymentAllocationFinalizationMode,
     released_legacy_prepaid_amount: Decimal = Decimal("0.00"),
 ) -> str:
     encoded = json.dumps(
@@ -4583,6 +4584,7 @@ def _payment_allocation_fingerprint(
                 if funding_position_at is not None
                 else None
             ),
+            "finalization_mode": finalization_mode.value,
             "released_legacy_prepaid_amount": (
                 f"{round_money(released_legacy_prepaid_amount):.2f}"
             ),
@@ -4591,6 +4593,14 @@ def _payment_allocation_fingerprint(
         separators=(",", ":"),
     )
     return hashlib.sha256(encoded.encode("utf-8")).hexdigest()
+
+
+def _reserve_prepaid_funding_for_allocation(
+    mode: PaymentAllocationFinalizationMode,
+) -> bool:
+    """Use one funding policy for preview and confirmation."""
+
+    return mode is PaymentAllocationFinalizationMode.standard
 
 
 class PaymentAllocationReconciliationExceptions:
@@ -4754,9 +4764,9 @@ def _build_payment_allocation_preview(
     db: Session,
     payload: PaymentAllocationPreviewRequest,
     *,
+    finalization_mode: PaymentAllocationFinalizationMode,
     funding_position_at: datetime | None = None,
     allow_existing_allocation: bool = False,
-    reserve_prepaid_funding: bool = True,
     released_legacy_prepaid_amount: Decimal = Decimal("0.00"),
 ) -> PaymentAllocationPreview:
     payment = get_by_id(db, Payment, payload.payment_id)
@@ -4844,7 +4854,7 @@ def _build_payment_allocation_preview(
         )
     credit_reader = (
         get_spendable_account_credit_balance
-        if reserve_prepaid_funding
+        if _reserve_prepaid_funding_for_allocation(finalization_mode)
         else get_account_credit_balance
     )
     account_credit_before = credit_reader(
@@ -4871,6 +4881,7 @@ def _build_payment_allocation_preview(
         account_credit_before=account_credit_before,
         receivable_before=receivable_before,
         funding_position_at=funding_position_at,
+        finalization_mode=finalization_mode,
         released_legacy_prepaid_amount=released_legacy_prepaid_amount,
     )
     return PaymentAllocationPreview(
@@ -5468,7 +5479,13 @@ class PaymentAllocations(ListResponseMixin):
         db: Session,
         payload: PaymentAllocationPreviewRequest,
     ) -> PaymentAllocationPreview:
-        return _build_payment_allocation_preview(db, payload)
+        invoice = get_by_id(db, Invoice, payload.invoice_id)
+        if invoice is None:
+            raise HTTPException(status_code=404, detail="Invoice not found")
+        finalization = resolve_payment_allocation_finalization(db, invoice)
+        return _build_payment_allocation_preview(
+            db, payload, finalization_mode=finalization.mode
+        )
 
     @staticmethod
     def preview_reviewed_document_correction_for_owner(
@@ -5480,7 +5497,7 @@ class PaymentAllocations(ListResponseMixin):
         return _build_payment_allocation_preview(
             db,
             payload,
-            reserve_prepaid_funding=False,
+            finalization_mode=PaymentAllocationFinalizationMode.reviewed_document_correction,
         )
 
     @staticmethod
@@ -5493,7 +5510,7 @@ class PaymentAllocations(ListResponseMixin):
         return _build_payment_allocation_preview(
             db,
             payload,
-            reserve_prepaid_funding=False,
+            finalization_mode=PaymentAllocationFinalizationMode.legacy_prepaid_debit_replacement,
             released_legacy_prepaid_amount=round_money(payload.amount),
         )
 
@@ -5507,7 +5524,7 @@ class PaymentAllocations(ListResponseMixin):
         return _build_payment_allocation_preview(
             db,
             payload,
-            reserve_prepaid_funding=False,
+            finalization_mode=PaymentAllocationFinalizationMode.issuance_reserved_credit,
         )
 
     @staticmethod
@@ -5516,6 +5533,7 @@ class PaymentAllocations(ListResponseMixin):
         payload: PaymentAllocationPreviewRequest,
         *,
         funding_position_at: datetime | None,
+        finalization_mode: PaymentAllocationFinalizationMode,
     ) -> PaymentAllocationPreview:
         """Preview an allocation using its coordinator's reviewed boundary."""
 
@@ -5523,6 +5541,7 @@ class PaymentAllocations(ListResponseMixin):
             db,
             payload,
             funding_position_at=funding_position_at,
+            finalization_mode=finalization_mode,
         )
 
     @staticmethod
@@ -5713,9 +5732,7 @@ class PaymentAllocations(ListResponseMixin):
         payload: PaymentAllocationConfirm,
         *,
         funding_position_at: datetime | None,
-        finalization_mode: PaymentAllocationFinalizationMode = (
-            PaymentAllocationFinalizationMode.standard
-        ),
+        finalization_mode: PaymentAllocationFinalizationMode,
     ) -> PaymentAllocationResult:
         """Stage a boundary-scoped allocation without ending the transaction."""
 
@@ -5735,6 +5752,7 @@ class PaymentAllocations(ListResponseMixin):
         invoice_id: UUID,
         amount: Decimal,
         funding_position_at: datetime | None,
+        finalization_mode: PaymentAllocationFinalizationMode,
     ) -> PaymentAllocationResult:
         """Top up an existing allocation from newly evidenced payment credit.
 
@@ -5777,6 +5795,7 @@ class PaymentAllocations(ListResponseMixin):
             ),
             funding_position_at=funding_position_at,
             allow_existing_allocation=True,
+            finalization_mode=finalization_mode,
         )
         invoice_entry = lock_for_update(db, LedgerEntry, allocation.ledger_entry_id)
         consumption_entry = lock_for_update(
@@ -5911,9 +5930,7 @@ class PaymentAllocations(ListResponseMixin):
             db,
             preview_request,
             funding_position_at=funding_position_at,
-            reserve_prepaid_funding=(
-                resolved_finalization_mode is PaymentAllocationFinalizationMode.standard
-            ),
+            finalization_mode=resolved_finalization_mode,
             released_legacy_prepaid_amount=released_legacy_prepaid_amount,
         )
         if preview.fingerprint != payload.preview_fingerprint:

@@ -17,6 +17,9 @@ from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from uuid import uuid4
 
+import pytest
+from fastapi import HTTPException
+
 from app.models.audit import AuditEvent
 from app.models.billing import (
     Invoice,
@@ -44,7 +47,10 @@ from app.schemas.billing import (
     PaymentAllocationConfirm,
     PaymentAllocationPreviewRequest,
 )
-from app.services.billing.payments import PaymentAllocations
+from app.services.billing.payments import (
+    PaymentAllocationFinalizationMode,
+    PaymentAllocations,
+)
 from app.services.events.handlers.prepaid_renewal import PrepaidRenewalHandler
 from app.services.events.types import Event, EventType
 from app.services.prepaid_service_renewals import (
@@ -246,6 +252,48 @@ def test_payment_allocation_emits_the_durable_funding_change_event(
     # consequence owner actually reads.
     assert records[0].account_id == subscriber.id
     assert records[0].invoice_id == invoice.id
+
+
+def test_reviewed_allocation_fingerprint_binds_mode_and_financial_state(
+    db_session, subscriber, subscription
+):
+    invoice = _prepaid_invoice(db_session, subscriber, subscription)
+    payment = _settled_payment(db_session, subscriber)
+    request = PaymentAllocationPreviewRequest(
+        payment_id=payment.id,
+        invoice_id=invoice.id,
+        amount=AMOUNT,
+    )
+    standard = PaymentAllocations.preview_at_reviewed_boundary_for_owner(
+        db_session,
+        request,
+        funding_position_at=None,
+        finalization_mode=PaymentAllocationFinalizationMode.standard,
+    )
+    historical = PaymentAllocations.preview_at_reviewed_boundary_for_owner(
+        db_session,
+        request,
+        funding_position_at=None,
+        finalization_mode=PaymentAllocationFinalizationMode.historical_debt,
+    )
+    assert standard.fingerprint != historical.fingerprint
+
+    invoice.total = AMOUNT + Decimal("1.00")
+    invoice.balance_due = AMOUNT + Decimal("1.00")
+    db_session.flush()
+    with pytest.raises(HTTPException) as error:
+        PaymentAllocations.stage_confirm_at_reviewed_boundary_for_owner(
+            db_session,
+            PaymentAllocationConfirm(
+                **request.model_dump(),
+                preview_fingerprint=standard.fingerprint,
+                idempotency_key=_allocation_key(payment, invoice),
+            ),
+            funding_position_at=None,
+            finalization_mode=PaymentAllocationFinalizationMode.standard,
+        )
+    assert error.value.status_code == 409
+    assert error.value.detail == "Financial state changed after preview; preview again"
 
 
 def test_paid_allocation_produces_entitlement_and_advanced_anchor(

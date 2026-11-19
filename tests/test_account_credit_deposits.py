@@ -10,6 +10,7 @@ from sqlalchemy.exc import IntegrityError
 from app.models.billing import (
     Invoice,
     InvoiceDueDateBasis,
+    InvoiceLine,
     InvoiceStatus,
     LedgerEntry,
     LedgerEntryType,
@@ -884,6 +885,74 @@ def test_invoice_created_during_checkout_consumes_confirmed_credit(
     assert invoice.balance_due == Decimal("0.00")
     assert get_account_credit_balance(db_session, str(subscriber.id)) == Decimal(
         "40000.00"
+    )
+
+
+def test_verified_deposit_settles_historical_prepaid_debt_without_new_entitlement(
+    db_session, subscriber, subscription
+):
+    period_start = datetime.now(UTC) - timedelta(days=90)
+    period_end = period_start + timedelta(days=30)
+    subscription.billing_mode = BillingMode.prepaid
+    subscription.status = SubscriptionStatus.active
+    subscription.next_billing_at = period_end + timedelta(days=30)
+    invoice = Invoice(
+        account_id=subscriber.id,
+        invoice_number=f"INV-HISTORICAL-DEPOSIT-{uuid4().hex[:8]}",
+        status=InvoiceStatus.issued,
+        currency="NGN",
+        total=Decimal("1000.00"),
+        balance_due=Decimal("1000.00"),
+        billing_period_start=period_start,
+        billing_period_end=period_end,
+        issued_at=period_start,
+        due_at=period_start,
+        metadata_={"payment_finalization_mode": "historical_debt"},
+    )
+    db_session.add(invoice)
+    db_session.flush()
+    db_session.add(
+        InvoiceLine(
+            invoice_id=invoice.id,
+            subscription_id=subscription.id,
+            description="Historical prepaid service",
+            quantity=Decimal("1.000"),
+            unit_price=Decimal("1000.00"),
+            amount=Decimal("1000.00"),
+            metadata_={"kind": "base_subscription"},
+            is_active=True,
+        )
+    )
+    db_session.commit()
+    anchor_before = subscription.next_billing_at
+    provider = _provider(db_session)
+    intent = _intent(db_session, subscriber, provider, amount="1000.00")
+    transaction = _transaction(intent, external_id="gateway-historical-debt")
+
+    result = _settle(
+        db_session,
+        intent_id=intent.id,
+        transaction=transaction,
+    )
+
+    db_session.refresh(invoice)
+    db_session.refresh(subscription)
+    assert result.application.applied == Decimal("1000.00")
+    assert invoice.status is InvoiceStatus.paid
+    assert invoice.balance_due == Decimal("0.00")
+    assert subscription.next_billing_at == anchor_before
+    assert db_session.query(ServiceEntitlement).count() == 0
+    assert (
+        db_session.query(PaymentAllocation).filter_by(invoice_id=invoice.id).count()
+        == 1
+    )
+
+    replay = _settle(db_session, intent_id=intent.id, transaction=transaction)
+    assert replay.already_recorded is True
+    assert replay.payment.id == result.payment.id
+    assert (
+        db_session.query(PaymentAllocation).filter_by(invoice_id=invoice.id).count()
+        == 1
     )
 
 

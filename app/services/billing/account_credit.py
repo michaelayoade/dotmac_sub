@@ -1102,6 +1102,7 @@ class AccountCreditApplications:
                 },
             )
 
+        finalization = resolve_payment_allocation_finalization(db, invoice)
         result = AccountCreditApplicationResult(
             account_id=str(invoice.account_id),
             available_credit=preview.spendable_credit,
@@ -1134,6 +1135,7 @@ class AccountCreditApplications:
                         db,
                         request,
                         funding_position_at=funding_position_at,
+                        finalization_mode=finalization.mode,
                     )
                 )
                 confirmation = (
@@ -1145,6 +1147,7 @@ class AccountCreditApplications:
                             idempotency_key=_allocation_key(payment, invoice),
                         ),
                         funding_position_at=funding_position_at,
+                        finalization_mode=finalization.mode,
                     )
                 )
             except HTTPException as exc:
@@ -1309,6 +1312,7 @@ class AccountCreditApplications:
                             invoice_id=invoice.id,
                             amount=amount,
                             funding_position_at=funding_position_at,
+                            finalization_mode=finalization.mode,
                         )
                     )
                     applied = round_money(
@@ -1320,6 +1324,7 @@ class AccountCreditApplications:
                         db,
                         request,
                         funding_position_at=funding_position_at,
+                        finalization_mode=finalization.mode,
                     )
                     allocation_result = (
                         PaymentAllocations.stage_confirm_at_reviewed_boundary_for_owner(

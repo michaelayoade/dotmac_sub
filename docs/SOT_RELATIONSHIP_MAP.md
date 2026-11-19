@@ -2716,7 +2716,10 @@ Payment creation, settlement, and allocation are one coherent owner contract:
   consolidated, and other explicitly controlled owners keep their bounded
   allocation modes.
 - Historical prepaid-debt boundary: `financial.payments` resolves one typed
-  finalization mode before applying invoice consequences. Carried-in prepaid
+  finalization mode before applying invoice consequences. The account-credit
+  application owner passes the same mode to reviewed allocation preview and
+  confirmation; both derive prepaid-funding reservation from it, and the
+  fingerprint binds the mode. Carried-in prepaid
   periods before the current subscription anchor, explicit historical-debt
   provenance, or authoritative later funded entitlement route to
   `historical_debt`. That mode settles the receivable but

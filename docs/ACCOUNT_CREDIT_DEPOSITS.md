@@ -148,6 +148,12 @@ adapters cannot retain usable payment credit while eligible debt remains.
 
 Fully paid prepaid invoices then use a typed finalization decision. Native
 current or genuinely lapsed renewals retain the standard settlement behavior.
+The account-credit application owner resolves that decision once per invoice
+and passes its mode to both the reviewed payment-allocation preview and
+confirmation. Both use the same funding-reservation policy: `standard`
+reserves prepaid funding, while `historical_debt` does not. The reviewed
+fingerprint includes the mode, so a changed policy or changed financial state
+still requires a fresh preview.
 Carried-in prepaid periods that precede the current subscription anchor,
 explicitly marked historical debt, and periods that authoritative later
 entitlement proves were superseded use

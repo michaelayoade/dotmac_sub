@@ -117,6 +117,46 @@ def test_adapters_select_root_or_participant_by_transaction_ownership() -> None:
     assert "settle_verified" not in _calls(proof)
 
 
+def test_reviewed_allocation_binds_one_finalization_mode() -> None:
+    owner_path = "app/services/billing/account_credit.py"
+    for function_name in ("apply", "_apply_invoice_payment_sources"):
+        owner = _function(owner_path, function_name)
+        calls = [
+            node
+            for node in ast.walk(owner)
+            if isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Attribute)
+            and node.func.attr
+            in {
+                "preview_at_reviewed_boundary_for_owner",
+                "stage_confirm_at_reviewed_boundary_for_owner",
+            }
+        ]
+        assert len(calls) == 2
+        for call in calls:
+            mode = next(
+                keyword.value
+                for keyword in call.keywords
+                if keyword.arg == "finalization_mode"
+            )
+            assert ast.unparse(mode) == "finalization.mode"
+
+    for function_name in (
+        "preview_at_reviewed_boundary_for_owner",
+        "stage_confirm_at_reviewed_boundary_for_owner",
+    ):
+        boundary = _function("app/services/billing/payments.py", function_name)
+        mode_index = [arg.arg for arg in boundary.args.kwonlyargs].index(
+            "finalization_mode"
+        )
+        assert boundary.args.kw_defaults[mode_index] is None
+    fingerprint = _function(
+        "app/services/billing/payments.py", "_payment_allocation_fingerprint"
+    )
+    assert "finalization_mode" in [arg.arg for arg in fingerprint.args.kwonlyargs]
+    assert "finalization_mode" in ast.unparse(fingerprint)
+
+
 def test_settlement_event_and_source_vocabulary_are_versioned() -> None:
     source = (ROOT / "app/services/account_credit_deposits.py").read_text(
         encoding="utf-8"
