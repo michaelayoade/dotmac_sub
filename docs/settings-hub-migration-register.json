@@ -2192,7 +2192,7 @@
       },
       "disposition": "Mapped to hub; preserve registered type, validation, tenant scope and owner-command writes",
       "source_references": [
-        "app/services/billing/adjustments.py:471",
+        "app/services/billing/adjustments.py:479",
         "app/services/billing/credit_notes.py:1167",
         "app/services/billing/invoices.py:3544",
         "app/services/billing/payments.py:3676",
@@ -2707,7 +2707,7 @@
       },
       "disposition": "Mapped to hub; preserve registered type, validation, tenant scope and owner-command writes",
       "source_references": [
-        "app/services/billing_invoice_pdf.py:54",
+        "app/services/billing_invoice_pdf.py:51",
         "app/services/web_system_config.py:232",
         "app/services/web_system_config.py:263",
         "app/services/web_system_config.py:389",
@@ -3420,7 +3420,7 @@
       },
       "disposition": "Mapped to hub; preserve registered type, validation, tenant scope and owner-command writes",
       "source_references": [
-        "app/services/service_extensions.py:1001"
+        "app/services/service_extensions.py:1070"
       ]
     },
     {
@@ -7494,7 +7494,7 @@
       },
       "disposition": "Mapped to hub; preserve registered type, validation, tenant scope and owner-command writes",
       "source_references": [
-        "app/services/brand_profiles.py:111",
+        "app/services/brand_profiles.py:114",
         "app/services/web_system_settings_views.py:204",
         "app/web/admin/system.py:4183",
         "templates/admin/system/branding.html:119",
@@ -7522,7 +7522,7 @@
       },
       "disposition": "Mapped to hub; preserve registered type, validation, tenant scope and owner-command writes",
       "source_references": [
-        "app/services/brand_profiles.py:112",
+        "app/services/brand_profiles.py:115",
         "app/services/web_system_settings_views.py:212",
         "app/web/admin/system.py:4193",
         "templates/admin/system/branding.html:135",
@@ -7550,7 +7550,7 @@
       },
       "disposition": "Mapped to hub; preserve registered type, validation, tenant scope and owner-command writes",
       "source_references": [
-        "app/services/brand_profiles.py:30"
+        "app/services/brand_profiles.py:33"
       ]
     },
     {
@@ -7574,7 +7574,7 @@
       },
       "disposition": "Mapped to hub; preserve registered type, validation, tenant scope and owner-command writes",
       "source_references": [
-        "app/services/brand_profiles.py:32"
+        "app/services/brand_profiles.py:35"
       ]
     },
     {
@@ -7598,7 +7598,7 @@
       },
       "disposition": "Mapped to hub; preserve registered type, validation, tenant scope and owner-command writes",
       "source_references": [
-        "app/services/brand_profiles.py:33"
+        "app/services/brand_profiles.py:36"
       ]
     },
     {
@@ -7622,7 +7622,7 @@
       },
       "disposition": "Mapped to hub; preserve registered type, validation, tenant scope and owner-command writes",
       "source_references": [
-        "app/services/brand_profiles.py:29"
+        "app/services/brand_profiles.py:32"
       ]
     },
     {
@@ -7646,7 +7646,7 @@
       },
       "disposition": "Mapped to hub; preserve registered type, validation, tenant scope and owner-command writes",
       "source_references": [
-        "app/services/brand_profiles.py:31"
+        "app/services/brand_profiles.py:34"
       ]
     },
     {
@@ -7744,9 +7744,9 @@
       "disposition": "Mapped to hub; preserve registered type, validation, tenant scope and owner-command writes",
       "source_references": [
         "app/migration_source/snapshot.py:1028",
-        "app/services/brand_profiles.py:122",
-        "app/services/brand_profiles.py:25",
-        "app/services/brand_profiles.py:72",
+        "app/services/brand_profiles.py:125",
+        "app/services/brand_profiles.py:28",
+        "app/services/brand_profiles.py:75",
         "app/services/public_branding.py:17",
         "app/services/sales/quote_documents.py:218",
         "app/services/web_admin.py:214",
@@ -8398,7 +8398,7 @@
       },
       "disposition": "Mapped to hub; preserve registered type, validation, tenant scope and owner-command writes",
       "source_references": [
-        "app/services/brand_profiles.py:121",
+        "app/services/brand_profiles.py:124",
         "app/services/email.py:879",
         "app/services/web_admin.py:213",
         "app/services/web_system_settings_views.py:24",
@@ -8428,8 +8428,7 @@
       },
       "disposition": "Mapped to hub; preserve registered type, validation, tenant scope and owner-command writes",
       "source_references": [
-        "app/services/billing_invoice_pdf.py:289",
-        "app/services/brand_profiles.py:120",
+        "app/services/brand_profiles.py:123",
         "app/services/email.py:867",
         "app/services/web_admin.py:212",
         "app/services/web_system_settings_views.py:23",
@@ -8582,9 +8581,9 @@
         "app/services/automation_actions.py:730",
         "app/services/autopay.py:192",
         "app/services/backup_alerts.py:85",
-        "app/services/billing_invoice_pdf.py:386",
-        "app/services/billing_invoice_pdf.py:663",
-        "app/services/billing_invoice_pdf.py:841",
+        "app/services/billing_invoice_pdf.py:356",
+        "app/services/billing_invoice_pdf.py:636",
+        "app/services/billing_invoice_pdf.py:814",
         "app/services/billing_payment_receipts.py:92",
         "app/services/channel_health_contracts.py:29",
         "app/services/channel_health_contracts.py:52",
@@ -19646,7 +19645,7 @@
       "disposition": "Mapped to hub; preserve registered type, validation, tenant scope and owner-command writes",
       "source_references": [
         "app/services/customer_portal_profile_commands.py:35",
-        "app/services/sot_registry/domains/customer_context.py:1914",
+        "app/services/sot_registry/domains/customer_context.py:1923",
         "app/web/customer/routes.py:1829"
       ]
     },
@@ -20989,9 +20988,9 @@
       },
       "disposition": "Preserve specialised/seed owner; not a generic SettingSpec",
       "source_references": [
-        "app/services/billing_invoice_pdf.py:133",
-        "app/services/billing_invoice_pdf.py:163",
-        "app/services/brand_profiles.py:132",
+        "app/services/billing_invoice_pdf.py:130",
+        "app/services/billing_invoice_pdf.py:160",
+        "app/services/brand_profiles.py:135",
         "app/services/web_system_company_info.py:21",
         "templates/admin/system/company_info.html:61"
       ]
@@ -21012,9 +21011,9 @@
       },
       "disposition": "Preserve specialised/seed owner; not a generic SettingSpec",
       "source_references": [
-        "app/services/billing_invoice_pdf.py:138",
-        "app/services/billing_invoice_pdf.py:165",
-        "app/services/brand_profiles.py:134",
+        "app/services/billing_invoice_pdf.py:135",
+        "app/services/billing_invoice_pdf.py:162",
+        "app/services/brand_profiles.py:137",
         "app/services/web_system_company_info.py:23",
         "templates/admin/system/company_info.html:69"
       ]
@@ -21035,9 +21034,9 @@
       },
       "disposition": "Preserve specialised/seed owner; not a generic SettingSpec",
       "source_references": [
-        "app/services/billing_invoice_pdf.py:127",
-        "app/services/billing_invoice_pdf.py:161",
-        "app/services/brand_profiles.py:130",
+        "app/services/billing_invoice_pdf.py:124",
+        "app/services/billing_invoice_pdf.py:158",
+        "app/services/brand_profiles.py:133",
         "app/services/web_system_company_info.py:19",
         "templates/admin/system/company_info.html:53"
       ]
@@ -21058,9 +21057,9 @@
       },
       "disposition": "Preserve specialised/seed owner; not a generic SettingSpec",
       "source_references": [
-        "app/services/billing_invoice_pdf.py:128",
-        "app/services/billing_invoice_pdf.py:162",
-        "app/services/brand_profiles.py:131",
+        "app/services/billing_invoice_pdf.py:125",
+        "app/services/billing_invoice_pdf.py:159",
+        "app/services/brand_profiles.py:134",
         "app/services/web_system_company_info.py:20",
         "templates/admin/system/company_info.html:57"
       ]
@@ -21081,9 +21080,9 @@
       },
       "disposition": "Preserve specialised/seed owner; not a generic SettingSpec",
       "source_references": [
-        "app/services/billing_invoice_pdf.py:134",
-        "app/services/billing_invoice_pdf.py:164",
-        "app/services/brand_profiles.py:133",
+        "app/services/billing_invoice_pdf.py:131",
+        "app/services/billing_invoice_pdf.py:161",
+        "app/services/brand_profiles.py:136",
         "app/services/web_system_company_info.py:22",
         "templates/admin/system/company_info.html:65"
       ]
@@ -21164,9 +21163,9 @@
       },
       "disposition": "Preserve specialised/seed owner; not a generic SettingSpec",
       "source_references": [
-        "app/services/billing_invoice_pdf.py:143",
-        "app/services/billing_invoice_pdf.py:159",
-        "app/services/brand_profiles.py:123",
+        "app/services/billing_invoice_pdf.py:140",
+        "app/services/billing_invoice_pdf.py:156",
+        "app/services/brand_profiles.py:126",
         "app/services/web_customer_auth.py:781",
         "app/services/web_system_company_info.py:24",
         "templates/admin/system/company_info.html:79"
@@ -21189,9 +21188,9 @@
       "disposition": "Preserve specialised/seed owner; not a generic SettingSpec",
       "source_references": [
         "app/migration_source/snapshot.py:711",
-        "app/services/billing_invoice_pdf.py:126",
-        "app/services/billing_invoice_pdf.py:158",
-        "app/services/brand_profiles.py:105",
+        "app/services/billing_invoice_pdf.py:123",
+        "app/services/billing_invoice_pdf.py:155",
+        "app/services/brand_profiles.py:108",
         "app/services/email.py:838",
         "app/services/network_explorer.py:270",
         "app/services/party_identity_adjudication.py:43",
@@ -21233,9 +21232,9 @@
       },
       "disposition": "Preserve specialised/seed owner; not a generic SettingSpec",
       "source_references": [
-        "app/services/billing_invoice_pdf.py:144",
-        "app/services/billing_invoice_pdf.py:160",
-        "app/services/brand_profiles.py:124",
+        "app/services/billing_invoice_pdf.py:141",
+        "app/services/billing_invoice_pdf.py:157",
+        "app/services/brand_profiles.py:127",
         "app/services/web_customer_auth.py:782",
         "app/services/web_system_company_info.py:25",
         "templates/admin/system/company_info.html:83"
@@ -21277,7 +21276,7 @@
       },
       "disposition": "Preserve specialised/seed owner; not a generic SettingSpec",
       "source_references": [
-        "app/services/billing_invoice_pdf.py:404",
+        "app/services/billing_invoice_pdf.py:377",
         "app/services/web_system_company_info.py:26",
         "templates/admin/system/company_info.html:39"
       ]
@@ -24047,7 +24046,7 @@
       },
       "disposition": "Cursor/counter/job state, not administrator configuration; retain storage and diagnostics, never expose a configuration writer",
       "source_references": [
-        "app/services/billing_invoice_pdf.py:52",
+        "app/services/billing_invoice_pdf.py:49",
         "app/services/domain_settings.py:130"
       ]
     },

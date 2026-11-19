@@ -10,7 +10,6 @@ import html
 import inspect
 import io
 import logging
-import mimetypes
 import re
 from collections.abc import Iterator
 from dataclasses import dataclass
@@ -25,11 +24,9 @@ from sqlalchemy.orm import Session
 
 from app.models.billing import Invoice, InvoicePdfExport, InvoicePdfExportStatus
 from app.models.domain_settings import SettingDomain
-from app.models.stored_file import StoredFile
 from app.models.subscriber import Subscriber, SubscriberCategory
 from app.models.subscription_engine import SettingValueType
 from app.schemas.settings import DomainSettingUpdate
-from app.services import branding_storage as branding_storage_service
 from app.services import domain_settings as domain_settings_service
 from app.services import invoice_bank_details as invoice_bank_details_service
 from app.services import settings_spec
@@ -284,42 +281,15 @@ def _render_payment_markup(presentment: InvoicePaymentPresentment) -> str:
     )
 
 
-def _logo_src(db: Session, configured_logo: str | None = None) -> str | None:
-    raw_logo = configured_logo or settings_spec.resolve_value(
-        db, SettingDomain.comms, "sidebar_logo_url"
-    )
-    logo_value = str(raw_logo or "").strip()
-    if not logo_value:
-        return None
-    if logo_value.startswith("data:"):
-        return logo_value
-    if logo_value.startswith("/branding/assets/"):
-        file_id = branding_storage_service.file_id_from_branding_url(logo_value)
-        if not file_id:
-            return None
-        record = db.get(StoredFile, file_id)
-        if not record or record.is_deleted:
-            return None
-        stream = file_uploads.stream_file(record)
-        content = b"".join(stream.chunks)
-        mime = record.content_type or "image/png"
-        return f"data:{mime};base64,{base64.b64encode(content).decode('ascii')}"
-    if logo_value.startswith("/static/"):
-        path = Path(logo_value.lstrip("/"))
-        if path.exists():
-            mime = mimetypes.guess_type(str(path))[0] or "image/png"
-            return f"data:{mime};base64,{base64.b64encode(path.read_bytes()).decode('ascii')}"
-        return None
-    return logo_value
-
-
 def _decode_logo_image(db: Session, configured_logo: str | None = None):
     try:
         from PIL import Image
     except Exception:
         return None
 
-    logo_src = _logo_src(db, configured_logo)
+    from app.services.brand_profiles import resolve_brand_logo_source
+
+    logo_src = resolve_brand_logo_source(db, configured_logo=configured_logo)
     if not logo_src:
         return None
     if not logo_src.startswith("data:"):
@@ -390,11 +360,14 @@ def _render_invoice_html(invoice: Invoice, db: Session) -> str:
     status = html.escape(
         invoice.status.value.replace("_", " ").title() if invoice.status else "Draft"
     )
-    from app.services.brand_profiles import resolve_brand
+    from app.services.brand_profiles import (
+        resolve_brand,
+        resolve_brand_logo_source,
+    )
 
     account_id = getattr(getattr(invoice, "account", None), "id", None)
     brand = resolve_brand(db, subscriber_id=account_id)
-    logo_src = _logo_src(db, brand.logo_url)
+    logo_src = resolve_brand_logo_source(db, configured_logo=brand.logo_url)
     company_info = _branded_company_info(
         company_info_service.get_company_info(db), brand
     )

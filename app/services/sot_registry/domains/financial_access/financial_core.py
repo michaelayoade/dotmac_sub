@@ -82,7 +82,8 @@ SERVICES: tuple[SOTService, ...] = (
         notes=(
             "This owner accepts debits only. Customer credits remain "
             "owned by financial.credit_notes, and account adjustments "
-            "do not decide service-access state."
+            "do not decide service-access state. Prepaid plan-change and "
+            "renewal debits use the reviewed prepaid financial position."
         ),
         contract=ServiceContract(
             concerns=(

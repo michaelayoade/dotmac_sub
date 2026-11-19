@@ -138,7 +138,7 @@ def _resolve_customer_statement_pdf(
     """Materialize only a statement still addressed to its verified owner."""
     from app.services.customer_account_statement import (
         CustomerStatementQuery,
-        read_customer_statement,
+        read_customer_statement_document,
         render_statement_pdf,
         statement_range,
     )
@@ -171,7 +171,7 @@ def _resolve_customer_statement_pdf(
             timezone=ZoneInfo(str(metadata["statement_timezone"])),
         )
         content = render_statement_pdf(
-            read_customer_statement(
+            read_customer_statement_document(
                 db, query=CustomerStatementQuery(account_id=account_id, period=period)
             )
         )

@@ -119,6 +119,10 @@ provenance.
 
 ### Prepaid activation funding admission
 
+Immediate prepaid plan-change debit confirmation uses the same reviewed
+opening-plus-native funding position as its service-change preview. If that
+position changes after review, confirmation requires a fresh preview.
+
 Billing approval admits an account to service; it does not prove the account
 has prepaid funding authority. A legacy account (one that existed when
 customer-subledger authority activated) with no active reviewed baseline and

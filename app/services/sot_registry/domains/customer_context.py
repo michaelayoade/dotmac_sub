@@ -169,10 +169,11 @@ DOMAIN = DomainSOT(
             owns=("customer account statement PDF projection",),
             depends_on=(
                 "customer.accounts",
+                "customer.branding",
                 "customer.financial_position",
                 "financial.ledger",
             ),
-            notes="Customer-only read projection; pre-opening archive history is labelled unavailable and never affects balances.",
+            notes="Customer-only branded document projection; canonical customer-facing identity is composed with financial facts, while pre-opening archive history is labelled unavailable and never affects balances.",
             contract=ServiceContract(
                 concerns=(
                     ConcernContract(
@@ -180,6 +181,7 @@ DOMAIN = DomainSOT(
                         role=OwnerRole.RESOLVER,
                         input_names=(
                             "canonical customer account",
+                            "canonical customer-facing brand",
                             "canonical customer financial events",
                             "separate receivable and prepaid summaries",
                         ),
@@ -191,6 +193,12 @@ DOMAIN = DomainSOT(
                         owner="customer.accounts",
                         kind=AuthorityKind.AUTHORITATIVE_RECORD,
                         source="Subscriber account ID and account number, scoped by the customer portal adapter.",
+                    ),
+                    AuthorityInput(
+                        name="canonical customer-facing brand",
+                        owner="customer.branding",
+                        kind=AuthorityKind.DERIVED_PROJECTION,
+                        source="Resolved organization, reseller, platform, or legacy legal identity, colors, contact details, and logo asset.",
                     ),
                     AuthorityInput(
                         name="canonical customer financial events",
@@ -225,14 +233,15 @@ DOMAIN = DomainSOT(
                         name="customer account statement PDF projection",
                         input_names=(
                             "canonical customer account",
+                            "canonical customer-facing brand",
                             "canonical customer financial events",
                             "separate receivable and prepaid summaries",
                         ),
                         writer="customer.account_statement",
                         freshness="rebuilt from committed records for each request",
                         stale_behavior="Missing prepaid authority is labelled unavailable; archived history is never guessed.",
-                        drift_signal="Statement rows or summaries disagree with canonical financial events and invoice/funding owners.",
-                        rebuild_operation="Re-run read_customer_statement for the account and date window.",
+                        drift_signal="Statement identity disagrees with customer.branding, or rows and summaries disagree with canonical financial events and invoice/funding owners.",
+                        rebuild_operation="Re-run read_customer_statement_document for the account and date window.",
                         repair_owner="customer.account_statement",
                     ),
                 ),
