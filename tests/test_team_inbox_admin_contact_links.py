@@ -650,13 +650,15 @@ def test_admin_macro_create_and_reply_records_execution(db_session, monkeypatch)
     actor_id = _online_reply_agent(db_session, conversation).id
     conversation.contact_address = "0803 555 0114"
     conversation.channel_type = InboxChannelType.whatsapp.value
+    inbound_at = datetime.now(UTC)
+    conversation.last_qualifying_inbound_at = inbound_at
     db_session.add(
         InboxMessage(
             conversation_id=conversation.id,
             channel_type=InboxChannelType.whatsapp.value,
             direction=InboxMessageDirection.inbound.value,
             body="Hello",
-            received_at=datetime.now(UTC),
+            received_at=inbound_at,
         )
     )
     from app.services import web_admin as web_admin_service

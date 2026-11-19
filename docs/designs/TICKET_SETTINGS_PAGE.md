@@ -7,11 +7,13 @@ and settings commands. Assignment Rules use their existing dedicated commands.
 The existing route guards and service audit behavior govern all writes.
 
 The first viewport shows the page identity, section navigation and General
-settings. The main action saves the full draft. Open Ticket Form and Cancel
-are secondary actions. Add, edit and remove operate on settings rows. Assignment
-rules have their own create and confirmed delete actions. Submitting an
-assignment action with an unsaved main draft prompts before leaving the page. There are no bulk
-actions or exports.
+settings. Open Ticket Form is a secondary action. Save and Cancel appear in the
+normal page flow only after a draft change, an inline ticket-type edit, or a
+failed save that needs review. Save submits the full draft; Cancel reloads the
+saved settings without submitting changes. Add, edit and remove operate on
+settings rows. Assignment rules have their own create and confirmed delete
+actions. Submitting an assignment action with an unsaved main draft prompts
+before leaving the page. There are no bulk actions or exports.
 
 General shows statuses, priorities and regions in their configured order.
 Ticket Types shows the configured names in order with case-insensitive search
@@ -24,7 +26,10 @@ Existing routing identifiers remain visible only to authorized administrators.
 
 Section switches and filters change visibility. All named controls stay in the
 form so off-screen draft edits are submitted. Empty lists and searches have
-dedicated messages. Validation and success feedback come from the server.
+dedicated messages. After a failed save, the server returns the submitted draft
+and selected section for correction; Cancel discards that draft. Saved routing
+rules retain their site coordinator when other settings are saved. Validation
+and success feedback come from the server.
 Authorization failures use the existing route response. The page is
 server-rendered with no separate loading or stale-data states. On narrow
 screens, cards stack, controls wrap, and wide tables scroll locally.

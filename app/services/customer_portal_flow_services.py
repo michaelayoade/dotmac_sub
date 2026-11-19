@@ -205,6 +205,8 @@ class UsagePageResult:
     period_total_gb: float
     filtered_totals: FilteredUsageTotals | None
     date_range: UsageDateRange | None
+    effective_start_at: datetime | None = None
+    effective_end_at: datetime | None = None
 
     def to_template_context(self) -> dict[str, object]:
         """Serialize explicitly at the Jinja adapter boundary."""
@@ -1079,6 +1081,8 @@ def get_usage_page(
 
     return {
         "usage_records": usage_records,
+        "effective_start_at": start_at,
+        "effective_end_at": end_at,
         "chart_records": _serialize_usage_chart_records(chart_source_records),
         "period": period,
         "page": page,
@@ -1182,6 +1186,8 @@ def query_usage_page(db: Session, query: UsagePageQuery) -> UsagePageResult:
             raw_totals if isinstance(raw_totals, FilteredUsageTotals) else None
         ),
         date_range=query.date_range,
+        effective_start_at=raw.get("effective_start_at"),
+        effective_end_at=raw.get("effective_end_at"),
     )
 
 

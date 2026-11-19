@@ -325,6 +325,7 @@ def test_ticket_settings_reload_projects_saved_region_manager_and_team(db_sessio
                 support_ticket_settings_service.RegionRoutingRuleUpdate(
                     region="Test-Region",
                     ticket_manager_person_id=manager.id,
+                    site_coordinator_person_id=manager.id,
                     service_team_id=team.id,
                 ),
             ),
@@ -338,6 +339,7 @@ def test_ticket_settings_reload_projects_saved_region_manager_and_team(db_sessio
         {
             "region": "test-region",
             "ticket_manager_person_id": str(manager.id),
+            "site_coordinator_person_id": str(manager.id),
             "technician_person_id": "",
             "service_team_id": str(team.id),
             "assignee_person_ids": "",
@@ -371,6 +373,7 @@ def test_ticket_settings_reload_projects_saved_region_manager_and_team(db_sessio
     assert '<option value="test-region">test-region</option>' in html
     assert f'<option value="{team.id}">Test Team</option>' in html
     assert f'"ticket_manager_person_id": "{manager.id}"' in html
+    assert 'name="routing_site_coordinator_person_ids"' in html
 
 
 def test_ticket_settings_reject_assignments_without_region(db_session):
@@ -418,6 +421,7 @@ def test_ticket_settings_route_returns_error_for_assignment_without_region(
             ("region_values", "test-region"),
             ("routing_regions", ""),
             ("routing_ticket_manager_person_ids", str(manager.id)),
+            ("routing_site_coordinator_person_ids", str(manager.id)),
             ("routing_technician_person_ids", ""),
             ("routing_service_team_ids", ""),
             ("routing_assignee_person_ids", ""),
@@ -427,6 +431,7 @@ def test_ticket_settings_route_returns_error_for_assignment_without_region(
             ("sla_aging_hours", "4"),
             ("sla_ticket_types", "incident"),
             ("sla_ticket_type_resolution_hours", "0"),
+            ("settings_section", "routing"),
         ]
     )
 
@@ -438,7 +443,59 @@ def test_ticket_settings_route_returns_error_for_assignment_without_region(
     assert rendered["routing_rule_rows"][0]["ticket_manager_person_id"] == str(
         manager.id
     )
+    assert rendered["routing_rule_rows"][0]["site_coordinator_person_id"] == str(
+        manager.id
+    )
+    assert rendered["status_options"] == ["open"]
+    assert rendered["ticket_type_options"] == ["incident"]
+    assert rendered["region_options"] == ["test-region"]
+    assert rendered["sla_policy"]["normal"]["resolution_hours"] == "8"
+    assert rendered["selected_section"] == "routing"
     assert "Routing assignments require a region" in rendered["errors"][0]
+
+
+def test_ticket_settings_parse_error_keeps_submitted_draft(db_session, monkeypatch):
+    rendered: dict[str, object] = {}
+
+    def render(_template, context, status_code=200):
+        rendered.update(context)
+        return SimpleNamespace(status_code=status_code)
+
+    monkeypatch.setattr(admin_system.templates, "TemplateResponse", render)
+    monkeypatch.setattr(
+        admin_system, "_config_context", lambda _request, _db, context: context
+    )
+    form = FormData(
+        [
+            ("status_values", "open"),
+            ("priority_values", "urgent"),
+            ("ticket_type_values", "Outage"),
+            ("infrastructure_type_index", "0"),
+            ("region_values", "north"),
+            ("routing_regions", "north"),
+            ("routing_assignee_person_ids", "invalid-uuid"),
+            ("sla_priorities", "urgent"),
+            ("sla_response_hours", "2"),
+            ("sla_resolution_hours", "8"),
+            ("sla_aging_hours", "4"),
+            ("sla_ticket_types", "Outage"),
+            ("sla_ticket_type_resolution_hours", "6"),
+            ("settings_section", "sla"),
+        ]
+    )
+
+    response = admin_system.ticket_settings_update(
+        request=SimpleNamespace(), form=form, db=db_session
+    )
+
+    assert response.status_code == 400
+    assert rendered["priority_options"] == ["urgent"]
+    assert rendered["ticket_type_options"] == ["Outage"]
+    assert rendered["infrastructure_enabled_indices"] == [0]
+    assert rendered["routing_rule_rows"][0]["assignee_person_ids"] == "invalid-uuid"
+    assert rendered["sla_policy"]["urgent"]["response_hours"] == "2"
+    assert rendered["ticket_type_sla_policy"]["Outage"] == "6"
+    assert rendered["selected_section"] == "sla"
 
 
 def test_ticket_settings_ignore_completely_blank_routing_row(db_session):

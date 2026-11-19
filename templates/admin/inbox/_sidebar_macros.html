@@ -1,0 +1,3 @@
+{% macro assignment_count(counts, value) -%}
+    {{- value if counts.state == 'available' else '—' -}}
+{%- endmacro %}

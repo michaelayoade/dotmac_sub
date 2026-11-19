@@ -44,6 +44,7 @@ def test_customer_inbound_and_expiry_converge_on_open_unassigned_window(engine) 
             primary_service_team_id=team.id,
             first_message_at=now - timedelta(hours=25),
             last_message_at=now - timedelta(hours=25),
+            last_qualifying_inbound_at=now - timedelta(hours=25),
         )
         setup.add(conversation)
         setup.flush()

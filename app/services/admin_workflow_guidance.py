@@ -350,6 +350,7 @@ WORKFLOW_GUIDANCE: tuple[AdminWorkflowGuidance, ...] = (
         "Use one page to review customer, service, network, billing, ticket, and timeline context.",
         (),
         "Use Account for profile and portal access, Service for subscriptions, Network for access, Billing for financial evidence, Tickets for support, and Timeline for history.",
+        "In Statistics, select the reporting dates to compare data usage with provider-side Uptime and Downtime in days. Check the availability explanation when monitoring is incomplete or the result is estimated.",
         "In Billing, use Extensions to review pending, applied, canceled, and reversed service-extension requests; billing-date impact appears when an extension has been applied.",
         "In Payment intents, Cancel stale intent appears only for an expired bank-transfer intent whose exact submitted proof is still unreviewed and has not created a payment.",
         "Open the linked proof, confirm from bank evidence that no payment was received, enter a clear reason, and confirm the cancellation.",
@@ -1044,7 +1045,7 @@ WORKFLOW_GUIDANCE: tuple[AdminWorkflowGuidance, ...] = (
         "On Routing > Mailbox routes, choose Edit route for an existing address. Review its destination team, priority, primary setting, and Reply sender before saving. Address or team changes affect future inbound messages; existing conversations keep their assigned team. If the route changed since the page loaded, reload and review it again before saving.",
         "In Queue messaging, keep heartbeats off unless reassurance is explicitly required; when enabled, use different non-position wording and a longer interval than position checks.",
         notes=(
-            "Inbox overview counts refresh from a shared projection every 15 seconds. During cache or database recovery, the last successful counts may remain visible for up to five minutes; choose Refresh counts when you need the newest available totals.",
+            "Inbox overview queue counts refresh from a shared projection every 15 seconds, while actor and team assignment totals use indexed reply-window state and refresh every 30 seconds. During cache or database recovery, the last successful counts may remain visible for up to five minutes. If assignment totals exceed the interactive read budget, those totals show as unavailable while conversations remain accessible; refresh later to retry them.",
             "Historical inbox views load bounded pages and may show that more results are available before an exact final total is known.",
             "A displayed queue position is the customer's current rank in that team, not the durable admission sequence; position messages are sent only when that rank moves forward.",
             "Normal self-assignment and manager assignment cannot skip an older queued conversation or exceed the selected agent's active-conversation capacity.",
@@ -1422,6 +1423,23 @@ HELP_ONLY_GUIDANCE: tuple[AdminWorkflowGuidance, ...] = (
         excluded_route_prefixes=("/admin/system/email",),
     ),
     _guide(
+        "system-users-list",
+        "System Overview",
+        "Find and review system users",
+        "System and security administrators",
+        "Find staff and reseller portal users before opening an account or taking an access action.",
+        (),
+        "Search by name or email, or apply role, status, and other filters to narrow the list.",
+        "Review the matching total and use Next or Previous to move through the results; each page shows 25 users by default.",
+        "Choose a different rows-per-page size when needed. Search, filters, and sort order stay active while moving between pages.",
+        "Open the intended account from its row, then review its details before changing access.",
+        route_templates=("/admin/system/users",),
+        notes=(
+            "Page links keep the current search and filters in the address, so refresh, Back, and Forward return to the selected page.",
+            "If a page cannot load, the current rows remain visible; retry the request after reviewing the error.",
+        ),
+    ),
+    _guide(
         "system-user-mfa-removal",
         "System Overview",
         "Remove a staff member's MFA after a lost device",
@@ -1463,7 +1481,12 @@ HELP_ONLY_GUIDANCE: tuple[AdminWorkflowGuidance, ...] = (
         ("/admin/system/ticket-settings",),
         "Review the Ticket Types list and its Infrastructure ticket type checkboxes. The existing infrastructure categories appear here even before settings have been saved.",
         "Add or remove a ticket type, then mark each infrastructure category and choose its allowed target kinds: base station, cabinet, network node, access point, or manual name. Choose either network node or access point for one category.",
-        "Save Ticket Settings and reopen the ticket form to confirm the available categories and infrastructure choices.",
+        (
+            "Save and Cancel appear after a draft change or an inline ticket-type edit. "
+            "Save Ticket Settings submits the full draft; Cancel reloads the saved settings. "
+            "If saving fails, correct the retained draft in the selected section and save again. "
+            "Reopen the ticket form to confirm the available categories and infrastructure choices."
+        ),
         notes=(
             "A manual target permits an unlinked customerless ticket and a ticket-backed infrastructure work order. An inventory selection uses the canonical outage ticket and audience.",
             "Removing a type or its manual kind affects new selection and legacy fallback. Tickets with saved explicit manual origin and tickets linked to an outage retain their infrastructure identity.",
@@ -1609,44 +1632,45 @@ _ACTION_SPECS: dict[str, tuple[_ActionSpec, ...]] = {
         ),
     ),
     "customer-detail": (
-        _action("review-customer", "Review customer information", 0, 1),
+        _action("review-customer", "Review customer information", 0, 2),
+        _action("review-statistics", "Review customer availability", 1),
         _action(
             "cancel-stale-intent",
             "Cancel an eligible stale payment intent",
-            2,
             3,
+            4,
             permission="billing:payment_intent:cancel",
         ),
         _action(
             "support-portal-access",
             "Support the customer through portal access",
-            4,
+            5,
             permission="subscriber:impersonate",
         ),
-        _action("review-history", "Review customer history", 5, 6),
+        _action("review-history", "Review customer history", 6, 7),
         _action(
             "check-customer-send-status",
             "Check customer message send status",
-            7,
+            8,
             permission="communications:customer:send",
         ),
         _action(
             "prepaid-activation-override",
             "Handle a prepaid funding quarantine",
-            8,
+            9,
             permission="billing:prepaid_funding:activation_override",
         ),
         _action(
             "reset-customer-mfa",
             "Recover a customer's lost MFA device",
-            9,
+            10,
             permission="customer:write",
         ),
         _action(
             "delete-customer",
             "Permanently delete an eligible customer",
-            10,
             11,
+            12,
             permission="customer:delete",
         ),
     ),
@@ -2575,6 +2599,12 @@ _ACTION_SPECS: dict[str, tuple[_ActionSpec, ...]] = {
         ),
         _action("verify-system-change", "Verify and audit a system change", 3),
     ),
+    "system-users-list": (
+        _action("find-system-users", "Find users", 0),
+        _action("page-system-users", "Move between user pages", 1),
+        _action("size-system-users", "Choose a page size", 2),
+        _action("open-system-user", "Review a user account", 3),
+    ),
     "system-user-mfa-removal": (
         _action("verify-staff-requester", "Verify the requester", 0),
         _action(
@@ -2605,7 +2635,7 @@ _ACTION_SPECS: dict[str, tuple[_ActionSpec, ...]] = {
             1,
             permission="system:settings:write",
         ),
-        _action("verify-ticket-types", "Verify ticket form choices", 2),
+        _action("verify-ticket-types", "Save and verify ticket settings", 2),
     ),
     "settings": (
         _action("choose-settings-area", "Choose a settings area", 0),
@@ -2826,7 +2856,12 @@ HELP_NAVIGATION: tuple[AdminHelpNavigationSection, ...] = (
     AdminHelpNavigationSection(
         "system",
         "System Overview",
-        ("system-overview", "system-user-mfa-removal", "reseller-user-mfa-removal"),
+        (
+            "system-overview",
+            "system-users-list",
+            "system-user-mfa-removal",
+            "reseller-user-mfa-removal",
+        ),
         "system:settings:read",
     ),
     AdminHelpNavigationSection(
@@ -2854,6 +2889,7 @@ HELP_NAVIGATION: tuple[AdminHelpNavigationSection, ...] = (
 # Only sections containing pages with different read scopes need an override.
 # Other pages inherit their Admin-sidebar section's visibility.
 HELP_GUIDE_VIEW_PERMISSIONS: dict[str, tuple[str, ...]] = {
+    "system-users-list": ("rbac:roles:read",),
     "billing-accounts": ("billing:account:read",),
     "invoice": ("billing:invoice:read",),
     "credit": ("billing:credit_note:read",),

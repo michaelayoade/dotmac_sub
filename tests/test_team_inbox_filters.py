@@ -69,6 +69,16 @@ def _channel_conversation(
         metadata = {}
         if qualifying is not None:
             metadata["reply_window_qualifying"] = qualifying
+        if (
+            channel_type
+            in {
+                InboxChannelType.whatsapp.value,
+                InboxChannelType.facebook_messenger.value,
+                InboxChannelType.instagram_dm.value,
+            }
+            and qualifying is not False
+        ):
+            conversation.last_qualifying_inbound_at = last_inbound_at
         db_session.add(
             InboxMessage(
                 conversation_id=conversation.id,

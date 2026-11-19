@@ -7496,7 +7496,7 @@
       "source_references": [
         "app/services/brand_profiles.py:111",
         "app/services/web_system_settings_views.py:204",
-        "app/web/admin/system.py:4182",
+        "app/web/admin/system.py:4183",
         "templates/admin/system/branding.html:119",
         "templates/admin/system/branding.html:125"
       ]
@@ -7524,7 +7524,7 @@
       "source_references": [
         "app/services/brand_profiles.py:112",
         "app/services/web_system_settings_views.py:212",
-        "app/web/admin/system.py:4192",
+        "app/web/admin/system.py:4193",
         "templates/admin/system/branding.html:135",
         "templates/admin/system/branding.html:141"
       ]
@@ -7751,7 +7751,7 @@
         "app/services/sales/quote_documents.py:218",
         "app/services/web_admin.py:214",
         "app/services/web_system_settings_views.py:25",
-        "app/web/admin/system.py:4229",
+        "app/web/admin/system.py:4230",
         "app/web/customer/branding.py:162",
         "app/web/customer/branding.py:170",
         "app/web/customer/branding.py:210",
@@ -7891,7 +7891,7 @@
         "app/services/team_inbox_widget.py:217",
         "app/services/team_inbox_widget.py:218",
         "app/services/team_inbox_widget.py:84",
-        "app/web/admin/inbox.py:3970",
+        "app/web/admin/inbox.py:3979",
         "templates/admin/inbox/email_routes.html:254"
       ]
     },
@@ -7920,7 +7920,7 @@
         "app/services/team_inbox_widget.py:175",
         "app/services/team_inbox_widget.py:177",
         "app/services/team_inbox_widget.py:77",
-        "app/web/admin/inbox.py:3963",
+        "app/web/admin/inbox.py:3972",
         "templates/admin/inbox/email_routes.html:247"
       ]
     },
@@ -7948,7 +7948,7 @@
       "source_references": [
         "app/services/team_inbox_widget.py:191",
         "app/services/team_inbox_widget.py:76",
-        "app/web/admin/inbox.py:3962",
+        "app/web/admin/inbox.py:3971",
         "templates/admin/inbox/email_routes.html:246"
       ]
     },
@@ -7977,7 +7977,7 @@
         "app/services/team_inbox_widget.py:212",
         "app/services/team_inbox_widget.py:213",
         "app/services/team_inbox_widget.py:83",
-        "app/web/admin/inbox.py:3969",
+        "app/web/admin/inbox.py:3978",
         "templates/admin/inbox/email_routes.html:253"
       ]
     },
@@ -8007,7 +8007,7 @@
       "source_references": [
         "app/services/team_inbox_widget.py:196",
         "app/services/team_inbox_widget.py:79",
-        "app/web/admin/inbox.py:3965",
+        "app/web/admin/inbox.py:3974",
         "templates/admin/inbox/email_routes.html:249"
       ]
     },
@@ -8037,7 +8037,7 @@
       "source_references": [
         "app/services/team_inbox_widget.py:199",
         "app/services/team_inbox_widget.py:80",
-        "app/web/admin/inbox.py:3966",
+        "app/web/admin/inbox.py:3975",
         "templates/admin/inbox/email_routes.html:250"
       ]
     },
@@ -8067,7 +8067,7 @@
         "app/services/team_inbox_widget.py:178",
         "app/services/team_inbox_widget.py:180",
         "app/services/team_inbox_widget.py:78",
-        "app/web/admin/inbox.py:3964",
+        "app/web/admin/inbox.py:3973",
         "templates/admin/inbox/email_routes.html:248"
       ]
     },
@@ -8096,7 +8096,7 @@
         "app/services/team_inbox_widget.py:207",
         "app/services/team_inbox_widget.py:208",
         "app/services/team_inbox_widget.py:82",
-        "app/web/admin/inbox.py:3968",
+        "app/web/admin/inbox.py:3977",
         "templates/admin/inbox/email_routes.html:252"
       ]
     },
@@ -8125,7 +8125,7 @@
         "app/services/team_inbox_widget.py:202",
         "app/services/team_inbox_widget.py:203",
         "app/services/team_inbox_widget.py:81",
-        "app/web/admin/inbox.py:3967",
+        "app/web/admin/inbox.py:3976",
         "templates/admin/inbox/email_routes.html:251"
       ]
     },
@@ -8154,7 +8154,7 @@
         "app/services/team_inbox_widget.py:186",
         "app/services/team_inbox_widget.py:187",
         "app/services/team_inbox_widget.py:75",
-        "app/web/admin/inbox.py:3961",
+        "app/web/admin/inbox.py:3970",
         "templates/admin/inbox/email_routes.html:245"
       ]
     },
@@ -8182,7 +8182,7 @@
       "source_references": [
         "app/services/team_inbox_widget.py:183",
         "app/services/team_inbox_widget.py:74",
-        "app/web/admin/inbox.py:3960",
+        "app/web/admin/inbox.py:3969",
         "templates/admin/inbox/email_routes.html:244"
       ]
     },
@@ -8207,7 +8207,7 @@
       },
       "disposition": "Mapped to hub; preserve registered type, validation, tenant scope and owner-command writes",
       "source_references": [
-        "app/web/admin/system.py:4141"
+        "app/web/admin/system.py:4142"
       ]
     },
     {
@@ -8231,7 +8231,7 @@
       },
       "disposition": "Mapped to hub; preserve registered type, validation, tenant scope and owner-command writes",
       "source_references": [
-        "app/web/admin/system.py:4125"
+        "app/web/admin/system.py:4126"
       ]
     },
     {
@@ -8255,7 +8255,7 @@
       },
       "disposition": "Mapped to hub; preserve registered type, validation, tenant scope and owner-command writes",
       "source_references": [
-        "app/web/admin/system.py:4133"
+        "app/web/admin/system.py:4134"
       ]
     },
     {
@@ -8710,7 +8710,7 @@
         "app/services/sales/meta_lead_ads.py:116",
         "app/services/sales/service.py:163",
         "app/services/sales/service.py:676",
-        "app/services/sot_registry/domains/notifications_communications.py:5658",
+        "app/services/sot_registry/domains/notifications_communications.py:5686",
         "app/services/sot_registry/domains/support_operations.py:2170",
         "app/services/sot_registry/domains/support_operations.py:71",
         "app/services/staff_provisioning.py:138",
@@ -8739,9 +8739,9 @@
         "app/services/team_inbox_observations.py:400",
         "app/services/team_inbox_operations.py:662",
         "app/services/team_inbox_processing.py:348",
-        "app/services/team_inbox_projection.py:1107",
-        "app/services/team_inbox_projection.py:1110",
-        "app/services/team_inbox_projection.py:944",
+        "app/services/team_inbox_projection.py:1155",
+        "app/services/team_inbox_projection.py:1158",
+        "app/services/team_inbox_projection.py:952",
         "app/services/team_inbox_support_identity.py:22",
         "app/services/ticket_mentions.py:129",
         "app/services/ticket_mentions.py:155",
@@ -8828,22 +8828,22 @@
         "app/services/web_system_user_edit.py:30",
         "app/services/web_system_users.py:103",
         "app/services/web_system_users.py:144",
-        "app/services/web_system_users.py:468",
-        "app/services/web_system_users.py:469",
-        "app/services/web_system_users.py:514",
-        "app/services/web_system_users.py:664",
-        "app/services/web_system_users.py:719",
+        "app/services/web_system_users.py:470",
+        "app/services/web_system_users.py:471",
+        "app/services/web_system_users.py:516",
+        "app/services/web_system_users.py:666",
+        "app/services/web_system_users.py:721",
         "app/services/web_system_users.py:76",
-        "app/services/web_system_users.py:888",
-        "app/services/web_system_users.py:918",
+        "app/services/web_system_users.py:890",
+        "app/services/web_system_users.py:920",
         "app/services/web_vendors.py:230",
         "app/validators/bulk.py:26",
         "app/web/admin/customers.py:1014",
         "app/web/admin/customers.py:1030",
         "app/web/admin/customers.py:1108",
-        "app/web/admin/customers.py:3298",
-        "app/web/admin/inbox.py:1749",
-        "app/web/admin/inbox.py:3889",
+        "app/web/admin/customers.py:3326",
+        "app/web/admin/inbox.py:1758",
+        "app/web/admin/inbox.py:3898",
         "app/web/admin/network.py:101",
         "app/web/admin/network_monitoring.py:272",
         "app/web/admin/network_monitoring.py:286",
@@ -8854,12 +8854,12 @@
         "app/web/admin/resellers.py:496",
         "app/web/admin/resellers.py:501",
         "app/web/admin/resellers.py:526",
-        "app/web/admin/system.py:1066",
-        "app/web/admin/system.py:653",
-        "app/web/admin/system.py:689",
-        "app/web/admin/system.py:710",
-        "app/web/admin/system.py:871",
-        "app/web/admin/system.py:932",
+        "app/web/admin/system.py:1067",
+        "app/web/admin/system.py:654",
+        "app/web/admin/system.py:690",
+        "app/web/admin/system.py:711",
+        "app/web/admin/system.py:872",
+        "app/web/admin/system.py:933",
         "app/web/auth/dependencies.py:288",
         "app/web/auth/dependencies.py:298",
         "app/web/customer/contracts.py:49",
@@ -8929,8 +8929,8 @@
         "templates/admin/system/profile.html:50",
         "templates/admin/system/profile.html:51",
         "templates/admin/system/users/edit.html:57",
-        "templates/admin/system/users/index.html:364",
-        "templates/admin/system/users/index.html:509",
+        "templates/admin/system/users/index.html:369",
+        "templates/admin/system/users/index.html:514",
         "templates/admin/vendors/detail.html:161",
         "templates/admin/vendors/detail.html:204",
         "templates/admin/vendors/vendor_form.html:48",
@@ -9195,12 +9195,12 @@
         "app/services/web_walled_garden_settings.py:98",
         "app/tasks/ont_bulk.py:109",
         "app/tasks/ont_bulk.py:89",
-        "app/web/admin/inbox.py:4292",
-        "app/web/admin/inbox.py:4296",
-        "app/web/admin/inbox.py:4307",
-        "app/web/admin/inbox.py:4385",
-        "app/web/admin/inbox.py:4387",
-        "app/web/admin/inbox.py:4449",
+        "app/web/admin/inbox.py:4301",
+        "app/web/admin/inbox.py:4305",
+        "app/web/admin/inbox.py:4316",
+        "app/web/admin/inbox.py:4394",
+        "app/web/admin/inbox.py:4396",
+        "app/web/admin/inbox.py:4458",
         "app/web/admin/network_onts_actions.py:1003",
         "app/web/admin/network_onts_actions.py:1008",
         "app/web/admin/network_onts_actions.py:1903",
@@ -9213,8 +9213,8 @@
         "app/web/admin/network_onts_actions.py:909",
         "app/web/admin/network_onts_actions.py:914",
         "app/web/admin/network_onts_actions.py:949",
-        "app/web/admin/system.py:1338",
-        "app/web/admin/system.py:1569",
+        "app/web/admin/system.py:1339",
+        "app/web/admin/system.py:1570",
         "app/web/public/referrals.py:24",
         "templates/admin/customers/detail.html:1356",
         "templates/admin/inbox/email_routes.html:441",
@@ -9364,10 +9364,10 @@
         "app/models/service_team.py:381",
         "app/models/service_team.py:388",
         "app/models/service_team.py:430",
-        "app/models/team_inbox.py:1234",
-        "app/models/team_inbox.py:1395",
+        "app/models/team_inbox.py:1246",
+        "app/models/team_inbox.py:1407",
         "app/models/team_inbox.py:191",
-        "app/models/team_inbox.py:857",
+        "app/models/team_inbox.py:869",
         "app/services/ai/gateway.py:356",
         "app/services/ai_conversation_intake.py:1900",
         "app/services/ai_conversation_intake.py:2017",
@@ -9410,14 +9410,14 @@
         "app/services/service_team_lifecycle.py:1002",
         "app/services/service_team_lifecycle.py:1076",
         "app/services/service_team_lifecycle.py:934",
-        "app/services/team_inbox_channel_receive.py:1061",
-        "app/services/team_inbox_channel_receive.py:1109",
-        "app/services/team_inbox_channel_receive.py:1476",
-        "app/services/team_inbox_channel_receive.py:1662",
-        "app/services/team_inbox_channel_receive.py:1918",
-        "app/services/team_inbox_channel_receive.py:813",
-        "app/services/team_inbox_channel_receive.py:916",
-        "app/services/team_inbox_channel_receive.py:920",
+        "app/services/team_inbox_channel_receive.py:1062",
+        "app/services/team_inbox_channel_receive.py:1110",
+        "app/services/team_inbox_channel_receive.py:1485",
+        "app/services/team_inbox_channel_receive.py:1671",
+        "app/services/team_inbox_channel_receive.py:1927",
+        "app/services/team_inbox_channel_receive.py:814",
+        "app/services/team_inbox_channel_receive.py:917",
+        "app/services/team_inbox_channel_receive.py:921",
         "app/services/team_inbox_commands.py:2608",
         "app/services/team_inbox_contact_links.py:715",
         "app/services/team_inbox_delivery_receipts.py:136",
@@ -9437,7 +9437,7 @@
         "app/services/team_inbox_processing.py:127",
         "app/services/team_inbox_processing.py:407",
         "app/services/team_inbox_processing.py:444",
-        "app/services/team_inbox_read.py:1420",
+        "app/services/team_inbox_read.py:1423",
         "app/services/team_inbox_read.py:280",
         "app/services/team_inbox_receive.py:374",
         "app/services/team_inbox_widget.py:1060",
@@ -9450,11 +9450,11 @@
         "app/tasks/notifications.py:858",
         "app/tasks/notifications.py:901",
         "app/tasks/notifications.py:955",
-        "app/web/admin/inbox.py:2423",
-        "app/web/admin/inbox.py:2484",
-        "app/web/admin/inbox.py:3918",
-        "app/web/admin/inbox.py:5509",
-        "app/web/admin/inbox.py:5522",
+        "app/web/admin/inbox.py:2432",
+        "app/web/admin/inbox.py:2493",
+        "app/web/admin/inbox.py:3927",
+        "app/web/admin/inbox.py:5518",
+        "app/web/admin/inbox.py:5531",
         "app/web/admin/integrations.py:1404",
         "app/web/customer/routes.py:211",
         "app/web/customer/routes.py:2634",
@@ -10207,8 +10207,8 @@
       "disposition": "Mapped to hub; preserve registered type, validation, tenant scope and owner-command writes",
       "source_references": [
         "app/services/team_inbox_ai_polish.py:235",
-        "app/web/admin/inbox.py:3843",
-        "app/web/admin/inbox.py:4966",
+        "app/web/admin/inbox.py:3852",
+        "app/web/admin/inbox.py:4975",
         "templates/admin/inbox/email_routes.html:980"
       ]
     },
@@ -10234,8 +10234,8 @@
       "disposition": "Mapped to hub; preserve registered type, validation, tenant scope and owner-command writes",
       "source_references": [
         "app/services/team_inbox_ai_polish.py:240",
-        "app/web/admin/inbox.py:3849",
-        "app/web/admin/inbox.py:4967",
+        "app/web/admin/inbox.py:3858",
+        "app/web/admin/inbox.py:4976",
         "templates/admin/inbox/email_routes.html:983"
       ]
     },
@@ -21201,7 +21201,7 @@
         "app/services/reseller_portal.py:150",
         "app/services/subscriber_data_completeness.py:463",
         "app/services/subscriber_summary.py:48",
-        "app/services/team_inbox_projection.py:1706",
+        "app/services/team_inbox_projection.py:1754",
         "app/services/topology/affected.py:622",
         "app/services/web_customer_actions.py:1275",
         "app/services/web_customer_actions.py:1278",
@@ -24450,7 +24450,7 @@
       "method": "GET",
       "path": "/admin/system/config/billing",
       "tab": "billing",
-      "source": "app/web/admin/system.py:5395",
+      "source": "app/web/admin/system.py:5511",
       "handler": "config_billing_page",
       "permissions": [],
       "calls": [
@@ -24462,7 +24462,7 @@
       "method": "POST",
       "path": "/admin/system/config/billing",
       "tab": "billing",
-      "source": "app/web/admin/system.py:5416",
+      "source": "app/web/admin/system.py:5532",
       "handler": "config_billing_save",
       "permissions": [
         "system:settings:write"
@@ -24477,7 +24477,7 @@
       "method": "GET",
       "path": "/admin/system/config/billing-notifications",
       "tab": "billing",
-      "source": "app/web/admin/system.py:5661",
+      "source": "app/web/admin/system.py:5777",
       "handler": "config_billing_notif_page",
       "permissions": [],
       "calls": [
@@ -24489,7 +24489,7 @@
       "method": "POST",
       "path": "/admin/system/config/billing-notifications",
       "tab": "billing",
-      "source": "app/web/admin/system.py:5682",
+      "source": "app/web/admin/system.py:5798",
       "handler": "config_billing_notif_save",
       "permissions": [
         "system:settings:write"
@@ -24504,7 +24504,7 @@
       "method": "GET",
       "path": "/admin/system/config/direct-bank-transfer",
       "tab": "billing",
-      "source": "app/web/admin/system.py:5461",
+      "source": "app/web/admin/system.py:5577",
       "handler": "config_direct_bank_transfer_page",
       "permissions": [],
       "calls": [
@@ -24516,7 +24516,7 @@
       "method": "POST",
       "path": "/admin/system/config/direct-bank-transfer",
       "tab": "billing",
-      "source": "app/web/admin/system.py:5483",
+      "source": "app/web/admin/system.py:5599",
       "handler": "config_direct_bank_transfer_save",
       "permissions": [
         "system:settings:write"
@@ -24531,7 +24531,7 @@
       "method": "GET",
       "path": "/admin/system/config/payment-methods",
       "tab": "billing",
-      "source": "app/web/admin/system.py:5523",
+      "source": "app/web/admin/system.py:5639",
       "handler": "config_payment_methods_page",
       "permissions": [],
       "calls": [
@@ -24543,7 +24543,7 @@
       "method": "GET",
       "path": "/admin/system/config/plan-change",
       "tab": "billing",
-      "source": "app/web/admin/system.py:5718",
+      "source": "app/web/admin/system.py:5834",
       "handler": "config_plan_change_page",
       "permissions": [],
       "calls": [
@@ -24555,7 +24555,7 @@
       "method": "POST",
       "path": "/admin/system/config/plan-change",
       "tab": "billing",
-      "source": "app/web/admin/system.py:5739",
+      "source": "app/web/admin/system.py:5855",
       "handler": "config_plan_change_save",
       "permissions": [
         "system:settings:write"
@@ -24570,7 +24570,7 @@
       "method": "GET",
       "path": "/admin/system/config/reminders",
       "tab": "billing",
-      "source": "app/web/admin/system.py:5610",
+      "source": "app/web/admin/system.py:5726",
       "handler": "config_reminders_page",
       "permissions": [],
       "calls": [
@@ -24582,7 +24582,7 @@
       "method": "POST",
       "path": "/admin/system/config/reminders",
       "tab": "billing",
-      "source": "app/web/admin/system.py:5631",
+      "source": "app/web/admin/system.py:5747",
       "handler": "config_reminders_save",
       "permissions": [
         "system:settings:write"
@@ -24597,7 +24597,7 @@
       "method": "GET",
       "path": "/admin/system/config/tax",
       "tab": "billing",
-      "source": "app/web/admin/system.py:5533",
+      "source": "app/web/admin/system.py:5649",
       "handler": "config_tax_page",
       "permissions": [],
       "calls": [
@@ -24609,7 +24609,7 @@
       "method": "POST",
       "path": "/admin/system/settings-hub/actions/starter-ledger-live",
       "tab": "billing",
-      "source": "app/web/admin/system.py:3944",
+      "source": "app/web/admin/system.py:3945",
       "handler": "settings_starter_ledger_live_update",
       "permissions": [
         "system:settings:write"
@@ -24624,7 +24624,7 @@
       "method": "GET",
       "path": "/admin/system/settings-hub/bank-accounts",
       "tab": "billing",
-      "source": "app/web/admin/system.py:4450",
+      "source": "app/web/admin/system.py:4451",
       "handler": "settings_bank_accounts_page",
       "permissions": [
         "system:settings:read"
@@ -24636,7 +24636,7 @@
       "method": "POST",
       "path": "/admin/system/settings-hub/bank-accounts",
       "tab": "billing",
-      "source": "app/web/admin/system.py:4505",
+      "source": "app/web/admin/system.py:4506",
       "handler": "settings_bank_account_create",
       "permissions": [
         "system:settings:write"
@@ -24651,7 +24651,7 @@
       "method": "POST",
       "path": "/admin/system/settings-hub/bank-accounts/{bank_account_id}",
       "tab": "billing",
-      "source": "app/web/admin/system.py:4533",
+      "source": "app/web/admin/system.py:4534",
       "handler": "settings_bank_account_update",
       "permissions": [
         "system:settings:write"
@@ -24666,7 +24666,7 @@
       "method": "POST",
       "path": "/admin/system/settings-hub/bank-accounts/{bank_account_id}/deactivate",
       "tab": "billing",
-      "source": "app/web/admin/system.py:4562",
+      "source": "app/web/admin/system.py:4563",
       "handler": "settings_bank_account_deactivate",
       "permissions": [
         "system:settings:write"
@@ -24680,7 +24680,7 @@
       "method": "GET",
       "path": "/admin/system/settings-hub/edit/billing",
       "tab": "billing",
-      "source": "app/web/admin/system.py:3858",
+      "source": "app/web/admin/system.py:3859",
       "handler": "settings_overview",
       "permissions": [
         "system:settings:read"
@@ -24692,7 +24692,7 @@
       "method": "POST",
       "path": "/admin/system/settings-hub/edit/billing",
       "tab": "billing",
-      "source": "app/web/admin/system.py:3877",
+      "source": "app/web/admin/system.py:3878",
       "handler": "settings_update",
       "permissions": [
         "system:settings:write"
@@ -24710,7 +24710,7 @@
       "method": "GET",
       "path": "/admin/system/settings-hub/edit/collections",
       "tab": "billing",
-      "source": "app/web/admin/system.py:3858",
+      "source": "app/web/admin/system.py:3859",
       "handler": "settings_overview",
       "permissions": [
         "system:settings:read"
@@ -24722,7 +24722,7 @@
       "method": "POST",
       "path": "/admin/system/settings-hub/edit/collections",
       "tab": "billing",
-      "source": "app/web/admin/system.py:3877",
+      "source": "app/web/admin/system.py:3878",
       "handler": "settings_update",
       "permissions": [
         "system:settings:write"
@@ -24740,7 +24740,7 @@
       "method": "GET",
       "path": "/admin/system/settings-hub/edit/starter-accounting",
       "tab": "billing",
-      "source": "app/web/admin/system.py:3858",
+      "source": "app/web/admin/system.py:3859",
       "handler": "settings_overview",
       "permissions": [
         "system:settings:read"
@@ -24752,7 +24752,7 @@
       "method": "POST",
       "path": "/admin/system/settings-hub/edit/starter-accounting",
       "tab": "billing",
-      "source": "app/web/admin/system.py:3877",
+      "source": "app/web/admin/system.py:3878",
       "handler": "settings_update",
       "permissions": [
         "system:settings:write"
@@ -25376,7 +25376,7 @@
       "method": "GET",
       "path": "/admin/system/settings-hub/edit/catalog",
       "tab": "catalog",
-      "source": "app/web/admin/system.py:3858",
+      "source": "app/web/admin/system.py:3859",
       "handler": "settings_overview",
       "permissions": [
         "system:settings:read"
@@ -25388,7 +25388,7 @@
       "method": "POST",
       "path": "/admin/system/settings-hub/edit/catalog",
       "tab": "catalog",
-      "source": "app/web/admin/system.py:3877",
+      "source": "app/web/admin/system.py:3878",
       "handler": "settings_update",
       "permissions": [
         "system:settings:write"
@@ -25406,7 +25406,7 @@
       "method": "GET",
       "path": "/admin/system/settings-hub/edit/referrals",
       "tab": "catalog",
-      "source": "app/web/admin/system.py:3858",
+      "source": "app/web/admin/system.py:3859",
       "handler": "settings_overview",
       "permissions": [
         "system:settings:read"
@@ -25418,7 +25418,7 @@
       "method": "POST",
       "path": "/admin/system/settings-hub/edit/referrals",
       "tab": "catalog",
-      "source": "app/web/admin/system.py:3877",
+      "source": "app/web/admin/system.py:3878",
       "handler": "settings_update",
       "permissions": [
         "system:settings:write"
@@ -25436,7 +25436,7 @@
       "method": "GET",
       "path": "/admin/system/settings-hub/edit/subscriber",
       "tab": "catalog",
-      "source": "app/web/admin/system.py:3858",
+      "source": "app/web/admin/system.py:3859",
       "handler": "settings_overview",
       "permissions": [
         "system:settings:read"
@@ -25448,7 +25448,7 @@
       "method": "POST",
       "path": "/admin/system/settings-hub/edit/subscriber",
       "tab": "catalog",
-      "source": "app/web/admin/system.py:3877",
+      "source": "app/web/admin/system.py:3878",
       "handler": "settings_update",
       "permissions": [
         "system:settings:write"
@@ -25466,7 +25466,7 @@
       "method": "GET",
       "path": "/admin/crm/inbox/settings",
       "tab": "integrations",
-      "source": "app/web/admin/inbox.py:4103",
+      "source": "app/web/admin/inbox.py:4112",
       "handler": "team_inbox_settings_entrypoint",
       "permissions": [
         "support:ticket:read"
@@ -25478,7 +25478,7 @@
       "method": "GET",
       "path": "/admin/crm/inbox/settings/partials/ai-testing",
       "tab": "integrations",
-      "source": "app/web/admin/inbox.py:4122",
+      "source": "app/web/admin/inbox.py:4131",
       "handler": "team_inbox_ai_testing_partial",
       "permissions": [
         "support:ticket:read"
@@ -26214,7 +26214,7 @@
       "method": "GET",
       "path": "/admin/system/settings-hub/edit/comms",
       "tab": "integrations",
-      "source": "app/web/admin/system.py:3858",
+      "source": "app/web/admin/system.py:3859",
       "handler": "settings_overview",
       "permissions": [
         "system:settings:read"
@@ -26226,7 +26226,7 @@
       "method": "POST",
       "path": "/admin/system/settings-hub/edit/comms",
       "tab": "integrations",
-      "source": "app/web/admin/system.py:3877",
+      "source": "app/web/admin/system.py:3878",
       "handler": "settings_update",
       "permissions": [
         "system:settings:write"
@@ -26244,7 +26244,7 @@
       "method": "GET",
       "path": "/admin/system/settings-hub/edit/integration",
       "tab": "integrations",
-      "source": "app/web/admin/system.py:3858",
+      "source": "app/web/admin/system.py:3859",
       "handler": "settings_overview",
       "permissions": [
         "system:settings:read"
@@ -26256,7 +26256,7 @@
       "method": "POST",
       "path": "/admin/system/settings-hub/edit/integration",
       "tab": "integrations",
-      "source": "app/web/admin/system.py:3877",
+      "source": "app/web/admin/system.py:3878",
       "handler": "settings_update",
       "permissions": [
         "system:settings:write"
@@ -26274,7 +26274,7 @@
       "method": "GET",
       "path": "/admin/system/audit",
       "tab": "logs",
-      "source": "app/web/admin/system.py:3487",
+      "source": "app/web/admin/system.py:3488",
       "handler": "audit_log",
       "permissions": [
         "audit:read"
@@ -26290,7 +26290,7 @@
       "method": "GET",
       "path": "/admin/system/audit-log",
       "tab": "logs",
-      "source": "app/web/admin/system.py:3636",
+      "source": "app/web/admin/system.py:3637",
       "handler": "audit_log_legacy",
       "permissions": [
         "audit:read"
@@ -26302,7 +26302,7 @@
       "method": "GET",
       "path": "/admin/system/audit/export/{export_format}",
       "tab": "logs",
-      "source": "app/web/admin/system.py:3581",
+      "source": "app/web/admin/system.py:3582",
       "handler": "export_audit_log",
       "permissions": [
         "audit:read"
@@ -26317,7 +26317,7 @@
       "method": "GET",
       "path": "/admin/system/control-plane",
       "tab": "logs",
-      "source": "app/web/admin/system.py:4817",
+      "source": "app/web/admin/system.py:4818",
       "handler": "control_plane",
       "permissions": [
         "system:settings:read"
@@ -26331,7 +26331,7 @@
       "method": "GET",
       "path": "/admin/system/scheduler",
       "tab": "logs",
-      "source": "app/web/admin/system.py:3646",
+      "source": "app/web/admin/system.py:3647",
       "handler": "scheduler_overview",
       "permissions": [
         "system:settings:read"
@@ -26345,7 +26345,7 @@
       "method": "GET",
       "path": "/admin/system/scheduler/{task_id}",
       "tab": "logs",
-      "source": "app/web/admin/system.py:3679",
+      "source": "app/web/admin/system.py:3680",
       "handler": "scheduler_task_detail",
       "permissions": [
         "system:settings:read"
@@ -26359,7 +26359,7 @@
       "method": "POST",
       "path": "/admin/system/scheduler/{task_id}/delete",
       "tab": "logs",
-      "source": "app/web/admin/system.py:3804",
+      "source": "app/web/admin/system.py:3805",
       "handler": "scheduler_task_delete",
       "permissions": [
         "system:settings:write"
@@ -26373,7 +26373,7 @@
       "method": "POST",
       "path": "/admin/system/scheduler/{task_id}/disable",
       "tab": "logs",
-      "source": "app/web/admin/system.py:3776",
+      "source": "app/web/admin/system.py:3777",
       "handler": "scheduler_task_disable",
       "permissions": [
         "system:settings:write"
@@ -26387,7 +26387,7 @@
       "method": "POST",
       "path": "/admin/system/scheduler/{task_id}/enable",
       "tab": "logs",
-      "source": "app/web/admin/system.py:3759",
+      "source": "app/web/admin/system.py:3760",
       "handler": "scheduler_task_enable",
       "permissions": [
         "system:settings:write"
@@ -26401,7 +26401,7 @@
       "method": "POST",
       "path": "/admin/system/scheduler/{task_id}/run",
       "tab": "logs",
-      "source": "app/web/admin/system.py:3793",
+      "source": "app/web/admin/system.py:3794",
       "handler": "scheduler_task_run",
       "permissions": [
         "system:settings:write"
@@ -26415,7 +26415,7 @@
       "method": "POST",
       "path": "/admin/system/scheduler/{task_id}/schedule",
       "tab": "logs",
-      "source": "app/web/admin/system.py:3717",
+      "source": "app/web/admin/system.py:3718",
       "handler": "scheduler_task_update_schedule",
       "permissions": [
         "system:settings:write"
@@ -26429,7 +26429,7 @@
       "method": "GET",
       "path": "/admin/system/settings-hub/edit/audit",
       "tab": "logs",
-      "source": "app/web/admin/system.py:3858",
+      "source": "app/web/admin/system.py:3859",
       "handler": "settings_overview",
       "permissions": [
         "system:settings:read"
@@ -26441,7 +26441,7 @@
       "method": "POST",
       "path": "/admin/system/settings-hub/edit/audit",
       "tab": "logs",
-      "source": "app/web/admin/system.py:3877",
+      "source": "app/web/admin/system.py:3878",
       "handler": "settings_update",
       "permissions": [
         "system:settings:write"
@@ -26459,7 +26459,7 @@
       "method": "GET",
       "path": "/admin/system/settings-hub/edit/scheduler",
       "tab": "logs",
-      "source": "app/web/admin/system.py:3858",
+      "source": "app/web/admin/system.py:3859",
       "handler": "settings_overview",
       "permissions": [
         "system:settings:read"
@@ -26471,7 +26471,7 @@
       "method": "POST",
       "path": "/admin/system/settings-hub/edit/scheduler",
       "tab": "logs",
-      "source": "app/web/admin/system.py:3877",
+      "source": "app/web/admin/system.py:3878",
       "handler": "settings_update",
       "permissions": [
         "system:settings:write"
@@ -26533,7 +26533,7 @@
       "method": "GET",
       "path": "/admin/system/config/monitoring",
       "tab": "network",
-      "source": "app/web/admin/system.py:6127",
+      "source": "app/web/admin/system.py:6243",
       "handler": "config_monitoring_page",
       "permissions": [],
       "calls": [
@@ -26545,7 +26545,7 @@
       "method": "POST",
       "path": "/admin/system/config/monitoring",
       "tab": "network",
-      "source": "app/web/admin/system.py:6146",
+      "source": "app/web/admin/system.py:6262",
       "handler": "config_monitoring_save",
       "permissions": [
         "system:settings:write"
@@ -26559,7 +26559,7 @@
       "method": "GET",
       "path": "/admin/system/config/nas-types",
       "tab": "network",
-      "source": "app/web/admin/system.py:6175",
+      "source": "app/web/admin/system.py:6291",
       "handler": "config_nas_types_page",
       "permissions": [],
       "calls": [
@@ -26571,7 +26571,7 @@
       "method": "GET",
       "path": "/admin/system/config/radius",
       "tab": "network",
-      "source": "app/web/admin/system.py:5785",
+      "source": "app/web/admin/system.py:5901",
       "handler": "config_radius_page",
       "permissions": [],
       "calls": [
@@ -26583,7 +26583,7 @@
       "method": "POST",
       "path": "/admin/system/config/radius",
       "tab": "network",
-      "source": "app/web/admin/system.py:5814",
+      "source": "app/web/admin/system.py:5930",
       "handler": "config_radius_save",
       "permissions": [
         "system:settings:write"
@@ -26599,7 +26599,7 @@
       "method": "POST",
       "path": "/admin/system/config/radius/push-reject-rules",
       "tab": "network",
-      "source": "app/web/admin/system.py:5861",
+      "source": "app/web/admin/system.py:5977",
       "handler": "config_radius_push_reject_rules",
       "permissions": [
         "system:settings:write"
@@ -26613,7 +26613,7 @@
       "method": "GET",
       "path": "/admin/system/config/walled-garden",
       "tab": "network",
-      "source": "app/web/admin/system.py:5964",
+      "source": "app/web/admin/system.py:6080",
       "handler": "config_walled_garden_page",
       "permissions": [
         "system:settings:read"
@@ -26625,7 +26625,7 @@
       "method": "POST",
       "path": "/admin/system/config/walled-garden/entries",
       "tab": "network",
-      "source": "app/web/admin/system.py:5982",
+      "source": "app/web/admin/system.py:6098",
       "handler": "config_walled_garden_save_entry",
       "permissions": [
         "system:settings:write"
@@ -26643,7 +26643,7 @@
       "method": "POST",
       "path": "/admin/system/config/walled-garden/entries/{entry_key}/enabled",
       "tab": "network",
-      "source": "app/web/admin/system.py:6049",
+      "source": "app/web/admin/system.py:6165",
       "handler": "config_walled_garden_set_enabled",
       "permissions": [
         "system:settings:write"
@@ -26658,7 +26658,7 @@
       "method": "POST",
       "path": "/admin/system/config/walled-garden/entries/{entry_key}/remove",
       "tab": "network",
-      "source": "app/web/admin/system.py:6092",
+      "source": "app/web/admin/system.py:6208",
       "handler": "config_walled_garden_remove_entry",
       "permissions": [
         "system:settings:write"
@@ -26673,7 +26673,7 @@
       "method": "GET",
       "path": "/admin/system/settings-hub/edit/bandwidth",
       "tab": "network",
-      "source": "app/web/admin/system.py:3858",
+      "source": "app/web/admin/system.py:3859",
       "handler": "settings_overview",
       "permissions": [
         "system:settings:read"
@@ -26685,7 +26685,7 @@
       "method": "POST",
       "path": "/admin/system/settings-hub/edit/bandwidth",
       "tab": "network",
-      "source": "app/web/admin/system.py:3877",
+      "source": "app/web/admin/system.py:3878",
       "handler": "settings_update",
       "permissions": [
         "system:settings:write"
@@ -26703,7 +26703,7 @@
       "method": "GET",
       "path": "/admin/system/settings-hub/edit/geocoding",
       "tab": "network",
-      "source": "app/web/admin/system.py:3858",
+      "source": "app/web/admin/system.py:3859",
       "handler": "settings_overview",
       "permissions": [
         "system:settings:read"
@@ -26715,7 +26715,7 @@
       "method": "POST",
       "path": "/admin/system/settings-hub/edit/geocoding",
       "tab": "network",
-      "source": "app/web/admin/system.py:3877",
+      "source": "app/web/admin/system.py:3878",
       "handler": "settings_update",
       "permissions": [
         "system:settings:write"
@@ -26733,7 +26733,7 @@
       "method": "GET",
       "path": "/admin/system/settings-hub/edit/gis",
       "tab": "network",
-      "source": "app/web/admin/system.py:3858",
+      "source": "app/web/admin/system.py:3859",
       "handler": "settings_overview",
       "permissions": [
         "system:settings:read"
@@ -26745,7 +26745,7 @@
       "method": "POST",
       "path": "/admin/system/settings-hub/edit/gis",
       "tab": "network",
-      "source": "app/web/admin/system.py:3877",
+      "source": "app/web/admin/system.py:3878",
       "handler": "settings_update",
       "permissions": [
         "system:settings:write"
@@ -26763,7 +26763,7 @@
       "method": "GET",
       "path": "/admin/system/settings-hub/edit/network",
       "tab": "network",
-      "source": "app/web/admin/system.py:3858",
+      "source": "app/web/admin/system.py:3859",
       "handler": "settings_overview",
       "permissions": [
         "system:settings:read"
@@ -26775,7 +26775,7 @@
       "method": "POST",
       "path": "/admin/system/settings-hub/edit/network",
       "tab": "network",
-      "source": "app/web/admin/system.py:3877",
+      "source": "app/web/admin/system.py:3878",
       "handler": "settings_update",
       "permissions": [
         "system:settings:write"
@@ -26793,7 +26793,7 @@
       "method": "GET",
       "path": "/admin/system/settings-hub/edit/network_monitoring",
       "tab": "network",
-      "source": "app/web/admin/system.py:3858",
+      "source": "app/web/admin/system.py:3859",
       "handler": "settings_overview",
       "permissions": [
         "system:settings:read"
@@ -26805,7 +26805,7 @@
       "method": "POST",
       "path": "/admin/system/settings-hub/edit/network_monitoring",
       "tab": "network",
-      "source": "app/web/admin/system.py:3877",
+      "source": "app/web/admin/system.py:3878",
       "handler": "settings_update",
       "permissions": [
         "system:settings:write"
@@ -26823,7 +26823,7 @@
       "method": "GET",
       "path": "/admin/system/settings-hub/edit/provisioning",
       "tab": "network",
-      "source": "app/web/admin/system.py:3858",
+      "source": "app/web/admin/system.py:3859",
       "handler": "settings_overview",
       "permissions": [
         "system:settings:read"
@@ -26835,7 +26835,7 @@
       "method": "POST",
       "path": "/admin/system/settings-hub/edit/provisioning",
       "tab": "network",
-      "source": "app/web/admin/system.py:3877",
+      "source": "app/web/admin/system.py:3878",
       "handler": "settings_update",
       "permissions": [
         "system:settings:write"
@@ -26853,7 +26853,7 @@
       "method": "GET",
       "path": "/admin/system/settings-hub/edit/radius",
       "tab": "network",
-      "source": "app/web/admin/system.py:3858",
+      "source": "app/web/admin/system.py:3859",
       "handler": "settings_overview",
       "permissions": [
         "system:settings:read"
@@ -26865,7 +26865,7 @@
       "method": "POST",
       "path": "/admin/system/settings-hub/edit/radius",
       "tab": "network",
-      "source": "app/web/admin/system.py:3877",
+      "source": "app/web/admin/system.py:3878",
       "handler": "settings_update",
       "permissions": [
         "system:settings:write"
@@ -26883,7 +26883,7 @@
       "method": "GET",
       "path": "/admin/system/settings-hub/edit/router-health",
       "tab": "network",
-      "source": "app/web/admin/system.py:3858",
+      "source": "app/web/admin/system.py:3859",
       "handler": "settings_overview",
       "permissions": [
         "system:settings:read"
@@ -26895,7 +26895,7 @@
       "method": "POST",
       "path": "/admin/system/settings-hub/edit/router-health",
       "tab": "network",
-      "source": "app/web/admin/system.py:3877",
+      "source": "app/web/admin/system.py:3878",
       "handler": "settings_update",
       "permissions": [
         "system:settings:write"
@@ -26913,7 +26913,7 @@
       "method": "GET",
       "path": "/admin/system/settings-hub/edit/router-health-policy",
       "tab": "network",
-      "source": "app/web/admin/system.py:3858",
+      "source": "app/web/admin/system.py:3859",
       "handler": "settings_overview",
       "permissions": [
         "system:settings:read"
@@ -26925,7 +26925,7 @@
       "method": "POST",
       "path": "/admin/system/settings-hub/edit/router-health-policy",
       "tab": "network",
-      "source": "app/web/admin/system.py:3877",
+      "source": "app/web/admin/system.py:3878",
       "handler": "settings_update",
       "permissions": [
         "system:settings:write"
@@ -26943,7 +26943,7 @@
       "method": "GET",
       "path": "/admin/system/settings-hub/edit/snmp",
       "tab": "network",
-      "source": "app/web/admin/system.py:3858",
+      "source": "app/web/admin/system.py:3859",
       "handler": "settings_overview",
       "permissions": [
         "system:settings:read"
@@ -26955,7 +26955,7 @@
       "method": "POST",
       "path": "/admin/system/settings-hub/edit/snmp",
       "tab": "network",
-      "source": "app/web/admin/system.py:3877",
+      "source": "app/web/admin/system.py:3878",
       "handler": "settings_update",
       "permissions": [
         "system:settings:write"
@@ -26973,7 +26973,7 @@
       "method": "GET",
       "path": "/admin/system/settings-hub/edit/test-connection",
       "tab": "network",
-      "source": "app/web/admin/system.py:3858",
+      "source": "app/web/admin/system.py:3859",
       "handler": "settings_overview",
       "permissions": [
         "system:settings:read"
@@ -26985,7 +26985,7 @@
       "method": "POST",
       "path": "/admin/system/settings-hub/edit/test-connection",
       "tab": "network",
-      "source": "app/web/admin/system.py:3877",
+      "source": "app/web/admin/system.py:3878",
       "handler": "settings_update",
       "permissions": [
         "system:settings:write"
@@ -27003,7 +27003,7 @@
       "method": "GET",
       "path": "/admin/system/settings-hub/edit/tr069",
       "tab": "network",
-      "source": "app/web/admin/system.py:3858",
+      "source": "app/web/admin/system.py:3859",
       "handler": "settings_overview",
       "permissions": [
         "system:settings:read"
@@ -27015,7 +27015,7 @@
       "method": "POST",
       "path": "/admin/system/settings-hub/edit/tr069",
       "tab": "network",
-      "source": "app/web/admin/system.py:3877",
+      "source": "app/web/admin/system.py:3878",
       "handler": "settings_update",
       "permissions": [
         "system:settings:write"
@@ -27033,7 +27033,7 @@
       "method": "GET",
       "path": "/admin/system/settings-hub/edit/usage",
       "tab": "network",
-      "source": "app/web/admin/system.py:3858",
+      "source": "app/web/admin/system.py:3859",
       "handler": "settings_overview",
       "permissions": [
         "system:settings:read"
@@ -27045,7 +27045,7 @@
       "method": "POST",
       "path": "/admin/system/settings-hub/edit/usage",
       "tab": "network",
-      "source": "app/web/admin/system.py:3877",
+      "source": "app/web/admin/system.py:3878",
       "handler": "settings_update",
       "permissions": [
         "system:settings:write"
@@ -27063,7 +27063,7 @@
       "method": "GET",
       "path": "/admin/system/settings-hub/edit/vpn",
       "tab": "network",
-      "source": "app/web/admin/system.py:3858",
+      "source": "app/web/admin/system.py:3859",
       "handler": "settings_overview",
       "permissions": [
         "system:settings:read"
@@ -27075,7 +27075,7 @@
       "method": "POST",
       "path": "/admin/system/settings-hub/edit/vpn",
       "tab": "network",
-      "source": "app/web/admin/system.py:3877",
+      "source": "app/web/admin/system.py:3878",
       "handler": "settings_update",
       "permissions": [
         "system:settings:write"
@@ -27093,7 +27093,7 @@
       "method": "GET",
       "path": "/admin/inbox/settings/email-routes",
       "tab": "notifications",
-      "source": "app/web/admin/inbox.py:3820",
+      "source": "app/web/admin/inbox.py:3829",
       "handler": "team_inbox_email_routes",
       "permissions": [
         "support:ticket:read"
@@ -27105,7 +27105,7 @@
       "method": "POST",
       "path": "/admin/inbox/settings/email-routes",
       "tab": "notifications",
-      "source": "app/web/admin/inbox.py:4985",
+      "source": "app/web/admin/inbox.py:4994",
       "handler": "team_inbox_email_route_create",
       "permissions": [
         "support:ticket:update"
@@ -27117,7 +27117,7 @@
       "method": "POST",
       "path": "/admin/inbox/settings/email-routes/{route_id}",
       "tab": "notifications",
-      "source": "app/web/admin/inbox.py:5014",
+      "source": "app/web/admin/inbox.py:5023",
       "handler": "team_inbox_email_route_update",
       "permissions": [
         "support:ticket:update"
@@ -27129,7 +27129,7 @@
       "method": "POST",
       "path": "/admin/inbox/settings/email-routes/{route_id}/delete",
       "tab": "notifications",
-      "source": "app/web/admin/inbox.py:5094",
+      "source": "app/web/admin/inbox.py:5103",
       "handler": "team_inbox_email_route_delete",
       "permissions": [
         "support:ticket:update"
@@ -27764,7 +27764,7 @@
       "method": "GET",
       "path": "/admin/system/config/email",
       "tab": "notifications",
-      "source": "app/web/admin/system.py:5325",
+      "source": "app/web/admin/system.py:5441",
       "handler": "config_email_page",
       "permissions": [],
       "calls": [],
@@ -27774,7 +27774,7 @@
       "method": "POST",
       "path": "/admin/system/config/email",
       "tab": "notifications",
-      "source": "app/web/admin/system.py:5334",
+      "source": "app/web/admin/system.py:5450",
       "handler": "config_email_save",
       "permissions": [
         "system:settings:write"
@@ -27786,7 +27786,7 @@
       "method": "GET",
       "path": "/admin/system/config/templates",
       "tab": "notifications",
-      "source": "app/web/admin/system.py:5285",
+      "source": "app/web/admin/system.py:5401",
       "handler": "config_templates_page",
       "permissions": [],
       "calls": [
@@ -27798,7 +27798,7 @@
       "method": "GET",
       "path": "/admin/system/email",
       "tab": "notifications",
-      "source": "app/web/admin/system.py:5238",
+      "source": "app/web/admin/system.py:5354",
       "handler": "email_page",
       "permissions": [
         "system:settings:read"
@@ -27810,7 +27810,7 @@
       "method": "POST",
       "path": "/admin/system/email/smtp-senders",
       "tab": "notifications",
-      "source": "app/web/admin/system.py:4322",
+      "source": "app/web/admin/system.py:4323",
       "handler": "settings_smtp_sender_upsert",
       "permissions": [
         "system:settings:write"
@@ -27826,7 +27826,7 @@
       "method": "POST",
       "path": "/admin/system/email/smtp-senders/activities",
       "tab": "notifications",
-      "source": "app/web/admin/system.py:4434",
+      "source": "app/web/admin/system.py:4435",
       "handler": "settings_smtp_sender_activities",
       "permissions": [
         "system:settings:write"
@@ -27840,7 +27840,7 @@
       "method": "POST",
       "path": "/admin/system/email/smtp-senders/default",
       "tab": "notifications",
-      "source": "app/web/admin/system.py:4371",
+      "source": "app/web/admin/system.py:4372",
       "handler": "settings_smtp_sender_set_default",
       "permissions": [
         "system:settings:write"
@@ -27854,7 +27854,7 @@
       "method": "POST",
       "path": "/admin/system/email/smtp-senders/{sender_key}/delete",
       "tab": "notifications",
-      "source": "app/web/admin/system.py:4384",
+      "source": "app/web/admin/system.py:4385",
       "handler": "settings_smtp_sender_delete",
       "permissions": [
         "system:settings:write"
@@ -27871,7 +27871,7 @@
       "method": "POST",
       "path": "/admin/system/email/smtp-senders/{sender_key}/test",
       "tab": "notifications",
-      "source": "app/web/admin/system.py:4404",
+      "source": "app/web/admin/system.py:4405",
       "handler": "settings_smtp_sender_test",
       "permissions": [
         "system:settings:write"
@@ -27886,7 +27886,7 @@
       "method": "POST",
       "path": "/admin/system/export/templates",
       "tab": "notifications",
-      "source": "app/web/admin/system.py:1206",
+      "source": "app/web/admin/system.py:1207",
       "handler": "system_export_create_template",
       "permissions": [
         "system:settings:write"
@@ -27900,7 +27900,7 @@
       "method": "POST",
       "path": "/admin/system/export/templates/{template_id}/delete",
       "tab": "notifications",
-      "source": "app/web/admin/system.py:1250",
+      "source": "app/web/admin/system.py:1251",
       "handler": "system_export_delete_template",
       "permissions": [
         "system:settings:write"
@@ -27914,7 +27914,7 @@
       "method": "GET",
       "path": "/admin/system/settings-hub/edit/notification",
       "tab": "notifications",
-      "source": "app/web/admin/system.py:3858",
+      "source": "app/web/admin/system.py:3859",
       "handler": "settings_overview",
       "permissions": [
         "system:settings:read"
@@ -27926,7 +27926,7 @@
       "method": "POST",
       "path": "/admin/system/settings-hub/edit/notification",
       "tab": "notifications",
-      "source": "app/web/admin/system.py:3877",
+      "source": "app/web/admin/system.py:3878",
       "handler": "settings_update",
       "permissions": [
         "system:settings:write"
@@ -28132,7 +28132,7 @@
       "method": "GET",
       "path": "/admin/system/settings-hub/edit/imports",
       "tab": "operations",
-      "source": "app/web/admin/system.py:3858",
+      "source": "app/web/admin/system.py:3859",
       "handler": "settings_overview",
       "permissions": [
         "system:settings:read"
@@ -28144,7 +28144,7 @@
       "method": "POST",
       "path": "/admin/system/settings-hub/edit/imports",
       "tab": "operations",
-      "source": "app/web/admin/system.py:3877",
+      "source": "app/web/admin/system.py:3878",
       "handler": "settings_update",
       "permissions": [
         "system:settings:write"
@@ -28162,7 +28162,7 @@
       "method": "GET",
       "path": "/admin/system/settings-hub/edit/projects",
       "tab": "operations",
-      "source": "app/web/admin/system.py:3858",
+      "source": "app/web/admin/system.py:3859",
       "handler": "settings_overview",
       "permissions": [
         "system:settings:read"
@@ -28174,7 +28174,7 @@
       "method": "POST",
       "path": "/admin/system/settings-hub/edit/projects",
       "tab": "operations",
-      "source": "app/web/admin/system.py:3877",
+      "source": "app/web/admin/system.py:3878",
       "handler": "settings_update",
       "permissions": [
         "system:settings:write"
@@ -28192,7 +28192,7 @@
       "method": "GET",
       "path": "/admin/system/settings-hub/edit/workflow",
       "tab": "operations",
-      "source": "app/web/admin/system.py:3858",
+      "source": "app/web/admin/system.py:3859",
       "handler": "settings_overview",
       "permissions": [
         "system:settings:read"
@@ -28204,7 +28204,7 @@
       "method": "POST",
       "path": "/admin/system/settings-hub/edit/workflow",
       "tab": "operations",
-      "source": "app/web/admin/system.py:3877",
+      "source": "app/web/admin/system.py:3878",
       "handler": "settings_update",
       "permissions": [
         "system:settings:write"
@@ -28222,7 +28222,7 @@
       "method": "GET",
       "path": "/admin/system/ticket-settings",
       "tab": "operations",
-      "source": "app/web/admin/system.py:4983",
+      "source": "app/web/admin/system.py:5098",
       "handler": "ticket_settings_page",
       "permissions": [
         "system:settings:read"
@@ -28234,7 +28234,7 @@
       "method": "POST",
       "path": "/admin/system/ticket-settings",
       "tab": "operations",
-      "source": "app/web/admin/system.py:5001",
+      "source": "app/web/admin/system.py:5116",
       "handler": "ticket_settings_update",
       "permissions": [
         "system:settings:write"
@@ -28253,7 +28253,7 @@
       "method": "POST",
       "path": "/admin/system/ticket-settings/assignment-rules",
       "tab": "operations",
-      "source": "app/web/admin/system.py:5148",
+      "source": "app/web/admin/system.py:5264",
       "handler": "ticket_assignment_rule_create",
       "permissions": [
         "system:settings:write"
@@ -28267,7 +28267,7 @@
       "method": "POST",
       "path": "/admin/system/ticket-settings/assignment-rules/{rule_id}/delete",
       "tab": "operations",
-      "source": "app/web/admin/system.py:5183",
+      "source": "app/web/admin/system.py:5299",
       "handler": "ticket_assignment_rule_delete",
       "permissions": [
         "system:settings:write"
@@ -28281,7 +28281,7 @@
       "method": "GET",
       "path": "/admin/system/tools/geocode",
       "tab": "operations",
-      "source": "app/web/admin/system.py:4576",
+      "source": "app/web/admin/system.py:4577",
       "handler": "geocode_tool_page",
       "permissions": [
         "system:settings:read"
@@ -28296,7 +28296,7 @@
       "method": "GET",
       "path": "/admin/system/tools/geocode/jobs/{job_id}/status",
       "tab": "operations",
-      "source": "app/web/admin/system.py:4645",
+      "source": "app/web/admin/system.py:4646",
       "handler": "geocode_tool_job_status",
       "permissions": [
         "system:settings:read"
@@ -28310,7 +28310,7 @@
       "method": "POST",
       "path": "/admin/system/tools/geocode/start",
       "tab": "operations",
-      "source": "app/web/admin/system.py:4608",
+      "source": "app/web/admin/system.py:4609",
       "handler": "geocode_tool_start",
       "permissions": [
         "system:settings:write"
@@ -28325,7 +28325,7 @@
       "method": "GET",
       "path": "/admin/system/tools/restore",
       "tab": "operations",
-      "source": "app/web/admin/system.py:4665",
+      "source": "app/web/admin/system.py:4666",
       "handler": "restore_tool_page",
       "permissions": [
         "system:settings:read"
@@ -28339,7 +28339,7 @@
       "method": "POST",
       "path": "/admin/system/tools/restore/settings",
       "tab": "operations",
-      "source": "app/web/admin/system.py:4739",
+      "source": "app/web/admin/system.py:4740",
       "handler": "restore_tool_settings",
       "permissions": [
         "system:settings:write"
@@ -28353,7 +28353,7 @@
       "method": "POST",
       "path": "/admin/system/tools/restore/{subscriber_id}",
       "tab": "operations",
-      "source": "app/web/admin/system.py:4697",
+      "source": "app/web/admin/system.py:4698",
       "handler": "restore_tool_restore",
       "permissions": [
         "system:settings:write"
@@ -28419,7 +28419,7 @@
       "method": "GET",
       "path": "/admin/system/api-keys",
       "tab": "security",
-      "source": "app/web/admin/system.py:3277",
+      "source": "app/web/admin/system.py:3278",
       "handler": "api_keys_list",
       "permissions": [],
       "calls": [
@@ -28431,7 +28431,7 @@
       "method": "POST",
       "path": "/admin/system/api-keys",
       "tab": "security",
-      "source": "app/web/admin/system.py:3322",
+      "source": "app/web/admin/system.py:3323",
       "handler": "api_key_create",
       "permissions": [
         "system:settings:write"
@@ -28448,7 +28448,7 @@
       "method": "GET",
       "path": "/admin/system/api-keys/new",
       "tab": "security",
-      "source": "app/web/admin/system.py:3302",
+      "source": "app/web/admin/system.py:3303",
       "handler": "api_key_new",
       "permissions": [],
       "calls": [
@@ -28460,7 +28460,7 @@
       "method": "POST",
       "path": "/admin/system/api-keys/{key_id}/revoke",
       "tab": "security",
-      "source": "app/web/admin/system.py:3401",
+      "source": "app/web/admin/system.py:3402",
       "handler": "api_key_revoke",
       "permissions": [
         "system:settings:write"
@@ -28475,7 +28475,7 @@
       "method": "POST",
       "path": "/admin/system/api-keys/{key_id}/rotate",
       "tab": "security",
-      "source": "app/web/admin/system.py:3436",
+      "source": "app/web/admin/system.py:3437",
       "handler": "api_key_rotate",
       "permissions": [
         "system:settings:write"
@@ -28491,7 +28491,7 @@
       "method": "GET",
       "path": "/admin/system/permissions",
       "tab": "security",
-      "source": "app/web/admin/system.py:3045",
+      "source": "app/web/admin/system.py:3046",
       "handler": "permissions_list",
       "permissions": [
         "rbac:permissions:read"
@@ -28505,7 +28505,7 @@
       "method": "POST",
       "path": "/admin/system/permissions",
       "tab": "security",
-      "source": "app/web/admin/system.py:3099",
+      "source": "app/web/admin/system.py:3100",
       "handler": "permission_create",
       "permissions": [
         "rbac:permissions:write"
@@ -28521,7 +28521,7 @@
       "method": "GET",
       "path": "/admin/system/permissions/new",
       "tab": "security",
-      "source": "app/web/admin/system.py:3077",
+      "source": "app/web/admin/system.py:3078",
       "handler": "permission_new",
       "permissions": [
         "rbac:permissions:write"
@@ -28535,7 +28535,7 @@
       "method": "POST",
       "path": "/admin/system/permissions/{permission_id}",
       "tab": "security",
-      "source": "app/web/admin/system.py:3190",
+      "source": "app/web/admin/system.py:3191",
       "handler": "permission_update",
       "permissions": [
         "rbac:permissions:write"
@@ -28551,7 +28551,7 @@
       "method": "POST",
       "path": "/admin/system/permissions/{permission_id}/delete",
       "tab": "security",
-      "source": "app/web/admin/system.py:3252",
+      "source": "app/web/admin/system.py:3253",
       "handler": "permission_delete",
       "permissions": [
         "rbac:permissions:delete"
@@ -28563,7 +28563,7 @@
       "method": "GET",
       "path": "/admin/system/permissions/{permission_id}/edit",
       "tab": "security",
-      "source": "app/web/admin/system.py:3157",
+      "source": "app/web/admin/system.py:3158",
       "handler": "permission_edit",
       "permissions": [
         "rbac:permissions:write"
@@ -28577,7 +28577,7 @@
       "method": "GET",
       "path": "/admin/system/roles",
       "tab": "security",
-      "source": "app/web/admin/system.py:2813",
+      "source": "app/web/admin/system.py:2814",
       "handler": "roles_list",
       "permissions": [
         "rbac:roles:read"
@@ -28591,7 +28591,7 @@
       "method": "POST",
       "path": "/admin/system/roles",
       "tab": "security",
-      "source": "app/web/admin/system.py:2868",
+      "source": "app/web/admin/system.py:2869",
       "handler": "role_create",
       "permissions": [
         "rbac:roles:write"
@@ -28608,7 +28608,7 @@
       "method": "GET",
       "path": "/admin/system/roles/new",
       "tab": "security",
-      "source": "app/web/admin/system.py:2846",
+      "source": "app/web/admin/system.py:2847",
       "handler": "role_new",
       "permissions": [
         "rbac:roles:write"
@@ -28622,7 +28622,7 @@
       "method": "POST",
       "path": "/admin/system/roles/{role_id}",
       "tab": "security",
-      "source": "app/web/admin/system.py:2960",
+      "source": "app/web/admin/system.py:2961",
       "handler": "role_update",
       "permissions": [
         "rbac:roles:write"
@@ -28639,7 +28639,7 @@
       "method": "POST",
       "path": "/admin/system/roles/{role_id}/delete",
       "tab": "security",
-      "source": "app/web/admin/system.py:3020",
+      "source": "app/web/admin/system.py:3021",
       "handler": "role_delete",
       "permissions": [
         "rbac:roles:delete"
@@ -28651,7 +28651,7 @@
       "method": "GET",
       "path": "/admin/system/roles/{role_id}/edit",
       "tab": "security",
-      "source": "app/web/admin/system.py:2926",
+      "source": "app/web/admin/system.py:2927",
       "handler": "role_edit",
       "permissions": [
         "rbac:roles:write"
@@ -28665,7 +28665,7 @@
       "method": "GET",
       "path": "/admin/system/secrets",
       "tab": "security",
-      "source": "app/web/admin/system.py:6194",
+      "source": "app/web/admin/system.py:6310",
       "handler": "secrets_management",
       "permissions": [
         "system:secrets:read"
@@ -28679,7 +28679,7 @@
       "method": "POST",
       "path": "/admin/system/secrets/create",
       "tab": "security",
-      "source": "app/web/admin/system.py:6263",
+      "source": "app/web/admin/system.py:6379",
       "handler": "secrets_create",
       "permissions": [
         "system:secrets:write"
@@ -28694,7 +28694,7 @@
       "method": "GET",
       "path": "/admin/system/secrets/new",
       "tab": "security",
-      "source": "app/web/admin/system.py:6251",
+      "source": "app/web/admin/system.py:6367",
       "handler": "secrets_new",
       "permissions": [
         "system:secrets:read"
@@ -28708,7 +28708,7 @@
       "method": "POST",
       "path": "/admin/system/secrets/{path:path}/delete",
       "tab": "security",
-      "source": "app/web/admin/system.py:6286",
+      "source": "app/web/admin/system.py:6402",
       "handler": "secrets_delete",
       "permissions": [
         "system:secrets:write"
@@ -28723,7 +28723,7 @@
       "method": "GET",
       "path": "/admin/system/secrets/{path:path}/edit",
       "tab": "security",
-      "source": "app/web/admin/system.py:6216",
+      "source": "app/web/admin/system.py:6332",
       "handler": "secrets_edit",
       "permissions": [
         "system:secrets:read"
@@ -28737,7 +28737,7 @@
       "method": "POST",
       "path": "/admin/system/secrets/{path:path}/save",
       "tab": "security",
-      "source": "app/web/admin/system.py:6231",
+      "source": "app/web/admin/system.py:6347",
       "handler": "secrets_save",
       "permissions": [
         "system:secrets:write"
@@ -28752,7 +28752,7 @@
       "method": "GET",
       "path": "/admin/system/settings-hub/edit/auth",
       "tab": "security",
-      "source": "app/web/admin/system.py:3858",
+      "source": "app/web/admin/system.py:3859",
       "handler": "settings_overview",
       "permissions": [
         "system:settings:read"
@@ -28764,7 +28764,7 @@
       "method": "POST",
       "path": "/admin/system/settings-hub/edit/auth",
       "tab": "security",
-      "source": "app/web/admin/system.py:3877",
+      "source": "app/web/admin/system.py:3878",
       "handler": "settings_update",
       "permissions": [
         "system:settings:write"
@@ -28782,7 +28782,7 @@
       "method": "GET",
       "path": "/admin/system/users",
       "tab": "security",
-      "source": "app/web/admin/system.py:1418",
+      "source": "app/web/admin/system.py:1419",
       "handler": "users_list",
       "permissions": [
         "rbac:roles:read"
@@ -28796,7 +28796,7 @@
       "method": "POST",
       "path": "/admin/system/users",
       "tab": "security",
-      "source": "app/web/admin/system.py:2742",
+      "source": "app/web/admin/system.py:2743",
       "handler": "user_create",
       "permissions": [
         "rbac:assign"
@@ -28812,7 +28812,7 @@
       "method": "POST",
       "path": "/admin/system/users/bulk/delete",
       "tab": "security",
-      "source": "app/web/admin/system.py:1986",
+      "source": "app/web/admin/system.py:1987",
       "handler": "users_bulk_delete",
       "permissions": [
         "rbac:assign"
@@ -28827,7 +28827,7 @@
       "method": "POST",
       "path": "/admin/system/users/bulk/invite",
       "tab": "security",
-      "source": "app/web/admin/system.py:2021",
+      "source": "app/web/admin/system.py:2022",
       "handler": "users_bulk_invite",
       "permissions": [
         "rbac:assign"
@@ -28842,7 +28842,7 @@
       "method": "POST",
       "path": "/admin/system/users/bulk/user-type",
       "tab": "security",
-      "source": "app/web/admin/system.py:1961",
+      "source": "app/web/admin/system.py:1962",
       "handler": "users_bulk_set_user_type",
       "permissions": [
         "rbac:assign"
@@ -28856,7 +28856,7 @@
       "method": "GET",
       "path": "/admin/system/users/filter",
       "tab": "security",
-      "source": "app/web/admin/system.py:1523",
+      "source": "app/web/admin/system.py:1524",
       "handler": "users_filter",
       "permissions": [
         "rbac:roles:read"
@@ -28870,7 +28870,7 @@
       "method": "GET",
       "path": "/admin/system/users/profile",
       "tab": "security",
-      "source": "app/web/admin/system.py:1558",
+      "source": "app/web/admin/system.py:1559",
       "handler": "user_profile",
       "permissions": [],
       "calls": [
@@ -28882,7 +28882,7 @@
       "method": "POST",
       "path": "/admin/system/users/profile",
       "tab": "security",
-      "source": "app/web/admin/system.py:1636",
+      "source": "app/web/admin/system.py:1637",
       "handler": "user_profile_update",
       "permissions": [],
       "calls": [
@@ -28896,7 +28896,7 @@
       "method": "POST",
       "path": "/admin/system/users/profile/device-login",
       "tab": "security",
-      "source": "app/web/admin/system.py:1721",
+      "source": "app/web/admin/system.py:1722",
       "handler": "user_profile_device_login",
       "permissions": [],
       "calls": [
@@ -28912,7 +28912,7 @@
       "method": "POST",
       "path": "/admin/system/users/profile/mfa/confirm",
       "tab": "security",
-      "source": "app/web/admin/system.py:1894",
+      "source": "app/web/admin/system.py:1895",
       "handler": "user_profile_mfa_confirm",
       "permissions": [],
       "calls": [
@@ -28925,7 +28925,7 @@
       "method": "GET",
       "path": "/admin/system/users/profile/mfa/setup",
       "tab": "security",
-      "source": "app/web/admin/system.py:1859",
+      "source": "app/web/admin/system.py:1860",
       "handler": "user_profile_mfa_setup",
       "permissions": [],
       "calls": [
@@ -28937,7 +28937,7 @@
       "method": "POST",
       "path": "/admin/system/users/profile/mfa/setup",
       "tab": "security",
-      "source": "app/web/admin/system.py:1889",
+      "source": "app/web/admin/system.py:1890",
       "handler": "user_profile_mfa_setup_post",
       "permissions": [],
       "calls": [],
@@ -28947,7 +28947,7 @@
       "method": "POST",
       "path": "/admin/system/users/profile/sessions/sign-out-others",
       "tab": "security",
-      "source": "app/web/admin/system.py:1816",
+      "source": "app/web/admin/system.py:1817",
       "handler": "user_profile_sign_out_other_sessions",
       "permissions": [],
       "calls": [
@@ -28959,7 +28959,7 @@
       "method": "GET",
       "path": "/admin/system/users/search",
       "tab": "security",
-      "source": "app/web/admin/system.py:1484",
+      "source": "app/web/admin/system.py:1485",
       "handler": "users_search",
       "permissions": [
         "rbac:roles:read"
@@ -28973,7 +28973,7 @@
       "method": "DELETE",
       "path": "/admin/system/users/{user_id}",
       "tab": "security",
-      "source": "app/web/admin/system.py:2787",
+      "source": "app/web/admin/system.py:2788",
       "handler": "user_delete",
       "permissions": [
         "rbac:assign"
@@ -28989,7 +28989,7 @@
       "method": "GET",
       "path": "/admin/system/users/{user_id}",
       "tab": "security",
-      "source": "app/web/admin/system.py:2061",
+      "source": "app/web/admin/system.py:2062",
       "handler": "user_detail",
       "permissions": [
         "rbac:roles:read"
@@ -29004,7 +29004,7 @@
       "method": "POST",
       "path": "/admin/system/users/{user_id}/activate",
       "tab": "security",
-      "source": "app/web/admin/system.py:2431",
+      "source": "app/web/admin/system.py:2432",
       "handler": "user_activate",
       "permissions": [
         "rbac:assign"
@@ -29020,7 +29020,7 @@
       "method": "POST",
       "path": "/admin/system/users/{user_id}/assignments",
       "tab": "security",
-      "source": "app/web/admin/system.py:2365",
+      "source": "app/web/admin/system.py:2366",
       "handler": "user_assignments_submit",
       "permissions": [
         "rbac:assign"
@@ -29037,7 +29037,7 @@
       "method": "POST",
       "path": "/admin/system/users/{user_id}/deactivate",
       "tab": "security",
-      "source": "app/web/admin/system.py:2458",
+      "source": "app/web/admin/system.py:2459",
       "handler": "user_deactivate",
       "permissions": [
         "rbac:assign"
@@ -29053,7 +29053,7 @@
       "method": "GET",
       "path": "/admin/system/users/{user_id}/device-login",
       "tab": "security",
-      "source": "app/web/admin/system.py:2732",
+      "source": "app/web/admin/system.py:2733",
       "handler": "user_device_login_get_fallback",
       "permissions": [
         "router:admin"
@@ -29065,7 +29065,7 @@
       "method": "POST",
       "path": "/admin/system/users/{user_id}/device-login",
       "tab": "security",
-      "source": "app/web/admin/system.py:2623",
+      "source": "app/web/admin/system.py:2624",
       "handler": "user_device_login_set",
       "permissions": [
         "router:admin"
@@ -29080,7 +29080,7 @@
       "method": "POST",
       "path": "/admin/system/users/{user_id}/disable-mfa",
       "tab": "security",
-      "source": "app/web/admin/system.py:2485",
+      "source": "app/web/admin/system.py:2486",
       "handler": "user_disable_mfa",
       "permissions": [
         "rbac:assign"
@@ -29096,7 +29096,7 @@
       "method": "GET",
       "path": "/admin/system/users/{user_id}/edit",
       "tab": "security",
-      "source": "app/web/admin/system.py:2216",
+      "source": "app/web/admin/system.py:2217",
       "handler": "user_edit",
       "permissions": [
         "rbac:assign"
@@ -29111,7 +29111,7 @@
       "method": "POST",
       "path": "/admin/system/users/{user_id}/edit",
       "tab": "security",
-      "source": "app/web/admin/system.py:2277",
+      "source": "app/web/admin/system.py:2278",
       "handler": "user_edit_submit",
       "permissions": [
         "rbac:assign"
@@ -29129,7 +29129,7 @@
       "method": "GET",
       "path": "/admin/system/users/{user_id}/invite",
       "tab": "security",
-      "source": "app/web/admin/system.py:2613",
+      "source": "app/web/admin/system.py:2614",
       "handler": "user_send_invite_get_fallback",
       "permissions": [
         "rbac:assign"
@@ -29141,7 +29141,7 @@
       "method": "POST",
       "path": "/admin/system/users/{user_id}/invite",
       "tab": "security",
-      "source": "app/web/admin/system.py:2567",
+      "source": "app/web/admin/system.py:2568",
       "handler": "user_send_invite",
       "permissions": [
         "rbac:assign"
@@ -29157,7 +29157,7 @@
       "method": "POST",
       "path": "/admin/system/users/{user_id}/nextcloud-talk",
       "tab": "security",
-      "source": "app/web/admin/system.py:2101",
+      "source": "app/web/admin/system.py:2102",
       "handler": "user_nextcloud_talk_mapping_save",
       "permissions": [
         "rbac:assign"
@@ -29173,7 +29173,7 @@
       "method": "POST",
       "path": "/admin/system/users/{user_id}/nextcloud-talk/{installation_id}/disable",
       "tab": "security",
-      "source": "app/web/admin/system.py:2144",
+      "source": "app/web/admin/system.py:2145",
       "handler": "user_nextcloud_talk_mapping_disable",
       "permissions": [
         "rbac:assign"
@@ -29188,7 +29188,7 @@
       "method": "POST",
       "path": "/admin/system/users/{user_id}/nextcloud-talk/{installation_id}/test",
       "tab": "security",
-      "source": "app/web/admin/system.py:2180",
+      "source": "app/web/admin/system.py:2181",
       "handler": "user_nextcloud_talk_mapping_test",
       "permissions": [
         "rbac:assign"
@@ -29203,7 +29203,7 @@
       "method": "GET",
       "path": "/admin/system/users/{user_id}/reset-password",
       "tab": "security",
-      "source": "app/web/admin/system.py:2557",
+      "source": "app/web/admin/system.py:2558",
       "handler": "user_reset_password_get_fallback",
       "permissions": [
         "rbac:assign"
@@ -29215,7 +29215,7 @@
       "method": "POST",
       "path": "/admin/system/users/{user_id}/reset-password",
       "tab": "security",
-      "source": "app/web/admin/system.py:2515",
+      "source": "app/web/admin/system.py:2516",
       "handler": "user_reset_password",
       "permissions": [
         "rbac:assign"
@@ -29310,7 +29310,7 @@
       "method": "GET",
       "path": "/admin/system",
       "tab": "system",
-      "source": "app/web/admin/system.py:375",
+      "source": "app/web/admin/system.py:376",
       "handler": "system_overview",
       "permissions": [
         "system:settings:read"
@@ -29324,7 +29324,7 @@
       "method": "GET",
       "path": "/admin/system/about",
       "tab": "system",
-      "source": "app/web/admin/system.py:5270",
+      "source": "app/web/admin/system.py:5386",
       "handler": "system_about_page",
       "permissions": [],
       "calls": [
@@ -29336,7 +29336,7 @@
       "method": "GET",
       "path": "/admin/system/branding",
       "tab": "system",
-      "source": "app/web/admin/system.py:5196",
+      "source": "app/web/admin/system.py:5312",
       "handler": "branding_page",
       "permissions": [
         "system:settings:read"
@@ -29350,7 +29350,7 @@
       "method": "POST",
       "path": "/admin/system/branding",
       "tab": "system",
-      "source": "app/web/admin/system.py:3980",
+      "source": "app/web/admin/system.py:3981",
       "handler": "settings_branding_update",
       "permissions": [
         "system:settings:write"
@@ -29370,7 +29370,7 @@
       "method": "GET",
       "path": "/admin/system/company-info",
       "tab": "system",
-      "source": "app/web/admin/system.py:5249",
+      "source": "app/web/admin/system.py:5365",
       "handler": "company_info_page",
       "permissions": [],
       "calls": [
@@ -29382,7 +29382,7 @@
       "method": "POST",
       "path": "/admin/system/company-info",
       "tab": "system",
-      "source": "app/web/admin/system.py:5262",
+      "source": "app/web/admin/system.py:5378",
       "handler": "company_info_save",
       "permissions": [
         "system:settings:write"
@@ -29396,7 +29396,7 @@
       "method": "GET",
       "path": "/admin/system/config/outage-notifications",
       "tab": "system",
-      "source": "app/web/admin/system.py:5551",
+      "source": "app/web/admin/system.py:5667",
       "handler": "config_outage_auto_notify_page",
       "permissions": [],
       "calls": [
@@ -29408,7 +29408,7 @@
       "method": "POST",
       "path": "/admin/system/config/outage-notifications",
       "tab": "system",
-      "source": "app/web/admin/system.py:5568",
+      "source": "app/web/admin/system.py:5684",
       "handler": "config_outage_auto_notify_save",
       "permissions": [
         "system:settings:write"
@@ -29423,7 +29423,7 @@
       "method": "GET",
       "path": "/admin/system/config/portal",
       "tab": "system",
-      "source": "app/web/admin/system.py:5344",
+      "source": "app/web/admin/system.py:5460",
       "handler": "config_portal_page",
       "permissions": [],
       "calls": [
@@ -29435,7 +29435,7 @@
       "method": "POST",
       "path": "/admin/system/config/portal",
       "tab": "system",
-      "source": "app/web/admin/system.py:5363",
+      "source": "app/web/admin/system.py:5479",
       "handler": "config_portal_save",
       "permissions": [
         "system:settings:write"
@@ -29449,7 +29449,7 @@
       "method": "GET",
       "path": "/admin/system/config/preferences",
       "tab": "system",
-      "source": "app/web/admin/system.py:5295",
+      "source": "app/web/admin/system.py:5411",
       "handler": "config_preferences_page",
       "permissions": [],
       "calls": [
@@ -29461,7 +29461,7 @@
       "method": "POST",
       "path": "/admin/system/config/preferences",
       "tab": "system",
-      "source": "app/web/admin/system.py:5308",
+      "source": "app/web/admin/system.py:5424",
       "handler": "config_preferences_save",
       "permissions": [
         "system:settings:write"
@@ -29475,7 +29475,7 @@
       "method": "GET",
       "path": "/admin/system/control-relationships",
       "tab": "system",
-      "source": "app/web/admin/system.py:5211",
+      "source": "app/web/admin/system.py:5327",
       "handler": "control_relationship_diagnostics",
       "permissions": [
         "system:settings:read"
@@ -29527,7 +29527,7 @@
       "method": "GET",
       "path": "/admin/system/export",
       "tab": "system",
-      "source": "app/web/admin/system.py:957",
+      "source": "app/web/admin/system.py:958",
       "handler": "system_export_tool",
       "permissions": [
         "system:settings:read"
@@ -29547,7 +29547,7 @@
       "method": "POST",
       "path": "/admin/system/export/download",
       "tab": "system",
-      "source": "app/web/admin/system.py:1050",
+      "source": "app/web/admin/system.py:1051",
       "handler": "system_export_download",
       "permissions": [
         "system:settings:read"
@@ -29564,7 +29564,7 @@
       "method": "GET",
       "path": "/admin/system/export/jobs/{job_id}/download",
       "tab": "system",
-      "source": "app/web/admin/system.py:1169",
+      "source": "app/web/admin/system.py:1170",
       "handler": "system_export_job_download",
       "permissions": [
         "system:settings:read"
@@ -29579,7 +29579,7 @@
       "method": "POST",
       "path": "/admin/system/export/schedules",
       "tab": "system",
-      "source": "app/web/admin/system.py:1278",
+      "source": "app/web/admin/system.py:1279",
       "handler": "system_export_create_schedule",
       "permissions": [
         "system:settings:write"
@@ -29593,7 +29593,7 @@
       "method": "POST",
       "path": "/admin/system/export/schedules/{schedule_id}/delete",
       "tab": "system",
-      "source": "app/web/admin/system.py:1362",
+      "source": "app/web/admin/system.py:1363",
       "handler": "system_export_delete_schedule",
       "permissions": [
         "system:settings:write"
@@ -29607,7 +29607,7 @@
       "method": "POST",
       "path": "/admin/system/export/schedules/{schedule_id}/toggle",
       "tab": "system",
-      "source": "app/web/admin/system.py:1331",
+      "source": "app/web/admin/system.py:1332",
       "handler": "system_export_toggle_schedule",
       "permissions": [
         "system:settings:write"
@@ -29621,7 +29621,7 @@
       "method": "GET",
       "path": "/admin/system/health",
       "tab": "system",
-      "source": "app/web/admin/system.py:355",
+      "source": "app/web/admin/system.py:356",
       "handler": "system_health_page",
       "permissions": [],
       "calls": [
@@ -29633,7 +29633,7 @@
       "method": "GET",
       "path": "/admin/system/import",
       "tab": "system",
-      "source": "app/web/admin/system.py:506",
+      "source": "app/web/admin/system.py:507",
       "handler": "system_import_wizard",
       "permissions": [
         "system:settings:read"
@@ -29648,7 +29648,7 @@
       "method": "POST",
       "path": "/admin/system/import",
       "tab": "system",
-      "source": "app/web/admin/system.py:598",
+      "source": "app/web/admin/system.py:599",
       "handler": "system_import_wizard_submit",
       "permissions": [
         "system:settings:write"
@@ -29670,7 +29670,7 @@
       "method": "GET",
       "path": "/admin/system/import-runs",
       "tab": "system",
-      "source": "app/web/admin/system.py:810",
+      "source": "app/web/admin/system.py:811",
       "handler": "system_import_runs",
       "permissions": [
         "system:settings:read"
@@ -29684,7 +29684,7 @@
       "method": "GET",
       "path": "/admin/system/import-runs/{run_id}",
       "tab": "system",
-      "source": "app/web/admin/system.py:832",
+      "source": "app/web/admin/system.py:833",
       "handler": "system_import_run_detail",
       "permissions": [
         "system:settings:read"
@@ -29698,7 +29698,7 @@
       "method": "POST",
       "path": "/admin/system/import-runs/{run_id}/apply",
       "tab": "system",
-      "source": "app/web/admin/system.py:863",
+      "source": "app/web/admin/system.py:864",
       "handler": "system_import_run_apply",
       "permissions": [
         "system:settings:write"
@@ -29712,7 +29712,7 @@
       "method": "POST",
       "path": "/admin/system/import-runs/{run_id}/payment-reversal-confirm",
       "tab": "system",
-      "source": "app/web/admin/system.py:918",
+      "source": "app/web/admin/system.py:919",
       "handler": "system_import_payment_reversal_confirm",
       "permissions": [
         "system:settings:write"
@@ -29724,7 +29724,7 @@
       "method": "POST",
       "path": "/admin/system/import-runs/{run_id}/payment-reversal-preview",
       "tab": "system",
-      "source": "app/web/admin/system.py:883",
+      "source": "app/web/admin/system.py:884",
       "handler": "system_import_payment_reversal_preview",
       "permissions": [
         "system:settings:write"
@@ -29736,7 +29736,7 @@
       "method": "GET",
       "path": "/admin/system/import/jobs/{job_id}/status",
       "tab": "system",
-      "source": "app/web/admin/system.py:790",
+      "source": "app/web/admin/system.py:791",
       "handler": "system_import_job_status",
       "permissions": [
         "system:settings:read"
@@ -29750,7 +29750,7 @@
       "method": "POST",
       "path": "/admin/system/import/mapping-preview",
       "tab": "system",
-      "source": "app/web/admin/system.py:560",
+      "source": "app/web/admin/system.py:561",
       "handler": "system_import_mapping_preview",
       "permissions": [
         "system:settings:write"
@@ -29765,7 +29765,7 @@
       "method": "GET",
       "path": "/admin/system/import/template.csv",
       "tab": "system",
-      "source": "app/web/admin/system.py:541",
+      "source": "app/web/admin/system.py:542",
       "handler": "system_import_template_csv",
       "permissions": [
         "system:settings:read"
@@ -29779,7 +29779,7 @@
       "method": "POST",
       "path": "/admin/system/import/{import_id}/rollback",
       "tab": "system",
-      "source": "app/web/admin/system.py:1390",
+      "source": "app/web/admin/system.py:1391",
       "handler": "system_import_wizard_rollback",
       "permissions": [
         "system:settings:write"
@@ -29793,7 +29793,7 @@
       "method": "GET",
       "path": "/admin/system/infrastructure",
       "tab": "system",
-      "source": "app/web/admin/system.py:398",
+      "source": "app/web/admin/system.py:399",
       "handler": "system_infrastructure_partial",
       "permissions": [
         "system:settings:read"
@@ -29807,7 +29807,7 @@
       "method": "GET",
       "path": "/admin/system/modules",
       "tab": "system",
-      "source": "app/web/admin/system.py:411",
+      "source": "app/web/admin/system.py:412",
       "handler": "modules_manager_page",
       "permissions": [
         "system:settings:read"
@@ -29821,7 +29821,7 @@
       "method": "POST",
       "path": "/admin/system/modules",
       "tab": "system",
-      "source": "app/web/admin/system.py:433",
+      "source": "app/web/admin/system.py:434",
       "handler": "modules_manager_save",
       "permissions": [
         "system:settings:write"
@@ -29839,7 +29839,7 @@
       "method": "GET",
       "path": "/admin/system/settings-hub",
       "tab": "system",
-      "source": "app/web/admin/system.py:4787",
+      "source": "app/web/admin/system.py:4788",
       "handler": "settings_hub",
       "permissions": [],
       "calls": [
@@ -29851,7 +29851,7 @@
       "method": "GET",
       "path": "/admin/system/settings-hub/edit/branding-values",
       "tab": "system",
-      "source": "app/web/admin/system.py:3858",
+      "source": "app/web/admin/system.py:3859",
       "handler": "settings_overview",
       "permissions": [
         "system:settings:read"
@@ -29863,7 +29863,7 @@
       "method": "GET",
       "path": "/admin/system/settings-hub/edit/portal",
       "tab": "system",
-      "source": "app/web/admin/system.py:3858",
+      "source": "app/web/admin/system.py:3859",
       "handler": "settings_overview",
       "permissions": [
         "system:settings:read"
@@ -29875,7 +29875,7 @@
       "method": "POST",
       "path": "/admin/system/settings-hub/edit/portal",
       "tab": "system",
-      "source": "app/web/admin/system.py:3877",
+      "source": "app/web/admin/system.py:3878",
       "handler": "settings_update",
       "permissions": [
         "system:settings:write"
@@ -29893,7 +29893,7 @@
       "method": "GET",
       "path": "/admin/system/settings-hub/edit/preferences",
       "tab": "system",
-      "source": "app/web/admin/system.py:3858",
+      "source": "app/web/admin/system.py:3859",
       "handler": "settings_overview",
       "permissions": [
         "system:settings:read"
@@ -29905,7 +29905,7 @@
       "method": "POST",
       "path": "/admin/system/settings-hub/edit/preferences",
       "tab": "system",
-      "source": "app/web/admin/system.py:3877",
+      "source": "app/web/admin/system.py:3878",
       "handler": "settings_update",
       "permissions": [
         "system:settings:write"
@@ -35034,6 +35034,12 @@
     },
     {
       "source": "templates/admin/system/ticket_settings.html",
+      "name": "routing_site_coordinator_person_ids",
+      "tab": "operations",
+      "disposition": "Dynamic fields expand from registered specs; static fields stay with their specialised action"
+    },
+    {
+      "source": "templates/admin/system/ticket_settings.html",
       "name": "routing_technician_person_ids",
       "tab": "operations",
       "disposition": "Dynamic fields expand from registered specs; static fields stay with their specialised action"
@@ -35041,6 +35047,12 @@
     {
       "source": "templates/admin/system/ticket_settings.html",
       "name": "routing_ticket_manager_person_ids",
+      "tab": "operations",
+      "disposition": "Dynamic fields expand from registered specs; static fields stay with their specialised action"
+    },
+    {
+      "source": "templates/admin/system/ticket_settings.html",
+      "name": "settings_section",
       "tab": "operations",
       "disposition": "Dynamic fields expand from registered specs; static fields stay with their specialised action"
     },
@@ -35108,6 +35120,54 @@
       "source": "templates/admin/system/ticket_settings.html",
       "name": "ticket_types",
       "tab": "operations",
+      "disposition": "Dynamic fields expand from registered specs; static fields stay with their specialised action"
+    },
+    {
+      "source": "templates/admin/system/users/_table_content.html",
+      "name": "filters",
+      "tab": "system",
+      "disposition": "Dynamic fields expand from registered specs; static fields stay with their specialised action"
+    },
+    {
+      "source": "templates/admin/system/users/_table_content.html",
+      "name": "limit",
+      "tab": "system",
+      "disposition": "Dynamic fields expand from registered specs; static fields stay with their specialised action"
+    },
+    {
+      "source": "templates/admin/system/users/_table_content.html",
+      "name": "offset",
+      "tab": "system",
+      "disposition": "Dynamic fields expand from registered specs; static fields stay with their specialised action"
+    },
+    {
+      "source": "templates/admin/system/users/_table_content.html",
+      "name": "order_by",
+      "tab": "system",
+      "disposition": "Dynamic fields expand from registered specs; static fields stay with their specialised action"
+    },
+    {
+      "source": "templates/admin/system/users/_table_content.html",
+      "name": "order_dir",
+      "tab": "system",
+      "disposition": "Dynamic fields expand from registered specs; static fields stay with their specialised action"
+    },
+    {
+      "source": "templates/admin/system/users/_table_content.html",
+      "name": "role",
+      "tab": "system",
+      "disposition": "Dynamic fields expand from registered specs; static fields stay with their specialised action"
+    },
+    {
+      "source": "templates/admin/system/users/_table_content.html",
+      "name": "search",
+      "tab": "system",
+      "disposition": "Dynamic fields expand from registered specs; static fields stay with their specialised action"
+    },
+    {
+      "source": "templates/admin/system/users/_table_content.html",
+      "name": "status",
+      "tab": "system",
       "disposition": "Dynamic fields expand from registered specs; static fields stay with their specialised action"
     },
     {
@@ -35256,6 +35316,12 @@
     },
     {
       "source": "templates/admin/system/users/index.html",
+      "name": "role",
+      "tab": "system",
+      "disposition": "Dynamic fields expand from registered specs; static fields stay with their specialised action"
+    },
+    {
+      "source": "templates/admin/system/users/index.html",
       "name": "role_id",
       "tab": "system",
       "disposition": "Dynamic fields expand from registered specs; static fields stay with their specialised action"
@@ -35269,6 +35335,12 @@
     {
       "source": "templates/admin/system/users/index.html",
       "name": "send_invite",
+      "tab": "system",
+      "disposition": "Dynamic fields expand from registered specs; static fields stay with their specialised action"
+    },
+    {
+      "source": "templates/admin/system/users/index.html",
+      "name": "status",
       "tab": "system",
       "disposition": "Dynamic fields expand from registered specs; static fields stay with their specialised action"
     },
@@ -35368,13 +35440,13 @@
     "app/web/admin/custom_fields.py": "dfa41084e38514ccb5ffcb1b067301de6127740980b1abcc8e4927aa3472122e",
     "app/web/admin/customer_connection_types.py": "f551b8b7cb3d8fe040ebd67c02b293e9574e7a9abb575ed0508d40cb302cab38",
     "app/web/admin/customer_regions.py": "095747de4fa2bc91a8fae64b33561d923020f3fc40e515070db79d760b904dd5",
-    "app/web/admin/inbox.py": "12d8b01ed37e3af4526e017e7be81718f72974f13f42e02aa54d8cab92ffbe24",
+    "app/web/admin/inbox.py": "336813a9d7e894c6f4ab1f0f56abb8b8e97ccd42e9bcb6382b34b7344124c80b",
     "app/web/admin/integrations.py": "25d48216689cc3b1d953d00dcf3659c9998f47505a77eb8eeeda7a099974e4b1",
     "app/web/admin/notifications.py": "4cef64da29d92b150e6600a95a5fe4939589ee61a3aa6c69ed5874119ddf91bd",
     "app/web/admin/payment_configuration_actions.py": "4f29a8e62f6d5bd5060476793af4a54e1132450e429064877ff1c4bcd74e916d",
     "app/web/admin/resellers.py": "753137e19ce85315bc822edaa49e642fa6907284b9d005b33835426443b3e114",
     "app/web/admin/service_teams.py": "59a1edbc51999206a97e974af33da8a65915601feef84d3b627519591e25fb05",
-    "app/web/admin/system.py": "fec966565c04c3c8ecc3a7771f6ce1344b4c04c05476046aa0734d2d8052679f",
+    "app/web/admin/system.py": "331db7fdaa30f69ca19de8eb5e4451c039d02e728be1b14c88808d341314274d",
     "app/web/admin/system_whats_new.py": "85ac32e4803e50f712512c9579a48a0740049fde397ab9740271f45dfee368e5"
   },
   "retired_routes": [
