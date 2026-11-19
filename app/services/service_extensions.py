@@ -2460,9 +2460,13 @@ def record_apply_rejection(
         if command.access_failure_category is not None:
             audit_details["access_failure_category"] = command.access_failure_category
         if command.expected_billing_at is not None:
-            audit_details["expected_billing_at"] = command.expected_billing_at.isoformat()
+            audit_details["expected_billing_at"] = (
+                command.expected_billing_at.isoformat()
+            )
         if command.observed_billing_at is not None:
-            audit_details["observed_billing_at"] = command.observed_billing_at.isoformat()
+            audit_details["observed_billing_at"] = (
+                command.observed_billing_at.isoformat()
+            )
         if command.creator_id is not None:
             audit_details["creator_id"] = command.creator_id
         audit = stage_audit_event(
