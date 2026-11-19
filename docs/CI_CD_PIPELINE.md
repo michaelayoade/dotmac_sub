@@ -139,9 +139,7 @@ detached `HEAD`; it never moves a local branch pointer. Local branch history is
 therefore preserved but cannot become deployment authority or block an
 otherwise valid immutable candidate.
 
-Each unit-test shard has a 30-minute job timeout; the architecture job has a
-45-minute timeout. The per-test watchdog catches a blocked unit test first;
-the job timeout remains the outer guard for collection, environment, plugin,
-and architecture-suite failures that occur outside an individual unit test.
-The architecture allowance covers runner variance after a 30-minute timeout
-cancelled a PR run whose unit and PostgreSQL shards passed.
+Each unit-test shard and the architecture job also has a 30-minute job timeout.
+The per-test watchdog catches a blocked unit test first; the job timeout remains
+the outer guard for collection, environment, plugin, and architecture-suite
+failures that occur outside an individual unit test.
