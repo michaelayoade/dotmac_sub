@@ -139,4 +139,7 @@ def test_statement_fetcher_refuses_everything_but_data_uris() -> None:
         )
     except OSError:  # WeasyPrint native libraries (pango) not installed
         pytest.skip("WeasyPrint native libraries unavailable")
-    assert result["string"] == PNG or result.get("file_obj") is not None
+    data = result.get("string")
+    if data is None:
+        data = result["file_obj"].read()
+    assert data == PNG
