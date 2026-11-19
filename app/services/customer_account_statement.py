@@ -356,6 +356,7 @@ def render_statement_html(document: CustomerStatementDocument) -> str:
         .replace('"', '\\"')
         .replace("\r", " ")
         .replace("\n", " ")
+        .replace("<", "\\3c ")
     )
     contact_parts = tuple(
         value
@@ -559,10 +560,21 @@ def render_statement_html(document: CustomerStatementDocument) -> str:
 </html>"""
 
 
+def _data_uri_only_fetcher(url: str, *args: object, **kwargs: object) -> dict:
+    """Refuse every fetch except inline data: URIs (no server-side requests)."""
+    if str(url).lower().startswith("data:"):
+        from weasyprint import default_url_fetcher
+
+        return default_url_fetcher(url, *args, **kwargs)
+    raise ValueError("External resources are not permitted in statement rendering")
+
+
 def render_statement_pdf(document: CustomerStatementDocument) -> bytes:
     from app.services.billing_invoice_pdf import _ensure_weasyprint_pydyf_compat
 
     _ensure_weasyprint_pydyf_compat()
     from weasyprint import HTML
 
-    return HTML(string=render_statement_html(document)).write_pdf()
+    return HTML(
+        string=render_statement_html(document), url_fetcher=_data_uri_only_fetcher
+    ).write_pdf()
