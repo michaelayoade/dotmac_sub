@@ -31,6 +31,19 @@ def test_customer_invoice_pay_button_has_light_and_dark_mode_contrast():
     assert "to-brand-600" not in pay_button
 
 
+def test_customer_statement_button_preserves_dark_mode_hover_contrast():
+    template = Path("templates/customer/billing/index.html").read_text()
+    statement_button = template.split(
+        'href="/portal/billing/statement"',
+        maxsplit=1,
+    )[1].split("</a>", maxsplit=1)[0]
+
+    assert "hover:bg-stone-50" in statement_button
+    assert "dark:bg-stone-800" in statement_button
+    assert "dark:text-white" in statement_button
+    assert "dark:hover:bg-stone-700" in statement_button
+
+
 def test_invoice_detail_shows_authoritative_paid_date_only_when_available():
     template = Path("templates/admin/billing/invoice_detail.html").read_text()
 

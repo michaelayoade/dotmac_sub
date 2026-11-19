@@ -508,7 +508,7 @@ Edit the owning domain shard and regenerate; do not hand-edit these rows.
 | `party.credential_authentication_projection` | credential principal readiness and projection convergence report | `resolver` | legacy credential principal reference ← `party.credential_authentication_projection`<br>reviewed Person Party binding ← `party.registry`<br>declared installed authentication binding ← `party.credential_authentication_projection` | `owner_managed` | `shadowing` | identity and authentication | `docs/PARTY_PRINCIPAL_CONTEXT_BINDING.md`<br>`docs/SOT_RELATIONSHIP_MAP.md`<br>`tests/test_authentication_binding_installation.py`<br>`tests/test_credential_party_binding.py`<br>`tests/test_credential_party_binding_migration.py`<br>`tests/test_identity_lock_order.py`<br>`tests/integration/test_identity_lock_order_concurrency.py`<br>`tests/architecture/test_credential_party_binding_boundary.py`<br>`tests/test_staff_party_credential_adoption.py` |
 | `party.staff_authentication_shadow` | legacy and Party-keyed staff authentication parity | `resolver` | canonical staff identity and credential state ← `auth.staff_provisioning`<br>credential Party authentication projection ← `party.credential_authentication_projection`<br>database authentication session state ← `app_sessions.auth`<br>legacy staff MFA persistence observation ← `party.staff_authentication_shadow` | `read_only` | `shadowing` | identity and authentication | `docs/PARTY_PRINCIPAL_CONTEXT_BINDING.md`<br>`docs/SOT_RELATIONSHIP_MAP.md`<br>`tests/test_staff_authentication_shadow.py`<br>`tests/integration/test_staff_party_identity_constraint.py` |
 | `party.staff_authentication_shadow` | staff Party authentication read-cutover readiness | `policy` | canonical staff identity and credential state ← `auth.staff_provisioning`<br>credential Party authentication projection ← `party.credential_authentication_projection`<br>database authentication session state ← `app_sessions.auth`<br>legacy staff MFA persistence observation ← `party.staff_authentication_shadow` | `read_only` | `shadowing` | identity and authentication | `docs/PARTY_PRINCIPAL_CONTEXT_BINDING.md`<br>`docs/SOT_RELATIONSHIP_MAP.md`<br>`tests/test_staff_authentication_shadow.py`<br>`tests/integration/test_staff_party_identity_constraint.py` |
-| `customer.account_statement` | customer account statement PDF projection | `resolver` | canonical customer account ← `customer.accounts`<br>canonical customer financial events ← `financial.ledger`<br>separate receivable and prepaid summaries ← `customer.financial_position` | `read_only` | `native` | finance operations | `docs/designs/CUSTOMER_ACCOUNT_STATEMENT.md`<br>`docs/SOT_RELATIONSHIP_MAP.md`<br>`tests/test_customer_account_statement.py`<br>`tests/architecture/test_customer_statement_boundary.py` |
+| `customer.account_statement` | customer account statement PDF projection | `resolver` | canonical customer account ← `customer.accounts`<br>canonical customer-facing brand ← `customer.branding`<br>canonical customer financial events ← `financial.ledger`<br>separate receivable and prepaid summaries ← `customer.financial_position` | `read_only` | `native` | finance operations | `docs/designs/CUSTOMER_ACCOUNT_STATEMENT.md`<br>`docs/SOT_RELATIONSHIP_MAP.md`<br>`tests/test_customer_account_statement.py`<br>`tests/architecture/test_customer_statement_boundary.py` |
 | `customer.account_statement_email` | customer statement PDF email request | `command_writer` | canonical customer account ← `customer.accounts`<br>authenticated customer principal ← `customer.identity_scope`<br>customer email request ← `customer.account_statement_email` | `owner_managed` | `native` | finance operations | `docs/designs/CUSTOMER_ACCOUNT_STATEMENT.md`<br>`docs/SOT_RELATIONSHIP_MAP.md`<br>`tests/test_customer_account_statement.py`<br>`tests/architecture/test_customer_statement_boundary.py` |
 | `customer.field_identity` | current assignment approved field identity disclosure | `resolver` | current native customer assignment ← `operations.work_order_commands`<br>reviewed field identity revision ← `operations.field_identity` | `read_only` | `cutover_ready` | customer operations | `docs/designs/CUSTOMER_FIELD_IDENTITY.md`<br>`tests/test_customer_field_identity.py`<br>`tests/test_vendor_attending_customer_identity.py`<br>`tests/integration/test_vendor_attending_person_acceptance.py` |
 | `customer.legacy_address_display` | legacy inline customer address display | `resolver` | retained inline customer address facts ← `customer.accounts` | `not_applicable` | `complete` | customer operations | `docs/designs/SUBSCRIBER_SERVICE_LOCATION_SOT.md`<br>`tests/test_customer_legacy_address_display.py`<br>`tests/test_web_customer_details.py`<br>`tests/architecture/test_customer_detail_location_read_boundary.py`<br>`tests/integration/test_customer_detail_location_read_pg.py` |
@@ -1768,6 +1768,17 @@ Edit the owning domain shard and regenerate; do not hand-edit these rows.
 | `migration.cohort_export` | cohort export contract version admission | `policy` | accepted Governance cohort definition ← `external:dotmac_governance` | `read_only` | `inventoried` | Dotmac Sub technical owner | `docs/adr/0012-isp-cohort-source-readiness.md`<br>`docs/ISP_COHORT1_SOURCE_OWNERSHIP.md`<br>`tests/test_isp_cohort_export_contract.py`<br>`tests/architecture/test_migration_export_boundary.py`<br>`tests/integration/test_isp_cohort_export_postgres.py` |
 <!-- END GENERATED SOT MANIFEST -->
 
+## Service Extension Apply Failures
+
+`financial.service_extensions` owns the decision to reject an Apply attempt.
+The failed grant transaction rolls back before its separate typed
+`RecordApplyRejectionCommand` records a failed, exact-entity audit through
+`observability.audit_log`. An invalid extension link has no entity and remains
+searchable by request ID. `ui.service_extension_detail_projection` owns the
+operator message and next step, plus the rejected-attempt activity label.
+The route only translates form evidence and owner outcomes into that
+presentation; it never records a successful grant for a rejected attempt.
+
 
 ## Party Identity, Roles, and Relationships
 
@@ -2466,6 +2477,8 @@ Account adjustments and add-on purchase debits use one evidenced contract:
   consequence as distinct preview fields. Confirmation locks the account,
   recomputes the preview, rejects stale or unfunded requests, records
   idempotency and actor audit evidence, and links one decision to one exact debit.
+  Plan-change and renewal debits measure available funding from the reviewed
+  prepaid opening plus later native events, matching their service previews.
   Direct API confirmations enter typed owner commands on transaction-free
   sessions. Plan-change, add-on, and renewal owners use separately named typed
   staging collaborators that flush only inside their wider transaction; no

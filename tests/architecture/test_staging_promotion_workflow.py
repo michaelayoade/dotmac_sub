@@ -734,6 +734,7 @@ def test_production_refuses_a_non_forward_deploy_without_typed_authorization() -
 
     adapter = _read("scripts/deploy_production.sh")
     workflow = _read(".github/workflows/production-deploy.yml")
+    runbook = _read("docs/runbooks/PRODUCTION_DEPLOYMENT.md")
 
     assert "Anti-rollback gate" in adapter
     assert "org.opencontainers.image.revision" in adapter
@@ -768,6 +769,23 @@ def test_production_refuses_a_non_forward_deploy_without_typed_authorization() -
         assert required in workflow
     assert "write-rollback-authorization" in workflow
     assert "write-bootstrap-authorization" in workflow
+    assert (
+        "python3 -m scripts.release_candidate_evidence write-rollback-authorization"
+    ) in workflow
+    assert (
+        "python3 -m scripts.release_candidate_evidence write-bootstrap-authorization"
+    ) in workflow
+    assert not re.search(
+        r"(?m)^\s+python -m scripts\.release_candidate_evidence "
+        r"write-(?:rollback|bootstrap)-authorization",
+        workflow,
+    )
+    assert "command -v python3" in workflow
+    assert "Production deployment runner requires python3 on PATH." in workflow
+    assert workflow.index("command -v python3") < workflow.index(
+        "python3 -m scripts.release_candidate_evidence write-rollback-authorization"
+    )
+    assert "compatibility `python` alias is neither required" in runbook
 
 
 def test_production_deploy_requires_authorization_and_runs_no_test_suite() -> None:

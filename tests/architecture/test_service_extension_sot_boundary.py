@@ -77,9 +77,9 @@ def test_lifecycle_owner_uses_one_boundary_per_public_command() -> None:
         "ReverseServiceExtensionOutcome",
     ):
         assert f"class {command}:" in source
-    # create, apply, cancel, reverse, anchor-projection repair, and duplicate-entry
-    # reconciliation (the last landed on main via #1593).
-    assert source.count("execute_owner_command(") == 6
+    # Create, apply, rejected-apply audit, cancel, reverse, anchor repair,
+    # and duplicate-entry reconciliation.
+    assert source.count("execute_owner_command(") == 7
     for forbidden in (
         "HTTPException",
         ".commit(",
@@ -93,6 +93,8 @@ def test_lifecycle_owner_uses_one_boundary_per_public_command() -> None:
     assert "with_for_update()" in source
     # Two-person control: the approver must differ from the creator.
     assert "self_approval_forbidden" in source
+    assert "billing.service_extension_apply_rejected" in source
+    assert "is_success=False" in source
 
 
 def test_lifecycle_evidence_and_idempotency_are_database_enforced() -> None:
@@ -131,6 +133,7 @@ def test_detail_route_is_a_thin_projection_and_command_adapter() -> None:
         assert forbidden not in detail_section
     assert "CreateServiceExtensionCommand(" in source
     assert "ApplyServiceExtensionCommand(" in source
+    assert "RecordApplyRejectionCommand(" in source
     assert "CancelServiceExtensionCommand(" in source
     assert "ReverseServiceExtensionCommand(" in source
 

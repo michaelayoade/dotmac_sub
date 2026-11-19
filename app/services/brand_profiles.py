@@ -2,9 +2,12 @@
 
 from __future__ import annotations
 
+import base64
+import mimetypes
 import re
 import uuid
 from dataclasses import asdict, dataclass
+from pathlib import Path
 from typing import Any
 
 from sqlalchemy import select
@@ -217,6 +220,68 @@ def resolve_brand(
         values.pop("brand_name") or values["product_name"] or values["legal_name"]
     )
     return ResolvedBrand(**values)
+
+
+MAX_LOGO_BYTES = 2 * 1024 * 1024
+_LOGO_MIME_TYPES = frozenset({"image/png", "image/jpeg", "image/webp"})
+_STATIC_BASE = Path("static")
+
+
+def _logo_data_uri(content: bytes, mime: str) -> str | None:
+    if mime not in _LOGO_MIME_TYPES or len(content) > MAX_LOGO_BYTES:
+        return None
+    return f"data:{mime};base64,{base64.b64encode(content).decode('ascii')}"
+
+
+def resolve_brand_logo_source(
+    db: Session, *, configured_logo: str | None
+) -> str | None:
+    """Resolve the canonical brand logo to a renderer-safe source.
+
+    Stored branding assets and packaged static files are embedded as data URIs
+    so generated documents retain their identity without network access. Remote
+    http(s) URLs, paths outside the static directory, non-image types and
+    files over ``MAX_LOGO_BYTES`` resolve to ``None``.
+    """
+    logo_value = str(configured_logo or "").strip()
+    if not logo_value:
+        return None
+    if logo_value.startswith("data:"):
+        header, _, payload = logo_value.partition(",")
+        mime = header[len("data:") :].split(";", 1)[0].lower()
+        if mime not in _LOGO_MIME_TYPES or len(payload) > MAX_LOGO_BYTES * 4 // 3 + 4:
+            return None
+        return logo_value
+    if logo_value.startswith("/branding/assets/"):
+        from app.models.stored_file import StoredFile
+        from app.services import branding_storage as branding_storage_service
+        from app.services.file_storage import file_uploads
+
+        file_id = branding_storage_service.file_id_from_branding_url(logo_value)
+        if not file_id:
+            return None
+        record = db.get(StoredFile, file_id)
+        if not record or record.is_deleted:
+            return None
+        if record.file_size is not None and record.file_size > MAX_LOGO_BYTES:
+            return None
+        stream = file_uploads.stream_file(record)
+        content = bytearray()
+        for chunk in stream.chunks:
+            content.extend(chunk)
+            if len(content) > MAX_LOGO_BYTES:
+                return None
+        return _logo_data_uri(bytes(content), record.content_type or "image/png")
+    if logo_value.startswith("/static/"):
+        base = _STATIC_BASE.resolve()
+        resolved = (base.parent / logo_value.lstrip("/")).resolve()
+        if not resolved.is_relative_to(base) or not resolved.is_file():
+            return None
+        mime = mimetypes.guess_type(str(resolved))[0] or ""
+        if mime not in _LOGO_MIME_TYPES or resolved.stat().st_size > MAX_LOGO_BYTES:
+            return None
+        return _logo_data_uri(resolved.read_bytes(), mime)
+    return None
 
 
 def upsert_brand_profile(
