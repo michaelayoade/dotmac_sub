@@ -66,8 +66,27 @@
     </div>
     {% endif %}
 
+    {% if duplicate_warning %}
+    <section aria-labelledby="duplicate-ticket-heading" class="rounded-xl border border-amber-300 bg-amber-50 p-4 dark:border-amber-700 dark:bg-amber-900/25">
+        <h2 id="duplicate-ticket-heading" class="font-semibold text-amber-950 dark:text-amber-100">Similar open tickets</h2>
+        <ul class="mt-2 space-y-2">
+            {% for match in duplicate_warning.matches %}
+            <li><a class="font-medium text-emerald-800 underline dark:text-emerald-300" href="/portal/support/{{ match.ticket_id }}">{{ match.reference }} — {{ match.title }}</a></li>
+            {% endfor %}
+        </ul>
+        <p class="mt-2 text-sm text-amber-900 dark:text-amber-200">Open the existing ticket or confirm below to create a separate one. Select your attachments again before submitting.</p>
+    </section>
+    {% endif %}
+
     <form method="POST" action="/portal/support/new" enctype="multipart/form-data" class="space-y-6">
         {% include "components/forms/csrf_input.html" %}
+        <input type="hidden" name="submission_id" value="{{ submission_id }}">
+        {% if duplicate_warning %}
+        <label class="flex items-center gap-2 text-sm font-medium text-stone-800 dark:text-stone-200">
+            <input type="checkbox" name="duplicate_override" value="true" required>
+            Create anyway as a separate ticket
+        </label>
+        {% endif %}
 
         <div class="rounded-2xl border border-stone-200/60 bg-white p-6 shadow-premium dark:border-stone-700/60 dark:bg-stone-800">
             <h2 class="text-lg font-display font-semibold text-stone-900 dark:text-white mb-6">Ticket Details</h2>

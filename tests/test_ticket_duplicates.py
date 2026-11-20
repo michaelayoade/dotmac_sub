@@ -8,6 +8,7 @@ Covers the scoring service (`find_duplicate_ticket_candidates`), the
 from __future__ import annotations
 
 import pytest
+from fastapi import HTTPException
 
 from app.api import support as support_api
 from app.models.subscriber import Subscriber
@@ -165,6 +166,28 @@ def test_same_subscriber_open_ticket_is_flagged(db_session, subscriber):
     assert match.subscriber_label == "Test User"
 
 
+def test_same_subscriber_unrelated_issue_is_not_flagged(db_session, subscriber):
+    _create_ticket(
+        db_session,
+        title="Router keeps rebooting",
+        subscriber_id=subscriber.id,
+        customer_account_id=subscriber.id,
+        ticket_type="Customer Support",
+        region="north",
+    )
+    result = ticket_validation.find_duplicate_ticket_candidates(
+        db_session,
+        ticket_validation.TicketDuplicateInput(
+            title="Question about my invoice",
+            subscriber_id=subscriber.id,
+            customer_account_id=subscriber.id,
+            ticket_type="Customer Support",
+            region="north",
+        ),
+    )
+    assert result.matches == []
+
+
 def test_other_subscribers_ticket_is_not_flagged(db_session, subscriber):
     other = Subscriber(
         first_name="Other",
@@ -191,6 +214,34 @@ def test_other_subscribers_ticket_is_not_flagged(db_session, subscriber):
     )
 
     assert result.matches == []
+
+
+def test_customer_warning_is_scoped_and_contains_safe_fields(db_session, subscriber):
+    own = _create_ticket(
+        db_session,
+        title="Router keeps rebooting",
+        subscriber_id=subscriber.id,
+    )
+    _create_ticket(db_session, title="Router keeps rebooting")
+    result = ticket_validation.find_duplicate_ticket_candidates(
+        db_session,
+        ticket_validation.TicketDuplicateInput(
+            title="Router keeps rebooting",
+            subscriber_id=subscriber.id,
+            customer_visible_only=True,
+        ),
+    )
+
+    assert [match.ticket_id for match in result.matches] == [str(own.id)]
+    safe = result.as_customer_dict()
+    assert safe["matches"] == [
+        {
+            "ticket_id": str(own.id),
+            "reference": own.number,
+            "title": own.title,
+            "status": own.status,
+        }
+    ]
 
 
 def test_closed_tickets_are_ignored(db_session, subscriber):
@@ -343,3 +394,25 @@ def test_web_create_override_records_duplicate_metadata(db_session, subscriber):
         item["ticket_id"] for item in metadata.get("possible_duplicate_tickets") or []
     ]
     assert str(existing.id) in references
+
+
+def test_staff_json_create_requires_override_for_similar_ticket(db_session, subscriber):
+    existing = _create_ticket(
+        db_session,
+        title="Router keeps rebooting",
+        subscriber_id=subscriber.id,
+    )
+    payload = TicketCreate(title=existing.title, subscriber_id=subscriber.id)
+
+    with pytest.raises(HTTPException) as warning:
+        support_api.create_ticket(
+            payload, duplicate_override=False, auth={}, db=db_session
+        )
+    assert warning.value.status_code == 409
+    assert warning.value.detail["matches"][0]["ticket_id"] == str(existing.id)
+
+    created = support_api.create_ticket(
+        payload, duplicate_override=True, auth={}, db=db_session
+    )
+    assert created.id != existing.id
+    assert created.metadata_["duplicate_override"] is True

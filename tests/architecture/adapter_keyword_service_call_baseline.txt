@@ -50,6 +50,6 @@ app/web/admin/surveys.py 1
 app/web/admin/system.py 1
 app/web/auth/routes.py 7
 app/web/customer/auth.py 2
-app/web/customer/routes.py 9
+app/web/customer/routes.py 8
 app/web/reseller/auth.py 1
 app/web/reseller/routes.py 16

@@ -152,10 +152,13 @@ def test_portal_ticket_routing_stays_in_configuration_and_lifecycle_owners() -> 
     assert "func.lower(ServiceTeam.name) == team_name.lower()" in configuration
     assert "class TicketCreationRoutingMode" in lifecycle
     assert "preserve_requested_team" in lifecycle
-    assert "resolve_portal_ticket_team_routing(db)" in portal
-    assert "TicketCreationRoutingMode.preserve_requested_team" in _source(
-        "app/services/crm_portal.py"
+    assert (
+        "team_routing=support_ticket_settings.resolve_portal_ticket_team_routing(db)"
+        in "".join(portal.split())
     )
+    portal_service = _source("app/services/crm_portal.py")
+    assert "team_routing: SupportTeamRoutingResolution" in portal_service
+    assert "TicketCreationRoutingMode.preserve_requested_team" in portal_service
 
 
 def test_operator_status_subset_is_owned_by_ticket_configuration() -> None:

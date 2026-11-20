@@ -86,17 +86,30 @@ def require_agent_or_admin(auth=Depends(require_user_auth)):
 )
 def create_ticket(
     payload: TicketCreate,
+    duplicate_override: bool = Header(default=False, alias="X-Duplicate-Override"),
     auth=Depends(require_user_auth),
     db: Session = Depends(get_db),
 ):
-    db_session_adapter.release_read_transaction(db)
     try:
+        payload = ticket_validation.prepare_human_ticket_creation(
+            db, payload, duplicate_override=duplicate_override
+        )
+        db_session_adapter.release_read_transaction(db)
         return support_service.tickets.create(
             db,
             payload,
             actor_id=_actor_id(auth),
             request=None,
         )
+    except ticket_validation.TicketDuplicateWarningError as exc:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": exc.code,
+                "message": exc.message,
+                **exc.result.as_dict(),
+            },
+        ) from exc
     except support_service.SupportTicketError as exc:
         raise _ticket_http_error(exc) from exc
 

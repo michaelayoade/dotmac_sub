@@ -8,15 +8,18 @@ support.Tickets / TicketComments service so the portal works standalone.
 import uuid
 from unittest.mock import patch
 
+import pytest
+
 from app.models.audit import AuditEvent
 from app.models.event_store import EventStatus, EventStore
 from app.models.sequence import DocumentSequence
 from app.models.service_team import ServiceTeam, ServiceTeamType
 from app.models.support import Ticket, TicketChannel, TicketCommentAuthorType
 from app.schemas.support import TicketCommentCreate, TicketCreate
-from app.services import crm_portal
+from app.services import crm_portal, ticket_validation
 from app.services import support as support_service
 from app.services import support_ticket_settings as support_ticket_settings_service
+from app.services.events.types import EventType
 
 
 def _portal_create(
@@ -28,16 +31,150 @@ def _portal_create(
     *,
     region: str = "north",
 ):
-    return crm_portal.handle_ticket_create(
+    outcome = crm_portal.handle_ticket_create(
         db_session,
-        {},
-        subscriber_id,
-        title,
-        description,
-        priority,
-        region,
-        support_ticket_settings_service.resolve_portal_ticket_team_routing(db_session),
+        command=crm_portal.PortalTicketCreateCommand(
+            subscriber_id=uuid.UUID(subscriber_id),
+            title=title,
+            description=description,
+            priority=priority,
+            region=region,
+            team_routing=support_ticket_settings_service.resolve_portal_ticket_team_routing(
+                db_session
+            ),
+            submission_id=uuid.uuid4(),
+        ),
     )
+    return {
+        "success": outcome.ticket is not None,
+        "ticket": crm_portal._ticket_to_dict(outcome.ticket)
+        if outcome.ticket
+        else None,
+        "error": outcome.error,
+    }
+
+
+def test_customer_submission_replays_once_and_requires_create_anyway(
+    db_session, subscriber
+):
+    submission_id = uuid.uuid4()
+    routing = support_ticket_settings_service.resolve_portal_ticket_team_routing(
+        db_session
+    )
+
+    def command(
+        title: str, *, key: uuid.UUID = submission_id, override: bool = False
+    ) -> crm_portal.PortalTicketCreateCommand:
+        return crm_portal.PortalTicketCreateCommand(
+            subscriber_id=subscriber.id,
+            title=title,
+            description="ONT has no signal",
+            priority="normal",
+            region="north",
+            team_routing=routing,
+            submission_id=key,
+            duplicate_override=override,
+        )
+
+    first = crm_portal.handle_ticket_create(
+        db_session, command=command("Internet is down")
+    )
+    assert first.ticket is not None
+    assert first.replayed is False
+    original_id = first.ticket.id
+    acknowledgements = (
+        db_session.query(EventStore)
+        .filter(EventStore.event_type == EventType.customer_ticket_created.value)
+        .all()
+    )
+    assert len(acknowledgements) == 1
+    assert acknowledgements[0].payload["ticket_id"] == str(original_id)
+    assert acknowledgements[0].payload["ticket_number"] == str(
+        first.ticket.number or original_id
+    )
+
+    replay = crm_portal.handle_ticket_create(
+        db_session, command=command("Internet is down")
+    )
+    assert replay.ticket is not None
+    assert replay.ticket.id == original_id
+    assert replay.replayed is True
+    assert (
+        db_session.query(EventStore)
+        .filter(EventStore.event_type == EventType.customer_ticket_created.value)
+        .count()
+        == 1
+    )
+    assert (
+        db_session.query(Ticket)
+        .filter(Ticket.customer_submission_id == submission_id)
+        .count()
+        == 1
+    )
+    assert (
+        db_session.query(AuditEvent)
+        .filter(
+            AuditEvent.action == "create",
+            AuditEvent.entity_type == "support_ticket",
+            AuditEvent.entity_id == str(original_id),
+        )
+        .count()
+        == 1
+    )
+
+    changed = crm_portal.handle_ticket_create(
+        db_session, command=command("Different issue")
+    )
+    assert changed.ticket is None
+    assert changed.error_code == "ticket_submission_conflict"
+
+    new_key = uuid.uuid4()
+    with pytest.raises(ticket_validation.TicketDuplicateWarningError) as warning:
+        crm_portal.handle_ticket_create(
+            db_session, command=command("Internet is down", key=new_key)
+        )
+    assert warning.value.result.as_customer_dict()["matches"][0]["ticket_id"] == str(
+        original_id
+    )
+
+    separate = crm_portal.handle_ticket_create(
+        db_session,
+        command=command("Internet is down", key=new_key, override=True),
+    )
+    assert separate.ticket is not None
+    assert separate.ticket.id != original_id
+    assert separate.ticket.metadata_["duplicate_override"] is True
+    assert separate.ticket.metadata_["possible_duplicate_tickets"][0][
+        "ticket_id"
+    ] == str(original_id)
+
+
+def test_unrelated_issue_can_create_another_customer_ticket(db_session, subscriber):
+    routing = support_ticket_settings_service.resolve_portal_ticket_team_routing(
+        db_session
+    )
+    common = {
+        "subscriber_id": subscriber.id,
+        "description": "",
+        "priority": "normal",
+        "region": "north",
+        "team_routing": routing,
+    }
+    first = crm_portal.handle_ticket_create(
+        db_session,
+        command=crm_portal.PortalTicketCreateCommand(
+            **common, title="Router keeps restarting", submission_id=uuid.uuid4()
+        ),
+    )
+    second = crm_portal.handle_ticket_create(
+        db_session,
+        command=crm_portal.PortalTicketCreateCommand(
+            **common, title="Question about my invoice", submission_id=uuid.uuid4()
+        ),
+    )
+    assert first.ticket is not None
+    assert second.ticket is not None
+    assert first.ticket.id != second.ticket.id
 
 
 def test_create_uses_local_ticket_module(db_session, subscriber):

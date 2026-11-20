@@ -30,6 +30,7 @@ void main() {
     expect(error.code, 'sales.portal_quote.retired');
     expect(error.requestId, 'req-123');
     expect(error.statusCode, 409);
+    expect(error.details?['reason'], 'retired');
   });
 
   test('continues to parse the legacy detail envelope', () {
@@ -44,5 +45,22 @@ void main() {
 
     expect(error.message, 'Reset your password.');
     expect(error.isPasswordResetRequired, isTrue);
+  });
+
+  test('preserves customer duplicate matches from a conflict response', () {
+    final error = ApiException.fromDio(
+      _error({
+        'detail': {
+          'code': 'ticket_duplicate_warning',
+          'message': 'A similar ticket already exists.',
+          'matches': [
+            {'ticket_id': 'ticket-1', 'title': 'No internet'},
+          ],
+        },
+      }),
+    );
+
+    expect(error.code, 'ticket_duplicate_warning');
+    expect(error.details?['matches'], isA<List>());
   });
 }

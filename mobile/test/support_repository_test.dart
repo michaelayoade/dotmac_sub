@@ -19,6 +19,9 @@ class _FakeAdapter implements HttpClientAdapter {
     Future<void>? cancelFuture,
   ) async {
     calls.add(options);
+    if (requestStream != null) {
+      await requestStream.drain<void>();
+    }
     if (options.path.contains('/attachments/')) {
       return ResponseBody.fromBytes(photoBytes, photoStatus, headers: {
         Headers.contentTypeHeader: [photoType],
@@ -138,7 +141,10 @@ void main() {
         request.contentType,
         startsWith('${Headers.multipartFormDataContentType}; boundary='),
       );
-      expect(_fields(request), {
+      final fields = _fields(request);
+      expect(fields['submission_id'], isNotEmpty);
+      fields.remove('submission_id');
+      expect(fields, {
         'title': 'No internet',
         'description': 'Service has been down since morning',
         'priority': 'high',
@@ -146,6 +152,21 @@ void main() {
       expect((request.data as FormData).files, isEmpty);
     },
   );
+
+  test('ticket retry reuses its submission and passes Create anyway', () async {
+    final adapter = _FakeAdapter();
+    final repository = _repository(adapter);
+    const submissionId = '11111111-1111-4111-8111-111111111111';
+
+    await repository.createTicket(
+      title: 'No internet',
+      submissionId: submissionId,
+      duplicateOverride: true,
+    );
+
+    expect(_fields(adapter.calls.single)['submission_id'], submissionId);
+    expect(_fields(adapter.calls.single)['duplicate_override'], 'true');
+  });
 
   test(
     'ticket reply without attachments still uses multipart form data',

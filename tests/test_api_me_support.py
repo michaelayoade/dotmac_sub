@@ -14,6 +14,9 @@ from fastapi import HTTPException
 
 from app.api import me as me_api
 from app.models.support import TicketChannel, TicketCommentAuthorType
+from app.schemas.support import TicketCreate
+from app.services import support as support_service
+from app.services.file_storage import FileValidationError
 
 
 def _subscriber_principal():
@@ -85,12 +88,15 @@ def test_my_create_ticket_forces_caller_scope(monkeypatch):
     principal = _subscriber_principal()
     captured = {}
 
-    def fake_create(db, payload, actor_id=None, request=None):
-        captured["payload"] = payload
-        captured["actor_id"] = actor_id
-        return payload
+    def fake_create(db, *, command, request=None):
+        captured["payload"] = command.payload
+        captured["actor_id"] = command.actor_id
+        captured["submission_id"] = command.submission_id
+        return types.SimpleNamespace(ticket=command.payload, replayed=False)
 
-    monkeypatch.setattr(me_api.support_service.tickets, "create", fake_create)
+    monkeypatch.setattr(
+        me_api.support_service.tickets, "create_customer_submission", fake_create
+    )
     monkeypatch.setattr(
         me_api.db_session_adapter, "release_read_transaction", lambda db: None
     )
@@ -103,6 +109,8 @@ def test_my_create_ticket_forces_caller_scope(monkeypatch):
         description=None,
         priority="normal",
         ticket_type=None,
+        submission_id=None,
+        duplicate_override=False,
         attachments=[],
         db=None,
         principal=principal,
@@ -111,6 +119,74 @@ def test_my_create_ticket_forces_caller_scope(monkeypatch):
     assert str(captured["payload"].subscriber_id) == principal["subscriber_id"]
     assert captured["payload"].channel == TicketChannel.web
     assert captured["actor_id"] == principal["subscriber_id"]
+    assert isinstance(captured["submission_id"], uuid.UUID)
+
+
+def test_my_create_ticket_maps_invalid_file_to_400(monkeypatch):
+    def reject_upload(db, *, command, request=None):
+        raise FileValidationError("Invalid file contents")
+
+    monkeypatch.setattr(
+        me_api.support_service.tickets, "create_customer_submission", reject_upload
+    )
+    monkeypatch.setattr(
+        me_api.db_session_adapter, "release_read_transaction", lambda db: None
+    )
+    with pytest.raises(HTTPException) as exc:
+        me_api.my_create_ticket(
+            request=None,
+            title="No internet",
+            description=None,
+            priority="normal",
+            ticket_type=None,
+            submission_id=uuid.uuid4(),
+            duplicate_override=False,
+            attachments=[],
+            db=None,
+            principal=_subscriber_principal(),
+        )
+    assert exc.value.status_code == 400
+    assert exc.value.detail["code"] == "invalid_attachment"
+
+
+def test_my_create_ticket_warns_then_accepts_create_anyway(db_session, subscriber):
+    existing = support_service.tickets.create(
+        db_session,
+        TicketCreate(title="No internet", subscriber_id=subscriber.id),
+    )
+    key = uuid.uuid4()
+    kwargs = {
+        "request": None,
+        "title": existing.title,
+        "description": None,
+        "priority": "normal",
+        "ticket_type": None,
+        "submission_id": key,
+        "attachments": [],
+        "db": db_session,
+        "principal": {
+            "principal_type": "subscriber",
+            "subscriber_id": str(subscriber.id),
+        },
+    }
+
+    with pytest.raises(HTTPException) as warning:
+        me_api.my_create_ticket(**kwargs, duplicate_override=False)
+    assert warning.value.status_code == 409
+    assert warning.value.detail["code"] == "ticket_duplicate_warning"
+    assert warning.value.detail["matches"] == [
+        {
+            "ticket_id": str(existing.id),
+            "reference": existing.number,
+            "title": existing.title,
+            "status": existing.status,
+        }
+    ]
+
+    created = me_api.my_create_ticket(**kwargs, duplicate_override=True)
+    assert created.id != existing.id
+    assert created.customer_submission_id == key
+    assert created.metadata_["duplicate_override"] is True
 
 
 def test_my_ticket_comments_hide_internal_notes(monkeypatch):

@@ -2,17 +2,15 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 from unittest.mock import Mock
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 from fastapi import Request
 from sqlalchemy.orm import Session
 
 from app.models.subscriber import Subscriber
 from app.models.support import ticket_status_display_value
-from app.schemas.support import TicketCreate
 from app.services import crm_portal
 from app.services.audit_adapter import AuditActor
-from app.services.support import TicketCreationRoutingMode
 from app.services.support_ticket_settings import (
     PortalTicketTeamRoutingSource,
     SupportTeamRoutingResolution,
@@ -380,37 +378,36 @@ def test_handle_ticket_create_normalizes_unknown_priority(monkeypatch) -> None:
     sid = str(uuid4())
     captured: dict[str, object] = {}
 
-    def _create(
-        db: object,
-        payload: TicketCreate,
-        actor_id: object | None = None,
-        dispatch_event_after_commit: bool = True,
-        routing_mode: TicketCreationRoutingMode | None = None,
-    ) -> Mock:
+    def _create(db: object, *, command, request=None) -> Mock:
+        payload = command.payload
         captured["priority"] = payload.priority
         captured["region"] = payload.region
         captured["description_is_internal"] = payload.description_is_internal
-        captured["routing_mode"] = routing_mode.value if routing_mode else None
-        return _ticket(id="ticket-1", subscriber_id=sid)
+        captured["routing_mode"] = command.routing_mode.value
+        return Mock(ticket=_ticket(id="ticket-1", subscriber_id=sid), replayed=False)
 
-    monkeypatch.setattr("app.services.support.Tickets.create", _create)
+    monkeypatch.setattr(
+        "app.services.support.Tickets.create_customer_submission", _create
+    )
     monkeypatch.setattr(
         crm_portal.db_session_adapter, "release_read_transaction", lambda db: None
     )
 
     result = crm_portal.handle_ticket_create(
         Mock(),
-        {},
-        sid,
-        "Slow internet",
-        "Please investigate.",
-        "not-a-priority",
-        "north",
-        _unassigned_routing(),
+        command=crm_portal.PortalTicketCreateCommand(
+            subscriber_id=UUID(sid),
+            title="Slow internet",
+            description="Please investigate.",
+            priority="not-a-priority",
+            region="north",
+            team_routing=_unassigned_routing(),
+            submission_id=uuid4(),
+        ),
     )
 
-    assert result["success"] is True
-    assert result["ticket"]["id"] == "ticket-1"
+    assert result.ticket is not None
+    assert result.ticket.id == "ticket-1"
     assert captured["priority"] == "normal"
     assert captured["description_is_internal"] is False
     assert captured["region"] == "north"
@@ -420,44 +417,44 @@ def test_handle_ticket_create_normalizes_unknown_priority(monkeypatch) -> None:
 def test_handle_ticket_create_returns_link_error_without_valid_subscriber() -> None:
     result = crm_portal.handle_ticket_create(
         Mock(),
-        {},
-        "not-a-uuid",
-        "Slow internet",
-        "",
-        "normal",
-        "north",
-        _unassigned_routing(),
+        command=crm_portal.PortalTicketCreateCommand(
+            subscriber_id=None,
+            title="Slow internet",
+            description="",
+            priority="normal",
+            region="north",
+            team_routing=_unassigned_routing(),
+            submission_id=uuid4(),
+        ),
     )
 
-    assert result == {
-        "success": False,
-        "error": "Unable to link your account to the support system.",
-    }
+    assert result.error == "Unable to link your account to the support system."
 
 
 def test_handle_ticket_create_returns_error_on_failure(monkeypatch) -> None:
     sid = str(uuid4())
 
-    def _boom(db, payload, actor_id=None, **kwargs):
+    def _boom(db, *, command, request=None):
         raise RuntimeError("db down")
 
-    monkeypatch.setattr("app.services.support.Tickets.create", _boom)
+    monkeypatch.setattr(
+        "app.services.support.Tickets.create_customer_submission", _boom
+    )
 
     result = crm_portal.handle_ticket_create(
         Mock(),
-        {},
-        sid,
-        "Slow internet",
-        "",
-        "normal",
-        "north",
-        _unassigned_routing(),
+        command=crm_portal.PortalTicketCreateCommand(
+            subscriber_id=UUID(sid),
+            title="Slow internet",
+            description="",
+            priority="normal",
+            region="north",
+            team_routing=_unassigned_routing(),
+            submission_id=uuid4(),
+        ),
     )
 
-    assert result == {
-        "success": False,
-        "error": "Unable to create ticket. Please try again later.",
-    }
+    assert result.error == "Unable to create ticket. Please try again later."
 
 
 def test_handle_ticket_comment_rejects_ticket_with_wrong_subscriber(

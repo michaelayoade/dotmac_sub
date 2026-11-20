@@ -552,7 +552,9 @@ DOMAIN = DomainSOT(
                             "AttachmentMeta with private StoredFile UUID, bounded comment "
                             "attachment-reference repair, and bulk command inputs "
                             "with CommandContext plus the closed silent-internal creation "
-                            "consequence mode and ManualInfrastructureTicketCreateCommand"
+                            "consequence mode, ManualInfrastructureTicketCreateCommand, "
+                            "and CustomerTicketSubmissionCommand with a per-form UUID "
+                            "and typed portal/mobile source"
                         ),
                     ),
                     AuthorityInput(
@@ -670,7 +672,9 @@ DOMAIN = DomainSOT(
                         "exact mention-set delta; status guards and merge/confirmation state "
                         "are rechecked before writing. Manual infrastructure creation takes "
                         "a PostgreSQL transaction advisory lock on the request key before "
-                        "checking existing Ticket metadata."
+                        "checking existing Ticket metadata. Customer submission commands "
+                        "lock the Subscriber row before checking the ticket/key pair; a "
+                        "database unique constraint arbitrates any remaining race."
                     ),
                     idempotency=(
                         "Public request_resolution returns SupportResolutionRequestOutcome with native request identity, expiry/deadline, pending status and replay flag, never raw token capability; exact actor and stable UUID intent are required. Immutable resolution request intent/fingerprint replays only an active original token with unchanged current basis and original deadline. Changed payload/basis conflicts; consumed tokens cannot be resurrected. Timer receipt records blocked_completion_basis atomically with immutable support attempt and audit. "
@@ -682,7 +686,14 @@ DOMAIN = DomainSOT(
                         "mention uniqueness, mention-occurrence notification keys, and "
                         "event/audit evidence make replay observable and bounded. Manual "
                         "infrastructure creation stores the key and payload fingerprint; "
-                        "exact retries return the Ticket and changed input conflicts."
+                        "exact retries return the Ticket and changed input conflicts. "
+                        "Customer web and mobile submissions use a stable UUID plus a "
+                        "material payload and attachment fingerprint; uploads are "
+                        "prepared before the subscriber lock, and web portal "
+                        "acknowledgements are staged with the Ticket; exact retries "
+                        "return the original Ticket without new events, while changed "
+                        "input conflicts. Similar open tickets require an explicit "
+                        "Create anyway decision before a distinct submission proceeds."
                     ),
                     retries=(
                         "Retry the complete command after rollback with the same typed input "
@@ -715,6 +726,8 @@ DOMAIN = DomainSOT(
                         "ticket_comment_mention_target_unavailable",
                         "ticket_comment_attachment_repair_scope_invalid",
                         "ticket_comment_idempotency_conflict",
+                        "ticket_submission_conflict",
+                        "ticket_duplicate_warning",
                         "automation_assignment_team_unavailable",
                         "automation_priority_invalid",
                         "resolution_confirmation_required",

@@ -38,7 +38,7 @@ def test_support_create_failure_preserves_form_and_uses_error_template() -> None
     assert '"customer/support/new.html"' in source
     assert "status_code=400" in source
     assert '"form_values"' in source
-    assert '"/portal/support/{ticket_id}"' in source
+    assert 'f"/portal/support/{ticket.id}"' in source
     assert '"region": region' in source
 
 
@@ -100,6 +100,8 @@ def test_support_create_maps_invalid_region_to_safe_preserved_form_error(
         description="Please investigate",
         priority="normal",
         region=submitted,
+        submission_id=None,
+        duplicate_override=False,
         attachments=[],
         db=object(),
     )

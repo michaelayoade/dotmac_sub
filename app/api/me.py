@@ -153,6 +153,7 @@ from app.services import (
     quote_deposits,
     quotes_mirror,
     team_inbox_widget,
+    ticket_validation,
     web_support_tickets,
 )
 from app.services import customer_location_requests as location_service
@@ -183,7 +184,7 @@ from app.services.customer_context import (
 from app.services.db_session_adapter import db_session_adapter
 from app.services.domain_errors import DomainError
 from app.services.events.handlers.owner_session import owner_session
-from app.services.file_storage import build_content_disposition
+from app.services.file_storage import FileValidationError, build_content_disposition
 from app.services.object_storage import ObjectNotFoundError
 from app.services.owner_commands import CommandContext
 from app.services.sales import selfserve as selfserve_service
@@ -1958,6 +1959,8 @@ def my_create_ticket(
     description: str | None = Form(default=None),
     priority: str = Form(default="normal"),
     ticket_type: str | None = Form(default=None),
+    submission_id: UUID | None = Form(default=None),
+    duplicate_override: bool = Form(default=False),
     attachments: list[UploadFile] = File(default=[]),
     db: Session = Depends(get_db),
     principal: dict = Depends(require_user_auth),
@@ -1966,9 +1969,10 @@ def my_create_ticket(
     are not accepted from the client — subscriber_id is forced to the caller.
 
     Accepts multipart/form-data: the JSON-equivalent fields (title, description,
-    priority, ticket_type) as form fields plus a repeatable ``attachments`` file
-    field (images + PDF, <=5 MB each, <=5 files). Attachments are stored locally
-    on the ticket and may not sync to the CRM (the CRM push omits them)."""
+    priority, ticket_type) as form fields plus a stable ``submission_id`` and a
+    repeatable ``attachments`` file field (images + PDF, <=5 MB each, <=5
+    files). A 409 warning may be retried with ``duplicate_override=true`` and
+    the same submission ID. Attachments are stored locally on the ticket."""
     payload = MySupportTicketCreate(
         title=title,
         description=description,
@@ -1986,37 +1990,53 @@ def my_create_ticket(
         channel=TicketChannel.web,
         subscriber_id=UUID(subscriber_id),
     )
+    key = submission_id or uuid4()  # Older app versions can still create tickets.
     db_session_adapter.release_read_transaction(db)
-    ticket = support_service.tickets.create(
-        db, ticket_payload, actor_id=subscriber_id, request=request
-    )
-    if files:
-        try:
-            uploaded = web_support_tickets.upload_ticket_attachments(
-                db,
-                ticket_id=ticket.id,
-                attachments=files,
-                entity_type=web_support_tickets.TicketAttachmentEntityType.ticket,
-                actor_id=UUID(subscriber_id),
-            )
-        except web_support_tickets.TicketAttachmentValidationError as exc:
-            raise HTTPException(
-                status_code=(
-                    413
-                    if exc.kind
-                    is web_support_tickets.TicketAttachmentValidationKind.too_large
-                    else 422
+    try:
+        outcome = support_service.tickets.create_customer_submission(
+            db,
+            command=support_service.CustomerTicketSubmissionCommand(
+                context=CommandContext.system(
+                    actor=f"subscriber:{subscriber_id}",
+                    scope="support.ticket:customer_submission",
+                    reason="Create customer mobile ticket",
+                    idempotency_key=str(key),
                 ),
-                detail={"code": exc.code, "message": exc.message},
-            ) from exc
-        except ValueError as exc:
-            raise HTTPException(
-                status_code=400,
-                detail={"code": "invalid_attachment", "message": str(exc)},
-            ) from exc
-        support_service.tickets.add_attachments(db, str(ticket.id), uploaded)
-        db.refresh(ticket)
-    return ticket
+                payload=ticket_payload,
+                submission_id=key,
+                source=support_service.CustomerTicketSubmissionSource.mobile_api,
+                attachments=tuple(files),
+                duplicate_override=duplicate_override,
+                actor_id=subscriber_id,
+                dispatch_event_after_commit=True,
+            ),
+            request=request,
+        )
+    except ticket_validation.TicketDuplicateWarningError as exc:
+        raise HTTPException(
+            status_code=409, detail=exc.result.as_customer_dict()
+        ) from exc
+    except support_service.SupportTicketError as exc:
+        raise HTTPException(
+            status_code=409 if exc.code == "ticket_submission_conflict" else 400,
+            detail={"code": exc.code, "message": exc.message},
+        ) from exc
+    except web_support_tickets.TicketAttachmentValidationError as exc:
+        raise HTTPException(
+            status_code=(
+                413
+                if exc.kind
+                is web_support_tickets.TicketAttachmentValidationKind.too_large
+                else 422
+            ),
+            detail={"code": exc.code, "message": exc.message},
+        ) from exc
+    except FileValidationError as exc:
+        raise HTTPException(
+            status_code=400,
+            detail={"code": "invalid_attachment", "message": str(exc)},
+        ) from exc
+    return outcome.ticket
 
 
 @router.get(

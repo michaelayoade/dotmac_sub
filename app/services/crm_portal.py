@@ -8,24 +8,55 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Iterable
+from dataclasses import dataclass
 from datetime import UTC, datetime
-from typing import Any
+from typing import TYPE_CHECKING, Any
 from uuid import UUID
 
 from fastapi import Request
 from sqlalchemy.orm import Session
 
 from app.models.subscriber import Subscriber
-from app.models.support import TicketCommentAuthorType, canonical_ticket_status_value
+from app.models.support import (
+    Ticket,
+    TicketCommentAuthorType,
+    canonical_ticket_status_value,
+)
 from app.services.common import coerce_uuid
 from app.services.db_session_adapter import db_session_adapter
 from app.services.domain_errors import DomainError
 from app.services.integrations.crm_capability import capability_client
+from app.services.owner_commands import CommandContext
 from app.services.session_store import get_session_redis
 from app.services.status_presentation import ticket_status_presentation
 from app.services.support_ticket_settings import SupportTeamRoutingResolution
 
 logger = logging.getLogger(__name__)
+
+if TYPE_CHECKING:
+    from app.services.web_support_tickets import TicketAttachmentUpload
+
+
+@dataclass(frozen=True, slots=True)
+class PortalTicketCreateCommand:
+    subscriber_id: UUID | None
+    title: str
+    description: str
+    priority: str
+    region: str
+    team_routing: SupportTeamRoutingResolution
+    submission_id: UUID
+    duplicate_override: bool = False
+    attachments: tuple[TicketAttachmentUpload, ...] = ()
+
+
+@dataclass(frozen=True, slots=True)
+class PortalTicketCreateOutcome:
+    ticket: Ticket | None = None
+    replayed: bool = False
+    error: str | None = None
+    error_code: str | None = None
+
 
 # ── Cache TTLs ───────────────────────────────────────────────────────────
 
@@ -440,80 +471,70 @@ def _record_ticket_created_portal_notification(db: Session, ticket: Any) -> None
 
 def handle_ticket_create(
     db: Session,
-    customer: dict,
-    subscriber_id: str,
-    title: str,
-    description: str,
-    priority: str,
-    region: str,
-    team_routing: SupportTeamRoutingResolution,
-    attachments: list | None = None,
-) -> dict[str, Any]:
-    """Create a ticket in the internal (local) ticket module.
-
-    ``attachments`` (UploadFile list) are stored locally on the ticket via
-    ``upload_ticket_attachments``.
-
-    Returns:
-        Dict with 'success' bool and 'ticket' or 'error' key.
-    """
+    *,
+    command: PortalTicketCreateCommand,
+) -> PortalTicketCreateOutcome:
+    """Create or replay one customer portal ticket submission."""
     from app.models.support import TicketChannel
     from app.schemas.support import TicketCreate
     from app.services import support as support_service
-    from app.services import web_support_tickets
+    from app.services import ticket_validation, web_support_tickets
 
-    try:
-        sid = coerce_uuid(str(subscriber_id or "").strip() or None)
-    except (ValueError, TypeError):
-        sid = None
+    sid = command.subscriber_id
     if not sid:
-        return {
-            "success": False,
-            "error": "Unable to link your account to the support system.",
-        }
-    files = [a for a in (attachments or []) if getattr(a, "filename", "")]
+        return PortalTicketCreateOutcome(
+            error="Unable to link your account to the support system."
+        )
     try:
         db_session_adapter.release_read_transaction(db)
-        ticket = support_service.Tickets.create(
+        outcome = support_service.Tickets.create_customer_submission(
             db,
-            TicketCreate(
-                subscriber_id=sid,
-                title=title,
-                description=description or "",
-                description_is_internal=False,
-                priority=priority if priority in TICKET_PRIORITY_DISPLAY else "normal",
-                region=region,
-                service_team_id=team_routing.service_team_id,
-                channel=TicketChannel.web,
+            command=support_service.CustomerTicketSubmissionCommand(
+                context=CommandContext.system(
+                    actor=f"subscriber:{sid}",
+                    scope="support.ticket:customer_submission",
+                    reason="Create customer portal ticket",
+                    idempotency_key=str(command.submission_id),
+                ),
+                payload=TicketCreate(
+                    subscriber_id=sid,
+                    title=command.title,
+                    description=command.description or "",
+                    description_is_internal=False,
+                    priority=(
+                        command.priority
+                        if command.priority in TICKET_PRIORITY_DISPLAY
+                        else "normal"
+                    ),
+                    region=command.region,
+                    service_team_id=command.team_routing.service_team_id,
+                    channel=TicketChannel.web,
+                ),
+                submission_id=command.submission_id,
+                source=support_service.CustomerTicketSubmissionSource.web_portal,
+                attachments=command.attachments,
+                duplicate_override=command.duplicate_override,
+                routing_mode=support_service.TicketCreationRoutingMode.preserve_requested_team,
             ),
-            actor_id=None,
-            # The ticket is already durable before event delivery. Do not make
-            # the customer wait for a broker or third-party integration; the
-            # scheduled event dispatcher drains this outbox record.
-            dispatch_event_after_commit=False,
-            routing_mode=support_service.TicketCreationRoutingMode.preserve_requested_team,
         )
-        if files:
-            uploaded = web_support_tickets.upload_ticket_attachments(
-                db,
-                ticket_id=ticket.id,
-                attachments=files,
-                entity_type=web_support_tickets.TicketAttachmentEntityType.ticket,
-                actor_id=sid,
-            )
-            support_service.Tickets.add_attachments(db, str(ticket.id), uploaded)
-        _record_ticket_created_portal_notification(db, ticket)
-        return {"success": True, "ticket": _ticket_to_dict(ticket)}
+        if not outcome.replayed:
+            _record_ticket_created_portal_notification(db, outcome.ticket)
+        return PortalTicketCreateOutcome(
+            ticket=outcome.ticket, replayed=outcome.replayed
+        )
+    except ticket_validation.TicketDuplicateWarningError:
+        raise
+    except support_service.SupportTicketError as exc:
+        return PortalTicketCreateOutcome(error=exc.message, error_code=exc.code)
     except (web_support_tickets.WebSupportTicketInputError, ValueError) as e:
         # Attachment validation (type/size) — surface the specific reason.
         logger.info("Rejected portal ticket attachment: %s", e)
-        return {"success": False, "error": str(e)}
+        return PortalTicketCreateOutcome(error=str(e))
     except Exception as e:  # noqa: BLE001
         logger.error("Failed to create portal ticket: %s", e)
-        return {
-            "success": False,
-            "error": "Unable to create ticket. Please try again later.",
-        }
+        return PortalTicketCreateOutcome(
+            error="Unable to create ticket. Please try again later."
+        )
 
 
 def handle_ticket_comment(

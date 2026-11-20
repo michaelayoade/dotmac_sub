@@ -2,7 +2,43 @@ from io import BytesIO
 from types import SimpleNamespace
 from uuid import uuid4
 
+from app.models.stored_file import StoredFile
 from app.services import web_support_tickets
+from app.services.file_storage import PreparedFileUpload
+
+
+def _stub_upload(monkeypatch, captured: dict[str, object], file_id):
+    def fake_prepare(**kwargs):
+        captured.update(kwargs)
+        return PreparedFileUpload(
+            owner_subscriber_id=kwargs["owner_subscriber_id"],
+            entity_type=kwargs["entity_type"],
+            entity_id=kwargs["entity_id"],
+            original_filename=kwargs["original_filename"],
+            storage_key="attachments/public/test/file.pdf",
+            file_size=len(kwargs["data"]),
+            content_type=kwargs["content_type"],
+            checksum=None,
+            uploaded_by=kwargs["uploaded_by"],
+        )
+
+    def fake_stage(*, db, prepared):
+        return StoredFile(
+            id=file_id,
+            original_filename=prepared.original_filename,
+            content_type=prepared.content_type,
+            file_size=prepared.file_size,
+            storage_key_or_relative_path=prepared.storage_key,
+            entity_type=prepared.entity_type,
+            entity_id=prepared.entity_id,
+        )
+
+    monkeypatch.setattr(
+        web_support_tickets.file_uploads, "prepare_upload", fake_prepare
+    )
+    monkeypatch.setattr(
+        web_support_tickets.file_uploads, "stage_prepared_upload", fake_stage
+    )
 
 
 def test_support_ticket_attachments_use_subscriber_safe_uploaded_by(
@@ -13,17 +49,7 @@ def test_support_ticket_attachments_use_subscriber_safe_uploaded_by(
 
     file_id = uuid4()
 
-    def _fake_upload(**kwargs):
-        captured.update(kwargs)
-        return SimpleNamespace(
-            id=file_id,
-            original_filename=kwargs["original_filename"],
-            content_type=kwargs["content_type"],
-            file_size=len(kwargs["data"]),
-            storage_key_or_relative_path="attachments/public/support_ticket/ticket-1/file.pdf",
-        )
-
-    monkeypatch.setattr(web_support_tickets.file_uploads, "stage_upload", _fake_upload)
+    _stub_upload(monkeypatch, captured, file_id)
     attachment = SimpleNamespace(
         filename="proof.pdf",
         content_type="application/pdf",
@@ -50,17 +76,7 @@ def test_support_ticket_attachments_ignore_system_user_uploaded_by(
 
     file_id = uuid4()
 
-    def _fake_upload(**kwargs):
-        captured.update(kwargs)
-        return SimpleNamespace(
-            id=file_id,
-            original_filename=kwargs["original_filename"],
-            content_type=kwargs["content_type"],
-            file_size=len(kwargs["data"]),
-            storage_key_or_relative_path="attachments/public/support_ticket_comment/ticket-2/file.pdf",
-        )
-
-    monkeypatch.setattr(web_support_tickets.file_uploads, "stage_upload", _fake_upload)
+    _stub_upload(monkeypatch, captured, file_id)
     attachment = SimpleNamespace(
         filename="evidence.pdf",
         content_type="application/pdf",
