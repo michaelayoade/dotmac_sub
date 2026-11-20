@@ -2762,6 +2762,28 @@ def build_queue_projection(
         if include_sidebar and request.actor_person_id is not None
         else 0
     )
+    service_team_options = (
+        tuple(
+            InboxServiceTeamOption(id=team_id, name=name)
+            for team_id, name in active_team_options
+        )
+        if include_sidebar
+        else list_service_team_options(db)
+    )
+    agent_options = list_agent_options(db) if include_sidebar else ()
+    agent_presence = (
+        get_agent_presence(db, request.actor_person_id) if include_sidebar else None
+    )
+    label_options = tuple(team_inbox_operations.list_labels(db))
+    saved_filters = (
+        tuple(
+            team_inbox_operations.list_saved_filters(
+                db, person_id=request.actor_person_id
+            )
+        )
+        if include_sidebar
+        else ()
+    )
     # Keep this last among projection database reads. A cold-cache PostgreSQL
     # timeout aborts the read transaction; the web adapter can then recover it
     # before rendering the explicitly unavailable count state.
@@ -2816,16 +2838,9 @@ def build_queue_projection(
         has_ticket=request.has_ticket,
         activity_from=_activity_param(request.activity_from),
         activity_to=_activity_param(request.activity_to),
-        service_team_options=tuple(
-            InboxServiceTeamOption(id=team_id, name=name)
-            for team_id, name in active_team_options
-        )
-        if include_sidebar
-        else list_service_team_options(db),
-        agent_options=list_agent_options(db) if include_sidebar else (),
-        agent_presence=(
-            get_agent_presence(db, request.actor_person_id) if include_sidebar else None
-        ),
+        service_team_options=service_team_options,
+        agent_options=agent_options,
+        agent_presence=agent_presence,
         assignment_counts=assignment_counts,
         status_options=tuple(item.value for item in InboxConversationStatus),
         channel_options=tuple(
@@ -2836,14 +2851,8 @@ def build_queue_projection(
         priority_options=INBOX_PRIORITY_OPTIONS,
         # The queue fragment contains the bulk-action toolbar, whose team and
         # label selectors must remain usable after a queue-only swap.
-        label_options=tuple(team_inbox_operations.list_labels(db)),
-        saved_filters=tuple(
-            team_inbox_operations.list_saved_filters(
-                db, person_id=request.actor_person_id
-            )
-        )
-        if include_sidebar
-        else (),
+        label_options=label_options,
+        saved_filters=saved_filters,
         selected_id=str(selected_id) if selected_id is not None else None,
         selected=selected,
         canonical_url=canonical_url,

@@ -188,14 +188,15 @@ def subscriber_summary(
     if account_id is not None:
         try:
             position = get_customer_financial_position(db, account_id)
-            balance = {
-                "outstanding": position.open_invoice_balance,
-                "overdue": position.overdue_debt_balance,
-                "overdue_count": position.overdue_invoice_count,
-                "prepaid": position.prepaid_available_balance,
-                "currency": position.currency,
-                "days_overdue": position.days_overdue,
-            }
+            if position is not None:
+                balance = {
+                    "outstanding": position.open_invoice_balance,
+                    "overdue": position.overdue_debt_balance,
+                    "overdue_count": position.overdue_invoice_count,
+                    "prepaid": position.prepaid_available_balance,
+                    "currency": position.currency,
+                    "days_overdue": position.days_overdue,
+                }
         except PrepaidFundingBaselineMissingError:
             balance = None
 
