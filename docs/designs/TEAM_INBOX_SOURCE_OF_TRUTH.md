@@ -790,6 +790,14 @@ stale. Realtime has no replay authority.
 - The conversation HTMX response is a thread-only partial. The loaded workspace
   owns global navigation and sidebar statistics, so opening a conversation must
   not recompute that full-page context before displaying its messages.
+- Subscriber-summary reads preserve missing-data states and propagate database
+  errors before the projection issues another query. If PostgreSQL cancels a
+  required queue, conversation, or contact projection, its web adapter discards
+  the failed read transaction and returns a retryable 503. If only assignment
+  totals are canceled, the adapter discards that transaction before rendering
+  the already materialized queue with unavailable totals. A concurrent cache
+  refresh can also make totals unavailable while the read transaction stays
+  usable.
 - Audience and job: authorized support operators triage, understand, assign,
   reply, collaborate, and close communication work.
 - Information owner: `communications.team_inbox_projection` returns the list

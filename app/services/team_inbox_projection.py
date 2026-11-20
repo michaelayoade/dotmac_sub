@@ -14,7 +14,7 @@ from time import perf_counter
 from uuid import UUID
 
 from sqlalchemy import func, or_
-from sqlalchemy.exc import OperationalError
+from sqlalchemy.exc import DBAPIError
 from sqlalchemy.orm import Session, aliased
 
 from app.models.service_team import ServiceTeamMember
@@ -48,6 +48,7 @@ from app.services import (
     team_inbox_sidebar_metrics,
 )
 from app.services.catalog import plan_family_catalogues
+from app.services.db_session_adapter import database_statement_was_canceled
 from app.services.integrations import whatsapp_capability
 from app.services.list_query import (
     ListDefinition,
@@ -57,6 +58,7 @@ from app.services.list_query import (
     request_needs_canonicalization,
 )
 from app.services.sales import lead_intake
+from app.services.subscriber_summary import SubscriberSummary
 
 _HTML_TAG_RE = re.compile(r"<[^>]+>")
 logger = logging.getLogger(__name__)
@@ -161,6 +163,11 @@ class InboxQueueComposition(StrEnum):
     full_workspace = "full_workspace"
     sidebar = "sidebar"
     queue_only = "queue_only"
+
+
+class InboxAssignmentCountsUnavailableReason(StrEnum):
+    query_canceled = "query_canceled"
+    refresh_in_progress = "refresh_in_progress"
 
 
 class InboxAssignmentCountsState(StrEnum):
@@ -363,7 +370,7 @@ class InboxTimelineEntry:
 @dataclass(frozen=True, slots=True)
 class InboxConversationProjection:
     timeline: team_inbox_read.InboxConversationTimeline
-    subscriber_summary: Mapping[str, object] | None
+    subscriber_summary: SubscriberSummary | None
     contact_link_candidates: ContactLinkCandidateSet
     label_options: tuple[team_inbox_operations.LabelOption, ...]
     conversation_labels: tuple[team_inbox_operations.LabelOption, ...]
@@ -472,6 +479,7 @@ class InboxAssignmentCounts:
     unreplied: int
     needs_attention: int
     state: InboxAssignmentCountsState = InboxAssignmentCountsState.available
+    unavailable_reason: InboxAssignmentCountsUnavailableReason | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -1043,15 +1051,12 @@ def _assignment_counts(
             actor_person_id=actor_person_id,
             actor_team_ids=team_ids,
         )
-    except OperationalError as exc:
-        sqlstate = getattr(exc.orig, "sqlstate", None) or getattr(
-            exc.orig, "pgcode", None
-        )
-        if sqlstate != "57014":
+    except DBAPIError as exc:
+        if not database_statement_was_canceled(exc):
             raise
         logger.warning(
             "inbox_assignment_counts_unavailable",
-            extra={"reason": "statement_timeout"},
+            extra={"reason": "query_canceled"},
         )
         return InboxAssignmentCounts(
             all=0,
@@ -1064,6 +1069,7 @@ def _assignment_counts(
             unreplied=queue_metrics.needs_response,
             needs_attention=needs_attention,
             state=InboxAssignmentCountsState.unavailable,
+            unavailable_reason=InboxAssignmentCountsUnavailableReason.query_canceled,
         )
     if cohort_counts is None:
         logger.warning(
@@ -1081,6 +1087,7 @@ def _assignment_counts(
             unreplied=queue_metrics.needs_response,
             needs_attention=needs_attention,
             state=InboxAssignmentCountsState.unavailable,
+            unavailable_reason=InboxAssignmentCountsUnavailableReason.refresh_in_progress,
         )
     return InboxAssignmentCounts(
         all=cohort_counts.all,
@@ -2755,6 +2762,28 @@ def build_queue_projection(
         if include_sidebar and request.actor_person_id is not None
         else 0
     )
+    service_team_options = (
+        tuple(
+            InboxServiceTeamOption(id=team_id, name=name)
+            for team_id, name in active_team_options
+        )
+        if include_sidebar
+        else list_service_team_options(db)
+    )
+    agent_options = list_agent_options(db) if include_sidebar else ()
+    agent_presence = (
+        get_agent_presence(db, request.actor_person_id) if include_sidebar else None
+    )
+    label_options = tuple(team_inbox_operations.list_labels(db))
+    saved_filters = (
+        tuple(
+            team_inbox_operations.list_saved_filters(
+                db, person_id=request.actor_person_id
+            )
+        )
+        if include_sidebar
+        else ()
+    )
     # Keep this last among projection database reads. A cold-cache PostgreSQL
     # timeout aborts the read transaction; the web adapter can then recover it
     # before rendering the explicitly unavailable count state.
@@ -2809,16 +2838,9 @@ def build_queue_projection(
         has_ticket=request.has_ticket,
         activity_from=_activity_param(request.activity_from),
         activity_to=_activity_param(request.activity_to),
-        service_team_options=tuple(
-            InboxServiceTeamOption(id=team_id, name=name)
-            for team_id, name in active_team_options
-        )
-        if include_sidebar
-        else list_service_team_options(db),
-        agent_options=list_agent_options(db) if include_sidebar else (),
-        agent_presence=(
-            get_agent_presence(db, request.actor_person_id) if include_sidebar else None
-        ),
+        service_team_options=service_team_options,
+        agent_options=agent_options,
+        agent_presence=agent_presence,
         assignment_counts=assignment_counts,
         status_options=tuple(item.value for item in InboxConversationStatus),
         channel_options=tuple(
@@ -2829,14 +2851,8 @@ def build_queue_projection(
         priority_options=INBOX_PRIORITY_OPTIONS,
         # The queue fragment contains the bulk-action toolbar, whose team and
         # label selectors must remain usable after a queue-only swap.
-        label_options=tuple(team_inbox_operations.list_labels(db)),
-        saved_filters=tuple(
-            team_inbox_operations.list_saved_filters(
-                db, person_id=request.actor_person_id
-            )
-        )
-        if include_sidebar
-        else (),
+        label_options=label_options,
+        saved_filters=saved_filters,
         selected_id=str(selected_id) if selected_id is not None else None,
         selected=selected,
         canonical_url=canonical_url,

@@ -340,12 +340,12 @@ def test_ci_test_jobs_fail_closed_instead_of_hanging_indefinitely() -> None:
     unit_job = workflow[
         workflow.index("  unit-shards:\n") : workflow.index("  architecture:\n")
     ]
-    architecture_job = workflow[
-        workflow.index("  architecture:\n") : workflow.index("  test:\n")
+    architecture_shards_job = workflow[
+        workflow.index("  architecture-shards:\n") : workflow.index("  architecture:\n")
     ]
 
     assert "    timeout-minutes: 30\n" in unit_job
-    assert "    timeout-minutes: 30\n" in architecture_job
+    assert "    timeout-minutes: 30\n" in architecture_shards_job
     assert "CI_UNIT_TEST_WORKERS ?= 4" in makefile
     assert "CI_TEST_TIMEOUT_SECONDS ?= 180" in makefile
     assert "-n $(CI_UNIT_TEST_WORKERS)" in makefile
@@ -377,6 +377,13 @@ def test_tests_is_the_stable_aggregate_for_unit_and_architecture_results() -> No
 
     workflow = CI_WORKFLOW.read_text(encoding="utf-8")
     aggregate = workflow[workflow.index("  test:\n") : workflow.index("  coverage:\n")]
+    architecture = workflow[
+        workflow.index("  architecture:\n") : workflow.index("  test:\n")
+    ]
+
+    assert "    name: Architecture Tests\n" in architecture
+    assert "needs: [changes, architecture-shards]" in architecture
+    assert 'test "$ARCHITECTURE_SHARDS_RESULT" = "success"' in architecture
 
     assert "    name: Tests\n" in aggregate
     assert (

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 from uuid import uuid4
@@ -8,6 +9,7 @@ import pytest
 from fastapi import BackgroundTasks, HTTPException
 from sqlalchemy import event
 from sqlalchemy.exc import OperationalError
+from sqlalchemy.orm import Session
 
 from app.api import support as support_api
 from app.models.notification import Notification
@@ -37,6 +39,7 @@ from app.services import (
     team_inbox_operations,
     team_inbox_projection,
     team_inbox_read,
+    team_inbox_sidebar_metrics,
 )
 from app.web.admin import inbox as admin_inbox
 from tests.staff_identity_fixtures import add_bound_staff_user
@@ -379,13 +382,47 @@ class _StatementTimeout:
 
 
 def test_admin_inbox_timeout_renders_without_assignment_totals(db_session, monkeypatch):
+    def timeout(db: Session) -> None:
+        raise OperationalError("SELECT assignment counts", {}, _StatementTimeout())
+
+    assert_inbox_queue_renders_without_assignment_totals(
+        db_session,
+        monkeypatch,
+        timeout,
+        reason=team_inbox_projection.InboxAssignmentCountsUnavailableReason.query_canceled,
+    )
+
+
+def test_admin_inbox_refresh_in_progress_does_not_discard_transaction(
+    db_session, monkeypatch
+):
+    def unexpected_rollback(db: Session) -> None:
+        pytest.fail("Cache refresh did not abort the transaction")
+
+    monkeypatch.setattr(
+        admin_inbox.db_session_adapter,
+        "discard_failed_transaction",
+        unexpected_rollback,
+    )
+    assert_inbox_queue_renders_without_assignment_totals(
+        db_session,
+        monkeypatch,
+        lambda db: None,
+        reason=team_inbox_projection.InboxAssignmentCountsUnavailableReason.refresh_in_progress,
+    )
+
+
+def assert_inbox_queue_renders_without_assignment_totals(
+    db_session: Session,
+    monkeypatch: pytest.MonkeyPatch,
+    get_counts: Callable[[Session], None],
+    *,
+    reason: team_inbox_projection.InboxAssignmentCountsUnavailableReason,
+) -> None:
     support = _team(db_session, "Timeout support")
     _conversation(db_session, support, subject="Still visible")
     db_session.commit()
     captured: dict[str, object] = {}
-
-    def timeout(*_args, **_kwargs):
-        raise OperationalError("SELECT assignment counts", {}, _StatementTimeout())
 
     def fake_template_response(
         template_name: str,
@@ -397,7 +434,11 @@ def test_admin_inbox_timeout_renders_without_assignment_totals(db_session, monke
         captured["headers"] = headers
         return context
 
-    monkeypatch.setattr(team_inbox_read, "assignment_cohort_counts", timeout)
+    monkeypatch.setattr(
+        team_inbox_sidebar_metrics,
+        "get_assignment_cohort_counts",
+        lambda db, **kwargs: get_counts(db),
+    )
     monkeypatch.setattr(
         admin_inbox.templates,
         "TemplateResponse",
@@ -431,6 +472,7 @@ def test_admin_inbox_timeout_renders_without_assignment_totals(db_session, monke
         context["assignment_counts"].state
         is team_inbox_projection.InboxAssignmentCountsState.unavailable
     )
+    assert context["assignment_counts"].unavailable_reason is reason
 
 
 def test_assignment_count_fallback_does_not_hide_other_database_errors(

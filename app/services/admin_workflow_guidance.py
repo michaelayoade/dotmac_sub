@@ -1046,6 +1046,7 @@ WORKFLOW_GUIDANCE: tuple[AdminWorkflowGuidance, ...] = (
         "In Queue messaging, keep heartbeats off unless reassurance is explicitly required; when enabled, use different non-position wording and a longer interval than position checks.",
         notes=(
             "Inbox overview queue counts refresh from a shared projection every 15 seconds, while actor and team assignment totals use indexed reply-window state and refresh every 30 seconds. During cache or database recovery, the last successful counts may remain visible for up to five minutes. If assignment totals exceed the interactive read budget, those totals show as unavailable while conversations remain accessible; refresh later to retry them.",
+            "If the Inbox, a conversation, or its contact details cannot finish loading, refresh or reopen that view to retry.",
             "Historical inbox views load bounded pages and may show that more results are available before an exact final total is known.",
             "A displayed queue position is the customer's current rank in that team, not the durable admission sequence; position messages are sent only when that rank moves forward.",
             "Normal self-assignment and manager assignment cannot skip an older queued conversation or exceed the selected agent's active-conversation capacity.",

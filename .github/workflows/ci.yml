@@ -434,12 +434,16 @@ jobs:
           python3 scripts/architecture/migration_sequence_gate.py \
             --base "origin/$BASE" $MODE
 
-  architecture:
-    name: Architecture Tests
+  architecture-shards:
+    name: Architecture Tests (shard ${{ matrix.shard }}/2)
     needs: [changes, python-environment]
     if: needs.changes.outputs.docs-only != 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2]
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
 
@@ -448,7 +452,26 @@ jobs:
           python-version: ${{ env.PYTHON_VERSION }}
 
       - name: Run architecture guards
+        env:
+          ARCHITECTURE_SHARD: ${{ matrix.shard }}
+          ARCHITECTURE_SHARDS: 2
         run: make test-architecture
+
+  architecture:
+    name: Architecture Tests
+    needs: [changes, architecture-shards]
+    if: always() && needs.changes.result == 'success'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Documentation-only change
+        if: needs.changes.outputs.docs-only == 'true'
+        run: echo "Architecture tests are not needed for documentation-only changes."
+
+      - name: Require both architecture shards
+        if: needs.changes.outputs.docs-only != 'true'
+        env:
+          ARCHITECTURE_SHARDS_RESULT: ${{ needs.architecture-shards.result }}
+        run: test "$ARCHITECTURE_SHARDS_RESULT" = "success"
 
   workflow-guidance:
     name: Workflow Guidance Gate
