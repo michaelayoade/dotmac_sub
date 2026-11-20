@@ -24,7 +24,7 @@ Application changes retain all release gates:
 - lint, formatting, typing, import-boundary, pre-commit, and blocking security
   checks;
 - the complete non-integration suite, split deterministically across four
-  runners, plus the explicit four-worker architecture suite;
+  runners, plus the architecture suite split across two four-worker runners;
 - Alembic and integration tests against PostgreSQL before merge and again on
   the resulting `main` push whenever the change can affect backend or
   deployed-schema behavior; and
@@ -105,12 +105,13 @@ worker count and timeout can be overridden locally through
 defaults. Coverage data from all shards is combined before the XML report is
 published.
 
-Architecture guards remain a separate required group. This prevents the same
-architecture suite from being collected and run as part of every general unit
-shard while retaining the repository's measured four-worker architecture
-default. High-volume static guards share a worker-local index of file listings,
-source text, and parsed ASTs, and the job reports its 50 slowest checks so the
-next optimization remains evidence-led.
+Architecture guards remain a separate required group. Every architecture test
+module is assigned to exactly one of two runners by a deterministic source-size
+partition. Each runner uses four pytest workers. The stable `Architecture Tests`
+check passes only when both runners pass, including on a rerun. This keeps the
+full architecture suite in the merge gate while bounding each runner's work.
+High-volume static guards share a worker-local index of file listings, source
+text, and parsed ASTs, and each runner reports its 50 slowest checks.
 
 GitHub-hosted CI owns every full pytest suite. Deployment hosts are runtime
 acceptance environments, not test runners: production refuses every pytest
@@ -139,7 +140,7 @@ detached `HEAD`; it never moves a local branch pointer. Local branch history is
 therefore preserved but cannot become deployment authority or block an
 otherwise valid immutable candidate.
 
-Each unit-test shard and the architecture job also has a 30-minute job timeout.
+Each unit-test shard and architecture shard also has a 30-minute job timeout.
 The per-test watchdog catches a blocked unit test first; the job timeout remains
 the outer guard for collection, environment, plugin, and architecture-suite
 failures that occur outside an individual unit test.
