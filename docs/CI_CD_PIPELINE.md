@@ -110,6 +110,8 @@ module is assigned to exactly one of two runners by a deterministic source-size
 partition. Each runner uses four pytest workers. The stable `Architecture Tests`
 check passes only when both runners pass, including on a rerun. This keeps the
 full architecture suite in the merge gate while bounding each runner's work.
+Both runners invoke `make test-architecture` with their shard selection; running
+that Make target locally without a shard still executes the complete suite.
 High-volume static guards share a worker-local index of file listings, source
 text, and parsed ASTs, and each runner reports its 50 slowest checks.
 

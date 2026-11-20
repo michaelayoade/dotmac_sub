@@ -454,11 +454,8 @@ jobs:
       - name: Run architecture guards
         env:
           ARCHITECTURE_SHARD: ${{ matrix.shard }}
-        run: |
-          poetry run python -m scripts.testing.host_test_policy full-suite
-          paths="$(python3 -m scripts.ci.select_architecture_shard --shard "$ARCHITECTURE_SHARD" --shards 2)"
-          test -n "$paths"
-          poetry run pytest $paths -q -n 4 --durations=50
+          ARCHITECTURE_SHARDS: 2
+        run: make test-architecture
 
   architecture:
     name: Architecture Tests

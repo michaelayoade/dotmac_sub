@@ -130,8 +130,18 @@ test-integration-shard: assert-full-test-host ## Run one duration-balanced Postg
 			-p scripts.ci.pytest_durations \
 			--ci-durations-output="$(CI_INTEGRATION_DURATIONS_OUTPUT)"
 
-test-architecture: assert-full-test-host ## Run architecture guards with the measured four-worker default
-	poetry run pytest tests/architecture -q -n 4 --durations=50
+ARCHITECTURE_SHARD ?=
+ARCHITECTURE_SHARDS ?= 2
+
+test-architecture: assert-full-test-host ## Run all architecture guards, or one CI shard
+	@if [ -n "$(ARCHITECTURE_SHARD)" ]; then \
+		paths="$$(poetry run python -m scripts.ci.select_architecture_shard \
+			--shard $(ARCHITECTURE_SHARD) --shards $(ARCHITECTURE_SHARDS))"; \
+		test -n "$$paths"; \
+		poetry run pytest $$paths -q -n 4 --durations=50; \
+	else \
+		poetry run pytest tests/architecture -q -n 4 --durations=50; \
+	fi
 
 test-architecture-serial: assert-full-test-host ## Run architecture guards serially for isolation/debugging
 	poetry run pytest tests/architecture -q
