@@ -18,7 +18,6 @@ from decimal import Decimal
 from typing import Any, TypedDict
 from uuid import UUID
 
-from fastapi import HTTPException
 from sqlalchemy.orm import Session
 
 from app.services import catalog as catalog_service
@@ -122,17 +121,12 @@ def subscriber_summary(
     if not subscriber_id:
         return None
     try:
-        UUID(subscriber_id)
+        parsed_subscriber_id = UUID(subscriber_id)
     except ValueError:
         return None
-    try:
-        subscriber = subscriber_service.subscribers.get(
-            db=db, subscriber_id=subscriber_id
-        )
-    except HTTPException as exc:
-        if exc.status_code != 404:
-            raise
-        return None
+    subscriber = subscriber_service.subscribers.get_optional(
+        db=db, subscriber_id=parsed_subscriber_id
+    )
     if subscriber is None:
         return None
 

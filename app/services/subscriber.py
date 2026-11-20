@@ -692,14 +692,17 @@ class Subscribers(ListResponseMixin):
         return Subscribers.commit_prepared_account(db, subscriber)
 
     @staticmethod
-    def get(db: Session, subscriber_id: str):
-        subscriber = db.get(
+    def get_optional(*, db: Session, subscriber_id: UUID) -> Subscriber | None:
+        """Read a subscriber without a transport-specific missing-record error."""
+        return db.get(
             Subscriber,
             subscriber_id,
-            options=[
-                selectinload(Subscriber.addresses),
-            ],
+            options=[selectinload(Subscriber.addresses)],
         )
+
+    @staticmethod
+    def get(db: Session, subscriber_id: str):
+        subscriber = Subscribers.get_optional(db=db, subscriber_id=UUID(subscriber_id))
         if not subscriber:
             raise HTTPException(status_code=404, detail="Subscriber not found")
         return subscriber

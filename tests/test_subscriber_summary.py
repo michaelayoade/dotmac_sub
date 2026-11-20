@@ -23,7 +23,7 @@ from app.services import subscriber_summary as ss
 
 def _wire(monkeypatch, *, subscriber, subscriptions=(), position=None, sessions=None):
     monkeypatch.setattr(
-        ss.subscriber_service.subscribers, "get", lambda **_: subscriber
+        ss.subscriber_service.subscribers, "get_optional", lambda **_: subscriber
     )
     monkeypatch.setattr(
         ss.catalog_service.subscriptions, "list", lambda **_: list(subscriptions)
@@ -126,7 +126,9 @@ def test_business_subscriber_gets_business_url(monkeypatch):
 
 def test_missing_or_unknown_subscriber_returns_none(monkeypatch):
     assert ss.subscriber_summary(object(), None) is None
-    monkeypatch.setattr(ss.subscriber_service.subscribers, "get", lambda **_: None)
+    monkeypatch.setattr(
+        ss.subscriber_service.subscribers, "get_optional", lambda **_: None
+    )
     assert ss.subscriber_summary(object(), str(uuid4())) is None
 
 
