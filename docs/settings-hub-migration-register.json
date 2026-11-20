@@ -2396,7 +2396,7 @@
       },
       "disposition": "Mapped to hub; preserve registered type, validation, tenant scope and owner-command writes",
       "source_references": [
-        "app/api/me.py:987",
+        "app/api/me.py:988",
         "app/services/reseller_portal_billing.py:94",
         "app/services/topup_intents.py:401",
         "app/services/topup_intents.py:61",
@@ -3242,8 +3242,8 @@
       "disposition": "Mapped to hub; preserve registered type, validation, tenant scope and owner-command writes",
       "source_references": [
         "app/services/service_period_policy.py:29",
-        "app/web/customer/routes.py:2447",
-        "app/web/customer/routes.py:694"
+        "app/web/customer/routes.py:2469",
+        "app/web/customer/routes.py:716"
       ]
     },
     {
@@ -8540,7 +8540,7 @@
       "disposition": "Mapped to hub; preserve registered type, validation, tenant scope and owner-command writes",
       "source_references": [
         "app/api/integrations.py:58",
-        "app/api/me.py:225",
+        "app/api/me.py:226",
         "app/migration_source/snapshot.py:716",
         "app/migration_source/snapshot.py:823",
         "app/migration_source/snapshot.py:932",
@@ -8626,21 +8626,21 @@
         "app/services/customer_portal_session.py:601",
         "app/services/dotmac_erp/expense_sync.py:178",
         "app/services/dotmac_erp/material_sync.py:171",
-        "app/services/events/handlers/notification.py:1026",
+        "app/services/events/handlers/notification.py:1023",
         "app/services/events/handlers/notification.py:43",
-        "app/services/events/handlers/notification.py:545",
-        "app/services/events/handlers/notification.py:552",
-        "app/services/events/handlers/notification.py:559",
-        "app/services/events/handlers/notification.py:566",
-        "app/services/events/handlers/notification.py:573",
-        "app/services/events/handlers/notification.py:580",
-        "app/services/events/handlers/notification.py:587",
-        "app/services/events/handlers/notification.py:594",
-        "app/services/events/handlers/notification.py:601",
-        "app/services/events/handlers/notification.py:608",
-        "app/services/events/handlers/notification.py:615",
-        "app/services/events/handlers/notification.py:636",
-        "app/services/events/handlers/notification.py:643",
+        "app/services/events/handlers/notification.py:542",
+        "app/services/events/handlers/notification.py:549",
+        "app/services/events/handlers/notification.py:556",
+        "app/services/events/handlers/notification.py:563",
+        "app/services/events/handlers/notification.py:570",
+        "app/services/events/handlers/notification.py:577",
+        "app/services/events/handlers/notification.py:584",
+        "app/services/events/handlers/notification.py:591",
+        "app/services/events/handlers/notification.py:598",
+        "app/services/events/handlers/notification.py:605",
+        "app/services/events/handlers/notification.py:612",
+        "app/services/events/handlers/notification.py:633",
+        "app/services/events/handlers/notification.py:640",
         "app/services/field/expense_requests.py:759",
         "app/services/fup_enforcement.py:853",
         "app/services/fup_enforcement.py:854",
@@ -8710,7 +8710,7 @@
         "app/services/sales/service.py:163",
         "app/services/sales/service.py:676",
         "app/services/sot_registry/domains/notifications_communications.py:5686",
-        "app/services/sot_registry/domains/support_operations.py:2170",
+        "app/services/sot_registry/domains/support_operations.py:2183",
         "app/services/sot_registry/domains/support_operations.py:71",
         "app/services/staff_provisioning.py:138",
         "app/services/staff_provisioning.py:435",
@@ -8722,9 +8722,9 @@
         "app/services/subscriber_data_completeness.py:72",
         "app/services/subscriber_summary.py:189",
         "app/services/subscriber_summary.py:56",
-        "app/services/support.py:1303",
-        "app/services/support.py:5365",
-        "app/services/support.py:5383",
+        "app/services/support.py:1371",
+        "app/services/support.py:5548",
+        "app/services/support.py:5566",
         "app/services/table_config.py:761",
         "app/services/table_config.py:913",
         "app/services/team_inbox_contact_context.py:271",
@@ -8819,8 +8819,8 @@
         "app/services/web_subscriber_details.py:522",
         "app/services/web_subscriber_details.py:538",
         "app/services/web_subscriber_lists.py:47",
-        "app/services/web_support_tickets.py:2161",
-        "app/services/web_support_tickets.py:2171",
+        "app/services/web_support_tickets.py:2141",
+        "app/services/web_support_tickets.py:2151",
         "app/services/web_system_common.py:54",
         "app/services/web_system_common.py:58",
         "app/services/web_system_import_wizard.py:159",
@@ -9136,7 +9136,7 @@
         "app/services/scheduler.py:151",
         "app/services/scheduler.py:156",
         "app/services/sole_approver_exception.py:155",
-        "app/services/support.py:1233",
+        "app/services/support.py:1301",
         "app/services/support_ticket_settings.py:737",
         "app/services/team_inbox_receive.py:639",
         "app/services/topology/outage_notifications.py:327",
@@ -9455,9 +9455,9 @@
         "app/web/admin/inbox.py:5518",
         "app/web/admin/inbox.py:5531",
         "app/web/admin/integrations.py:1404",
-        "app/web/customer/routes.py:211",
-        "app/web/customer/routes.py:2634",
-        "app/web/customer/routes.py:2802",
+        "app/web/customer/routes.py:212",
+        "app/web/customer/routes.py:2656",
+        "app/web/customer/routes.py:2824",
         "templates/admin/inbox/email_routes.html:356",
         "templates/admin/inbox/email_routes.html:693",
         "templates/admin/integrations/whatsapp/config.html:38",
@@ -19646,7 +19646,7 @@
       "source_references": [
         "app/services/customer_portal_profile_commands.py:35",
         "app/services/sot_registry/domains/customer_context.py:1923",
-        "app/web/customer/routes.py:1829"
+        "app/web/customer/routes.py:1851"
       ]
     },
     {
@@ -23526,7 +23526,7 @@
       },
       "disposition": "Preserve specialised ticket configuration owner and typed commands",
       "source_references": [
-        "app/services/support.py:1128",
+        "app/services/support.py:1196",
         "app/services/support_ticket_settings.py:37"
       ]
     },
@@ -23563,7 +23563,7 @@
       },
       "disposition": "Preserve specialised ticket configuration owner and typed commands",
       "source_references": [
-        "app/services/support.py:1129",
+        "app/services/support.py:1197",
         "app/services/support_ticket_settings.py:39"
       ]
     },

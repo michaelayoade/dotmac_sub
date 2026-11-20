@@ -469,7 +469,6 @@ def customer_support_create(
             ),
         )
     except ticket_validation.TicketDuplicateWarningError as exc:
-        db.rollback()
         context = crm_portal.ticket_create_context(request, db, customer)
         context["submission_id"] = str(submission_id)
         context["crm_error"] = True

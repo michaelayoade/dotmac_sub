@@ -313,7 +313,9 @@ BASELINE = Path("tests/architecture/session_construction_baseline.txt")
 #: These are test-only fixture sites; production allowances remain unchanged.
 #: +1 test-only tenant-session factory Session in
 #: tests/integration/test_outbox_relay_dispatcher_postgres.py (SUB-2).
-TEST_FIXTURE_BASELINE_TOTAL = 807
+#: +2 test-only migrated-clone constructions (one Engine and one sessionmaker)
+#: in tests/integration/test_customer_ticket_submission_concurrency.py.
+TEST_FIXTURE_BASELINE_TOTAL = 809
 
 
 def _baseline() -> dict[str, int]:

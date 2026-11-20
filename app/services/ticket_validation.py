@@ -336,7 +336,7 @@ def prepare_human_ticket_creation(
         return payload
     if not duplicate_override:
         raise TicketDuplicateWarningError(result)
-    prepared = payload.model_copy(deep=True)
+    prepared: TicketCreate = payload.model_copy(deep=True)
     prepared.metadata_ = {
         **metadata,
         "duplicate_override": True,
