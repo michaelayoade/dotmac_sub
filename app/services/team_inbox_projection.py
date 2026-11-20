@@ -14,7 +14,7 @@ from time import perf_counter
 from uuid import UUID
 
 from sqlalchemy import func, or_
-from sqlalchemy.exc import OperationalError
+from sqlalchemy.exc import DBAPIError
 from sqlalchemy.orm import Session, aliased
 
 from app.models.service_team import ServiceTeamMember
@@ -48,6 +48,7 @@ from app.services import (
     team_inbox_sidebar_metrics,
 )
 from app.services.catalog import plan_family_catalogues
+from app.services.db_session_adapter import database_statement_was_canceled
 from app.services.integrations import whatsapp_capability
 from app.services.list_query import (
     ListDefinition,
@@ -57,6 +58,7 @@ from app.services.list_query import (
     request_needs_canonicalization,
 )
 from app.services.sales import lead_intake
+from app.services.subscriber_summary import SubscriberSummary
 
 _HTML_TAG_RE = re.compile(r"<[^>]+>")
 logger = logging.getLogger(__name__)
@@ -161,6 +163,11 @@ class InboxQueueComposition(StrEnum):
     full_workspace = "full_workspace"
     sidebar = "sidebar"
     queue_only = "queue_only"
+
+
+class InboxAssignmentCountsUnavailableReason(StrEnum):
+    query_canceled = "query_canceled"
+    refresh_in_progress = "refresh_in_progress"
 
 
 class InboxAssignmentCountsState(StrEnum):
@@ -363,7 +370,7 @@ class InboxTimelineEntry:
 @dataclass(frozen=True, slots=True)
 class InboxConversationProjection:
     timeline: team_inbox_read.InboxConversationTimeline
-    subscriber_summary: Mapping[str, object] | None
+    subscriber_summary: SubscriberSummary | None
     contact_link_candidates: ContactLinkCandidateSet
     label_options: tuple[team_inbox_operations.LabelOption, ...]
     conversation_labels: tuple[team_inbox_operations.LabelOption, ...]
@@ -472,6 +479,7 @@ class InboxAssignmentCounts:
     unreplied: int
     needs_attention: int
     state: InboxAssignmentCountsState = InboxAssignmentCountsState.available
+    unavailable_reason: InboxAssignmentCountsUnavailableReason | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -1043,15 +1051,12 @@ def _assignment_counts(
             actor_person_id=actor_person_id,
             actor_team_ids=team_ids,
         )
-    except OperationalError as exc:
-        sqlstate = getattr(exc.orig, "sqlstate", None) or getattr(
-            exc.orig, "pgcode", None
-        )
-        if sqlstate != "57014":
+    except DBAPIError as exc:
+        if not database_statement_was_canceled(exc):
             raise
         logger.warning(
             "inbox_assignment_counts_unavailable",
-            extra={"reason": "statement_timeout"},
+            extra={"reason": "query_canceled"},
         )
         return InboxAssignmentCounts(
             all=0,
@@ -1064,6 +1069,7 @@ def _assignment_counts(
             unreplied=queue_metrics.needs_response,
             needs_attention=needs_attention,
             state=InboxAssignmentCountsState.unavailable,
+            unavailable_reason=InboxAssignmentCountsUnavailableReason.query_canceled,
         )
     if cohort_counts is None:
         logger.warning(
@@ -1081,6 +1087,7 @@ def _assignment_counts(
             unreplied=queue_metrics.needs_response,
             needs_attention=needs_attention,
             state=InboxAssignmentCountsState.unavailable,
+            unavailable_reason=InboxAssignmentCountsUnavailableReason.refresh_in_progress,
         )
     return InboxAssignmentCounts(
         all=cohort_counts.all,

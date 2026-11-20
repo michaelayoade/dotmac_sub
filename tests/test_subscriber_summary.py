@@ -12,6 +12,10 @@ from decimal import Decimal
 from types import SimpleNamespace
 from uuid import uuid4
 
+import pytest
+from sqlalchemy.exc import OperationalError
+from sqlalchemy.orm import Session
+
 from app.models.catalog import SubscriptionStatus
 from app.models.subscriber import SubscriberStatus
 from app.services import subscriber_summary as ss
@@ -124,3 +128,33 @@ def test_missing_or_unknown_subscriber_returns_none(monkeypatch):
     assert ss.subscriber_summary(object(), None) is None
     monkeypatch.setattr(ss.subscriber_service.subscribers, "get", lambda **_: None)
     assert ss.subscriber_summary(object(), str(uuid4())) is None
+
+
+def test_missing_prepaid_baseline_leaves_balance_unavailable(monkeypatch):
+    sub = _subscriber()
+    _wire(monkeypatch, subscriber=sub)
+
+    def missing_baseline(db: Session, account_id: object) -> None:
+        raise ss.PrepaidFundingBaselineMissingError("Missing verified baseline")
+
+    monkeypatch.setattr(ss, "get_customer_financial_position", missing_baseline)
+    summary = ss.subscriber_summary(object(), str(sub.id))
+
+    assert summary is not None
+    assert summary["balance"] is None
+    assert summary["name"] == "Amaka Okafor"
+
+
+def test_subscriber_summary_propagates_financial_database_failure(monkeypatch):
+    sub = _subscriber()
+    _wire(monkeypatch, subscriber=sub)
+    error = OperationalError("SELECT balance", {}, RuntimeError("query canceled"))
+
+    def failed_read(db: Session, account_id: object) -> None:
+        raise error
+
+    monkeypatch.setattr(ss, "get_customer_financial_position", failed_read)
+    with pytest.raises(OperationalError) as raised:
+        ss.subscriber_summary(object(), str(sub.id))
+
+    assert raised.value is error

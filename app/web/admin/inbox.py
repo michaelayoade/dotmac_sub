@@ -29,6 +29,7 @@ from fastapi.responses import (
     StreamingResponse,
 )
 from pydantic import BaseModel, Field
+from sqlalchemy.exc import DBAPIError
 from sqlalchemy.orm import Session
 
 from app.db import finish_read_transaction, get_db
@@ -90,6 +91,10 @@ from app.services.audit_adapter import AuditActor
 from app.services.auth_dependencies import can, load_permission_keys, require_permission
 from app.services.catalog import plan_family_catalogues
 from app.services.common import coerce_uuid
+from app.services.db_session_adapter import (
+    database_statement_was_canceled,
+    db_session_adapter,
+)
 from app.services.domain_errors import DomainError
 from app.services.file_storage import (
     build_content_disposition,
@@ -246,6 +251,18 @@ def _parse_datetime_field(value: object) -> datetime | None:
     except ValueError:
         return None
     return parsed if parsed.tzinfo else parsed.replace(tzinfo=UTC)
+
+
+def _recover_inbox_read(db: Session, error: DBAPIError) -> HTMLResponse:
+    if not database_statement_was_canceled(error):
+        raise error
+    db_session_adapter.discard_failed_transaction(db)
+    logger.warning("inbox_required_read_canceled")
+    return HTMLResponse(
+        "<p>The Inbox could not finish loading. Refresh to try again.</p>",
+        status_code=503,
+        headers=INBOX_HTML_RESPONSE_HEADERS,
+    )
 
 
 def _prepare_mutation(db: Session) -> None:
@@ -449,14 +466,14 @@ def team_inbox_queue(
         )
     except team_inbox_filters.InboxFilterError as exc:
         raise HTTPException(status_code=422, detail=exc.message) from exc
+    except DBAPIError as exc:
+        return _recover_inbox_read(db, exc)
     if (
-        projection.assignment_counts.state
-        is team_inbox_projection.InboxAssignmentCountsState.unavailable
+        projection.assignment_counts.unavailable_reason
+        is team_inbox_projection.InboxAssignmentCountsUnavailableReason.query_canceled
     ):
-        # PostgreSQL leaves the read transaction aborted after statement
-        # timeout. Recover through the shared read-transaction boundary; no
-        # business writes have occurred on this GET route.
-        finish_read_transaction(db)
+        # The materialized queue is usable once the aborted read is discarded.
+        db_session_adapter.discard_failed_transaction(db)
         team_inbox_sidebar_metrics.apply_read_budget(db)
     projection_finished_at = perf_counter()
     if projection.canonical_url is not None:
@@ -1203,15 +1220,18 @@ def team_inbox_detail(
         actor_person_id = UUID(actor_id) if actor_id else None
     except ValueError:
         actor_person_id = None
-    projection = team_inbox_projection.get_conversation_projection(
-        db,
-        conversation_id=conversation_id,
-        actor_person_id=actor_person_id,
-        message_page=team_inbox_read.InboxTimelineMessagePageRequest(),
-        actor_permission_keys=_request_permission_keys(request, db),
-        include_contact_candidates=False,
-        include_label_usage_counts=False,
-    )
+    try:
+        projection = team_inbox_projection.get_conversation_projection(
+            db,
+            conversation_id=conversation_id,
+            actor_person_id=actor_person_id,
+            message_page=team_inbox_read.InboxTimelineMessagePageRequest(),
+            actor_permission_keys=_request_permission_keys(request, db),
+            include_contact_candidates=False,
+            include_label_usage_counts=False,
+        )
+    except DBAPIError as exc:
+        return _recover_inbox_read(db, exc)
     view = (
         {
             "timeline": projection.timeline,
@@ -1279,13 +1299,16 @@ def team_inbox_contact_context(
     request: Request,
     db: Session = Depends(get_db),
 ):
-    projection = team_inbox_projection.get_conversation_projection(
-        db,
-        conversation_id=conversation_id,
-        actor_person_id=_actor_uuid_from_request(request),
-        message_page=team_inbox_read.InboxTimelineMessagePageRequest(limit=1),
-        include_contact_candidates=False,
-    )
+    try:
+        projection = team_inbox_projection.get_conversation_projection(
+            db,
+            conversation_id=conversation_id,
+            actor_person_id=_actor_uuid_from_request(request),
+            message_page=team_inbox_read.InboxTimelineMessagePageRequest(limit=1),
+            include_contact_candidates=False,
+        )
+    except DBAPIError as exc:
+        return _recover_inbox_read(db, exc)
     if projection is None:
         return HTMLResponse(
             '<p class="p-4 text-sm text-slate-500">Contact context unavailable.</p>',

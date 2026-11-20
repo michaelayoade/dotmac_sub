@@ -7,10 +7,18 @@ from contextlib import contextmanager
 from typing import Protocol
 
 from sqlalchemy import text
+from sqlalchemy.exc import DBAPIError
 from sqlalchemy.orm import Session
 
 from app.db import SessionLocal
 from app.services.adapters import adapter_registry
+
+
+def database_statement_was_canceled(error: DBAPIError) -> bool:
+    sqlstate = getattr(error.orig, "sqlstate", None) or getattr(
+        error.orig, "pgcode", None
+    )
+    return sqlstate == "57014"
 
 
 class DbSessionProvider(Protocol):

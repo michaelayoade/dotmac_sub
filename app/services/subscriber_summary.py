@@ -14,8 +14,11 @@ usage. Connection status here is the cheap DB read over RADIUS accounting.
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Any
+from decimal import Decimal
+from typing import Any, TypedDict
+from uuid import UUID
 
+from fastapi import HTTPException
 from sqlalchemy.orm import Session
 
 from app.services import catalog as catalog_service
@@ -24,10 +27,66 @@ from app.services.customer_financial_position import get_customer_financial_posi
 from app.services.network.radius_sessions import (
     latest_open_accounting_sessions_by_subscription,
 )
+from app.services.prepaid_funding_reconstruction import (
+    PrepaidFundingBaselineMissingError,
+)
 from app.services.status_presentation import (
     account_status_presentation,
     subscription_status_presentation,
 )
+
+
+class SubscriberSummaryStatus(TypedDict):
+    label: str
+    tone: str
+    value: str
+
+
+class SubscriberSummaryPlan(TypedDict):
+    name: str | None
+    price: Decimal | None
+    next_billing_at: datetime | None
+    status_label: str
+    status_tone: str
+
+
+class SubscriberSummaryBalance(TypedDict):
+    outstanding: Decimal
+    overdue: Decimal
+    overdue_count: int
+    prepaid: Decimal
+    currency: str
+    days_overdue: int
+
+
+class SubscriberSummaryConnection(TypedDict):
+    online: bool
+    last_seen_at: datetime | None
+    ip: str | None
+
+
+class SubscriberSummaryAddress(TypedDict):
+    line1: str | None
+    city: str | None
+    region: str | None
+
+
+class SubscriberSummary(TypedDict):
+    id: str
+    url: str
+    is_business: bool
+    name: str | None
+    account_number: str | None
+    subscriber_number: str | None
+    email: str | None
+    phone: str | None
+    since: datetime | None
+    status: SubscriberSummaryStatus
+    plan: SubscriberSummaryPlan | None
+    active_plan_count: int
+    balance: SubscriberSummaryBalance | None
+    connection: SubscriberSummaryConnection | None
+    address: SubscriberSummaryAddress | None
 
 
 def _tone(tone: object) -> str:
@@ -56,19 +115,23 @@ def _display_name(subscriber: Any) -> str | None:
     return joined or getattr(subscriber, "email", None)
 
 
-def subscriber_summary(db: Session, subscriber_id: str | None) -> dict | None:
-    """Return the summary projection for ``subscriber_id`` or ``None``.
-
-    Never raises on partial data: a missing subscription/balance/session leaves
-    that section ``None`` rather than breaking the caller's page.
-    """
+def subscriber_summary(
+    db: Session, subscriber_id: str | None
+) -> SubscriberSummary | None:
+    """Return missing sections as None and propagate database failures."""
     if not subscriber_id:
+        return None
+    try:
+        UUID(subscriber_id)
+    except ValueError:
         return None
     try:
         subscriber = subscriber_service.subscribers.get(
             db=db, subscriber_id=subscriber_id
         )
-    except Exception:  # noqa: BLE001 - a bad/stale id must not break the caller
+    except HTTPException as exc:
+        if exc.status_code != 404:
+            raise
         return None
     if subscriber is None:
         return None
@@ -80,28 +143,24 @@ def subscriber_summary(db: Session, subscriber_id: str | None) -> dict | None:
         getattr(subscriber, "status", None),
         is_active=getattr(subscriber, "is_active", None),
     )
-    status = {
+    status: SubscriberSummaryStatus = {
         "label": presentation.label,
         "tone": _tone(presentation.tone),
         "value": presentation.value,
     }
 
     # Plan — the primary active subscription (there may be several).
-    plan: dict | None = None
-    active_subscription_ids: list = []
-    try:
-        subscriptions = catalog_service.subscriptions.list(
-            db=db,
-            subscriber_id=str(account_id),
-            offer_id=None,
-            status=None,
-            order_by="created_at",
-            order_dir="desc",
-            limit=200,
-            offset=0,
-        )
-    except Exception:  # noqa: BLE001
-        subscriptions = []
+    plan: SubscriberSummaryPlan | None = None
+    subscriptions = catalog_service.subscriptions.list(
+        db=db,
+        subscriber_id=str(account_id),
+        offer_id=None,
+        status=None,
+        order_by="created_at",
+        order_dir="desc",
+        limit=200,
+        offset=0,
+    )
     active = [
         s
         for s in subscriptions
@@ -125,7 +184,7 @@ def subscriber_summary(db: Session, subscriber_id: str | None) -> dict | None:
         }
 
     # Balance — the SOT financial position (currency-safe, per account).
-    balance: dict | None = None
+    balance: SubscriberSummaryBalance | None = None
     if account_id is not None:
         try:
             position = get_customer_financial_position(db, account_id)
@@ -137,18 +196,15 @@ def subscriber_summary(db: Session, subscriber_id: str | None) -> dict | None:
                 "currency": position.currency,
                 "days_overdue": position.days_overdue,
             }
-        except Exception:  # noqa: BLE001
+        except PrepaidFundingBaselineMissingError:
             balance = None
 
     # Connection — cheap RADIUS accounting DB read (never a live device poll).
-    connection: dict | None = None
+    connection: SubscriberSummaryConnection | None = None
     if active_subscription_ids:
-        try:
-            sessions = latest_open_accounting_sessions_by_subscription(
-                db, active_subscription_ids
-            )
-        except Exception:  # noqa: BLE001
-            sessions = {}
+        sessions = latest_open_accounting_sessions_by_subscription(
+            db, active_subscription_ids
+        )
         if sessions:
             observed_at = [
                 value
@@ -172,7 +228,7 @@ def subscriber_summary(db: Session, subscriber_id: str | None) -> dict | None:
 
     # Address — flattened service-address columns (the richer Address model with
     # lat/lng belongs to the network/map surfaces, not this summary).
-    address: dict | None = None
+    address: SubscriberSummaryAddress | None = None
     line1 = getattr(subscriber, "address_line1", None)
     city = getattr(subscriber, "city", None)
     region = getattr(subscriber, "region", None)
