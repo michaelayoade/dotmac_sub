@@ -144,8 +144,8 @@ class TestCustomerPortalUsagePage:
         assert (
             "Service lifecycle history is incomplete for this period." in partial_html
         )
-        assert partial_html.count("How uptime was calculated") == 1
-        assert partial_html.count("How downtime was calculated") == 1
+        assert partial_html.count('aria-label="How uptime was calculated"') == 1
+        assert partial_html.count('aria-label="How downtime was calculated"') == 1
 
         second_service = SubscriptionStatisticsAvailability(
             subscription_id=UUID("00000000-0000-0000-0000-000000000002"),
