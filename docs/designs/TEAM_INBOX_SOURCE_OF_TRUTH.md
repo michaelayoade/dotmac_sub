@@ -58,6 +58,14 @@ matching message/comment conversation IDs are searched without hydrating any
 transcript. Historical hits in continuous mode are mapped through at most 50
 episode links to the current episode. Opening that result loads the newest 10
 messages; older messages remain cursor-paged on demand.
+The message substring branches (subject, body, sender address, and the four
+provider sender-name metadata fields) have PostgreSQL trigram indexes owned by
+Alembic revision 712. The indexes accelerate the existing case-insensitive
+search without changing its matching or ownership rules. An interrupted
+concurrent build is retried only after its exact index shape is verified;
+existing message rows are not rewritten. Check the query plan and response
+time on a migrated PostgreSQL dataset before treating the search timeout as
+resolved. Index size and message-write cost must be monitored after rollout.
 
 Reviewed contact linking uses an optimistic route-version check so two agents
 cannot silently overwrite one another. The owner repairs at most 100 historical

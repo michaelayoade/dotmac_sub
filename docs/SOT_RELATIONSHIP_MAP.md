@@ -23,6 +23,12 @@ capability shards. `app/services/sot_relationships.py` is a compatibility facade
 not a declaration source. When a domain is harmonised, update its owning shard
 and cover the aggregate boundary with tests before migrating more callers.
 
+The `communications.team_inbox_projection` search remains a read-only projection
+over native Inbox messages. Alembic revision 712 owns the physical PostgreSQL
+trigram indexes for its seven message substring predicates; those indexes do
+not own message facts or search meaning. See
+`docs/designs/TEAM_INBOX_SOURCE_OF_TRUTH.md` for the bounded search contract.
+
 The manifest has one canonical graph. Domain, capability/module, and journey
 hierarchies are derived navigation views; they do not own parallel dependency
 lists or service declarations.

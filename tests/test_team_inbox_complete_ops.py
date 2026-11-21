@@ -200,6 +200,32 @@ def test_inbox_search_finds_message_content(db_session):
     assert [item.id for item in result.items] == [str(conversation.id)]
 
 
+def test_inbox_search_preserves_each_message_field_match(db_session):
+    fields = (
+        ("subject", "Subjectneedle"),
+        ("body", "Bodyneedle"),
+        ("from_address", "senderneedle@example.com"),
+        ("from_name", "Fromneedle"),
+        ("contact_name", "Contactneedle"),
+        ("sender_name", "Senderneedle"),
+        ("profile_name", "Profileneedle"),
+    )
+    expected = {}
+    for field, value in fields:
+        conversation = _conversation(db_session)
+        message = _message(db_session, conversation, body="Unrelated message")
+        if field in {"subject", "body", "from_address"}:
+            setattr(message, field, value)
+        else:
+            message.metadata_ = {field: value}
+        expected[value] = str(conversation.id)
+    db_session.flush()
+
+    for value, conversation_id in expected.items():
+        result = team_inbox_read.list_conversations(db_session, search=value)
+        assert [item.id for item in result.items] == [conversation_id]
+
+
 def test_inbox_search_finds_unlinked_provider_contact_name(db_session):
     conversation = _conversation(db_session, subject="Social message")
     _message(
