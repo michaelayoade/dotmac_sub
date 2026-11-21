@@ -3097,6 +3097,7 @@ DOMAIN = DomainSOT(
             module="app.services.customer_service_level",
             owns=(
                 "per-subscription SLA policy resolution and period score",
+                "staff Statistics operational availability projection",
                 "immutable effective-dated SLA policy versions",
                 "immutable SLA period-score revisions and evidence snapshots",
             ),
@@ -3129,8 +3130,12 @@ DOMAIN = DomainSOT(
                 "snapshots; incomplete evidence may prove a breach but can "
                 "never produce passing or at-risk. The "
                 "legacy topology.customer_availability stays the "
-                "admin display authority until the shadow-comparison gate "
-                "cuts over. The restricted admin review compares one exact "
+                "contractual SLA display authority until the shadow-comparison "
+                "gate cuts over. Staff Statistics separately projects "
+                "lifecycle-active time, exact confirmed outage intervals and "
+                "positive subscription-bound monitoring through the same "
+                "interval engine, without an SLA verdict or entitlement claim. "
+                "The restricted admin review compares one exact "
                 "closed month and classifies missing, incomplete, unavailable, "
                 "matching, and unreviewed-difference evidence without guessing "
                 "a cause or tolerance. The selector vocabulary is deliberately "
@@ -3160,6 +3165,15 @@ DOMAIN = DomainSOT(
                             "qualifying downtime intervals",
                             "offer SLA policy inputs",
                             "admin SLA display control",
+                        ),
+                    ),
+                    ConcernContract(
+                        name="staff Statistics operational availability projection",
+                        role=OwnerRole.RESOLVER,
+                        input_names=(
+                            "period-scoped lifecycle evidence",
+                            "positive subscription monitoring evidence",
+                            "qualifying downtime intervals",
                         ),
                     ),
                     ConcernContract(
@@ -3656,9 +3670,11 @@ DOMAIN = DomainSOT(
                 "prefers RADIUS session bytes over imported daily bytes on "
                 "overlapping days, with a labeled bandwidth estimate for "
                 "days without either recorded source. The admin Statistics "
-                "adapter sends the resolved window to the separate legacy "
-                "topology.customer_availability typed read query; usage "
-                "summary does not interpret outage evidence."
+                "adapter sends the selected period to customer.service_level's "
+                "typed staff Statistics operational read, which alone uses "
+                "Africa/Lagos calendar month windows for availability. Usage "
+                "summary retains its own window and does not interpret outage "
+                "evidence."
             ),
             contract=ServiceContract(
                 concerns=tuple(

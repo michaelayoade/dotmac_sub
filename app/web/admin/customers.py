@@ -6,7 +6,7 @@ import json
 import logging
 import uuid
 from collections.abc import Mapping
-from datetime import date, timedelta
+from datetime import date
 from typing import Annotated, Any, Literal
 from urllib.parse import quote_plus
 from uuid import UUID, uuid4
@@ -1784,30 +1784,35 @@ def person_detail_stats(
     )
     availability_stats = None
     availability_message = None
-    availability_start = getattr(usage_result, "effective_start_at", None)
-    availability_end = getattr(usage_result, "effective_end_at", None)
-    if availability_start is not None and availability_end is not None:
-        from app.services.topology.customer_availability import (
-            CustomerAvailabilityQuery,
-            query_customer_availability,
-        )
+    from app.services.customer_service_level import (
+        CustomerStatisticsAvailabilityQuery,
+        StatisticsPeriod,
+        query_customer_statistics_availability,
+    )
 
-        if usage_result.date_range:
-            availability_end = usage_result.date_range.end_at + timedelta(
-                microseconds=1
-            )
-        try:
-            availability_stats = query_customer_availability(
-                db,
-                CustomerAvailabilityQuery(
-                    customer_id=UUID(str(subscriber.id)),
-                    period_start=availability_start,
-                    period_end=availability_end,
+    try:
+        availability_stats = query_customer_statistics_availability(
+            db,
+            CustomerStatisticsAvailabilityQuery(
+                customer_id=UUID(str(subscriber.id)),
+                period=StatisticsPeriod(usage_result.period.value),
+                start_date=(
+                    usage_result.date_range.start_date
+                    if usage_result.date_range is not None
+                    else None
                 ),
-            )
-        except Exception:
-            logger.exception("Customer Statistics availability query failed")
-            availability_message = "Availability evidence could not be loaded."
+                end_date=(
+                    usage_result.date_range.end_date
+                    if usage_result.date_range is not None
+                    else None
+                ),
+            ),
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except Exception:
+        logger.exception("Customer Statistics availability query failed")
+        availability_message = "Availability evidence could not be loaded."
 
     return templates.TemplateResponse(
         "admin/customers/_stats_panel.html",
