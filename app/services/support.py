@@ -3330,6 +3330,7 @@ class Tickets:
                 "infrastructure_idempotency_key_required", "Request key is required."
             )
         payload.metadata_ = {
+            **(payload.metadata_ or {}),
             "base_station_details": name,
             "infrastructure_selection": {
                 "mode": "manual",

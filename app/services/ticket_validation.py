@@ -18,6 +18,7 @@ from sqlalchemy import and_, or_
 from sqlalchemy.orm import Session
 from sqlalchemy.sql import ColumnElement
 
+from app.models.network_monitoring import OutageIncident, OutageIncidentTicketLink
 from app.models.subscriber import Subscriber
 from app.models.support import Ticket, TicketStatus
 from app.schemas.support import TicketCreate
@@ -28,6 +29,7 @@ from app.services.customer_support_links import (
     ticket_unlinked_customer_filter,
 )
 from app.services.domain_errors import DomainError
+from app.services.infrastructure_ticket_selection import InfrastructureKind
 
 
 class TicketValidationError(DomainError):
@@ -276,6 +278,136 @@ class TicketDuplicateResult:
             "has_likely_duplicate": self.has_likely_duplicate,
             "matches": [match.as_dict() for match in self.matches],
         }
+
+
+@dataclass(frozen=True, slots=True)
+class InfrastructureTicketDuplicateInput:
+    title: str
+    description: str
+    ticket_type: str | None
+    asset_kind: InfrastructureKind | None = None
+    asset_id: UUID | None = None
+    manual_name: str | None = None
+
+
+def find_infrastructure_ticket_duplicates(
+    db: Session, payload: InfrastructureTicketDuplicateInput
+) -> TicketDuplicateResult:
+    """Find similar open issues on the selected infrastructure target."""
+    target_column = {
+        InfrastructureKind.basestation: OutageIncident.basestation_id,
+        InfrastructureKind.cabinet: OutageIncident.fdh_cabinet_id,
+        InfrastructureKind.node: OutageIncident.root_node_id,
+    }.get(payload.asset_kind)
+    if target_column is not None and payload.asset_id is not None:
+        current_incident = (
+            db.query(OutageIncident)
+            .filter(target_column == payload.asset_id)
+            .filter(OutageIncident.status.in_(("open", "confirmed")))
+            .order_by(OutageIncident.started_at.desc())
+            .first()
+        )
+        if current_incident is not None and (
+            db.query(OutageIncidentTicketLink.id)
+            .filter(
+                OutageIncidentTicketLink.incident_id == current_incident.id,
+                OutageIncidentTicketLink.role == "infrastructure",
+            )
+            .first()
+        ):
+            # The canonical outage owner will reuse this exact ticket.
+            return TicketDuplicateResult(matches=[])
+        candidates = (
+            db.query(Ticket)
+            .join(
+                OutageIncidentTicketLink,
+                OutageIncidentTicketLink.ticket_id == Ticket.id,
+            )
+            .join(
+                OutageIncident,
+                OutageIncident.id == OutageIncidentTicketLink.incident_id,
+            )
+            .filter(OutageIncidentTicketLink.role == "infrastructure")
+            .filter(target_column == payload.asset_id)
+            .filter(Ticket.is_active.is_(True), Ticket.status.in_(_OPEN_STATUSES))
+            .order_by(Ticket.created_at.desc())
+            .all()
+        )
+    elif payload.manual_name and payload.manual_name.strip():
+        candidates = (
+            db.query(Ticket)
+            .filter(Ticket.is_active.is_(True), Ticket.status.in_(_OPEN_STATUSES))
+            .filter(
+                Ticket.metadata_["infrastructure_selection"]["mode"].as_string()
+                == "manual"
+            )
+            .order_by(Ticket.created_at.desc())
+            .all()
+        )
+        name = _normalize_duplicate_location(payload.manual_name)
+        matching_candidates: list[Ticket] = []
+        for ticket in candidates:
+            metadata = ticket.metadata_ if isinstance(ticket.metadata_, dict) else {}
+            selection = metadata.get("infrastructure_selection")
+            if (
+                isinstance(selection, dict)
+                and _normalize_duplicate_location(selection.get("name")) == name
+            ):
+                matching_candidates.append(ticket)
+        candidates = matching_candidates
+    else:
+        return TicketDuplicateResult(matches=[])
+
+    scored: list[tuple[int, list[str], Ticket]] = []
+    for ticket in candidates:
+        title_similarity = _text_similarity(payload.title, ticket.title)
+        description_similarity = _text_similarity(
+            payload.description, ticket.description
+        )
+        if title_similarity < 0.40 and description_similarity < 0.40:
+            continue
+        reasons = ["same infrastructure"]
+        score = 45
+        if title_similarity >= 0.75:
+            score += 25
+            reasons.append("very similar title")
+        elif title_similarity >= 0.40:
+            score += 15
+            reasons.append("similar title")
+        if description_similarity >= 0.70:
+            score += 20
+            reasons.append("very similar description")
+        elif description_similarity >= 0.40:
+            score += 10
+            reasons.append("similar description")
+        if payload.ticket_type and _normalize_ticket_type(
+            ticket.ticket_type
+        ) == _normalize_ticket_type(payload.ticket_type):
+            score += 15
+            reasons.append("same ticket type")
+        scored.append((score, reasons, ticket))
+    scored.sort(
+        key=lambda item: (item[0], _duplicate_sort_ts(item[2].created_at)), reverse=True
+    )
+    return TicketDuplicateResult(
+        matches=[
+            TicketDuplicateMatch(
+                ticket_id=str(ticket.id),
+                number=ticket.number,
+                title=ticket.title,
+                status=ticket.status or "",
+                ticket_type=ticket.ticket_type,
+                created_at=ticket.created_at,
+                updated_at=ticket.updated_at,
+                score=min(score, 100),
+                confidence="likely"
+                if score >= DUPLICATE_LIKELY_THRESHOLD
+                else "possible",
+                reasons=reasons,
+            )
+            for score, reasons, ticket in scored[:5]
+        ]
+    )
 
 
 def _coerce_optional_uuid(value: UUID | str | None) -> UUID | None:

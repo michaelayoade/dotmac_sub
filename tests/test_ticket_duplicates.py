@@ -10,11 +10,13 @@ from __future__ import annotations
 import pytest
 
 from app.api import support as support_api
+from app.models.network import FdhCabinet
+from app.models.network_monitoring import OutageIncident, OutageIncidentTicketLink
 from app.models.subscriber import Subscriber
 from app.models.support import TicketStatus
 from app.schemas.support import TicketCreate
+from app.services import infrastructure_ticket_selection, ticket_validation
 from app.services import support as support_service
-from app.services import ticket_validation
 from app.services import web_support_tickets as web_service
 
 
@@ -136,6 +138,156 @@ def test_same_base_station_is_duplicate_signal(db_session):
 
     assert [match.ticket_id for match in result.matches] == [str(existing.id)]
     assert "same base station" in result.matches[0].reasons
+
+
+def test_manual_infrastructure_warning_requires_same_name_and_similar_issue(db_session):
+    existing = _create_ticket(
+        db_session,
+        title="FDH 12 link down",
+        description="Cabinet uplink has failed",
+        ticket_type="Cabinet Disconnection",
+        metadata={"infrastructure_selection": {"mode": "manual", "name": "FDH-12"}},
+    )
+    duplicate_input = ticket_validation.InfrastructureTicketDuplicateInput(
+        title="FDH 12 link down",
+        description="Cabinet uplink has failed",
+        ticket_type="Cabinet Disconnection",
+        manual_name="fdh 12",
+    )
+    result = ticket_validation.find_infrastructure_ticket_duplicates(
+        db_session, duplicate_input
+    )
+    assert [match.ticket_id for match in result.matches] == [str(existing.id)]
+    assert (
+        ticket_validation.find_infrastructure_ticket_duplicates(
+            db_session,
+            ticket_validation.InfrastructureTicketDuplicateInput(
+                title=duplicate_input.title,
+                description=duplicate_input.description,
+                ticket_type=duplicate_input.ticket_type,
+                manual_name="FDH 13",
+            ),
+        ).matches
+        == []
+    )
+    assert (
+        ticket_validation.find_infrastructure_ticket_duplicates(
+            db_session,
+            ticket_validation.InfrastructureTicketDuplicateInput(
+                title="Power equipment inspection",
+                description="Routine inspection of batteries",
+                ticket_type=duplicate_input.ticket_type,
+                manual_name="FDH 12",
+            ),
+        ).matches
+        == []
+    )
+
+
+def test_asset_infrastructure_warning_uses_asset_identity(db_session):
+    from uuid import uuid4
+
+    cabinet = FdhCabinet(name=f"FDH {uuid4().hex[:8]}")
+    db_session.add(cabinet)
+    db_session.flush()
+    asset_id = cabinet.id
+    other_asset_id = uuid4()
+    existing = _create_ticket(
+        db_session,
+        title="Cabinet uplink down",
+        description="Cabinet uplink has failed",
+        ticket_type="Cabinet Disconnection",
+    )
+    incident = OutageIncident(status="resolved", fdh_cabinet_id=asset_id)
+    db_session.add(incident)
+    db_session.flush()
+    db_session.add(
+        OutageIncidentTicketLink(
+            incident_id=incident.id,
+            ticket_id=existing.id,
+            role="infrastructure",
+            source="operator",
+        )
+    )
+    db_session.flush()
+
+    def lookup(target_id):
+        return ticket_validation.find_infrastructure_ticket_duplicates(
+            db_session,
+            ticket_validation.InfrastructureTicketDuplicateInput(
+                title="Cabinet uplink down",
+                description="Cabinet uplink has failed",
+                ticket_type="Cabinet Disconnection",
+                asset_kind=infrastructure_ticket_selection.InfrastructureKind.cabinet,
+                asset_id=target_id,
+            ),
+        )
+
+    assert [match.ticket_id for match in lookup(asset_id).matches] == [str(existing.id)]
+    assert lookup(other_asset_id).matches == []
+    incident.status = "open"
+    db_session.flush()
+    assert lookup(asset_id).matches == []  # canonical outage path reuses its ticket
+
+
+def test_manual_infrastructure_create_warns_then_records_override(
+    db_session, monkeypatch
+):
+    from uuid import uuid4
+
+    monkeypatch.setattr(
+        infrastructure_ticket_selection,
+        "allowed_kinds",
+        lambda _db, _type: (infrastructure_ticket_selection.InfrastructureKind.manual,),
+    )
+    existing = _create_ticket(
+        db_session,
+        title="FDH 12 uplink down",
+        description="Cabinet uplink has failed",
+        ticket_type="Cabinet Disconnection",
+        metadata={"infrastructure_selection": {"mode": "manual", "name": "FDH 12"}},
+    )
+    payload = web_service.build_ticket_create_payload(
+        web_service.TicketFormValues(
+            **_form_values(
+                title="FDH 12 uplink down",
+                description="Cabinet uplink has failed",
+                ticket_type="Cabinet Disconnection",
+            )
+        )
+    )
+    selection = web_service.ManualInfrastructureSelection(
+        name="FDH-12", request_key=uuid4()
+    )
+    actor_id = str(uuid4())
+
+    def create(*, duplicate_override):
+        return web_service.create_ticket_from_form(
+            db_session,
+            command=web_service.TicketFormCreateCommand(
+                payload=payload,
+                actor_id=actor_id,
+                infrastructure=selection,
+                infrastructure_permissions=frozenset(
+                    {"support:ticket:create", "monitoring:write"}
+                ),
+                duplicate_override=duplicate_override,
+            ),
+            request=None,
+            attachments=[],
+        )
+
+    with pytest.raises(web_service.DuplicateTicketWarningError) as warning:
+        create(duplicate_override=False)
+    assert [match.ticket_id for match in warning.value.result.matches] == [
+        str(existing.id)
+    ]
+    created = create(duplicate_override=True)
+    assert created.id != existing.id
+    assert created.metadata_["duplicate_override"] is True
+    assert created.metadata_["possible_duplicate_tickets"][0]["ticket_id"] == str(
+        existing.id
+    )
 
 
 def test_same_subscriber_open_ticket_is_flagged(db_session, subscriber):
