@@ -204,7 +204,7 @@ def test_inbox_search_preserves_each_message_field_match(db_session):
     fields = (
         ("subject", "Subjectneedle"),
         ("body", "Bodyneedle"),
-        ("from_address", "senderneedle@example.com"),
+        ("from_address", "addressneedle@example.com"),
         ("from_name", "Fromneedle"),
         ("contact_name", "Contactneedle"),
         ("sender_name", "Senderneedle"),
