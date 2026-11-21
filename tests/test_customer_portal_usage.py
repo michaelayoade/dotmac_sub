@@ -16,6 +16,10 @@ class TestCustomerPortalUsagePage:
             UsagePageResult,
             UsageSummaryProjection,
         )
+        from app.services.customer_service_level import (
+            CustomerStatisticsAvailability,
+            SubscriptionStatisticsAvailability,
+        )
         from app.services.usage_summary import (
             FilteredUsageTotals,
             UsageDateRange,
@@ -64,11 +68,23 @@ class TestCustomerPortalUsagePage:
             "usage_subscription_id": None,
             "bandwidth_chart_initial_stats": None,
             "usage_view": "table",
-            "availability_stats": SimpleNamespace(
-                uptime_days=2.5,
-                downtime_days=0.5,
-                state="estimated",
-                reason="PON availability uses daily working-ONT ratios rather than continuous outage history.",
+            "availability_stats": CustomerStatisticsAvailability(
+                period_start=datetime(2026, 5, 1, tzinfo=UTC),
+                period_end=datetime(2026, 5, 4, tzinfo=UTC),
+                services=(
+                    SubscriptionStatisticsAvailability(
+                        subscription_id=UUID("00000000-0000-0000-0000-000000000001"),
+                        label="Test service",
+                        expected_seconds=3 * 86400,
+                        connected_seconds=int(2.5 * 86400),
+                        confirmed_downtime_seconds=int(0.5 * 86400),
+                        unknown_seconds=0,
+                        uptime_lower_seconds=int(2.5 * 86400),
+                        uptime_upper_seconds=int(2.5 * 86400),
+                        provisional=False,
+                        reason=None,
+                    ),
+                ),
             ),
         }
         html = template.render(usage_portal=result.to_template_context(), **context)
@@ -83,8 +99,12 @@ class TestCustomerPortalUsagePage:
             "2.50",
             "Uptime",
             "Downtime",
-            "Estimated: PON availability",
+            "How uptime was calculated",
+            "How downtime was calculated",
+            "2.50",
+            "12.0 hours",
             "2026-05-01 to 2026-05-03",
+            "Availability period:",
         ):
             assert expected in html
 
@@ -99,18 +119,65 @@ class TestCustomerPortalUsagePage:
             usage_portal=result.to_template_context(),
             **{
                 **context,
-                "availability_stats": SimpleNamespace(
-                    uptime_days=None,
-                    downtime_days=None,
-                    state="partial",
-                    reason="Monitoring data exists for only 1 of 3 days.",
+                "availability_stats": CustomerStatisticsAvailability(
+                    period_start=datetime(2026, 5, 1, tzinfo=UTC),
+                    period_end=datetime(2026, 5, 4, tzinfo=UTC),
+                    services=(
+                        SubscriptionStatisticsAvailability(
+                            subscription_id=UUID(
+                                "00000000-0000-0000-0000-000000000001"
+                            ),
+                            label="Test service",
+                            expected_seconds=None,
+                            connected_seconds=None,
+                            confirmed_downtime_seconds=None,
+                            unknown_seconds=None,
+                            uptime_lower_seconds=None,
+                            uptime_upper_seconds=None,
+                            provisional=True,
+                            reason="Service lifecycle history is incomplete for this period.",
+                        ),
+                    ),
                 ),
             },
         )
         assert (
-            "Availability unavailable: Monitoring data exists for only 1 of 3 days."
-            in partial_html
+            "Service lifecycle history is incomplete for this period." in partial_html
         )
+        assert partial_html.count("How uptime was calculated") == 1
+        assert partial_html.count("How downtime was calculated") == 1
+
+        second_service = SubscriptionStatisticsAvailability(
+            subscription_id=UUID("00000000-0000-0000-0000-000000000002"),
+            label="Second service",
+            expected_seconds=24 * 3600,
+            connected_seconds=22 * 3600,
+            confirmed_downtime_seconds=0,
+            unknown_seconds=2 * 3600,
+            uptime_lower_seconds=22 * 3600,
+            uptime_upper_seconds=24 * 3600,
+            provisional=True,
+            reason="2.0 hours are unexplained. This time is not assumed to be uptime.",
+        )
+        provisional_html = template.render(
+            usage_portal=result.to_template_context(),
+            **{
+                **context,
+                "availability_stats": replace(
+                    context["availability_stats"],
+                    services=(
+                        context["availability_stats"].services[0],
+                        second_service,
+                    ),
+                ),
+            },
+        )
+        assert "Second service" in provisional_html
+        assert "Provisional" in provisional_html
+        assert "22.0 hours–1.00 days" in provisional_html
+        assert "Unknown or unattributed offline: 2.0 hours" in provisional_html
+        assert provisional_html.count('aria-label="How uptime was calculated"') == 1
+        assert provisional_html.count('aria-label="How downtime was calculated"') == 1
 
     def test_typed_custom_date_range_is_inclusive(
         self, db_session, subscriber, subscription
