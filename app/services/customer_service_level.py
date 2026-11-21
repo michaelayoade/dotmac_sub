@@ -16,8 +16,9 @@ import hashlib
 import json
 import logging
 from dataclasses import dataclass
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, date, datetime, time, timedelta
 from decimal import Decimal
+from enum import StrEnum
 from typing import TYPE_CHECKING
 from uuid import UUID
 from zoneinfo import ZoneInfo
@@ -386,6 +387,186 @@ def score_subscription_period(
     ).score
 
 
+class StatisticsPeriod(StrEnum):
+    current = "current"
+    last = "last"
+    custom = "custom"
+
+
+@dataclass(frozen=True, slots=True)
+class CustomerStatisticsAvailabilityQuery:
+    """Staff-only, per-service operational availability request."""
+
+    customer_id: UUID
+    period: StatisticsPeriod
+    start_date: date | None = None
+    end_date: date | None = None
+    evaluated_at: datetime | None = None
+
+    def __post_init__(self) -> None:
+        if self.period is StatisticsPeriod.custom:
+            if self.start_date is None or self.end_date is None:
+                raise ValueError("Custom availability requires both dates")
+            if self.start_date > self.end_date:
+                raise ValueError("Start date must be on or before end date")
+        elif self.start_date is not None or self.end_date is not None:
+            raise ValueError("Dates require the custom availability period")
+
+
+@dataclass(frozen=True, slots=True)
+class SubscriptionStatisticsAvailability:
+    subscription_id: UUID
+    label: str
+    expected_seconds: int | None
+    connected_seconds: int | None
+    confirmed_downtime_seconds: int | None
+    unknown_seconds: int | None
+    uptime_lower_seconds: int | None
+    uptime_upper_seconds: int | None
+    provisional: bool
+    reason: str | None
+
+
+@dataclass(frozen=True, slots=True)
+class CustomerStatisticsAvailability:
+    period_start: datetime
+    period_end: datetime
+    services: tuple[SubscriptionStatisticsAvailability, ...]
+
+    @property
+    def period_label(self) -> str:
+        zone = ZoneInfo(SLA_CALENDAR_TIMEZONE)
+        start = self.period_start.astimezone(zone).strftime("%d %b %Y")
+        last_day = (self.period_end - timedelta(microseconds=1)).astimezone(zone)
+        return f"{start} to {last_day:%d %b %Y}"
+
+
+def statistics_period_bounds(
+    query: CustomerStatisticsAvailabilityQuery,
+) -> tuple[datetime, datetime]:
+    """Africa/Lagos calendar periods, represented as half-open UTC spans."""
+
+    now = _utc(query.evaluated_at or datetime.now(UTC)) or datetime.now(UTC)
+    zone = ZoneInfo(SLA_CALENDAR_TIMEZONE)
+    month_start, _ = period_bounds(now)
+    if query.period is StatisticsPeriod.current:
+        return month_start, now
+    if query.period is StatisticsPeriod.last:
+        local_month_start = month_start.astimezone(zone)
+        previous_day = local_month_start.date() - timedelta(days=1)
+        previous_start = datetime.combine(
+            previous_day.replace(day=1), time.min, tzinfo=zone
+        )
+        return previous_start.astimezone(UTC), month_start
+    assert query.start_date is not None and query.end_date is not None
+    start = datetime.combine(query.start_date, time.min, tzinfo=zone).astimezone(UTC)
+    end = datetime.combine(
+        query.end_date + timedelta(days=1), time.min, tzinfo=zone
+    ).astimezone(UTC)
+    if start >= now:
+        raise ValueError("Availability dates must begin before now")
+    return start, min(end, now)
+
+
+def query_customer_statistics_availability(
+    db: Session, query: CustomerStatisticsAvailabilityQuery
+) -> CustomerStatisticsAvailability:
+    """Project the existing SLA evidence engine without contractual scoring.
+
+    A service with unsupported lifecycle history is explicitly unavailable;
+    we never substitute its mutable current status for historical evidence.
+    """
+
+    start, end = statistics_period_bounds(query)
+    subscriptions = (
+        db.query(Subscription)
+        .filter(Subscription.subscriber_id == query.customer_id)
+        .order_by(Subscription.created_at, Subscription.id)
+        .all()
+    )
+    services: list[SubscriptionStatisticsAvailability] = []
+    for subscription in subscriptions:
+        offer_name = subscription.offer.name if subscription.offer else "Service"
+        label = f"{offer_name} · {str(subscription.id)[:8].upper()}"
+        lifecycle = lifecycle_history_for_period(
+            db, subscription.id, period_start=start, period_end=end
+        )
+        if not lifecycle.complete:
+            services.append(
+                SubscriptionStatisticsAvailability(
+                    subscription_id=subscription.id,
+                    label=label,
+                    expected_seconds=None,
+                    connected_seconds=None,
+                    confirmed_downtime_seconds=None,
+                    unknown_seconds=None,
+                    uptime_lower_seconds=None,
+                    uptime_upper_seconds=None,
+                    provisional=True,
+                    reason="Service lifecycle history is incomplete for this period.",
+                )
+            )
+            continue
+        expected = intersect(
+            union(
+                Span(_utc(item.start) or start, _utc(item.end) or end)
+                for item in lifecycle.active_windows
+                if (_utc(item.end) or end) > (_utc(item.start) or start)
+            ),
+            (Span(start, end),),
+        )
+        evidence = _availability_evidence(
+            db,
+            subscription.id,
+            period_start=start,
+            period_end=end,
+            expected=expected,
+            contractual_exclusions=False,
+        )
+        expected_seconds = total_seconds(expected)
+        downtime_seconds = total_seconds(evidence.downtime)
+        unknown_seconds = total_seconds(evidence.unknown)
+        connected_seconds = total_seconds(evidence.connected)
+        lower_seconds = total_seconds(subtract(evidence.connected, evidence.downtime))
+        upper_seconds = expected_seconds - downtime_seconds
+        provisional = not evidence.accounting_complete or unknown_seconds > 0
+        reason = None
+        if expected_seconds == 0:
+            reason = "No proven active service time in this period."
+        elif unknown_seconds > 0:
+            if unknown_seconds < 60:
+                unknown_label = f"{unknown_seconds} seconds"
+            elif unknown_seconds < 3600:
+                unknown_label = f"{unknown_seconds / 60:.1f} minutes"
+            elif unknown_seconds < 86400:
+                unknown_label = f"{unknown_seconds / 3600:.1f} hours"
+            else:
+                unknown_label = f"{unknown_seconds / 86400:.2f} days"
+            reason = (
+                f"{unknown_label} are unexplained. "
+                "This time is not assumed to be uptime."
+            )
+        elif not evidence.accounting_complete:
+            reason = "Some connection evidence is invalid; uptime is provisional."
+        services.append(
+            SubscriptionStatisticsAvailability(
+                subscription_id=subscription.id,
+                label=label,
+                expected_seconds=expected_seconds,
+                connected_seconds=connected_seconds,
+                confirmed_downtime_seconds=downtime_seconds,
+                unknown_seconds=unknown_seconds,
+                uptime_lower_seconds=lower_seconds,
+                uptime_upper_seconds=upper_seconds,
+                provisional=provisional,
+                reason=reason,
+            )
+        )
+    return CustomerStatisticsAvailability(
+        period_start=start, period_end=end, services=tuple(services)
+    )
+
+
 def _complete_verdict(
     *,
     policy: SlaPolicyVersion | None,
@@ -423,6 +604,21 @@ class _MonitoringSnapshot:
     span: Span
     source_id: UUID
     fingerprint: str
+
+
+@dataclass(frozen=True, slots=True)
+class _AvailabilityEvidence:
+    """Shared interval calculation for contractual and operational reads."""
+
+    monitoring: tuple[_MonitoringSnapshot, ...]
+    connected: tuple[Span, ...]
+    downtime: tuple[Span, ...]
+    excluded: tuple[Span, ...]
+    unknown: tuple[Span, ...]
+    outage_rows: tuple[dict[str, object], ...]
+    interval_ids: tuple[str, ...]
+    accounting_complete: bool
+    accounting_issues: tuple[str, ...]
 
 
 @dataclass(frozen=True, slots=True)
@@ -524,6 +720,90 @@ def _segment_verdict(
     )
 
 
+def _availability_evidence(
+    db: Session,
+    subscription_id: UUID,
+    *,
+    period_start: datetime,
+    period_end: datetime,
+    expected: tuple[Span, ...],
+    contractual_exclusions: bool,
+) -> _AvailabilityEvidence:
+    """Use one interval engine for the SLA score and staff Statistics cards."""
+
+    accounting = accounting_coverage_for_period(
+        db,
+        subscription_id,
+        period_start=period_start,
+        period_end=period_end,
+    )
+    monitoring = tuple(
+        _MonitoringSnapshot(
+            span=Span(item.starts_at, item.ends_at),
+            source_id=item.source_id,
+            fingerprint=_fingerprint(
+                subscription_id,
+                item.starts_at.isoformat(),
+                item.ends_at.isoformat(),
+                "radius_accounting_session",
+                item.source_id,
+            ),
+        )
+        for item in accounting.intervals
+    )
+    monitored = intersect(expected, (item.span for item in monitoring))
+    confirmed: list[Span] = []
+    exclusion_candidates: list[Span] = []
+    outage_rows: list[dict[str, object]] = []
+    interval_ids: list[str] = []
+    for interval in intervals_for_subscription(db, subscription_id, since=period_start):
+        if interval.state != ImpactState.confirmed_unavailable.value:
+            continue
+        interval_start = max(_utc(interval.started_at) or period_start, period_start)
+        interval_end = min(_utc(interval.ended_at) or period_end, period_end)
+        if interval_end <= interval_start:
+            continue
+        span = Span(interval_start, interval_end)
+        interval_ids.append(str(interval.id))
+        outage_rows.append(
+            {
+                "id": str(interval.id),
+                "start": interval_start.isoformat(),
+                "end": interval_end.isoformat(),
+                "quality": interval.quality,
+                "exclusion": interval.exclusion_candidate,
+                "finalized_at": (
+                    (_utc(interval.finalized_at) or interval.finalized_at).isoformat()
+                    if interval.finalized_at is not None
+                    else None
+                ),
+            }
+        )
+        if interval.exclusion_candidate is None and interval.quality == "exact":
+            confirmed.append(span)
+        else:
+            exclusion_candidates.append(span)
+
+    downtime = intersect(expected, confirmed)
+    excluded = (
+        subtract(intersect(expected, exclusion_candidates), downtime)
+        if contractual_exclusions
+        else ()
+    )
+    unknown = subtract(expected, union(monitored, downtime, excluded))
+    return _AvailabilityEvidence(
+        monitoring=monitoring,
+        connected=monitored,
+        downtime=downtime,
+        excluded=excluded,
+        unknown=unknown,
+        outage_rows=tuple(outage_rows),
+        interval_ids=tuple(sorted(interval_ids)),
+        accounting_complete=accounting.complete,
+        accounting_issues=accounting.issues,
+    )
+
+
 def _calculate_period_score(
     db: Session,
     subscription: Subscription,
@@ -585,70 +865,26 @@ def _calculate_period_score(
                 )
     eligible = union(item.span for item in eligibility_rows)
 
-    accounting = accounting_coverage_for_period(
+    evidence = _availability_evidence(
         db,
         subscription.id,
         period_start=start,
         period_end=measured_end,
+        expected=eligible,
+        contractual_exclusions=True,
     )
-    monitoring_rows = tuple(
-        _MonitoringSnapshot(
-            span=Span(item.starts_at, item.ends_at),
-            source_id=item.source_id,
-            fingerprint=_fingerprint(
-                subscription.id,
-                item.starts_at.isoformat(),
-                item.ends_at.isoformat(),
-                "radius_accounting_session",
-                item.source_id,
-            ),
-        )
-        for item in accounting.intervals
+    monitoring_rows = evidence.monitoring
+    downtime = evidence.downtime
+    excluded = evidence.excluded
+    unknown = evidence.unknown
+
+    base_complete = (
+        lifecycle.complete and entitlement_complete and evidence.accounting_complete
     )
-    monitored = intersect(eligible, (item.span for item in monitoring_rows))
-
-    qualifying: list[Span] = []
-    exclusion_candidates: list[Span] = []
-    outage_rows: list[dict[str, object]] = []
-    interval_ids: list[str] = []
-    for interval in intervals_for_subscription(db, subscription.id, since=start):
-        if interval.state != ImpactState.confirmed_unavailable.value:
-            continue
-        interval_start = max(_utc(interval.started_at) or start, start)
-        interval_end = min(_utc(interval.ended_at) or measured_end, measured_end)
-        if interval_end <= interval_start:
-            continue
-        span = Span(interval_start, interval_end)
-        interval_ids.append(str(interval.id))
-        outage_rows.append(
-            {
-                "id": str(interval.id),
-                "start": interval_start.isoformat(),
-                "end": interval_end.isoformat(),
-                "quality": interval.quality,
-                "exclusion": interval.exclusion_candidate,
-                "finalized_at": (
-                    (_utc(interval.finalized_at) or interval.finalized_at).isoformat()
-                    if interval.finalized_at is not None
-                    else None
-                ),
-            }
-        )
-        if interval.exclusion_candidate is None and interval.quality == "exact":
-            qualifying.append(span)
-        else:
-            exclusion_candidates.append(span)
-
-    downtime = intersect(eligible, qualifying)
-    excluded = subtract(intersect(eligible, exclusion_candidates), downtime)
-    known = union(monitored, downtime, excluded)
-    unknown = subtract(eligible, known)
-
-    base_complete = lifecycle.complete and entitlement_complete and accounting.complete
     completeness_issues = [
         *(f"lifecycle:{issue}" for issue in lifecycle.issues),
         *(f"entitlement:{issue}" for issue in entitlement_issues),
-        *(f"monitoring:{issue}" for issue in accounting.issues),
+        *(f"monitoring:{issue}" for issue in evidence.accounting_issues),
     ]
     if unknown:
         completeness_issues.append("monitoring:unknown_eligible_coverage")
@@ -741,7 +977,7 @@ def _calculate_period_score(
             }
             for item in monitoring_rows
         ],
-        "outages": outage_rows,
+        "outages": evidence.outage_rows,
         "policies": [
             {
                 "start": item.start.isoformat(),
@@ -766,7 +1002,7 @@ def _calculate_period_score(
         verdict=verdict,
         policy=compatibility_policy,
         evidence_digest=evidence_digest,
-        interval_ids=tuple(sorted(interval_ids)),
+        interval_ids=evidence.interval_ids,
         policy_segments=tuple(segment_scores),
         evidence_complete=evidence_complete,
         completeness_issues=tuple(sorted(set(completeness_issues))),

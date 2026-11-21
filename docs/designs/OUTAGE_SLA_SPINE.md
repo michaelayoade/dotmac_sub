@@ -205,6 +205,38 @@ this design. This restriction changes presentation, not the scoring authority.
   and candidate evidence, but no ordinary admin surface presents both as
   competing authorities.
 
+### Staff Customer Statistics operational cards
+
+Customer Details > Service > Statistics keeps its two Uptime and Downtime cards.
+These are operational time measurements, not a contractual SLA score, verdict,
+or compensation decision. `customer.service_level` owns their typed read and
+reuses the period interval engine already used by the shadow scorer. This
+staff-only projection does not arm the contractual admin display selector.
+
+- Current means the Africa/Lagos month from its first midnight through now;
+  Last period is the complete preceding calendar month; Custom includes the
+  selected end date. Internally all windows are half-open UTC intervals.
+- Each subscription is reported separately. The two cards show a per-service
+  breakdown when several services exist; they do not silently sum service
+  durations.
+- Expected service time is the subscription's proven lifecycle-active time in
+  the window. Suspended and other non-active lifecycle time is excluded.
+- Confirmed provider downtime is the union of exact, confirmed,
+  subscription-linked `customer_outage_intervals` inside that active time.
+  Pending, estimated, excluded, and unsupported evidence cannot create a
+  provider-downtime number. Complaint tickets and RADIUS disconnections alone
+  never create such an interval.
+- Exact subscription-bound RADIUS accounting proves connected time only up to
+  its last observation. Connected time outside confirmed incidents is the
+  uptime lower bound; active time less confirmed downtime is the upper bound.
+  The gap is labelled unknown, and the Uptime card is provisional until
+  monitoring explains it. Incomplete lifecycle history shows an explicit
+  unavailable reason instead of guessing active time.
+- Only these two cards have information controls. Their disclosures explain
+  the period, provenance, expected time, connected time, confirmed downtime,
+  unknown time, and any per-service breakdown. The controls work on hover,
+  focus, and click.
+
 ## 5. Planned maintenance (approved)
 
 `network.maintenance_lifecycle` owns draft → approved → announced →
