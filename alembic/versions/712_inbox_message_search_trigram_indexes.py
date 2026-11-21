@@ -10,8 +10,6 @@ Revision ID: 712_inbox_message_search_trigram_indexes
 Revises: 711_repair_inbox_reply_window_index
 """
 
-from __future__ import annotations
-
 from collections.abc import Sequence
 from dataclasses import dataclass
 
