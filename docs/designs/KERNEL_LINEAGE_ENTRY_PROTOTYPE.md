@@ -42,6 +42,11 @@ They do not prove the local a97 environment is the pinned installation, verify
 registry wheel bytes, or establish actual migrated-schema acceptance. The hosted
 lockfile install and complete-chain tests remain required.
 
+The disposable fixture's current Sub head guard is
+`712_inbox_message_search_trigram_indexes`. Advancing this guard follows the
+Sub migration chain; it does not change the pinned Kernel wheel or the fixed
+collision closure.
+
 ## Fixed closure and independent observations
 
 The fixed fifteen relations are audit_events, communication_suppressions,
