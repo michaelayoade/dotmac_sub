@@ -17,7 +17,7 @@ def test_inbox_search_indexes_cover_every_message_predicate() -> None:
     columns = set(re.findall(r"InboxMessage\.(\w+)\.ilike\(like\)", search))
     metadata_keys = set(
         re.findall(
-            r"InboxMessage\.metadata_\[\s*literal_column\(\"'(\w+)'\"\)\s*\]\s*\.as_string\(\)\s*\.ilike\(like\)",
+            r'_indexed_message_metadata_text\("(\w+)"\)\.ilike\(like\)',
             search,
         )
     )
@@ -58,6 +58,8 @@ def test_inbox_search_indexes_cover_every_message_predicate() -> None:
             )
     assert indexed_columns == columns
     assert indexed_metadata == metadata_keys
+    assert "type_=JSON.JSONStrIndexType()" in owner
+    assert "literal_execute=True" in owner
     assert "CREATE INDEX CONCURRENTLY" in migration
     assert "gin_trgm_ops" in migration
     assert "_index_state(bind, index)" in migration
