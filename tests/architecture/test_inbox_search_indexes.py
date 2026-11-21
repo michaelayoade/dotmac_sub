@@ -17,7 +17,7 @@ def test_inbox_search_indexes_cover_every_message_predicate() -> None:
     columns = set(re.findall(r"InboxMessage\.(\w+)\.ilike\(like\)", search))
     metadata_keys = set(
         re.findall(
-            r'InboxMessage\.metadata_\["(\w+)"\]\.as_string\(\)\.ilike\(like\)',
+            r"InboxMessage\.metadata_\[\s*literal_column\(\"'(\w+)'\"\)\s*\]\s*\.as_string\(\)\s*\.ilike\(like\)",
             search,
         )
     )

@@ -7,7 +7,17 @@ from enum import StrEnum
 from urllib.parse import urlencode
 from uuid import UUID
 
-from sqlalchemy import and_, case, exists, false, func, literal, or_, select
+from sqlalchemy import (
+    and_,
+    case,
+    exists,
+    false,
+    func,
+    literal,
+    literal_column,
+    or_,
+    select,
+)
 from sqlalchemy.orm import Session, aliased
 from sqlalchemy.sql.elements import ColumnElement
 
@@ -1684,10 +1694,18 @@ def list_conversations(
                     InboxMessage.subject.ilike(like),
                     InboxMessage.body.ilike(like),
                     InboxMessage.from_address.ilike(like),
-                    InboxMessage.metadata_["from_name"].as_string().ilike(like),
-                    InboxMessage.metadata_["contact_name"].as_string().ilike(like),
-                    InboxMessage.metadata_["sender_name"].as_string().ilike(like),
-                    InboxMessage.metadata_["profile_name"].as_string().ilike(like),
+                    InboxMessage.metadata_[literal_column("'from_name'")]
+                    .as_string()
+                    .ilike(like),
+                    InboxMessage.metadata_[literal_column("'contact_name'")]
+                    .as_string()
+                    .ilike(like),
+                    InboxMessage.metadata_[literal_column("'sender_name'")]
+                    .as_string()
+                    .ilike(like),
+                    InboxMessage.metadata_[literal_column("'profile_name'")]
+                    .as_string()
+                    .ilike(like),
                 )
             )
             .distinct()
