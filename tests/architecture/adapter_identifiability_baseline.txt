@@ -32,12 +32,12 @@ app/services/web_integrations.py 8
 app/services/web_integrations_webhooks.py 5
 app/services/web_network_alarm_rules.py 2
 app/services/web_network_authorization_presets.py 2
-app/services/web_network_core_devices_forms.py 36
+app/services/web_network_core_devices_forms.py 35
 app/services/web_network_core_devices_views.py 59
 app/services/web_network_core_runtime.py 11
 app/services/web_network_cpes.py 12
 app/services/web_network_dns_threats.py 4
-app/services/web_network_fdh.py 7
+app/services/web_network_fdh.py 6
 app/services/web_network_fiber.py 38
 app/services/web_network_ip_actions.py 2
 app/services/web_network_ipam_ledger.py 3
@@ -57,7 +57,7 @@ app/services/web_network_pop_sites.py 16
 app/services/web_network_radius.py 14
 app/services/web_network_service_ports.py 1
 app/services/web_network_speedtests.py 9
-app/services/web_network_splice_closures.py 8
+app/services/web_network_splice_closures.py 7
 app/services/web_network_topology.py 3
 app/services/web_network_tr069.py 5
 app/services/web_network_vlans.py 10

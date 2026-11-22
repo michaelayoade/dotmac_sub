@@ -1,0 +1,23 @@
+{% macro notes(presentation) %}
+{% if presentation.text %}
+<div class="sm:col-span-2 min-w-0">
+    <dt class="text-sm font-medium text-slate-500 dark:text-slate-400">Notes</dt>
+    <dd class="mt-1 whitespace-pre-wrap text-sm text-slate-900 [overflow-wrap:anywhere] dark:text-white">{{ presentation.text }}</dd>
+</div>
+{% endif %}
+{% if presentation.evidence %}
+<div class="sm:col-span-2 min-w-0">
+    <dt class="text-sm font-medium text-slate-500 dark:text-slate-400">Import evidence</dt>
+    <dd class="mt-1">
+        <details class="rounded-lg border border-slate-200 bg-slate-50 p-3 dark:border-slate-700 dark:bg-slate-900/50">
+            <summary class="cursor-pointer text-sm font-medium text-primary-600 dark:text-primary-400">View source details</summary>
+            <dl class="mt-3 grid gap-2 text-xs sm:grid-cols-2">
+                {% for label, value in presentation.evidence %}
+                <div class="min-w-0"><dt class="font-medium text-slate-500 dark:text-slate-400">{{ label }}</dt><dd class="mt-0.5 select-text font-mono text-slate-800 [overflow-wrap:anywhere] dark:text-slate-200">{{ value }}</dd></div>
+                {% endfor %}
+            </dl>
+        </details>
+    </dd>
+</div>
+{% endif %}
+{% endmacro %}

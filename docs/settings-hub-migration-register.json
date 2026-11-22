@@ -9165,7 +9165,7 @@
         "app/services/web_integrations.py:629",
         "app/services/web_integrations_webhooks.py:306",
         "app/services/web_integrations_webhooks.py:339",
-        "app/services/web_network_core_devices_forms.py:1470",
+        "app/services/web_network_core_devices_forms.py:1488",
         "app/services/web_network_core_devices_views.py:2544",
         "app/services/web_network_ont_actions/config_setters.py:1321",
         "app/services/web_network_ont_actions/config_setters.py:1333",
@@ -11021,7 +11021,7 @@
       },
       "disposition": "Mapped to hub; preserve registered type, validation, tenant scope and owner-command writes",
       "source_references": [
-        "app/services/network/fiber_services.py:90"
+        "app/services/network/fiber_services.py:147"
       ]
     },
     {

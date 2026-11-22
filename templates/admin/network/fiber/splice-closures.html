@@ -1,5 +1,6 @@
 {% extends "layouts/admin.html" %}
 {% from "components/ui/macros.html" import status_badge %}
+{% from "admin/network/fiber/_inventory_controls.html" import search_form, pager %}
 
 {% block title %}Splice Closures - Admin{% endblock %}
 
@@ -27,12 +28,14 @@
                     <svg class="h-6 w-6 text-teal-600 dark:text-teal-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 5a1 1 0 011-1h14a1 1 0 011 1v2a1 1 0 01-1 1H5a1 1 0 01-1-1V5zM4 13a1 1 0 011-1h6a1 1 0 011 1v6a1 1 0 01-1 1H5a1 1 0 01-1-1v-6zM16 13a1 1 0 011-1h2a1 1 0 011 1v6a1 1 0 01-1 1h-2a1 1 0 01-1-1v-6z"/></svg>
                 </div>
                 <div>
-                    <p class="text-sm font-medium text-slate-500 dark:text-slate-400">Total Closures</p>
+                    <p class="text-sm font-medium text-slate-500 dark:text-slate-400">{{ 'Matching' if search else 'Total' }} Closures</p>
                     <p class="text-2xl font-bold text-slate-900 dark:text-white">{{ stats.total }}</p>
                 </div>
             </div>
         </div>
     </div>
+
+    {{ search_form('/admin/network/splice-closures', 'splice closures', search, pagination) }}
 
     <!-- Closures Table -->
     <div class="overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm dark:border-slate-700 dark:bg-slate-800">
@@ -60,7 +63,9 @@
                             </div>
                         </td>
                         <td class="px-6 py-4">
-                            <p class="text-sm text-slate-500 dark:text-slate-400 truncate max-w-xs">{{ closure.notes or '-' }}</p>
+                            {% if closure.notes and closure.notes.lstrip().startswith('{') %}
+                            <a href="/admin/network/splice-closures/{{ closure.id }}" class="text-sm text-primary-600 hover:underline dark:text-primary-400">Imported evidence · View details</a>
+                            {% else %}<p class="max-w-xs truncate text-sm text-slate-500 dark:text-slate-400">{{ closure.notes or '-' }}</p>{% endif %}
                         </td>
                         <td class="px-6 py-4 whitespace-nowrap">
                             {% if closure.is_active %}
@@ -86,5 +91,6 @@
             </table>
         </div>
     </div>
+    {{ pager(request, pagination, 'Splice closure') }}
 </div>
 {% endblock %}

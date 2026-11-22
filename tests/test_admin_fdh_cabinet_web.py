@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from starlette.datastructures import FormData
 
-from app.models.network import FdhCabinet
+from app.models.network import FdhCabinet, Splitter
 from app.services import web_network_fdh
 
 
@@ -24,6 +24,47 @@ def test_fdh_list_paginates_all_active_cabinets(db_session):
     assert first_page["pagination"]["has_next"] is True
     assert len(last_page["cabinets"]) == 5
     assert last_page["pagination"]["has_next"] is False
+
+
+def test_fdh_list_searches_name_and_code_in_active_scope(db_session):
+    db_session.add_all(
+        [
+            FdhCabinet(name="Central cabinet", code="FDH-CENTRAL", is_active=True),
+            FdhCabinet(name="Percent % cabinet", code="FDH-PERCENT", is_active=True),
+            FdhCabinet(name="Retired cabinet", code="FDH-RETIRED", is_active=False),
+        ]
+    )
+    db_session.flush()
+
+    matched = web_network_fdh.list_page_data(db_session, search="central")
+    retired = web_network_fdh.list_page_data(db_session, search="FDH-RETIRED")
+    percent = web_network_fdh.list_page_data(db_session, search="%")
+
+    assert matched["stats"]["total"] == 1
+    assert matched["cabinets"][0].code == "FDH-CENTRAL"
+    assert retired["stats"]["total"] == 0
+    assert percent["stats"]["total"] == 1
+
+
+def test_splitter_list_searches_its_cabinet_identity(db_session):
+    cabinet = FdhCabinet(name="North hub", code="FDH-NORTH", is_active=True)
+    db_session.add(cabinet)
+    db_session.flush()
+    db_session.add(
+        Splitter(
+            name="SPL-001",
+            fdh_id=cabinet.id,
+            splitter_ratio="1:8",
+            input_ports=1,
+            output_ports=8,
+            is_active=True,
+        )
+    )
+    db_session.flush()
+
+    found = web_network_fdh.list_splitters_page_data(db_session, search="FDH-NORTH")
+    assert found["stats"]["total"] == 1
+    assert found["splitters"][0].fdh.name == "North hub"
 
 
 def test_coordinate_validation_accepts_complete_wgs84_and_empty_pair():

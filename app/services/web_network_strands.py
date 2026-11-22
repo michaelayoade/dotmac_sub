@@ -7,6 +7,7 @@ from typing import cast
 
 from sqlalchemy.orm import Session
 
+from app.schemas.fiber_inventory import FiberInventoryQuery
 from app.schemas.network import FiberStrandCreate, FiberStrandUpdate
 from app.services import network as network_service
 from app.services.common import validate_enum
@@ -14,25 +15,28 @@ from app.services.common import validate_enum
 logger = logging.getLogger(__name__)
 
 
-def list_page_data(db: Session) -> dict[str, object]:
+def list_page_data(
+    db: Session, *, page: int = 1, per_page: int = 50, search: str = ""
+) -> dict[str, object]:
     """Return strand list and summary stats for index page."""
-    strands = network_service.fiber_strands.list(
-        db=db,
-        cable_name=None,
-        status=None,
-        order_by="cable_name",
-        order_dir="asc",
-        limit=200,
-        offset=0,
+    result = network_service.fiber_strands.inventory_page(
+        db, FiberInventoryQuery(page, per_page, search, active_only=True)
     )
+    status_counts = network_service.fiber_strands.inventory_status_counts(db, search)
     return {
-        "strands": strands,
+        "strands": result.items,
+        "search": search.strip()[:120],
         "stats": {
-            "total": len(strands),
-            "available": sum(
-                1 for strand in strands if strand.status.value == "available"
-            ),
-            "in_use": sum(1 for strand in strands if strand.status.value == "in_use"),
+            "total": result.total,
+            **status_counts,
+        },
+        "pagination": {
+            "page": result.page,
+            "per_page": result.per_page,
+            "total": result.total,
+            "total_pages": result.total_pages,
+            "has_prev": result.page > 1,
+            "has_next": result.page < result.total_pages,
         },
     }
 

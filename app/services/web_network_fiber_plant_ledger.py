@@ -1,7 +1,7 @@
 """Fiber-plant ledger page data — a projection over the fiber SOT owners.
 
 Consolidates the per-asset fiber inventory pages into one archetype-D ledger.
-Each asset type is sourced from its OWNER `.list()` read (not the legacy
+Each asset type is sourced from its OWNER `.inventory_page()` read (not the legacy
 web_network_fdh/... adapters, which bypass the owners) and normalised into a
 uniform {columns, rows} shape so the template renders generically. Status tone
 comes from the server-owned fiber presentations. Read-only projection.
@@ -9,8 +9,11 @@ comes from the server-owned fiber presentations. Read-only projection.
 
 from __future__ import annotations
 
+from typing import TypeAlias
+
 from sqlalchemy.orm import Session
 
+from app.schemas.fiber_inventory import FiberInventoryPage, FiberInventoryQuery
 from app.services import fiber_change_requests
 from app.services.network.fiber_services import (
     fiber_splice_closures as closure_owner,
@@ -29,8 +32,6 @@ from app.services.status_presentation import (
     fiber_strand_status_presentation,
 )
 
-_LIMIT = 500
-
 # facet order + labels
 ASSET_TYPES: tuple[tuple[str, str], ...] = (
     ("fdh", "FDH cabinets"),
@@ -40,6 +41,7 @@ ASSET_TYPES: tuple[tuple[str, str], ...] = (
     ("change_requests", "Change requests"),
 )
 _VALID = {key for key, _ in ASSET_TYPES}
+LedgerRows: TypeAlias = tuple[list, list, FiberInventoryPage[object]]
 
 
 def _loc(obj: object) -> str:
@@ -50,61 +52,94 @@ def _loc(obj: object) -> str:
     return f"{float(lat):.5f}, {float(lng):.5f}"
 
 
-def _fdh_rows(db: Session) -> tuple[list, list]:
-    columns = [("Name", "name"), ("Code", "code"), ("Location", "location")]
-    rows = [
-        {"id": str(c.id), "name": c.name, "code": c.code or "—", "location": _loc(c)}
-        for c in fdh_owner.list(db, limit=_LIMIT)
+def _fdh_rows(db: Session, query: FiberInventoryQuery) -> LedgerRows:
+    columns = [
+        ("Name", "name"),
+        ("Code", "code"),
+        ("Location", "location"),
+        ("Inventory", "inventory"),
     ]
-    return columns, rows
+    page = fdh_owner.inventory_page(db, query)
+    rows = [
+        {
+            "id": str(c.id),
+            "name": c.name,
+            "code": c.code or "—",
+            "location": _loc(c),
+            "inventory": "Active" if c.is_active else "Inactive",
+        }
+        for c in page.items
+    ]
+    return columns, rows, page
 
 
-def _splitter_rows(db: Session) -> tuple[list, list]:
-    columns = [("Name", "name"), ("Ratio", "ratio"), ("Outputs", "ports")]
+def _splitter_rows(db: Session, query: FiberInventoryQuery) -> LedgerRows:
+    columns = [
+        ("Name", "name"),
+        ("Ratio", "ratio"),
+        ("Outputs", "ports"),
+        ("Inventory", "inventory"),
+    ]
+    page = splitter_owner.inventory_page(db, query)
     rows = [
         {
             "id": str(s.id),
             "name": s.name,
             "ratio": s.splitter_ratio or "—",
             "ports": s.output_ports,
+            "inventory": "Active" if s.is_active else "Inactive",
         }
-        for s in splitter_owner.list(db, limit=_LIMIT)
+        for s in page.items
     ]
-    return columns, rows
+    return columns, rows, page
 
 
-def _strand_rows(db: Session) -> tuple[list, list]:
-    columns = [("Cable", "cable"), ("Strand", "number"), ("Status", "__status")]
+def _strand_rows(db: Session, query: FiberInventoryQuery) -> LedgerRows:
+    columns = [
+        ("Cable", "cable"),
+        ("Strand", "number"),
+        ("Status", "__status"),
+        ("Inventory", "inventory"),
+    ]
+    page = strand_owner.inventory_page(db, query)
     rows = [
         {
             "id": str(s.id),
             "cable": s.cable_name,
             "number": s.strand_number,
             "status": fiber_strand_status_presentation(s.status),
+            "inventory": "Active" if s.is_active else "Inactive",
         }
-        for s in strand_owner.list(db, limit=_LIMIT)
+        for s in page.items
     ]
-    return columns, rows
+    return columns, rows, page
 
 
-def _closure_rows(db: Session) -> tuple[list, list]:
-    columns = [("Name", "name"), ("Location", "location")]
+def _closure_rows(db: Session, query: FiberInventoryQuery) -> LedgerRows:
+    columns = [("Name", "name"), ("Location", "location"), ("Inventory", "inventory")]
+    page = closure_owner.inventory_page(db, query)
     rows = [
-        {"id": str(c.id), "name": c.name, "location": _loc(c)}
-        for c in closure_owner.list(db, limit=_LIMIT)
+        {
+            "id": str(c.id),
+            "name": c.name,
+            "location": _loc(c),
+            "inventory": "Active" if c.is_active else "Inactive",
+        }
+        for c in page.items
     ]
-    return columns, rows
+    return columns, rows, page
 
 
-def _change_request_rows(db: Session) -> tuple[list, list]:
+def _change_request_rows(db: Session, query: FiberInventoryQuery) -> LedgerRows:
     columns = [
         ("Asset", "asset"),
         ("Operation", "operation"),
         ("Status", "__status"),
         ("Requested", "requested"),
     ]
+    page = fiber_change_requests.inventory_page(db, query)
     rows = []
-    for r in fiber_change_requests.list_requests(db):
+    for r in page.items:
         operation = getattr(r.operation, "value", r.operation)
         requested = r.created_at.strftime("%b %d, %Y") if r.created_at else "—"
         rows.append(
@@ -116,7 +151,7 @@ def _change_request_rows(db: Session) -> tuple[list, list]:
                 "requested": requested,
             }
         )
-    return columns, rows
+    return columns, rows, page
 
 
 _DISPATCH = {
@@ -128,25 +163,45 @@ _DISPATCH = {
 }
 
 
-def fiber_plant_ledger_data(db: Session, asset_type: str = "fdh") -> dict:
+def fiber_plant_ledger_data(
+    db: Session,
+    asset_type: str = "fdh",
+    *,
+    page: int = 1,
+    per_page: int = 50,
+    search: str = "",
+    include_activation_count: bool = True,
+) -> dict:
     """Return the ledger page data for one fiber asset type (from its owner)."""
     from app.services.network import as_built_plant_projection
 
     asset_type = asset_type if asset_type in _VALID else "fdh"
-    columns, rows = _DISPATCH[asset_type](db)
+    query = FiberInventoryQuery(page=page, per_page=per_page, search=search)
+    columns, rows, result = _DISPATCH[asset_type](db, query)
     return {
         # An accepted as-built whose projected cable is still inactive is
         # absent from every ledger facet and every map, so the plant hub counts
         # it explicitly rather than leaving it to be noticed.
         "awaiting_activation_count": (
             as_built_plant_projection.awaiting_activation_count(db)
+            if include_activation_count
+            else 0
         ),
         "asset_type": asset_type,
         "asset_label": dict(ASSET_TYPES)[asset_type],
         "asset_types": [{"key": k, "label": lbl} for k, lbl in ASSET_TYPES],
         "columns": columns,
         "rows": rows,
-        "row_count": len(rows),
+        "row_count": result.total,
+        "search": query.normalized_search,
+        "pagination": {
+            "page": result.page,
+            "per_page": result.per_page,
+            "total": result.total,
+            "total_pages": result.total_pages,
+            "has_prev": result.page > 1,
+            "has_next": result.page < result.total_pages,
+        },
         "detail_base": {
             "fdh": "/admin/network/fdh-cabinets/",
             "splitters": "/admin/network/splitters/",

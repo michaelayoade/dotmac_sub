@@ -13,12 +13,13 @@ from sqlalchemy.orm import Session
 from starlette.datastructures import FormData
 
 from app.models.network import FdhCabinet, Splitter
+from app.schemas.fiber_inventory import FiberInventoryQuery
 from app.schemas.network import SplitterCreate, SplitterUpdate
 from app.services import catalog as catalog_service
 from app.services.audit_helpers import diff_dicts, model_to_dict
 from app.services.common import coerce_uuid
+from app.services.fiber_note_presentation import present_fiber_notes
 from app.services.network.splitters import (
-    FdhCabinetPageQuery,
     FdhCabinets,
 )
 from app.services.network.splitters import (
@@ -37,21 +38,21 @@ def _form_str(form: FormData, key: str, default: str = "") -> str:
 
 
 def list_page_data(
-    db: Session, *, page: int = 1, per_page: int = 50
+    db: Session, *, page: int = 1, per_page: int = 50, search: str = ""
 ) -> dict[str, object]:
     """Return FDH cabinet list and summary stats."""
-    result = FdhCabinets.active_page(
-        db,
-        FdhCabinetPageQuery(page=page, per_page=per_page),
+    result = FdhCabinets.inventory_page(
+        db, FiberInventoryQuery(page, per_page, search, active_only=True)
     )
     total = result.total
-    cabinets = result.cabinets
+    cabinets = result.items
     return {
         "cabinets": cabinets,
+        "search": search.strip()[:120],
         "stats": {"total": total},
         "pagination": {
             "page": result.page,
-            "per_page": min(max(per_page, 10), 100),
+            "per_page": result.per_page,
             "total": total,
             "total_pages": result.total_pages,
             "has_prev": result.page > 1,
@@ -279,18 +280,33 @@ def detail_page_data(db: Session, cabinet_id: str) -> dict[str, object] | None:
     splitters = db.scalars(
         select(Splitter).where(Splitter.fdh_id == cabinet.id).order_by(Splitter.name)
     ).all()
-    return {"cabinet": cabinet, "splitters": splitters}
+    return {
+        "cabinet": cabinet,
+        "splitters": splitters,
+        "notes_presentation": present_fiber_notes(cabinet.notes),
+    }
 
 
-def list_splitters_page_data(db: Session) -> dict[str, object]:
+def list_splitters_page_data(
+    db: Session, *, page: int = 1, per_page: int = 50, search: str = ""
+) -> dict[str, object]:
     """Return splitter list and summary stats."""
-    splitters = db.scalars(
-        select(Splitter)
-        .where(Splitter.is_active.is_(True))
-        .order_by(Splitter.name)
-        .limit(200)
-    ).all()
-    return {"splitters": splitters, "stats": {"total": len(splitters)}}
+    result = splitter_service.inventory_page(
+        db, FiberInventoryQuery(page, per_page, search, active_only=True)
+    )
+    return {
+        "splitters": result.items,
+        "stats": {"total": result.total},
+        "search": search.strip()[:120],
+        "pagination": {
+            "page": result.page,
+            "per_page": result.per_page,
+            "total": result.total,
+            "total_pages": result.total_pages,
+            "has_prev": result.page > 1,
+            "has_next": result.page < result.total_pages,
+        },
+    }
 
 
 def cabinets_for_splitter_forms(db: Session) -> list[FdhCabinet]:
@@ -490,4 +506,8 @@ def splitter_detail_page_data(
         .where(SplitterPort.splitter_id == splitter.id)
         .order_by(SplitterPort.port_number)
     ).all()
-    return {"splitter": splitter, "ports": ports}
+    return {
+        "splitter": splitter,
+        "ports": ports,
+        "notes_presentation": present_fiber_notes(splitter.notes),
+    }

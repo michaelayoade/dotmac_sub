@@ -6,7 +6,8 @@ from uuid import UUID
 
 from fastapi import HTTPException
 from pydantic import ValidationError
-from sqlalchemy.orm import Session
+from sqlalchemy import or_
+from sqlalchemy.orm import Session, joinedload
 
 from app.models.network import (
     FdhCabinet,
@@ -15,6 +16,12 @@ from app.models.network import (
     SplitterPort,
     SplitterPortAssignment,
     SplitterPortType,
+)
+from app.schemas.fiber_inventory import (
+    FiberInventoryPage,
+    FiberInventoryQuery,
+    page_number,
+    page_result,
 )
 from app.schemas.network import (
     FdhCabinetUpdate,
@@ -42,6 +49,7 @@ from app.services.query_builders import (
     apply_active_state,
     apply_optional_equals,
     apply_optional_ilike,
+    literal_contains_pattern,
 )
 
 logger = logging.getLogger(__name__)
@@ -70,6 +78,31 @@ class FdhCabinets(CRUDManager[FdhCabinet]):
     not_found_detail = "FDH cabinet not found"
     soft_delete_field = "is_active"
     soft_delete_value = False
+
+    @staticmethod
+    def inventory_page(
+        db: Session, query: FiberInventoryQuery
+    ) -> FiberInventoryPage[FdhCabinet]:
+        rows = db.query(FdhCabinet)
+        if query.active_only:
+            rows = rows.filter(FdhCabinet.is_active.is_(True))
+        if search := query.normalized_search:
+            term = literal_contains_pattern(search)
+            rows = rows.filter(
+                or_(
+                    FdhCabinet.name.ilike(term, escape="\\"),
+                    FdhCabinet.code.ilike(term, escape="\\"),
+                )
+            )
+        total = rows.count()
+        page = page_number(query, total)
+        items = (
+            rows.order_by(FdhCabinet.name, FdhCabinet.id)
+            .offset((page - 1) * query.page_size)
+            .limit(query.page_size)
+            .all()
+        )
+        return page_result(query, total, items)
 
     @staticmethod
     def active_page(db: Session, query: FdhCabinetPageQuery) -> FdhCabinetPage:
@@ -134,6 +167,34 @@ class Splitters(CRUDManager[Splitter]):
     not_found_detail = "Splitter not found"
     soft_delete_field = "is_active"
     soft_delete_value = False
+
+    @staticmethod
+    def inventory_page(
+        db: Session, query: FiberInventoryQuery
+    ) -> FiberInventoryPage[Splitter]:
+        rows = db.query(Splitter)
+        if query.active_only:
+            rows = rows.filter(Splitter.is_active.is_(True))
+        if search := query.normalized_search:
+            rows = rows.outerjoin(FdhCabinet, Splitter.fdh_id == FdhCabinet.id)
+            term = literal_contains_pattern(search)
+            rows = rows.filter(
+                or_(
+                    Splitter.name.ilike(term, escape="\\"),
+                    FdhCabinet.name.ilike(term, escape="\\"),
+                    FdhCabinet.code.ilike(term, escape="\\"),
+                )
+            )
+        total = rows.count()
+        page = page_number(query, total)
+        items = (
+            rows.options(joinedload(Splitter.fdh))
+            .order_by(Splitter.name, Splitter.id)
+            .offset((page - 1) * query.page_size)
+            .limit(query.page_size)
+            .all()
+        )
+        return page_result(query, total, items)
 
     @classmethod
     def create(cls, db: Session, payload, *, commit: bool = True):

@@ -1,4 +1,5 @@
 {% extends "layouts/admin.html" %}
+{% from "admin/network/fiber/_inventory_controls.html" import search_form, pager %}
 
 {% block title %}Fiber Strands - Admin{% endblock %}
 
@@ -26,7 +27,7 @@
                     <svg class="h-6 w-6 text-indigo-600 dark:text-indigo-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"/></svg>
                 </div>
                 <div>
-                    <p class="text-sm font-medium text-slate-500 dark:text-slate-400">Total Strands</p>
+                    <p class="text-sm font-medium text-slate-500 dark:text-slate-400">{{ 'Matching' if search else 'Total' }} Strands</p>
                     <p class="text-2xl font-bold text-slate-900 dark:text-white">{{ stats.total }}</p>
                 </div>
             </div>
@@ -54,6 +55,8 @@
             </div>
         </div>
     </div>
+
+    {{ search_form('/admin/network/fiber-strands', 'fiber strands', search, pagination) }}
 
     <!-- Strands Table -->
     <div class="overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm dark:border-slate-700 dark:bg-slate-800">
@@ -119,5 +122,6 @@
             </table>
         </div>
     </div>
+    {{ pager(request, pagination, 'Fiber strand') }}
 </div>
 {% endblock %}

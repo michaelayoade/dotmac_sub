@@ -1,0 +1,61 @@
+{% from "components/ui/macros.html" import status_presentation_badge %}
+<section id="fiber-plant-content" class="space-y-5" aria-label="Fiber plant inventory">
+    <nav class="-mb-px flex gap-6 overflow-x-auto border-b border-slate-200 dark:border-slate-800" aria-label="Asset types">
+        {% for t in asset_types %}
+        {% set tab_url = '/admin/network/fiber-plant?type=' ~ t.key ~ '&per_page=' ~ pagination.per_page %}
+        <a href="{{ tab_url }}" hx-get="{{ tab_url }}" hx-target="#fiber-plant-content" hx-swap="outerHTML" hx-push-url="true" hx-indicator="#fiber-plant-loading"
+           {% if t.key == asset_type %}aria-current="page"{% endif %}
+           class="{% if t.key == asset_type %}border-accent-500 text-accent-700 dark:text-accent-300{% else %}border-transparent text-slate-500 hover:border-slate-300 hover:text-slate-800 dark:text-slate-400 dark:hover:text-slate-200{% endif %} whitespace-nowrap border-b-2 px-1 py-3 text-sm font-semibold transition-colors">{{ t.label }}</a>
+        {% endfor %}
+    </nav>
+
+    <div class="flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
+        <form action="/admin/network/fiber-plant" method="get" hx-get="/admin/network/fiber-plant" hx-target="#fiber-plant-content" hx-swap="outerHTML" hx-push-url="true" hx-indicator="#fiber-plant-loading" class="flex w-full flex-wrap items-end gap-2 sm:max-w-xl" role="search">
+            <input type="hidden" name="type" value="{{ asset_type }}">
+            <input type="hidden" name="per_page" value="{{ pagination.per_page }}">
+            <div class="min-w-48 flex-1">
+                <label for="fiber-plant-search" class="mb-1 block text-xs font-medium text-slate-600 dark:text-slate-300">Search {{ asset_label | lower }}</label>
+                <input id="fiber-plant-search" name="search" type="search" maxlength="120" value="{{ search }}" placeholder="Search this list" class="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 placeholder:text-slate-400 focus:border-accent-500 focus:ring-accent-500 dark:border-slate-700 dark:bg-slate-800 dark:text-white">
+            </div>
+            <button type="submit" class="rounded-lg bg-accent-600 px-4 py-2 text-sm font-semibold text-white hover:bg-accent-700">Search</button>
+            {% if search %}<a href="/admin/network/fiber-plant?type={{ asset_type }}&per_page={{ pagination.per_page }}" hx-get="/admin/network/fiber-plant?type={{ asset_type }}&per_page={{ pagination.per_page }}" hx-target="#fiber-plant-content" hx-swap="outerHTML" hx-push-url="true" class="rounded-lg border border-slate-300 px-4 py-2 text-sm font-medium text-slate-700 dark:border-slate-700 dark:text-slate-200">Clear</a>{% endif %}
+        </form>
+        <p id="fiber-plant-loading" class="htmx-indicator text-xs text-slate-500" role="status">Loading {{ asset_label | lower }}…</p>
+    </div>
+
+    <div class="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm dark:border-slate-800 dark:bg-slate-900">
+        <div class="flex items-center justify-between border-b border-slate-200 px-5 py-3 dark:border-slate-800">
+            <h2 class="font-display text-sm font-semibold text-slate-900 dark:text-white">{{ asset_label }} <span class="ml-1 font-normal text-slate-400 dark:text-slate-500">· {{ row_count }}</span></h2>
+        </div>
+        <div class="overflow-x-auto">
+            <table class="min-w-full divide-y divide-slate-100 dark:divide-slate-800">
+                <thead><tr class="bg-slate-50 dark:bg-slate-800/40">
+                    {% for col in columns %}<th scope="col" class="px-5 py-2.5 text-left text-[10.5px] font-semibold uppercase tracking-[0.1em] text-slate-400 dark:text-slate-500">{{ col[0] }}</th>{% endfor %}
+                </tr></thead>
+                <tbody class="divide-y divide-slate-100 dark:divide-slate-800/70">
+                    {% for row in rows %}
+                    <tr class="transition-colors hover:bg-slate-50 dark:hover:bg-slate-800/50">
+                        {% for col in columns %}
+                        <td class="max-w-xs px-5 py-3 text-sm text-slate-700 [overflow-wrap:anywhere] dark:text-slate-200">
+                            {%- if col[1] == '__status' -%}
+                                {{ status_presentation_badge(row.status, size="sm") }}
+                            {%- elif loop.first and detail_base -%}
+                                <a href="{{ detail_base }}{{ row.id }}" class="font-medium text-slate-900 hover:text-accent-600 dark:text-white dark:hover:text-accent-400">{{ row[col[1]] }}</a>
+                            {%- else -%}{{ row[col[1]] }}{%- endif -%}
+                        </td>
+                        {% endfor %}
+                    </tr>
+                    {% else %}<tr><td colspan="{{ columns | length }}" class="px-5 py-10 text-center text-sm text-slate-500 dark:text-slate-400">{% if search %}No {{ asset_label | lower }} match this search.{% else %}No {{ asset_label | lower }} found.{% endif %}</td></tr>{% endfor %}
+                </tbody>
+            </table>
+        </div>
+        <nav class="flex flex-wrap items-center justify-between gap-3 border-t border-slate-200 px-5 py-3 text-sm dark:border-slate-800" aria-label="{{ asset_label }} pages">
+            <p class="text-slate-500 dark:text-slate-400">{% if pagination.total %}Showing {{ (pagination.page - 1) * pagination.per_page + 1 }}–{{ [pagination.page * pagination.per_page, pagination.total] | min }} of {{ pagination.total }}{% else %}0 results{% endif %}</p>
+            <div class="flex items-center gap-3">
+                {% if pagination.has_prev %}{% set prev_url = request.url.include_query_params(type=asset_type, page=pagination.page - 1, per_page=pagination.per_page, search=search) %}<a href="{{ prev_url }}" hx-get="{{ prev_url }}" hx-target="#fiber-plant-content" hx-swap="outerHTML" hx-push-url="true" hx-indicator="#fiber-plant-loading" class="rounded-lg border border-slate-300 px-3 py-1.5 font-medium dark:border-slate-700">Previous</a>{% endif %}
+                <span class="text-slate-600 dark:text-slate-300">Page {{ pagination.page }} of {{ pagination.total_pages }}</span>
+                {% if pagination.has_next %}{% set next_url = request.url.include_query_params(type=asset_type, page=pagination.page + 1, per_page=pagination.per_page, search=search) %}<a href="{{ next_url }}" hx-get="{{ next_url }}" hx-target="#fiber-plant-content" hx-swap="outerHTML" hx-push-url="true" hx-indicator="#fiber-plant-loading" class="rounded-lg border border-slate-300 px-3 py-1.5 font-medium dark:border-slate-700">Next</a>{% endif %}
+            </div>
+        </nav>
+    </div>
+</section>

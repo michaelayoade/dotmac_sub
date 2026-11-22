@@ -31,11 +31,12 @@
         ]
     ) %}
         <form method="GET" action="/admin/network/core-devices" class="contents">
+            <input type="hidden" name="per_page" value="{{ pagination.per_page }}">
             {% if role_filter %}
             <input type="hidden" name="role" value="{{ role_filter }}">
             {% endif %}
             <label for="search" class="sr-only">Search</label>
-            <input id="search" name="search" type="search" value="{{ search_filter or '' }}"
+            <input id="search" name="search" type="search" maxlength="120" value="{{ search_filter or '' }}"
                 placeholder="Search name, host, IP, vendor..."
                 class="block w-64 rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-700 shadow-sm focus:border-blue-500 focus:ring-blue-500 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-200">
             <label for="pop_site_id" class="sr-only">Site</label>
@@ -66,6 +67,7 @@
             </button>
         </form>
         <form method="GET" action="/admin/network/core-devices" class="contents">
+            <input type="hidden" name="per_page" value="{{ pagination.per_page }}">
             {% if role_filter %}
             <input type="hidden" name="role" value="{{ role_filter }}">
             {% endif %}
@@ -272,6 +274,14 @@
             </table>
         </div>
     {% endcall %}
+    <nav class="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-slate-200 bg-white px-4 py-3 text-sm dark:border-slate-700 dark:bg-slate-800" aria-label="Core device pages">
+        <p class="text-slate-500 dark:text-slate-400">{% if pagination.total %}Showing {{ (pagination.page - 1) * pagination.per_page + 1 }}–{{ [pagination.page * pagination.per_page, pagination.total] | min }} of {{ pagination.total }}{% else %}0 results{% endif %}</p>
+        <div class="flex items-center gap-3">
+            {% if pagination.has_prev %}<a href="{{ request.url.include_query_params(page=pagination.page - 1, per_page=pagination.per_page) }}" class="rounded-lg border border-slate-300 px-3 py-1.5 font-medium dark:border-slate-600">Previous</a>{% endif %}
+            <span class="text-slate-600 dark:text-slate-300">Page {{ pagination.page }} of {{ pagination.total_pages }}</span>
+            {% if pagination.has_next %}<a href="{{ request.url.include_query_params(page=pagination.page + 1, per_page=pagination.per_page) }}" class="rounded-lg border border-slate-300 px-3 py-1.5 font-medium dark:border-slate-600">Next</a>{% endif %}
+        </div>
+    </nav>
 </div>
 
 {{ animation_styles() }}

@@ -435,7 +435,7 @@ jobs:
             --base "origin/$BASE" $MODE
 
   architecture-shards:
-    name: Architecture Tests (shard ${{ matrix.shard }}/2)
+    name: Architecture Tests (shard ${{ matrix.shard }}/4)
     needs: [changes, python-environment]
     if: needs.changes.outputs.docs-only != 'true'
     runs-on: ubuntu-latest
@@ -443,7 +443,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        shard: [1, 2]
+        shard: [1, 2, 3, 4]
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
 
@@ -454,7 +454,7 @@ jobs:
       - name: Run architecture guards
         env:
           ARCHITECTURE_SHARD: ${{ matrix.shard }}
-          ARCHITECTURE_SHARDS: 2
+          ARCHITECTURE_SHARDS: 4
         run: make test-architecture
 
   architecture:
@@ -467,7 +467,7 @@ jobs:
         if: needs.changes.outputs.docs-only == 'true'
         run: echo "Architecture tests are not needed for documentation-only changes."
 
-      - name: Require both architecture shards
+      - name: Require all architecture shards
         if: needs.changes.outputs.docs-only != 'true'
         env:
           ARCHITECTURE_SHARDS_RESULT: ${{ needs.architecture-shards.result }}
