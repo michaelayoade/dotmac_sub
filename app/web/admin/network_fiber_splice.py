@@ -2,7 +2,7 @@
 
 from typing import cast
 
-from fastapi import APIRouter, Depends, Request
+from fastapi import APIRouter, Depends, Query, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.templating import Jinja2Templates
 from pydantic import ValidationError
@@ -51,8 +51,16 @@ def _base_context(
     response_class=HTMLResponse,
     dependencies=[Depends(require_permission("network:fiber:read"))],
 )
-def fiber_strands_list(request: Request, db: Session = Depends(get_db)):
-    page_data = web_network_strands_service.list_page_data(db)
+def fiber_strands_list(
+    request: Request,
+    page: int = Query(default=1, ge=1),
+    per_page: int = Query(default=50, ge=10, le=100),
+    search: str = Query(default="", max_length=120),
+    db: Session = Depends(get_db),
+):
+    page_data = web_network_strands_service.list_page_data(
+        db, page=page, per_page=per_page, search=search
+    )
     context = _base_context(
         request, db, active_page="fiber-strands", active_menu="fiber"
     )
@@ -237,8 +245,16 @@ def fiber_strand_update(
     response_class=HTMLResponse,
     dependencies=[Depends(require_permission("network:fiber:read"))],
 )
-def splice_closures_list(request: Request, db: Session = Depends(get_db)):
-    page_data = web_network_splice_closures_service.list_page_data(db)
+def splice_closures_list(
+    request: Request,
+    page: int = Query(default=1, ge=1),
+    per_page: int = Query(default=50, ge=10, le=100),
+    search: str = Query(default="", max_length=120),
+    db: Session = Depends(get_db),
+):
+    page_data = web_network_splice_closures_service.list_page_data(
+        db, page=page, per_page=per_page, search=search
+    )
     context = _base_context(
         request, db, active_page="splice-closures", active_menu="fiber"
     )

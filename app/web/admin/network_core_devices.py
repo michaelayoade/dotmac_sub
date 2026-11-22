@@ -87,7 +87,7 @@ def _base_context(
 )
 def network_devices_consolidated(
     tab: str = "core",
-    search: str | None = None,
+    search: str | None = Query(default=None, max_length=120),
 ):
     """Folded into the unified device ledger (docs/design/NETWORK_IA_RATIONALIZATION.md).
 
@@ -158,6 +158,8 @@ def network_backups_overview(
 )
 def core_devices_list(
     request: Request,
+    page: int = Query(default=1, ge=1),
+    per_page: int = Query(default=50, ge=10, le=100),
     role: str | None = None,
     device_type: str | None = None,
     status: str | None = None,
@@ -173,6 +175,8 @@ def core_devices_list(
         device_type=device_type,
         pop_site_id=pop_site_id,
         search=search,
+        page=page,
+        per_page=per_page,
     )
     refresh_param = (request.query_params.get("refresh") or "").strip().lower()
     force_refresh = refresh_param in {"1", "true", "yes", "on"}

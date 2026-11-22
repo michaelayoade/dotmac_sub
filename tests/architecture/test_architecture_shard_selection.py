@@ -7,7 +7,7 @@ from scripts.ci.select_architecture_shard import (
 
 
 def test_architecture_shards_cover_each_module_once() -> None:
-    groups = partition_architecture_files(shards=2)
+    groups = partition_architecture_files(shards=4)
     assert all(groups)
     selected = [path for group in groups for path in group]
     assert len(selected) == len(set(selected))

@@ -1,4 +1,5 @@
 {% extends "layouts/admin.html" %}
+{% from "admin/network/fiber/_notes.html" import notes as fiber_notes %}
 {% from "components/ui/macros.html" import status_badge %}
 
 {% block title %}{{ cabinet.name }} - FDH Cabinet - Admin{% endblock %}
@@ -56,7 +57,7 @@
                     <dl class="grid grid-cols-1 gap-6 sm:grid-cols-2">
                         <div>
                             <dt class="text-sm font-medium text-slate-500 dark:text-slate-400">Cabinet Code</dt>
-                            <dd class="mt-1 text-sm text-slate-900 dark:text-white font-mono">{{ cabinet.code or '-' }}</dd>
+                            <dd class="mt-1 font-mono text-sm text-slate-900 [overflow-wrap:anywhere] dark:text-white">{{ cabinet.code or '-' }}</dd>
                         </div>
                         <div>
                             <dt class="text-sm font-medium text-slate-500 dark:text-slate-400">Region</dt>
@@ -66,12 +67,7 @@
                             <dt class="text-sm font-medium text-slate-500 dark:text-slate-400">Splitters</dt>
                             <dd class="mt-1 text-sm text-slate-900 dark:text-white">{{ splitters | length }}</dd>
                         </div>
-                        {% if cabinet.notes %}
-                        <div class="sm:col-span-2">
-                            <dt class="text-sm font-medium text-slate-500 dark:text-slate-400">Notes</dt>
-                            <dd class="mt-1 text-sm text-slate-900 dark:text-white whitespace-pre-wrap">{{ cabinet.notes }}</dd>
-                        </div>
-                        {% endif %}
+                        {{ fiber_notes(notes_presentation) }}
                     </dl>
                 </div>
             </div>

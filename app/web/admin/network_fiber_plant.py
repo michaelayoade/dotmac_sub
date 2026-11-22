@@ -171,16 +171,34 @@ def _identity_proposal_response(
 def fiber_plant_consolidated(
     request: Request,
     asset_type: str = Query(default="fdh", alias="type"),
+    page: int = Query(default=1, ge=1),
+    per_page: int = Query(default=50, ge=10, le=100),
+    search: str = Query(default="", max_length=120),
     db: Session = Depends(get_db),
 ):
     """Consolidated fiber-plant ledger, projected from the fiber SOT owners."""
-    context = _base_context(request, db, active_page="fiber-plant", active_menu="fiber")
+    is_partial = request.headers.get("HX-Request") == "true"
+    context = (
+        {"request": request}
+        if is_partial
+        else _base_context(request, db, active_page="fiber-plant", active_menu="fiber")
+    )
     context.update(
         web_network_fiber_plant_ledger_service.fiber_plant_ledger_data(
-            db, asset_type=asset_type
+            db,
+            asset_type=asset_type,
+            page=page,
+            per_page=per_page,
+            search=search,
+            include_activation_count=not is_partial,
         )
     )
-    return templates.TemplateResponse("admin/network/fiber-plant/index.html", context)
+    template = (
+        "admin/network/fiber-plant/_ledger.html"
+        if is_partial
+        else "admin/network/fiber-plant/index.html"
+    )
+    return templates.TemplateResponse(template, context)
 
 
 def _as_built_activation_response(
@@ -780,6 +798,10 @@ def ont_identity_review_execute(
 )
 def fiber_change_requests(
     request: Request,
+    page: int = Query(default=1, ge=1),
+    per_page: int = Query(default=50, ge=10, le=100),
+    search: str = Query(default="", max_length=120),
+    map_page: int = Query(default=1, ge=1),
     db: Session = Depends(get_db),
     auth: dict[str, object] = Depends(require_permission("network:fiber:read")),
 ):
@@ -790,6 +812,10 @@ def fiber_change_requests(
         skipped=request.query_params.get("skipped"),
         can_review_map_assets=can(request, "network:fiber:review"),
         map_asset_actor_id=str(auth.get("principal_id") or ""),
+        page=page,
+        per_page=per_page,
+        search=search,
+        map_page=map_page,
     )
     context = _base_context(
         request, db, active_page="fiber-change-requests", active_menu="fiber"
@@ -990,10 +1016,13 @@ def fdh_cabinets_list(
     request: Request,
     page: int = Query(default=1, ge=1),
     per_page: int = Query(default=50, ge=10, le=100),
+    search: str = Query(default="", max_length=120),
     db: Session = Depends(get_db),
 ):
     """List FDH cabinets."""
-    page_data = web_network_fdh_service.list_page_data(db, page=page, per_page=per_page)
+    page_data = web_network_fdh_service.list_page_data(
+        db, page=page, per_page=per_page, search=search
+    )
     context = _base_context(
         request, db, active_page="fdh-cabinets", active_menu="fiber"
     )
@@ -1144,8 +1173,16 @@ def fdh_cabinet_detail(
     response_class=HTMLResponse,
     dependencies=[Depends(require_permission("network:fiber:read"))],
 )
-def splitters_list(request: Request, db: Session = Depends(get_db)):
-    page_data = web_network_fdh_service.list_splitters_page_data(db)
+def splitters_list(
+    request: Request,
+    page: int = Query(default=1, ge=1),
+    per_page: int = Query(default=50, ge=10, le=100),
+    search: str = Query(default="", max_length=120),
+    db: Session = Depends(get_db),
+):
+    page_data = web_network_fdh_service.list_splitters_page_data(
+        db, page=page, per_page=per_page, search=search
+    )
     context = _base_context(request, db, active_page="splitters", active_menu="fiber")
     context.update(page_data)
     return templates.TemplateResponse("admin/network/fiber/splitters.html", context)

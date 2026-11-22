@@ -1,5 +1,5 @@
 {% extends "layouts/admin.html" %}
-{% from "components/ui/macros.html" import page_header, status_presentation_badge %}
+{% from "components/ui/macros.html" import page_header %}
 
 {% block title %}Fiber Plant - Admin{% endblock %}
 
@@ -22,55 +22,21 @@
     </a>
     {% endif %}
 
-    {# asset-type facet tabs #}
-    <div class="border-b border-slate-200 dark:border-slate-800">
-        <nav class="-mb-px flex flex-wrap gap-6" aria-label="Asset types">
-            {% for t in asset_types %}
-            <a href="/admin/network/fiber-plant?type={{ t.key }}"
-               class="{% if t.key == asset_type %}border-accent-500 text-accent-700 dark:text-accent-300{% else %}border-transparent text-slate-500 hover:border-slate-300 hover:text-slate-800 dark:text-slate-400 dark:hover:text-slate-200{% endif %} whitespace-nowrap border-b-2 px-1 py-3 text-sm font-semibold transition-colors">
-                {{ t.label }}
-            </a>
-            {% endfor %}
-        </nav>
-    </div>
-
-    {# ledger #}
-    <div class="overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm dark:border-slate-800 dark:bg-slate-900">
-        <div class="flex items-center justify-between border-b border-slate-200 px-5 py-3 dark:border-slate-800">
-            <h2 class="font-display text-sm font-semibold text-slate-900 dark:text-white">{{ asset_label }} <span class="ml-1 font-normal text-slate-400 dark:text-slate-500">· {{ row_count }}</span></h2>
-        </div>
-        <div class="overflow-x-auto">
-            <table class="min-w-full divide-y divide-slate-100 dark:divide-slate-800">
-                <thead>
-                    <tr class="bg-slate-50 dark:bg-slate-800/40">
-                        {% for col in columns %}
-                        <th class="px-5 py-2.5 text-left text-[10.5px] font-semibold uppercase tracking-[0.1em] text-slate-400 dark:text-slate-500">{{ col[0] }}</th>
-                        {% endfor %}
-                    </tr>
-                </thead>
-                <tbody class="divide-y divide-slate-100 dark:divide-slate-800/70">
-                    {% for row in rows %}
-                    <tr class="transition-colors hover:bg-slate-50 dark:hover:bg-slate-800/50">
-                        {% for col in columns %}
-                        <td class="whitespace-nowrap px-5 py-3 text-sm text-slate-700 dark:text-slate-200">
-                            {%- if col[1] == '__status' -%}
-                                {{ status_presentation_badge(row.status, size="sm") }}
-                            {%- elif loop.first and detail_base -%}
-                                <a href="{{ detail_base }}{{ row.id }}" class="font-medium text-slate-900 transition-colors hover:text-accent-600 dark:text-white dark:hover:text-accent-400">{{ row[col[1]] }}</a>
-                            {%- else -%}
-                                {{ row[col[1]] }}
-                            {%- endif -%}
-                        </td>
-                        {% endfor %}
-                    </tr>
-                    {% else %}
-                    <tr>
-                        <td colspan="{{ columns | length }}" class="px-5 py-12 text-center text-sm text-slate-500 dark:text-slate-400">No {{ asset_label | lower }} found.</td>
-                    </tr>
-                    {% endfor %}
-                </tbody>
-            </table>
-        </div>
-    </div>
+    <p id="fiber-plant-error" role="alert" hidden class="rounded-lg border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-800 dark:border-rose-800 dark:bg-rose-950/30 dark:text-rose-200">The inventory could not be loaded. Try the tab or search again.</p>
+    {% include "admin/network/fiber-plant/_ledger.html" %}
 </div>
+<script>
+    (() => {
+        const error = document.getElementById('fiber-plant-error');
+        const fromLedger = event => document.getElementById('fiber-plant-content')?.contains(event.detail?.elt);
+        document.addEventListener('htmx:beforeRequest', event => {
+            if (fromLedger(event)) error.hidden = true;
+        });
+        for (const name of ['htmx:responseError', 'htmx:sendError', 'htmx:timeout']) {
+            document.addEventListener(name, event => {
+                if (fromLedger(event)) error.hidden = false;
+            });
+        }
+    })();
+</script>
 {% endblock %}

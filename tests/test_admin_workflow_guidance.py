@@ -225,6 +225,19 @@ def test_network_guidance_explains_independent_map_proposal_review() -> None:
     assert "canonical asset change" in content
 
 
+def test_inventory_guidance_describes_paged_owner_backed_lists() -> None:
+    fiber = guidance_for_path("/admin/network/fiber-plant")
+    cabinet = guidance_for_path("/admin/network/fdh-cabinets/example")
+    core = guidance_for_path("/admin/network/core-devices")
+
+    assert fiber is not None and fiber.id == "fiber-inventory"
+    assert cabinet == fiber
+    assert core is not None and core.id == "core-device-inventory"
+    assert "each tab has its own search and page controls" in " ".join(fiber.steps)
+    assert "inactive assets" in " ".join(fiber.notes)
+    assert "full filtered inventory" in " ".join(core.steps)
+
+
 def test_network_guidance_explains_map_layer_visibility_controls() -> None:
     guide = guidance_for_path("/admin/network/map")
 
@@ -608,7 +621,7 @@ def test_period_review_guidance_explains_manual_approval_and_reserved_cash() -> 
 
 def test_every_help_guide_has_complete_action_sections() -> None:
     guides = (*WORKFLOW_GUIDANCE, *HELP_ONLY_GUIDANCE)
-    assert len(guides) == 71
+    assert len(guides) == 73
     for guide in guides:
         actions = help_actions_for(guide)
         assert actions, guide.id

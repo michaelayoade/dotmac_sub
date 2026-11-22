@@ -4,6 +4,7 @@ import logging
 from uuid import UUID
 
 from fastapi import HTTPException
+from sqlalchemy import String, cast, or_
 from sqlalchemy.orm import Session
 
 from app.models.domain_settings import SettingDomain
@@ -17,6 +18,12 @@ from app.models.network import (
     FiberStrandStatus,
     FiberTerminationPoint,
     ODNEndpointType,
+)
+from app.schemas.fiber_inventory import (
+    FiberInventoryPage,
+    FiberInventoryQuery,
+    page_number,
+    page_result,
 )
 from app.schemas.network import (
     FiberSegmentUpdate,
@@ -39,6 +46,7 @@ from app.services.query_builders import (
     apply_active_state,
     apply_optional_equals,
     apply_optional_ilike,
+    literal_contains_pattern,
 )
 
 logger = logging.getLogger(__name__)
@@ -69,6 +77,55 @@ class FiberStrands(CRUDManager[FiberStrand]):
     not_found_detail = "Fiber strand not found"
     soft_delete_field = "is_active"
     soft_delete_value = False
+
+    @staticmethod
+    def inventory_page(
+        db: Session, query: FiberInventoryQuery
+    ) -> FiberInventoryPage[FiberStrand]:
+        rows = db.query(FiberStrand)
+        if query.active_only:
+            rows = rows.filter(FiberStrand.is_active.is_(True))
+        if search := query.normalized_search:
+            term = literal_contains_pattern(search)
+            rows = rows.filter(
+                or_(
+                    FiberStrand.cable_name.ilike(term, escape="\\"),
+                    FiberStrand.label.ilike(term, escape="\\"),
+                    cast(FiberStrand.strand_number, String).ilike(term, escape="\\"),
+                )
+            )
+        total = rows.count()
+        page = page_number(query, total)
+        items = (
+            rows.order_by(
+                FiberStrand.cable_name, FiberStrand.strand_number, FiberStrand.id
+            )
+            .offset((page - 1) * query.page_size)
+            .limit(query.page_size)
+            .all()
+        )
+        return page_result(query, total, items)
+
+    @staticmethod
+    def inventory_status_counts(db: Session, search: str = "") -> dict[str, int]:
+        rows = db.query(FiberStrand).filter(FiberStrand.is_active.is_(True))
+        if search := search.strip()[:120]:
+            term = literal_contains_pattern(search)
+            rows = rows.filter(
+                or_(
+                    FiberStrand.cable_name.ilike(term, escape="\\"),
+                    FiberStrand.label.ilike(term, escape="\\"),
+                    cast(FiberStrand.strand_number, String).ilike(term, escape="\\"),
+                )
+            )
+        return {
+            "available": rows.filter(
+                FiberStrand.status == FiberStrandStatus.available
+            ).count(),
+            "in_use": rows.filter(
+                FiberStrand.status == FiberStrandStatus.in_use
+            ).count(),
+        }
 
     @staticmethod
     def create(db: Session, payload: FiberStrandCreate):
@@ -197,6 +254,29 @@ class FiberSpliceClosures(CRUDManager[FiberSpliceClosure]):
     not_found_detail = "Fiber splice closure not found"
     soft_delete_field = "is_active"
     soft_delete_value = False
+
+    @staticmethod
+    def inventory_page(
+        db: Session, query: FiberInventoryQuery
+    ) -> FiberInventoryPage[FiberSpliceClosure]:
+        rows = db.query(FiberSpliceClosure)
+        if query.active_only:
+            rows = rows.filter(FiberSpliceClosure.is_active.is_(True))
+        if search := query.normalized_search:
+            rows = rows.filter(
+                FiberSpliceClosure.name.ilike(
+                    literal_contains_pattern(search), escape="\\"
+                )
+            )
+        total = rows.count()
+        page = page_number(query, total)
+        items = (
+            rows.order_by(FiberSpliceClosure.name, FiberSpliceClosure.id)
+            .offset((page - 1) * query.page_size)
+            .limit(query.page_size)
+            .all()
+        )
+        return page_result(query, total, items)
 
     @staticmethod
     def list(
