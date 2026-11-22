@@ -131,7 +131,7 @@ test-integration-shard: assert-full-test-host ## Run one duration-balanced Postg
 			--ci-durations-output="$(CI_INTEGRATION_DURATIONS_OUTPUT)"
 
 ARCHITECTURE_SHARD ?=
-ARCHITECTURE_SHARDS ?= 2
+ARCHITECTURE_SHARDS ?= 4
 
 test-architecture: assert-full-test-host ## Run all architecture guards, or one CI shard
 	@if [ -n "$(ARCHITECTURE_SHARD)" ]; then \
