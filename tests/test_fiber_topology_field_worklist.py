@@ -19,6 +19,7 @@ from app.services.network.fiber_topology_field_observations import (
     record_fiber_field_observation,
 )
 from app.services.network.fiber_topology_field_worklist import (
+    project_fiber_field_worklist_rows,
     reconcile_fiber_field_worklist,
 )
 from app.web.admin import network_fiber_plant
@@ -237,6 +238,11 @@ def test_worklist_keeps_complete_cohort_and_orders_every_evidence_state(db_sessi
     )
     assert rows["SPAN-WORKLIST-UNOBSERVED"]["staged_feature_id"] == str(unobserved.id)
     assert all(len(str(row["row_sha256"])) == 64 for row in report.rows)
+    selected_rows = project_fiber_field_worklist_rows(db_session, [drift, agreement])
+    assert {row["external_id"]: row["row_sha256"] for row in selected_rows} == {
+        external_id: rows[external_id]["row_sha256"]
+        for external_id in ("FAT-WORKLIST-DRIFT", "FAT-WORKLIST-AGREEMENT")
+    }
 
 
 def test_worklist_separates_current_and_superseded_native_job_context(db_session):
@@ -292,7 +298,7 @@ def test_new_observation_changes_exact_report_without_creating_other_state(db_se
     assert db_session.query(FiberTopologyFieldObservation).count() == 1
 
 
-def test_admin_route_and_template_are_read_only_complete_cohort_projection():
+def test_admin_route_pages_field_evidence_and_preserves_complete_audit():
     routes = {route.path: route for route in network_fiber_plant.router.routes}
     route = routes["/network/fiber-field-verification"]
     template = Path("templates/admin/network/fiber/field_verification_worklist.html")
@@ -300,10 +306,12 @@ def test_admin_route_and_template_are_read_only_complete_cohort_projection():
     assert route.methods == {"GET"}
     assert template.exists()
     content = template.read_text()
-    assert "always use the complete cohort" in content
+    assert "Run complete audit" in content
+    assert "complete audit separately orders the full cohort" in content
     assert "cannot create or assign work orders" in content
     assert "worklist_rows" in content
     assert "list_pagination" in content
     assert "worklist.rows[:500]" not in content
     assert "cutover gate" in content
-    assert 'type="submit"' not in content
+    assert 'method="get"' in content
+    assert 'method="post"' not in content

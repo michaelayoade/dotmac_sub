@@ -102,9 +102,12 @@ def test_admin_projection_is_get_only_and_cannot_hide_a_limited_audit():
 
     assert '"/fiber-connectivity-coverage"' in admin_source
     assert "reconcile_fiber_connectivity_coverage(db)" in admin_source
-    assert "coverage.paths[:250]" in template_source
-    assert "gates always use the complete cohort" in template_source
-    for forbidden_form in ("<form", 'type="submit"', "bulk approve"):
+    assert "coverage.paths[:250]" not in template_source
+    assert "for row in audit_rows" in template_source
+    assert "Complete audit gates always use the full cohort" in template_source
+    assert "Run complete audit" in template_source
+    assert "_source_inventory_controls.html" in template_source
+    for forbidden_form in ('method="post"', "bulk approve"):
         assert forbidden_form not in template_source.lower()
 
 

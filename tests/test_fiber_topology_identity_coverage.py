@@ -363,7 +363,7 @@ def test_failed_execution_remains_distinct_from_never_executed(db_session):
     assert report.ready_for_point_identity_cutover_review is False
 
 
-def test_admin_route_and_template_are_read_only_complete_cohort_projection():
+def test_admin_route_pages_source_points_and_keeps_complete_audit():
     routes = {route.path: route for route in network_fiber_plant.router.routes}
     route = routes["/network/fiber-identity-coverage"]
     template = Path("templates/admin/network/fiber/identity_coverage.html")
@@ -371,7 +371,8 @@ def test_admin_route_and_template_are_read_only_complete_cohort_projection():
     assert route.methods == {"GET"}
     assert template.exists()
     content = template.read_text()
-    assert "gates always use the complete cohort" in content
+    assert "Complete audit gates always use the full cohort" in content
+    assert "Run complete audit" in content
     assert "cannot infer identities" in content
     assert "decide support mounts" in content
-    assert "<form" not in content
+    assert 'method="post"' not in content

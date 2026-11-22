@@ -289,6 +289,15 @@ class FiberTraceSearchResult:
 
 
 @dataclass(frozen=True)
+class FiberTraceSearchPage:
+    items: tuple[FiberTraceSearchResult, ...]
+    total: int
+    page: int
+    per_page: int
+    total_pages: int
+
+
+@dataclass(frozen=True)
 class FiberTraceCoverage:
     total_subscriptions: int
     evaluated_subscriptions: int
@@ -1042,11 +1051,74 @@ def trace_fiber_subscription(
     )
 
 
-def search_fiber_trace_subscriptions(
-    db: Session, query: str | None = None, *, limit: int = 20
-) -> tuple[FiberTraceSearchResult, ...]:
-    """Return a bounded operator worklist for the trace UI."""
-    stmt = (
+def page_fiber_trace_subscriptions(
+    db: Session,
+    query: str | None = None,
+    *,
+    page: int = 1,
+    per_page: int = 25,
+) -> FiberTraceSearchPage:
+    """Page distinct fiber subscriptions before loading their ONT display facts."""
+    size = min(max(per_page, 1), 100)
+    ids_query = (
+        select(Subscription.id)
+        .join(Subscriber, Subscriber.id == Subscription.subscriber_id)
+        .join(CatalogOffer, CatalogOffer.id == Subscription.offer_id)
+        .where(CatalogOffer.access_type == AccessType.fiber)
+    )
+    cleaned = (query or "").strip()[:160]
+    if cleaned:
+        escaped = cleaned.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+        like = f"%{escaped}%"
+        ont_serial_match = (
+            select(OntAssignment.id)
+            .join(OntUnit, OntUnit.id == OntAssignment.ont_unit_id)
+            .where(
+                OntAssignment.subscription_id == Subscription.id,
+                OntAssignment.active.is_(True),
+                OntUnit.serial_number.ilike(like, escape="\\"),
+            )
+            .exists()
+        )
+        predicates: list[ColumnElement[bool]] = [
+            column.ilike(like, escape="\\")
+            for column in (
+                Subscriber.display_name,
+                Subscriber.company_name,
+                Subscriber.first_name,
+                Subscriber.last_name,
+                Subscriber.email,
+                Subscriber.phone,
+                Subscriber.subscriber_number,
+                Subscriber.account_number,
+            )
+        ]
+        predicates.append(ont_serial_match)
+        try:
+            predicates.append(Subscription.id == uuid.UUID(cleaned))
+        except ValueError:
+            pass
+        ids_query = ids_query.where(or_(*predicates))
+    else:
+        ids_query = ids_query.where(Subscription.status == SubscriptionStatus.active)
+
+    total = int(db.scalar(select(func.count()).select_from(ids_query.subquery())) or 0)
+    total_pages = max(1, (total + size - 1) // size)
+    current_page = min(max(page, 1), total_pages)
+    ids = tuple(
+        db.scalars(
+            ids_query.order_by(
+                Subscriber.last_name,
+                Subscriber.first_name,
+                Subscription.id,
+            )
+            .limit(size)
+            .offset((current_page - 1) * size)
+        )
+    )
+    if not ids:
+        return FiberTraceSearchPage((), total, current_page, size, total_pages)
+    rows = db.execute(
         select(
             Subscription.id,
             Subscriber.display_name,
@@ -1068,56 +1140,38 @@ def search_fiber_trace_subscriptions(
             & OntAssignment.active.is_(True),
         )
         .outerjoin(OntUnit, OntUnit.id == OntAssignment.ont_unit_id)
-        .where(CatalogOffer.access_type == AccessType.fiber)
+        .where(Subscription.id.in_(ids))
+        .order_by(Subscription.id, OntAssignment.id)
     )
-    cleaned = (query or "").strip()
-    if cleaned:
-        like = f"%{cleaned}%"
-        predicates: list[ColumnElement[bool]] = [
-            Subscriber.display_name.ilike(like),
-            Subscriber.company_name.ilike(like),
-            Subscriber.first_name.ilike(like),
-            Subscriber.last_name.ilike(like),
-            Subscriber.email.ilike(like),
-            Subscriber.phone.ilike(like),
-            Subscriber.subscriber_number.ilike(like),
-            OntUnit.serial_number.ilike(like),
-        ]
-        try:
-            predicates.append(Subscription.id == uuid.UUID(cleaned))
-        except ValueError:
-            pass
-        stmt = stmt.where(or_(*predicates))
-    else:
-        stmt = stmt.where(Subscription.status == SubscriptionStatus.active)
-    rows = db.execute(
-        stmt.order_by(
-            OntUnit.olt_status.asc().nullslast(),
-            OntUnit.olt_status_seen_at.desc().nullslast(),
-            Subscriber.last_name,
-            Subscriber.first_name,
-        ).limit(max(1, min(limit, 50)))
-    ).all()
-    results = []
-    seen_subscriptions = set()
+    by_id: dict[object, FiberTraceSearchResult] = {}
     for row in rows:
-        if row[0] in seen_subscriptions:
+        if row[0] in by_id:
             continue
-        seen_subscriptions.add(row[0])
         customer = row[1] or row[2] or f"{row[3]} {row[4]}".strip()
-        results.append(
-            FiberTraceSearchResult(
-                subscription_id=row[0],
-                customer_label=customer,
-                subscriber_number=row[5],
-                offer_name=row[6],
-                subscription_status=_enum_value(row[7]),
-                ont_serial=row[8],
-                ont_status=_enum_value(row[9]) if row[9] is not None else None,
-                status_seen_at=row[10],
-            )
+        by_id[row[0]] = FiberTraceSearchResult(
+            subscription_id=row[0],
+            customer_label=customer,
+            subscriber_number=row[5],
+            offer_name=row[6],
+            subscription_status=_enum_value(row[7]),
+            ont_serial=row[8],
+            ont_status=_enum_value(row[9]) if row[9] is not None else None,
+            status_seen_at=row[10],
         )
-    return tuple(results)
+    return FiberTraceSearchPage(
+        tuple(by_id[subscription_id] for subscription_id in ids),
+        total,
+        current_page,
+        size,
+        total_pages,
+    )
+
+
+def search_fiber_trace_subscriptions(
+    db: Session, query: str | None = None, *, limit: int = 20
+) -> tuple[FiberTraceSearchResult, ...]:
+    """Compatibility reader for bounded trace searches."""
+    return page_fiber_trace_subscriptions(db, query, per_page=limit).items
 
 
 def _as_utc(value: datetime | None) -> datetime | None:
@@ -2387,6 +2441,8 @@ __all__ = [
     "FiberTraceHop",
     "FiberTraceCoverage",
     "FiberTraceSearchResult",
+    "FiberTraceSearchPage",
+    "page_fiber_trace_subscriptions",
     "PassivePlantIntegrity",
     "audit_fiber_topology",
     "audit_fiber_trace_coverage",

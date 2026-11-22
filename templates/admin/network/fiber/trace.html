@@ -24,9 +24,13 @@
             <label for="fiber-trace-search" class="block text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">Find fiber service</label>
             <div class="mt-2 flex gap-2">
                 <input id="fiber-trace-search" name="q" value="{{ query }}" type="search" placeholder="Customer, account, ONT serial, or subscription UUID" class="min-w-0 flex-1 rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 placeholder:text-slate-400 focus:border-indigo-500 focus:ring-indigo-500 dark:border-slate-600 dark:bg-slate-900 dark:text-slate-100">
+                <label class="sr-only" for="fiber-trace-page-size">Rows per page</label>
+                <select id="fiber-trace-page-size" name="per_page" class="rounded-lg border border-slate-300 bg-white px-2 py-2 text-sm dark:border-slate-600 dark:bg-slate-900 dark:text-slate-100">
+                    {% for size in (25, 50, 100) %}<option value="{{ size }}" {% if search_page.per_page == size %}selected{% endif %}>{{ size }}</option>{% endfor %}
+                </select>
                 <button type="submit" class="rounded-lg bg-indigo-600 px-4 py-2 text-sm font-semibold text-white hover:bg-indigo-500">Search</button>
             </div>
-            <p class="mt-2 text-xs text-slate-400 dark:text-slate-500">Without a search, the list shows a bounded active-fiber telemetry worklist.</p>
+            <p class="mt-2 text-xs text-slate-500 dark:text-slate-400">Without a search, the list shows active fiber services. All matching services are available through the page controls.</p>
         </form>
 
         <div class="rounded-xl border border-blue-200 bg-blue-50 p-5 text-sm text-blue-900 dark:border-blue-800 dark:bg-blue-950/40 dark:text-blue-200">
@@ -174,7 +178,7 @@
 
     <section class="rounded-xl border border-slate-200 bg-white shadow-sm dark:border-slate-700 dark:bg-slate-800">
         <div class="border-b border-slate-200 px-5 py-4 dark:border-slate-700">
-            <h2 class="font-semibold text-slate-900 dark:text-white">{{ 'Search results' if query else 'Active fiber telemetry worklist' }}</h2>
+            <h2 class="font-semibold text-slate-900 dark:text-white">{{ 'Search results' if query else 'Active fiber telemetry worklist' }} <span class="text-sm font-normal text-slate-500">· {{ search_page.total }}</span></h2>
         </div>
         <div class="overflow-x-auto">
             <table class="min-w-full text-sm">
@@ -201,7 +205,7 @@
                         </td>
                         <td class="px-5 py-3 text-xs text-slate-500">{{ row.status_seen_at | app_datetime('%Y-%m-%d %H:%M', '-') }}</td>
                         <td class="px-5 py-3 text-right">
-                            <a href="/admin/network/fiber-trace?subscription_id={{ row.subscription_id }}{% if query %}&q={{ query | urlencode }}{% endif %}" class="inline-flex rounded-lg border border-indigo-200 px-3 py-1.5 text-xs font-semibold text-indigo-700 hover:bg-indigo-50 dark:border-indigo-800 dark:text-indigo-300 dark:hover:bg-indigo-950/40">Trace</a>
+                            <a href="{{ request.url.include_query_params(subscription_id=row.subscription_id, page=search_page.page, per_page=search_page.per_page) }}" class="inline-flex rounded-lg border border-indigo-200 px-3 py-1.5 text-xs font-semibold text-indigo-700 hover:bg-indigo-50 dark:border-indigo-800 dark:text-indigo-300 dark:hover:bg-indigo-950/40">Trace</a>
                         </td>
                     </tr>
                     {% else %}
@@ -210,6 +214,13 @@
                 </tbody>
             </table>
         </div>
+        <nav class="flex flex-wrap items-center justify-between gap-3 border-t border-slate-200 px-5 py-3 text-sm dark:border-slate-700" aria-label="Fiber service pages">
+            <span class="text-slate-500 dark:text-slate-400">Page {{ search_page.page }} of {{ search_page.total_pages }}</span>
+            <div class="flex gap-2">
+                {% if search_page.page > 1 %}<a href="{{ request.url.remove_query_params('subscription_id').include_query_params(page=search_page.page - 1, per_page=search_page.per_page) }}" class="rounded-lg border border-slate-300 px-3 py-1.5 dark:border-slate-600">Previous</a>{% endif %}
+                {% if search_page.page < search_page.total_pages %}<a href="{{ request.url.remove_query_params('subscription_id').include_query_params(page=search_page.page + 1, per_page=search_page.per_page) }}" class="rounded-lg border border-slate-300 px-3 py-1.5 dark:border-slate-600">Next</a>{% endif %}
+            </div>
+        </nav>
     </section>
 </div>
 {% endblock %}

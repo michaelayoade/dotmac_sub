@@ -96,7 +96,7 @@ def test_worklist_cli_is_full_cohort_read_only_and_has_no_readiness_exit():
         assert f'add_parser("{forbidden}"' not in source
 
 
-def test_worklist_admin_is_get_only_bounded_display_of_complete_report():
+def test_worklist_admin_pages_source_rows_without_narrowing_the_complete_audit():
     admin_source = ADMIN.read_text()
     template_source = TEMPLATE.read_text()
 
@@ -106,9 +106,11 @@ def test_worklist_admin_is_get_only_bounded_display_of_complete_report():
     assert "worklist.rows[:500]" not in template_source
     assert "list_pagination" in template_source
     assert "latest-staged-source-identities" in template_source
-    assert "always use the complete cohort" in template_source
+    assert "Run complete audit" in template_source
+    assert "complete audit separately orders the full cohort" in template_source
     assert "This worklist has no job writer" in template_source
-    for forbidden_form in ('type="submit"', "bulk approve"):
+    assert 'method="get"' in template_source
+    for forbidden_form in ('method="post"', "bulk approve"):
         assert forbidden_form not in template_source.lower()
 
 

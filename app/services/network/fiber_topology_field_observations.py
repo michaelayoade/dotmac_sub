@@ -18,7 +18,7 @@ from collections.abc import Mapping, Sequence
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
-from sqlalchemy import select
+from sqlalchemy import or_, select, tuple_
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, joinedload
 
@@ -892,11 +892,50 @@ def project_field_verification_evidence(
     if not features:
         return {}
     asset_types = {feature.asset_type for feature in features}
+    observation_query = select(FiberTopologyFieldObservation).where(
+        FiberTopologyFieldObservation.source_asset_type.in_(asset_types)
+    )
+    if len(features) <= 100:
+        named_keys = [
+            (feature.batch.source_system, feature.asset_type, feature.external_id)
+            for feature in features
+            if feature.external_id
+        ]
+        anonymous_keys = [
+            (feature.batch.source_system, feature.asset_type, feature.id)
+            for feature in features
+            if not feature.external_id
+        ]
+        named_match = (
+            tuple_(
+                FiberTopologyFieldObservation.source_system,
+                FiberTopologyFieldObservation.source_asset_type,
+                FiberTopologyFieldObservation.source_external_id,
+            ).in_(named_keys)
+            if named_keys
+            else None
+        )
+        anonymous_match = (
+            tuple_(
+                FiberTopologyFieldObservation.source_system,
+                FiberTopologyFieldObservation.source_asset_type,
+                FiberTopologyFieldObservation.staged_feature_id,
+            ).in_(anonymous_keys)
+            if anonymous_keys
+            else None
+        )
+        observation_query = observation_query.where(
+            or_(
+                *(
+                    match
+                    for match in (named_match, anonymous_match)
+                    if match is not None
+                )
+            )
+        )
     observations = list(
         db.scalars(
-            select(FiberTopologyFieldObservation)
-            .where(FiberTopologyFieldObservation.source_asset_type.in_(asset_types))
-            .order_by(
+            observation_query.order_by(
                 FiberTopologyFieldObservation.observed_at,
                 FiberTopologyFieldObservation.id,
             )

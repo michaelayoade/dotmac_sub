@@ -29,6 +29,17 @@ the same pull request. `scripts/architecture/workflow_guidance_gate.py` is run
 by the required **Workflow Guidance Gate** CI job and fails a PR that changes
 `app/web/admin` without changing the guidance registry.
 
+## Fiber evidence lists
+
+The five fiber evidence routes share a bounded browsing workflow. Connectivity
+coverage and point identity coverage initially show searchable, paged latest
+source facts. Field verification projects evidence for the selected source page.
+Use **Run complete audit** when complete counts, gate results, priority order,
+or report digests are needed. Fiber trace pages all matching subscriptions,
+and ONT identity reviews loads only the chosen queue. Batch rows preview three
+decisions with a link to the complete decision search; opening Candidates runs
+the complete assignment audit.
+
 Ticket Settings explains the editable infrastructure ticket-type and target-kind
 policy, when Save and Cancel appear, and how to correct a retained draft after
 a failed save. The support ticket guide describes creating a customerless
