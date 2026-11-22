@@ -1264,6 +1264,51 @@ def create_ticket_from_form(
     )
     if kinds and (not payload.description or not payload.description.strip()):
         raise ValueError("Description is required for infrastructure tickets.")
+    if kinds and selection is not None:
+        duplicate_result = ticket_validation.find_infrastructure_ticket_duplicates(
+            db,
+            ticket_validation.InfrastructureTicketDuplicateInput(
+                title=payload.title,
+                description=payload.description or "",
+                ticket_type=payload.ticket_type,
+                asset_kind=(
+                    selection.kind
+                    if isinstance(selection, ExistingInfrastructureSelection)
+                    else None
+                ),
+                asset_id=(
+                    selection.asset_id
+                    if isinstance(selection, ExistingInfrastructureSelection)
+                    else None
+                ),
+                manual_name=(
+                    selection.name
+                    if isinstance(selection, ManualInfrastructureSelection)
+                    else None
+                ),
+                request_key=(
+                    selection.request_key
+                    if isinstance(selection, ManualInfrastructureSelection)
+                    else None
+                ),
+            ),
+        )
+        if duplicate_result.has_warning:
+            if not command.duplicate_override:
+                raise DuplicateTicketWarningError(duplicate_result)
+            metadata = dict(payload.metadata_ or {})
+            metadata["duplicate_override"] = True
+            metadata["possible_duplicate_tickets"] = [
+                {
+                    "ticket_id": match.ticket_id,
+                    "reference": match.reference,
+                    "score": match.score,
+                    "confidence": match.confidence,
+                    "reasons": match.reasons,
+                }
+                for match in duplicate_result.matches
+            ]
+            payload.metadata_ = metadata
     if kinds and isinstance(selection, ManualInfrastructureSelection):
         from app.services.owner_commands import CommandContext
 

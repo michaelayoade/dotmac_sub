@@ -23,6 +23,19 @@ The lifecycle owner controls, in one root owner command:
 - transactionally staged audit records, domain events, notifications, and SLA
   consequences.
 
+The admin infrastructure form evaluates a typed duplicate-candidate query on
+submission before manual or asset creation. Candidates are active, open tickets
+for the selected inventory asset (via the authoritative outage-ticket link) or
+the same normalized manual infrastructure name. A similar title or description
+produces a 409 warning with ticket links. A second submission with an explicit
+override records the candidates and decision in Ticket metadata. The outage
+owner still reuses the one canonical ticket for the latest open or confirmed
+outage on an asset; a similarity override cannot create another ticket for that
+same incident. Manual names are operator observations, not inventory identity.
+Replaying a manual creation request key skips the warning for its own ticket;
+the ticket owner still rejects a changed request payload. Candidate evidence is
+excluded from the idempotency fingerprint because it can change between retries.
+
 Local attachment metadata crosses the lifecycle boundary as typed
 `AttachmentMeta`. Its `stored_file_id` is the private `StoredFile` UUID used by
 authorized admin and portal streaming routes; the storage key is evidence and

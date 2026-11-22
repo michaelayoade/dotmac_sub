@@ -552,7 +552,9 @@ DOMAIN = DomainSOT(
                             "AttachmentMeta with private StoredFile UUID, bounded comment "
                             "attachment-reference repair, and bulk command inputs "
                             "with CommandContext plus the closed silent-internal creation "
-                            "consequence mode and ManualInfrastructureTicketCreateCommand"
+                            "consequence mode and ManualInfrastructureTicketCreateCommand; "
+                            "typed infrastructure duplicate evidence and explicit override "
+                            "are checked before manual or asset creation"
                         ),
                     ),
                     AuthorityInput(
