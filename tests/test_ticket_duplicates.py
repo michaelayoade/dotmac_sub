@@ -145,9 +145,10 @@ def test_manual_infrastructure_warning_requires_same_name_and_similar_issue(db_s
         db_session,
         title="FDH 12 link down",
         description="Cabinet uplink has failed",
-        ticket_type="Cabinet Disconnection",
         metadata={"infrastructure_selection": {"mode": "manual", "name": "FDH-12"}},
     )
+    existing.ticket_type = "Cabinet Disconnection"
+    db_session.flush()
     duplicate_input = ticket_validation.InfrastructureTicketDuplicateInput(
         title="FDH 12 link down",
         description="Cabinet uplink has failed",
@@ -196,8 +197,9 @@ def test_asset_infrastructure_warning_uses_asset_identity(db_session):
         db_session,
         title="Cabinet uplink down",
         description="Cabinet uplink has failed",
-        ticket_type="Cabinet Disconnection",
     )
+    existing.ticket_type = "Cabinet Disconnection"
+    db_session.flush()
     incident = OutageIncident(status="resolved", fdh_cabinet_id=asset_id)
     db_session.add(incident)
     db_session.flush()
@@ -235,17 +237,18 @@ def test_manual_infrastructure_create_warns_then_records_override(
 ):
     from uuid import uuid4
 
-    monkeypatch.setattr(
-        infrastructure_ticket_selection,
-        "allowed_kinds",
-        lambda _db, _type: (infrastructure_ticket_selection.InfrastructureKind.manual,),
-    )
     existing = _create_ticket(
         db_session,
         title="FDH 12 uplink down",
         description="Cabinet uplink has failed",
-        ticket_type="Cabinet Disconnection",
         metadata={"infrastructure_selection": {"mode": "manual", "name": "FDH 12"}},
+    )
+    existing.ticket_type = "Cabinet Disconnection"
+    db_session.flush()
+    monkeypatch.setattr(
+        infrastructure_ticket_selection,
+        "allowed_kinds",
+        lambda _db, _type: (infrastructure_ticket_selection.InfrastructureKind.manual,),
     )
     payload = web_service.build_ticket_create_payload(
         web_service.TicketFormValues(
@@ -288,6 +291,7 @@ def test_manual_infrastructure_create_warns_then_records_override(
     assert created.metadata_["possible_duplicate_tickets"][0]["ticket_id"] == str(
         existing.id
     )
+    assert create(duplicate_override=False).id == created.id
 
 
 def test_same_subscriber_open_ticket_is_flagged(db_session, subscriber):

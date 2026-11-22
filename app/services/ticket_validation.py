@@ -288,17 +288,22 @@ class InfrastructureTicketDuplicateInput:
     asset_kind: InfrastructureKind | None = None
     asset_id: UUID | None = None
     manual_name: str | None = None
+    request_key: UUID | None = None
 
 
 def find_infrastructure_ticket_duplicates(
     db: Session, payload: InfrastructureTicketDuplicateInput
 ) -> TicketDuplicateResult:
     """Find similar open issues on the selected infrastructure target."""
-    target_column = {
-        InfrastructureKind.basestation: OutageIncident.basestation_id,
-        InfrastructureKind.cabinet: OutageIncident.fdh_cabinet_id,
-        InfrastructureKind.node: OutageIncident.root_node_id,
-    }.get(payload.asset_kind)
+    target_column = (
+        {
+            InfrastructureKind.basestation: OutageIncident.basestation_id,
+            InfrastructureKind.cabinet: OutageIncident.fdh_cabinet_id,
+            InfrastructureKind.node: OutageIncident.root_node_id,
+        }.get(payload.asset_kind)
+        if payload.asset_kind is not None
+        else None
+    )
     if target_column is not None and payload.asset_id is not None:
         current_incident = (
             db.query(OutageIncident)
@@ -334,6 +339,17 @@ def find_infrastructure_ticket_duplicates(
             .all()
         )
     elif payload.manual_name and payload.manual_name.strip():
+        if (
+            payload.request_key is not None
+            and db.query(Ticket.id)
+            .filter(
+                Ticket.metadata_["infrastructure_request_key"].as_string()
+                == f"infrastructure-ticket:{payload.request_key}"
+            )
+            .first()
+        ):
+            # A retry belongs to the owner command's idempotency check.
+            return TicketDuplicateResult(matches=[])
         candidates = (
             db.query(Ticket)
             .filter(Ticket.is_active.is_(True), Ticket.status.in_(_OPEN_STATUSES))

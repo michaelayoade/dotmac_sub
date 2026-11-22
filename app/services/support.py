@@ -3338,8 +3338,13 @@ class Tickets:
                 "ticket_type": payload.ticket_type,
             },
         }
+        fingerprint_payload = payload.model_dump(mode="json")
+        fingerprint_metadata = fingerprint_payload.get("metadata_")
+        if isinstance(fingerprint_metadata, dict):
+            fingerprint_metadata.pop("duplicate_override", None)
+            fingerprint_metadata.pop("possible_duplicate_tickets", None)
         fingerprint = hashlib.sha256(
-            json.dumps(payload.model_dump(mode="json"), sort_keys=True).encode("utf-8")
+            json.dumps(fingerprint_payload, sort_keys=True).encode("utf-8")
         ).hexdigest()
         if db.get_bind().dialect.name == "postgresql":
             lock_key = int.from_bytes(

@@ -1286,6 +1286,11 @@ def create_ticket_from_form(
                     if isinstance(selection, ManualInfrastructureSelection)
                     else None
                 ),
+                request_key=(
+                    selection.request_key
+                    if isinstance(selection, ManualInfrastructureSelection)
+                    else None
+                ),
             ),
         )
         if duplicate_result.has_warning:
