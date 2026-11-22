@@ -15,6 +15,7 @@ _EVIDENCE_LABELS = (
     ("source_profile", "Source profile"),
     ("source_external_id", "Source external ID"),
     ("fiber_topology_identity_decision_id", "Identity decision"),
+    ("connectivity_decision_id", "Connectivity decision"),
     ("staged_feature_id", "Staged feature"),
     ("source_content_sha256", "Source fingerprint"),
 )

@@ -4,13 +4,10 @@ from __future__ import annotations
 
 import logging
 
-from sqlalchemy import select
 from sqlalchemy.orm import Session
 from starlette.datastructures import FormData
 
 from app.models.fiber_change_request import FiberChangeRequestStatus
-from app.models.subscriber import Subscriber
-from app.models.vendor_routes import Vendor
 from app.schemas.fiber_inventory import FiberInventoryQuery, page_number
 from app.schemas.network_map_asset_changes import NetworkAssetProposalStatus
 from app.services import fiber_change_requests as change_request_service
@@ -50,33 +47,8 @@ def change_requests_page_data(
         status=FiberChangeRequestStatus.pending,
     )
     requests = request_page.items
-    vendor_ids = {
-        req.requested_by_vendor_id for req in requests if req.requested_by_vendor_id
-    }
-    requester_ids = {
-        req.requested_by_person_id for req in requests if req.requested_by_person_id
-    }
-    vendor_names = (
-        {
-            str(vendor_id): name
-            for vendor_id, name in db.execute(
-                select(Vendor.id, Vendor.name).where(Vendor.id.in_(vendor_ids))
-            )
-        }
-        if vendor_ids
-        else {}
-    )
-    requester_names = (
-        {
-            str(person_id): f"{first_name} {last_name}".strip()
-            for person_id, first_name, last_name in db.execute(
-                select(
-                    Subscriber.id, Subscriber.first_name, Subscriber.last_name
-                ).where(Subscriber.id.in_(requester_ids))
-            )
-        }
-        if requester_ids
-        else {}
+    vendor_names, requester_names = change_request_service.requester_labels(
+        db, requests
     )
     conflicts = {
         str(req.id): web_network_fiber_service.has_change_request_conflict(db, req)

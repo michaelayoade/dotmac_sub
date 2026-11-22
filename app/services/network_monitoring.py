@@ -3,9 +3,11 @@ from __future__ import annotations
 import builtins
 import logging
 from collections.abc import Callable
+from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from decimal import ROUND_HALF_UP, Decimal
 from typing import Any, TypeVar, cast
+from uuid import UUID
 
 from fastapi import HTTPException
 from sqlalchemy import case, func, or_, select
@@ -21,6 +23,7 @@ from app.models.network_monitoring import (
     AlertStatus,
     DeviceInterface,
     DeviceMetric,
+    DeviceRole,
     DeviceType,
     InterfaceStatus,
     MetricType,
@@ -51,6 +54,7 @@ from app.services.common import (
     coerce_uuid,
     validate_enum,
 )
+from app.services.query_builders import literal_contains_pattern
 from app.services.response import ListResponseMixin
 
 logger = logging.getLogger(__name__)
@@ -990,7 +994,75 @@ class PopSites(ListResponseMixin):
         return _commit(db, lambda: PopSites.delete(db, site_id))
 
 
+@dataclass(frozen=True, slots=True)
+class CoreDeviceInventoryQuery:
+    role: DeviceRole | None = None
+    device_type: DeviceType | None = None
+    active: bool | None = None
+    pop_site_id: UUID | None = None
+    search: str = ""
+    page: int = 1
+    per_page: int = 50
+
+
+@dataclass(frozen=True, slots=True)
+class CoreDeviceInventoryPage:
+    devices: tuple[NetworkDevice, ...]
+    role_counts: dict[str, int]
+    total: int
+    page: int
+    per_page: int
+    total_pages: int
+
+
 class NetworkDevices(ListResponseMixin):
+    @staticmethod
+    def inventory_page(
+        db: Session, query: CoreDeviceInventoryQuery
+    ) -> CoreDeviceInventoryPage:
+        """Count and page the same filtered core-device inventory scope."""
+        stmt = select(NetworkDevice)
+        if query.role is not None:
+            stmt = stmt.where(NetworkDevice.role == query.role)
+        if query.device_type is not None:
+            stmt = stmt.where(NetworkDevice.device_type == query.device_type)
+        if query.active is not None:
+            stmt = stmt.where(NetworkDevice.is_active.is_(query.active))
+        if query.pop_site_id is not None:
+            stmt = stmt.where(NetworkDevice.pop_site_id == query.pop_site_id)
+        if query.search:
+            pattern = literal_contains_pattern(query.search.strip()[:120])
+            stmt = stmt.where(
+                NetworkDevice.name.ilike(pattern, escape="\\")
+                | NetworkDevice.hostname.ilike(pattern, escape="\\")
+                | NetworkDevice.mgmt_ip.ilike(pattern, escape="\\")
+                | NetworkDevice.vendor.ilike(pattern, escape="\\")
+                | NetworkDevice.model.ilike(pattern, escape="\\")
+            )
+        matching = stmt.with_only_columns(
+            NetworkDevice.role, maintain_column_froms=True
+        ).subquery()
+        role_counts = {
+            (role.value if isinstance(role, DeviceRole) else str(role)): count
+            for role, count in db.execute(
+                select(matching.c.role, func.count()).group_by(matching.c.role)
+            ).all()
+        }
+        total = sum(role_counts.values())
+        page_size = min(max(query.per_page, 10), 100)
+        total_pages = max(1, (total + page_size - 1) // page_size)
+        page = min(max(query.page, 1), total_pages)
+        devices = tuple(
+            db.scalars(
+                stmt.order_by(NetworkDevice.name, NetworkDevice.id)
+                .offset((page - 1) * page_size)
+                .limit(page_size)
+            ).all()
+        )
+        return CoreDeviceInventoryPage(
+            devices, role_counts, total, page, page_size, total_pages
+        )
+
     @staticmethod
     def create(db: Session, payload: NetworkDeviceCreate):
         device = NetworkDevice(**payload.model_dump())

@@ -9,9 +9,11 @@ comes from the server-owned fiber presentations. Read-only projection.
 
 from __future__ import annotations
 
+from typing import TypeAlias
+
 from sqlalchemy.orm import Session
 
-from app.schemas.fiber_inventory import FiberInventoryQuery
+from app.schemas.fiber_inventory import FiberInventoryPage, FiberInventoryQuery
 from app.services import fiber_change_requests
 from app.services.network.fiber_services import (
     fiber_splice_closures as closure_owner,
@@ -39,6 +41,7 @@ ASSET_TYPES: tuple[tuple[str, str], ...] = (
     ("change_requests", "Change requests"),
 )
 _VALID = {key for key, _ in ASSET_TYPES}
+LedgerRows: TypeAlias = tuple[list, list, FiberInventoryPage[object]]
 
 
 def _loc(obj: object) -> str:
@@ -49,7 +52,7 @@ def _loc(obj: object) -> str:
     return f"{float(lat):.5f}, {float(lng):.5f}"
 
 
-def _fdh_rows(db: Session, query: FiberInventoryQuery) -> tuple[list, list, object]:
+def _fdh_rows(db: Session, query: FiberInventoryQuery) -> LedgerRows:
     columns = [
         ("Name", "name"),
         ("Code", "code"),
@@ -70,9 +73,7 @@ def _fdh_rows(db: Session, query: FiberInventoryQuery) -> tuple[list, list, obje
     return columns, rows, page
 
 
-def _splitter_rows(
-    db: Session, query: FiberInventoryQuery
-) -> tuple[list, list, object]:
+def _splitter_rows(db: Session, query: FiberInventoryQuery) -> LedgerRows:
     columns = [
         ("Name", "name"),
         ("Ratio", "ratio"),
@@ -93,7 +94,7 @@ def _splitter_rows(
     return columns, rows, page
 
 
-def _strand_rows(db: Session, query: FiberInventoryQuery) -> tuple[list, list, object]:
+def _strand_rows(db: Session, query: FiberInventoryQuery) -> LedgerRows:
     columns = [
         ("Cable", "cable"),
         ("Strand", "number"),
@@ -114,7 +115,7 @@ def _strand_rows(db: Session, query: FiberInventoryQuery) -> tuple[list, list, o
     return columns, rows, page
 
 
-def _closure_rows(db: Session, query: FiberInventoryQuery) -> tuple[list, list, object]:
+def _closure_rows(db: Session, query: FiberInventoryQuery) -> LedgerRows:
     columns = [("Name", "name"), ("Location", "location"), ("Inventory", "inventory")]
     page = closure_owner.inventory_page(db, query)
     rows = [
@@ -129,9 +130,7 @@ def _closure_rows(db: Session, query: FiberInventoryQuery) -> tuple[list, list, 
     return columns, rows, page
 
 
-def _change_request_rows(
-    db: Session, query: FiberInventoryQuery
-) -> tuple[list, list, object]:
+def _change_request_rows(db: Session, query: FiberInventoryQuery) -> LedgerRows:
     columns = [
         ("Asset", "asset"),
         ("Operation", "operation"),

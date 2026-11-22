@@ -113,9 +113,10 @@ def test_change_request_tab_has_its_own_bounded_search_page(db_session):
 
 def test_import_evidence_is_structured_without_losing_human_notes():
     evidence = present_fiber_notes(
-        '{"source_system":"fiber-map","source_profile":"fdh","source_external_id":"abc"}'
+        '{"source_system":"fiber-map","source_profile":"fdh","source_external_id":"abc","connectivity_decision_id":"decision-1"}'
     )
     assert evidence.text is None
     assert ("Source system", "fiber-map") in evidence.evidence
     assert ("Source external ID", "abc") in evidence.evidence
+    assert ("Connectivity decision", "decision-1") in evidence.evidence
     assert present_fiber_notes("Needs field check").text == "Needs field check"

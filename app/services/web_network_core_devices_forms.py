@@ -51,8 +51,11 @@ from app.services.network_device_status_presentation import (
     NetworkDeviceListStatusContext,
     network_device_list_status_presentation,
 )
-from app.services.network_monitoring import set_network_device_active
-from app.services.query_builders import literal_contains_pattern
+from app.services.network_monitoring import (
+    CoreDeviceInventoryQuery,
+    NetworkDevices,
+    set_network_device_active,
+)
 
 
 def _format_uptime_short(seconds: int | None) -> str | None:
@@ -604,67 +607,52 @@ def list_page_data(
     per_page: int = 50,
 ) -> dict[str, object]:
     """Return data payload for core-device index."""
-    stmt = select(NetworkDevice)
+    role_enum: DeviceRole | None = None
     if role:
         try:
             role_enum = DeviceRole(role)
-            stmt = stmt.where(NetworkDevice.role == role_enum)
         except ValueError:
             pass
+    type_enum: DeviceType | None = None
     device_type_filter = (device_type or "").strip().lower()
     if device_type_filter:
         try:
             type_enum = DeviceType(device_type_filter)
-            stmt = stmt.where(NetworkDevice.device_type == type_enum)
         except ValueError:
             device_type_filter = ""
 
     status_filter = (status or "all").strip().lower()
-    if status_filter == "active":
-        stmt = stmt.where(NetworkDevice.is_active.is_(True))
-    elif status_filter == "inactive":
-        stmt = stmt.where(NetworkDevice.is_active.is_(False))
+    active = (
+        True
+        if status_filter == "active"
+        else False
+        if status_filter == "inactive"
+        else None
+    )
 
     pop_site_filter: str | None = None
+    pop_site_uuid: UUID | None = None
     if pop_site_id and pop_site_id != "all":
         try:
             pop_site_uuid = UUID(pop_site_id)
-            stmt = stmt.where(NetworkDevice.pop_site_id == pop_site_uuid)
             pop_site_filter = pop_site_id
         except ValueError:
             pop_site_filter = None
 
     search_filter = (search or "").strip()[:120]
-    if search_filter:
-        pattern = literal_contains_pattern(search_filter)
-        stmt = stmt.where(
-            NetworkDevice.name.ilike(pattern, escape="\\")
-            | NetworkDevice.hostname.ilike(pattern, escape="\\")
-            | NetworkDevice.mgmt_ip.ilike(pattern, escape="\\")
-            | NetworkDevice.vendor.ilike(pattern, escape="\\")
-            | NetworkDevice.model.ilike(pattern, escape="\\")
-        )
-
-    matching = stmt.with_only_columns(
-        NetworkDevice.role, maintain_column_froms=True
-    ).subquery()
-    role_counts = {
-        (role.value if isinstance(role, DeviceRole) else str(role)): count
-        for role, count in db.execute(
-            select(matching.c.role, func.count()).group_by(matching.c.role)
-        ).all()
-    }
-    total = sum(role_counts.values())
-    page_size = min(max(per_page, 10), 100)
-    total_pages = max(1, (total + page_size - 1) // page_size)
-    page = min(max(page, 1), total_pages)
-    devices = list(
-        db.scalars(
-            stmt.order_by(NetworkDevice.name, NetworkDevice.id)
-            .offset((page - 1) * page_size)
-            .limit(page_size)
-        ).all()
+    inventory = NetworkDevices.inventory_page(
+        db,
+        CoreDeviceInventoryQuery(
+            role=role_enum,
+            device_type=type_enum,
+            active=active,
+            pop_site_id=pop_site_uuid,
+            search=search_filter,
+            page=page,
+            per_page=per_page,
+        ),
     )
+    devices = list(inventory.devices)
     annotate_operational_status(devices)
     device_ids = [device.id for device in devices]
     pop_sites = pop_sites_for_forms(db)
@@ -802,23 +790,23 @@ def list_page_data(
                 "last_backup_at": latest_backup.created_at if latest_backup else None,
             }
     stats = {
-        "total": total,
-        "core": role_counts.get("core", 0),
-        "distribution": role_counts.get("distribution", 0),
-        "access": role_counts.get("access", 0),
-        "aggregation": role_counts.get("aggregation", 0),
-        "edge": role_counts.get("edge", 0),
+        "total": inventory.total,
+        "core": inventory.role_counts.get("core", 0),
+        "distribution": inventory.role_counts.get("distribution", 0),
+        "access": inventory.role_counts.get("access", 0),
+        "aggregation": inventory.role_counts.get("aggregation", 0),
+        "edge": inventory.role_counts.get("edge", 0),
     }
     return {
         "devices": devices,
         "stats": stats,
         "pagination": {
-            "page": page,
-            "per_page": page_size,
-            "total": total,
-            "total_pages": total_pages,
-            "has_prev": page > 1,
-            "has_next": page < total_pages,
+            "page": inventory.page,
+            "per_page": inventory.per_page,
+            "total": inventory.total,
+            "total_pages": inventory.total_pages,
+            "has_prev": inventory.page > 1,
+            "has_next": inventory.page < inventory.total_pages,
         },
         "role_filter": role,
         "status_filter": status_filter,

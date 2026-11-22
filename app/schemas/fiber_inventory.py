@@ -3,7 +3,7 @@
 from dataclasses import dataclass
 from typing import Generic, TypeVar
 
-T = TypeVar("T")
+T = TypeVar("T", covariant=True)
 
 
 @dataclass(frozen=True, slots=True)

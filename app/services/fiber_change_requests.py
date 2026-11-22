@@ -1,6 +1,7 @@
 import json
 import logging
 import uuid
+from collections.abc import Sequence
 from datetime import UTC, datetime
 from typing import Any, TypeAlias
 
@@ -27,6 +28,8 @@ from app.models.network import (
     Splitter,
     SplitterPort,
 )
+from app.models.subscriber import Subscriber
+from app.models.vendor_routes import Vendor
 from app.schemas.fiber_inventory import (
     FiberInventoryPage,
     FiberInventoryQuery,
@@ -456,6 +459,41 @@ def list_requests(db: Session, status: FiberChangeRequestStatus | None = None):
     if status:
         stmt = stmt.where(FiberChangeRequest.status == status)
     return list(db.scalars(stmt.order_by(FiberChangeRequest.created_at.desc())).all())
+
+
+def requester_labels(
+    db: Session, requests: Sequence[FiberChangeRequest]
+) -> tuple[dict[str, str], dict[str, str]]:
+    """Resolve the vendor and person labels for one bounded request page."""
+    vendor_ids = {
+        req.requested_by_vendor_id for req in requests if req.requested_by_vendor_id
+    }
+    person_ids = {
+        req.requested_by_person_id for req in requests if req.requested_by_person_id
+    }
+    vendor_names = (
+        {
+            str(vendor_id): name
+            for vendor_id, name in db.execute(
+                select(Vendor.id, Vendor.name).where(Vendor.id.in_(vendor_ids))
+            )
+        }
+        if vendor_ids
+        else {}
+    )
+    person_names = (
+        {
+            str(person_id): f"{first_name} {last_name}".strip()
+            for person_id, first_name, last_name in db.execute(
+                select(
+                    Subscriber.id, Subscriber.first_name, Subscriber.last_name
+                ).where(Subscriber.id.in_(person_ids))
+            )
+        }
+        if person_ids
+        else {}
+    )
+    return vendor_names, person_names
 
 
 def inventory_page(
