@@ -35,6 +35,14 @@ a failed save. The support ticket guide describes creating a customerless
 infrastructure work order from a ticket; the dispatch guide describes assigning
 its technician after creation.
 
+The Fiber Plant guide explains selecting a tab, searching and paging its bounded
+inventory, and opening asset details. Imported topology evidence is disclosed
+separately from human notes. The Core Devices guide explains that summary cards
+count the full filtered inventory while the table shows one page. Fiber Change
+Requests guidance covers the independent pending-request and map-proposal
+queues. These guides describe navigation; the fiber and device owners remain
+authoritative for inventory state and totals.
+
 ## Churn analysis
 
 Use `/admin/reports/churn` to review subscriber churn within a defined calendar

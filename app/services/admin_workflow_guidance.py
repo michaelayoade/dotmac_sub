@@ -476,7 +476,7 @@ WORKFLOW_GUIDANCE: tuple[AdminWorkflowGuidance, ...] = (
         "Review each staged feature's name, geometry, suggested asset type, and blocker; correct classifications before submission.",
         "Submit eligible new point assets into the existing proposal review. Route geometry and other blocked features stay staged until their separate review is complete.",
         "On the fiber map, submit supported FDH and closure moves for review; the canonical map position changes only after approval.",
-        "On Fiber Change Requests, review pending Map V2 proposals in their separate queue. Only an independent reviewer with network:fiber:review can approve or reject; approval applies the proposed canonical asset change.",
+        "On Fiber Change Requests, search and page pending fiber requests and pending Map V2 proposals in their separate queues. Only an independent reviewer with network:fiber:review can approve or reject a Map V2 proposal; approval applies the proposed canonical asset change.",
         "On the FDH cabinet ledger, use the active-cabinet list and page controls to find a cabinet, then use its editor for non-location details.",
         "When assigning a customer IPv4 address in IP Management, select the exact customer and subscription before saving. A subscriber-only IPv4 assignment is refused; device and management addresses belong on the device record.",
         notes=(
@@ -490,6 +490,38 @@ WORKFLOW_GUIDANCE: tuple[AdminWorkflowGuidance, ...] = (
             "/admin/network/map",
             "/admin/network/ip-management/ipv4-assign",
         ),
+    ),
+    _guide(
+        "fiber-inventory",
+        "Network and access",
+        "Find fiber plant assets",
+        "NOC and fiber operations",
+        "Find a cabinet, splitter, strand, or splice closure and inspect its owner-backed record.",
+        (
+            "/admin/network/fiber-plant",
+            "/admin/network/fdh-cabinets",
+            "/admin/network/splitters",
+            "/admin/network/strands",
+            "/admin/network/splice-closures",
+        ),
+        "On Fiber Plant, select the asset tab you need. The page loads that tab's first bounded result page when selected; each tab has its own search and page controls.",
+        "Search by an asset name or identifier, then use Previous and Next to inspect all matching rows. Search and page changes retain the selected asset type in the URL.",
+        "Open an asset for its details. Imported source identifiers and fingerprints appear under evidence details; ordinary notes remain readable text.",
+        notes=(
+            "The consolidated Fiber Plant ledger includes inactive assets and labels their state. Standalone lists retain their active-only scope.",
+            "An empty search result describes the selected tab and filter; clear the search before concluding an asset is absent.",
+        ),
+    ),
+    _guide(
+        "core-device-inventory",
+        "Network and access",
+        "Find core devices",
+        "NOC and network operations",
+        "Find a core device without losing the meaning of filtered inventory totals.",
+        (),
+        "Use the Core Devices search and filters to narrow the inventory, then page through the matching devices.",
+        "The summary cards count the full filtered inventory, while the table shows only the current page. Keep the filters when changing pages.",
+        route_templates=("/admin/network/core-devices",),
     ),
     _guide(
         "router-health",
@@ -1794,6 +1826,30 @@ _ACTION_SPECS: dict[str, tuple[_ActionSpec, ...]] = {
             permission="network:ip:write",
         ),
     ),
+    "fiber-inventory": (
+        _action(
+            "find-fiber-asset",
+            "Find a fiber plant asset",
+            0,
+            1,
+            permission="network:fiber:read",
+        ),
+        _action(
+            "inspect-fiber-evidence",
+            "Inspect asset details and evidence",
+            2,
+            permission="network:fiber:read",
+        ),
+    ),
+    "core-device-inventory": (
+        _action(
+            "find-core-device",
+            "Find a core device",
+            0,
+            1,
+            permission="network:device:read",
+        ),
+    ),
     "router-health": (
         _action(
             "scan-router-health", "Scan router health", 0, 1, permission="router:read"
@@ -2788,6 +2844,8 @@ HELP_NAVIGATION: tuple[AdminHelpNavigationSection, ...] = (
         "Network",
         (
             "network-access",
+            "fiber-inventory",
+            "core-device-inventory",
             "router-health",
             "ip-pool-labels",
             "cross-app-drift",
@@ -2903,6 +2961,8 @@ HELP_GUIDE_VIEW_PERMISSIONS: dict[str, tuple[str, ...]] = {
     "vendor-records": ("inventory:read",),
     "vendor-reviews": ("inventory:read", "finance:ap:read"),
     "vendor-routes": ("network:fiber:read",),
+    "fiber-inventory": ("network:fiber:read",),
+    "core-device-inventory": ("network:device:read",),
     "ticket-sla-report": ("reports:support:read",),
     "churn-report": ("customer:read",),
     "customer-retention-report": ("reports:billing:read",),
