@@ -1,4 +1,5 @@
 {% extends "layouts/admin.html" %}
+{% from "admin/network/fiber/_notes.html" import notes as fiber_notes %}
 {% from "components/ui/macros.html" import status_badge %}
 
 {% block title %}{{ closure.name }} - Splice Closure - Admin{% endblock %}
@@ -58,12 +59,7 @@
                             <dt class="text-sm font-medium text-slate-500 dark:text-slate-400">Splices</dt>
                             <dd class="mt-1 text-sm text-slate-900 dark:text-white">{{ splices | length }}</dd>
                         </div>
-                        {% if closure.notes %}
-                        <div class="sm:col-span-2">
-                            <dt class="text-sm font-medium text-slate-500 dark:text-slate-400">Notes</dt>
-                            <dd class="mt-1 text-sm text-slate-900 dark:text-white whitespace-pre-wrap">{{ closure.notes }}</dd>
-                        </div>
-                        {% endif %}
+                        {{ fiber_notes(notes_presentation) }}
                     </dl>
                 </div>
             </div>

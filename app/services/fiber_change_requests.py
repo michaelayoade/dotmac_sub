@@ -5,7 +5,7 @@ from datetime import UTC, datetime
 from typing import Any, TypeAlias
 
 from fastapi import HTTPException
-from sqlalchemy import Uuid, func, select
+from sqlalchemy import String, Uuid, cast, func, or_, select
 from sqlalchemy.orm import Session
 
 from app.models.fiber_change_request import (
@@ -27,6 +27,12 @@ from app.models.network import (
     Splitter,
     SplitterPort,
 )
+from app.schemas.fiber_inventory import (
+    FiberInventoryPage,
+    FiberInventoryQuery,
+    page_number,
+    page_result,
+)
 from app.schemas.network_map_asset_changes import (
     AppliedNetworkAssetChange,
     ApplyReviewedNetworkAssetChange,
@@ -37,6 +43,7 @@ from app.schemas.network_map_asset_changes import (
 )
 from app.services.common import coerce_uuid
 from app.services.domain_errors import DomainError
+from app.services.query_builders import literal_contains_pattern
 
 logger = logging.getLogger(__name__)
 
@@ -449,6 +456,39 @@ def list_requests(db: Session, status: FiberChangeRequestStatus | None = None):
     if status:
         stmt = stmt.where(FiberChangeRequest.status == status)
     return list(db.scalars(stmt.order_by(FiberChangeRequest.created_at.desc())).all())
+
+
+def inventory_page(
+    db: Session,
+    query: FiberInventoryQuery,
+    *,
+    status: FiberChangeRequestStatus | None = None,
+) -> FiberInventoryPage[FiberChangeRequest]:
+    """A bounded, searchable page of requests from the canonical owner."""
+    stmt = select(FiberChangeRequest)
+    if status is not None:
+        stmt = stmt.where(FiberChangeRequest.status == status)
+    if search := query.normalized_search:
+        term = literal_contains_pattern(search)
+        stmt = stmt.where(
+            or_(
+                FiberChangeRequest.asset_type.ilike(term, escape="\\"),
+                cast(FiberChangeRequest.id, String).ilike(term, escape="\\"),
+                cast(FiberChangeRequest.asset_id, String).ilike(term, escape="\\"),
+            )
+        )
+    total = int(db.scalar(select(func.count()).select_from(stmt.subquery())) or 0)
+    page = page_number(query, total)
+    items = list(
+        db.scalars(
+            stmt.order_by(
+                FiberChangeRequest.created_at.desc(), FiberChangeRequest.id.desc()
+            )
+            .offset((page - 1) * query.page_size)
+            .limit(query.page_size)
+        )
+    )
+    return page_result(query, total, items)
 
 
 def get_request(db: Session, request_id: str) -> FiberChangeRequest:

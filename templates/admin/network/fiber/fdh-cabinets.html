@@ -1,5 +1,6 @@
 {% extends "layouts/admin.html" %}
 {% from "components/ui/macros.html" import status_badge %}
+{% from "admin/network/fiber/_inventory_controls.html" import search_form, pager %}
 
 {% block title %}FDH Cabinets - Admin{% endblock %}
 
@@ -27,12 +28,14 @@
                     <svg class="h-6 w-6 text-orange-600 dark:text-orange-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M20 7l-8-4-8 4m16 0l-8 4m8-4v10l-8 4m0-10L4 7m8 4v10M4 7v10l8 4"/></svg>
                 </div>
                 <div>
-                    <p class="text-sm font-medium text-slate-500 dark:text-slate-400">Total FDH Cabinets</p>
+                    <p class="text-sm font-medium text-slate-500 dark:text-slate-400">{{ 'Matching' if search else 'Total' }} FDH Cabinets</p>
                     <p class="text-2xl font-bold text-slate-900 dark:text-white">{{ stats.total }}</p>
                 </div>
             </div>
         </div>
     </div>
+
+    {{ search_form('/admin/network/fdh-cabinets', 'FDH cabinets', search, pagination) }}
 
     <!-- Cabinets Table -->
     <div class="overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm dark:border-slate-700 dark:bg-slate-800">
@@ -60,15 +63,12 @@
                                 </div>
                             </div>
                         </td>
-                        <td class="px-6 py-4 whitespace-nowrap">
+                        <td class="max-w-xs px-6 py-4 [overflow-wrap:anywhere]">
                             <span class="font-mono text-sm text-slate-900 dark:text-white">{{ cabinet.code or '-' }}</span>
                         </td>
                         <td class="px-6 py-4">
                             {% if cabinet.notes and cabinet.notes.lstrip().startswith('{') %}
-                            <details class="max-w-xs">
-                                <summary class="cursor-pointer text-sm text-primary-600">Imported evidence</summary>
-                                <pre class="mt-2 max-h-40 overflow-auto whitespace-pre-wrap rounded bg-slate-100 p-2 text-xs text-slate-600 dark:bg-slate-900 dark:text-slate-300">{{ cabinet.notes }}</pre>
-                            </details>
+                            <a href="/admin/network/fdh-cabinets/{{ cabinet.id }}" class="text-sm text-primary-600 hover:underline dark:text-primary-400">Imported evidence · View details</a>
                             {% else %}
                             <p class="max-w-xs truncate text-sm text-slate-500 dark:text-slate-400">{{ cabinet.notes or '-' }}</p>
                             {% endif %}
@@ -98,17 +98,6 @@
         </div>
     </div>
 
-    {% if pagination.total_pages > 1 %}
-    <nav class="flex items-center justify-between rounded-xl border border-slate-200 bg-white px-4 py-3 dark:border-slate-700 dark:bg-slate-800" aria-label="FDH cabinet pages">
-        <p class="text-sm text-slate-500 dark:text-slate-400">
-            Showing {{ (pagination.page - 1) * pagination.per_page + 1 }} to {{ [pagination.page * pagination.per_page, pagination.total] | min }} of {{ pagination.total }} active cabinets
-        </p>
-        <div class="flex items-center gap-3">
-            {% if pagination.has_prev %}<a href="{{ request.url.include_query_params(page=pagination.page - 1, per_page=pagination.per_page) }}" class="rounded-lg border border-slate-300 px-3 py-1.5 text-sm font-medium text-slate-700 dark:border-slate-600 dark:text-slate-200">Previous</a>{% endif %}
-            <span class="text-sm text-slate-600 dark:text-slate-300">Page {{ pagination.page }} of {{ pagination.total_pages }}</span>
-            {% if pagination.has_next %}<a href="{{ request.url.include_query_params(page=pagination.page + 1, per_page=pagination.per_page) }}" class="rounded-lg border border-slate-300 px-3 py-1.5 text-sm font-medium text-slate-700 dark:border-slate-600 dark:text-slate-200">Next</a>{% endif %}
-        </div>
-    </nav>
-    {% endif %}
+    {{ pager(request, pagination, 'FDH cabinet') }}
 </div>
 {% endblock %}

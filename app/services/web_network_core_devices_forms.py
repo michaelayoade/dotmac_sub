@@ -52,6 +52,7 @@ from app.services.network_device_status_presentation import (
     network_device_list_status_presentation,
 )
 from app.services.network_monitoring import set_network_device_active
+from app.services.query_builders import literal_contains_pattern
 
 
 def _format_uptime_short(seconds: int | None) -> str | None:
@@ -599,6 +600,8 @@ def list_page_data(
     device_type: str | None = None,
     pop_site_id: str | None = None,
     search: str | None = None,
+    page: int = 1,
+    per_page: int = 50,
 ) -> dict[str, object]:
     """Return data payload for core-device index."""
     stmt = select(NetworkDevice)
@@ -631,18 +634,37 @@ def list_page_data(
         except ValueError:
             pop_site_filter = None
 
-    search_filter = (search or "").strip()
+    search_filter = (search or "").strip()[:120]
     if search_filter:
-        pattern = f"%{search_filter}%"
+        pattern = literal_contains_pattern(search_filter)
         stmt = stmt.where(
-            NetworkDevice.name.ilike(pattern)
-            | NetworkDevice.hostname.ilike(pattern)
-            | NetworkDevice.mgmt_ip.ilike(pattern)
-            | NetworkDevice.vendor.ilike(pattern)
-            | NetworkDevice.model.ilike(pattern)
+            NetworkDevice.name.ilike(pattern, escape="\\")
+            | NetworkDevice.hostname.ilike(pattern, escape="\\")
+            | NetworkDevice.mgmt_ip.ilike(pattern, escape="\\")
+            | NetworkDevice.vendor.ilike(pattern, escape="\\")
+            | NetworkDevice.model.ilike(pattern, escape="\\")
         )
 
-    devices = list(db.scalars(stmt.order_by(NetworkDevice.name).limit(200)).all())
+    matching = stmt.with_only_columns(
+        NetworkDevice.role, maintain_column_froms=True
+    ).subquery()
+    role_counts = {
+        (role.value if isinstance(role, DeviceRole) else str(role)): count
+        for role, count in db.execute(
+            select(matching.c.role, func.count()).group_by(matching.c.role)
+        ).all()
+    }
+    total = sum(role_counts.values())
+    page_size = min(max(per_page, 10), 100)
+    total_pages = max(1, (total + page_size - 1) // page_size)
+    page = min(max(page, 1), total_pages)
+    devices = list(
+        db.scalars(
+            stmt.order_by(NetworkDevice.name, NetworkDevice.id)
+            .offset((page - 1) * page_size)
+            .limit(page_size)
+        ).all()
+    )
     annotate_operational_status(devices)
     device_ids = [device.id for device in devices]
     pop_sites = pop_sites_for_forms(db)
@@ -780,16 +802,24 @@ def list_page_data(
                 "last_backup_at": latest_backup.created_at if latest_backup else None,
             }
     stats = {
-        "total": len(devices),
-        "core": sum(1 for d in devices if d.role.value == "core"),
-        "distribution": sum(1 for d in devices if d.role.value == "distribution"),
-        "access": sum(1 for d in devices if d.role.value == "access"),
-        "aggregation": sum(1 for d in devices if d.role.value == "aggregation"),
-        "edge": sum(1 for d in devices if d.role.value == "edge"),
+        "total": total,
+        "core": role_counts.get("core", 0),
+        "distribution": role_counts.get("distribution", 0),
+        "access": role_counts.get("access", 0),
+        "aggregation": role_counts.get("aggregation", 0),
+        "edge": role_counts.get("edge", 0),
     }
     return {
         "devices": devices,
         "stats": stats,
+        "pagination": {
+            "page": page,
+            "per_page": page_size,
+            "total": total,
+            "total_pages": total_pages,
+            "has_prev": page > 1,
+            "has_next": page < total_pages,
+        },
         "role_filter": role,
         "status_filter": status_filter,
         "pop_sites": pop_sites,

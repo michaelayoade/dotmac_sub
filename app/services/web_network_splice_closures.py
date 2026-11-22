@@ -17,8 +17,10 @@ from app.models.network import (
     FiberSpliceTray,
     FiberStrand,
 )
+from app.schemas.fiber_inventory import FiberInventoryQuery
 from app.schemas.network import FiberSpliceCreate, FiberSpliceUpdate
 from app.services import network as network_service
+from app.services.fiber_note_presentation import present_fiber_notes
 
 logger = logging.getLogger(__name__)
 
@@ -28,15 +30,26 @@ def _form_str(form: Mapping[str, object], key: str, default: str = "") -> str:
     return value.strip() if isinstance(value, str) else default
 
 
-def list_page_data(db: Session) -> dict[str, object]:
+def list_page_data(
+    db: Session, *, page: int = 1, per_page: int = 50, search: str = ""
+) -> dict[str, object]:
     """Return splice closure list and summary stats."""
-    closures = db.scalars(
-        select(FiberSpliceClosure)
-        .where(FiberSpliceClosure.is_active.is_(True))
-        .order_by(FiberSpliceClosure.name)
-        .limit(200)
-    ).all()
-    return {"closures": closures, "stats": {"total": len(closures)}}
+    result = network_service.fiber_splice_closures.inventory_page(
+        db, FiberInventoryQuery(page, per_page, search, active_only=True)
+    )
+    return {
+        "closures": result.items,
+        "stats": {"total": result.total},
+        "search": search.strip()[:120],
+        "pagination": {
+            "page": result.page,
+            "per_page": result.per_page,
+            "total": result.total,
+            "total_pages": result.total_pages,
+            "has_prev": result.page > 1,
+            "has_next": result.page < result.total_pages,
+        },
+    }
 
 
 def get_closure(db: Session, closure_id: str) -> FiberSpliceClosure | None:
@@ -139,7 +152,12 @@ def detail_page_data(db: Session, closure_id: str) -> dict[str, object] | None:
     splices = db.scalars(
         select(FiberSplice).where(FiberSplice.closure_id == closure.id)
     ).all()
-    return {"closure": closure, "trays": trays, "splices": splices}
+    return {
+        "closure": closure,
+        "trays": trays,
+        "splices": splices,
+        "notes_presentation": present_fiber_notes(closure.notes),
+    }
 
 
 def get_tray(db: Session, closure_id: str, tray_id: str) -> FiberSpliceTray | None:

@@ -1,0 +1,22 @@
+{% macro search_form(action, label, search, pagination) %}
+<form action="{{ action }}" method="get" role="search" class="flex flex-wrap items-end gap-2">
+    <input type="hidden" name="per_page" value="{{ pagination.per_page }}">
+    <div class="min-w-48 flex-1 sm:max-w-sm">
+        <label for="inventory-search" class="mb-1 block text-xs font-medium text-slate-600 dark:text-slate-300">Search {{ label }}</label>
+        <input id="inventory-search" type="search" name="search" maxlength="120" value="{{ search }}" placeholder="Search this list" class="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 placeholder:text-slate-400 focus:border-primary-500 focus:ring-primary-500 dark:border-slate-600 dark:bg-slate-800 dark:text-white">
+    </div>
+    <button type="submit" class="rounded-lg bg-primary-600 px-4 py-2 text-sm font-semibold text-white hover:bg-primary-700">Search</button>
+    {% if search %}<a href="{{ action }}?per_page={{ pagination.per_page }}" class="rounded-lg border border-slate-300 px-4 py-2 text-sm font-medium text-slate-700 dark:border-slate-600 dark:text-slate-200">Clear</a>{% endif %}
+</form>
+{% endmacro %}
+
+{% macro pager(request, pagination, label) %}
+<nav class="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-slate-200 bg-white px-4 py-3 text-sm dark:border-slate-700 dark:bg-slate-800" aria-label="{{ label }} pages">
+    <p class="text-slate-500 dark:text-slate-400">{% if pagination.total %}Showing {{ (pagination.page - 1) * pagination.per_page + 1 }}–{{ [pagination.page * pagination.per_page, pagination.total] | min }} of {{ pagination.total }}{% else %}0 results{% endif %}</p>
+    <div class="flex items-center gap-3">
+        {% if pagination.has_prev %}<a href="{{ request.url.include_query_params(page=pagination.page - 1, per_page=pagination.per_page) }}" class="rounded-lg border border-slate-300 px-3 py-1.5 font-medium dark:border-slate-600">Previous</a>{% endif %}
+        <span class="text-slate-600 dark:text-slate-300">Page {{ pagination.page }} of {{ pagination.total_pages }}</span>
+        {% if pagination.has_next %}<a href="{{ request.url.include_query_params(page=pagination.page + 1, per_page=pagination.per_page) }}" class="rounded-lg border border-slate-300 px-3 py-1.5 font-medium dark:border-slate-600">Next</a>{% endif %}
+    </div>
+</nav>
+{% endmacro %}

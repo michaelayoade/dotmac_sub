@@ -4,10 +4,14 @@ from __future__ import annotations
 
 import logging
 
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 from starlette.datastructures import FormData
 
 from app.models.fiber_change_request import FiberChangeRequestStatus
+from app.models.subscriber import Subscriber
+from app.models.vendor_routes import Vendor
+from app.schemas.fiber_inventory import FiberInventoryQuery, page_number
 from app.schemas.network_map_asset_changes import NetworkAssetProposalStatus
 from app.services import fiber_change_requests as change_request_service
 from app.services import fiber_topology as fiber_topology_service
@@ -35,19 +39,68 @@ def change_requests_page_data(
     skipped: str | None,
     can_review_map_assets: bool = False,
     map_asset_actor_id: str = "",
+    page: int = 1,
+    per_page: int = 50,
+    search: str = "",
+    map_page: int = 1,
 ) -> dict[str, object]:
-    requests = change_request_service.list_requests(
-        db, status=FiberChangeRequestStatus.pending
+    request_page = change_request_service.inventory_page(
+        db,
+        FiberInventoryQuery(page, per_page, search),
+        status=FiberChangeRequestStatus.pending,
+    )
+    requests = request_page.items
+    vendor_ids = {
+        req.requested_by_vendor_id for req in requests if req.requested_by_vendor_id
+    }
+    requester_ids = {
+        req.requested_by_person_id for req in requests if req.requested_by_person_id
+    }
+    vendor_names = (
+        {
+            str(vendor_id): name
+            for vendor_id, name in db.execute(
+                select(Vendor.id, Vendor.name).where(Vendor.id.in_(vendor_ids))
+            )
+        }
+        if vendor_ids
+        else {}
+    )
+    requester_names = (
+        {
+            str(person_id): f"{first_name} {last_name}".strip()
+            for person_id, first_name, last_name in db.execute(
+                select(
+                    Subscriber.id, Subscriber.first_name, Subscriber.last_name
+                ).where(Subscriber.id.in_(requester_ids))
+            )
+        }
+        if requester_ids
+        else {}
     )
     conflicts = {
         str(req.id): web_network_fiber_service.has_change_request_conflict(db, req)
         for req in requests
     }
+    map_total = network_map_asset_changes.count_proposals(
+        db, status=NetworkAssetProposalStatus.pending
+    )
+    actual_map_page = page_number(FiberInventoryQuery(map_page, 25), map_total)
     map_asset_proposals = network_map_asset_changes.list_proposals(
         db,
         status=NetworkAssetProposalStatus.pending,
-        limit=200,
+        limit=25,
+        offset=(actual_map_page - 1) * 25,
     )
+    current_map_pages = max(1, (map_asset_proposals.total + 24) // 25)
+    if actual_map_page > current_map_pages:
+        actual_map_page = current_map_pages
+        map_asset_proposals = network_map_asset_changes.list_proposals(
+            db,
+            status=NetworkAssetProposalStatus.pending,
+            limit=25,
+            offset=(actual_map_page - 1) * 25,
+        )
     map_asset_items = [
         {
             **proposal.to_transport(),
@@ -61,6 +114,22 @@ def change_requests_page_data(
     ]
     return {
         "requests": requests,
+        "vendor_names": vendor_names,
+        "requester_names": requester_names,
+        "search": search.strip()[:120],
+        "pagination": {
+            "page": request_page.page,
+            "per_page": request_page.per_page,
+            "total": request_page.total,
+            "total_pages": request_page.total_pages,
+            "has_prev": request_page.page > 1,
+            "has_next": request_page.page < request_page.total_pages,
+        },
+        "map_pagination": {
+            "page": actual_map_page,
+            "total_pages": max(1, (map_asset_proposals.total + 24) // 25),
+            "total": map_asset_proposals.total,
+        },
         "conflicts": conflicts,
         "map_asset_proposals": map_asset_items,
         "map_asset_proposals_total": map_asset_proposals.total,

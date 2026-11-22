@@ -7,6 +7,12 @@ import logging
 logger = logging.getLogger(__name__)
 
 
+def literal_contains_pattern(value: str) -> str:
+    """Escape SQL LIKE wildcards so an inventory search matches literal text."""
+    escaped = value.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+    return f"%{escaped}%"
+
+
 def apply_optional_equals(query, filters: dict):
     """Apply equality filters when values are not None."""
     for column, value in filters.items():

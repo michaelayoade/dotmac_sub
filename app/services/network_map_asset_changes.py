@@ -944,20 +944,32 @@ def _review_proposal(
     return _outcome(row)
 
 
+def count_proposals(
+    db: Session, *, status: NetworkAssetProposalStatus | None = None
+) -> int:
+    """Count proposals in the same owner scope used by list_proposals."""
+    filters = []
+    if status is not None:
+        filters.append(NetworkMapAssetChangeProposal.status == status.value)
+    return int(
+        db.scalar(select(func.count(NetworkMapAssetChangeProposal.id)).where(*filters))
+        or 0
+    )
+
+
 def list_proposals(
     db: Session,
     *,
     status: NetworkAssetProposalStatus | None = None,
     limit: int = 100,
+    offset: int = 0,
 ) -> NetworkAssetProposalList:
     bounded_limit = min(max(limit, 1), 200)
+    bounded_offset = max(offset, 0)
     filters = []
     if status is not None:
         filters.append(NetworkMapAssetChangeProposal.status == status.value)
-    total = int(
-        db.scalar(select(func.count(NetworkMapAssetChangeProposal.id)).where(*filters))
-        or 0
-    )
+    total = count_proposals(db, status=status)
     rows = tuple(
         db.scalars(
             select(NetworkMapAssetChangeProposal)
@@ -966,6 +978,7 @@ def list_proposals(
                 NetworkMapAssetChangeProposal.created_at.desc(),
                 NetworkMapAssetChangeProposal.id.desc(),
             )
+            .offset(bounded_offset)
             .limit(bounded_limit)
         )
     )
@@ -976,7 +989,7 @@ def list_proposals(
         ),
         total=total,
         limit=bounded_limit,
-        truncated=total > bounded_limit,
+        truncated=total > bounded_offset + bounded_limit,
     )
 
 
@@ -995,6 +1008,7 @@ __all__ = [
     "OWNER",
     "PROPOSE_PERMISSION",
     "REVIEW_PERMISSION",
+    "count_proposals",
     "get_proposal",
     "list_proposals",
     "review_proposal",
