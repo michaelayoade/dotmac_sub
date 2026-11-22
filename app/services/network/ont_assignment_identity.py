@@ -15,13 +15,19 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import TypeVar
 
-from sqlalchemy import or_, select
+from sqlalchemy import String, cast, func, or_, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 from sqlalchemy.sql import Select
 
 from app.models.network import OLTDevice, OntAssignment, OntUnit, PonPort
+from app.models.ont_assignment_cutover import (
+    OntAssignmentCutoverBatchReview,
+    OntAssignmentCutoverProposalBatch,
+    OntAssignmentCutoverVerificationAttestation,
+)
 from app.models.ont_assignment_identity import OntAssignmentIdentityDecision
+from app.models.ont_topology_observation import OntTopologyObservationEvidence
 from app.services.network_subscriber_bridge import (
     AssignmentSubscriptionSnapshot,
     assignment_subscription_snapshot,
@@ -29,6 +35,342 @@ from app.services.network_subscriber_bridge import (
 
 ACTIVE_STATUSES = ("proposed", "approved")
 _ModelT = TypeVar("_ModelT")
+
+
+@dataclass(frozen=True, slots=True)
+class OntIdentityReviewQueuePage:
+    """Bounded database selection for one ONT identity review queue."""
+
+    ids: tuple[uuid.UUID, ...]
+    decisions: tuple[OntAssignmentIdentityDecision, ...]
+    total: int
+    page: int
+    per_page: int
+    total_pages: int
+    status_counts: tuple[tuple[str, int], ...] = ()
+
+
+def _review_page_number(total: int, requested: int, size: int) -> tuple[int, int]:
+    total_pages = max(1, (total + size - 1) // size)
+    return min(max(requested, 1), total_pages), total_pages
+
+
+def _review_search_like(query: str) -> str:
+    escaped = query.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+    return f"%{escaped}%"
+
+
+def _review_search_uuid(query: str) -> uuid.UUID | None:
+    try:
+        return uuid.UUID(query)
+    except (ValueError, AttributeError):
+        return None
+
+
+def page_ont_identity_review_queue(
+    db: Session,
+    *,
+    tab: str,
+    query: str,
+    status: str,
+    page: int,
+    per_page: int,
+) -> OntIdentityReviewQueuePage:
+    """Select one queue before the web adapter hydrates its display rows."""
+
+    cleaned = query.strip()[:160]
+    like = _review_search_like(cleaned)
+    exact_id = _review_search_uuid(cleaned)
+    size = min(max(per_page, 1), 100)
+    if tab == "observations":
+        observation_statement = (
+            select(OntTopologyObservationEvidence.id)
+            .outerjoin(
+                OntUnit, OntUnit.id == OntTopologyObservationEvidence.ont_unit_id
+            )
+            .where(
+                OntTopologyObservationEvidence.latest_outcome.in_(
+                    ("incomplete", "review_required")
+                ),
+                OntTopologyObservationEvidence.resolved_at.is_(None),
+            )
+        )
+        if cleaned:
+            observation_statement = observation_statement.where(
+                or_(
+                    cast(OntTopologyObservationEvidence.id, String).ilike(
+                        like, escape="\\"
+                    ),
+                    OntTopologyObservationEvidence.source.ilike(like, escape="\\"),
+                    OntTopologyObservationEvidence.evidence_key.ilike(
+                        like, escape="\\"
+                    ),
+                    OntTopologyObservationEvidence.latest_reason.ilike(
+                        like, escape="\\"
+                    ),
+                    cast(OntTopologyObservationEvidence.ont_unit_id, String).ilike(
+                        like, escape="\\"
+                    ),
+                    cast(OntTopologyObservationEvidence.observed_olt_id, String).ilike(
+                        like, escape="\\"
+                    ),
+                    cast(
+                        OntTopologyObservationEvidence.observed_pon_port_id, String
+                    ).ilike(like, escape="\\"),
+                    cast(OntTopologyObservationEvidence.canonical_olt_id, String).ilike(
+                        like, escape="\\"
+                    ),
+                    cast(
+                        OntTopologyObservationEvidence.canonical_pon_port_id, String
+                    ).ilike(like, escape="\\"),
+                    cast(
+                        OntTopologyObservationEvidence.active_assignment_ids, String
+                    ).ilike(like, escape="\\"),
+                    OntUnit.serial_number.ilike(like, escape="\\"),
+                    *(
+                        (
+                            column == exact_id
+                            for column in (
+                                OntTopologyObservationEvidence.id,
+                                OntTopologyObservationEvidence.ont_unit_id,
+                                OntTopologyObservationEvidence.observed_olt_id,
+                                OntTopologyObservationEvidence.observed_pon_port_id,
+                                OntTopologyObservationEvidence.canonical_olt_id,
+                                OntTopologyObservationEvidence.canonical_pon_port_id,
+                            )
+                        )
+                        if exact_id is not None
+                        else ()
+                    ),
+                )
+            )
+        total = int(
+            db.scalar(
+                select(func.count()).select_from(observation_statement.subquery())
+            )
+            or 0
+        )
+        selected_page, total_pages = _review_page_number(total, page, size)
+        ids = tuple(
+            db.scalars(
+                observation_statement.order_by(
+                    OntTopologyObservationEvidence.last_seen_at.desc(),
+                    OntTopologyObservationEvidence.id.desc(),
+                )
+                .limit(size)
+                .offset((selected_page - 1) * size)
+            )
+        )
+        return OntIdentityReviewQueuePage(
+            ids, (), total, selected_page, size, total_pages
+        )
+
+    if tab == "batches":
+        batch_statement = select(OntAssignmentCutoverProposalBatch.id)
+        if cleaned:
+            review_match = (
+                select(OntAssignmentCutoverBatchReview.proposal_batch_id)
+                .where(
+                    OntAssignmentCutoverBatchReview.proposal_batch_id
+                    == OntAssignmentCutoverProposalBatch.id,
+                    OntAssignmentCutoverBatchReview.reviewed_by.ilike(
+                        like, escape="\\"
+                    ),
+                )
+                .exists()
+            )
+            verification_match = (
+                select(OntAssignmentCutoverVerificationAttestation.proposal_batch_id)
+                .where(
+                    OntAssignmentCutoverVerificationAttestation.proposal_batch_id
+                    == OntAssignmentCutoverProposalBatch.id,
+                    or_(
+                        OntAssignmentCutoverVerificationAttestation.verified_by.ilike(
+                            like, escape="\\"
+                        ),
+                        OntAssignmentCutoverVerificationAttestation.outcome.ilike(
+                            like, escape="\\"
+                        ),
+                    ),
+                )
+                .exists()
+            )
+            decision_match = (
+                select(OntAssignmentIdentityDecision.id)
+                .where(
+                    OntAssignmentIdentityDecision.proposal_batch_id
+                    == OntAssignmentCutoverProposalBatch.id,
+                    or_(
+                        cast(OntAssignmentIdentityDecision.id, String).ilike(
+                            like, escape="\\"
+                        ),
+                        cast(
+                            OntAssignmentIdentityDecision.primary_assignment_id, String
+                        ).ilike(like, escape="\\"),
+                        *(
+                            (
+                                OntAssignmentIdentityDecision.id == exact_id,
+                                OntAssignmentIdentityDecision.primary_assignment_id
+                                == exact_id,
+                            )
+                            if exact_id is not None
+                            else ()
+                        ),
+                    ),
+                )
+                .exists()
+            )
+            batch_statement = batch_statement.where(
+                or_(
+                    cast(OntAssignmentCutoverProposalBatch.id, String).ilike(
+                        like, escape="\\"
+                    ),
+                    OntAssignmentCutoverProposalBatch.source_name.ilike(
+                        like, escape="\\"
+                    ),
+                    OntAssignmentCutoverProposalBatch.proposed_by.ilike(
+                        like, escape="\\"
+                    ),
+                    OntAssignmentCutoverProposalBatch.report_sha256.ilike(
+                        like, escape="\\"
+                    ),
+                    OntAssignmentCutoverProposalBatch.manifest_sha256.ilike(
+                        like, escape="\\"
+                    ),
+                    *(
+                        (OntAssignmentCutoverProposalBatch.id == exact_id,)
+                        if exact_id is not None
+                        else ()
+                    ),
+                    review_match,
+                    verification_match,
+                    decision_match,
+                )
+            )
+        total = int(
+            db.scalar(select(func.count()).select_from(batch_statement.subquery())) or 0
+        )
+        selected_page, total_pages = _review_page_number(total, page, size)
+        ids = tuple(
+            db.scalars(
+                batch_statement.order_by(
+                    OntAssignmentCutoverProposalBatch.created_at.desc(),
+                    OntAssignmentCutoverProposalBatch.id.desc(),
+                )
+                .limit(size)
+                .offset((selected_page - 1) * size)
+            )
+        )
+        return OntIdentityReviewQueuePage(
+            ids, (), total, selected_page, size, total_pages
+        )
+
+    if tab != "decisions":
+        raise ValueError(f"unsupported review queue: {tab}")
+    normalized_status = status.strip().lower()
+    if normalized_status not in {
+        "active",
+        "all",
+        "proposed",
+        "approved",
+        "declined",
+        "applied",
+        "closed",
+    }:
+        normalized_status = "active"
+    decision_statement = select(OntAssignmentIdentityDecision)
+    if normalized_status == "active":
+        decision_statement = decision_statement.where(
+            OntAssignmentIdentityDecision.status.in_(ACTIVE_STATUSES)
+        )
+    elif normalized_status != "all":
+        decision_statement = decision_statement.where(
+            OntAssignmentIdentityDecision.status == normalized_status
+        )
+    if cleaned:
+        serial_match = (
+            select(OntUnit.id)
+            .where(
+                OntUnit.id == OntAssignmentIdentityDecision.ont_unit_id,
+                OntUnit.serial_number.ilike(like, escape="\\"),
+            )
+            .exists()
+        )
+        decision_statement = decision_statement.where(
+            or_(
+                cast(OntAssignmentIdentityDecision.id, String).ilike(like, escape="\\"),
+                cast(OntAssignmentIdentityDecision.primary_assignment_id, String).ilike(
+                    like, escape="\\"
+                ),
+                cast(OntAssignmentIdentityDecision.ont_unit_id, String).ilike(
+                    like, escape="\\"
+                ),
+                cast(
+                    OntAssignmentIdentityDecision.target_subscription_id, String
+                ).ilike(like, escape="\\"),
+                cast(OntAssignmentIdentityDecision.target_pon_port_id, String).ilike(
+                    like, escape="\\"
+                ),
+                cast(OntAssignmentIdentityDecision.target_olt_id, String).ilike(
+                    like, escape="\\"
+                ),
+                cast(OntAssignmentIdentityDecision.proposal_batch_id, String).ilike(
+                    like, escape="\\"
+                ),
+                OntAssignmentIdentityDecision.proposed_by.ilike(like, escape="\\"),
+                OntAssignmentIdentityDecision.reviewed_by.ilike(like, escape="\\"),
+                serial_match,
+                *(
+                    (
+                        column == exact_id
+                        for column in (
+                            OntAssignmentIdentityDecision.id,
+                            OntAssignmentIdentityDecision.primary_assignment_id,
+                            OntAssignmentIdentityDecision.ont_unit_id,
+                            OntAssignmentIdentityDecision.target_subscription_id,
+                            OntAssignmentIdentityDecision.target_pon_port_id,
+                            OntAssignmentIdentityDecision.target_olt_id,
+                            OntAssignmentIdentityDecision.proposal_batch_id,
+                        )
+                    )
+                    if exact_id is not None
+                    else ()
+                ),
+            )
+        )
+    total = int(
+        db.scalar(
+            select(func.count()).select_from(
+                decision_statement.with_only_columns(OntAssignmentIdentityDecision.id)
+                .order_by(None)
+                .subquery()
+            )
+        )
+        or 0
+    )
+    selected_page, total_pages = _review_page_number(total, page, size)
+    decisions = tuple(
+        db.scalars(
+            decision_statement.order_by(
+                OntAssignmentIdentityDecision.proposed_at.desc(),
+                OntAssignmentIdentityDecision.id.desc(),
+            )
+            .limit(size)
+            .offset((selected_page - 1) * size)
+        )
+    )
+    status_counts = tuple(
+        (current_status, count)
+        for current_status, count in db.execute(
+            select(
+                OntAssignmentIdentityDecision.status,
+                func.count(OntAssignmentIdentityDecision.id),
+            ).group_by(OntAssignmentIdentityDecision.status)
+        )
+    )
+    return OntIdentityReviewQueuePage(
+        (), decisions, total, selected_page, size, total_pages, status_counts
+    )
 
 
 class OntAssignmentIdentityError(ValueError):

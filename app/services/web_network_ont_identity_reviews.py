@@ -7,7 +7,7 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import Generic, NotRequired, TypedDict, TypeVar
 
-from sqlalchemy import String, cast, func, or_, select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.models.network import OntUnit, PonPort
@@ -32,6 +32,7 @@ from app.services.network.ont_assignment_identity import (
     OntAssignmentIdentityError,
     OntAssignmentIdentityPreview,
     active_assignment_identity_conflict_ids,
+    page_ont_identity_review_queue,
     preview_assignment_identity_repair,
     propose_assignment_identity_repair,
 )
@@ -56,18 +57,6 @@ def _page(total: int, page: int, per_page: int, items: Sequence[T]) -> OntReview
     return OntReviewPage(
         tuple(items), total, min(max(page, 1), total_pages), per_page, total_pages
     )
-
-
-def _like(query: str) -> str:
-    escaped = query.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
-    return f"%{escaped}%"
-
-
-def _search_uuid(query: str) -> uuid.UUID | None:
-    try:
-        return uuid.UUID(query)
-    except (ValueError, AttributeError):
-        return None
 
 
 class OntAssignmentReviewListRow(TypedDict):
@@ -477,331 +466,18 @@ def review_tab_page_data(
 
     active_tab = tab if tab in REVIEW_TABS else "observations"
     cleaned = str(query or "").strip()[:160]
-    like = _like(cleaned)
-    exact_id = _search_uuid(cleaned)
     size = min(max(per_page, 1), 100)
+    empty_page: OntReviewPage[object] = _page(0, 1, size, ())
     result: OntReviewTabPageData = {
         "active_tab": active_tab,
         "query": cleaned,
         "selected_status": status or "active",
         "statuses": ("active", "all", *DECISION_STATUSES),
         "review_tabs": REVIEW_TABS,
-        "page_meta": _page(0, 1, size, []),
+        "page_meta": empty_page,
     }
     page_items: tuple[object, ...] = ()
-
-    if active_tab == "observations":
-        statement = (
-            select(OntTopologyObservationEvidence.id)
-            .outerjoin(
-                OntUnit, OntUnit.id == OntTopologyObservationEvidence.ont_unit_id
-            )
-            .where(
-                OntTopologyObservationEvidence.latest_outcome.in_(
-                    ("incomplete", "review_required")
-                ),
-                OntTopologyObservationEvidence.resolved_at.is_(None),
-            )
-        )
-        if cleaned:
-            statement = statement.where(
-                or_(
-                    cast(OntTopologyObservationEvidence.id, String).ilike(
-                        like, escape="\\"
-                    ),
-                    OntTopologyObservationEvidence.source.ilike(like, escape="\\"),
-                    OntTopologyObservationEvidence.evidence_key.ilike(
-                        like, escape="\\"
-                    ),
-                    OntTopologyObservationEvidence.latest_reason.ilike(
-                        like, escape="\\"
-                    ),
-                    cast(OntTopologyObservationEvidence.ont_unit_id, String).ilike(
-                        like, escape="\\"
-                    ),
-                    cast(OntTopologyObservationEvidence.observed_olt_id, String).ilike(
-                        like, escape="\\"
-                    ),
-                    cast(
-                        OntTopologyObservationEvidence.observed_pon_port_id, String
-                    ).ilike(like, escape="\\"),
-                    cast(OntTopologyObservationEvidence.canonical_olt_id, String).ilike(
-                        like, escape="\\"
-                    ),
-                    cast(
-                        OntTopologyObservationEvidence.canonical_pon_port_id, String
-                    ).ilike(like, escape="\\"),
-                    cast(
-                        OntTopologyObservationEvidence.active_assignment_ids, String
-                    ).ilike(like, escape="\\"),
-                    OntUnit.serial_number.ilike(like, escape="\\"),
-                    *(
-                        (
-                            column == exact_id
-                            for column in (
-                                OntTopologyObservationEvidence.id,
-                                OntTopologyObservationEvidence.ont_unit_id,
-                                OntTopologyObservationEvidence.observed_olt_id,
-                                OntTopologyObservationEvidence.observed_pon_port_id,
-                                OntTopologyObservationEvidence.canonical_olt_id,
-                                OntTopologyObservationEvidence.canonical_pon_port_id,
-                            )
-                        )
-                        if exact_id is not None
-                        else ()
-                    ),
-                )
-            )
-        total = int(
-            db.scalar(select(func.count()).select_from(statement.subquery())) or 0
-        )
-        meta = _page(total, page, size, [])
-        ids = set(
-            db.scalars(
-                statement.order_by(
-                    OntTopologyObservationEvidence.last_seen_at.desc(),
-                    OntTopologyObservationEvidence.id.desc(),
-                )
-                .limit(size)
-                .offset((meta.page - 1) * size)
-            )
-        )
-        observation_rows = (
-            list_topology_observation_reviews(db, limit=size, evidence_ids=ids)
-            if ids
-            else []
-        )
-        result["observation_reviews"] = observation_rows
-        page_items = tuple(observation_rows)
-    elif active_tab == "batches":
-        statement = select(OntAssignmentCutoverProposalBatch.id)
-        if cleaned:
-            review_match = (
-                select(OntAssignmentCutoverBatchReview.proposal_batch_id)
-                .where(
-                    OntAssignmentCutoverBatchReview.proposal_batch_id
-                    == OntAssignmentCutoverProposalBatch.id,
-                    OntAssignmentCutoverBatchReview.reviewed_by.ilike(
-                        like, escape="\\"
-                    ),
-                )
-                .exists()
-            )
-            verification_match = (
-                select(OntAssignmentCutoverVerificationAttestation.proposal_batch_id)
-                .where(
-                    OntAssignmentCutoverVerificationAttestation.proposal_batch_id
-                    == OntAssignmentCutoverProposalBatch.id,
-                    or_(
-                        OntAssignmentCutoverVerificationAttestation.verified_by.ilike(
-                            like, escape="\\"
-                        ),
-                        OntAssignmentCutoverVerificationAttestation.outcome.ilike(
-                            like, escape="\\"
-                        ),
-                    ),
-                )
-                .exists()
-            )
-            decision_match = (
-                select(OntAssignmentIdentityDecision.id)
-                .where(
-                    OntAssignmentIdentityDecision.proposal_batch_id
-                    == OntAssignmentCutoverProposalBatch.id,
-                    or_(
-                        cast(OntAssignmentIdentityDecision.id, String).ilike(
-                            like, escape="\\"
-                        ),
-                        cast(
-                            OntAssignmentIdentityDecision.primary_assignment_id, String
-                        ).ilike(like, escape="\\"),
-                        *(
-                            (
-                                OntAssignmentIdentityDecision.id == exact_id,
-                                OntAssignmentIdentityDecision.primary_assignment_id
-                                == exact_id,
-                            )
-                            if exact_id is not None
-                            else ()
-                        ),
-                    ),
-                )
-                .exists()
-            )
-            statement = statement.where(
-                or_(
-                    cast(OntAssignmentCutoverProposalBatch.id, String).ilike(
-                        like, escape="\\"
-                    ),
-                    OntAssignmentCutoverProposalBatch.source_name.ilike(
-                        like, escape="\\"
-                    ),
-                    OntAssignmentCutoverProposalBatch.proposed_by.ilike(
-                        like, escape="\\"
-                    ),
-                    OntAssignmentCutoverProposalBatch.report_sha256.ilike(
-                        like, escape="\\"
-                    ),
-                    OntAssignmentCutoverProposalBatch.manifest_sha256.ilike(
-                        like, escape="\\"
-                    ),
-                    *(
-                        (OntAssignmentCutoverProposalBatch.id == exact_id,)
-                        if exact_id is not None
-                        else ()
-                    ),
-                    review_match,
-                    verification_match,
-                    decision_match,
-                )
-            )
-        total = int(
-            db.scalar(select(func.count()).select_from(statement.subquery())) or 0
-        )
-        meta = _page(total, page, size, [])
-        ids = set(
-            db.scalars(
-                statement.order_by(
-                    OntAssignmentCutoverProposalBatch.created_at.desc(),
-                    OntAssignmentCutoverProposalBatch.id.desc(),
-                )
-                .limit(size)
-                .offset((meta.page - 1) * size)
-            )
-        )
-        batch_rows = (
-            list_cutover_proposal_batches(db, limit=size, batch_ids=ids) if ids else []
-        )
-        result["cutover_batches"] = batch_rows
-        page_items = tuple(batch_rows)
-    elif active_tab == "decisions":
-        normalized_status = str(status or "active").strip().lower()
-        if normalized_status not in {"active", "all", *DECISION_STATUSES}:
-            normalized_status = "active"
-        statement = select(OntAssignmentIdentityDecision)
-        if normalized_status == "active":
-            statement = statement.where(
-                OntAssignmentIdentityDecision.status.in_(ACTIVE_STATUSES)
-            )
-        elif normalized_status != "all":
-            statement = statement.where(
-                OntAssignmentIdentityDecision.status == normalized_status
-            )
-        if cleaned:
-            serial_match = (
-                select(OntUnit.id)
-                .where(
-                    OntUnit.id == OntAssignmentIdentityDecision.ont_unit_id,
-                    OntUnit.serial_number.ilike(like, escape="\\"),
-                )
-                .exists()
-            )
-            statement = statement.where(
-                or_(
-                    cast(OntAssignmentIdentityDecision.id, String).ilike(
-                        like, escape="\\"
-                    ),
-                    cast(
-                        OntAssignmentIdentityDecision.primary_assignment_id, String
-                    ).ilike(like, escape="\\"),
-                    cast(OntAssignmentIdentityDecision.ont_unit_id, String).ilike(
-                        like, escape="\\"
-                    ),
-                    cast(
-                        OntAssignmentIdentityDecision.target_subscription_id, String
-                    ).ilike(like, escape="\\"),
-                    cast(
-                        OntAssignmentIdentityDecision.target_pon_port_id, String
-                    ).ilike(like, escape="\\"),
-                    cast(OntAssignmentIdentityDecision.target_olt_id, String).ilike(
-                        like, escape="\\"
-                    ),
-                    cast(OntAssignmentIdentityDecision.proposal_batch_id, String).ilike(
-                        like, escape="\\"
-                    ),
-                    OntAssignmentIdentityDecision.proposed_by.ilike(like, escape="\\"),
-                    OntAssignmentIdentityDecision.reviewed_by.ilike(like, escape="\\"),
-                    serial_match,
-                    *(
-                        (
-                            column == exact_id
-                            for column in (
-                                OntAssignmentIdentityDecision.id,
-                                OntAssignmentIdentityDecision.primary_assignment_id,
-                                OntAssignmentIdentityDecision.ont_unit_id,
-                                OntAssignmentIdentityDecision.target_subscription_id,
-                                OntAssignmentIdentityDecision.target_pon_port_id,
-                                OntAssignmentIdentityDecision.target_olt_id,
-                                OntAssignmentIdentityDecision.proposal_batch_id,
-                            )
-                        )
-                        if exact_id is not None
-                        else ()
-                    ),
-                )
-            )
-        total = int(
-            db.scalar(
-                select(func.count()).select_from(
-                    statement.with_only_columns(OntAssignmentIdentityDecision.id)
-                    .order_by(None)
-                    .subquery()
-                )
-            )
-            or 0
-        )
-        meta = _page(total, page, size, [])
-        decisions = list(
-            db.scalars(
-                statement.order_by(
-                    OntAssignmentIdentityDecision.proposed_at.desc(),
-                    OntAssignmentIdentityDecision.id.desc(),
-                )
-                .limit(size)
-                .offset((meta.page - 1) * size)
-            )
-        )
-        labels = resolve_actor_display_names(
-            db,
-            {
-                actor
-                for decision in decisions
-                for actor in (decision.proposed_by, decision.reviewed_by)
-                if actor
-            },
-        )
-        onts = _models_by_id(
-            db, OntUnit, {decision.ont_unit_id for decision in decisions}
-        )
-        decision_rows: list[OntDecisionReviewRow] = [
-            {
-                "decision": decision,
-                "ont_serial_number": getattr(
-                    onts.get(decision.ont_unit_id), "serial_number", "Unknown ONT"
-                ),
-                "reviewed_by_name": labels.get(
-                    str(decision.reviewed_by), "Former or unknown user"
-                )
-                if decision.reviewed_by
-                else None,
-            }
-            for decision in decisions
-        ]
-        result["decisions"] = decision_rows
-        page_items = tuple(decision_rows)
-        result["status_counts"] = {
-            **dict.fromkeys(DECISION_STATUSES, 0),
-            **dict(
-                db.execute(
-                    select(
-                        OntAssignmentIdentityDecision.status,
-                        func.count(OntAssignmentIdentityDecision.id),
-                    ).group_by(OntAssignmentIdentityDecision.status)
-                )
-            ),
-        }
-        result["selected_status"] = normalized_status
-    else:
+    if active_tab == "candidates":
         audit = audit_ont_assignment_cutover(db)
         matches = [
             finding
@@ -809,19 +485,86 @@ def review_tab_page_data(
             if not cleaned or cleaned.lower() in _candidate_searchable(finding)
         ]
         total = len(matches)
-        meta = _page(total, page, size, [])
+        candidate_meta: OntReviewPage[object] = _page(total, page, size, ())
+        selected_page = candidate_meta.page
         candidate_rows = list_assignment_identity_candidates(
             db,
             query=cleaned,
             limit=size,
-            offset=(meta.page - 1) * size,
+            offset=(selected_page - 1) * size,
             cutover_audit=audit,
         )
         result["candidates"] = candidate_rows
         result["cutover_audit"] = audit
         page_items = tuple(candidate_rows)
-
-    result["page_meta"] = _page(total, page, size, page_items)
+    else:
+        selection = page_ont_identity_review_queue(
+            db,
+            tab=active_tab,
+            query=cleaned,
+            status=status or "active",
+            page=page,
+            per_page=size,
+        )
+        total = selection.total
+        selected_page = selection.page
+        if active_tab == "observations":
+            ids = set(selection.ids)
+            observation_rows = (
+                list_topology_observation_reviews(db, limit=size, evidence_ids=ids)
+                if ids
+                else []
+            )
+            result["observation_reviews"] = observation_rows
+            page_items = tuple(observation_rows)
+        elif active_tab == "batches":
+            ids = set(selection.ids)
+            batch_rows = (
+                list_cutover_proposal_batches(db, limit=size, batch_ids=ids)
+                if ids
+                else []
+            )
+            result["cutover_batches"] = batch_rows
+            page_items = tuple(batch_rows)
+        else:
+            decisions = selection.decisions
+            labels = resolve_actor_display_names(
+                db,
+                {
+                    actor
+                    for decision in decisions
+                    for actor in (decision.proposed_by, decision.reviewed_by)
+                    if actor
+                },
+            )
+            onts = _models_by_id(
+                db, OntUnit, {decision.ont_unit_id for decision in decisions}
+            )
+            decision_rows: list[OntDecisionReviewRow] = [
+                {
+                    "decision": decision,
+                    "ont_serial_number": getattr(
+                        onts.get(decision.ont_unit_id), "serial_number", "Unknown ONT"
+                    ),
+                    "reviewed_by_name": labels.get(
+                        str(decision.reviewed_by), "Former or unknown user"
+                    )
+                    if decision.reviewed_by
+                    else None,
+                }
+                for decision in decisions
+            ]
+            result["decisions"] = decision_rows
+            page_items = tuple(decision_rows)
+            result["status_counts"] = {
+                **dict.fromkeys(DECISION_STATUSES, 0),
+                **dict(selection.status_counts),
+            }
+            normalized_status = str(status or "active").strip().lower()
+            if normalized_status not in {"active", "all", *DECISION_STATUSES}:
+                normalized_status = "active"
+            result["selected_status"] = normalized_status
+    result["page_meta"] = _page(total, selected_page, size, page_items)
     return result
 
 

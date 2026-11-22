@@ -45,7 +45,7 @@ app/services/web_network_monitoring.py 11
 app/services/web_network_olt_profiles.py 16
 app/services/web_network_ont_assignments.py 7
 app/services/web_network_ont_autofind.py 18
-app/services/web_network_ont_identity_reviews.py 10
+app/services/web_network_ont_identity_reviews.py 8
 app/services/web_network_ont_topology.py 3
 app/services/web_network_ont_tr069.py 1
 app/services/web_network_onts.py 12
