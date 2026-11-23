@@ -13,8 +13,11 @@ from app.services.list_query import (
     ListQuery,
     PageMeta,
 )
+from app.services.network.fiber_staged_inventory import latest_staged_feature_page
+from app.services.network.fiber_topology_field_observations import SOURCE_ASSET_TYPES
 from app.services.network.fiber_topology_field_worklist import (
     FiberTopologyFieldWorklistReport,
+    project_fiber_field_worklist_rows,
     reconcile_fiber_field_worklist,
 )
 
@@ -22,12 +25,12 @@ FIBER_FIELD_WORKLIST_LIST_DEFINITION = ListDefinition(
     key="fiber-field-verification-identities",
     fields=(
         ListFieldDefinition(
-            key="evidence_priority",
-            label="Evidence priority",
+            key="source_identity",
+            label="Source identity",
             sortable=True,
         ),
     ),
-    default_sort="evidence_priority",
+    default_sort="source_identity",
     default_sort_dir="asc",
     default_per_page=25,
     per_page_options=(25, 50, 100),
@@ -36,7 +39,7 @@ FIBER_FIELD_WORKLIST_LIST_DEFINITION = ListDefinition(
 
 @dataclass(frozen=True, slots=True)
 class FiberFieldWorklistPageQuery:
-    """Normalized presentation-only pagination for the exhaustive report."""
+    """Normalized bounded list query for latest staged source identities."""
 
     list_query: ListQuery
 
@@ -88,9 +91,9 @@ class FiberFieldWorklistSummary:
 
 @dataclass(frozen=True, slots=True)
 class FiberFieldWorklistPage:
-    """One typed HTML page derived from the unchanged complete report."""
+    """One bounded HTML page with an optional complete audit summary."""
 
-    worklist: FiberFieldWorklistSummary
+    worklist: FiberFieldWorklistSummary | None
     rows: tuple[FiberFieldWorklistRowView, ...]
     list_query: ListQuery
     page_meta: PageMeta
@@ -179,8 +182,9 @@ def build_fiber_field_worklist_page_query(
     *,
     page: int,
     per_page: int | None,
+    search: str | None = None,
 ) -> FiberFieldWorklistPageQuery:
-    """Normalize raw web pagination without changing report semantics."""
+    """Normalize raw web search and pagination."""
 
     definition = FIBER_FIELD_WORKLIST_LIST_DEFINITION
     normalized_page = max(1, page)
@@ -191,7 +195,7 @@ def build_fiber_field_worklist_page_query(
     )
     return FiberFieldWorklistPageQuery(
         list_query=definition.build_query(
-            search=None,
+            search=str(search or "").strip()[:160],
             filters={},
             sort_by=definition.default_sort,
             sort_dir=definition.default_sort_dir,
@@ -205,21 +209,29 @@ def get_fiber_field_worklist_page(
     *,
     db: Session,
     query: FiberFieldWorklistPageQuery,
+    audit: bool = False,
 ) -> FiberFieldWorklistPage:
-    """Slice the exhaustive report only after its counts and digest are built."""
+    """Project selected source rows; run the complete report only on request."""
 
-    worklist = reconcile_fiber_field_worklist(db)
+    full_report = reconcile_fiber_field_worklist(db) if audit else None
+    source_page = latest_staged_feature_page(
+        db,
+        asset_types=SOURCE_ASSET_TYPES,
+        query=query.list_query.search,
+        page=query.list_query.page,
+        per_page=query.list_query.per_page,
+    )
     page_meta = PageMeta.from_query(
         query.list_query,
-        total_items=worklist.staged_feature_count,
+        total_items=source_page.total,
     )
     list_query = query.list_query.with_page(page_meta.page)
-    start = list_query.offset
     rows = tuple(
-        _row_view(row) for row in worklist.rows[start : start + list_query.per_page]
+        _row_view(row)
+        for row in project_fiber_field_worklist_rows(db, list(source_page.features))
     )
     return FiberFieldWorklistPage(
-        worklist=_summary(worklist),
+        worklist=_summary(full_report) if full_report else None,
         rows=rows,
         list_query=list_query,
         page_meta=page_meta,

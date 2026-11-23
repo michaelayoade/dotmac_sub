@@ -19,6 +19,7 @@ from app.services.network.ont_topology_observations import (
 )
 from app.services.web_network_ont_identity_reviews import (
     list_topology_observation_reviews,
+    review_tab_page_data,
 )
 
 
@@ -80,7 +81,7 @@ def test_uisp_observation_initializes_empty_topology_with_durable_evidence(
 
 
 def test_observation_conflict_is_evidence_and_never_overwrites_assignment(
-    db_session, subscription
+    db_session, subscription, monkeypatch
 ):
     canonical_olt = _olt(db_session, "Canonical")
     observed_olt = _olt(db_session, "Observed")
@@ -130,6 +131,25 @@ def test_observation_conflict_is_evidence_and_never_overwrites_assignment(
     assert len(review_rows) == 1
     assert review_rows[0]["evidence"].id == result.evidence.id
     assert review_rows[0]["proposal_assignment_id"] == str(assignment.id)
+    monkeypatch.setattr(
+        "app.services.web_network_ont_identity_reviews.audit_ont_assignment_cutover",
+        lambda _db: (_ for _ in ()).throw(
+            AssertionError("full audit on observation page")
+        ),
+    )
+    page = review_tab_page_data(db_session, query=ont.serial_number, page=1)
+    assert page["page_meta"].total == 1
+    assert page["observation_reviews"][0]["evidence"].id == result.evidence.id
+    exact_page = review_tab_page_data(db_session, query=str(result.evidence.id))
+    assert exact_page["page_meta"].total == 1
+    assert exact_page["observation_reviews"][0]["evidence"].id == result.evidence.id
+
+
+def test_decision_review_tab_handles_an_empty_page(db_session):
+    page = review_tab_page_data(db_session, tab="decisions", status="all", page=99)
+    assert page["page_meta"].page == 1
+    assert page["page_meta"].total == 0
+    assert page["decisions"] == []
 
 
 def test_huawei_fsp_reuses_modeled_pon_and_does_not_create_missing_inventory(

@@ -685,7 +685,9 @@ importer or a replacement for normal explicit service provisioning.
   may initialize missing PON inventory from an exact parent OLT and numeric port
   but cannot merge or overwrite existing identity.
 - The admin queue at `/admin/network/ont-identity-reviews` detects relationship
-  disagreements without proposing a correction. An operator supplies the exact
+  disagreements without proposing a correction. Its observation, batch, and
+  decision tabs search and page their own database queries; opening Candidates
+  runs the exhaustive assignment audit and pages its findings. An operator supplies the exact
   primary assignment, subscription, and modeled PON IDs, then reviews a
   read-only hashed preview before recording a proposal. The adapter derives the
   subscriber only from the selected subscription, the OLT only from the
@@ -1132,9 +1134,11 @@ migration and creates no new mutation authority.
   `ready_for_connectivity_cutover_review`; it neither names a target environment
   nor authorizes import, execution, change-request approval, or production
   cutover.
-- `/admin/network/fiber-connectivity-coverage` is a read-only projection. Its
-  gates always use the complete cohort while the HTML table displays at most 250
-  rows. `scripts/network/audit_fiber_connectivity_coverage.py` emits the complete
+- `/admin/network/fiber-connectivity-coverage` initially searches and pages the
+  latest staged source paths through a bounded database query. **Run complete
+  audit** explicitly computes the exhaustive report and gates, then displays
+  evidence for the selected source page. The fast list never asserts readiness.
+  `scripts/network/audit_fiber_connectivity_coverage.py` emits the complete
   JSON report in a read-only PostgreSQL `REPEATABLE READ` transaction and exits
   non-zero until every conservative gate passes. Neither interface has a
   proposal, review, execute, reconcile, apply, approve, or cutover mode.
@@ -1184,8 +1188,10 @@ reported point type now has a canonical create/link or link-only model.
   supported identities, including every applied or explicitly rejected support
   identity.
   Passing means only `ready_for_point_identity_cutover_review`.
-- `/admin/network/fiber-identity-coverage` is GET-only. Its HTML table displays
-  at most 250 rows, but every gate always uses the complete cohort.
+- `/admin/network/fiber-identity-coverage` is GET-only. It initially searches
+  and pages latest staged point identities without computing coverage gates.
+  **Run complete audit** computes the full cohort and shows evidence for the
+  selected page; all gate values and the digest remain exhaustive.
   `scripts/network/audit_fiber_identity_coverage.py` emits the full JSON report
   inside a read-only PostgreSQL `REPEATABLE READ` transaction and exits non-zero
   while any conservative gate is blocked.
@@ -1261,11 +1267,14 @@ no mutation authority.
   cutover gate. The worklist deliberately has no ready/pass/eligible field;
   only `network.fiber_cutover_readiness` applies the checked-in numeric policy to
   the complete worklist evidence.
-- `/admin/network/fiber-field-verification` is GET-only. Its summary, counts,
-  deterministic evidence-priority order, and report digest always use the
-  complete cohort. A presentation-only HTML projection paginates that ordered
-  report at 25, 50, or 100 rows per page and does not pass a display limit into
-  the exhaustive owner. `scripts/network/audit_fiber_field_verification.py`
+- `/admin/network/fiber-field-verification` is GET-only. Its normal list
+  searches and pages latest staged source identities in the database at 25,
+  50, or 100 rows per page, then projects field evidence for only those rows.
+  The list is ordered by source identity, not global evidence priority. **Run
+  complete audit** explicitly computes the unchanged full-cohort summary,
+  deterministic priority counts, and report digest. The paged list cannot
+  claim a complete worklist or cutover readiness.
+  `scripts/network/audit_fiber_field_verification.py`
   emits the complete JSON report inside a read-only PostgreSQL
   `REPEATABLE READ` transaction and does not return a cutover-readiness exit
   code.
@@ -1623,7 +1632,9 @@ for manual review instead of choosing one.
 The read-only admin surface is `/admin/network/fiber-trace`. Operators can find
 a fiber service by customer, account, ONT serial, or subscription UUID. It shows
 the validated chain, every explicit gap, telemetry freshness, shared-cohort
-counts, and ranked candidate scopes. It has no topology write or outage command.
+counts, and ranked candidate scopes. Search results are counted and paged before
+trace details are loaded, so later matches are reachable. It has no topology
+write or outage command.
 
 ### Fiber service trace page contract
 

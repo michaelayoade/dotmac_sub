@@ -25,6 +25,33 @@
         <p class="mt-1">Names, addresses, geometry, proximity, and imported registration values can help an operator investigate, but they cannot select or authorize a repair. The target OLT is derived only from the exact modeled PON selected in the proposal.</p>
     </div>
 
+    <nav class="flex gap-5 overflow-x-auto border-b border-slate-200 dark:border-slate-700" aria-label="Identity review queues">
+        {% for item in review_tabs %}
+        <a href="/admin/network/ont-identity-reviews?tab={{ item }}" {% if active_tab == item %}aria-current="page"{% endif %} class="whitespace-nowrap border-b-2 px-1 py-3 text-sm font-semibold {{ 'border-indigo-500 text-indigo-700 dark:text-indigo-300' if active_tab == item else 'border-transparent text-slate-500 hover:text-slate-800 dark:text-slate-400' }}">{{ item | title }}</a>
+        {% endfor %}
+    </nav>
+
+    <form method="get" class="flex flex-wrap items-end gap-3 rounded-xl border border-slate-200 bg-white p-4 shadow-sm dark:border-slate-700 dark:bg-slate-800">
+        <input type="hidden" name="tab" value="{{ active_tab }}">
+        <label class="min-w-48 flex-1">
+            <span class="text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">Search this queue</span>
+            <input type="search" name="q" value="{{ query }}" placeholder="Exact ID, ONT serial, or source" class="mt-1 w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-900 dark:text-white">
+        </label>
+        {% if active_tab == 'decisions' %}<label class="block min-w-40">
+            <span class="text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">Decision status</span>
+            <select name="status" class="mt-1 w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-900 dark:text-white">
+                {% for status in statuses %}<option value="{{ status }}" {{ 'selected' if selected_status == status else '' }}>{{ status | replace('_', ' ') | title }}</option>{% endfor %}
+            </select>
+        </label>{% endif %}
+        <label class="block text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">Rows per page
+            <select name="per_page" class="mt-1 block rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-900 dark:text-white">
+                {% for size in (25, 50, 100) %}<option value="{{ size }}" {% if page_meta.per_page == size %}selected{% endif %}>{{ size }}</option>{% endfor %}
+            </select>
+        </label>
+        <button type="submit" class="self-end rounded-lg border border-slate-300 px-4 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50 dark:border-slate-600 dark:text-slate-200 dark:hover:bg-slate-700">Search</button>
+    </form>
+
+    {% if active_tab == 'candidates' %}
     <section class="rounded-xl border {{ 'border-emerald-200 bg-emerald-50 dark:border-emerald-800 dark:bg-emerald-950/30' if cutover_audit.ready_for_constraints else 'border-rose-200 bg-rose-50 dark:border-rose-800 dark:bg-rose-950/30' }} p-4">
         <div class="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
             <div>
@@ -41,14 +68,16 @@
             {% endfor %}
         </div>
     </section>
+    {% endif %}
 
+    {% if active_tab == 'batches' %}
     <section class="space-y-3">
         <div class="flex items-center justify-between gap-3">
             <div>
                 <h2 class="text-lg font-semibold text-slate-900 dark:text-white">Reviewed cleanup batches</h2>
                 <p class="text-sm text-slate-500 dark:text-slate-400">Immutable audit-bound manifests. Approval changes only the delegated decision states; each repair is still executed and revalidated individually.</p>
             </div>
-            <span class="rounded-full bg-indigo-100 px-3 py-1 text-xs font-semibold text-indigo-800 dark:bg-indigo-900/40 dark:text-indigo-200">{{ cutover_batches | length }} shown</span>
+            <span class="rounded-full bg-indigo-100 px-3 py-1 text-xs font-semibold text-indigo-800 dark:bg-indigo-900/40 dark:text-indigo-200">{{ page_meta.total }} batches</span>
         </div>
         <div class="overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm dark:border-slate-700 dark:bg-slate-800">
             <div class="overflow-x-auto">
@@ -61,7 +90,7 @@
                         <tr class="align-top">
                             <td class="px-4 py-4"><div class="font-mono text-xs text-slate-700 dark:text-slate-200">{{ row.batch.id }}</div><div class="mt-1 text-xs text-slate-500">{{ row.batch.item_count }} item(s) · {{ row.batch.source_name }} · proposed by {{ row.proposed_by_name }}</div><div class="mt-1 text-xs text-slate-500">{{ row.batch.created_at | app_datetime('%Y-%m-%d %H:%M', '-') }}</div></td>
                             <td class="px-4 py-4 text-xs"><div title="Complete cutover report SHA-256"><span class="font-semibold">Report</span> <span class="font-mono">{{ row.batch.report_sha256[:16] }}…</span></div><div class="mt-1" title="Immutable manifest SHA-256"><span class="font-semibold">Manifest</span> <span class="font-mono">{{ row.batch.manifest_sha256[:16] }}…</span></div></td>
-                            <td class="px-4 py-4 text-xs"><ul class="space-y-1">{% for decision in row.decisions %}<li><a href="/admin/network/ont-identity-reviews/{{ decision.id }}" class="font-mono text-indigo-700 hover:underline dark:text-indigo-300">#{{ decision.proposal_batch_row_number }} {{ decision.primary_assignment_id }}</a> <span class="rounded bg-slate-100 px-1.5 py-0.5 font-semibold text-slate-700 dark:bg-slate-700 dark:text-slate-200">{{ decision.status }}</span></li>{% endfor %}</ul></td>
+                            <td class="px-4 py-4 text-xs"><ul class="space-y-1">{% for decision in row.decisions %}<li><a href="/admin/network/ont-identity-reviews/{{ decision.id }}" class="font-mono text-indigo-700 hover:underline dark:text-indigo-300">#{{ decision.proposal_batch_row_number }} {{ decision.primary_assignment_id }}</a> <span class="rounded bg-slate-100 px-1.5 py-0.5 font-semibold text-slate-700 dark:bg-slate-700 dark:text-slate-200">{{ decision.status }}</span></li>{% endfor %}</ul>{% if row.batch.item_count > (row.decisions | length) %}<a href="/admin/network/ont-identity-reviews?tab=decisions&amp;status=all&amp;q={{ row.batch.id }}" class="mt-2 inline-block font-medium text-indigo-700 hover:underline dark:text-indigo-300">View all {{ row.batch.item_count }} decisions</a>{% endif %}</td>
                             <td class="px-4 py-4 text-xs"><span class="rounded-full px-2 py-1 font-semibold {{ 'bg-emerald-100 text-emerald-800 dark:bg-emerald-900/40 dark:text-emerald-200' if row.status == 'approve' else ('bg-rose-100 text-rose-800 dark:bg-rose-900/40 dark:text-rose-200' if row.status == 'decline' else 'bg-amber-100 text-amber-800 dark:bg-amber-900/40 dark:text-amber-200') }}">{{ row.status | replace('_', ' ') | title }}</span>{% if row.review %}<p class="mt-2 text-slate-500">{{ row.reviewed_by_name }} · {{ row.review.reviewed_at | app_datetime('%Y-%m-%d %H:%M', '-') }}</p>{% endif %}</td>
                             <td class="px-4 py-4 text-xs">{% if row.latest_verification %}<span class="rounded-full px-2 py-1 font-semibold {{ 'bg-emerald-100 text-emerald-800 dark:bg-emerald-900/40 dark:text-emerald-200' if row.latest_verification.outcome == 'applied_clean_scope' else 'bg-amber-100 text-amber-800 dark:bg-amber-900/40 dark:text-amber-200' }}">{{ row.latest_verification.outcome | replace('_', ' ') | title }}</span><p class="mt-2 text-slate-500">{{ row.latest_verification.batch_scope_residual_count }} scope residual · {{ row.latest_verification.global_blocker_assignment_count }} global blocker(s)</p><p class="mt-1 text-slate-500">{{ row.verified_by_name }} · {{ row.latest_verification.verified_at | app_datetime('%Y-%m-%d %H:%M', '-') }}</p>{% else %}<span class="text-slate-500">Not attested</span>{% endif %}</td>
                         </tr>
@@ -71,30 +100,16 @@
             </div>
         </div>
     </section>
+    {% endif %}
 
-    <form method="get" class="grid gap-3 rounded-xl border border-slate-200 bg-white p-4 shadow-sm dark:border-slate-700 dark:bg-slate-800 md:grid-cols-[minmax(0,1fr)_12rem_auto]">
-        <label class="block">
-            <span class="text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">Search exact IDs or ONT serial</span>
-            <input type="search" name="q" value="{{ query }}" placeholder="Assignment, ONT, subscription, PON, OLT, serial" class="mt-1 w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-900 dark:text-white">
-        </label>
-        <label class="block">
-            <span class="text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-400">Decision status</span>
-            <select name="status" class="mt-1 w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-900 dark:text-white">
-                {% for status in statuses %}
-                <option value="{{ status }}" {{ 'selected' if selected_status == status else '' }}>{{ status | replace('_', ' ') | title }}</option>
-                {% endfor %}
-            </select>
-        </label>
-        <button type="submit" class="self-end rounded-lg border border-slate-300 px-4 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-50 dark:border-slate-600 dark:text-slate-200 dark:hover:bg-slate-700">Filter</button>
-    </form>
-
+    {% if active_tab == 'observations' %}
     <section class="space-y-3">
         <div class="flex items-center justify-between gap-3">
             <div>
                 <h2 class="text-lg font-semibold text-slate-900 dark:text-white">Network observations needing validation</h2>
                 <p class="text-sm text-slate-500 dark:text-slate-400">Durable collector evidence that is incomplete or disagrees with canonical topology. It cannot mutate an existing identity edge.</p>
             </div>
-            <span class="rounded-full bg-rose-100 px-3 py-1 text-xs font-semibold text-rose-800 dark:bg-rose-900/40 dark:text-rose-200">{{ observation_reviews | length }} shown</span>
+            <span class="rounded-full bg-rose-100 px-3 py-1 text-xs font-semibold text-rose-800 dark:bg-rose-900/40 dark:text-rose-200">{{ page_meta.total }} observations</span>
         </div>
         <div class="overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm dark:border-slate-700 dark:bg-slate-800">
             <div class="overflow-x-auto">
@@ -120,14 +135,16 @@
             </div>
         </div>
     </section>
+    {% endif %}
 
+    {% if active_tab == 'candidates' %}
     <section class="space-y-3">
         <div class="flex items-center justify-between gap-3">
             <div>
                 <h2 class="text-lg font-semibold text-slate-900 dark:text-white">Detected disagreements</h2>
                 <p class="text-sm text-slate-500 dark:text-slate-400">Read-only detection. Nothing in this table is an approved correction.</p>
             </div>
-            <span class="rounded-full bg-amber-100 px-3 py-1 text-xs font-semibold text-amber-800 dark:bg-amber-900/40 dark:text-amber-200">{{ candidates | length }} shown</span>
+            <span class="rounded-full bg-amber-100 px-3 py-1 text-xs font-semibold text-amber-800 dark:bg-amber-900/40 dark:text-amber-200">{{ page_meta.total }} disagreements</span>
         </div>
         <div class="overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm dark:border-slate-700 dark:bg-slate-800">
             <div class="overflow-x-auto">
@@ -180,7 +197,9 @@
             </div>
         </div>
     </section>
+    {% endif %}
 
+    {% if active_tab == 'decisions' %}
     <section class="space-y-3">
         <div>
             <h2 class="text-lg font-semibold text-slate-900 dark:text-white">Reviewed repair decisions</h2>
@@ -210,5 +229,14 @@
             </div>
         </div>
     </section>
+    {% endif %}
+
+    <nav class="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-slate-200 bg-white px-4 py-3 text-sm dark:border-slate-700 dark:bg-slate-800" aria-label="{{ active_tab | title }} pages">
+        <span class="text-slate-500 dark:text-slate-400">{{ page_meta.total }} matching · page {{ page_meta.page }} of {{ page_meta.total_pages }}</span>
+        <div class="flex gap-2">
+            {% if page_meta.page > 1 %}<a href="{{ request.url.include_query_params(page=page_meta.page - 1, per_page=page_meta.per_page) }}" class="rounded-lg border border-slate-300 px-3 py-1.5 dark:border-slate-600">Previous</a>{% endif %}
+            {% if page_meta.page < page_meta.total_pages %}<a href="{{ request.url.include_query_params(page=page_meta.page + 1, per_page=page_meta.per_page) }}" class="rounded-lg border border-slate-300 px-3 py-1.5 dark:border-slate-600">Next</a>{% endif %}
+        </div>
+    </nav>
 </div>
 {% endblock %}

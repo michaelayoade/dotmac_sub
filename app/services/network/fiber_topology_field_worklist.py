@@ -215,13 +215,11 @@ def _count(values: list[str], keys: tuple[str, ...] | None = None) -> dict[str, 
     return dict(sorted(counts.items()))
 
 
-def reconcile_fiber_field_worklist(
-    db: Session,
-) -> FiberTopologyFieldWorklistReport:
-    """Build the complete latest-source worklist without writing state."""
+def project_fiber_field_worklist_rows(
+    db: Session, features: list[FiberTopologyStagedFeature]
+) -> list[dict[str, object]]:
+    """Project the same evidence row shape for a selected source cohort."""
 
-    ensure_field_worklist_repeatable_snapshot(db)
-    features = _latest_staged_features(db)
     evidence_by_feature = project_field_verification_evidence(db, features)
     rows: list[dict[str, object]] = []
     for feature in features:
@@ -260,6 +258,18 @@ def reconcile_fiber_field_worklist(
         }
         row_payload["row_sha256"] = _digest(row_payload)
         rows.append(row_payload)
+
+    return rows
+
+
+def reconcile_fiber_field_worklist(
+    db: Session,
+) -> FiberTopologyFieldWorklistReport:
+    """Build the complete latest-source worklist without writing state."""
+
+    ensure_field_worklist_repeatable_snapshot(db)
+    features = _latest_staged_features(db)
+    rows = project_fiber_field_worklist_rows(db, features)
 
     rows.sort(
         key=lambda row: (
@@ -325,6 +335,7 @@ __all__ = [
     "FiberTopologyFieldWorklistError",
     "FiberTopologyFieldWorklistReport",
     "ensure_field_worklist_repeatable_snapshot",
+    "project_fiber_field_worklist_rows",
     "select_fiber_field_worklist_evidence",
     "reconcile_fiber_field_worklist",
 ]

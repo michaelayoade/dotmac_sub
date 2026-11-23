@@ -492,6 +492,28 @@ WORKFLOW_GUIDANCE: tuple[AdminWorkflowGuidance, ...] = (
         ),
     ),
     _guide(
+        "fiber-evidence-lists",
+        "Network and access",
+        "Browse fiber evidence queues",
+        "NOC and fiber operations",
+        "Find a specific source identity or ONT review without loading every evidence row.",
+        (),
+        "On connectivity and point identity coverage, search the staged source list and use Previous or Next to inspect further pages. The fast list shows source facts only; choose Run complete audit before reading coverage, lifecycle, or readiness gates.",
+        "On Field verification, search and page through source identities to inspect their current field evidence. Run complete audit for the full priority ordering, counts, and report digest; page-specific rows do not establish cutover readiness.",
+        "On Fiber trace, search by customer, account, ONT serial, or subscription ID, then page through all matches before selecting one service to trace.",
+        "On ONT identity reviews, choose the observation, batch, decision, or candidate tab, then search and page within that queue. Batch rows preview three decisions; View all opens the matching decision search. The full assignment audit runs only when the candidate tab is opened.",
+        notes=(
+            "The complete fiber audits and their digests remain exhaustive and read-only; a filtered or paged source list never changes their gates.",
+        ),
+        route_templates=(
+            "/admin/network/fiber-connectivity-coverage",
+            "/admin/network/fiber-identity-coverage",
+            "/admin/network/fiber-field-verification",
+            "/admin/network/fiber-trace",
+            "/admin/network/ont-identity-reviews",
+        ),
+    ),
+    _guide(
         "fiber-inventory",
         "Network and access",
         "Find fiber plant assets",
@@ -1826,6 +1848,12 @@ _ACTION_SPECS: dict[str, tuple[_ActionSpec, ...]] = {
             permission="network:ip:write",
         ),
     ),
+    "fiber-evidence-lists": (
+        _action("browse-coverage", "Browse staged source coverage", 0),
+        _action("browse-field-evidence", "Browse field evidence", 1),
+        _action("trace-service", "Find and trace a fiber service", 2),
+        _action("browse-ont-reviews", "Browse ONT review queues", 3),
+    ),
     "fiber-inventory": (
         _action(
             "find-fiber-asset",
@@ -2844,6 +2872,7 @@ HELP_NAVIGATION: tuple[AdminHelpNavigationSection, ...] = (
         "Network",
         (
             "network-access",
+            "fiber-evidence-lists",
             "fiber-inventory",
             "core-device-inventory",
             "router-health",
@@ -2961,6 +2990,7 @@ HELP_GUIDE_VIEW_PERMISSIONS: dict[str, tuple[str, ...]] = {
     "vendor-records": ("inventory:read",),
     "vendor-reviews": ("inventory:read", "finance:ap:read"),
     "vendor-routes": ("network:fiber:read",),
+    "fiber-evidence-lists": ("network:fiber:read",),
     "fiber-inventory": ("network:fiber:read",),
     "core-device-inventory": ("network:device:read",),
     "ticket-sla-report": ("reports:support:read",),

@@ -1,7 +1,10 @@
+import uuid
 from datetime import UTC, datetime
 from decimal import Decimal
+from unittest.mock import MagicMock
 
 from fastapi.routing import APIRoute
+from sqlalchemy.orm import Session
 
 from app.models.catalog import Subscription, SubscriptionStatus
 from app.models.network import (
@@ -22,6 +25,7 @@ from app.models.network import (
 from app.services.fiber_topology import (
     audit_fiber_topology,
     localize_fiber_fault,
+    page_fiber_trace_subscriptions,
     trace_fiber_subscription,
 )
 from app.services.network.fiber_access_attachments import (
@@ -59,6 +63,51 @@ def test_fiber_trace_template_compiles():
         web_fiber_plant.templates.env.get_template("admin/network/fiber/trace.html")
         is not None
     )
+
+
+def test_trace_search_pages_unique_subscriptions_before_display_rows():
+    db = MagicMock(spec=Session)
+    subscription_id = uuid.uuid4()
+    db.scalar.return_value = 26
+    db.scalars.return_value = [subscription_id]
+    db.execute.return_value = [
+        (
+            subscription_id,
+            "Later Customer",
+            None,
+            "Later",
+            "Customer",
+            "S-26",
+            "Fiber",
+            "active",
+            "ONT-26",
+            None,
+            None,
+        ),
+        (
+            subscription_id,
+            "Later Customer",
+            None,
+            "Later",
+            "Customer",
+            "S-26",
+            "Fiber",
+            "active",
+            "ONT-27",
+            None,
+            None,
+        ),
+    ]
+
+    result = page_fiber_trace_subscriptions(db, "Later", page=2, per_page=25)
+
+    assert result.total == 26
+    assert result.page == 2
+    assert result.total_pages == 2
+    assert len(result.items) == 1
+    assert result.items[0].subscription_id == subscription_id
+    statement = db.scalars.call_args.args[0]
+    assert "OFFSET 25" in str(statement.compile(compile_kwargs={"literal_binds": True}))
 
 
 def _add_segment(db_session, name, start_type, start_id, end_type, end_id):

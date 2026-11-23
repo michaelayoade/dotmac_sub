@@ -108,10 +108,12 @@ def test_identity_coverage_admin_is_get_only_and_full_cohort_gated():
 
     assert '"/fiber-identity-coverage"' in admin_source
     assert "reconcile_fiber_identity_coverage(db)" in admin_source
-    assert "coverage.assets[:250]" in template_source
-    assert "gates always use the complete cohort" in template_source
-    assert "decide support mounts" in template_source
-    for forbidden_form in ("<form", 'type="submit"', "bulk approve"):
+    assert "coverage.assets[:250]" not in template_source
+    assert "for row in audit_rows" in template_source
+    assert "Complete audit gates always use the full cohort" in template_source
+    assert "Run complete audit" in template_source
+    assert "_source_inventory_controls.html" in template_source
+    for forbidden_form in ('method="post"', "bulk approve"):
         assert forbidden_form not in template_source.lower()
 
 

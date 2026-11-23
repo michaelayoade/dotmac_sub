@@ -9,6 +9,7 @@ from sqlalchemy.orm import Session
 
 from app.services import web_network_fiber_field_verification as service
 from app.services.list_query import PageMeta
+from app.services.network.fiber_staged_inventory import StagedFeaturePage
 from app.services.network.fiber_topology_field_worklist import (
     FiberTopologyFieldWorklistReport,
 )
@@ -43,18 +44,40 @@ def _report(total: int) -> FiberTopologyFieldWorklistReport:
     )
 
 
-def test_page_projection_slices_after_building_the_complete_report(monkeypatch):
-    report = _report(1240)
-    monkeypatch.setattr(service, "reconcile_fiber_field_worklist", lambda _db: report)
-    query = service.build_fiber_field_worklist_page_query(page=2, per_page=25)
+def test_page_projection_reads_only_selected_source_rows(monkeypatch):
+    features = tuple(
+        SimpleNamespace(id=f"feature-{index:04d}") for index in range(25, 50)
+    )
+
+    def source_page(_db, **kwargs):
+        assert kwargs["page"] == 2
+        assert kwargs["query"] == "later"
+        return StagedFeaturePage(features, 1240, 2, 25, 50, "later")
+
+    monkeypatch.setattr(service, "latest_staged_feature_page", source_page)
+    monkeypatch.setattr(
+        service,
+        "project_fiber_field_worklist_rows",
+        lambda _db, selected: [
+            {"staged_feature_id": feature.id, "priority_rank": 4}
+            for feature in selected
+        ],
+    )
+    monkeypatch.setattr(
+        service,
+        "reconcile_fiber_field_worklist",
+        lambda _db: (_ for _ in ()).throw(AssertionError("full audit on fast list")),
+    )
+    query = service.build_fiber_field_worklist_page_query(
+        page=2, per_page=25, search="later"
+    )
 
     page = service.get_fiber_field_worklist_page(
         db=MagicMock(spec=Session),
         query=query,
     )
 
-    assert page.worklist.report_sha256 == "a" * 64
-    assert page.worklist.staged_feature_count == 1240
+    assert page.worklist is None
     assert len(page.rows) == 25
     assert page.rows[0].staged_feature_id == "feature-0025"
     assert page.rows[-1].staged_feature_id == "feature-0049"
@@ -63,9 +86,15 @@ def test_page_projection_slices_after_building_the_complete_report(monkeypatch):
     assert page.page_meta.total_items == 1240
 
 
-def test_page_query_has_only_the_approved_sizes_and_clamps_an_empty_page(monkeypatch):
-    report = _report(0)
-    monkeypatch.setattr(service, "reconcile_fiber_field_worklist", lambda _db: report)
+def test_page_query_has_only_approved_sizes_and_clamps_an_empty_page(monkeypatch):
+    monkeypatch.setattr(
+        service,
+        "latest_staged_feature_page",
+        lambda _db, **_kwargs: StagedFeaturePage((), 0, 1, 25, 1, ""),
+    )
+    monkeypatch.setattr(
+        service, "project_fiber_field_worklist_rows", lambda _db, _features: []
+    )
     query = service.build_fiber_field_worklist_page_query(page=99, per_page=500)
 
     page = service.get_fiber_field_worklist_page(
@@ -77,6 +106,26 @@ def test_page_query_has_only_the_approved_sizes_and_clamps_an_empty_page(monkeyp
     assert query.list_query.per_page == 25
     assert page.list_query.page == 1
     assert page.rows == ()
+
+
+def test_complete_audit_is_explicit_and_retains_full_report(monkeypatch):
+    report = _report(1240)
+    monkeypatch.setattr(service, "reconcile_fiber_field_worklist", lambda _db: report)
+    monkeypatch.setattr(
+        service,
+        "latest_staged_feature_page",
+        lambda _db, **_kwargs: StagedFeaturePage((), 1240, 1, 25, 50, ""),
+    )
+    monkeypatch.setattr(
+        service, "project_fiber_field_worklist_rows", lambda _db, _features: []
+    )
+    query = service.build_fiber_field_worklist_page_query(page=1, per_page=25)
+    page = service.get_fiber_field_worklist_page(
+        db=MagicMock(spec=Session), query=query, audit=True
+    )
+    assert page.worklist is not None
+    assert page.worklist.report_sha256 == report.report_sha256
+    assert page.worklist.staged_feature_count == 1240
 
 
 def test_field_worklist_template_renders_the_typed_page_projection():

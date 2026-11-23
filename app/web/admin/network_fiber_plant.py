@@ -33,6 +33,7 @@ from app.services.network.as_built_plant_projection import (
     AsBuiltPlantProjectionError,
     activate_projected_segment,
 )
+from app.services.network.fiber_staged_inventory import latest_staged_feature_page
 from app.services.network.fiber_topology_connectivity_coverage import (
     reconcile_fiber_connectivity_coverage,
 )
@@ -42,6 +43,9 @@ from app.services.network.fiber_topology_connectivity_review import (
 )
 from app.services.network.fiber_topology_field_map import (
     project_fiber_field_verification_map,
+)
+from app.services.network.fiber_topology_field_observations import (
+    POINT_ASSET_TYPES,
 )
 from app.services.network.fiber_topology_identity_coverage import (
     reconcile_fiber_identity_coverage,
@@ -344,17 +348,44 @@ def fiber_connectivity_batch_evidence(batch_id: str, db: Session = Depends(get_d
     response_class=HTMLResponse,
     dependencies=[Depends(require_permission("network:fiber:read"))],
 )
-def fiber_connectivity_coverage(request: Request, db: Session = Depends(get_db)):
-    """Show exhaustive read-only staged-path connectivity coverage evidence."""
+def fiber_connectivity_coverage(
+    request: Request,
+    q: str | None = None,
+    page: int = Query(default=1, ge=1),
+    per_page: int = Query(default=25),
+    audit: bool = False,
+    db: Session = Depends(get_db),
+):
+    """Browse staged paths; compute exhaustive coverage only when requested."""
 
-    coverage = reconcile_fiber_connectivity_coverage(db)
+    coverage = reconcile_fiber_connectivity_coverage(db) if audit else None
+    inventory = latest_staged_feature_page(
+        db,
+        asset_types=frozenset({"fiber_segment"}),
+        query=q,
+        page=page,
+        per_page=per_page,
+    )
+    selected_ids = {str(feature.id) for feature in inventory.features}
+    audit_rows = (
+        tuple(row for row in coverage.paths if row["staged_feature_id"] in selected_ids)
+        if coverage
+        else ()
+    )
     context = _base_context(
         request,
         db,
         active_page="fiber-connectivity-coverage",
         active_menu="fiber",
     )
-    context["coverage"] = coverage
+    context.update(
+        {
+            "coverage": coverage,
+            "inventory": inventory,
+            "audit_rows": audit_rows,
+            "audit": audit,
+        }
+    )
     return templates.TemplateResponse(
         "admin/network/fiber/connectivity_coverage.html", context
     )
@@ -365,17 +396,42 @@ def fiber_connectivity_coverage(request: Request, db: Session = Depends(get_db))
     response_class=HTMLResponse,
     dependencies=[Depends(require_permission("network:fiber:read"))],
 )
-def fiber_identity_coverage(request: Request, db: Session = Depends(get_db)):
-    """Show exhaustive read-only staged point-identity coverage evidence."""
+def fiber_identity_coverage(
+    request: Request,
+    q: str | None = None,
+    page: int = Query(default=1, ge=1),
+    per_page: int = Query(default=25),
+    audit: bool = False,
+    db: Session = Depends(get_db),
+):
+    """Browse staged points; compute exhaustive coverage only when requested."""
 
-    coverage = reconcile_fiber_identity_coverage(db)
+    coverage = reconcile_fiber_identity_coverage(db) if audit else None
+    inventory = latest_staged_feature_page(
+        db, asset_types=POINT_ASSET_TYPES, query=q, page=page, per_page=per_page
+    )
+    selected_ids = {str(feature.id) for feature in inventory.features}
+    audit_rows = (
+        tuple(
+            row for row in coverage.assets if row["staged_feature_id"] in selected_ids
+        )
+        if coverage
+        else ()
+    )
     context = _base_context(
         request,
         db,
         active_page="fiber-identity-coverage",
         active_menu="fiber",
     )
-    context["coverage"] = coverage
+    context.update(
+        {
+            "coverage": coverage,
+            "inventory": inventory,
+            "audit_rows": audit_rows,
+            "audit": audit,
+        }
+    )
     return templates.TemplateResponse(
         "admin/network/fiber/identity_coverage.html", context
     )
@@ -388,21 +444,25 @@ def fiber_identity_coverage(request: Request, db: Session = Depends(get_db)):
 )
 def fiber_field_verification_worklist(
     request: Request,
+    search: str | None = None,
     page: int = Query(default=1, ge=1),
     per_page: int = Query(default=25),
+    audit: bool = False,
     db: Session = Depends(get_db),
 ):
-    """Show the complete read-only staged-source field-evidence worklist."""
+    """Browse bounded field evidence; load the complete audit on request."""
 
     page_query = (
         fiber_field_verification_web_service.build_fiber_field_worklist_page_query(
             page=page,
             per_page=per_page,
+            search=search,
         )
     )
     page_data = fiber_field_verification_web_service.get_fiber_field_worklist_page(
         db=db,
         query=page_query,
+        audit=audit,
     )
     context = _base_context(
         request,
@@ -416,6 +476,7 @@ def fiber_field_verification_worklist(
             "page_meta": page_data.page_meta,
             "worklist": page_data.worklist,
             "worklist_rows": page_data.rows,
+            "audit": audit,
         }
     )
     return templates.TemplateResponse(
@@ -453,14 +514,18 @@ def fiber_subscription_trace(
     request: Request,
     subscription_id: str | None = None,
     q: str | None = Query(default=None, max_length=160),
+    page: int = Query(default=1, ge=1),
+    per_page: int = Query(default=25, ge=1, le=100),
     db: Session = Depends(get_db),
 ):
     """Read-only validated fiber path and bounded fault-candidate view."""
     context = _base_context(request, db, active_page="fiber-trace", active_menu="fiber")
     context["query"] = (q or "").strip()
-    context["search_results"] = fiber_topology_service.search_fiber_trace_subscriptions(
-        db, context["query"]
+    search_page = fiber_topology_service.page_fiber_trace_subscriptions(
+        db, context["query"], page=page, per_page=per_page
     )
+    context["search_page"] = search_page
+    context["search_results"] = search_page.items
     context["selected_subscription_id"] = subscription_id
     context["localization"] = None
     context["candidate_asset_ids"] = set()
@@ -540,19 +605,21 @@ def ont_assignment_cutover_coverage(
 )
 def ont_identity_reviews(
     request: Request,
+    tab: str = Query(default="observations"),
     status_filter: str | None = Query(default="active", alias="status"),
     q: str | None = Query(default=None, max_length=160),
+    page: int = Query(default=1, ge=1),
+    per_page: int = Query(default=25, ge=1, le=100),
     db: Session = Depends(get_db),
 ):
     """Show detected disagreements separately from reviewed repair decisions."""
+    page_data = ont_identity_review_service.review_tab_page_data(
+        db, tab=tab, status=status_filter, query=q, page=page, per_page=per_page
+    )
     context = _base_context(
         request, db, active_page="ont-identity-reviews", active_menu="fiber"
     )
-    context.update(
-        ont_identity_review_service.decisions_page_data(
-            db, status=status_filter, query=q
-        )
-    )
+    context.update(page_data)
     return templates.TemplateResponse(
         "admin/network/fiber/ont_identity_reviews.html", context
     )

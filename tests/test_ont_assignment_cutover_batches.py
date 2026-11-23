@@ -24,6 +24,7 @@ from app.services.network.ont_assignment_cutover_batches import (
 )
 from app.services.web_network_ont_identity_reviews import (
     list_cutover_proposal_batches,
+    review_tab_page_data,
 )
 
 
@@ -144,6 +145,26 @@ def test_proposal_is_exact_atomic_and_idempotent(db_session):
     assert len(projected) == 1
     assert projected[0]["status"] == "awaiting independent review"
     assert len(projected[0]["decisions"]) == 2
+
+
+def test_batch_review_page_previews_three_decisions_and_links_to_complete_queue(
+    db_session,
+):
+    _drift_assignments(db_session, count=5)
+    report, items = _deactivation_items(db_session)
+    result = _propose(db_session, report, items)
+
+    batch_page = review_tab_page_data(
+        db_session, tab="batches", query=str(result.batch.id)
+    )
+    assert batch_page["page_meta"].total == 1
+    assert len(batch_page["cutover_batches"][0]["decisions"]) == 3
+
+    decision_page = review_tab_page_data(
+        db_session, tab="decisions", status="all", query=str(result.batch.id)
+    )
+    assert decision_page["page_meta"].total == 5
+    assert len(decision_page["decisions"]) == 5
 
 
 def test_proposal_rolls_back_every_staged_row_on_mid_batch_failure(

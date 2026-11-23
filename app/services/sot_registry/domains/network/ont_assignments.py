@@ -234,6 +234,7 @@ SERVICES: tuple[SOTService, ...] = (
             "exact subscription/subscriber and ONT/PON/OLT repair projection",
             "duplicate assignment deactivation audit evidence",
             "exact electronic identity repair result evidence",
+            "bounded ONT identity review queue selection",
         ),
         depends_on=(
             "network.fiber_topology",

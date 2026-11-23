@@ -351,7 +351,7 @@ def test_tampered_run_evidence_is_execution_drift(db_session):
     assert report.ready_for_connectivity_cutover_review is False
 
 
-def test_admin_route_and_template_are_read_only_complete_cohort_projection():
+def test_admin_route_pages_source_paths_and_keeps_complete_audit():
     paths = {route.path: route for route in network_fiber_plant.router.routes}
     route = paths["/network/fiber-connectivity-coverage"]
     template = Path("templates/admin/network/fiber/connectivity_coverage.html")
@@ -359,6 +359,7 @@ def test_admin_route_and_template_are_read_only_complete_cohort_projection():
     assert route.methods == {"GET"}
     assert template.exists()
     content = template.read_text()
-    assert "gates always use the complete cohort" in content
+    assert "Complete audit gates always use the full cohort" in content
+    assert "Run complete audit" in content
     assert "cannot infer endpoints" in content
-    assert "<form" not in content
+    assert 'method="post"' not in content

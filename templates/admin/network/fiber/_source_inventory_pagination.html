@@ -1,0 +1,8 @@
+<nav aria-label="Source identity pages" class="flex flex-wrap items-center justify-between gap-3 border-t border-slate-200 px-4 py-3 text-sm dark:border-slate-700">
+    <span class="text-slate-500 dark:text-slate-400">{% if inventory.total %}{{ (inventory.page - 1) * inventory.per_page + 1 }}–{{ [inventory.page * inventory.per_page, inventory.total] | min }} of {{ inventory.total }}{% else %}No matches{% endif %}</span>
+    <div class="flex items-center gap-2">
+        {% if inventory.page > 1 %}<a href="{{ request.url.include_query_params(page=inventory.page - 1) }}" class="rounded-lg border border-slate-300 px-3 py-1.5 text-slate-700 hover:bg-slate-50 dark:border-slate-600 dark:text-slate-200 dark:hover:bg-slate-700">Previous</a>{% endif %}
+        <span class="text-slate-500 dark:text-slate-400">Page {{ inventory.page }} of {{ inventory.total_pages }}</span>
+        {% if inventory.page < inventory.total_pages %}<a href="{{ request.url.include_query_params(page=inventory.page + 1) }}" class="rounded-lg border border-slate-300 px-3 py-1.5 text-slate-700 hover:bg-slate-50 dark:border-slate-600 dark:text-slate-200 dark:hover:bg-slate-700">Next</a>{% endif %}
+    </div>
+</nav>
