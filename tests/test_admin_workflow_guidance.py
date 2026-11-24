@@ -784,6 +784,26 @@ def test_router_health_guidance_covers_badge_shadow_and_read_only_boundary() -> 
     assert "router posture" in " ".join(drift.steps).lower()
 
 
+def test_detected_outages_guidance_covers_lazy_routes_and_permissions() -> None:
+    for path in (
+        "/admin/network/detected-outages",
+        "/admin/network/detected-outages/live",
+        "/admin/network/detected-outages/detail",
+        "/admin/network/detected-outages/branches",
+        "/admin/network/detected-outages/notify",
+    ):
+        guide = guidance_for_path(path)
+        assert guide is not None and guide.id == "detected-outages"
+    content = " ".join((*guide.steps, *guide.notes)).lower()
+    assert "persisted" in content
+    assert "un-debounced" in content
+    assert "50" in content
+    assert "one pon at a time" in content
+    assert "retry" in content
+    permissions = {action.permission for action in help_actions_for(guide)}
+    assert permissions == {"monitoring:read", "monitoring:outage_notify:send"}
+
+
 def test_installed_talk_guide_explains_save_validation_and_unchanged_delivery():
     guide = guidance_for_path("/admin/integrations/nextcloud-talk/installation-id")
     assert guide is not None and guide.id == "integrations"

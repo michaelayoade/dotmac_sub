@@ -1,0 +1,94 @@
+<section id="detected-outages-live" class="space-y-6" aria-label="Live outage diagnostics">
+    <!-- Health summary -->
+    <div class="rounded-xl border border-slate-200 bg-white p-5 shadow-sm dark:border-slate-700 dark:bg-slate-800">
+        <div class="mb-4 flex flex-col gap-1 sm:flex-row sm:items-baseline sm:justify-between">
+            <h2 class="font-semibold text-slate-900 dark:text-white">Node health</h2>
+            <p class="text-xs text-slate-500 dark:text-slate-400">{{ summary.total_nodes }} pingable infra nodes classified</p>
+        </div>
+        <div class="grid gap-6 lg:grid-cols-[280px_1fr] lg:items-center">
+            <div class="chart-container h-64 min-h-64">
+                <canvas id="node-health-chart" data-counts='{{ summary.counts | tojson }}'></canvas>
+            </div>
+            <div>
+                <h3 class="mb-3 text-sm font-semibold text-slate-700 dark:text-slate-200">Classifier states</h3>
+                <dl class="grid grid-cols-2 gap-3 sm:grid-cols-3">
+                    {% set cls_meta = {
+                        'healthy': ('Healthy', 'emerald'),
+                        'node_outage': ('Node outage', 'red'),
+                        'service_fault': ('Service fault', 'amber'),
+                        'monitoring_fault': ('Monitoring fault', 'violet'),
+                        'unknown': ('Unknown', 'slate')
+                    } %}
+                    {% for key, meta in cls_meta.items() %}
+                    <div class="rounded-lg border border-slate-100 p-3 dark:border-slate-700">
+                        <dt class="text-xs font-medium uppercase tracking-wide text-{{ meta[1] }}-600 dark:text-{{ meta[1] }}-400">{{ meta[0] }}</dt>
+                        <dd class="mt-1 text-2xl font-bold text-slate-900 dark:text-white">{{ summary.counts.get(key, 0) }}</dd>
+                    </div>
+                    {% endfor %}
+                </dl>
+            </div>
+        </div>
+    </div>
+
+    <!-- SECONDARY: raw live-computed candidates (un-debounced) -->
+    <div class="rounded-xl border border-slate-200 bg-white p-5 shadow-sm dark:border-slate-700 dark:bg-slate-800">
+        <h2 class="mb-1 font-semibold text-slate-900 dark:text-white">Live candidates <span class="text-sm font-normal text-slate-400">({{ active.outages | length }})</span></h2>
+        <p class="mb-3 text-xs text-slate-500 dark:text-slate-400">Raw, <em>un-debounced</em> classifier verdict for the current instant — a candidate becomes a persisted incident above only after it survives the debounce window.</p>
+        <div class="overflow-x-auto">
+            <table class="w-full text-left text-sm">
+                <thead class="text-xs uppercase tracking-wide text-slate-400">
+                    <tr>
+                        <th class="pb-2">Boundary node</th>
+                        <th class="pb-2">Class</th>
+                        <th class="pb-2">Medium</th>
+                        <th class="pb-2">Affected</th>
+                        <th class="pb-2">Online now</th>
+                        <th class="pb-2">Confidence</th>
+                        <th class="pb-2"></th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for o in active.outages %}
+                    <tr class="border-t border-slate-100 dark:border-slate-700">
+                        <td class="py-2 font-medium text-slate-900 dark:text-white">{{ o.name }}{% if not o.localized %} <span class="ml-1 rounded bg-slate-100 px-1.5 py-0.5 text-xs text-slate-500 dark:bg-slate-700 dark:text-slate-300" title="No deeper boundary localized — anchored on the classified node">unlocalized</span>{% endif %}</td>
+                        <td class="py-2">
+                            {% if o.class == 'node_outage' %}<span class="rounded bg-red-100 px-2 py-0.5 text-xs font-medium text-red-700 dark:bg-red-900/40 dark:text-red-300">node outage</span>
+                            {% else %}<span class="rounded bg-amber-100 px-2 py-0.5 text-xs font-medium text-amber-700 dark:bg-amber-900/40 dark:text-amber-300">{{ o.class.replace('_', ' ') }}</span>{% endif %}
+                        </td>
+                        <td class="py-2 text-slate-500">{{ o.medium }}</td>
+                        <td class="py-2 font-semibold text-slate-900 dark:text-white">{{ o.affected }}</td>
+                        <td class="py-2 text-slate-500">{{ o.online_now }}</td>
+                        <td class="py-2 text-slate-500">{{ o.confidence }}</td>
+                        <td class="py-2 space-x-3 whitespace-nowrap">
+                            <a href="/admin/network/detected-outages?node_id={{ o.failure_node }}" class="text-sky-600 hover:underline dark:text-sky-400">Diagnose →</a>
+                        </td>
+                    </tr>
+                    {% else %}
+                    <tr><td colspan="7" class="py-4 text-slate-400">No active outages — every classified domain has a live customer (proof-of-life).</td></tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    </div>
+
+    <!-- Monitoring-fault self-heal queue -->
+    {% if active.monitoring_faults %}
+    <div class="rounded-xl border border-violet-200 bg-violet-50 p-5 shadow-sm dark:border-violet-700/70 dark:bg-slate-900">
+        <h2 class="mb-1 font-semibold text-violet-900 dark:text-violet-100">Self-heal queue — monitoring faults <span class="text-sm font-normal text-violet-500 dark:text-violet-300">({{ active.monitoring_faults | length }})</span></h2>
+        <p class="mb-3 text-xs text-violet-700 dark:text-violet-200">A live session proves these nodes are up while ping/snmp reports down — the <em>check</em> is wrong, not the device. These are NOT outages; fix the monitoring path.</p>
+        <table class="w-full text-left text-sm">
+            <thead class="text-xs uppercase tracking-wide text-violet-500 dark:text-violet-300"><tr><th class="pb-2">Node</th><th class="pb-2">Reported</th><th class="pb-2">Online now</th></tr></thead>
+            <tbody>
+                {% for m in active.monitoring_faults %}
+                <tr class="border-t border-violet-100 dark:border-violet-800/70">
+                    <td class="py-2 font-medium text-violet-900 dark:text-white">{{ m.name }}</td>
+                    <td class="py-2 text-violet-600 dark:text-violet-100">{{ m.live_status or '—' }}</td>
+                    <td class="py-2 text-violet-600 dark:text-violet-100">{{ m.online_count }}</td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+    {% endif %}
+
+</section>

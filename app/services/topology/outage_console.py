@@ -16,16 +16,19 @@ engines and shows what is *actually* down right now, how deep, and why.
     ``diagnose_last_mile`` verdict, plus P3 predictive branch alerts
     (``infer_branches`` / ``detect_rx_droop``) when the node is an OLT.
 
-Pure read service. It reuses the batching already in ``affected_customers`` /
-``diagnose_many`` and CAPS large sweeps (logging when it does — no silent
-truncation). Nothing here writes.
+Pure read service. The fleet sweep batches topology, subscriptions, and live
+sessions; the drill-in reuses ``affected_customers`` / ``diagnose_many``.
+Large sweeps are capped and logged rather than silently truncated. Nothing
+here writes.
 """
 
 from __future__ import annotations
 
 import logging
 import uuid
-from datetime import datetime
+from collections.abc import Mapping
+from datetime import UTC, datetime
+from typing import NotRequired, TypedDict
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -33,20 +36,142 @@ from sqlalchemy.orm import Session
 from app.models.network import OntUnit
 from app.models.network_monitoring import DeviceRole, DeviceType, NetworkDevice
 from app.services.device_operational_status import warmer_is_stale
-from app.services.topology.affected import affected_customers
+from app.services.topology.affected import (
+    _dist_to_core,
+    affected_customers,
+    downstream_nodes,
+    forwarding_graph_projection,
+    subscriptions_for_nodes,
+)
 from app.services.topology.health_classifier import (
     HEALTHY,
     MONITORING_FAULT,
     NODE_OUTAGE,
     SERVICE_FAULT,
     UNKNOWN,
+    LocalizationSnapshot,
+    OutageBoundary,
     classify_node,
     localize_outage,
+    online_subscription_ids,
 )
 from app.services.topology.last_mile import diagnose_many
 from app.services.topology.splice_inference import detect_rx_droop, infer_branches
 
 logger = logging.getLogger(__name__)
+
+NodeBrief = TypedDict(
+    "NodeBrief",
+    {
+        "node_id": uuid.UUID,
+        "name": str,
+        "role": str | None,
+        "medium": str,
+        "live_status": str | None,
+        "class": str,
+        "count": int,
+        "online_count": int,
+        "boundary": NotRequired[OutageBoundary | None],
+    },
+)
+
+
+class NetworkHealthSummary(TypedDict):
+    counts: dict[str, int]
+    total_nodes: int
+    not_healthy: list[NodeBrief]
+
+
+ActiveOutageRow = TypedDict(
+    "ActiveOutageRow",
+    {
+        "failure_node": uuid.UUID,
+        "name": str,
+        "class": str,
+        "medium": str,
+        "affected": int,
+        "online_now": int,
+        "confidence": str,
+        "localized": bool,
+    },
+)
+
+
+class MonitoringFaultRow(TypedDict):
+    node_id: uuid.UUID
+    name: str
+    online_count: int
+    live_status: str | None
+    note: str
+
+
+class ActiveOutages(TypedDict):
+    outages: list[ActiveOutageRow]
+    monitoring_faults: list[MonitoringFaultRow]
+
+
+class CoFailureBranchAlert(TypedDict):
+    pon_port_id: uuid.UUID
+    ont_unit_ids: list[uuid.UUID]
+    support: int
+    confidence: str
+
+
+class RxDroopBranchAlert(TypedDict):
+    pon_port_id: uuid.UUID
+    ont_unit_ids: list[uuid.UUID]
+    shared_shift_db: float
+    confidence: str
+
+
+class PredictiveBranches(TypedDict):
+    co_failure: list[CoFailureBranchAlert]
+    rx_droop: list[RxDroopBranchAlert]
+
+
+class PredictiveBranchesPage(PredictiveBranches):
+    page: int
+    has_next: bool
+    total_ports: int
+
+
+class DomainNode(TypedDict):
+    id: uuid.UUID
+    name: str
+    role: str | None
+    medium: str
+    live_status: str | None
+
+
+class CustomerDiagnosis(TypedDict):
+    subscription_id: uuid.UUID
+    subscriber_name: str
+    online: bool
+    verdict: str | None
+    medium: str | None
+    signal_dbm: float | None
+    customer_message: str | None
+    agent_action: str | None
+    evidence: Mapping[str, object] | None
+
+
+OutageDetail = TypedDict(
+    "OutageDetail",
+    {
+        "node": DomainNode,
+        "class": str,
+        "count": int,
+        "online_count": int,
+        "boundary": OutageBoundary | None,
+        "customers": list[CustomerDiagnosis],
+        "capped": bool,
+        "customer_offset": int,
+        "total_customers": int,
+        "has_next": bool,
+        "predictive": PredictiveBranches,
+    },
+)
+
 
 # Infra roles we ping/classify — everything that is a shared node. CPE is the
 # customer's own device (P2 territory), never a plant node, so it's excluded.
@@ -60,7 +185,7 @@ _INFRA_ROLES = frozenset(
     }
 )
 
-# Bound the per-request sweep. Real fleets are in the low hundreds of infra
+# Bound the live sweep. Real fleets are in the low hundreds of infra
 # nodes; beyond this we cap and LOG rather than melt the request (design: no
 # silent truncation). Raise if the fleet outgrows it.
 MAX_NODES = 750
@@ -148,7 +273,7 @@ def _customer_display_verdict(node: NetworkDevice, cls: str, verdict: dict) -> d
     return verdict
 
 
-def _node_brief(node: NetworkDevice, impact: dict, cls: str) -> dict:
+def _node_brief(node: NetworkDevice, impact: dict, cls: str) -> NodeBrief:
     return {
         "node_id": node.id,
         "name": node.name,
@@ -161,7 +286,9 @@ def _node_brief(node: NetworkDevice, impact: dict, cls: str) -> dict:
     }
 
 
-def network_health_summary(session: Session, *, now: datetime | None = None) -> dict:
+def network_health_summary(
+    session: Session, *, now: datetime | None = None
+) -> NetworkHealthSummary:
     """Classify every pingable infra node; counts by class + the not-healthy set.
 
     Returns::
@@ -185,11 +312,42 @@ def network_health_summary(session: Session, *, now: datetime | None = None) -> 
         MONITORING_FAULT: 0,
         UNKNOWN: 0,
     }
-    not_healthy: list[dict] = []
+    not_healthy: list[NodeBrief] = []
 
+    if not nodes:
+        return {"counts": counts, "total_nodes": 0, "not_healthy": []}
+
+    now = now or datetime.now(UTC)
+    graph = forwarding_graph_projection(session)
+    dist = _dist_to_core(
+        session, adjacency=graph.adjacency, root_ids=graph.root_device_ids
+    )
+    scopes = {
+        node.id: downstream_nodes(session, node, dist=dist, adjacency=graph.adjacency)
+        for node in nodes
+    }
+    scope_ids = set().union(*scopes.values())
+    by_node = subscriptions_for_nodes(session, scope_ids)
+    online_ids = online_subscription_ids(
+        session, {sub.id for subs in by_node.values() for sub in subs}, now=now
+    )
+    snapshot = LocalizationSnapshot(
+        provisioned_by_node={nid: len(by_node.get(nid, ())) for nid in scope_ids},
+        online_by_node={
+            nid: sum(sub.id in online_ids for sub in by_node.get(nid, ()))
+            for nid in scope_ids
+        },
+        distance_to_core=dist,
+    )
     warm_stale = warmer_is_stale(now)
     for node in nodes:
-        impact = affected_customers(session, node=node)
+        subscription_ids = {
+            sub.id for nid in scopes[node.id] for sub in by_node.get(nid, ())
+        }
+        impact = {
+            "count": len(subscription_ids),
+            "online_count": len(subscription_ids & online_ids),
+        }
         cls = classify_node(
             node,
             impact["online_count"],
@@ -203,7 +361,11 @@ def network_health_summary(session: Session, *, now: datetime | None = None) -> 
         brief = _node_brief(node, impact, cls)
         if cls in _FAULT_CLASSES:
             brief["boundary"] = localize_outage(
-                session, impact["node_ids"], now=now, warm_stale=warm_stale
+                session,
+                scopes[node.id],
+                now=now,
+                warm_stale=warm_stale,
+                snapshot=snapshot,
             )
         not_healthy.append(brief)
 
@@ -218,7 +380,12 @@ def network_health_summary(session: Session, *, now: datetime | None = None) -> 
     }
 
 
-def active_outages(session: Session, *, now: datetime | None = None) -> dict:
+def active_outages(
+    session: Session,
+    *,
+    now: datetime | None = None,
+    summary: NetworkHealthSummary | None = None,
+) -> ActiveOutages:
     """Localized failure boundaries + the self-heal (monitoring-fault) queue.
 
     ``outages`` are deduped by boundary node (several parents can localize to
@@ -228,10 +395,11 @@ def active_outages(session: Session, *, now: datetime | None = None) -> dict:
 
     Returns ``{outages: [...], monitoring_faults: [...]}``.
     """
-    summary = network_health_summary(session, now=now)
+    if summary is None:
+        summary = network_health_summary(session, now=now)
 
-    outages_by_boundary: dict[uuid.UUID, dict] = {}
-    monitoring_faults: list[dict] = []
+    outages_by_boundary: dict[uuid.UUID, ActiveOutageRow] = {}
+    monitoring_faults: list[MonitoringFaultRow] = []
 
     for brief in summary["not_healthy"]:
         if brief["class"] == MONITORING_FAULT:
@@ -254,7 +422,7 @@ def active_outages(session: Session, *, now: datetime | None = None) -> dict:
         # so the operator still sees it.
         bnode = boundary["failure_node"] if boundary else brief["node_id"]
         existing = outages_by_boundary.get(bnode)
-        row = {
+        row: ActiveOutageRow = {
             "failure_node": bnode,
             "name": brief["name"],
             "class": (boundary["class"] if boundary else brief["class"]),
@@ -283,32 +451,88 @@ def _olt_pon_port_ids(session: Session, olt_device_id: uuid.UUID) -> list[uuid.U
             OntUnit.pon_port_id.is_not(None),
         )
         .distinct()
+        .order_by(OntUnit.pon_port_id)
     ).all()
     return [r[0] for r in rows if r[0] is not None]
 
 
 def _predictive_branches(
-    session: Session, node: NetworkDevice, *, now: datetime | None
-) -> dict:
+    session: Session,
+    node: NetworkDevice,
+    *,
+    now: datetime | None,
+    pon_ids: list[uuid.UUID] | None = None,
+) -> PredictiveBranches:
     """P3 branch alerts for an OLT node — co-failure + correlated-Rx droop.
 
     Empty for non-OLT nodes (wireless localizes only to the BTS — design §4).
     """
     if node.matched_device_type != "olt" or node.matched_device_id is None:
         return {"co_failure": [], "rx_droop": []}
-    co_failure: list[dict] = []
-    rx_droop: list[dict] = []
-    for pon_id in _olt_pon_port_ids(session, node.matched_device_id):
+    co_failure: list[CoFailureBranchAlert] = []
+    rx_droop: list[RxDroopBranchAlert] = []
+    for pon_id in (
+        pon_ids
+        if pon_ids is not None
+        else _olt_pon_port_ids(session, node.matched_device_id)
+    ):
         for b in infer_branches(session, pon_id, now=now):
-            co_failure.append({"pon_port_id": pon_id, **b})
+            co_failure.append(
+                {
+                    "pon_port_id": pon_id,
+                    "ont_unit_ids": b["ont_unit_ids"],
+                    "support": b["support"],
+                    "confidence": b["confidence"],
+                }
+            )
         for d in detect_rx_droop(session, pon_id, now=now):
-            rx_droop.append({"pon_port_id": pon_id, **d})
+            rx_droop.append(
+                {
+                    "pon_port_id": pon_id,
+                    "ont_unit_ids": d["ont_unit_ids"],
+                    "shared_shift_db": d["shared_shift_db"],
+                    "confidence": d["confidence"],
+                }
+            )
     return {"co_failure": co_failure, "rx_droop": rx_droop}
 
 
+def predictive_branches_page(
+    session: Session, node_id: uuid.UUID, *, page: int = 1
+) -> PredictiveBranchesPage | None:
+    """Run P3 inference for one PON per request instead of an entire OLT."""
+    node = session.get(NetworkDevice, node_id)
+    if node is None:
+        return None
+    if node.matched_device_type != "olt" or node.matched_device_id is None:
+        return {
+            "co_failure": [],
+            "rx_droop": [],
+            "page": page,
+            "has_next": False,
+            "total_ports": 0,
+        }
+    pon_ids = _olt_pon_port_ids(session, node.matched_device_id)
+    selected = pon_ids[page - 1 : page]
+    branches = _predictive_branches(session, node, now=None, pon_ids=selected)
+    return {
+        "co_failure": branches["co_failure"],
+        "rx_droop": branches["rx_droop"],
+        "page": page,
+        "has_next": page < len(pon_ids),
+        "total_ports": len(pon_ids),
+    }
+
+
 def outage_detail(
-    session: Session, node_id: uuid.UUID, *, now: datetime | None = None
-) -> dict | None:
+    session: Session,
+    node_id: uuid.UUID,
+    *,
+    now: datetime | None = None,
+    customer_offset: int = 0,
+    customer_limit: int = MAX_DETAIL_CUSTOMERS,
+    include_predictive: bool = True,
+) -> OutageDetail | None:
     """One domain drill-in: per-customer P2 verdicts + P3 predictive alerts.
 
     Returns ``None`` if the node doesn't exist. Otherwise::
@@ -338,22 +562,24 @@ def outage_detail(
         warm_stale=warm_stale,
     )
 
-    subs = impact["subscriptions"]
-    capped = False
-    if len(subs) > MAX_DETAIL_CUSTOMERS:
+    subs = sorted(impact["subscriptions"], key=lambda sub: str(sub.id))
+    total_customers = len(subs)
+    if customer_limit > MAX_DETAIL_CUSTOMERS:
+        customer_limit = MAX_DETAIL_CUSTOMERS
+    capped = total_customers > customer_offset + customer_limit
+    if capped:
         logger.warning(
-            "outage_console: domain for node %s has %d customers > cap %d — "
-            "diagnosing the first %d",
+            "outage_console: domain for node %s has %d customers; "
+            "diagnosing offset %d, limit %d",
             node_id,
-            len(subs),
-            MAX_DETAIL_CUSTOMERS,
-            MAX_DETAIL_CUSTOMERS,
+            total_customers,
+            customer_offset,
+            customer_limit,
         )
-        subs = subs[:MAX_DETAIL_CUSTOMERS]
-        capped = True
+    subs = subs[customer_offset : customer_offset + customer_limit]
 
     verdicts = diagnose_many(session, [s.id for s in subs], now=now)
-    customers = []
+    customers: list[CustomerDiagnosis] = []
     for s in subs:
         v = _customer_display_verdict(node, cls, verdicts.get(s.id, {}))
         online = v.get("verdict") == "healthy"
@@ -377,7 +603,7 @@ def outage_detail(
     # Session-down (the actionable ones) first, then by verdict for grouping.
     customers.sort(key=lambda c: (c["online"], c["verdict"] or ""))
 
-    return {
+    result: OutageDetail = {
         "node": {
             "id": node.id,
             "name": node.name,
@@ -393,5 +619,13 @@ def outage_detail(
         ),
         "customers": customers,
         "capped": capped,
-        "predictive": _predictive_branches(session, node, now=now),
+        "customer_offset": customer_offset,
+        "total_customers": total_customers,
+        "has_next": capped,
+        "predictive": (
+            _predictive_branches(session, node, now=now)
+            if include_predictive
+            else {"co_failure": [], "rx_droop": []}
+        ),
     }
+    return result

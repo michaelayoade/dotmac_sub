@@ -546,6 +546,22 @@ WORKFLOW_GUIDANCE: tuple[AdminWorkflowGuidance, ...] = (
         route_templates=("/admin/network/core-devices",),
     ),
     _guide(
+        "detected-outages",
+        "Network and access",
+        "Review detected outages",
+        "NOC and network operations",
+        "Review debounced classifier incidents, then inspect live candidates and affected customers without running the whole fleet diagnosis on every page load.",
+        ("/admin/network/detected-outages",),
+        "Review the persisted suspected, confirmed, and clearing incidents first. Use Previous and Next to inspect the 50-row pages; the number beside the heading describes the current page.",
+        "Open the live network diagnosis when needed. It classifies current node health and shows raw, un-debounced candidates separately from persisted incidents. If the live request fails, keep using the incident list and retry the live view.",
+        "Select Diagnose on a candidate to inspect one domain. Page through customers 50 at a time, and on an OLT choose Load branch alerts to inspect one PON at a time.",
+        "For a confirmed or clearing incident, authorized staff can open Notify to preview the affected audience and policy before confirming a send. The preview does not dispatch a notification.",
+        notes=(
+            "A monitoring fault means live customer sessions contradict the device check; investigate the monitoring path rather than treating it as a network outage.",
+            "The persisted incident lifecycle remains the source of truth; a raw live candidate has not passed debounce.",
+        ),
+    ),
+    _guide(
         "router-health",
         "Network and access",
         "Read router health findings",
@@ -1878,6 +1894,24 @@ _ACTION_SPECS: dict[str, tuple[_ActionSpec, ...]] = {
             permission="network:device:read",
         ),
     ),
+    "detected-outages": (
+        _action(
+            "review-incidents",
+            "Review classifier incidents",
+            0,
+            permission="monitoring:read",
+        ),
+        _action("load-live", "Load live diagnosis", 1, permission="monitoring:read"),
+        _action(
+            "diagnose-domain", "Diagnose a domain", 2, permission="monitoring:read"
+        ),
+        _action(
+            "preview-notification",
+            "Preview an outage notification",
+            3,
+            permission="monitoring:outage_notify:send",
+        ),
+    ),
     "router-health": (
         _action(
             "scan-router-health", "Scan router health", 0, 1, permission="router:read"
@@ -2872,6 +2906,7 @@ HELP_NAVIGATION: tuple[AdminHelpNavigationSection, ...] = (
         "Network",
         (
             "network-access",
+            "detected-outages",
             "fiber-evidence-lists",
             "fiber-inventory",
             "core-device-inventory",
@@ -2977,6 +3012,7 @@ HELP_NAVIGATION: tuple[AdminHelpNavigationSection, ...] = (
 # Only sections containing pages with different read scopes need an override.
 # Other pages inherit their Admin-sidebar section's visibility.
 HELP_GUIDE_VIEW_PERMISSIONS: dict[str, tuple[str, ...]] = {
+    "detected-outages": ("monitoring:read",),
     "system-users-list": ("rbac:roles:read",),
     "billing-accounts": ("billing:account:read",),
     "invoice": ("billing:invoice:read",),

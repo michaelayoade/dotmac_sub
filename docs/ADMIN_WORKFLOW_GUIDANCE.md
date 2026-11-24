@@ -98,6 +98,19 @@ module's owner command. Save drafts, review permissions and runtime status,
 then publish only after the resulting run evidence and rollback/reconciliation
 path are understood.
 
+## Detected outages
+
+Use `/admin/network/detected-outages` to review persisted, debounced classifier
+incidents first. The incident table pages 50 rows at a time. The separate live
+node-health and candidate view loads only when opened or scrolled into view;
+its raw verdicts have not passed the incident debounce window. A failed live
+load leaves the persisted incident list visible and offers a retry.
+
+Diagnose opens one selected domain without repeating the fleet sweep. Customer
+verdicts page 50 at a time; OLT branch inference is requested separately, one
+PON per request. A monitoring fault calls for checking the monitoring path,
+while Notify remains an authorized preview before a confirmed send.
+
 ## Router health
 
 Use `/admin/network/routers` to find routers that need attention. The Health

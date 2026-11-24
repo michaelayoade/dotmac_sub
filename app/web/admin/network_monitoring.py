@@ -26,6 +26,7 @@ templates = Jinja2Templates(directory="templates")
 router = APIRouter(prefix="/network", tags=["web-admin-network"])
 
 OUTAGE_NOTIFY_SEND_PERMISSION = "monitoring:outage_notify:send"
+DETECTED_OUTAGES_PAGE_SIZE = 50
 
 _format_duration = web_network_core_runtime_service.format_duration
 _format_bps = web_network_core_runtime_service.format_bps
@@ -726,47 +727,66 @@ def outages_resolve(incident_id: str, request: Request, db: Session = Depends(ge
 )
 def detected_outages_console(
     request: Request,
-    node_id: str | None = None,
+    node_id: uuid.UUID | None = None,
+    live: bool = False,
+    incident_page: int = Query(1, ge=1, le=1000),
     db: Session = Depends(get_db),
 ):
     """Classifier-driven outage console (design §P4a).
 
-        PRIMARY source is the PERSISTED, debounced classifier incidents from the
-        §7.6 reconcile loop (suspected/confirmed/clearing) — the debounced truth,
-        not the raw live-computed verdict. The live P1/P2/P3 verdict is kept as a
-        clearly-separate SECONDARY "candidates" view (raw, un-debounced). Optional
-        `
-    ode_id`` drills into one failure domain (per-customer P2 verdicts + P3
-        branch alerts). No operator declaration, no notification sending here."""
-    import uuid as _uuid
-
+    PRIMARY source is the PERSISTED, debounced classifier incidents from the
+    §7.6 reconcile loop (suspected/confirmed/clearing) — the debounced truth,
+    not the raw live-computed verdict. The live P1/P2/P3 verdict is kept as a
+    clearly-separate SECONDARY "candidates" view (raw, un-debounced),
+    loaded after the primary view. Optional ``node_id`` drills into one
+    failure domain (per-customer P2 verdicts + P3 branch alerts)."""
     from app.models.network_monitoring import NetworkDevice, PopSite
     from app.services.status_presentation import outage_status_presentation
     from app.services.topology.outage import (
         list_classifier_incidents,
         mttr_so_far_seconds,
     )
-    from app.services.topology.outage_console import (
-        active_outages,
-        network_health_summary,
-        outage_detail,
-    )
 
     context = _base_context(request, db, active_page="monitoring")
 
     # Primary: persisted debounced classifier incidents (newest first).
+    page_size = DETECTED_OUTAGES_PAGE_SIZE
+    incidents = list_classifier_incidents(
+        db, limit=page_size + 1, offset=(incident_page - 1) * page_size
+    )
+    context["incident_has_next"] = len(incidents) > page_size
+    context["incident_page"] = incident_page
+    incidents = incidents[:page_size]
+    node_ids = {inc.root_node_id for inc in incidents if inc.root_node_id is not None}
+    nodes = (
+        {
+            node.id: node
+            for node in db.query(NetworkDevice)
+            .filter(NetworkDevice.id.in_(node_ids))
+            .all()
+        }
+        if node_ids
+        else {}
+    )
+    pop_ids = {
+        inc.basestation_id for inc in incidents if inc.basestation_id is not None
+    }
+    pop_ids.update(
+        node.pop_site_id for node in nodes.values() if node.pop_site_id is not None
+    )
+    pops = (
+        {pop.id: pop for pop in db.query(PopSite).filter(PopSite.id.in_(pop_ids)).all()}
+        if pop_ids
+        else {}
+    )
     incident_rows = []
-    for inc in list_classifier_incidents(db):
-        node = (
-            db.get(NetworkDevice, inc.root_node_id)
-            if inc.root_node_id is not None
-            else None
-        )
+    for inc in incidents:
+        node = nodes.get(inc.root_node_id) if inc.root_node_id is not None else None
         basestation = None
         if inc.basestation_id is not None:
-            basestation = db.get(PopSite, inc.basestation_id)
+            basestation = pops.get(inc.basestation_id)
         elif node is not None and node.pop_site_id is not None:
-            basestation = db.get(PopSite, node.pop_site_id)
+            basestation = pops.get(node.pop_site_id)
         incident_rows.append(
             {
                 "incident": inc,
@@ -785,17 +805,86 @@ def detected_outages_console(
         )
     context["classifier_incidents"] = incident_rows
 
-    # Secondary: raw live-computed candidates (un-debounced) + self-heal queue.
-    context["summary"] = network_health_summary(db)
-    context["active"] = active_outages(db)
-    detail = None
-    if node_id:
-        try:
-            detail = outage_detail(db, _uuid.UUID(node_id))
-        except (ValueError, TypeError):
-            detail = None
-    context["detail"] = detail
+    # The persisted incident list renders first; HTMX loads the live sweep later.
+    context["show_live"] = live
+    if live:
+        context.update(_detected_outages_live_context(db))
+    context["selected_node_id"] = node_id
     return templates.TemplateResponse("admin/network/detected_outages.html", context)
+
+
+def _detected_outages_live_context(db: Session) -> dict:
+    from app.services.topology.outage_console import (
+        active_outages,
+        network_health_summary,
+    )
+
+    summary = network_health_summary(db)
+    return {"summary": summary, "active": active_outages(db, summary=summary)}
+
+
+@router.get(
+    "/detected-outages/live",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("monitoring:read"))],
+)
+def detected_outages_live(request: Request, db: Session = Depends(get_db)):
+    return templates.TemplateResponse(
+        "admin/network/_detected_outages_live.html",
+        {"request": request, **_detected_outages_live_context(db)},
+    )
+
+
+@router.get(
+    "/detected-outages/detail",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("monitoring:read"))],
+)
+def detected_outages_detail(
+    request: Request,
+    node_id: uuid.UUID,
+    customer_page: int = Query(1, ge=1, le=1000),
+    db: Session = Depends(get_db),
+):
+    from app.services.topology.outage_console import outage_detail
+
+    return templates.TemplateResponse(
+        "admin/network/_detected_outages_detail.html",
+        {
+            "request": request,
+            "detail": outage_detail(
+                db,
+                node_id,
+                customer_offset=(customer_page - 1) * 50,
+                customer_limit=50,
+                include_predictive=False,
+            ),
+            "customer_page": customer_page,
+        },
+    )
+
+
+@router.get(
+    "/detected-outages/branches",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("monitoring:read"))],
+)
+def detected_outages_branches(
+    request: Request,
+    node_id: uuid.UUID,
+    pon_page: int = Query(1, ge=1, le=1000),
+    db: Session = Depends(get_db),
+):
+    from app.services.topology.outage_console import predictive_branches_page
+
+    return templates.TemplateResponse(
+        "admin/network/_detected_outages_branches.html",
+        {
+            "request": request,
+            "node_id": node_id,
+            "branches": predictive_branches_page(db, node_id, page=pon_page),
+        },
+    )
 
 
 def _actor_id(request: Request):

@@ -28,7 +28,11 @@ Out of P1 scope (documented TODOs, later phases):
 from __future__ import annotations
 
 import logging
+import uuid
+from collections.abc import Iterable, Mapping
+from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
+from typing import TypedDict
 
 from sqlalchemy import func
 from sqlalchemy.orm import Session
@@ -60,6 +64,27 @@ SERVICE_FAULT = "service_fault"  # up/up/down row: data-plane, NOT "area down"
 MONITORING_FAULT = "monitoring_fault"  # impossible contradiction -> self-heal
 NODE_OUTAGE = "node_outage"  # all planes consistently dark
 UNKNOWN = "unknown"  # insufficient signal to call it
+
+
+@dataclass(frozen=True)
+class LocalizationSnapshot:
+    """Shared proof-of-life and topology inputs for a batched console sweep."""
+
+    provisioned_by_node: Mapping[uuid.UUID, int]
+    online_by_node: Mapping[uuid.UUID, int]
+    distance_to_core: Mapping[uuid.UUID, int]
+
+
+OutageBoundary = TypedDict(
+    "OutageBoundary",
+    {
+        "failure_node": uuid.UUID,
+        "class": str,
+        "affected_online_before": int,
+        "affected_now": int,
+        "confidence": str,
+    },
+)
 
 
 def _cutoff(now: datetime | None) -> datetime:
@@ -212,11 +237,12 @@ def _confidence(affected_before: int, survivors_elsewhere: bool) -> str:
 
 def localize_outage(
     session: Session,
-    node_ids,
+    node_ids: Iterable[uuid.UUID],
     *,
     now: datetime | None = None,
     warm_stale: bool | None = None,
-) -> dict | None:
+    snapshot: LocalizationSnapshot | None = None,
+) -> OutageBoundary | None:
     """Deepest dark-under-live node in a failure domain (design §3).
 
     Given the candidate ``node_ids`` (e.g. ``affected_customers()["node_ids"]``),
@@ -237,15 +263,20 @@ def localize_outage(
     if not node_ids:
         return None
 
-    by_node = subscriptions_for_nodes(session, node_ids)
-    all_sub_ids = {s.id for subs in by_node.values() for s in subs}
-    online_ids = online_subscription_ids(session, all_sub_ids, now=now)
-
-    provisioned_by_node = {nid: len(by_node.get(nid, [])) for nid in node_ids}
-    online_by_node = {
-        nid: sum(1 for s in by_node.get(nid, []) if s.id in online_ids)
-        for nid in node_ids
-    }
+    provisioned_by_node: Mapping[uuid.UUID, int]
+    online_by_node: Mapping[uuid.UUID, int]
+    if snapshot is None:
+        by_node = subscriptions_for_nodes(session, node_ids)
+        all_sub_ids = {s.id for subs in by_node.values() for s in subs}
+        online_ids = online_subscription_ids(session, all_sub_ids, now=now)
+        provisioned_by_node = {nid: len(by_node.get(nid, [])) for nid in node_ids}
+        online_by_node = {
+            nid: sum(1 for s in by_node.get(nid, []) if s.id in online_ids)
+            for nid in node_ids
+        }
+    else:
+        provisioned_by_node = snapshot.provisioned_by_node
+        online_by_node = snapshot.online_by_node
 
     # A node is a suspect only if it had customers (coarse prior life) and none
     # are online now (design §2: collapse). == 0 is P1's proxy for "well below
@@ -263,7 +294,7 @@ def localize_outage(
     # Deepest = furthest from a declared core/border root. Nodes without an
     # agreeing authoritative path sort shallowest; observations cannot deepen
     # an outage boundary on their own.
-    dist = _dist_to_core(session)
+    dist = snapshot.distance_to_core if snapshot is not None else _dist_to_core(session)
 
     def _depth_key(nid):
         d = dist.get(nid)
