@@ -16,9 +16,8 @@ import hashlib
 import json
 import logging
 from dataclasses import dataclass
-from datetime import UTC, date, datetime, time, timedelta
+from datetime import UTC, datetime, timedelta
 from decimal import Decimal
-from enum import StrEnum
 from typing import TYPE_CHECKING
 from uuid import UUID
 from zoneinfo import ZoneInfo
@@ -26,11 +25,13 @@ from zoneinfo import ZoneInfo
 from sqlalchemy import or_
 from sqlalchemy.orm import Session
 
+from app.models.billing_contract import BillingContractVersion
 from app.models.catalog import (
     BillingMode,
     CatalogOffer,
     SlaProfile,
     Subscription,
+    SubscriptionStatus,
 )
 from app.models.catalog import (
     SlaPolicyVersion as SlaPolicyVersionRecord,
@@ -41,7 +42,11 @@ from app.models.sla import (
     SlaPeriodScoreRevision,
 )
 from app.services import sla_admin_review as _sla_admin_review
-from app.services.billing.contracts import postpaid_entitlement_history_for_period
+from app.services.billing.cadence import period_containing, service_period
+from app.services.billing.contracts import (
+    BillingContracts,
+    postpaid_entitlement_history_for_period,
+)
 from app.services.domain_errors import DomainError
 from app.services.network.customer_outage_accrual import intervals_for_subscription
 from app.services.network.radius_sessions import accounting_coverage_for_period
@@ -387,36 +392,20 @@ def score_subscription_period(
     ).score
 
 
-class StatisticsPeriod(StrEnum):
-    current = "current"
-    last = "last"
-    custom = "custom"
-
-
 @dataclass(frozen=True, slots=True)
 class CustomerStatisticsAvailabilityQuery:
-    """Staff-only, per-service operational availability request."""
+    """Staff-only availability for one current customer service."""
 
     customer_id: UUID
-    period: StatisticsPeriod
-    start_date: date | None = None
-    end_date: date | None = None
     evaluated_at: datetime | None = None
-
-    def __post_init__(self) -> None:
-        if self.period is StatisticsPeriod.custom:
-            if self.start_date is None or self.end_date is None:
-                raise ValueError("Custom availability requires both dates")
-            if self.start_date > self.end_date:
-                raise ValueError("Start date must be on or before end date")
-        elif self.start_date is not None or self.end_date is not None:
-            raise ValueError("Dates require the custom availability period")
 
 
 @dataclass(frozen=True, slots=True)
 class SubscriptionStatisticsAvailability:
     subscription_id: UUID
     label: str
+    period_start: datetime
+    period_end: datetime
     expected_seconds: int | None
     connected_seconds: int | None
     confirmed_downtime_seconds: int | None
@@ -426,13 +415,6 @@ class SubscriptionStatisticsAvailability:
     provisional: bool
     reason: str | None
 
-
-@dataclass(frozen=True, slots=True)
-class CustomerStatisticsAvailability:
-    period_start: datetime
-    period_end: datetime
-    services: tuple[SubscriptionStatisticsAvailability, ...]
-
     @property
     def period_label(self) -> str:
         zone = ZoneInfo(SLA_CALENDAR_TIMEZONE)
@@ -441,129 +423,305 @@ class CustomerStatisticsAvailability:
         return f"{start} to {last_day:%d %b %Y}"
 
 
-def statistics_period_bounds(
-    query: CustomerStatisticsAvailabilityQuery,
-) -> tuple[datetime, datetime]:
-    """Africa/Lagos calendar periods, represented as half-open UTC spans."""
+@dataclass(frozen=True, slots=True)
+class CustomerStatisticsAvailability:
+    service: SubscriptionStatisticsAvailability | None
+    selected_label: str | None
+    selected_status: SubscriptionStatus | None
+    reason: str | None
 
-    now = _utc(query.evaluated_at or datetime.now(UTC)) or datetime.now(UTC)
-    zone = ZoneInfo(SLA_CALENDAR_TIMEZONE)
-    month_start, _ = period_bounds(now)
-    if query.period is StatisticsPeriod.current:
-        return month_start, now
-    if query.period is StatisticsPeriod.last:
-        local_month_start = month_start.astimezone(zone)
-        previous_day = local_month_start.date() - timedelta(days=1)
-        previous_start = datetime.combine(
-            previous_day.replace(day=1), time.min, tzinfo=zone
-        )
-        return previous_start.astimezone(UTC), month_start
-    assert query.start_date is not None and query.end_date is not None
-    start = datetime.combine(query.start_date, time.min, tzinfo=zone).astimezone(UTC)
-    end = datetime.combine(
-        query.end_date + timedelta(days=1), time.min, tzinfo=zone
-    ).astimezone(UTC)
+
+def _statistics_service_periods(
+    db: Session,
+    subscription: Subscription,
+    *,
+    now: datetime,
+    include_history: bool,
+) -> tuple[Span, ...]:
+    """Resolve current bounds narrowly; scan historical periods on demand."""
+    starts = [
+        instant
+        for value in (subscription.start_at, subscription.created_at)
+        if (instant := _utc(value)) is not None
+    ]
+    start = min(starts, default=now)
     if start >= now:
-        raise ValueError("Availability dates must begin before now")
-    return start, min(end, now)
+        return ()
+    lookup_start = start if include_history else now
+    if subscription.billing_mode is BillingMode.prepaid:
+        coverage = prepaid_coverage_history_for_period(
+            db,
+            subscription,
+            period_start=lookup_start,
+            period_end=now + timedelta(microseconds=1),
+            preserve_source_bounds=True,
+        )
+        periods = [Span(item.starts_at, item.ends_at) for item in coverage.intervals]
+    else:
+        end = now + timedelta(microseconds=1)
+        coverage = postpaid_entitlement_history_for_period(
+            db,
+            subscription_id=subscription.id,
+            period_start=lookup_start,
+            period_end=end,
+        )
+        periods = []
+        for item in coverage.intervals:
+            version = db.get(BillingContractVersion, item.contract_version_id)
+            if version is None:
+                continue
+            cadence = BillingContracts.cadence_of(version)
+            contract_start = _utc(version.starts_at) or item.starts_at
+            index, period = period_containing(
+                cadence=cadence,
+                contract_start=contract_start,
+                moment=item.starts_at,
+            )
+            while period.starts_at < item.ends_at:
+                period_start = max(period.starts_at, contract_start)
+                period_end = min(
+                    period.ends_at,
+                    _utc(version.ends_at) or period.ends_at,
+                )
+                if period_end > period_start:
+                    periods.append(Span(period_start, period_end))
+                if period_end >= item.ends_at:
+                    break
+                index += 1
+                period = service_period(
+                    cadence=cadence,
+                    contract_start=contract_start,
+                    index=index,
+                )
+    distinct = sorted(set(periods))
+    if any(
+        current.start < previous.end
+        for previous, current in zip(distinct, distinct[1:])
+    ):
+        # Overlapping purchases/grants have no declared period precedence.
+        # Do not silently turn them into one longer service period.
+        return ()
+    return tuple(distinct)
+
+
+def _statistics_period_availability(
+    db: Session,
+    subscription: Subscription,
+    period: Span,
+    *,
+    evaluated_at: datetime,
+) -> SubscriptionStatisticsAvailability:
+    start, end = period.start, min(period.end, evaluated_at)
+    label = _statistics_service_label(subscription)
+    lifecycle = lifecycle_history_for_period(
+        db, subscription.id, period_start=start, period_end=end
+    )
+    if not lifecycle.complete:
+        return SubscriptionStatisticsAvailability(
+            subscription_id=subscription.id,
+            label=label,
+            period_start=period.start,
+            period_end=end,
+            expected_seconds=None,
+            connected_seconds=None,
+            confirmed_downtime_seconds=None,
+            unknown_seconds=None,
+            uptime_lower_seconds=None,
+            uptime_upper_seconds=None,
+            provisional=True,
+            reason="Service lifecycle history is incomplete for this period.",
+        )
+    expected = intersect(
+        union(
+            Span(_utc(item.start) or start, _utc(item.end) or end)
+            for item in lifecycle.active_windows
+            if (_utc(item.end) or end) > (_utc(item.start) or start)
+        ),
+        (period,),
+    )
+    evidence = _availability_evidence(
+        db,
+        subscription.id,
+        period_start=start,
+        period_end=end,
+        expected=expected,
+        contractual_exclusions=False,
+    )
+    expected_seconds = total_seconds(expected)
+    downtime_seconds = total_seconds(evidence.downtime)
+    unknown_seconds = total_seconds(evidence.unknown)
+    connected_seconds = total_seconds(evidence.connected)
+    lower_seconds = total_seconds(subtract(evidence.connected, evidence.downtime))
+    upper_seconds = expected_seconds - downtime_seconds
+    provisional = not evidence.accounting_complete or unknown_seconds > 0
+    reason = None
+    if expected_seconds == 0:
+        reason = "No proven active service time in this period."
+    elif unknown_seconds > 0:
+        if unknown_seconds < 60:
+            unknown_label = f"{unknown_seconds} seconds"
+        elif unknown_seconds < 3600:
+            unknown_label = f"{unknown_seconds / 60:.1f} minutes"
+        elif unknown_seconds < 86400:
+            unknown_label = f"{unknown_seconds / 3600:.1f} hours"
+        else:
+            unknown_label = f"{unknown_seconds / 86400:.2f} days"
+        reason = (
+            f"{unknown_label} are unexplained. This time is not assumed to be uptime."
+        )
+    elif not evidence.accounting_complete:
+        reason = "Some connection evidence is invalid; uptime is provisional."
+    return SubscriptionStatisticsAvailability(
+        subscription_id=subscription.id,
+        label=label,
+        period_start=period.start,
+        period_end=end,
+        expected_seconds=expected_seconds,
+        connected_seconds=connected_seconds,
+        confirmed_downtime_seconds=downtime_seconds,
+        unknown_seconds=unknown_seconds,
+        uptime_lower_seconds=lower_seconds,
+        uptime_upper_seconds=upper_seconds,
+        provisional=provisional,
+        reason=reason,
+    )
+
+
+def _statistics_service_label(subscription: Subscription) -> str:
+    offer_name = subscription.offer.name if subscription.offer else "Service"
+    return f"{offer_name} · {str(subscription.id)[:8].upper()}"
+
+
+def _statistics_selection_start(subscription: Subscription) -> datetime:
+    return _utc(
+        subscription.start_at or subscription.created_at
+    ) or datetime.min.replace(tzinfo=UTC)
+
+
+def _statistics_last_active_end(
+    db: Session, subscription: Subscription, *, now: datetime
+) -> datetime | None:
+    start = _statistics_selection_start(subscription)
+    if start >= now:
+        return None
+    lifecycle = lifecycle_history_for_period(
+        db, subscription.id, period_start=start, period_end=now
+    )
+    if not lifecycle.complete:
+        return None
+    last_active_end = max(
+        (_utc(window.end) or now for window in lifecycle.active_windows),
+        default=None,
+    )
+    # A paused/suspended row with history still claiming activity through now
+    # has no trustworthy stop instant for the fallback card.
+    return (
+        last_active_end
+        if last_active_end is not None and last_active_end < now
+        else None
+    )
 
 
 def query_customer_statistics_availability(
     db: Session, query: CustomerStatisticsAvailabilityQuery
 ) -> CustomerStatisticsAvailability:
-    """Project the existing SLA evidence engine without contractual scoring.
-
-    A service with unsupported lifecycle history is explicitly unavailable;
-    we never substitute its mutable current status for historical evidence.
-    """
-
-    start, end = statistics_period_bounds(query)
+    """Select one current service, then project its verified active period."""
+    now = _utc(query.evaluated_at or datetime.now(UTC)) or datetime.now(UTC)
     subscriptions = (
         db.query(Subscription)
-        .filter(Subscription.subscriber_id == query.customer_id)
-        .order_by(Subscription.created_at, Subscription.id)
+        .filter(
+            Subscription.subscriber_id == query.customer_id,
+            Subscription.status.in_(
+                (
+                    SubscriptionStatus.active,
+                    SubscriptionStatus.paused,
+                    SubscriptionStatus.suspended,
+                )
+            ),
+        )
         .all()
     )
-    services: list[SubscriptionStatisticsAvailability] = []
-    for subscription in subscriptions:
-        offer_name = subscription.offer.name if subscription.offer else "Service"
-        label = f"{offer_name} · {str(subscription.id)[:8].upper()}"
-        lifecycle = lifecycle_history_for_period(
-            db, subscription.id, period_start=start, period_end=end
-        )
-        if not lifecycle.complete:
-            services.append(
-                SubscriptionStatisticsAvailability(
-                    subscription_id=subscription.id,
-                    label=label,
-                    expected_seconds=None,
-                    connected_seconds=None,
-                    confirmed_downtime_seconds=None,
-                    unknown_seconds=None,
-                    uptime_lower_seconds=None,
-                    uptime_upper_seconds=None,
-                    provisional=True,
-                    reason="Service lifecycle history is incomplete for this period.",
-                )
+    active = [
+        subscription
+        for subscription in subscriptions
+        if subscription.status is SubscriptionStatus.active
+    ]
+    selected: Subscription | None = None
+    period: Span | None = None
+    if active:
+        current = [
+            (
+                subscription,
+                next(
+                    (
+                        candidate
+                        for candidate in _statistics_service_periods(
+                            db, subscription, now=now, include_history=False
+                        )
+                        if candidate.start <= now < candidate.end
+                    ),
+                    None,
+                ),
             )
-            continue
-        expected = intersect(
-            union(
-                Span(_utc(item.start) or start, _utc(item.end) or end)
-                for item in lifecycle.active_windows
-                if (_utc(item.end) or end) > (_utc(item.start) or start)
+            for subscription in active
+        ]
+        selected, period = max(
+            current,
+            key=lambda item: (
+                item[1] is not None,
+                item[1].start if item[1] else _statistics_selection_start(item[0]),
+                _statistics_selection_start(item[0]),
+                item[0].id,
             ),
-            (Span(start, end),),
         )
-        evidence = _availability_evidence(
-            db,
-            subscription.id,
-            period_start=start,
-            period_end=end,
-            expected=expected,
-            contractual_exclusions=False,
+    else:
+        recent = [
+            (subscription, _statistics_last_active_end(db, subscription, now=now))
+            for subscription in subscriptions
+        ]
+        proven = [(subscription, end) for subscription, end in recent if end]
+        if proven:
+            selected, last_active_end = max(
+                proven,
+                key=lambda item: (
+                    item[1],
+                    _statistics_selection_start(item[0]),
+                    item[0].id,
+                ),
+            )
+            prior = (
+                candidate
+                for candidate in _statistics_service_periods(
+                    db, selected, now=now, include_history=True
+                )
+                if candidate.start < last_active_end <= candidate.end
+            )
+            latest = max(prior, key=lambda item: item.start, default=None)
+            if latest is not None:
+                period = Span(latest.start, last_active_end)
+    if selected is None:
+        return CustomerStatisticsAvailability(
+            service=None,
+            selected_label=None,
+            selected_status=None,
+            reason=(
+                "No active, paused, or suspended service is recorded for this customer."
+                if not subscriptions
+                else "No paused or suspended service has a proven completed active period."
+            ),
         )
-        expected_seconds = total_seconds(expected)
-        downtime_seconds = total_seconds(evidence.downtime)
-        unknown_seconds = total_seconds(evidence.unknown)
-        connected_seconds = total_seconds(evidence.connected)
-        lower_seconds = total_seconds(subtract(evidence.connected, evidence.downtime))
-        upper_seconds = expected_seconds - downtime_seconds
-        provisional = not evidence.accounting_complete or unknown_seconds > 0
-        reason = None
-        if expected_seconds == 0:
-            reason = "No proven active service time in this period."
-        elif unknown_seconds > 0:
-            if unknown_seconds < 60:
-                unknown_label = f"{unknown_seconds} seconds"
-            elif unknown_seconds < 3600:
-                unknown_label = f"{unknown_seconds / 60:.1f} minutes"
-            elif unknown_seconds < 86400:
-                unknown_label = f"{unknown_seconds / 3600:.1f} hours"
-            else:
-                unknown_label = f"{unknown_seconds / 86400:.2f} days"
-            reason = (
-                f"{unknown_label} are unexplained. "
-                "This time is not assumed to be uptime."
-            )
-        elif not evidence.accounting_complete:
-            reason = "Some connection evidence is invalid; uptime is provisional."
-        services.append(
-            SubscriptionStatisticsAvailability(
-                subscription_id=subscription.id,
-                label=label,
-                expected_seconds=expected_seconds,
-                connected_seconds=connected_seconds,
-                confirmed_downtime_seconds=downtime_seconds,
-                unknown_seconds=unknown_seconds,
-                uptime_lower_seconds=lower_seconds,
-                uptime_upper_seconds=upper_seconds,
-                provisional=provisional,
-                reason=reason,
-            )
+    if period is None:
+        return CustomerStatisticsAvailability(
+            service=None,
+            selected_label=_statistics_service_label(selected),
+            selected_status=selected.status,
+            reason="The selected service has no verified service period to measure.",
         )
     return CustomerStatisticsAvailability(
-        period_start=start, period_end=end, services=tuple(services)
+        service=_statistics_period_availability(db, selected, period, evaluated_at=now),
+        selected_label=_statistics_service_label(selected),
+        selected_status=selected.status,
+        reason=None,
     )
 
 

@@ -279,9 +279,12 @@ def prepaid_coverage_history_for_period(
     *,
     period_start: datetime,
     period_end: datetime,
+    preserve_source_bounds: bool = False,
 ) -> PrepaidCoveragePeriodHistory:
     """Return exact entitlement/grant intervals overlapping one SLA period.
 
+    ``preserve_source_bounds`` keeps the full boundaries of rows overlapping
+    a narrow lookup window, for callers resolving a current service period.
     Missing rows normally mean the service was not funded and therefore was
     not eligible.  The one exception is a mutable ``next_billing_at`` that
     claims paid-through time without exact evidence: that is an unresolved
@@ -307,8 +310,16 @@ def prepaid_coverage_history_for_period(
             subscription_id=subscription.id,
             source=PrepaidCoverageSource.funded_entitlement,
             source_id=row.id,
-            starts_at=max(_as_utc(row.starts_at), start),
-            ends_at=min(_as_utc(row.ends_at), end),
+            starts_at=(
+                _as_utc(row.starts_at)
+                if preserve_source_bounds
+                else max(_as_utc(row.starts_at), start)
+            ),
+            ends_at=(
+                _as_utc(row.ends_at)
+                if preserve_source_bounds
+                else min(_as_utc(row.ends_at), end)
+            ),
         )
         for row in entitlements
     )
@@ -339,8 +350,16 @@ def prepaid_coverage_history_for_period(
                 subscription_id=subscription.id,
                 source=PrepaidCoverageSource.service_extension_grant,
                 source_id=row.id,
-                starts_at=max(_as_utc(row.grant_starts_at), start),
-                ends_at=min(_as_utc(row.grant_ends_at), end),
+                starts_at=(
+                    _as_utc(row.grant_starts_at)
+                    if preserve_source_bounds
+                    else max(_as_utc(row.grant_starts_at), start)
+                ),
+                ends_at=(
+                    _as_utc(row.grant_ends_at)
+                    if preserve_source_bounds
+                    else min(_as_utc(row.grant_ends_at), end)
+                ),
             )
         )
 
