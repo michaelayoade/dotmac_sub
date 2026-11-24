@@ -24,6 +24,9 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from enum import StrEnum
+from typing import Any, cast
+
+from sqlalchemy.orm import Session
 
 
 # Derived UI buckets (keep small — reasons live in `reason`, not extra pills).
@@ -751,6 +754,30 @@ def annotate_operational_status(devices, *, now: datetime | None = None) -> None
                 None,
             )
         _attach_operational_projection(device, operational)
+
+
+@dataclass(frozen=True, slots=True)
+class ActiveDeviceOperationalCounts:
+    total: int
+    working: int
+    not_working: int
+
+
+def active_device_operational_counts(db: Session) -> ActiveDeviceOperationalCounts:
+    """Count active devices using the canonical operational resolver."""
+    from app.models.network_monitoring import NetworkDevice
+
+    devices = db.query(NetworkDevice).filter(NetworkDevice.is_active.is_(True)).all()
+    annotate_operational_status(devices)
+    not_working = sum(
+        cast(OperationalStatus, cast(Any, device).operational).status == NOT_WORKING
+        for device in devices
+    )
+    return ActiveDeviceOperationalCounts(
+        total=len(devices),
+        working=len(devices) - not_working,
+        not_working=not_working,
+    )
 
 
 def _attach_operational_projection(device, operational: OperationalStatus) -> None:

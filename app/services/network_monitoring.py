@@ -11,7 +11,7 @@ from uuid import UUID
 
 from fastapi import HTTPException
 from sqlalchemy import case, func, or_, select
-from sqlalchemy.orm import Session, selectinload
+from sqlalchemy.orm import Session, joinedload, selectinload
 
 from app.models.network import FdhCabinet, OLTDevice, OntUnit, PonPort
 from app.models.network_monitoring import (
@@ -70,6 +70,57 @@ def _commit(db: Session, action: Callable[[], T]) -> T:
     except Exception:
         db.rollback()
         raise
+
+
+@dataclass(frozen=True, slots=True)
+class OpenAlarmCounts:
+    total: int
+    critical: int
+
+
+def get_open_alarm_counts(db: Session) -> OpenAlarmCounts:
+    """Count all open monitoring alarms in one grouped owner query."""
+    rows = (
+        db.query(Alert.severity, func.count(Alert.id))
+        .filter(Alert.status == AlertStatus.open)
+        .group_by(Alert.severity)
+        .all()
+    )
+    return OpenAlarmCounts(
+        total=sum(count for _severity, count in rows),
+        critical=sum(
+            count for severity, count in rows if severity == AlertSeverity.critical
+        ),
+    )
+
+
+@dataclass(frozen=True, slots=True)
+class OpenAlarmPreview:
+    name: str
+    device_name: str
+    severity: AlertSeverity
+    triggered_at: datetime | None
+
+
+def get_open_alarm_preview(db: Session) -> tuple[OpenAlarmPreview, ...]:
+    """Return the five newest open alarms for the monitoring overview."""
+    alarms = (
+        db.query(Alert)
+        .options(joinedload(Alert.rule), joinedload(Alert.device))
+        .filter(Alert.status == AlertStatus.open)
+        .order_by(Alert.triggered_at.desc())
+        .limit(5)
+        .all()
+    )
+    return tuple(
+        OpenAlarmPreview(
+            name=alarm.rule.name if alarm.rule else "Alert",
+            device_name=alarm.device.name if alarm.device else "Unknown device",
+            severity=alarm.severity,
+            triggered_at=alarm.triggered_at,
+        )
+        for alarm in alarms
+    )
 
 
 # ── Device admission lifecycle (owned by network.monitoring_inventory) ───────

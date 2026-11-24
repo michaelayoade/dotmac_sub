@@ -17,8 +17,8 @@ import httpx
 from sqlalchemy import func
 from sqlalchemy.orm import Session
 
-from app.models.network_monitoring import AlertSeverity
 from app.schemas.status_presentation import StatusPresentation
+from app.services.network_monitoring import OpenAlarmPreview
 
 logger = logging.getLogger(__name__)
 
@@ -46,14 +46,6 @@ class MonitoringGlance:
 
 
 @dataclass(frozen=True, slots=True)
-class MonitoringAlarmPreview:
-    name: str
-    device_name: str
-    severity: AlertSeverity
-    triggered_at: datetime | None
-
-
-@dataclass(frozen=True, slots=True)
 class MonitoringPonPreview:
     port_name: str
     olt_name: str
@@ -63,7 +55,7 @@ class MonitoringPonPreview:
 
 @dataclass(frozen=True, slots=True)
 class MonitoringAttention:
-    alarms: tuple[MonitoringAlarmPreview, ...]
+    alarms: tuple[OpenAlarmPreview, ...]
 
 
 @dataclass(frozen=True, slots=True)
@@ -167,39 +159,21 @@ class MonitoringDevicesPage:
 
 def monitoring_glance(db: Session) -> MonitoringGlance:
     """Read only the decision-bearing overview, using owner-resolved states."""
-    from app.models.network_monitoring import (
-        Alert,
-        AlertStatus,
-        NetworkDevice,
+    from app.services.device_operational_status import active_device_operational_counts
+    from app.services.network_monitoring import (
+        get_onu_status_summary,
+        get_open_alarm_counts,
     )
-    from app.services.device_operational_status import (
-        NOT_WORKING,
-        annotate_operational_status,
-    )
-    from app.services.network_monitoring import get_onu_status_summary
 
-    devices = db.query(NetworkDevice).filter(NetworkDevice.is_active.is_(True)).all()
-    annotate_operational_status(devices)
-    not_working = sum(
-        1 for device in devices if cast(Any, device).operational.status == NOT_WORKING
-    )
-    alarm_counts = (
-        db.query(Alert.severity, func.count(Alert.id))
-        .filter(Alert.status == AlertStatus.open)
-        .group_by(Alert.severity)
-        .all()
-    )
-    alarms_open = sum(count for _severity, count in alarm_counts)
-    alarms_critical = sum(
-        count for severity, count in alarm_counts if severity == AlertSeverity.critical
-    )
+    devices = active_device_operational_counts(db)
+    alarms = get_open_alarm_counts(db)
     onu = get_onu_status_summary(db)
     return MonitoringGlance(
-        devices_total=len(devices),
-        devices_working=len(devices) - not_working,
-        devices_not_working=not_working,
-        alarms_open=int(alarms_open or 0),
-        alarms_critical=int(alarms_critical or 0),
+        devices_total=devices.total,
+        devices_working=devices.working,
+        devices_not_working=devices.not_working,
+        alarms_open=alarms.total,
+        alarms_critical=alarms.critical,
         onts_total=int(onu["total"]),
         onts_not_working=int(onu["not_working"]),
         low_signal=int(onu["low_signal"]),
@@ -208,30 +182,10 @@ def monitoring_glance(db: Session) -> MonitoringGlance:
 
 
 def monitoring_attention(db: Session) -> MonitoringAttention:
-    """Fetch a bounded open-alarm preview after the overview has rendered."""
-    from sqlalchemy.orm import joinedload
+    """Fetch the owner-projected alarm preview after the overview renders."""
+    from app.services.network_monitoring import get_open_alarm_preview
 
-    from app.models.network_monitoring import Alert, AlertStatus
-
-    alarms = (
-        db.query(Alert)
-        .options(joinedload(Alert.rule), joinedload(Alert.device))
-        .filter(Alert.status == AlertStatus.open)
-        .order_by(Alert.triggered_at.desc())
-        .limit(5)
-        .all()
-    )
-    return MonitoringAttention(
-        alarms=tuple(
-            MonitoringAlarmPreview(
-                name=alarm.rule.name if alarm.rule else "Alert",
-                device_name=alarm.device.name if alarm.device else "Unknown device",
-                severity=alarm.severity,
-                triggered_at=alarm.triggered_at,
-            )
-            for alarm in alarms
-        ),
-    )
+    return MonitoringAttention(alarms=get_open_alarm_preview(db))
 
 
 def monitoring_pon_outages(db: Session) -> MonitoringPonOutages:

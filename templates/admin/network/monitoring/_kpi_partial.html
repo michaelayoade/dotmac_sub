@@ -1,7 +1,7 @@
 {% if glance.alarms_critical or glance.devices_not_working %}
-    <div class="rounded-xl border border-rose-200 bg-rose-50 px-5 py-4 dark:border-rose-900 dark:bg-rose-950/30">
-        <p class="font-semibold text-rose-900 dark:text-rose-100">{{ glance.alarms_critical }} critical alarms · {{ glance.devices_not_working }} devices not working</p>
-        <a href="/admin/network/noc" class="mt-1 inline-block text-sm font-medium text-rose-700 underline dark:text-rose-300">Investigate in NOC queue</a>
+    <div class="status-panel status-panel-negative status-foreground rounded-xl border px-5 py-4">
+        <p class="font-semibold">{{ glance.alarms_critical }} critical alarms · {{ glance.devices_not_working }} devices not working</p>
+        <a href="/admin/network/noc" class="mt-1 inline-block text-sm font-medium underline">Investigate in NOC queue</a>
     </div>
     {% endif %}
 <p class="mb-3 text-xs text-slate-500 dark:text-slate-400">Snapshot {{ glance.observed_at | app_datetime('%Y-%m-%d %H:%M') }}</p>
