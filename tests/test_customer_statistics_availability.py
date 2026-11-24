@@ -688,6 +688,7 @@ def test_no_verified_active_period_is_unavailable_instead_of_using_old_service(
     db_session, subscriber, subscription, monkeypatch
 ):
     subscription.status = SubscriptionStatus.paused
+    db_session.flush()
     monkeypatch.setattr(sla, "_statistics_last_active_end", lambda *_a, **_k: None)
     result = sla.query_customer_statistics_availability(
         db_session,

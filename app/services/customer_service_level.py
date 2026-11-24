@@ -459,14 +459,14 @@ def _statistics_service_periods(
         periods = [Span(item.starts_at, item.ends_at) for item in coverage.intervals]
     else:
         end = now + timedelta(microseconds=1)
-        coverage = postpaid_entitlement_history_for_period(
+        postpaid_coverage = postpaid_entitlement_history_for_period(
             db,
             subscription_id=subscription.id,
             period_start=lookup_start,
             period_end=end,
         )
         periods = []
-        for item in coverage.intervals:
+        for item in postpaid_coverage.intervals:
             version = db.get(BillingContractVersion, item.contract_version_id)
             if version is None:
                 continue
