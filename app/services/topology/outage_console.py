@@ -26,7 +26,7 @@ from __future__ import annotations
 
 import logging
 import uuid
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from datetime import UTC, datetime
 from typing import NotRequired, TypedDict
 
@@ -34,7 +34,13 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.models.network import OntUnit
-from app.models.network_monitoring import DeviceRole, DeviceType, NetworkDevice
+from app.models.network_monitoring import (
+    DeviceRole,
+    DeviceType,
+    NetworkDevice,
+    OutageIncident,
+    PopSite,
+)
 from app.services.device_operational_status import warmer_is_stale
 from app.services.topology.affected import (
     _dist_to_core,
@@ -80,6 +86,52 @@ class NetworkHealthSummary(TypedDict):
     counts: dict[str, int]
     total_nodes: int
     not_healthy: list[NodeBrief]
+
+
+class ClassifierIncidentLocation(TypedDict):
+    node_name: str | None
+    basestation_name: str | None
+
+
+def classifier_incident_locations(
+    session: Session, incidents: Sequence[OutageIncident]
+) -> dict[uuid.UUID, ClassifierIncidentLocation]:
+    """Resolve incident display names in two bounded inventory queries."""
+    node_ids = {inc.root_node_id for inc in incidents if inc.root_node_id is not None}
+    nodes = (
+        {
+            node.id: node
+            for node in session.query(NetworkDevice)
+            .filter(NetworkDevice.id.in_(node_ids))
+            .all()
+        }
+        if node_ids
+        else {}
+    )
+    pop_ids = {
+        inc.basestation_id for inc in incidents if inc.basestation_id is not None
+    }
+    pop_ids.update(
+        node.pop_site_id for node in nodes.values() if node.pop_site_id is not None
+    )
+    pops = (
+        {
+            pop.id: pop
+            for pop in session.query(PopSite).filter(PopSite.id.in_(pop_ids)).all()
+        }
+        if pop_ids
+        else {}
+    )
+    result: dict[uuid.UUID, ClassifierIncidentLocation] = {}
+    for inc in incidents:
+        node = nodes.get(inc.root_node_id) if inc.root_node_id is not None else None
+        pop_id = inc.basestation_id or (node.pop_site_id if node else None)
+        basestation = pops.get(pop_id) if pop_id is not None else None
+        result[inc.id] = {
+            "node_name": node.name if node is not None else None,
+            "basestation_name": (basestation.name if basestation is not None else None),
+        }
+    return result
 
 
 ActiveOutageRow = TypedDict(

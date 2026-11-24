@@ -740,12 +740,12 @@ def detected_outages_console(
     clearly-separate SECONDARY "candidates" view (raw, un-debounced),
     loaded after the primary view. Optional ``node_id`` drills into one
     failure domain (per-customer P2 verdicts + P3 branch alerts)."""
-    from app.models.network_monitoring import NetworkDevice, PopSite
     from app.services.status_presentation import outage_status_presentation
     from app.services.topology.outage import (
         list_classifier_incidents,
         mttr_so_far_seconds,
     )
+    from app.services.topology.outage_console import classifier_incident_locations
 
     context = _base_context(request, db, active_page="monitoring")
 
@@ -757,36 +757,10 @@ def detected_outages_console(
     context["incident_has_next"] = len(incidents) > page_size
     context["incident_page"] = incident_page
     incidents = incidents[:page_size]
-    node_ids = {inc.root_node_id for inc in incidents if inc.root_node_id is not None}
-    nodes = (
-        {
-            node.id: node
-            for node in db.query(NetworkDevice)
-            .filter(NetworkDevice.id.in_(node_ids))
-            .all()
-        }
-        if node_ids
-        else {}
-    )
-    pop_ids = {
-        inc.basestation_id for inc in incidents if inc.basestation_id is not None
-    }
-    pop_ids.update(
-        node.pop_site_id for node in nodes.values() if node.pop_site_id is not None
-    )
-    pops = (
-        {pop.id: pop for pop in db.query(PopSite).filter(PopSite.id.in_(pop_ids)).all()}
-        if pop_ids
-        else {}
-    )
+    locations = classifier_incident_locations(db, tuple(incidents))
     incident_rows = []
     for inc in incidents:
-        node = nodes.get(inc.root_node_id) if inc.root_node_id is not None else None
-        basestation = None
-        if inc.basestation_id is not None:
-            basestation = pops.get(inc.basestation_id)
-        elif node is not None and node.pop_site_id is not None:
-            basestation = pops.get(node.pop_site_id)
+        location = locations[inc.id]
         incident_rows.append(
             {
                 "incident": inc,
@@ -796,8 +770,8 @@ def detected_outages_console(
                 "affected_count": inc.affected_count,
                 "confidence": inc.confidence,
                 "classification": inc.classification,
-                "node_name": getattr(node, "name", None),
-                "basestation_name": getattr(basestation, "name", None),
+                "node_name": location["node_name"],
+                "basestation_name": location["basestation_name"],
                 "suspected_at": inc.suspected_at,
                 "confirmed_at": inc.confirmed_at,
                 "mttr_so_far_seconds": mttr_so_far_seconds(inc),
