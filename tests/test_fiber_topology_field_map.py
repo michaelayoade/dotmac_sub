@@ -321,14 +321,17 @@ def test_field_map_fails_closed_on_worklist_source_hash_drift(db_session, monkey
 def test_admin_field_map_route_is_get_only_complete_projection():
     routes = {route.path: route for route in network_fiber_plant.router.routes}
     route = routes["/network/fiber-field-verification-map"]
+    data_route = routes["/network/fiber-field-verification-map/data"]
     template = Path("templates/admin/network/fiber/field_verification_map.html")
 
     assert route.methods == {"GET"}
+    assert data_route.methods == {"GET"}
     assert template.exists()
     content = template.read_text()
     assert "complete read-only overlay" in content
     assert "exact staged source GeoJSON" in content
-    assert "field_map.feature_collection" in content
+    assert "fetch('/admin/network/fiber-field-verification-map/data'" in content
+    assert "requestAnimationFrame(addBatch)" in content
     assert "Current-source work orders" in content
     assert "Superseded-source work orders" in content
     assert "Filters change only this browser view" in content

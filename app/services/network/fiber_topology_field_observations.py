@@ -891,56 +891,43 @@ def project_field_verification_evidence(
 
     if not features:
         return {}
-    asset_types = {feature.asset_type for feature in features}
-    observation_query = select(FiberTopologyFieldObservation).where(
-        FiberTopologyFieldObservation.source_asset_type.in_(asset_types)
-    )
-    if len(features) <= 100:
-        named_keys = [
+    source_keys = sorted(
+        {
             (feature.batch.source_system, feature.asset_type, feature.external_id)
             for feature in features
             if feature.external_id
-        ]
-        anonymous_keys = [
-            (feature.batch.source_system, feature.asset_type, feature.id)
-            for feature in features
-            if not feature.external_id
-        ]
-        named_match = (
-            tuple_(
-                FiberTopologyFieldObservation.source_system,
-                FiberTopologyFieldObservation.source_asset_type,
-                FiberTopologyFieldObservation.source_external_id,
-            ).in_(named_keys)
-            if named_keys
-            else None
-        )
-        anonymous_match = (
-            tuple_(
-                FiberTopologyFieldObservation.source_system,
-                FiberTopologyFieldObservation.source_asset_type,
-                FiberTopologyFieldObservation.staged_feature_id,
-            ).in_(anonymous_keys)
-            if anonymous_keys
-            else None
-        )
-        observation_query = observation_query.where(
-            or_(
-                *(
-                    match
-                    for match in (named_match, anonymous_match)
-                    if match is not None
-                )
-            )
-        )
-    observations = list(
-        db.scalars(
-            observation_query.order_by(
-                FiberTopologyFieldObservation.observed_at,
-                FiberTopologyFieldObservation.id,
-            )
-        ).all()
+        }
     )
+    anonymous_ids = [feature.id for feature in features if not feature.external_id]
+    observations: list[FiberTopologyFieldObservation] = []
+    # Bound SQL parameters while retaining observations from superseded source versions.
+    for offset in range(0, len(source_keys), 500):
+        keys = source_keys[offset : offset + 500]
+        observations.extend(
+            db.scalars(
+                select(FiberTopologyFieldObservation).where(
+                    tuple_(
+                        FiberTopologyFieldObservation.source_system,
+                        FiberTopologyFieldObservation.source_asset_type,
+                        FiberTopologyFieldObservation.source_external_id,
+                    ).in_(keys)
+                )
+            ).all()
+        )
+    for offset in range(0, len(anonymous_ids), 500):
+        ids = anonymous_ids[offset : offset + 500]
+        observations.extend(
+            db.scalars(
+                select(FiberTopologyFieldObservation).where(
+                    FiberTopologyFieldObservation.staged_feature_id.in_(ids),
+                    or_(
+                        FiberTopologyFieldObservation.source_external_id.is_(None),
+                        FiberTopologyFieldObservation.source_external_id == "",
+                    ),
+                )
+            ).all()
+        )
+    observations.sort(key=lambda row: (row.observed_at, row.id))
     observations_by_source: dict[
         tuple[str, str, str], list[FiberTopologyFieldObservation]
     ] = defaultdict(list)
