@@ -9462,7 +9462,7 @@
         "templates/admin/inbox/email_routes.html:693",
         "templates/admin/integrations/whatsapp/config.html:38",
         "templates/admin/network/speedtests/form.html:56",
-        "templates/admin/sales/quotes/detail.html:97",
+        "templates/admin/sales/quotes/detail.html:106",
         "templates/admin/system/service_teams/detail.html:44",
         "templates/customer/billing/_payment_method_choice.html:3",
         "templates/customer/billing/pay.html:65",
