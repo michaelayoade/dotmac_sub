@@ -1786,26 +1786,14 @@ def person_detail_stats(
     availability_message = None
     from app.services.customer_service_level import (
         CustomerStatisticsAvailabilityQuery,
-        StatisticsPeriod,
         query_customer_statistics_availability,
     )
 
     try:
         availability_stats = query_customer_statistics_availability(
-            db,
-            CustomerStatisticsAvailabilityQuery(
+            db=db,
+            query=CustomerStatisticsAvailabilityQuery(
                 customer_id=UUID(str(subscriber.id)),
-                period=StatisticsPeriod(usage_result.period.value),
-                start_date=(
-                    usage_result.date_range.start_date
-                    if usage_result.date_range is not None
-                    else None
-                ),
-                end_date=(
-                    usage_result.date_range.end_date
-                    if usage_result.date_range is not None
-                    else None
-                ),
             ),
         )
     except ValueError as exc:

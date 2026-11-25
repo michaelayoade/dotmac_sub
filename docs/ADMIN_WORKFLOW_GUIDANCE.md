@@ -111,6 +111,16 @@ verdicts page 50 at a time; OLT branch inference is requested separately, one
 PON per request. A monitoring fault calls for checking the monitoring path,
 while Notify remains an authorized preview before a confirmed send.
 
+## Network monitoring
+
+Use `/admin/network/monitoring` for a current exception snapshot. Open NOC or
+Alarms from the summary cards, review the bounded alarm preview, and run the
+PON outage scan only when needed. Site, VPN, and bandwidth panels load on
+request and can be retried independently. Open Devices for the paginated
+inventory; older search links redirect there. Bulk controls appear only with
+`monitoring:write`, while device-detail links require `network:device:read`.
+The snapshot time marks the read, not the time of every underlying observation.
+
 ## Router health
 
 Use `/admin/network/routers` to find routers that need attention. The Health

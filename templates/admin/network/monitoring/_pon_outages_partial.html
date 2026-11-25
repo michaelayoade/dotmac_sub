@@ -1,0 +1,12 @@
+{% from "components/ui/macros.html" import card %}
+{% call card("PON outages", color="rose") %}
+    {% if outages.rows %}
+    <ul class="divide-y divide-slate-200 dark:divide-slate-700">
+        {% for outage in outages.rows %}
+        <li class="py-2 text-sm"><span class="font-medium text-slate-900 dark:text-white">{{ outage.olt_name }} · {{ outage.port_name }}</span><span class="ml-2 text-rose-700 dark:text-rose-300">{{ outage.offline_count }}/{{ outage.total_count }} offline</span></li>
+        {% endfor %}
+    </ul>
+    {% if outages.total > 5 %}<p class="mt-2 text-xs text-slate-500">Showing 5 of {{ outages.total }} PON outages.</p>{% endif %}
+    {% else %}<p class="text-sm text-slate-500">No PON outages detected.</p>{% endif %}
+    <a href="/admin/network/noc" class="mt-3 inline-block text-sm font-medium text-blue-600 dark:text-blue-400">Investigate in NOC</a>
+{% endcall %}

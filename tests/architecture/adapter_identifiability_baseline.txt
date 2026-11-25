@@ -41,7 +41,7 @@ app/services/web_network_fdh.py 6
 app/services/web_network_fiber.py 38
 app/services/web_network_ip_actions.py 2
 app/services/web_network_ipam_ledger.py 3
-app/services/web_network_monitoring.py 11
+app/services/web_network_monitoring.py 10
 app/services/web_network_olt_profiles.py 16
 app/services/web_network_ont_assignments.py 7
 app/services/web_network_ont_autofind.py 18

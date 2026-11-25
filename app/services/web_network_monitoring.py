@@ -7,6 +7,8 @@ import os
 import shutil
 import subprocess  # nosec
 import time
+import uuid
+from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from html import escape
 from typing import Any, cast
@@ -15,7 +17,8 @@ import httpx
 from sqlalchemy import func
 from sqlalchemy.orm import Session
 
-from app.services.audit_helpers import build_audit_activities_for_types
+from app.schemas.status_presentation import StatusPresentation
+from app.services.network_monitoring import OpenAlarmPreview
 
 logger = logging.getLogger(__name__)
 
@@ -29,6 +32,217 @@ _TUNNEL_NAMES = {
 }
 
 
+@dataclass(frozen=True, slots=True)
+class MonitoringGlance:
+    devices_total: int
+    devices_working: int
+    devices_not_working: int
+    alarms_open: int
+    alarms_critical: int
+    onts_total: int
+    onts_not_working: int
+    low_signal: int
+    observed_at: datetime
+
+
+@dataclass(frozen=True, slots=True)
+class MonitoringPonPreview:
+    port_name: str
+    olt_name: str
+    offline_count: int
+    total_count: int
+
+
+@dataclass(frozen=True, slots=True)
+class MonitoringAttention:
+    alarms: tuple[OpenAlarmPreview, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class MonitoringPonOutages:
+    rows: tuple[MonitoringPonPreview, ...]
+    total: int
+
+
+@dataclass(frozen=True, slots=True)
+class MonitoringSite:
+    name: str
+    working: int
+    total: int
+    impaired: int
+    working_pct: int
+
+
+@dataclass(frozen=True, slots=True)
+class MonitoringTunnel:
+    name: str
+    endpoint: str | None
+    up: bool
+    handshake_ago: str
+    rx: str
+    tx: str
+
+
+@dataclass(frozen=True, slots=True)
+class MonitoringInfrastructure:
+    sites: tuple[MonitoringSite, ...]
+    tunnels: tuple[MonitoringTunnel, ...]
+
+
+def monitoring_infrastructure(db: Session) -> MonitoringInfrastructure:
+    """Read secondary site and tunnel details only when requested."""
+    sites = get_site_reachability(db)
+    tunnels = get_vpn_tunnel_status()
+    return MonitoringInfrastructure(
+        sites=tuple(
+            MonitoringSite(
+                name=site["name"],
+                working=site["working"],
+                total=site["total"],
+                impaired=site["impaired"],
+                working_pct=site["working_pct"],
+            )
+            for site in sites
+        ),
+        tunnels=tuple(
+            MonitoringTunnel(
+                name=str(tunnel["name"]),
+                endpoint=cast(str | None, tunnel["endpoint"]),
+                up=bool(tunnel["up"]),
+                handshake_ago=str(tunnel["handshake_ago"]),
+                rx=str(tunnel["rx"]),
+                tx=str(tunnel["tx"]),
+            )
+            for tunnel in tunnels
+        ),
+    )
+
+
+@dataclass(frozen=True, slots=True)
+class MonitoringDevicesQuery:
+    search: str | None = None
+    page: int = 1
+    per_page: int = 50
+
+
+@dataclass(frozen=True, slots=True)
+class MonitoringDeviceRow:
+    id: uuid.UUID
+    name: str
+    mgmt_ip: str
+    status_reason: str
+    status_presentation: StatusPresentation
+    max_concurrent_subscribers: int | None
+    current_subscriber_count: int | None
+    cpu: float | None
+    memory: float | None
+    uptime: str | None
+    last_ping_at: datetime | None
+    last_snmp_at: datetime | None
+
+
+@dataclass(frozen=True, slots=True)
+class MonitoringDevicePagination:
+    page: int
+    per_page: int
+    total: int
+    total_pages: int
+    has_prev: bool
+    has_next: bool
+
+
+@dataclass(frozen=True, slots=True)
+class MonitoringDevicesPage:
+    rows: tuple[MonitoringDeviceRow, ...]
+    pagination: MonitoringDevicePagination
+
+
+def monitoring_glance(db: Session) -> MonitoringGlance:
+    """Read only the decision-bearing overview, using owner-resolved states."""
+    from app.services.device_operational_status import active_device_operational_counts
+    from app.services.network_monitoring import (
+        get_onu_status_summary,
+        get_open_alarm_counts,
+    )
+
+    devices = active_device_operational_counts(db)
+    alarms = get_open_alarm_counts(db)
+    onu = get_onu_status_summary(db)
+    return MonitoringGlance(
+        devices_total=devices.total,
+        devices_working=devices.working,
+        devices_not_working=devices.not_working,
+        alarms_open=alarms.total,
+        alarms_critical=alarms.critical,
+        onts_total=int(onu["total"]),
+        onts_not_working=int(onu["not_working"]),
+        low_signal=int(onu["low_signal"]),
+        observed_at=datetime.now(UTC),
+    )
+
+
+def monitoring_attention(db: Session) -> MonitoringAttention:
+    """Fetch the owner-projected alarm preview after the overview renders."""
+    from app.services.network_monitoring import get_open_alarm_preview
+
+    return MonitoringAttention(alarms=get_open_alarm_preview(db))
+
+
+def monitoring_pon_outages(db: Session) -> MonitoringPonOutages:
+    """Run the fleetwide outage scan only on explicit operator request."""
+    from app.services.network_monitoring import get_pon_outage_summary
+
+    outages = get_pon_outage_summary(db)
+    return MonitoringPonOutages(
+        rows=tuple(
+            MonitoringPonPreview(
+                port_name=str(item["pon_port_name"]),
+                olt_name=str(item["olt_name"]),
+                offline_count=int(item["offline_count"]),
+                total_count=int(item["total_count"]),
+            )
+            for item in outages[:5]
+        ),
+        total=len(outages),
+    )
+
+
+def monitoring_devices_page(
+    db: Session, *, query: MonitoringDevicesQuery
+) -> MonitoringDevicesPage:
+    """Expose the existing paged inventory as a typed UI query."""
+    rows, page = _get_device_health_page(
+        db, query=query.search, page=query.page, per_page=query.per_page
+    )
+    return MonitoringDevicesPage(
+        rows=tuple(
+            MonitoringDeviceRow(
+                id=uuid.UUID(row["id"]),
+                name=row["name"],
+                mgmt_ip=row["mgmt_ip"],
+                status_reason=row["status_reason"],
+                status_presentation=row["status_presentation"],
+                max_concurrent_subscribers=row["max_concurrent_subscribers"],
+                current_subscriber_count=row["current_subscriber_count"],
+                cpu=row["cpu"],
+                memory=row["memory"],
+                uptime=row["uptime"],
+                last_ping_at=row["last_ping_at"],
+                last_snmp_at=row["last_snmp_at"],
+            )
+            for row in rows
+        ),
+        pagination=MonitoringDevicePagination(
+            page=int(page["page"]),
+            per_page=int(page["per_page"]),
+            total=int(page["total"]),
+            total_pages=int(page["total_pages"]),
+            has_prev=bool(page["has_prev"]),
+            has_next=bool(page["has_next"]),
+        ),
+    )
+
+
 def active_monitoring_devices(db: Session) -> list:
     """Return active monitoring devices for health refresh jobs."""
     from app.models.network_monitoring import NetworkDevice
@@ -36,117 +250,15 @@ def active_monitoring_devices(db: Session) -> list:
     return db.query(NetworkDevice).filter(NetworkDevice.is_active.is_(True)).all()
 
 
-def monitoring_page_data(
-    db: Session,
-    *,
-    format_duration,
-    format_bps,
-    query: str | None = None,
-    page: int = 1,
-    per_page: int = 50,
-) -> dict[str, object]:
-    """Return payload for network monitoring dashboard.
-
-    Delegates to the centralized core service method and adds
-    bandwidth summary context.
-    """
-    from app.services.network_monitoring import NetworkDevices
-
-    data = NetworkDevices.get_monitoring_dashboard_stats(
-        db,
-        format_duration=format_duration,
-        format_bps=format_bps,
-        query=query,
-    )
-
-    # Add bandwidth context
-    data["bandwidth"] = _get_bandwidth_summary()
-    data["nas_throughput"] = _get_nas_throughput_summary(db)
-
-    # ONT status summaries and PON outage detection (Sprint 2)
-    from app.services.network_monitoring import (
-        get_onu_status_summary,
-        get_pon_outage_summary,
-    )
-
-    data["ont_service_summary"] = get_onu_status_summary(db)
-    data["pon_outages"] = get_pon_outage_summary(db)
-
-    # ONT status trend chart (24-hour time series)
-    data["ont_service_trend"] = _get_onu_status_trend(db, hours=24)
-
-    # ONU authorization trend (Phase 6D — new registrations per day, 30 days)
-    data["onu_auth_trend"] = _get_onu_auth_trend(db, days=30)
-
-    # Network activity feed (Phase 6E — recent audit events)
-    data["network_activity"] = _get_network_activity_feed(db, limit=15)
-
-    data["query"] = (query or "").strip()
-    data["last_refreshed_at"] = datetime.now(UTC)
-
-    # Device health metrics table (CPU, memory, temperature per device)
-    device_health, device_health_pagination = _get_device_health_page(
-        db, query=query, page=page, per_page=per_page
-    )
-    data["device_health"] = device_health
-    data["device_health_total"] = device_health_pagination["total"]
-    data["device_health_pagination"] = device_health_pagination
-
-    return data
-
-
-def dispatch_monitoring_refresh(*, request_id: str | None = None) -> None:
-    """No-op refresh hook for the page's ``?refresh=1``.
-
-    The Zabbix cache warmer this used to enqueue was retired with the native
-    monitoring cutover; the dashboard reads native poll state directly, so
-    there is nothing to re-warm.
-    """
-    del request_id
-
-
-def monitoring_index_context(
-    db: Session,
-    *,
-    format_duration,
-    format_bps,
-    query: str | None = None,
-    page: int = 1,
-    per_page: int = 50,
-) -> dict[str, object]:
-    """Build the full monitoring dashboard context payload."""
-    data = monitoring_page_data(
-        db,
-        format_duration=format_duration,
-        format_bps=format_bps,
-        query=query,
-        page=page,
-        per_page=per_page,
-    )
-    data["vpn_tunnels"] = get_vpn_tunnel_status()
-    data["site_reachability"] = get_site_reachability(db)
-    data["activities"] = build_audit_activities_for_types(
-        db,
-        ["core_device", "network_device"],
-        limit=5,
-    )
-    return data
-
-
 _BANDWIDTH_CTX_CACHE: dict[str, Any] = {"value": None, "expires_at": 0.0}
 _BANDWIDTH_CTX_TTL_SECONDS = 10.0
 
 
 def monitoring_bandwidth_context(db: Session) -> dict[str, object]:
-    """Build context for the auto-refreshing live bandwidth partial.
+    """Build context for the on-demand bandwidth partial.
 
-    Mirrors the bandwidth/nas_throughput slice of ``monitoring_page_data`` so
-    the network-wide throughput panel can poll independently of the full page.
-
-    The result is the same network-wide aggregate for every viewer, so it is
-    cached ~10s and shared process-wide: the 15s HTMX poll then issues the
-    VictoriaMetrics fan-out (5 blocking instant queries) at most once per
-    window regardless of how many NOC tabs are open, instead of once per tab.
+    The network-wide aggregate is requested on demand and cached for 10s
+    per process to avoid repeated VictoriaMetrics fan-out.
     """
     now = time.monotonic()
     cached = _BANDWIDTH_CTX_CACHE
@@ -159,34 +271,6 @@ def monitoring_bandwidth_context(db: Session) -> dict[str, object]:
     cached["value"] = value
     cached["expires_at"] = now + _BANDWIDTH_CTX_TTL_SECONDS
     return value
-
-
-def monitoring_kpi_context(
-    db: Session,
-    *,
-    format_duration,
-    format_bps,
-) -> dict[str, object]:
-    """Build context for the auto-refreshing monitoring KPI partial."""
-    from app.services.network_monitoring import (
-        NetworkDevices,
-        get_onu_status_summary,
-        get_pon_outage_summary,
-    )
-
-    stats = NetworkDevices.get_monitoring_dashboard_stats(
-        db, format_duration=format_duration, format_bps=format_bps
-    )
-    alarms_data = alarms_page_data(db, severity=None, status=None)
-    return {
-        "stats": stats.get("stats", {}),
-        "ont_service_summary": get_onu_status_summary(db),
-        "pon_outages": get_pon_outage_summary(db),
-        "alarms": alarms_data.get("alarms", []),
-        "vpn_tunnels": get_vpn_tunnel_status(),
-        "site_reachability": get_site_reachability(db),
-        "now": datetime.now(UTC),
-    }
 
 
 def get_vpn_tunnel_status() -> list[dict[str, object]]:
@@ -353,38 +437,6 @@ def _vm_instant_query(query: str) -> list[dict[str, Any]]:
                 return result
     except Exception as exc:
         logger.warning("VictoriaMetrics instant query failed (%s): %s", query[:60], exc)
-    return []
-
-
-def _vm_range_query(
-    query: str,
-    start: datetime,
-    end: datetime,
-    step: str,
-) -> list[dict[str, Any]]:
-    """Execute a synchronous PromQL range query against VictoriaMetrics.
-
-    Returns an empty list on any error so callers always get a safe value.
-    """
-    try:
-        resp = httpx.get(
-            f"{_VICTORIAMETRICS_URL}/api/v1/query_range",
-            params={
-                "query": query,
-                "start": start.isoformat(),
-                "end": end.isoformat(),
-                "step": step,
-            },
-            timeout=15,
-        )
-        resp.raise_for_status()
-        data = resp.json()
-        if isinstance(data, dict) and data.get("status") == "success":
-            result = data.get("data", {}).get("result", [])
-            if isinstance(result, list):
-                return result
-    except Exception as exc:
-        logger.warning("VictoriaMetrics range query failed (%s): %s", query[:60], exc)
     return []
 
 
@@ -575,40 +627,6 @@ def _get_onu_auth_trend(db: Session, days: int = 30) -> dict[str, Any]:
     }
 
 
-# Network entity types for the activity feed
-_NETWORK_ENTITY_TYPES = (
-    "olt",
-    "ont",
-    "pon_port",
-    "vlan",
-    "ip_pool",
-    "ip_block",
-    "network_device",
-    "network_zone",
-    "core_device",
-    "nas",
-    "splitter",
-    "fdh_cabinet",
-    "pop_site",
-)
-
-# Action → human-readable label
-_ACTION_DISPLAY: dict[str, str] = {
-    "create": "Created",
-    "update": "Updated",
-    "delete": "Deleted",
-    "reboot": "Rebooted",
-    "factory_reset": "Factory Reset",
-    "set_wifi_ssid": "WiFi SSID Changed",
-    "set_wifi_password": "WiFi Password Changed",  # nosec
-    "toggle_lan_port": "LAN Port Toggled",
-    "assign": "Assigned",
-    "unassign": "Unassigned",
-    "activate": "Activated",
-    "deactivate": "Deactivated",
-}
-
-
 def get_site_reachability(db: Session) -> list[dict[str, Any]]:
     """Group owner-resolved device operation by management subnet."""
     from sqlalchemy import select as sa_select
@@ -666,38 +684,6 @@ def get_site_reachability(db: Session) -> list[dict[str, Any]]:
         data["working_pct"] = pct
         result.append(data)
     return result
-
-
-def _get_network_activity_feed(db: Session, limit: int = 15) -> list[dict[str, Any]]:
-    """Fetch recent audit events for network-related entities."""
-    from app.models.audit import AuditEvent
-
-    events = (
-        db.query(AuditEvent)
-        .filter(AuditEvent.entity_type.in_(_NETWORK_ENTITY_TYPES))
-        .order_by(AuditEvent.occurred_at.desc())
-        .limit(limit)
-        .all()
-    )
-
-    items: list[dict[str, Any]] = []
-    for ev in events:
-        action_label = _ACTION_DISPLAY.get(
-            ev.action, ev.action.replace("_", " ").title()
-        )
-        items.append(
-            {
-                "title": f"{ev.entity_type.replace('_', ' ').title()} {action_label}",
-                "entity_type": ev.entity_type,
-                "entity_id": ev.entity_id,
-                "action": ev.action,
-                "occurred_at": ev.occurred_at,
-                "actor_type": ev.actor_type.value if ev.actor_type else "system",
-                "is_success": ev.is_success,
-            }
-        )
-
-    return items
 
 
 def _get_device_health_page(

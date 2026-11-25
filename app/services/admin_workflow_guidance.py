@@ -350,7 +350,7 @@ WORKFLOW_GUIDANCE: tuple[AdminWorkflowGuidance, ...] = (
         "Use one page to review customer, service, network, billing, ticket, and timeline context.",
         (),
         "Use Account for profile and portal access, Service for subscriptions, Network for access, Billing for financial evidence, Tickets for support, and Timeline for history.",
-        "In Service > Statistics, Current covers this calendar month, Last period covers the previous month, and Custom includes the selected end date for Uptime and Downtime. Each service is shown separately. Hover or click the icon on either time card to see active service time, connected time, confirmed provider outages, and unexplained time. Uptime is provisional when connection evidence is incomplete; unconfirmed complaints and customer device power-off do not add provider downtime.",
+        "In Service > Statistics, Uptime and Downtime show one selected service. An active subscription takes priority, including one on a delinquent account; otherwise the paused or suspended subscription with the most recent proven active time is selected. The cards name the service and measured dates. Usage date filters do not change these cards. Hover or click the icon to see active service time, connected time, confirmed provider outages, and unexplained time. Uptime is provisional when connection evidence is incomplete; unconfirmed complaints and customer device power-off do not add provider downtime.",
         "In Billing, use Extensions to review pending, applied, canceled, and reversed service-extension requests; billing-date impact appears when an extension has been applied.",
         "In Payment intents, Cancel stale intent appears only for an expired bank-transfer intent whose exact submitted proof is still unreviewed and has not created a payment.",
         "Open the linked proof, confirm from bank evidence that no payment was received, enter a clear reason, and confirm the cancellation.",
@@ -559,6 +559,24 @@ WORKFLOW_GUIDANCE: tuple[AdminWorkflowGuidance, ...] = (
         notes=(
             "A monitoring fault means live customer sessions contradict the device check; investigate the monitoring path rather than treating it as a network outage.",
             "The persisted incident lifecycle remains the source of truth; a raw live candidate has not passed debounce.",
+        ),
+    ),
+    _guide(
+        "network-monitoring",
+        "Network and access",
+        "Review network monitoring",
+        "NOC and network operations",
+        "Find current network exceptions and open the matching investigation view.",
+        ("/admin/network/monitoring",),
+        "Read the four snapshot cards and their observation time, then open NOC or Alarms for the affected cohort.",
+        "Review the bounded open-alarm preview under Needs attention; use Full queue for the complete triage list.",
+        "Select Check PON outages only when you need the fleetwide outage scan.",
+        "Select Load site & VPN status or Load latest bandwidth when that evidence is needed; a failed panel can be retried independently.",
+        "Open Devices to search the paginated inventory; older monitoring search links lead to this view.",
+        "Select devices and choose a bulk action only after confirming the intended scope and consequences.",
+        notes=(
+            "The overview reads current owner-resolved counts; its snapshot time is the read time, not the timestamp of every underlying observation.",
+            "Device bulk actions require monitoring:write. Device-detail links require network:device:read.",
         ),
     ),
     _guide(
@@ -1806,6 +1824,19 @@ _ACTION_SPECS: dict[str, tuple[_ActionSpec, ...]] = {
             "change-plan", "Change the subscription plan", 3, permission="catalog:write"
         ),
     ),
+    "network-monitoring": (
+        _action("review-monitoring-snapshot", "Review the monitoring snapshot", 0),
+        _action("investigate-monitoring-alarm", "Investigate open alarms", 1),
+        _action("scan-pon-outages", "Check PON outages", 2),
+        _action("load-monitoring-evidence", "Load site, VPN, or bandwidth evidence", 3),
+        _action("search-monitoring-devices", "Search monitored devices", 4),
+        _action(
+            "act-on-monitoring-devices",
+            "Act on selected devices",
+            5,
+            permission="monitoring:write",
+        ),
+    ),
     "network-access": (
         _action("investigate-access", "Investigate customer network access", 0),
         _action(
@@ -2910,6 +2941,7 @@ HELP_NAVIGATION: tuple[AdminHelpNavigationSection, ...] = (
             "fiber-evidence-lists",
             "fiber-inventory",
             "core-device-inventory",
+            "network-monitoring",
             "router-health",
             "ip-pool-labels",
             "cross-app-drift",
@@ -3014,6 +3046,7 @@ HELP_NAVIGATION: tuple[AdminHelpNavigationSection, ...] = (
 HELP_GUIDE_VIEW_PERMISSIONS: dict[str, tuple[str, ...]] = {
     "detected-outages": ("monitoring:read",),
     "system-users-list": ("rbac:roles:read",),
+    "network-monitoring": ("monitoring:read",),
     "billing-accounts": ("billing:account:read",),
     "invoice": ("billing:invoice:read",),
     "credit": ("billing:credit_note:read",),

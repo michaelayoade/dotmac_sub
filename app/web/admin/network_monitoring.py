@@ -1106,30 +1106,14 @@ def outage_communications_send(
     response_class=HTMLResponse,
     dependencies=[Depends(require_permission("monitoring:read"))],
 )
-def monitoring_page(
-    request: Request,
-    q: str | None = None,
-    refresh: str | None = None,
-    page: int = Query(1, ge=1),
-    per_page: int = Query(50, ge=10, le=100),
-    db: Session = Depends(get_db),
-):
-    force_refresh = (refresh or "").strip().lower() in {"1", "true", "yes", "on"}
-    if force_refresh:
-        web_network_monitoring_service.dispatch_monitoring_refresh(
-            request_id=getattr(request.state, "request_id", None)
+def monitoring_page(request: Request, db: Session = Depends(get_db)):
+    if any(key in request.query_params for key in ("q", "page", "per_page")):
+        query = str(request.url.query)
+        return RedirectResponse(
+            f"/admin/network/monitoring/devices?{query}", status_code=307
         )
-
-    page_data = web_network_monitoring_service.monitoring_index_context(
-        db,
-        format_duration=_format_duration,
-        format_bps=_format_bps,
-        query=q,
-        page=page,
-        per_page=per_page,
-    )
     context = _base_context(request, db, active_page="monitoring")
-    context.update(page_data)
+    context["glance"] = web_network_monitoring_service.monitoring_glance(db)
     return templates.TemplateResponse("admin/network/monitoring/index.html", context)
 
 
@@ -1139,18 +1123,88 @@ def monitoring_page(
     dependencies=[Depends(require_permission("monitoring:read"))],
 )
 def monitoring_kpi_partial(request: Request, db: Session = Depends(get_db)):
-    """HTMX partial: auto-refreshing KPI cards + alarm/outage summary."""
-    context = {
-        "request": request,
-        **web_network_monitoring_service.monitoring_kpi_context(
-            db,
-            format_duration=_format_duration,
-            format_bps=_format_bps,
-        ),
-    }
     return templates.TemplateResponse(
-        "admin/network/monitoring/_kpi_partial.html", context
+        "admin/network/monitoring/_kpi_partial.html",
+        {
+            "request": request,
+            "glance": web_network_monitoring_service.monitoring_glance(db),
+        },
     )
+
+
+@router.get(
+    "/monitoring/attention",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("monitoring:read"))],
+)
+def monitoring_attention_partial(request: Request, db: Session = Depends(get_db)):
+    return templates.TemplateResponse(
+        "admin/network/monitoring/_attention_partial.html",
+        {
+            "request": request,
+            "attention": web_network_monitoring_service.monitoring_attention(db),
+        },
+    )
+
+
+@router.get(
+    "/monitoring/pon-outages",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("monitoring:read"))],
+)
+def monitoring_pon_outages_partial(request: Request, db: Session = Depends(get_db)):
+    return templates.TemplateResponse(
+        "admin/network/monitoring/_pon_outages_partial.html",
+        {
+            "request": request,
+            "outages": web_network_monitoring_service.monitoring_pon_outages(db),
+        },
+    )
+
+
+@router.get(
+    "/monitoring/infrastructure",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("monitoring:read"))],
+)
+def monitoring_infrastructure_partial(request: Request, db: Session = Depends(get_db)):
+    return templates.TemplateResponse(
+        "admin/network/monitoring/_infrastructure_partial.html",
+        {
+            "request": request,
+            "infrastructure": web_network_monitoring_service.monitoring_infrastructure(
+                db
+            ),
+        },
+    )
+
+
+@router.get(
+    "/monitoring/devices",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("monitoring:read"))],
+)
+def monitoring_devices_page(
+    request: Request,
+    q: str | None = None,
+    page: int = Query(1, ge=1),
+    per_page: int = Query(50, ge=10, le=100),
+    db: Session = Depends(get_db),
+):
+    device_page = web_network_monitoring_service.monitoring_devices_page(
+        db,
+        query=web_network_monitoring_service.MonitoringDevicesQuery(
+            search=q, page=page, per_page=per_page
+        ),
+    )
+    context = _base_context(request, db, active_page="monitoring")
+    context.update(
+        query=(q or "").strip(),
+        device_health=device_page.rows,
+        device_health_pagination=device_page.pagination,
+        device_health_total=device_page.pagination.total,
+    )
+    return templates.TemplateResponse("admin/network/monitoring/devices.html", context)
 
 
 @router.get(
