@@ -213,6 +213,25 @@ def test_ai_knowledge_retrieval_is_bounded_deterministic_and_stateless() -> None
     assert len(empty.source_watermark) == 64
 
 
+def test_network_monitoring_guidance_covers_deferred_views_and_permissions() -> None:
+    overview = guidance_for_path("/admin/network/monitoring")
+    devices = guidance_for_path("/admin/network/monitoring/devices")
+    assert overview is not None and devices is not None
+    assert overview.id == devices.id == "network-monitoring"
+    content = " ".join((*overview.steps, *overview.notes)).lower()
+    for phrase in (
+        "snapshot",
+        "pon outages",
+        "load site & vpn status",
+        "paginated inventory",
+        "monitoring:write",
+        "network:device:read",
+    ):
+        assert phrase in content
+    actions = help_actions_for(overview)
+    assert actions[-1].permission == "monitoring:write"
+
+
 def test_network_guidance_explains_independent_map_proposal_review() -> None:
     guide = guidance_for_path("/admin/network/fiber-change-requests")
 
@@ -621,7 +640,7 @@ def test_period_review_guidance_explains_manual_approval_and_reserved_cash() -> 
 
 def test_every_help_guide_has_complete_action_sections() -> None:
     guides = (*WORKFLOW_GUIDANCE, *HELP_ONLY_GUIDANCE)
-    assert len(guides) == 74
+    assert len(guides) == 75
     for guide in guides:
         actions = help_actions_for(guide)
         assert actions, guide.id

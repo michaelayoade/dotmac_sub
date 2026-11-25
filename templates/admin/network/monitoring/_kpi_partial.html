@@ -1,60 +1,29 @@
-{# HTMX partial: compact monitoring snapshot for NOC scan speed #}
-<div class="space-y-3">
-    <div class="flex items-center justify-between gap-3">
-        <div>
-            <p class="text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-500 dark:text-slate-400">Network Snapshot</p>
-            <p class="mt-1 text-sm text-slate-600 dark:text-slate-300">Current device and ONT state for quick triage confirmation.</p>
-        </div>
-        <div class="inline-flex items-center gap-2 rounded-full border border-slate-200 bg-slate-50 px-2.5 py-1 text-xs font-medium text-slate-600 dark:border-slate-700 dark:bg-slate-900/40 dark:text-slate-300">
-            <span class="status-tone-dot status-tone-dot-neutral h-2 w-2 rounded-full"></span>
-            Operational state
-        </div>
-    </div>
-
-    <div class="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
-        <div class="status-panel status-panel-positive rounded-xl border px-4 py-3">
-            <p class="status-foreground status-tone-positive text-[11px] font-semibold uppercase tracking-[0.16em]">Devices Working</p>
-            <p class="status-foreground status-tone-positive mt-2 text-2xl font-bold tabular-nums">{{ stats.devices_working }}</p>
-            <p class="status-foreground status-tone-positive mt-1 text-xs">Operation confirmed</p>
-        </div>
-        <div class="status-panel status-panel-negative rounded-xl border px-4 py-3">
-            <p class="status-foreground status-tone-negative text-[11px] font-semibold uppercase tracking-[0.16em]">Devices Not Working</p>
-            <p class="status-foreground status-tone-negative mt-2 text-2xl font-bold tabular-nums">{{ stats.devices_not_working }}</p>
-            <p class="status-foreground status-tone-negative mt-1 text-xs">Failure or verification unavailable</p>
-        </div>
-        <div class="status-panel status-panel-warning rounded-xl border px-4 py-3">
-            <p class="status-foreground status-tone-warning text-[11px] font-semibold uppercase tracking-[0.16em]">Open Alarms</p>
-            <p class="status-foreground status-tone-warning mt-2 text-2xl font-bold tabular-nums">{{ stats.alarms_open }}</p>
-            <p class="status-foreground status-tone-warning mt-1 text-xs">Rules currently firing</p>
-        </div>
-        <div class="status-panel status-panel-positive rounded-xl border px-4 py-3">
-            <p class="status-foreground status-tone-positive text-[11px] font-semibold uppercase tracking-[0.16em]">Subscribers Online</p>
-            <p class="status-foreground status-tone-positive mt-2 text-2xl font-bold tabular-nums">{{ stats.subscribers_online }}</p>
-            <p class="status-foreground status-tone-positive mt-1 text-xs">Sessions currently up</p>
-        </div>
-    </div>
-    {% if ont_service_summary and ont_service_summary.total > 0 %}
-    <div class="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
-        <div class="status-panel status-panel-positive rounded-xl border px-4 py-3">
-            <p class="text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-500 dark:text-slate-400">ONT Working</p>
-            <p class="mt-2 text-xl font-semibold tabular-nums text-slate-900 dark:text-white">{{ ont_service_summary.working }}</p>
-            <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">Currently confirmed by OLT, ACS, or last-seen evidence</p>
-        </div>
-        <div class="status-panel status-panel-negative rounded-xl border px-4 py-3">
-            <p class="text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-500 dark:text-slate-400">ONT Not Working</p>
-            <p class="mt-2 text-xl font-semibold tabular-nums text-slate-900 dark:text-white">{{ ont_service_summary.not_working }}</p>
-            <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">Confirmed failure or verification unable to confirm operation</p>
-        </div>
-        <div class="status-panel status-panel-warning rounded-xl border px-4 py-3">
-            <p class="text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-500 dark:text-slate-400">Low Signal</p>
-            <p class="mt-2 text-xl font-semibold tabular-nums text-slate-900 dark:text-white">{{ ont_service_summary.low_signal }}</p>
-            <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">Optical warning threshold breached</p>
-        </div>
-        <div class="status-panel status-panel-neutral rounded-xl border px-4 py-3">
-            <p class="text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-500 dark:text-slate-400">Total ONTs</p>
-            <p class="mt-2 text-xl font-semibold tabular-nums text-slate-900 dark:text-white">{{ ont_service_summary.total }}</p>
-            <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">Managed inventory count</p>
-        </div>
+{% if glance.alarms_critical or glance.devices_not_working %}
+    <div class="status-panel status-panel-negative status-foreground rounded-xl border px-5 py-4">
+        <p class="font-semibold">{{ glance.alarms_critical }} critical alarms · {{ glance.devices_not_working }} devices not working</p>
+        <a href="/admin/network/noc" class="mt-1 inline-block text-sm font-medium underline">Investigate in NOC queue</a>
     </div>
     {% endif %}
+<p class="mb-3 text-xs text-slate-500 dark:text-slate-400">Snapshot {{ glance.observed_at | app_datetime('%Y-%m-%d %H:%M') }}</p>
+<div class="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
+    <a href="/admin/network/noc" class="status-panel status-panel-negative rounded-xl border px-4 py-3">
+        <p class="status-foreground status-tone-negative text-xs font-semibold uppercase">Devices not working</p>
+        <p class="status-foreground status-tone-negative mt-2 text-2xl font-bold tabular-nums">{{ glance.devices_not_working }}</p>
+        <p class="mt-1 text-xs text-slate-600 dark:text-slate-300">{{ glance.devices_working }} of {{ glance.devices_total }} working</p>
+    </a>
+    <a href="/admin/network/alarms" class="status-panel status-panel-warning rounded-xl border px-4 py-3">
+        <p class="status-foreground status-tone-warning text-xs font-semibold uppercase">Open alarms</p>
+        <p class="status-foreground status-tone-warning mt-2 text-2xl font-bold tabular-nums">{{ glance.alarms_open }}</p>
+        <p class="mt-1 text-xs text-slate-600 dark:text-slate-300">{{ glance.alarms_critical }} critical</p>
+    </a>
+    <a href="/admin/network/noc" class="status-panel status-panel-negative rounded-xl border px-4 py-3">
+        <p class="status-foreground status-tone-negative text-xs font-semibold uppercase">ONTs not working</p>
+        <p class="status-foreground status-tone-negative mt-2 text-2xl font-bold tabular-nums">{{ glance.onts_not_working }}</p>
+        <p class="mt-1 text-xs text-slate-600 dark:text-slate-300">Of {{ glance.onts_total }} managed ONTs</p>
+    </a>
+    <a href="/admin/network/performance" class="status-panel status-panel-warning rounded-xl border px-4 py-3">
+        <p class="status-foreground status-tone-warning text-xs font-semibold uppercase">Low signal</p>
+        <p class="status-foreground status-tone-warning mt-2 text-2xl font-bold tabular-nums">{{ glance.low_signal }}</p>
+        <p class="mt-1 text-xs text-slate-600 dark:text-slate-300">Optical warning threshold</p>
+    </a>
 </div>

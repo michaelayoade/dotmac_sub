@@ -546,6 +546,24 @@ WORKFLOW_GUIDANCE: tuple[AdminWorkflowGuidance, ...] = (
         route_templates=("/admin/network/core-devices",),
     ),
     _guide(
+        "network-monitoring",
+        "Network and access",
+        "Review network monitoring",
+        "NOC and network operations",
+        "Find current network exceptions and open the matching investigation view.",
+        ("/admin/network/monitoring",),
+        "Read the four snapshot cards and their observation time, then open NOC or Alarms for the affected cohort.",
+        "Review the bounded open-alarm preview under Needs attention; use Full queue for the complete triage list.",
+        "Select Check PON outages only when you need the fleetwide outage scan.",
+        "Select Load site & VPN status or Load latest bandwidth when that evidence is needed; a failed panel can be retried independently.",
+        "Open Devices to search the paginated inventory; older monitoring search links lead to this view.",
+        "Select devices and choose a bulk action only after confirming the intended scope and consequences.",
+        notes=(
+            "The overview reads current owner-resolved counts; its snapshot time is the read time, not the timestamp of every underlying observation.",
+            "Device bulk actions require monitoring:write. Device-detail links require network:device:read.",
+        ),
+    ),
+    _guide(
         "router-health",
         "Network and access",
         "Read router health findings",
@@ -1790,6 +1808,19 @@ _ACTION_SPECS: dict[str, tuple[_ActionSpec, ...]] = {
             "change-plan", "Change the subscription plan", 3, permission="catalog:write"
         ),
     ),
+    "network-monitoring": (
+        _action("review-monitoring-snapshot", "Review the monitoring snapshot", 0),
+        _action("investigate-monitoring-alarm", "Investigate open alarms", 1),
+        _action("scan-pon-outages", "Check PON outages", 2),
+        _action("load-monitoring-evidence", "Load site, VPN, or bandwidth evidence", 3),
+        _action("search-monitoring-devices", "Search monitored devices", 4),
+        _action(
+            "act-on-monitoring-devices",
+            "Act on selected devices",
+            5,
+            permission="monitoring:write",
+        ),
+    ),
     "network-access": (
         _action("investigate-access", "Investigate customer network access", 0),
         _action(
@@ -2875,6 +2906,7 @@ HELP_NAVIGATION: tuple[AdminHelpNavigationSection, ...] = (
             "fiber-evidence-lists",
             "fiber-inventory",
             "core-device-inventory",
+            "network-monitoring",
             "router-health",
             "ip-pool-labels",
             "cross-app-drift",
@@ -2978,6 +3010,7 @@ HELP_NAVIGATION: tuple[AdminHelpNavigationSection, ...] = (
 # Other pages inherit their Admin-sidebar section's visibility.
 HELP_GUIDE_VIEW_PERMISSIONS: dict[str, tuple[str, ...]] = {
     "system-users-list": ("rbac:roles:read",),
+    "network-monitoring": ("monitoring:read",),
     "billing-accounts": ("billing:account:read",),
     "invoice": ("billing:invoice:read",),
     "credit": ("billing:credit_note:read",),
