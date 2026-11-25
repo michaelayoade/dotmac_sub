@@ -141,6 +141,16 @@ records disagree with reality.
 - **P3 — splice inference** (§6): co-failure + correlated-Rx branch inference; predictive-maintenance alerts.
 - **P4 — surfaces**: admin outage console using the classifier; selfcare/mobile connection status; notification send-path (gated on comms policy, not data).
 
+The detected-outages admin page renders the persisted, debounced incidents first.
+Its secondary live health and candidate view loads when scrolled into view (or
+through the full-page `?live=1` fallback). One bounded live sweep shares a
+single forwarding graph, subscription map, and fresh-session set across nodes;
+the same summary drives both the health counts and candidate list. A failed
+live request leaves the persisted incident list usable and offers a retry.
+The incident list is paged at 50 rows and resolves node/basestation names in
+two batched queries. A selected domain loads separately, diagnosing 50 customers
+per page. Its P3 branch alerts are requested on demand, one PON per request.
+
 Every phase consumes signals already on prod. The build is the **correlation engine
 + the temporal baseline** — no new collection.
 

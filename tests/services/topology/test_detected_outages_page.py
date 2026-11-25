@@ -47,7 +47,7 @@ def _node_with_bts(db):
     return node, pop
 
 
-def _render_context(db, monkeypatch):
+def _render_context(db, monkeypatch, *, live=False, node_id=None, incident_page=1):
     from app.web.admin import network_monitoring
 
     monkeypatch.setattr(
@@ -58,8 +58,160 @@ def _render_context(db, monkeypatch):
         "TemplateResponse",
         lambda template, context: {"template": template, "context": context},
     )
-    resp = network_monitoring.detected_outages_console(_request(), db=db)
+    resp = network_monitoring.detected_outages_console(
+        _request(),
+        node_id=node_id,
+        live=live,
+        incident_page=incident_page,
+        db=db,
+    )
     return resp["context"]
+
+
+def test_console_defers_live_sweep(db_session, monkeypatch):
+    from app.web.admin import network_monitoring
+
+    def unexpected_sweep(db):
+        raise AssertionError("initial page must not run the live sweep")
+
+    monkeypatch.setattr(
+        network_monitoring, "_detected_outages_live_context", unexpected_sweep
+    )
+    context = _render_context(db_session, monkeypatch)
+    assert context["show_live"] is False
+    assert "summary" not in context
+    assert "active" not in context
+
+
+def test_console_defers_selected_domain_diagnosis(db_session, monkeypatch):
+    from app.services.topology import outage_console
+
+    def unexpected_detail(*args, **kwargs):
+        raise AssertionError("initial page must not diagnose customers")
+
+    monkeypatch.setattr(outage_console, "outage_detail", unexpected_detail)
+    selected_id = uuid.uuid4()
+    context = _render_context(db_session, monkeypatch, node_id=selected_id)
+    assert context["selected_node_id"] == selected_id
+    assert "detail" not in context
+
+
+def test_console_paginates_incident_list(db_session, monkeypatch):
+    from app.web.admin import network_monitoring
+
+    calls = []
+
+    def incidents(db, *, limit, offset):
+        calls.append((limit, offset))
+        return []
+
+    monkeypatch.setattr(
+        "app.services.topology.outage.list_classifier_incidents", incidents
+    )
+    context = _render_context(db_session, monkeypatch, incident_page=3)
+    assert calls == [(network_monitoring.DETECTED_OUTAGES_PAGE_SIZE + 1, 100)]
+    assert context["incident_page"] == 3
+    assert context["incident_has_next"] is False
+
+
+def test_console_full_page_live_fallback(db_session, monkeypatch):
+    from app.web.admin import network_monitoring
+
+    live_context = {"summary": {"counts": {}}, "active": {"outages": []}}
+    monkeypatch.setattr(
+        network_monitoring, "_detected_outages_live_context", lambda db: live_context
+    )
+    context = _render_context(db_session, monkeypatch, live=True)
+    assert context["show_live"] is True
+    assert context["summary"] is live_context["summary"]
+
+
+def test_live_fragment_reuses_one_summary(db_session, monkeypatch):
+    from app.services.topology import outage_console
+    from app.web.admin import network_monitoring
+
+    summary = {"counts": {}, "total_nodes": 0, "not_healthy": []}
+    calls = []
+    monkeypatch.setattr(outage_console, "network_health_summary", lambda db: summary)
+
+    def active(db, *, summary):
+        calls.append(summary)
+        return {"outages": [], "monitoring_faults": []}
+
+    monkeypatch.setattr(outage_console, "active_outages", active)
+    monkeypatch.setattr(
+        network_monitoring.templates,
+        "TemplateResponse",
+        lambda template, context: {"template": template, "context": context},
+    )
+    response = network_monitoring.detected_outages_live(_request(), db=db_session)
+    assert response["template"] == "admin/network/_detected_outages_live.html"
+    assert response["context"]["summary"] is summary
+    assert calls == [summary]
+
+
+def test_detail_fragment_only_loads_selected_domain(db_session, monkeypatch):
+    from app.services.topology import outage_console
+    from app.web.admin import network_monitoring
+
+    selected_id = uuid.uuid4()
+    calls = []
+
+    def detail(db, node_id, **kwargs):
+        calls.append((node_id, kwargs))
+        return {"node": {"name": "Selected"}}
+
+    monkeypatch.setattr(outage_console, "outage_detail", detail)
+    monkeypatch.setattr(
+        network_monitoring.templates,
+        "TemplateResponse",
+        lambda template, context: {"template": template, "context": context},
+    )
+    response = network_monitoring.detected_outages_detail(
+        _request("/admin/network/detected-outages/detail"),
+        node_id=selected_id,
+        customer_page=2,
+        db=db_session,
+    )
+    assert response["template"] == "admin/network/_detected_outages_detail.html"
+    assert response["context"]["detail"]["node"]["name"] == "Selected"
+    assert calls == [
+        (
+            selected_id,
+            {
+                "customer_offset": 50,
+                "customer_limit": 50,
+                "include_predictive": False,
+            },
+        )
+    ]
+
+
+def test_branch_fragment_loads_one_pon_page(db_session, monkeypatch):
+    from app.services.topology import outage_console
+    from app.web.admin import network_monitoring
+
+    selected_id = uuid.uuid4()
+    calls = []
+
+    def branches(db, node_id, *, page):
+        calls.append((node_id, page))
+        return {"co_failure": [], "rx_droop": [], "total_ports": 2}
+
+    monkeypatch.setattr(outage_console, "predictive_branches_page", branches)
+    monkeypatch.setattr(
+        network_monitoring.templates,
+        "TemplateResponse",
+        lambda template, context: {"template": template, "context": context},
+    )
+    response = network_monitoring.detected_outages_branches(
+        _request("/admin/network/detected-outages/branches"),
+        node_id=selected_id,
+        pon_page=2,
+        db=db_session,
+    )
+    assert response["template"] == "admin/network/_detected_outages_branches.html"
+    assert calls == [(selected_id, 2)]
 
 
 def test_console_reads_persisted_confirmed_classifier_incident(db_session, monkeypatch):
@@ -144,9 +296,36 @@ def test_detected_outages_route_requires_monitoring_read():
     )
     # The auth dependency is declared on the route (same pattern as siblings).
     assert route.dependencies, "route must carry a require_permission dependency"
+    live_route = next(
+        r
+        for r in router.routes
+        if getattr(r, "path", None) == "/network/detected-outages/live"
+    )
+    assert live_route.dependencies
+    detail_route = next(
+        r
+        for r in router.routes
+        if getattr(r, "path", None) == "/network/detected-outages/detail"
+    )
+    assert detail_route.dependencies
+    branches_route = next(
+        r
+        for r in router.routes
+        if getattr(r, "path", None) == "/network/detected-outages/branches"
+    )
+    assert branches_route.dependencies
 
 
 def test_detected_outages_template_compiles():
     Jinja2Templates(directory="templates").env.get_template(
         "admin/network/detected_outages.html"
+    )
+    Jinja2Templates(directory="templates").env.get_template(
+        "admin/network/_detected_outages_live.html"
+    )
+    Jinja2Templates(directory="templates").env.get_template(
+        "admin/network/_detected_outages_detail.html"
+    )
+    Jinja2Templates(directory="templates").env.get_template(
+        "admin/network/_detected_outages_branches.html"
     )
