@@ -35,6 +35,9 @@ not period-scoped, matching the operational worklist contract.
 Currency is never summed across codes. Each aggregate retains its currency
 groups; the display projection renders explicit currency codes and the forecast
 creates separate expected and weighted series per currency.
+The forecast chart uses successive brand-owned data colors for its series and
+draws weighted series with dashed lines so the comparison does not rely on
+color alone.
 
 Agent identity is currently retained on Lead as an observed UUID without a
 native staff relationship. The dashboard therefore displays a stable shortened
