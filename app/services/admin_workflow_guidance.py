@@ -1853,8 +1853,9 @@ _ACTION_SPECS: dict[str, tuple[_ActionSpec, ...]] = {
     "fiber-evidence-lists": (
         _action("browse-coverage", "Browse staged source coverage", 0),
         _action("browse-field-evidence", "Browse field evidence", 1),
-        _action("trace-service", "Find and trace a fiber service", 2),
-        _action("browse-ont-reviews", "Browse ONT review queues", 3),
+        _action("browse-field-map", "Browse the field verification map", 2),
+        _action("trace-service", "Find and trace a fiber service", 3),
+        _action("browse-ont-reviews", "Browse ONT review queues", 4),
     ),
     "fiber-inventory": (
         _action(
