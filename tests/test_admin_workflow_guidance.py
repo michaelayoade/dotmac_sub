@@ -505,6 +505,17 @@ def test_vendor_route_guidance_covers_optional_admin_proposals() -> None:
     assert "staff-owned proposals remain separate" in content
 
 
+def test_field_verification_map_guidance_explains_loading_and_retry() -> None:
+    guide = guidance_for_path("/admin/network/fiber-field-verification-map")
+
+    assert guide is not None
+    assert guide.id == "fiber-evidence-lists"
+    content = " ".join(guide.steps).lower()
+    assert "loads the complete source overlay" in content
+    assert "reload the page to retry" in content
+    assert "filters change only the visible map" in content
+
+
 def test_support_ticket_guidance_separates_editing_from_assignment() -> None:
     guide = guidance_for_path("/admin/support/tickets/123")
 

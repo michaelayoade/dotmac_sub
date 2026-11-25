@@ -40,6 +40,11 @@ and ONT identity reviews loads only the chosen queue. Batch rows preview three
 decisions with a link to the complete decision search; opening Candidates runs
 the complete assignment audit.
 
+The Field verification map opens its shell while the complete source overlay
+loads. Wait for the feature count and report hashes before inspecting it. If
+the report fails to load, reload the page to retry. Browser filters change only
+visible features; they do not change the complete report or its hashes.
+
 Ticket Settings explains the editable infrastructure ticket-type and target-kind
 policy, when Save and Cancel appear, and how to correct a retained draft after
 a failed save. The support ticket guide describes creating a customerless

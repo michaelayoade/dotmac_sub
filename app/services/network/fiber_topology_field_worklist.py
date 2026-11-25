@@ -16,7 +16,8 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import cast
 
-from sqlalchemy import select
+from sqlalchemy import String, func, literal, select
+from sqlalchemy import cast as sql_cast
 from sqlalchemy.orm import Session, joinedload
 
 from app.models.fiber_topology_staging import (
@@ -163,30 +164,43 @@ def _source_key(
 
 
 def _latest_staged_features(db: Session) -> list[FiberTopologyStagedFeature]:
+    identity = func.coalesce(
+        func.nullif(FiberTopologyStagedFeature.external_id, ""),
+        literal("feature:") + sql_cast(FiberTopologyStagedFeature.id, String),
+    )
+    ranked = (
+        select(
+            FiberTopologyStagedFeature.id.label("feature_id"),
+            func.row_number()
+            .over(
+                partition_by=(
+                    FiberTopologySourceBatch.source_system,
+                    FiberTopologyStagedFeature.asset_type,
+                    identity,
+                ),
+                order_by=(
+                    FiberTopologySourceBatch.created_at.desc(),
+                    FiberTopologyStagedFeature.created_at.desc(),
+                    FiberTopologyStagedFeature.id.desc(),
+                ),
+            )
+            .label("rank"),
+        )
+        .join(FiberTopologyStagedFeature.batch)
+        .where(FiberTopologyStagedFeature.asset_type.in_(SOURCE_ASSET_TYPES))
+        .subquery()
+    )
     rows = list(
         db.scalars(
             select(FiberTopologyStagedFeature)
-            .join(FiberTopologyStagedFeature.batch)
+            .join(ranked, ranked.c.feature_id == FiberTopologyStagedFeature.id)
             .options(joinedload(FiberTopologyStagedFeature.batch))
-            .where(FiberTopologyStagedFeature.asset_type.in_(SOURCE_ASSET_TYPES))
-            .order_by(
-                FiberTopologySourceBatch.created_at.desc(),
-                FiberTopologyStagedFeature.created_at.desc(),
-                FiberTopologyStagedFeature.id.desc(),
-            )
+            .where(ranked.c.rank == 1)
         )
         .unique()
         .all()
     )
-    latest: list[FiberTopologyStagedFeature] = []
-    seen: set[tuple[str, str, str]] = set()
-    for feature in rows:
-        key = _source_key(feature)
-        if key in seen:
-            continue
-        seen.add(key)
-        latest.append(feature)
-    return sorted(latest, key=_source_key)
+    return sorted(rows, key=_source_key)
 
 
 def _work_orders(

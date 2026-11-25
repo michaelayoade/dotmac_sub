@@ -500,6 +500,7 @@ WORKFLOW_GUIDANCE: tuple[AdminWorkflowGuidance, ...] = (
         (),
         "On connectivity and point identity coverage, search the staged source list and use Previous or Next to inspect further pages. The fast list shows source facts only; choose Run complete audit before reading coverage, lifecycle, or readiness gates.",
         "On Field verification, search and page through source identities to inspect their current field evidence. Run complete audit for the full priority ordering, counts, and report digest; page-specific rows do not establish cutover readiness.",
+        "On the Field verification map, the map opens first and then loads the complete source overlay. Wait for the feature count and report hashes before inspecting evidence; if the report cannot load, reload the page to retry. Filters change only the visible map, not the complete report.",
         "On Fiber trace, search by customer, account, ONT serial, or subscription ID, then page through all matches before selecting one service to trace.",
         "On ONT identity reviews, choose the observation, batch, decision, or candidate tab, then search and page within that queue. Batch rows preview three decisions; View all opens the matching decision search. The full assignment audit runs only when the candidate tab is opened.",
         notes=(
@@ -509,6 +510,7 @@ WORKFLOW_GUIDANCE: tuple[AdminWorkflowGuidance, ...] = (
             "/admin/network/fiber-connectivity-coverage",
             "/admin/network/fiber-identity-coverage",
             "/admin/network/fiber-field-verification",
+            "/admin/network/fiber-field-verification-map",
             "/admin/network/fiber-trace",
             "/admin/network/ont-identity-reviews",
         ),
@@ -1898,8 +1900,9 @@ _ACTION_SPECS: dict[str, tuple[_ActionSpec, ...]] = {
     "fiber-evidence-lists": (
         _action("browse-coverage", "Browse staged source coverage", 0),
         _action("browse-field-evidence", "Browse field evidence", 1),
-        _action("trace-service", "Find and trace a fiber service", 2),
-        _action("browse-ont-reviews", "Browse ONT review queues", 3),
+        _action("browse-field-map", "Browse the field verification map", 2),
+        _action("trace-service", "Find and trace a fiber service", 3),
+        _action("browse-ont-reviews", "Browse ONT review queues", 4),
     ),
     "fiber-inventory": (
         _action(

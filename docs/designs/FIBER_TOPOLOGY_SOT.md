@@ -1312,11 +1312,19 @@ migration and no mutation authority.
   pairs. This is a viewport projection, not asset proximity, endpoint selection,
   route validation, or fault localization. Map color comes only from the Phase
   worklist evidence-priority field; asset types and client filters cannot redefine it.
-- `/admin/network/fiber-field-verification-map` is GET-only and embeds the
-  complete FeatureCollection. Browser filters change only the visible overlay;
+- `/admin/network/fiber-field-verification-map` is GET-only and returns the map
+  shell immediately. Its permissioned GET `/data` endpoint returns the same
+  complete FeatureCollection, counts, bounds, and exact hashes. The browser
+  renders exact features in bounded animation-frame batches so the map remains
+  responsive. Browser filters change only the visible overlay;
   complete counts and hashes remain unchanged. Exact source/content/geometry,
   worklist-row, and map-feature hashes plus current/superseded job context remain
   inspectable.
+- The worklist selects the latest identity per source system and asset type in
+  SQL before loading geometry. Evidence queries are bounded to those identities,
+  including superseded observations; neither query loads unrelated historic
+  geometries or observations. The full report and its digest semantics are
+  unchanged.
 - `scripts/network/audit_fiber_field_verification_map.py` emits the same complete
   JSON projection inside a read-only PostgreSQL `REPEATABLE READ` transaction.
   It has no create/assign/observe/propose/apply action and no readiness exit code.

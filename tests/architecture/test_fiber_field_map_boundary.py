@@ -5,6 +5,10 @@ from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 SERVICE = PROJECT_ROOT / "app/services/network/fiber_topology_field_map.py"
+WORKLIST = PROJECT_ROOT / "app/services/network/fiber_topology_field_worklist.py"
+OBSERVATIONS = (
+    PROJECT_ROOT / "app/services/network/fiber_topology_field_observations.py"
+)
 COMMAND = PROJECT_ROOT / "scripts/network/audit_fiber_field_verification_map.py"
 ADMIN = PROJECT_ROOT / "app/web/admin/network_fiber_plant.py"
 TEMPLATE = PROJECT_ROOT / "templates/admin/network/fiber/field_verification_map.html"
@@ -68,6 +72,17 @@ def test_field_map_owner_is_exact_read_only_worklist_projection():
     assert "eligible" not in source
 
 
+def test_field_map_cohort_queries_do_not_load_unrelated_history():
+    worklist_source = WORKLIST.read_text()
+    observation_source = OBSERVATIONS.read_text()
+
+    assert "func.row_number()" in worklist_source
+    assert ".where(ranked.c.rank == 1)" in worklist_source
+    assert "tuple_(" in observation_source
+    assert ").in_(keys)" in observation_source
+    assert "source_asset_type.in_(asset_types)" not in observation_source
+
+
 def test_field_map_cli_is_full_cohort_repeatable_and_read_only():
     tree = _tree(COMMAND)
     commands = {
@@ -100,8 +115,11 @@ def test_field_map_admin_is_get_only_and_has_no_business_actions():
     template_source = TEMPLATE.read_text()
 
     assert '"/fiber-field-verification-map"' in admin_source
-    assert "project_fiber_field_verification_map(db)" in admin_source
-    assert "field_map.feature_collection" in template_source
+    assert '"/fiber-field-verification-map/data"' in admin_source
+    assert "project_fiber_field_verification_map(db).to_dict()" in admin_source
+    assert "fetch('/admin/network/fiber-field-verification-map/data'" in template_source
+    assert "requestAnimationFrame(addBatch)" in template_source
+    assert 'context["field_map"]' not in admin_source
     assert "Color represents only" in template_source
     assert "exact staged source GeoJSON" in template_source
     assert "Filters change only this browser view" in template_source
