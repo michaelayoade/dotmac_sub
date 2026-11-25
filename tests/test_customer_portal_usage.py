@@ -12,6 +12,7 @@ class TestCustomerPortalUsagePage:
     def test_admin_stats_render_complete_filtered_totals_and_unavailable_state(
         self,
     ) -> None:
+        from app.models.catalog import SubscriptionStatus
         from app.services.customer_portal_flow_services import (
             UsagePageResult,
             UsageSummaryProjection,
@@ -69,22 +70,23 @@ class TestCustomerPortalUsagePage:
             "bandwidth_chart_initial_stats": None,
             "usage_view": "table",
             "availability_stats": CustomerStatisticsAvailability(
-                period_start=datetime(2026, 5, 1, tzinfo=UTC),
-                period_end=datetime(2026, 5, 4, tzinfo=UTC),
-                services=(
-                    SubscriptionStatisticsAvailability(
-                        subscription_id=UUID("00000000-0000-0000-0000-000000000001"),
-                        label="Test service",
-                        expected_seconds=3 * 86400,
-                        connected_seconds=int(2.5 * 86400),
-                        confirmed_downtime_seconds=int(0.5 * 86400),
-                        unknown_seconds=0,
-                        uptime_lower_seconds=int(2.5 * 86400),
-                        uptime_upper_seconds=int(2.5 * 86400),
-                        provisional=False,
-                        reason=None,
-                    ),
+                service=SubscriptionStatisticsAvailability(
+                    subscription_id=UUID("00000000-0000-0000-0000-000000000001"),
+                    label="Test service",
+                    period_start=datetime(2026, 5, 1, tzinfo=UTC),
+                    period_end=datetime(2026, 5, 4, tzinfo=UTC),
+                    expected_seconds=3 * 86400,
+                    connected_seconds=int(2.5 * 86400),
+                    confirmed_downtime_seconds=int(0.5 * 86400),
+                    unknown_seconds=0,
+                    uptime_lower_seconds=int(2.5 * 86400),
+                    uptime_upper_seconds=int(2.5 * 86400),
+                    provisional=False,
+                    reason=None,
                 ),
+                selected_label="Test service",
+                selected_status=SubscriptionStatus.active,
+                reason=None,
             ),
         }
         html = template.render(usage_portal=result.to_template_context(), **context)
@@ -104,7 +106,8 @@ class TestCustomerPortalUsagePage:
             "2.50",
             "12.0 hours",
             "2026-05-01 to 2026-05-03",
-            "Availability period:",
+            "Selected service availability",
+            "Test service",
         ):
             assert expected in html
 
@@ -114,30 +117,31 @@ class TestCustomerPortalUsagePage:
         )
         assert "Usage summary is unavailable" in unavailable_html
         assert "Total data used" not in unavailable_html
+        assert "Uptime" in unavailable_html
+        assert "Downtime" in unavailable_html
 
         partial_html = template.render(
             usage_portal=result.to_template_context(),
             **{
                 **context,
                 "availability_stats": CustomerStatisticsAvailability(
-                    period_start=datetime(2026, 5, 1, tzinfo=UTC),
-                    period_end=datetime(2026, 5, 4, tzinfo=UTC),
-                    services=(
-                        SubscriptionStatisticsAvailability(
-                            subscription_id=UUID(
-                                "00000000-0000-0000-0000-000000000001"
-                            ),
-                            label="Test service",
-                            expected_seconds=None,
-                            connected_seconds=None,
-                            confirmed_downtime_seconds=None,
-                            unknown_seconds=None,
-                            uptime_lower_seconds=None,
-                            uptime_upper_seconds=None,
-                            provisional=True,
-                            reason="Service lifecycle history is incomplete for this period.",
-                        ),
+                    service=SubscriptionStatisticsAvailability(
+                        subscription_id=UUID("00000000-0000-0000-0000-000000000001"),
+                        label="Test service",
+                        period_start=datetime(2026, 5, 1, tzinfo=UTC),
+                        period_end=datetime(2026, 5, 4, tzinfo=UTC),
+                        expected_seconds=None,
+                        connected_seconds=None,
+                        confirmed_downtime_seconds=None,
+                        unknown_seconds=None,
+                        uptime_lower_seconds=None,
+                        uptime_upper_seconds=None,
+                        provisional=True,
+                        reason="Service lifecycle history is incomplete for this period.",
                     ),
+                    selected_label="Test service",
+                    selected_status=SubscriptionStatus.paused,
+                    reason=None,
                 ),
             },
         )
@@ -150,6 +154,8 @@ class TestCustomerPortalUsagePage:
         second_service = SubscriptionStatisticsAvailability(
             subscription_id=UUID("00000000-0000-0000-0000-000000000002"),
             label="Second service",
+            period_start=datetime(2026, 5, 1, tzinfo=UTC),
+            period_end=datetime(2026, 5, 2, tzinfo=UTC),
             expected_seconds=24 * 3600,
             connected_seconds=22 * 3600,
             confirmed_downtime_seconds=0,
@@ -165,19 +171,47 @@ class TestCustomerPortalUsagePage:
                 **context,
                 "availability_stats": replace(
                     context["availability_stats"],
-                    services=(
-                        context["availability_stats"].services[0],
-                        second_service,
-                    ),
+                    service=second_service,
+                    selected_label="Second service",
                 ),
             },
         )
         assert "Second service" in provisional_html
+        assert "Test service" not in provisional_html
         assert "Provisional" in provisional_html
         assert "22.0 hours–1.00 days" in provisional_html
         assert "Unknown or unattributed offline: 2.0 hours" in provisional_html
         assert provisional_html.count('aria-label="How uptime was calculated"') == 1
         assert provisional_html.count('aria-label="How downtime was calculated"') == 1
+
+        no_period_html = template.render(
+            usage_portal=result.to_template_context(),
+            **{
+                **context,
+                "availability_stats": replace(
+                    context["availability_stats"],
+                    service=None,
+                    selected_status=SubscriptionStatus.suspended,
+                    reason="The selected service has no verified service period to measure.",
+                ),
+            },
+        )
+        assert "The selected service has no verified service period" in no_period_html
+        assert "Previous service periods" not in no_period_html
+
+        empty_html = template.render(
+            usage_portal=result.to_template_context(),
+            **{
+                **context,
+                "availability_stats": CustomerStatisticsAvailability(
+                    service=None,
+                    selected_label=None,
+                    selected_status=None,
+                    reason="No active, paused, or suspended service is recorded.",
+                ),
+            },
+        )
+        assert "No active, paused, or suspended service is recorded." in empty_html
 
     def test_typed_custom_date_range_is_inclusive(
         self, db_session, subscriber, subscription

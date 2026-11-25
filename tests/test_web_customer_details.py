@@ -1369,6 +1369,8 @@ def test_person_detail_normalizes_usage_period(monkeypatch, db_session):
 
 
 def test_person_detail_stats_normalizes_usage_period(monkeypatch, db_session):
+    from app.services import customer_service_level
+
     captured: dict[str, object] = {}
     customer_id = "00000000-0000-0000-0000-000000000123"
 
@@ -1425,6 +1427,16 @@ def test_person_detail_stats_normalizes_usage_period(monkeypatch, db_session):
         lambda db, subscription_id: {"current_rx_formatted": "1.20 Mbps"},
     )
 
+    def _query_availability(db, query):
+        captured["availability_query"] = query
+        return SimpleNamespace(service=None)
+
+    monkeypatch.setattr(
+        customer_service_level,
+        "query_customer_statistics_availability",
+        _query_availability,
+    )
+
     response = customer_routes.person_detail_stats(
         request=SimpleNamespace(headers={}),
         customer_id=customer_id,
@@ -1436,6 +1448,7 @@ def test_person_detail_stats_normalizes_usage_period(monkeypatch, db_session):
 
     assert response.status_code == 200
     assert captured["query"].period.value == "last"
+    assert captured["availability_query"].customer_id == UUID(customer_id)
     assert captured["template_name"] == "admin/customers/_stats_panel.html"
     assert captured["context"]["usage_portal"]["period"] == "last"
     assert captured["context"]["usage_subscription_id"] == "sub-123"
