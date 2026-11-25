@@ -4759,6 +4759,10 @@ writers are retired; historical rows remain readable evidence.
    without repairing or hiding its cohort row. It cannot snap, transform, infer
    topology, create jobs or observations, mutate state, establish a threshold,
    or claim cutover readiness.
+   The admin map shell loads the complete hash-bound report through a permissioned
+   read endpoint and adds exact layers in browser animation-frame batches. The
+   worklist selects latest source identities in SQL before loading geometry and
+   scopes observation reads to those identities, retaining superseded evidence.
 14. `network.fiber_work_order_evidence_map`: owns the read-only exact-GeoJSON
    fiber evidence projection for one explicitly scoped native Sub work order.
    It consumes the immutable field-observation cohort and complete
