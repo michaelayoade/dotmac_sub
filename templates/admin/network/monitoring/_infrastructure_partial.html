@@ -1,0 +1,21 @@
+{% from "components/ui/macros.html" import card %}
+<div class="grid gap-4 lg:grid-cols-2">
+    {% call card("Site Reachability", color="emerald") %}
+        {% if infrastructure.sites %}
+        <ul class="divide-y divide-slate-200 dark:divide-slate-700">
+            {% for site in infrastructure.sites %}
+            <li class="flex justify-between gap-3 py-2 text-sm"><span class="font-medium text-slate-900 dark:text-white">{{ site.name }}</span><span class="tabular-nums text-slate-700 dark:text-slate-300">{{ site.working }}/{{ site.total }} working · {{ site.working_pct }}%{% if site.impaired %} · {{ site.impaired }} impaired{% endif %}</span></li>
+            {% endfor %}
+        </ul>
+        {% else %}<p class="text-sm text-slate-500">No monitored sites.</p>{% endif %}
+    {% endcall %}
+    {% call card("VPN Tunnels", color="blue") %}
+        {% if infrastructure.tunnels %}
+        <ul class="divide-y divide-slate-200 dark:divide-slate-700">
+            {% for tunnel in infrastructure.tunnels %}
+            <li class="flex justify-between gap-3 py-2 text-sm"><span><span class="font-medium text-slate-900 dark:text-white">{{ tunnel.name }}</span><span class="block text-xs text-slate-500 dark:text-slate-400">{{ tunnel.endpoint or 'No endpoint' }}</span></span><span class="text-right text-xs"><span class="font-semibold {{ 'text-emerald-700 dark:text-emerald-300' if tunnel.up else 'text-rose-700 dark:text-rose-300' }}">{{ 'Working' if tunnel.up else 'Not working' }}</span><span class="block text-slate-500 dark:text-slate-400">{{ tunnel.handshake_ago }}</span><span class="block text-slate-500 dark:text-slate-400">↓ {{ tunnel.rx }} · ↑ {{ tunnel.tx }}</span></span></li>
+            {% endfor %}
+        </ul>
+        {% else %}<p class="text-sm text-slate-500">No VPN tunnel status available.</p>{% endif %}
+    {% endcall %}
+</div>

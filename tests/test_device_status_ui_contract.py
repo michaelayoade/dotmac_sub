@@ -11,7 +11,7 @@ MIGRATED_BADGE_TEMPLATES = (
     "templates/admin/network/devices/_table_rows.html",
     "templates/admin/network/device_status_worklist.html",
     "templates/admin/network/olts/index.html",
-    "templates/admin/network/monitoring/index.html",
+    "templates/admin/network/monitoring/devices.html",
 )
 
 
@@ -36,10 +36,11 @@ def test_network_map_uses_server_semantic_tone_not_admin_status() -> None:
     assert "device.status.value" not in service
     assert "p.status_presentation?.tone" in template
     assert "semanticToneColor(deviceTone)" in template
-    assert (
-        'device_status_chart["tones"]'
-        in (ROOT / "templates/admin/network/monitoring/index.html").read_text()
-    )
+    monitoring_kpis = (
+        ROOT / "templates/admin/network/monitoring/_kpi_partial.html"
+    ).read_text()
+    assert "status-panel-negative" in monitoring_kpis
+    assert "status-panel-warning" in monitoring_kpis
     assert (
         "p.status === 'online'"
         not in template.split("case 'network_device':", maxsplit=1)[1].split(

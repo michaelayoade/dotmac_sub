@@ -213,12 +213,25 @@ or compensation decision. `customer.service_level` owns their typed read and
 reuses the period interval engine already used by the shadow scorer. This
 staff-only projection does not arm the contractual admin display selector.
 
-- Current means the Africa/Lagos month from its first midnight through now;
-  Last period is the complete preceding calendar month; Custom includes the
-  selected end date. Internally all windows are half-open UTC intervals.
-- Each subscription is reported separately. The two cards show a per-service
-  breakdown when several services exist; they do not silently sum service
-  durations.
+- The two cards select one subscription. Current `active` status takes priority;
+  a delinquent account's active subscription remains eligible. Among active
+  services with verified current periods, the latest period start wins, with
+  service start and identifier as deterministic ties. If none is active, the
+  `paused` or `suspended` subscription whose proven active time ended most
+  recently wins. Pending, blocked, stopped, disabled and terminal subscriptions
+  never supply card values.
+- An active service is measured from its verified current period start through
+  now. A paused or suspended service is measured from the start of the last
+  verified service period that contained its latest proven active time through
+  the end of that active time. Prepaid boundaries come from funded entitlements
+  or applied extension grants; postpaid boundaries come from authoritative
+  contract cadence. The cards identify the selected service, status and measured
+  dates in Africa/Lagos. Usage calendar filters do not change the cards.
+  Missing period evidence yields an unavailable reason, never a mutable billing
+  date substitute. Distinct overlapping prepaid intervals also remain
+  unavailable until their period precedence is resolved; they are not merged
+  into a fictitious longer period. Internally all windows are half-open UTC
+  intervals.
 - Expected service time is the subscription's proven lifecycle-active time in
   the window. Suspended and other non-active lifecycle time is excluded.
 - Confirmed provider downtime is the union of exact, confirmed,
@@ -234,8 +247,8 @@ staff-only projection does not arm the contractual admin display selector.
   unavailable reason instead of guessing active time.
 - Only these two cards have information controls. Their disclosures explain
   the period, provenance, expected time, connected time, confirmed downtime,
-  unknown time, and any per-service breakdown. The controls work on hover,
-  focus, and click.
+  and unknown time for the selected service. The controls work on hover, focus,
+  and click.
 
 ## 5. Planned maintenance (approved)
 

@@ -166,7 +166,7 @@ def test_map_and_dashboard_consume_binary_ont_projection() -> None:
     assert '"working": 0' in monitoring_source
     assert '"not_working": 0' in monitoring_source
     monitoring_page = (
-        PROJECT_ROOT / "templates/admin/network/monitoring/index.html"
+        PROJECT_ROOT / "templates/admin/network/monitoring/_infrastructure_partial.html"
     ).read_text(encoding="utf-8")
     assert "site.working_pct" in monitoring_page
     assert "site.reachable_pct" not in monitoring_page
