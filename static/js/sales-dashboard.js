@@ -33,7 +33,15 @@
                 canvas,
                 {
                     labels: payload.labels,
-                    datasets: payload.datasets,
+                    datasets: payload.datasets.map((dataset, index) => {
+                        const token = `data-${(index % 7) + 1}`;
+                        return {
+                            ...dataset,
+                            color: window.themeColor(token),
+                            fillColor: window.themeColor(token, 0.1),
+                            borderDash: index % 2 === 1 ? [6, 4] : [],
+                        };
+                    }),
                 },
                 {
                     maintainAspectRatio: false,
