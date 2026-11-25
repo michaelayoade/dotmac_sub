@@ -1,0 +1,26 @@
+<section id="detected-outages-branches" hx-sync="#detected-outages-branches:drop" class="mb-4 rounded-lg border border-sky-200 bg-sky-50 p-3 dark:border-sky-900/50 dark:bg-sky-950/30" aria-label="Predictive branch alerts">
+    <h3 class="text-sm font-semibold text-sky-900 dark:text-sky-200">Predictive branch alerts (splice inference)</h3>
+    <p id="detected-outages-branches-status" role="status" class="text-sm text-amber-600 dark:text-amber-300"></p>
+    {% if not branches %}
+    <p class="mt-2 text-sm text-sky-700 dark:text-sky-300">Node not found.</p>
+    {% elif branches.total_ports == 0 %}
+    <p class="mt-2 text-sm text-sky-700 dark:text-sky-300">No PON ports linked to this node.</p>
+    {% else %}
+    <p class="mt-1 text-xs text-sky-700 dark:text-sky-300">PON {{ branches.page }} of {{ branches.total_ports }}</p>
+    {% for b in branches.co_failure %}
+    <p class="mt-1 text-xs text-sky-700 dark:text-sky-300">Co-failure branch — {{ b.ont_unit_ids | length }} ONTs go dark together (support {{ b.support }}, {{ b.confidence }})</p>
+    {% endfor %}
+    {% for d in branches.rx_droop %}
+    <p class="mt-1 text-xs text-sky-700 dark:text-sky-300">Correlated Rx droop — {{ d.ont_unit_ids | length }} ONTs down {{ d.shared_shift_db }} dB together, a splice may be failing ({{ d.confidence }})</p>
+    {% endfor %}
+    {% if not branches.co_failure and not branches.rx_droop %}
+    <p class="mt-2 text-sm text-sky-700 dark:text-sky-300">No branch alerts on this PON.</p>
+    {% endif %}
+    {% if branches.page > 1 or branches.has_next %}
+    <nav aria-label="PON pages" class="mt-3 flex items-center justify-between text-sm">
+        {% if branches.page > 1 %}<a href="/admin/network/detected-outages/branches?node_id={{ node_id }}&pon_page={{ branches.page - 1 }}" hx-get="/admin/network/detected-outages/branches?node_id={{ node_id }}&pon_page={{ branches.page - 1 }}" hx-target="#detected-outages-branches" hx-swap="outerHTML" class="text-sky-700 underline dark:text-sky-300">← Previous PON</a>{% else %}<span></span>{% endif %}
+        {% if branches.has_next %}<a href="/admin/network/detected-outages/branches?node_id={{ node_id }}&pon_page={{ branches.page + 1 }}" hx-get="/admin/network/detected-outages/branches?node_id={{ node_id }}&pon_page={{ branches.page + 1 }}" hx-target="#detected-outages-branches" hx-swap="outerHTML" class="text-sky-700 underline dark:text-sky-300">Next PON →</a>{% else %}<span></span>{% endif %}
+    </nav>
+    {% endif %}
+    {% endif %}
+</section>

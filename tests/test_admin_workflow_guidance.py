@@ -213,6 +213,25 @@ def test_ai_knowledge_retrieval_is_bounded_deterministic_and_stateless() -> None
     assert len(empty.source_watermark) == 64
 
 
+def test_network_monitoring_guidance_covers_deferred_views_and_permissions() -> None:
+    overview = guidance_for_path("/admin/network/monitoring")
+    devices = guidance_for_path("/admin/network/monitoring/devices")
+    assert overview is not None and devices is not None
+    assert overview.id == devices.id == "network-monitoring"
+    content = " ".join((*overview.steps, *overview.notes)).lower()
+    for phrase in (
+        "snapshot",
+        "pon outages",
+        "load site & vpn status",
+        "paginated inventory",
+        "monitoring:write",
+        "network:device:read",
+    ):
+        assert phrase in content
+    actions = help_actions_for(overview)
+    assert actions[-1].permission == "monitoring:write"
+
+
 def test_network_guidance_explains_independent_map_proposal_review() -> None:
     guide = guidance_for_path("/admin/network/fiber-change-requests")
 
@@ -486,6 +505,17 @@ def test_vendor_route_guidance_covers_optional_admin_proposals() -> None:
     assert "staff-owned proposals remain separate" in content
 
 
+def test_field_verification_map_guidance_explains_loading_and_retry() -> None:
+    guide = guidance_for_path("/admin/network/fiber-field-verification-map")
+
+    assert guide is not None
+    assert guide.id == "fiber-evidence-lists"
+    content = " ".join(guide.steps).lower()
+    assert "loads the complete source overlay" in content
+    assert "reload the page to retry" in content
+    assert "filters change only the visible map" in content
+
+
 def test_support_ticket_guidance_separates_editing_from_assignment() -> None:
     guide = guidance_for_path("/admin/support/tickets/123")
 
@@ -621,7 +651,7 @@ def test_period_review_guidance_explains_manual_approval_and_reserved_cash() -> 
 
 def test_every_help_guide_has_complete_action_sections() -> None:
     guides = (*WORKFLOW_GUIDANCE, *HELP_ONLY_GUIDANCE)
-    assert len(guides) == 74
+    assert len(guides) == 76
     for guide in guides:
         actions = help_actions_for(guide)
         assert actions, guide.id
@@ -782,6 +812,26 @@ def test_router_health_guidance_covers_badge_shadow_and_read_only_boundary() -> 
     assert drift is not None
     assert drift.id == "cross-app-drift"
     assert "router posture" in " ".join(drift.steps).lower()
+
+
+def test_detected_outages_guidance_covers_lazy_routes_and_permissions() -> None:
+    for path in (
+        "/admin/network/detected-outages",
+        "/admin/network/detected-outages/live",
+        "/admin/network/detected-outages/detail",
+        "/admin/network/detected-outages/branches",
+        "/admin/network/detected-outages/notify",
+    ):
+        guide = guidance_for_path(path)
+        assert guide is not None and guide.id == "detected-outages"
+    content = " ".join((*guide.steps, *guide.notes)).lower()
+    assert "persisted" in content
+    assert "un-debounced" in content
+    assert "50" in content
+    assert "one pon at a time" in content
+    assert "retry" in content
+    permissions = {action.permission for action in help_actions_for(guide)}
+    assert permissions == {"monitoring:read", "monitoring:outage_notify:send"}
 
 
 def test_installed_talk_guide_explains_save_validation_and_unchanged_delivery():

@@ -4,7 +4,7 @@ from decimal import Decimal
 from urllib.parse import quote
 
 from fastapi import APIRouter, Depends, Query, Request
-from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
+from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Response
 from fastapi.templating import Jinja2Templates
 from sqlalchemy.orm import Session
 
@@ -489,20 +489,33 @@ def fiber_field_verification_worklist(
     response_class=HTMLResponse,
     dependencies=[Depends(require_permission("network:fiber:read"))],
 )
-def fiber_field_verification_map(request: Request, db: Session = Depends(get_db)):
-    """Show the complete worklist over exact staged source GeoJSON."""
+def fiber_field_verification_map(
+    request: Request, db: Session = Depends(get_db)
+) -> Response:
+    """Show the field map shell while its complete report loads separately."""
 
-    field_map = project_fiber_field_verification_map(db)
     context = _base_context(
         request,
         db,
         active_page="fiber-field-verification-map",
         active_menu="fiber",
     )
-    context["field_map"] = field_map
     return templates.TemplateResponse(
         "admin/network/fiber/field_verification_map.html", context
     )
+
+
+@router.get(
+    "/fiber-field-verification-map/data",
+    response_class=JSONResponse,
+    dependencies=[Depends(require_permission("network:fiber:read"))],
+)
+def fiber_field_verification_map_data(
+    db: Session = Depends(get_db),
+) -> JSONResponse:
+    """Return one complete, hash-bound, owner-produced map report."""
+
+    return JSONResponse(project_fiber_field_verification_map(db).to_dict())
 
 
 @router.get(

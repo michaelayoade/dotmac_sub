@@ -26,6 +26,7 @@ templates = Jinja2Templates(directory="templates")
 router = APIRouter(prefix="/network", tags=["web-admin-network"])
 
 OUTAGE_NOTIFY_SEND_PERMISSION = "monitoring:outage_notify:send"
+DETECTED_OUTAGES_PAGE_SIZE = 50
 
 _format_duration = web_network_core_runtime_service.format_duration
 _format_bps = web_network_core_runtime_service.format_bps
@@ -726,47 +727,40 @@ def outages_resolve(incident_id: str, request: Request, db: Session = Depends(ge
 )
 def detected_outages_console(
     request: Request,
-    node_id: str | None = None,
+    node_id: uuid.UUID | None = None,
+    live: bool = False,
+    incident_page: int = Query(1, ge=1, le=1000),
     db: Session = Depends(get_db),
 ):
     """Classifier-driven outage console (design §P4a).
 
-        PRIMARY source is the PERSISTED, debounced classifier incidents from the
-        §7.6 reconcile loop (suspected/confirmed/clearing) — the debounced truth,
-        not the raw live-computed verdict. The live P1/P2/P3 verdict is kept as a
-        clearly-separate SECONDARY "candidates" view (raw, un-debounced). Optional
-        `
-    ode_id`` drills into one failure domain (per-customer P2 verdicts + P3
-        branch alerts). No operator declaration, no notification sending here."""
-    import uuid as _uuid
-
-    from app.models.network_monitoring import NetworkDevice, PopSite
+    PRIMARY source is the PERSISTED, debounced classifier incidents from the
+    §7.6 reconcile loop (suspected/confirmed/clearing) — the debounced truth,
+    not the raw live-computed verdict. The live P1/P2/P3 verdict is kept as a
+    clearly-separate SECONDARY "candidates" view (raw, un-debounced),
+    loaded after the primary view. Optional ``node_id`` drills into one
+    failure domain (per-customer P2 verdicts + P3 branch alerts)."""
     from app.services.status_presentation import outage_status_presentation
     from app.services.topology.outage import (
         list_classifier_incidents,
         mttr_so_far_seconds,
     )
-    from app.services.topology.outage_console import (
-        active_outages,
-        network_health_summary,
-        outage_detail,
-    )
+    from app.services.topology.outage_console import classifier_incident_locations
 
     context = _base_context(request, db, active_page="monitoring")
 
     # Primary: persisted debounced classifier incidents (newest first).
+    page_size = DETECTED_OUTAGES_PAGE_SIZE
+    incidents = list_classifier_incidents(
+        db, limit=page_size + 1, offset=(incident_page - 1) * page_size
+    )
+    context["incident_has_next"] = len(incidents) > page_size
+    context["incident_page"] = incident_page
+    incidents = incidents[:page_size]
+    locations = classifier_incident_locations(db, tuple(incidents))
     incident_rows = []
-    for inc in list_classifier_incidents(db):
-        node = (
-            db.get(NetworkDevice, inc.root_node_id)
-            if inc.root_node_id is not None
-            else None
-        )
-        basestation = None
-        if inc.basestation_id is not None:
-            basestation = db.get(PopSite, inc.basestation_id)
-        elif node is not None and node.pop_site_id is not None:
-            basestation = db.get(PopSite, node.pop_site_id)
+    for inc in incidents:
+        location = locations[inc.id]
         incident_rows.append(
             {
                 "incident": inc,
@@ -776,8 +770,8 @@ def detected_outages_console(
                 "affected_count": inc.affected_count,
                 "confidence": inc.confidence,
                 "classification": inc.classification,
-                "node_name": getattr(node, "name", None),
-                "basestation_name": getattr(basestation, "name", None),
+                "node_name": location["node_name"],
+                "basestation_name": location["basestation_name"],
                 "suspected_at": inc.suspected_at,
                 "confirmed_at": inc.confirmed_at,
                 "mttr_so_far_seconds": mttr_so_far_seconds(inc),
@@ -785,17 +779,86 @@ def detected_outages_console(
         )
     context["classifier_incidents"] = incident_rows
 
-    # Secondary: raw live-computed candidates (un-debounced) + self-heal queue.
-    context["summary"] = network_health_summary(db)
-    context["active"] = active_outages(db)
-    detail = None
-    if node_id:
-        try:
-            detail = outage_detail(db, _uuid.UUID(node_id))
-        except (ValueError, TypeError):
-            detail = None
-    context["detail"] = detail
+    # The persisted incident list renders first; HTMX loads the live sweep later.
+    context["show_live"] = live
+    if live:
+        context.update(_detected_outages_live_context(db))
+    context["selected_node_id"] = node_id
     return templates.TemplateResponse("admin/network/detected_outages.html", context)
+
+
+def _detected_outages_live_context(db: Session) -> dict:
+    from app.services.topology.outage_console import (
+        active_outages,
+        network_health_summary,
+    )
+
+    summary = network_health_summary(db)
+    return {"summary": summary, "active": active_outages(db, summary=summary)}
+
+
+@router.get(
+    "/detected-outages/live",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("monitoring:read"))],
+)
+def detected_outages_live(request: Request, db: Session = Depends(get_db)):
+    return templates.TemplateResponse(
+        "admin/network/_detected_outages_live.html",
+        {"request": request, **_detected_outages_live_context(db)},
+    )
+
+
+@router.get(
+    "/detected-outages/detail",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("monitoring:read"))],
+)
+def detected_outages_detail(
+    request: Request,
+    node_id: uuid.UUID,
+    customer_page: int = Query(1, ge=1, le=1000),
+    db: Session = Depends(get_db),
+):
+    from app.services.topology.outage_console import outage_detail
+
+    return templates.TemplateResponse(
+        "admin/network/_detected_outages_detail.html",
+        {
+            "request": request,
+            "detail": outage_detail(
+                db,
+                node_id,
+                customer_offset=(customer_page - 1) * 50,
+                customer_limit=50,
+                include_predictive=False,
+            ),
+            "customer_page": customer_page,
+        },
+    )
+
+
+@router.get(
+    "/detected-outages/branches",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("monitoring:read"))],
+)
+def detected_outages_branches(
+    request: Request,
+    node_id: uuid.UUID,
+    pon_page: int = Query(1, ge=1, le=1000),
+    db: Session = Depends(get_db),
+):
+    from app.services.topology.outage_console import predictive_branches_page
+
+    return templates.TemplateResponse(
+        "admin/network/_detected_outages_branches.html",
+        {
+            "request": request,
+            "node_id": node_id,
+            "branches": predictive_branches_page(db, node_id, page=pon_page),
+        },
+    )
 
 
 def _actor_id(request: Request):
@@ -1043,30 +1106,14 @@ def outage_communications_send(
     response_class=HTMLResponse,
     dependencies=[Depends(require_permission("monitoring:read"))],
 )
-def monitoring_page(
-    request: Request,
-    q: str | None = None,
-    refresh: str | None = None,
-    page: int = Query(1, ge=1),
-    per_page: int = Query(50, ge=10, le=100),
-    db: Session = Depends(get_db),
-):
-    force_refresh = (refresh or "").strip().lower() in {"1", "true", "yes", "on"}
-    if force_refresh:
-        web_network_monitoring_service.dispatch_monitoring_refresh(
-            request_id=getattr(request.state, "request_id", None)
+def monitoring_page(request: Request, db: Session = Depends(get_db)):
+    if any(key in request.query_params for key in ("q", "page", "per_page")):
+        query = str(request.url.query)
+        return RedirectResponse(
+            f"/admin/network/monitoring/devices?{query}", status_code=307
         )
-
-    page_data = web_network_monitoring_service.monitoring_index_context(
-        db,
-        format_duration=_format_duration,
-        format_bps=_format_bps,
-        query=q,
-        page=page,
-        per_page=per_page,
-    )
     context = _base_context(request, db, active_page="monitoring")
-    context.update(page_data)
+    context["glance"] = web_network_monitoring_service.monitoring_glance(db)
     return templates.TemplateResponse("admin/network/monitoring/index.html", context)
 
 
@@ -1076,18 +1123,88 @@ def monitoring_page(
     dependencies=[Depends(require_permission("monitoring:read"))],
 )
 def monitoring_kpi_partial(request: Request, db: Session = Depends(get_db)):
-    """HTMX partial: auto-refreshing KPI cards + alarm/outage summary."""
-    context = {
-        "request": request,
-        **web_network_monitoring_service.monitoring_kpi_context(
-            db,
-            format_duration=_format_duration,
-            format_bps=_format_bps,
-        ),
-    }
     return templates.TemplateResponse(
-        "admin/network/monitoring/_kpi_partial.html", context
+        "admin/network/monitoring/_kpi_partial.html",
+        {
+            "request": request,
+            "glance": web_network_monitoring_service.monitoring_glance(db),
+        },
     )
+
+
+@router.get(
+    "/monitoring/attention",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("monitoring:read"))],
+)
+def monitoring_attention_partial(request: Request, db: Session = Depends(get_db)):
+    return templates.TemplateResponse(
+        "admin/network/monitoring/_attention_partial.html",
+        {
+            "request": request,
+            "attention": web_network_monitoring_service.monitoring_attention(db),
+        },
+    )
+
+
+@router.get(
+    "/monitoring/pon-outages",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("monitoring:read"))],
+)
+def monitoring_pon_outages_partial(request: Request, db: Session = Depends(get_db)):
+    return templates.TemplateResponse(
+        "admin/network/monitoring/_pon_outages_partial.html",
+        {
+            "request": request,
+            "outages": web_network_monitoring_service.monitoring_pon_outages(db),
+        },
+    )
+
+
+@router.get(
+    "/monitoring/infrastructure",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("monitoring:read"))],
+)
+def monitoring_infrastructure_partial(request: Request, db: Session = Depends(get_db)):
+    return templates.TemplateResponse(
+        "admin/network/monitoring/_infrastructure_partial.html",
+        {
+            "request": request,
+            "infrastructure": web_network_monitoring_service.monitoring_infrastructure(
+                db
+            ),
+        },
+    )
+
+
+@router.get(
+    "/monitoring/devices",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("monitoring:read"))],
+)
+def monitoring_devices_page(
+    request: Request,
+    q: str | None = None,
+    page: int = Query(1, ge=1),
+    per_page: int = Query(50, ge=10, le=100),
+    db: Session = Depends(get_db),
+):
+    device_page = web_network_monitoring_service.monitoring_devices_page(
+        db,
+        query=web_network_monitoring_service.MonitoringDevicesQuery(
+            search=q, page=page, per_page=per_page
+        ),
+    )
+    context = _base_context(request, db, active_page="monitoring")
+    context.update(
+        query=(q or "").strip(),
+        device_health=device_page.rows,
+        device_health_pagination=device_page.pagination,
+        device_health_total=device_page.pagination.total,
+    )
+    return templates.TemplateResponse("admin/network/monitoring/devices.html", context)
 
 
 @router.get(

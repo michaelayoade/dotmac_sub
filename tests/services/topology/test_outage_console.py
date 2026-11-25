@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import uuid
 from datetime import UTC, datetime, timedelta
+from types import SimpleNamespace
 
 from app.models.catalog import NasDevice, Subscription, SubscriptionStatus
 from app.models.network_monitoring import DeviceRole, NetworkDevice
@@ -19,6 +20,7 @@ from app.services.topology.outage_console import (
     active_outages,
     network_health_summary,
     outage_detail,
+    predictive_branches_page,
 )
 
 # --- helpers (mirror test_affected / test_health_classifier) ---------------
@@ -120,6 +122,43 @@ def test_health_summary_stale_session_is_not_proof_of_life(db_session, catalog_o
     assert summary["counts"]["healthy"] == 0
 
 
+def test_health_summary_batches_fleet_inputs(db_session, catalog_offer, monkeypatch):
+    from app.services.topology import outage_console
+
+    _, healthy_nas = _nas_node(db_session, "batched-healthy", "up")
+    _session(
+        db_session, _sub(db_session, catalog_offer.id, healthy_nas.id), healthy_nas.id
+    )
+    _, dark_nas = _nas_node(db_session, "batched-dark", "down")
+    _sub(db_session, catalog_offer.id, dark_nas.id)
+
+    calls = {"graph": 0, "subscriptions": 0, "online": 0}
+
+    def count(name, original):
+        def wrapper(*args, **kwargs):
+            calls[name] += 1
+            return original(*args, **kwargs)
+
+        return wrapper
+
+    for name, attribute in (
+        ("graph", "forwarding_graph_projection"),
+        ("subscriptions", "subscriptions_for_nodes"),
+        ("online", "online_subscription_ids"),
+    ):
+        monkeypatch.setattr(
+            outage_console,
+            attribute,
+            count(name, getattr(outage_console, attribute)),
+        )
+
+    summary = network_health_summary(db_session)
+
+    assert summary["counts"]["healthy"] == 1
+    assert summary["counts"]["node_outage"] == 1
+    assert calls == {"graph": 1, "subscriptions": 1, "online": 1}
+
+
 # --- active_outages: boundary vs self-heal queue ---------------------------
 
 
@@ -180,3 +219,51 @@ def test_outage_detail_returns_per_customer_verdicts(db_session, catalog_offer):
 
 def test_outage_detail_unknown_node_returns_none(db_session):
     assert outage_detail(db_session, uuid.uuid4()) is None
+
+
+def test_outage_detail_paginates_customer_diagnosis(db_session, catalog_offer):
+    node, nas = _nas_node(db_session, "paged", "down")
+    first = _sub(db_session, catalog_offer.id, nas.id)
+    second = _sub(db_session, catalog_offer.id, nas.id)
+
+    page_one = outage_detail(
+        db_session, node.id, customer_limit=1, include_predictive=False
+    )
+    page_two = outage_detail(
+        db_session,
+        node.id,
+        customer_offset=1,
+        customer_limit=1,
+        include_predictive=False,
+    )
+    assert page_one is not None and page_two is not None
+    assert page_one["has_next"] is True
+    assert page_two["has_next"] is False
+    ids = {
+        page_one["customers"][0]["subscription_id"],
+        page_two["customers"][0]["subscription_id"],
+    }
+    assert ids == {first.id, second.id}
+
+
+def test_predictive_branches_page_runs_one_pon(monkeypatch):
+    from app.services.topology import outage_console
+
+    node_id = uuid.uuid4()
+    pon_ids = [uuid.uuid4(), uuid.uuid4()]
+    node = SimpleNamespace(matched_device_type="olt", matched_device_id=uuid.uuid4())
+    session = SimpleNamespace(get=lambda model, selected_id: node)
+    calls = []
+
+    monkeypatch.setattr(outage_console, "_olt_pon_port_ids", lambda *args: pon_ids)
+
+    def branches(session, node, *, now, pon_ids):
+        calls.append(pon_ids)
+        return {"co_failure": [], "rx_droop": []}
+
+    monkeypatch.setattr(outage_console, "_predictive_branches", branches)
+    result = predictive_branches_page(session, node_id, page=2)
+    assert calls == [[pon_ids[1]]]
+    assert result is not None
+    assert result["page"] == 2
+    assert result["has_next"] is False

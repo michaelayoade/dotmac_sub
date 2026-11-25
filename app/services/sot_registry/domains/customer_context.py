@@ -3102,6 +3102,7 @@ DOMAIN = DomainSOT(
                 "immutable SLA period-score revisions and evidence snapshots",
             ),
             depends_on=(
+                "access.subscription_lifecycle",
                 "access.subscription_lifecycle_evidence",
                 "billing.contracts",
                 "financial.prepaid_service_coverage",
@@ -3131,10 +3132,12 @@ DOMAIN = DomainSOT(
                 "never produce passing or at-risk. The "
                 "legacy topology.customer_availability stays the "
                 "contractual SLA display authority until the shadow-comparison "
-                "gate cuts over. Staff Statistics separately projects "
-                "lifecycle-active time, exact confirmed outage intervals and "
-                "positive subscription-bound monitoring through the same "
-                "interval engine, without an SLA verdict or entitlement claim. "
+                "gate cuts over. Staff Statistics selects one subscription: "
+                "a verified active service first, or the paused/suspended "
+                "service with the latest proven active time. It projects that "
+                "service's exact prepaid or postpaid period, lifecycle-active "
+                "time, confirmed outage intervals and positive monitoring "
+                "without an SLA verdict or compensation claim. "
                 "The restricted admin review compares one exact "
                 "closed month and classifies missing, incomplete, unavailable, "
                 "matching, and unreviewed-difference evidence without guessing "
@@ -3171,7 +3174,10 @@ DOMAIN = DomainSOT(
                         name="staff Statistics operational availability projection",
                         role=OwnerRole.RESOLVER,
                         input_names=(
+                            "canonical subscription lifecycle state",
                             "period-scoped lifecycle evidence",
+                            "period-scoped prepaid entitlement evidence",
+                            "period-scoped postpaid contract evidence",
                             "positive subscription monitoring evidence",
                             "qualifying downtime intervals",
                         ),
@@ -3194,6 +3200,12 @@ DOMAIN = DomainSOT(
                     ),
                 ),
                 authoritative_inputs=(
+                    AuthorityInput(
+                        name="canonical subscription lifecycle state",
+                        owner="access.subscription_lifecycle",
+                        kind=AuthorityKind.AUTHORITATIVE_RECORD,
+                        source="Subscription status and service start identity",
+                    ),
                     AuthorityInput(
                         name="contractual SLA terms",
                         owner="customer.service_level",
@@ -3670,9 +3682,9 @@ DOMAIN = DomainSOT(
                 "prefers RADIUS session bytes over imported daily bytes on "
                 "overlapping days, with a labeled bandwidth estimate for "
                 "days without either recorded source. The admin Statistics "
-                "adapter sends the selected period to customer.service_level's "
-                "typed staff Statistics operational read, which alone uses "
-                "Africa/Lagos calendar month windows for availability. Usage "
+                "adapter calls customer.service_level's typed staff Statistics "
+                "operational read for verified service periods, independent of "
+                "the selected usage calendar window. Usage "
                 "summary retains its own window and does not interpret outage "
                 "evidence."
             ),

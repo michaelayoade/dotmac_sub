@@ -23,6 +23,9 @@ def test_stats_cards_remain_admin_only_and_route_is_an_adapter():
     assert "service.confirmed_downtime_seconds" in admin_cards
     assert admin_cards.count('aria-label="How uptime was calculated"') == 1
     assert admin_cards.count('aria-label="How downtime was calculated"') == 1
+    assert "availability_stats.service" in admin_cards
+    assert "availability_stats.services" not in admin_cards
+    assert "availability_history_query" not in admin_cards
     for label in ("Total data used", "Download", "Upload", "Daily average"):
         card = admin_cards.split(f">{label}</p>", 1)[1].split("</div>", 1)[0]
         assert "<details" not in card
@@ -37,11 +40,28 @@ def test_stats_cards_remain_admin_only_and_route_is_an_adapter():
 
 def test_statistics_owner_uses_only_authoritative_period_evidence():
     source = (ROOT / "app/services/customer_service_level.py").read_text()
-    query = source.split("def query_customer_statistics_availability(", 1)[1].split(
+    query = source.split("def _statistics_service_periods(", 1)[1].split(
         "def _complete_verdict", 1
     )[0]
+    assert "prepaid_coverage_history_for_period(" in query
+    assert "postpaid_entitlement_history_for_period(" in query
     assert "lifecycle_history_for_period(" in query
     assert "_availability_evidence(" in query
+    assert "SubscriptionStatus.active" in query
+    assert "SubscriptionStatus.paused" in query
+    assert "SubscriptionStatus.suspended" in query
+    for excluded in (
+        "pending",
+        "blocked",
+        "stopped",
+        "disabled",
+        "expired",
+        "canceled",
+        "hidden",
+        "archived",
+    ):
+        assert f"SubscriptionStatus.{excluded}" not in query
+    assert "selected, period = max(" in query
     assert "get_current_path" not in query
     assert "Ticket" not in query
     assert "AvailabilitySnapshot" not in query

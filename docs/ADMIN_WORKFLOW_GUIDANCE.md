@@ -40,6 +40,11 @@ and ONT identity reviews loads only the chosen queue. Batch rows preview three
 decisions with a link to the complete decision search; opening Candidates runs
 the complete assignment audit.
 
+The Field verification map opens its shell while the complete source overlay
+loads. Wait for the feature count and report hashes before inspecting it. If
+the report fails to load, reload the page to retry. Browser filters change only
+visible features; they do not change the complete report or its hashes.
+
 Ticket Settings explains the editable infrastructure ticket-type and target-kind
 policy, when Save and Cancel appear, and how to correct a retained draft after
 a failed save. The support ticket guide describes creating a customerless
@@ -97,6 +102,29 @@ published. Never use a script to write the database directly or to bypass the
 module's owner command. Save drafts, review permissions and runtime status,
 then publish only after the resulting run evidence and rollback/reconciliation
 path are understood.
+
+## Detected outages
+
+Use `/admin/network/detected-outages` to review persisted, debounced classifier
+incidents first. The incident table pages 50 rows at a time. The separate live
+node-health and candidate view loads only when opened or scrolled into view;
+its raw verdicts have not passed the incident debounce window. A failed live
+load leaves the persisted incident list visible and offers a retry.
+
+Diagnose opens one selected domain without repeating the fleet sweep. Customer
+verdicts page 50 at a time; OLT branch inference is requested separately, one
+PON per request. A monitoring fault calls for checking the monitoring path,
+while Notify remains an authorized preview before a confirmed send.
+
+## Network monitoring
+
+Use `/admin/network/monitoring` for a current exception snapshot. Open NOC or
+Alarms from the summary cards, review the bounded alarm preview, and run the
+PON outage scan only when needed. Site, VPN, and bandwidth panels load on
+request and can be retried independently. Open Devices for the paginated
+inventory; older search links redirect there. Bulk controls appear only with
+`monitoring:write`, while device-detail links require `network:device:read`.
+The snapshot time marks the read, not the time of every underlying observation.
 
 ## Router health
 

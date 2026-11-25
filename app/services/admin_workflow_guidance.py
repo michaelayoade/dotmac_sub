@@ -350,7 +350,7 @@ WORKFLOW_GUIDANCE: tuple[AdminWorkflowGuidance, ...] = (
         "Use one page to review customer, service, network, billing, ticket, and timeline context.",
         (),
         "Use Account for profile and portal access, Service for subscriptions, Network for access, Billing for financial evidence, Tickets for support, and Timeline for history.",
-        "In Service > Statistics, Current covers this calendar month, Last period covers the previous month, and Custom includes the selected end date for Uptime and Downtime. Each service is shown separately. Hover or click the icon on either time card to see active service time, connected time, confirmed provider outages, and unexplained time. Uptime is provisional when connection evidence is incomplete; unconfirmed complaints and customer device power-off do not add provider downtime.",
+        "In Service > Statistics, Uptime and Downtime show one selected service. An active subscription takes priority, including one on a delinquent account; otherwise the paused or suspended subscription with the most recent proven active time is selected. The cards name the service and measured dates. Usage date filters do not change these cards. Hover or click the icon to see active service time, connected time, confirmed provider outages, and unexplained time. Uptime is provisional when connection evidence is incomplete; unconfirmed complaints and customer device power-off do not add provider downtime.",
         "In Billing, use Extensions to review pending, applied, canceled, and reversed service-extension requests; billing-date impact appears when an extension has been applied.",
         "In Payment intents, Cancel stale intent appears only for an expired bank-transfer intent whose exact submitted proof is still unreviewed and has not created a payment.",
         "Open the linked proof, confirm from bank evidence that no payment was received, enter a clear reason, and confirm the cancellation.",
@@ -500,6 +500,7 @@ WORKFLOW_GUIDANCE: tuple[AdminWorkflowGuidance, ...] = (
         (),
         "On connectivity and point identity coverage, search the staged source list and use Previous or Next to inspect further pages. The fast list shows source facts only; choose Run complete audit before reading coverage, lifecycle, or readiness gates.",
         "On Field verification, search and page through source identities to inspect their current field evidence. Run complete audit for the full priority ordering, counts, and report digest; page-specific rows do not establish cutover readiness.",
+        "On the Field verification map, the map opens first and then loads the complete source overlay. Wait for the feature count and report hashes before inspecting evidence; if the report cannot load, reload the page to retry. Filters change only the visible map, not the complete report.",
         "On Fiber trace, search by customer, account, ONT serial, or subscription ID, then page through all matches before selecting one service to trace.",
         "On ONT identity reviews, choose the observation, batch, decision, or candidate tab, then search and page within that queue. Batch rows preview three decisions; View all opens the matching decision search. The full assignment audit runs only when the candidate tab is opened.",
         notes=(
@@ -509,6 +510,7 @@ WORKFLOW_GUIDANCE: tuple[AdminWorkflowGuidance, ...] = (
             "/admin/network/fiber-connectivity-coverage",
             "/admin/network/fiber-identity-coverage",
             "/admin/network/fiber-field-verification",
+            "/admin/network/fiber-field-verification-map",
             "/admin/network/fiber-trace",
             "/admin/network/ont-identity-reviews",
         ),
@@ -544,6 +546,40 @@ WORKFLOW_GUIDANCE: tuple[AdminWorkflowGuidance, ...] = (
         "Use the Core Devices search and filters to narrow the inventory, then page through the matching devices.",
         "The summary cards count the full filtered inventory, while the table shows only the current page. Keep the filters when changing pages.",
         route_templates=("/admin/network/core-devices",),
+    ),
+    _guide(
+        "detected-outages",
+        "Network and access",
+        "Review detected outages",
+        "NOC and network operations",
+        "Review debounced classifier incidents, then inspect live candidates and affected customers without running the whole fleet diagnosis on every page load.",
+        ("/admin/network/detected-outages",),
+        "Review the persisted suspected, confirmed, and clearing incidents first. Use Previous and Next to inspect the 50-row pages; the number beside the heading describes the current page.",
+        "Open the live network diagnosis when needed. It classifies current node health and shows raw, un-debounced candidates separately from persisted incidents. If the live request fails, keep using the incident list and retry the live view.",
+        "Select Diagnose on a candidate to inspect one domain. Page through customers 50 at a time, and on an OLT choose Load branch alerts to inspect one PON at a time.",
+        "For a confirmed or clearing incident, authorized staff can open Notify to preview the affected audience and policy before confirming a send. The preview does not dispatch a notification.",
+        notes=(
+            "A monitoring fault means live customer sessions contradict the device check; investigate the monitoring path rather than treating it as a network outage.",
+            "The persisted incident lifecycle remains the source of truth; a raw live candidate has not passed debounce.",
+        ),
+    ),
+    _guide(
+        "network-monitoring",
+        "Network and access",
+        "Review network monitoring",
+        "NOC and network operations",
+        "Find current network exceptions and open the matching investigation view.",
+        ("/admin/network/monitoring",),
+        "Read the four snapshot cards and their observation time, then open NOC or Alarms for the affected cohort.",
+        "Review the bounded open-alarm preview under Needs attention; use Full queue for the complete triage list.",
+        "Select Check PON outages only when you need the fleetwide outage scan.",
+        "Select Load site & VPN status or Load latest bandwidth when that evidence is needed; a failed panel can be retried independently.",
+        "Open Devices to search the paginated inventory; older monitoring search links lead to this view.",
+        "Select devices and choose a bulk action only after confirming the intended scope and consequences.",
+        notes=(
+            "The overview reads current owner-resolved counts; its snapshot time is the read time, not the timestamp of every underlying observation.",
+            "Device bulk actions require monitoring:write. Device-detail links require network:device:read.",
+        ),
     ),
     _guide(
         "router-health",
@@ -1790,6 +1826,19 @@ _ACTION_SPECS: dict[str, tuple[_ActionSpec, ...]] = {
             "change-plan", "Change the subscription plan", 3, permission="catalog:write"
         ),
     ),
+    "network-monitoring": (
+        _action("review-monitoring-snapshot", "Review the monitoring snapshot", 0),
+        _action("investigate-monitoring-alarm", "Investigate open alarms", 1),
+        _action("scan-pon-outages", "Check PON outages", 2),
+        _action("load-monitoring-evidence", "Load site, VPN, or bandwidth evidence", 3),
+        _action("search-monitoring-devices", "Search monitored devices", 4),
+        _action(
+            "act-on-monitoring-devices",
+            "Act on selected devices",
+            5,
+            permission="monitoring:write",
+        ),
+    ),
     "network-access": (
         _action("investigate-access", "Investigate customer network access", 0),
         _action(
@@ -1851,8 +1900,9 @@ _ACTION_SPECS: dict[str, tuple[_ActionSpec, ...]] = {
     "fiber-evidence-lists": (
         _action("browse-coverage", "Browse staged source coverage", 0),
         _action("browse-field-evidence", "Browse field evidence", 1),
-        _action("trace-service", "Find and trace a fiber service", 2),
-        _action("browse-ont-reviews", "Browse ONT review queues", 3),
+        _action("browse-field-map", "Browse the field verification map", 2),
+        _action("trace-service", "Find and trace a fiber service", 3),
+        _action("browse-ont-reviews", "Browse ONT review queues", 4),
     ),
     "fiber-inventory": (
         _action(
@@ -1876,6 +1926,24 @@ _ACTION_SPECS: dict[str, tuple[_ActionSpec, ...]] = {
             0,
             1,
             permission="network:device:read",
+        ),
+    ),
+    "detected-outages": (
+        _action(
+            "review-incidents",
+            "Review classifier incidents",
+            0,
+            permission="monitoring:read",
+        ),
+        _action("load-live", "Load live diagnosis", 1, permission="monitoring:read"),
+        _action(
+            "diagnose-domain", "Diagnose a domain", 2, permission="monitoring:read"
+        ),
+        _action(
+            "preview-notification",
+            "Preview an outage notification",
+            3,
+            permission="monitoring:outage_notify:send",
         ),
     ),
     "router-health": (
@@ -2872,9 +2940,11 @@ HELP_NAVIGATION: tuple[AdminHelpNavigationSection, ...] = (
         "Network",
         (
             "network-access",
+            "detected-outages",
             "fiber-evidence-lists",
             "fiber-inventory",
             "core-device-inventory",
+            "network-monitoring",
             "router-health",
             "ip-pool-labels",
             "cross-app-drift",
@@ -2977,7 +3047,9 @@ HELP_NAVIGATION: tuple[AdminHelpNavigationSection, ...] = (
 # Only sections containing pages with different read scopes need an override.
 # Other pages inherit their Admin-sidebar section's visibility.
 HELP_GUIDE_VIEW_PERMISSIONS: dict[str, tuple[str, ...]] = {
+    "detected-outages": ("monitoring:read",),
     "system-users-list": ("rbac:roles:read",),
+    "network-monitoring": ("monitoring:read",),
     "billing-accounts": ("billing:account:read",),
     "invoice": ("billing:invoice:read",),
     "credit": ("billing:credit_note:read",),

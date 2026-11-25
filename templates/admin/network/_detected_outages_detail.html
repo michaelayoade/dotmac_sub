@@ -1,0 +1,56 @@
+<section id="detected-outages-detail" aria-label="Domain diagnosis" hx-sync="#detected-outages-detail:drop">
+    {% if detail %}
+
+    <div class="rounded-xl border border-slate-200 bg-white p-5 shadow-sm dark:border-slate-700 dark:bg-slate-800">
+        <p id="detected-outages-detail-status" role="status" class="text-sm text-amber-600 dark:text-amber-300"></p>
+        <div class="mb-3 flex items-baseline justify-between">
+            <h2 class="font-semibold text-slate-900 dark:text-white">Domain: {{ detail.node.name }}</h2>
+            <span class="text-sm text-slate-500">{{ detail.class.replace('_', ' ') }} · {{ detail.online_count }}/{{ detail.count }} online · {{ detail.node.medium }}</span>
+        </div>
+        <p class="mb-2 text-xs text-slate-500 dark:text-slate-400">Showing customers {{ detail.customer_offset + 1 if detail.customers else 0 }}–{{ detail.customer_offset + (detail.customers | length) if detail.customers else 0 }} of {{ detail.total_customers }}.</p>
+
+        {% if detail.node.medium == 'fiber' %}
+        <section id="detected-outages-branches" hx-sync="#detected-outages-branches:drop" class="mb-4 rounded-lg border border-sky-200 bg-sky-50 p-3 dark:border-sky-900/50 dark:bg-sky-950/30">
+            <h3 class="text-sm font-semibold text-sky-900 dark:text-sky-200">Predictive branch alerts (splice inference)</h3>
+            <p id="detected-outages-branches-status" role="status" class="text-sm text-amber-600 dark:text-amber-300"></p>
+            <button type="button" class="mt-2 text-sm text-sky-700 underline dark:text-sky-300"
+                    hx-get="/admin/network/detected-outages/branches?node_id={{ detail.node.id }}"
+                    hx-target="#detected-outages-branches" hx-swap="outerHTML">Load branch alerts</button>
+            <noscript><a href="/admin/network/detected-outages/branches?node_id={{ detail.node.id }}" class="mt-2 block text-sm text-sky-700 underline dark:text-sky-300">Open branch alerts</a></noscript>
+        </section>
+        {% endif %}
+
+        <div class="overflow-x-auto">
+            <table class="w-full text-left text-sm">
+                <thead class="text-xs uppercase tracking-wide text-slate-400">
+                    <tr><th class="pb-2">Customer</th><th class="pb-2">Verdict</th><th class="pb-2">Medium</th><th class="pb-2">Signal</th><th class="pb-2">Action</th></tr>
+                </thead>
+                <tbody>
+                    {% for c in detail.customers %}
+                    <tr class="border-t border-slate-100 dark:border-slate-700">
+                        <td class="py-2 text-slate-700 dark:text-slate-200">{{ c.subscriber_name }}</td>
+                        <td class="py-2">
+                            {% if c.online %}<span class="rounded bg-emerald-100 px-2 py-0.5 text-xs font-medium text-emerald-700 dark:bg-emerald-900/40 dark:text-emerald-300">online</span>
+                            {% elif c.verdict == 'area_outage' %}<span class="rounded bg-red-100 px-2 py-0.5 text-xs font-medium text-red-700 dark:bg-red-900/40 dark:text-red-300">area outage</span>
+                            {% elif c.verdict %}<span class="rounded bg-slate-100 px-2 py-0.5 text-xs font-medium text-slate-700 dark:bg-slate-700 dark:text-slate-200">{{ c.verdict.replace('_', ' ') }}</span>
+                            {% else %}<span class="text-slate-400">—</span>{% endif %}
+                        </td>
+                        <td class="py-2 text-slate-500">{{ c.medium or '—' }}</td>
+                        <td class="py-2 text-slate-500">{% if c.signal_dbm is not none %}{{ c.signal_dbm }} dBm{% else %}—{% endif %}</td>
+                        <td class="py-2 text-slate-500">{{ c.agent_action or '—' }}</td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+        {% if customer_page > 1 or detail.has_next %}
+        <nav aria-label="Domain customer pages" class="mt-4 flex items-center justify-between text-sm">
+            {% if customer_page > 1 %}<a href="/admin/network/detected-outages/detail?node_id={{ detail.node.id }}&customer_page={{ customer_page - 1 }}" hx-get="/admin/network/detected-outages/detail?node_id={{ detail.node.id }}&customer_page={{ customer_page - 1 }}" hx-target="#detected-outages-detail" hx-swap="outerHTML" class="text-sky-600 underline dark:text-sky-400">← Previous</a>{% else %}<span></span>{% endif %}
+            <span class="text-slate-500 dark:text-slate-400">Page {{ customer_page }}</span>
+            {% if detail.has_next %}<a href="/admin/network/detected-outages/detail?node_id={{ detail.node.id }}&customer_page={{ customer_page + 1 }}" hx-get="/admin/network/detected-outages/detail?node_id={{ detail.node.id }}&customer_page={{ customer_page + 1 }}" hx-target="#detected-outages-detail" hx-swap="outerHTML" class="text-sky-600 underline dark:text-sky-400">Next →</a>{% else %}<span></span>{% endif %}
+        </nav>
+        {% endif %}
+    </div>
+    {% endif %}
+    {% if not detail %}<p class="rounded-xl border border-slate-200 bg-white p-5 text-sm text-slate-500 dark:border-slate-700 dark:bg-slate-800">Node not found.</p>{% endif %}
+</section>
