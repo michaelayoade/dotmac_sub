@@ -747,21 +747,29 @@ def list_open_incidents(session: Session) -> list[OutageIncident]:
 
 
 def list_classifier_incidents(
-    session: Session, *, states: tuple[str, ...] = CLASSIFIER_OPEN_STATUSES
+    session: Session,
+    *,
+    states: tuple[str, ...] = CLASSIFIER_OPEN_STATUSES,
+    limit: int | None = None,
+    offset: int = 0,
 ) -> list[OutageIncident]:
     """Persisted classifier incidents for the P4a console — the debounced truth
     (§7.6). Defaults to the OPEN lifecycle states (suspected/confirmed/clearing),
     newest first; terminal states (resolved/discarded) are excluded so the
     console shows only what is live. Live-compute is a separate secondary view."""
-    return (
+    query = (
         session.query(OutageIncident)
         .filter(
             OutageIncident.detection_source == CLASSIFIER_SOURCE,
             OutageIncident.status.in_(states),
         )
-        .order_by(OutageIncident.started_at.desc())
-        .all()
+        .order_by(OutageIncident.started_at.desc(), OutageIncident.id.desc())
     )
+    if offset:
+        query = query.offset(offset)
+    if limit is not None:
+        query = query.limit(limit)
+    return query.all()
 
 
 def _aware(value: datetime | None) -> datetime | None:
