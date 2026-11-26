@@ -55,7 +55,41 @@
    SUBSCRIBER HERO — the record hero over the subscriber_summary
    projection. `caller()` supplies the action buttons.
    ============================================================ #}
-{% macro subscriber_hero(summary, status_presentation=None) %}
+{#
+  Online chip — renders the already-computed network_connection_status
+  (web_customer_details._build_network_connection_snapshot). Renders nothing
+  when the snapshot is absent/empty (include_network false), so the page never
+  shows a misleading state. Last seen = newest last_seen_at across the
+  per-subscription entries, omitted when none.
+#}
+{% macro customer_online_chip(connection_status, connection_by_subscription=None, size="sm") %}
+{% if connection_status and connection_status.state %}
+{% set _state = connection_status.state %}
+{% if _state == 'connected' %}
+{% set _n = connection_status.connected_count or 0 %}
+{{ status_badge("Online" ~ (" · " ~ _n ~ (" session" if _n == 1 else " sessions") if _n else ""), "positive", size=size, icon="wifi") }}
+{% elif _state == 'stale' %}
+{{ status_badge("Stale", "warning", size=size, icon="clock") }}
+{% else %}
+{% set _seen = (connection_by_subscription or {}).values() | map(attribute='last_seen_at') | select | list %}
+{{ status_badge("Offline" ~ (" · last seen " ~ (_seen | max | app_datetime('%b %d, %H:%M')) if _seen else ""), "negative", size=size, icon="wifi-off") }}
+{% endif %}
+{% endif %}
+{% endmacro %}
+
+{# ONT live fields already on OntUnit: OLT status, last seen, Rx power. #}
+{% macro ont_live_status(ont_unit) %}
+{% if ont_unit %}
+{% set _olt = ont_unit.olt_status.value if ont_unit.olt_status is not none and ont_unit.olt_status.value is defined else ont_unit.olt_status %}
+<span class="mt-1 flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-slate-500 dark:text-slate-400" data-testid="ont-live-status">
+    {% if _olt %}{{ status_badge("ONT online" if _olt == 'online' else "ONT offline", "positive" if _olt == 'online' else "negative", size="sm", icon="wifi" if _olt == 'online' else "wifi-off") }}{% endif %}
+    {% if ont_unit.last_seen_at is not none %}<span>Last seen {{ ont_unit.last_seen_at | app_datetime('%b %d, %H:%M') }}</span>{% endif %}
+    {% if ont_unit.onu_rx_signal_dbm is not none %}<span>Rx {{ '%.1f' | format(ont_unit.onu_rx_signal_dbm) }} dBm</span>{% endif %}
+</span>
+{% endif %}
+{% endmacro %}
+
+{% macro subscriber_hero(summary, status_presentation=None, hide_active_status=False, connection_chip="") %}
 {% set hero_status = status_presentation or summary.status %}
 <div class="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm dark:border-slate-800 dark:bg-slate-900">
     <div class="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
@@ -66,8 +100,9 @@
             <div class="min-w-0">
                 <div class="flex flex-wrap items-center gap-2.5">
                     <h1 class="font-display text-2xl font-bold tracking-tight text-slate-900 dark:text-white">{{ summary.name or "Unnamed subscriber" }}</h1>
-                    {% if hero_status %}{{ status_badge(hero_status.label, hero_status.tone, size="sm") }}{% endif %}
-                    {% if summary.connection %}{{ status_badge("Online" if summary.connection.online else "Offline", "positive" if summary.connection.online else "negative", size="sm") }}{% endif %}
+                    {% if hero_status and not (hide_active_status and hero_status.value == 'active') %}{{ status_badge(hero_status.label, hero_status.tone, size="sm") }}{% endif %}
+                    {% if connection_chip %}{{ connection_chip }}{% endif %}
+                    {% if summary.connection and not connection_chip %}{{ status_badge("Online" if summary.connection.online else "Offline", "positive" if summary.connection.online else "negative", size="sm") }}{% endif %}
                     <span class="rounded-md bg-slate-100 px-2 py-0.5 text-[11px] font-semibold text-slate-500 dark:bg-slate-800 dark:text-slate-400">{{ "Business" if summary.is_business else "Individual" }}</span>
                 </div>
                 <div class="mt-1.5 flex flex-wrap items-center gap-x-3 gap-y-1 text-[12.5px] text-slate-500 dark:text-slate-400">

@@ -1,6 +1,6 @@
 {% extends "layouts/admin.html" %}
 {% from "components/ui/macros.html" import status_badge, status_presentation_badge %}
-{% from "components/ui/record.html" import subscriber_hero %}
+{% from "components/ui/record.html" import subscriber_hero, customer_online_chip, ont_live_status %}
 {% from "admin/customers/_network_path.html" import network_path_graph %}
 
 {% block title %}{{ customer_name }} - Customer - Admin{% endblock %}
@@ -61,7 +61,8 @@
         {% set invoice_link = "/admin/billing/invoices/new?customer_id=" ~ customer.id ~ "&customer_type=" ~ customer_type %}
     {% endif %}
     {% if subscriber_summary %}
-    {% call subscriber_hero(subscriber_summary, customer_status_presentation) %}
+    {% set online_chip %}{{ customer_online_chip(network_connection_status, connection_by_subscription) }}{% endset %}
+    {% call subscriber_hero(subscriber_summary, customer_status_presentation, hide_active_status=True, connection_chip=online_chip|trim) %}
         {% if can(request, 'subscription:create') %}<a href="{{ subscription_link }}" class="inline-flex items-center gap-2 rounded-lg bg-accent-600 px-4 py-2.5 text-sm font-semibold text-white transition hover:bg-accent-700">
             <svg class="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4"/></svg>
             New Subscription
@@ -140,6 +141,12 @@
 
     <!-- Tab Content: Overview -->
     <div x-show="activeTab === 'overview'" x-cloak class="space-y-6">
+        {% set overview_online_chip %}{{ customer_online_chip(network_connection_status, connection_by_subscription) }}{% endset %}
+        {% if overview_online_chip|trim %}
+        <div class="flex items-center gap-2 text-sm text-slate-600 dark:text-slate-300" data-testid="overview-online-status">
+            <span class="font-medium">Connection</span>{{ overview_online_chip|trim }}
+        </div>
+        {% endif %}
         <!-- Stats Grid with Visual Enhancements -->
         <div class="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
             <!-- Active Services with Ring Progress -->
@@ -792,7 +799,7 @@
                             </div>
                             <div class="flex items-center gap-3">
                                 {% set subscriber_status_presentation = account_status_presentations.get(subscriber.id|string) %}
-                                {{ status_presentation_badge(subscriber_status_presentation, pulse=(subscriber_status_presentation.value == 'active'), size="sm") }}
+                                {% if subscriber_status_presentation and subscriber_status_presentation.value != 'active' %}{{ status_presentation_badge(subscriber_status_presentation, size="sm") }}{% endif %}
                                 <svg class="h-4 w-4 text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"/></svg>
                             </div>
                         </a>
@@ -1408,7 +1415,8 @@
                             <div>
                                 <div class="flex items-center gap-2">
                                     {% if can(request, 'subscription:read') %}<a href="/admin/catalog/subscriptions/{{ subscription.id }}" class="text-sm font-semibold text-slate-900 transition-colors hover:text-amber-600 dark:text-white dark:hover:text-amber-400">{{ subscription.offer.name if subscription.offer else 'Subscription' }}</a>{% else %}{{ subscription.offer.name if subscription.offer else 'Subscription' }}{% endif %}
-                                    {{ status_presentation_badge(subscription_status_presentations.get(subscription.id|string), pulse=(sub_status == 'active'), size="sm") }}
+                                    {% set _sub_presentation = subscription_status_presentations.get(subscription.id|string) %}
+                                    {% if _sub_presentation and _sub_presentation.value != 'active' %}{{ status_presentation_badge(_sub_presentation, size="sm") }}{% endif %}
                                     {% if service_health and service_health.pending_change %}
                                     <span class="inline-flex items-center rounded-full border border-amber-300 bg-amber-100 px-2 py-0.5 text-[11px] font-semibold uppercase tracking-wide text-amber-900 dark:border-amber-700 dark:bg-amber-900/40 dark:text-amber-100"
                                           data-testid="pending-plan-change-badge-{{ subscription.id }}">
@@ -1648,6 +1656,7 @@
                                             <span>ONT-ID: {{ assignment.ont_unit.ont_index }}</span>
                                             {% endif %}
                                         </div>
+                                        {{ ont_live_status(assignment.ont_unit) }}
                                     </div>
                                 </div>
                                 {% if assignment.notes %}
@@ -1977,8 +1986,8 @@
                                 <p class="text-sm font-medium text-slate-900 dark:text-white">{{ card.offer_name }}</p>
                                 <div class="flex flex-wrap items-center justify-end gap-2">
                                     {% set card_conn = card.connection_status or {} %}
-                                    {{ status_presentation_badge(card_conn.status_presentation, size="sm") }}
-                                    {{ status_presentation_badge(card.status_presentation, size="sm") }}
+                                    {% if card_conn.status_presentation %}<span class="text-xs text-slate-500 dark:text-slate-400">Session:</span>{{ status_presentation_badge(card_conn.status_presentation, size="sm") }}{% endif %}
+                                    {% if card.status_presentation and card.status_presentation.value != 'active' %}{{ status_presentation_badge(card.status_presentation, size="sm") }}{% endif %}
                                 </div>
                             </div>
                             <div class="grid grid-cols-2 gap-3 text-sm">
@@ -1987,7 +1996,7 @@
                                 <div>
                                     <p class="text-xs text-slate-500 dark:text-slate-400">Connection</p>
                                     <p class="font-mono font-medium text-slate-900 dark:text-white">
-                                        {{ card_conn.identifier or ('Updated ' ~ card_conn.last_seen_at | app_datetime('%b %d, %H:%M')) }}
+                                        {{ card_conn.identifier or (('Updated ' if card_conn.state == 'connected' else 'Last seen ') ~ card_conn.last_seen_at | app_datetime('%b %d, %H:%M')) }}
                                     </p>
                                 </div>
                                 {% endif %}
@@ -2317,6 +2326,7 @@
                                     <span class="rounded-full bg-emerald-100 px-2 py-0.5 text-xs font-medium text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-300">ONT</span>
                                 </div>
                                 <p class="mt-1 text-xs text-slate-500 dark:text-slate-400">{{ 'Active' if assignment.active else 'Inactive' }}{% if assignment.pon_port and assignment.pon_port.name %} · FSP: {{ assignment.pon_port.name }}{% endif %}{% if assignment.ont_unit and assignment.ont_unit.ont_index is not none %} · ONT-ID: {{ assignment.ont_unit.ont_index }}{% endif %}</p>
+                                {{ ont_live_status(assignment.ont_unit) }}
                             </div>
                             <span class="shrink-0 rounded-full px-2 py-0.5 text-xs font-medium {% if assignment.active %}bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-400{% else %}bg-slate-100 text-slate-600 dark:bg-slate-700 dark:text-slate-400{% endif %}">{{ 'Active' if assignment.active else 'Inactive' }}</span>
                         </div>
