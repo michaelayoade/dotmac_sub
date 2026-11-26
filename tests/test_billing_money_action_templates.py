@@ -70,8 +70,10 @@ def test_credit_customer_filter_can_overlay_content_below_it() -> None:
     before_picker, picker, _ = html.partition(picker_url)
     assert picker
     card_markup = before_picker.rsplit('class="animate-fade-in-up ', 1)[1]
-    card_classes = card_markup.split('"', 1)[0]
+    card_classes, _, body_markup = card_markup.partition('"')
+    body_classes = body_markup.split('class="', 1)[1].split('"', 1)[0]
     assert {"overflow-visible", "relative", "z-[80]"} <= set(card_classes.split())
+    assert "rounded-3xl" in body_classes.split()
     assert 'name="customer_ref" data-typeahead-hidden value="person:example"' in html
     assert 'name="status" value="issued"' in html
 
