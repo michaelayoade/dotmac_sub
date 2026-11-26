@@ -27,7 +27,7 @@
     {% endcall %}
 
     {# ── Filters ── #}
-    {% call card(color="emerald") %}
+    {% call card(color="emerald", allow_overflow=True, class_name="relative z-[80]") %}
         <form method="get" class="flex flex-col gap-4 sm:flex-row sm:items-end">
             <div class="w-full sm:w-72">
                 <label class="block text-xs font-semibold uppercase tracking-wider text-slate-500 dark:text-slate-400 mb-2">Customer</label>
