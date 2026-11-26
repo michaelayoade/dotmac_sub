@@ -8,7 +8,6 @@ from __future__ import annotations
 
 from pathlib import Path
 
-
 # ---------------------------------------------------------------------------
 # Online status chip, ONT live line, hidden "Active" badge (presentation only)
 # ---------------------------------------------------------------------------
