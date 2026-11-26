@@ -1,6 +1,7 @@
 from pathlib import Path
 
 from fastapi.templating import Jinja2Templates
+from jinja2 import ChoiceLoader, DictLoader
 
 
 def _template(path: str) -> str:
@@ -41,6 +42,40 @@ def test_manual_payment_and_credit_forms_confirm_and_bound_amounts():
     assert 'name="preview_fingerprint"' in credit_confirmation
     assert 'name="idempotency_key"' in credit_confirmation
     assert 'min="0.01"' in credit_form
+
+
+def test_credit_customer_filter_can_overlay_content_below_it() -> None:
+    env = Jinja2Templates(directory="templates").env
+    template_loader = env.loader
+    assert template_loader is not None
+    env.loader = ChoiceLoader(
+        [
+            DictLoader({"layouts/admin.html": "{% block content %}{% endblock %}"}),
+            template_loader,
+        ]
+    )
+    env.filters.setdefault("app_datetime", str)
+
+    html = env.get_template("admin/billing/credits.html").render(
+        customer_ref="person:example",
+        status="issued",
+        credits=[],
+        page=1,
+        per_page=50,
+        total=0,
+        total_pages=1,
+    )
+
+    picker_url = 'data-typeahead-url="/api/v1/search/customers"'
+    before_picker, picker, _ = html.partition(picker_url)
+    assert picker
+    card_markup = before_picker.rsplit('class="animate-fade-in-up ', 1)[1]
+    card_classes, _, body_markup = card_markup.partition('"')
+    body_classes = body_markup.split('class="', 1)[1].split('"', 1)[0]
+    assert {"overflow-visible", "relative", "z-[80]"} <= set(card_classes.split())
+    assert "rounded-3xl" in body_classes.split()
+    assert 'name="customer_ref" data-typeahead-hidden value="person:example"' in html
+    assert 'name="status" value="issued"' in html
 
 
 def test_credit_and_collection_forms_seed_currency_from_default_setting_context():
