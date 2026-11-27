@@ -13,6 +13,7 @@ usage. Connection status here is the cheap DB read over RADIUS accounting.
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from datetime import datetime
 from decimal import Decimal
 from typing import Any, TypedDict
@@ -22,6 +23,11 @@ from sqlalchemy.orm import Session
 
 from app.services import catalog as catalog_service
 from app.services import subscriber as subscriber_service
+from app.services.billing_profile import (
+    BillingProfile,
+    BillingProfileSource,
+    resolve_billing_profile,
+)
 from app.services.customer_financial_position import get_customer_financial_position
 from app.services.network.radius_sessions import (
     latest_open_accounting_sessions_by_subscription,
@@ -47,6 +53,13 @@ class SubscriberSummaryPlan(TypedDict):
     next_billing_at: datetime | None
     status_label: str
     status_tone: str
+
+
+@dataclass(frozen=True, slots=True)
+class SubscriberSummaryBillingMode:
+    label: str
+    source: BillingProfileSource
+    needs_review: bool
 
 
 class SubscriberSummaryBalance(TypedDict):
@@ -82,6 +95,7 @@ class SubscriberSummary(TypedDict):
     since: datetime | None
     status: SubscriberSummaryStatus
     plan: SubscriberSummaryPlan | None
+    billing_mode: SubscriberSummaryBillingMode
     active_plan_count: int
     balance: SubscriberSummaryBalance | None
     connection: SubscriberSummaryConnection | None
@@ -95,6 +109,24 @@ def _tone(tone: object) -> str:
 
 def _status_value(status: object) -> str:
     return getattr(status, "value", None) or str(status or "")
+
+
+def _billing_mode_summary(profile: BillingProfile) -> SubscriberSummaryBillingMode:
+    if profile.effective_mode is None or profile.invalid_reason is not None:
+        label = "Billing mode needs review"
+    elif profile.account_subscription_mismatch:
+        label = f"{profile.effective_mode.value.title()} (review account setting)"
+    else:
+        label = profile.effective_mode.value.title()
+    return SubscriberSummaryBillingMode(
+        label=label,
+        source=profile.source,
+        needs_review=(
+            profile.invalid_reason is not None
+            or profile.account_subscription_mismatch
+            or profile.effective_mode is None
+        ),
+    )
 
 
 def _display_name(subscriber: Any) -> str | None:
@@ -142,6 +174,7 @@ def subscriber_summary(
         "tone": _tone(presentation.tone),
         "value": presentation.value,
     }
+    billing_mode = _billing_mode_summary(resolve_billing_profile(db, subscriber))
 
     # Plan — the primary active subscription (there may be several).
     plan: SubscriberSummaryPlan | None = None
@@ -243,6 +276,7 @@ def subscriber_summary(
         or getattr(subscriber, "created_at", None),
         "status": status,
         "plan": plan,
+        "billing_mode": billing_mode,
         "active_plan_count": len(active),
         "balance": balance,
         "connection": connection,
