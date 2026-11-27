@@ -134,6 +134,7 @@ def test_summary_maps_identity_plan_balance_and_connection(monkeypatch):
     assert summary["plan"]["name"] == "Fibre 100"
     assert summary["plan"]["price"] == Decimal("18500")
     assert summary["billing_mode"].label == "Prepaid"
+    assert summary["billing_mode"].source_label == "Account setting"
     assert summary["active_plan_count"] == 1
     assert summary["balance"]["currency"] == "NGN"
     assert summary["connection"]["online"] is True
@@ -153,6 +154,7 @@ def test_business_subscriber_gets_business_url(monkeypatch):
     assert summary["connection"] is None  # no active subscriptions -> no lookup
     assert summary["billing_mode"].label == "Prepaid"
     assert summary["billing_mode"].source is BillingProfileSource.ACCOUNT
+    assert summary["billing_mode"].source_label == "Account setting"
 
 
 @pytest.mark.parametrize(
@@ -222,6 +224,14 @@ def test_billing_mode_follows_canonical_profile(
     assert summary is not None
     assert summary["billing_mode"].label == expected
     assert summary["billing_mode"].source is source
+    assert (
+        summary["billing_mode"].source_label
+        == {
+            BillingProfileSource.ACCOUNT: "Account setting",
+            BillingProfileSource.SUBSCRIPTION: "Billable services",
+            BillingProfileSource.MIXED_SUBSCRIPTIONS: "Mixed services",
+        }[source]
+    )
     assert summary["billing_mode"].needs_review is (mismatch or reason is not None)
 
 

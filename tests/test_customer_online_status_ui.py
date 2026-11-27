@@ -93,7 +93,7 @@ def _hero(status_value: str, hide: bool) -> str:
         email=None,
         phone=None,
         plan=None,
-        billing_mode=SimpleNamespace(label="Prepaid"),
+        billing_mode=SimpleNamespace(label="Prepaid", source_label="Account setting"),
         balance=None,
         connection=None,
         status=None,
@@ -123,7 +123,7 @@ def test_hero_hides_active_badge_but_keeps_other_statuses():
 
 def test_hero_plan_tile_keeps_billing_mode_without_active_plan():
     assert "No active plan" in _hero("active", True)
-    assert "Prepaid" in _hero("active", True)
+    assert "Prepaid · Account setting" in _hero("active", True)
 
 
 def test_hero_plan_tile_shows_mode_and_price():
@@ -139,14 +139,16 @@ def test_hero_plan_tile_shows_mode_and_price():
         email=None,
         phone=None,
         plan=SimpleNamespace(name="Fibre 100", price=Decimal("18500")),
-        billing_mode=SimpleNamespace(label="Postpaid"),
+        billing_mode=SimpleNamespace(
+            label="Postpaid", source_label="Billable services"
+        ),
         balance=None,
         connection=None,
         status=None,
     )
     html = _render_macro("{{ subscriber_hero(summary) }}", summary=summary)
     assert "Fibre 100" in html
-    assert "Postpaid · ₦18,500" in html
+    assert "Postpaid · Billable services · ₦18,500" in html
 
 
 def test_detail_template_hides_active_badges_and_labels_session():

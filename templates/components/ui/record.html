@@ -119,12 +119,12 @@
     {# at-a-glance tiles — flat, semantic #}
     <div class="mt-4 grid grid-cols-2 gap-2.5 sm:grid-cols-4">
         {{ hero_stat("Account", hero_status.label if hero_status else "—", tone=(hero_status.tone if hero_status else "")) }}
-        {% set billing_mode_label = summary.billing_mode.label if summary.billing_mode else "Billing mode unavailable" %}
+        {% set billing_mode_detail = (summary.billing_mode.label ~ " · " ~ summary.billing_mode.source_label) if summary.billing_mode else "Billing mode unavailable" %}
         {% if summary.plan %}
             {% set plan_price = "₦%s"|format("{:,.0f}".format(summary.plan.price)) if summary.plan.price is not none else "" %}
-            {{ hero_stat("Plan", summary.plan.name or "—", sub=(billing_mode_label ~ (" · " ~ plan_price if plan_price else "")), wrap_sub=True) }}
+            {{ hero_stat("Plan", summary.plan.name or "—", sub=(billing_mode_detail ~ (" · " ~ plan_price if plan_price else "")), wrap_sub=True) }}
         {% else %}
-            {{ hero_stat("Plan", "No active plan", sub=billing_mode_label, wrap_sub=True) }}
+            {{ hero_stat("Plan", "No active plan", sub=billing_mode_detail, wrap_sub=True) }}
         {% endif %}
         {% if summary.balance %}
             {% set _b = summary.balance %}

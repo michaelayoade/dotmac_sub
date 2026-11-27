@@ -61,6 +61,14 @@ class SubscriberSummaryBillingMode:
     source: BillingProfileSource
     needs_review: bool
 
+    @property
+    def source_label(self) -> str:
+        if self.source is BillingProfileSource.ACCOUNT:
+            return "Account setting"
+        if self.source is BillingProfileSource.SUBSCRIPTION:
+            return "Billable services"
+        return "Mixed services"
+
 
 class SubscriberSummaryBalance(TypedDict):
     outstanding: Decimal
