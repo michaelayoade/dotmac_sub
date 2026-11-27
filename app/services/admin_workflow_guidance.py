@@ -555,12 +555,14 @@ WORKFLOW_GUIDANCE: tuple[AdminWorkflowGuidance, ...] = (
         "Review debounced classifier incidents, then inspect live candidates and affected customers without running the whole fleet diagnosis on every page load.",
         ("/admin/network/detected-outages",),
         "Review the persisted suspected, confirmed, and clearing incidents first. Use Previous and Next to inspect the 50-row pages; the number beside the heading describes the current page.",
+        "In Customer Connectivity, search for any active BTS, cabinet, or node, including healthy equipment. Select it to see all mapped customers, then filter to those without a live session or without an open service-down ticket. The list pages 50 customers at a time.",
         "Open the live network diagnosis when needed. It classifies current node health and shows raw, un-debounced candidates separately from persisted incidents. If the live request fails, keep using the incident list and retry the live view.",
         "Select Diagnose on a candidate to inspect one domain. Page through customers 50 at a time, and on an OLT choose Load branch alerts to inspect one PON at a time.",
         "For a confirmed or clearing incident, authorized staff can open Notify to preview the affected audience and policy before confirming a send. The preview does not dispatch a notification.",
         notes=(
             "A monitoring fault means live customer sessions contradict the device check; investigate the monitoring path rather than treating it as a network outage.",
             "The persisted incident lifecycle remains the source of truth; a raw live candidate has not passed debounce.",
+            "Customer Connectivity keeps customers without a live session visible after equipment recovery. A missing session alone does not confirm provider downtime. The start time comes from the confirmed outage ledger when available; a last recorded RADIUS disconnect is labeled as an estimate. Ticket details require support:ticket:read.",
         ),
     ),
     _guide(
@@ -1937,12 +1939,18 @@ _ACTION_SPECS: dict[str, tuple[_ActionSpec, ...]] = {
         ),
         _action("load-live", "Load live diagnosis", 1, permission="monitoring:read"),
         _action(
-            "diagnose-domain", "Diagnose a domain", 2, permission="monitoring:read"
+            "review-customer-connectivity",
+            "Review customer connectivity",
+            2,
+            permission="monitoring:read",
+        ),
+        _action(
+            "diagnose-domain", "Diagnose a domain", 3, permission="monitoring:read"
         ),
         _action(
             "preview-notification",
             "Preview an outage notification",
-            3,
+            4,
             permission="monitoring:outage_notify:send",
         ),
     ),
