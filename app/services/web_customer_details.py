@@ -110,6 +110,7 @@ from app.services.network.radius_sessions import (
 from app.services.nin_matching import mask_nin
 from app.services.portal_account_health import build_portal_account_health
 from app.services.pppoe_password_reveal import refuse_secret_reference
+from app.services.service_address import service_address
 from app.services.status_presentation import (
     access_session_status_presentation,
     account_status_presentation,
@@ -1841,19 +1842,10 @@ def build_customer_detail_snapshot(
     if not addresses:
         addresses.extend(_build_person_fallback_address(customer=customer))
 
-    primary_address = next(
-        (
-            a
-            for a in addresses
-            if getattr(a, "is_primary", False) and (a.address_line1 or "").strip()
-        ),
-        next(
-            (a for a in addresses if getattr(a, "is_primary", False)),
-            next(
-                (a for a in addresses if (a.address_line1 or "").strip()),
-                addresses[0] if addresses else None,
-            ),
-        ),
+    # Use the same service Address resolver as the customer portal. The
+    # retained inline snapshot is only for accounts without an Address row.
+    primary_address = service_address(db, customer.id) or (
+        addresses[0] if addresses else None
     )
     map_data, geocode_target = _build_map_payload(primary_address, customer_name)
 
