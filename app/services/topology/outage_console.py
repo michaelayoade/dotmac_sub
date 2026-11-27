@@ -748,16 +748,23 @@ def search_scopes(
     db: Session, *, scope: ConnectivityScope, query: str, limit: int = 25
 ) -> tuple[ScopeChoice, ...]:
     """Find active assets, including healthy ones, without a live fleet sweep."""
-    model = {
-        ConnectivityScope.basestation: PopSite,
-        ConnectivityScope.cabinet: FdhCabinet,
-        ConnectivityScope.node: NetworkDevice,
-    }[scope]
-    statement = select(model.id, model.name).where(model.is_active.is_(True))
+    if scope == ConnectivityScope.basestation:
+        statement = select(PopSite.id, PopSite.name).where(PopSite.is_active.is_(True))
+        name_column, id_column = PopSite.name, PopSite.id
+    elif scope == ConnectivityScope.cabinet:
+        statement = select(FdhCabinet.id, FdhCabinet.name).where(
+            FdhCabinet.is_active.is_(True)
+        )
+        name_column, id_column = FdhCabinet.name, FdhCabinet.id
+    else:
+        statement = select(NetworkDevice.id, NetworkDevice.name).where(
+            NetworkDevice.is_active.is_(True)
+        )
+        name_column, id_column = NetworkDevice.name, NetworkDevice.id
     term = query.strip()
     if term:
-        statement = statement.where(model.name.ilike(f"%{term}%"))
-    statement = statement.order_by(model.name, model.id).limit(limit)
+        statement = statement.where(name_column.ilike(f"%{term}%"))
+    statement = statement.order_by(name_column, id_column).limit(limit)
     return tuple(ScopeChoice(id=row.id, name=row.name) for row in db.execute(statement))
 
 
@@ -773,22 +780,27 @@ def customer_connectivity(
     include_tickets: bool = False,
 ) -> ConnectivityPage | None:
     """All mapped customers in a BTS, cabinet, or node, regardless of health."""
-    model = {
-        ConnectivityScope.basestation: PopSite,
-        ConnectivityScope.cabinet: FdhCabinet,
-        ConnectivityScope.node: NetworkDevice,
-    }[scope]
-    asset = db.get(model, scope_id)
-    if asset is None or not asset.is_active:
-        return None
+    asset: PopSite | FdhCabinet | NetworkDevice
+    if scope == ConnectivityScope.basestation:
+        basestation = db.get(PopSite, scope_id)
+        if basestation is None or not basestation.is_active:
+            return None
+        asset = basestation
+        impact = affected_customers(db, basestation=basestation)
+    elif scope == ConnectivityScope.cabinet:
+        cabinet = db.get(FdhCabinet, scope_id)
+        if cabinet is None or not cabinet.is_active:
+            return None
+        asset = cabinet
+        impact = affected_customers(db, fdh=cabinet)
+    else:
+        node = db.get(NetworkDevice, scope_id)
+        if node is None or not node.is_active:
+            return None
+        asset = node
+        impact = affected_customers(db, node=node)
     page_size = max(1, min(page_size, 50))
     instant = now or datetime.now(UTC)
-    impact = affected_customers(
-        db,
-        basestation=asset if scope == ConnectivityScope.basestation else None,
-        fdh=asset if scope == ConnectivityScope.cabinet else None,
-        node=asset if scope == ConnectivityScope.node else None,
-    )
     subscriptions = sorted(impact["subscriptions"], key=lambda sub: str(sub.id))
     subscription_ids = {sub.id for sub in subscriptions}
     live_ids = online_subscription_ids(db, subscription_ids, now=instant)
@@ -847,7 +859,10 @@ def customer_connectivity(
             if not is_infrastructure_down_ticket(ticket):
                 continue
             for subscriber_id in ticket_customer_linked_ids(ticket):
-                if subscriber_id in subscriber_ids:
+                if (
+                    isinstance(subscriber_id, uuid.UUID)
+                    and subscriber_id in subscriber_ids
+                ):
                     tickets.setdefault(subscriber_id, ticket)
 
     selected = [
@@ -866,11 +881,11 @@ def customer_connectivity(
     result_rows: list[ConnectivityRow] = []
     for sub in visible:
         diagnosis = verdicts.get(sub.id, {})
-        interval = intervals.get(sub.id) if sub.id not in live_ids else None
-        ticket = tickets.get(sub.subscriber_id)
+        active_interval = intervals.get(sub.id) if sub.id not in live_ids else None
+        open_ticket = tickets.get(sub.subscriber_id)
         started = (
-            interval.started_at
-            if interval
+            active_interval.started_at
+            if active_interval
             else last_disconnects.get(sub.id)
             if sub.id not in live_ids
             else None
@@ -896,15 +911,15 @@ def customer_connectivity(
                     else None
                 ),
                 downtime_quality=(
-                    interval.quality
-                    if interval
+                    active_interval.quality
+                    if active_interval
                     else "estimated_from_last_disconnect"
                     if started
                     else None
                 ),
-                ticket_id=ticket.id if ticket else None,
-                ticket_number=ticket.number if ticket else None,
-                ticket_status=ticket.status if ticket else None,
+                ticket_id=open_ticket.id if open_ticket else None,
+                ticket_number=open_ticket.number if open_ticket else None,
+                ticket_status=open_ticket.status if open_ticket else None,
             )
         )
     return ConnectivityPage(

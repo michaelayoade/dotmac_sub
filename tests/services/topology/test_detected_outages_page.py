@@ -98,7 +98,7 @@ def test_console_defers_selected_domain_diagnosis(db_session, monkeypatch):
     selected_id = uuid.uuid4()
     context = _render_context(db_session, monkeypatch, node_id=selected_id)
     assert context["selected_node_id"] == selected_id
-    assert "detail" not in context
+    assert context["detail"] is None
 
 
 def test_console_paginates_incident_list(db_session, monkeypatch):
