@@ -20,11 +20,11 @@
    HERO STAT — a flat at-a-glance tile. tone (optional) colors the
    value via the semantic renderer; never a hardcoded color.
    ============================================================ #}
-{% macro hero_stat(label, value, sub="", tone="") %}
+{% macro hero_stat(label, value, sub="", tone="", wrap_sub=False) %}
 <div class="rounded-xl border border-slate-200 bg-white px-3.5 py-2.5 dark:border-slate-700 dark:bg-slate-800">
     <p class="text-[10.5px] font-semibold uppercase tracking-[0.1em] text-slate-400 dark:text-slate-500">{{ label }}</p>
     <p class="mt-1 text-lg font-bold leading-tight tabular-nums {% if tone %}status-foreground status-tone-{{ tone }}{% else %}text-slate-900 dark:text-white{% endif %}">{{ value }}</p>
-    {% if sub %}<p class="mt-0.5 truncate text-[11px] text-slate-500 dark:text-slate-400">{{ sub }}</p>{% endif %}
+    {% if sub %}<p class="mt-0.5 {{ 'break-words' if wrap_sub else 'truncate' }} text-[11px] text-slate-500 dark:text-slate-400">{{ sub }}</p>{% endif %}
 </div>
 {% endmacro %}
 
@@ -119,10 +119,12 @@
     {# at-a-glance tiles — flat, semantic #}
     <div class="mt-4 grid grid-cols-2 gap-2.5 sm:grid-cols-4">
         {{ hero_stat("Account", hero_status.label if hero_status else "—", tone=(hero_status.tone if hero_status else "")) }}
+        {% set billing_mode_detail = (summary.billing_mode.label ~ " · " ~ summary.billing_mode.source_label) if summary.billing_mode else "Billing mode unavailable" %}
         {% if summary.plan %}
-            {{ hero_stat("Plan", summary.plan.name or "—", sub=("₦%s"|format("{:,.0f}".format(summary.plan.price)) if summary.plan.price is not none else "")) }}
+            {% set plan_price = "₦%s"|format("{:,.0f}".format(summary.plan.price)) if summary.plan.price is not none else "" %}
+            {{ hero_stat("Plan", summary.plan.name or "—", sub=(billing_mode_detail ~ (" · " ~ plan_price if plan_price else "")), wrap_sub=True) }}
         {% else %}
-            {{ hero_stat("Plan", "No active plan") }}
+            {{ hero_stat("Plan", "No active plan", sub=billing_mode_detail, wrap_sub=True) }}
         {% endif %}
         {% if summary.balance %}
             {% set _b = summary.balance %}

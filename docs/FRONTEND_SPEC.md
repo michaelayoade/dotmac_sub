@@ -767,6 +767,17 @@ lifecycle billing gate even when their retained contract price is coherent.
 #### `GET /admin/customers/{type}/{id}` (Person Detail)
 **Template:** `admin/customers/detail.html`
 
+The header Plan tile shows the newest active subscription's offer name and price.
+Its secondary line shows the effective prepaid/postpaid mode and whether it
+comes from the account setting or billable services, using
+`financial.billing_profile` independently of which active plan is selected. When
+there is no collectible service, the account billing mode supplies the label,
+including when the tile says **No active plan**. Mixed collectible service modes
+or missing billing evidence display **Billing mode needs review**. If the
+collectible services agree but the account setting differs, show the service
+mode with **review account setting**. The subscriber summary supplies the typed
+mode label and source label; the template only renders them.
+
 ```python
 {
     "customer": Subscriber,             # full ORM object

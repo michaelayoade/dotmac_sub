@@ -93,6 +93,7 @@ def _hero(status_value: str, hide: bool) -> str:
         email=None,
         phone=None,
         plan=None,
+        billing_mode=SimpleNamespace(label="Prepaid", source_label="Account setting"),
         balance=None,
         connection=None,
         status=None,
@@ -118,6 +119,36 @@ def test_hero_hides_active_badge_but_keeps_other_statuses():
     )
     # default behaviour unchanged for other pages
     assert "ActiveBADGE" in _hero("active", False).split("</h1>")[1].split("</div>")[0]
+
+
+def test_hero_plan_tile_keeps_billing_mode_without_active_plan():
+    assert "No active plan" in _hero("active", True)
+    assert "Prepaid · Account setting" in _hero("active", True)
+
+
+def test_hero_plan_tile_shows_mode_and_price():
+    from decimal import Decimal
+    from types import SimpleNamespace
+
+    summary = SimpleNamespace(
+        name="Test Customer",
+        avatar_url=None,
+        is_business=False,
+        subscriber_number=None,
+        since=None,
+        email=None,
+        phone=None,
+        plan=SimpleNamespace(name="Fibre 100", price=Decimal("18500")),
+        billing_mode=SimpleNamespace(
+            label="Postpaid", source_label="Billable services"
+        ),
+        balance=None,
+        connection=None,
+        status=None,
+    )
+    html = _render_macro("{{ subscriber_hero(summary) }}", summary=summary)
+    assert "Fibre 100" in html
+    assert "Postpaid · Billable services · ₦18,500" in html
 
 
 def test_detail_template_hides_active_badges_and_labels_session():

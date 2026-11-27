@@ -16,17 +16,45 @@ import pytest
 from sqlalchemy.exc import OperationalError
 from sqlalchemy.orm import Session
 
-from app.models.catalog import SubscriptionStatus
+from app.models.catalog import BillingMode, SubscriptionStatus
 from app.models.subscriber import SubscriberStatus
 from app.services import subscriber_summary as ss
+from app.services.billing_profile import (
+    BillingProfile,
+    BillingProfileReason,
+    BillingProfileSource,
+)
 
 
-def _wire(monkeypatch, *, subscriber, subscriptions=(), position=None, sessions=None):
+def _wire(
+    monkeypatch,
+    *,
+    subscriber,
+    subscriptions=(),
+    position=None,
+    sessions=None,
+    profile=None,
+):
     monkeypatch.setattr(
         ss.subscriber_service.subscribers, "get_optional", lambda **_: subscriber
     )
     monkeypatch.setattr(
         ss.catalog_service.subscriptions, "list", lambda **_: list(subscriptions)
+    )
+    monkeypatch.setattr(
+        ss,
+        "resolve_billing_profile",
+        lambda _db, _account: (
+            profile
+            or BillingProfile(
+                account_id=subscriber.id,
+                account_mode=BillingMode.prepaid,
+                subscription_modes=frozenset(),
+                effective_mode=BillingMode.prepaid,
+                source=BillingProfileSource.ACCOUNT,
+                account_subscription_mismatch=False,
+            )
+        ),
     )
     monkeypatch.setattr(
         ss, "get_customer_financial_position", lambda _db, _aid: position
@@ -105,6 +133,8 @@ def test_summary_maps_identity_plan_balance_and_connection(monkeypatch):
     assert summary["status"]["tone"]
     assert summary["plan"]["name"] == "Fibre 100"
     assert summary["plan"]["price"] == Decimal("18500")
+    assert summary["billing_mode"].label == "Prepaid"
+    assert summary["billing_mode"].source_label == "Account setting"
     assert summary["active_plan_count"] == 1
     assert summary["balance"]["currency"] == "NGN"
     assert summary["connection"]["online"] is True
@@ -122,6 +152,87 @@ def test_business_subscriber_gets_business_url(monkeypatch):
     assert summary["url"] == f"/admin/customers/business/{sub.id}"
     assert summary["plan"] is None
     assert summary["connection"] is None  # no active subscriptions -> no lookup
+    assert summary["billing_mode"].label == "Prepaid"
+    assert summary["billing_mode"].source is BillingProfileSource.ACCOUNT
+    assert summary["billing_mode"].source_label == "Account setting"
+
+
+@pytest.mark.parametrize(
+    (
+        "account_mode",
+        "service_modes",
+        "effective_mode",
+        "source",
+        "mismatch",
+        "reason",
+        "expected",
+    ),
+    [
+        (
+            BillingMode.postpaid,
+            frozenset({BillingMode.postpaid}),
+            BillingMode.postpaid,
+            BillingProfileSource.SUBSCRIPTION,
+            False,
+            None,
+            "Postpaid",
+        ),
+        (
+            BillingMode.prepaid,
+            frozenset({BillingMode.postpaid}),
+            BillingMode.postpaid,
+            BillingProfileSource.SUBSCRIPTION,
+            True,
+            None,
+            "Postpaid (review account setting)",
+        ),
+        (
+            BillingMode.prepaid,
+            frozenset({BillingMode.prepaid, BillingMode.postpaid}),
+            None,
+            BillingProfileSource.MIXED_SUBSCRIPTIONS,
+            True,
+            BillingProfileReason.MIXED_COLLECTIBLE_SUBSCRIPTION_BILLING_MODES,
+            "Billing mode needs review",
+        ),
+    ],
+)
+def test_billing_mode_follows_canonical_profile(
+    monkeypatch,
+    account_mode,
+    service_modes,
+    effective_mode,
+    source,
+    mismatch,
+    reason,
+    expected,
+):
+    sub = _subscriber()
+    profile = BillingProfile(
+        account_id=sub.id,
+        account_mode=account_mode,
+        subscription_modes=service_modes,
+        effective_mode=effective_mode,
+        source=source,
+        account_subscription_mismatch=mismatch,
+        invalid_reason=reason,
+    )
+    _wire(monkeypatch, subscriber=sub, profile=profile)
+
+    summary = ss.subscriber_summary(object(), str(sub.id))
+
+    assert summary is not None
+    assert summary["billing_mode"].label == expected
+    assert summary["billing_mode"].source is source
+    assert (
+        summary["billing_mode"].source_label
+        == {
+            BillingProfileSource.ACCOUNT: "Account setting",
+            BillingProfileSource.SUBSCRIPTION: "Billable services",
+            BillingProfileSource.MIXED_SUBSCRIPTIONS: "Mixed services",
+        }[source]
+    )
+    assert summary["billing_mode"].needs_review is (mismatch or reason is not None)
 
 
 def test_missing_or_unknown_subscriber_returns_none(monkeypatch):
