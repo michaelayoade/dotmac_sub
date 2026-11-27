@@ -63,6 +63,11 @@ def _render_context(db, monkeypatch, *, live=False, node_id=None, incident_page=
         node_id=node_id,
         live=live,
         incident_page=incident_page,
+        scope="basestation",
+        q="",
+        scope_id=None,
+        status_filter="all",
+        customer_page=1,
         db=db,
     )
     return resp["context"]
@@ -187,10 +192,10 @@ def test_detail_fragment_only_loads_selected_domain(db_session, monkeypatch):
     ]
 
 
-def test_connectivity_fragment_does_not_read_tickets_without_permission(
+def test_connectivity_context_does_not_read_tickets_without_permission(
     db_session, monkeypatch
 ):
-    from app.services.topology import customer_connectivity as projection
+    from app.services.topology import outage_console as projection
     from app.web.admin import network_monitoring
 
     selected_id = uuid.uuid4()
@@ -203,22 +208,16 @@ def test_connectivity_fragment_does_not_read_tickets_without_permission(
         return None
 
     monkeypatch.setattr(projection, "customer_connectivity", detail)
-    monkeypatch.setattr(
-        network_monitoring.templates,
-        "TemplateResponse",
-        lambda template, context: {"template": template, "context": context},
-    )
-    response = network_monitoring.detected_outages_connectivity(
-        _request("/admin/network/detected-outages/connectivity"),
+    context = network_monitoring._detected_outages_connectivity_context(
+        request=_request(),
+        db=db_session,
         scope="node",
         q="",
         scope_id=selected_id,
         status_filter="no_ticket",
         customer_page=1,
-        db=db_session,
     )
-    assert response["template"] == "admin/network/_detected_outages_connectivity.html"
-    assert response["context"]["can_view_tickets"] is False
+    assert context["can_view_tickets"] is False
     assert calls[0]["include_tickets"] is False
     assert calls[0]["status_filter"] == projection.ConnectivityFilter.all
 

@@ -734,6 +734,11 @@ def detected_outages_console(
     node_id: uuid.UUID | None = None,
     live: bool = False,
     incident_page: int = Query(1, ge=1, le=1000),
+    scope: str = "basestation",
+    q: str = Query("", max_length=80),
+    scope_id: uuid.UUID | None = None,
+    status_filter: str = "all",
+    customer_page: int = Query(1, ge=1, le=1000),
     db: Session = Depends(get_db),
 ):
     """Classifier-driven outage console (design §P4a).
@@ -788,6 +793,17 @@ def detected_outages_console(
     if live:
         context.update(_detected_outages_live_context(db))
     context["selected_node_id"] = node_id
+    context.update(
+        _detected_outages_connectivity_context(
+            request=request,
+            db=db,
+            scope=scope,
+            q=q,
+            scope_id=scope_id,
+            status_filter=status_filter,
+            customer_page=customer_page,
+        )
+    )
     return templates.TemplateResponse("admin/network/detected_outages.html", context)
 
 
@@ -813,22 +829,18 @@ def detected_outages_live(request: Request, db: Session = Depends(get_db)):
     )
 
 
-@router.get(
-    "/detected-outages/connectivity",
-    response_class=HTMLResponse,
-    dependencies=[Depends(require_permission("monitoring:read"))],
-)
-def detected_outages_connectivity(
+def _detected_outages_connectivity_context(
+    *,
     request: Request,
-    scope: str = "basestation",
-    q: str = Query("", max_length=80),
-    scope_id: uuid.UUID | None = None,
-    status_filter: str = "all",
-    customer_page: int = Query(1, ge=1, le=1000),
-    db: Session = Depends(get_db),
-):
-    """Read-only, independent customer view for healthy or down equipment."""
-    from app.services.topology.customer_connectivity import (
+    db: Session,
+    scope: str,
+    q: str,
+    scope_id: uuid.UUID | None,
+    status_filter: str,
+    customer_page: int,
+) -> dict:
+    """Build the existing page's read-only customer view."""
+    from app.services.topology.outage_console import (
         ConnectivityFilter,
         ConnectivityScope,
         customer_connectivity,
@@ -858,19 +870,16 @@ def detected_outages_connectivity(
         if scope_id is not None
         else None
     )
-    return templates.TemplateResponse(
-        "admin/network/_detected_outages_connectivity.html",
-        {
-            "request": request,
-            "scope": selected_scope,
-            "q": q,
-            "choices": choices,
-            "scope_id": scope_id,
-            "status_filter": selected_filter,
-            "detail": detail,
-            "can_view_tickets": can_view_tickets,
-        },
-    )
+    return {
+        "request": request,
+        "scope": selected_scope,
+        "q": q,
+        "choices": choices,
+        "scope_id": scope_id,
+        "status_filter": selected_filter,
+        "detail": detail,
+        "can_view_tickets": can_view_tickets,
+    }
 
 
 @router.get(

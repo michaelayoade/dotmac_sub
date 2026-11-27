@@ -15,7 +15,7 @@ from app.models.radius_active_session import RadiusActiveSession
 from app.models.subscriber import Subscriber
 from app.models.support import Ticket, TicketStatus
 from app.models.usage import AccountingStatus, RadiusAccountingSession
-from app.services.topology.customer_connectivity import (
+from app.services.topology.outage_console import (
     ConnectivityFilter,
     ConnectivityScope,
     customer_connectivity,
