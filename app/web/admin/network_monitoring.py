@@ -15,7 +15,11 @@ from app.services import web_network_core_runtime as web_network_core_runtime_se
 from app.services import web_network_monitoring as web_network_monitoring_service
 from app.services import web_network_noc as web_network_noc_service
 from app.services import web_network_noc_inspector as web_network_noc_inspector_service
-from app.services.auth_dependencies import require_any_permission, require_permission
+from app.services.auth_dependencies import (
+    can,
+    require_any_permission,
+    require_permission,
+)
 from app.services.topology.reachability import (
     ReachabilityPageQuery,
     get_reachability_page,
@@ -806,6 +810,66 @@ def detected_outages_live(request: Request, db: Session = Depends(get_db)):
     return templates.TemplateResponse(
         "admin/network/_detected_outages_live.html",
         {"request": request, **_detected_outages_live_context(db)},
+    )
+
+
+@router.get(
+    "/detected-outages/connectivity",
+    response_class=HTMLResponse,
+    dependencies=[Depends(require_permission("monitoring:read"))],
+)
+def detected_outages_connectivity(
+    request: Request,
+    scope: str = "basestation",
+    q: str = Query("", max_length=80),
+    scope_id: uuid.UUID | None = None,
+    status_filter: str = "all",
+    customer_page: int = Query(1, ge=1, le=1000),
+    db: Session = Depends(get_db),
+):
+    """Read-only, independent customer view for healthy or down equipment."""
+    from app.services.topology.customer_connectivity import (
+        ConnectivityFilter,
+        ConnectivityScope,
+        customer_connectivity,
+        search_scopes,
+    )
+
+    try:
+        selected_scope = ConnectivityScope(scope)
+        selected_filter = ConnectivityFilter(status_filter)
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=422, detail="Invalid connectivity filter"
+        ) from exc
+    can_view_tickets = can(request, "support:ticket:read")
+    if not can_view_tickets and selected_filter == ConnectivityFilter.no_ticket:
+        selected_filter = ConnectivityFilter.all
+    choices = search_scopes(db, scope=selected_scope, query=q, limit=25)
+    detail = (
+        customer_connectivity(
+            db,
+            scope=selected_scope,
+            scope_id=scope_id,
+            status_filter=selected_filter,
+            page=customer_page,
+            include_tickets=can_view_tickets,
+        )
+        if scope_id is not None
+        else None
+    )
+    return templates.TemplateResponse(
+        "admin/network/_detected_outages_connectivity.html",
+        {
+            "request": request,
+            "scope": selected_scope,
+            "q": q,
+            "choices": choices,
+            "scope_id": scope_id,
+            "status_filter": selected_filter,
+            "detail": detail,
+            "can_view_tickets": can_view_tickets,
+        },
     )
 
 

@@ -71,6 +71,18 @@
         {% endif %}
     </div>
 
+    <section id="detected-outages-connectivity"
+             aria-label="Customer Connectivity"
+             hx-get="/admin/network/detected-outages/connectivity"
+             hx-trigger="revealed once"
+             hx-swap="outerHTML"
+             class="rounded-xl border border-slate-200 bg-white p-5 shadow-sm dark:border-slate-700 dark:bg-slate-800">
+        <h2 class="font-semibold text-slate-900 dark:text-white">Customer Connectivity</h2>
+        <p class="mt-1 text-sm text-slate-500 dark:text-slate-400">Choose a BTS, cabinet, or node to see its customers, even when the equipment is healthy.</p>
+        <p role="status" class="mt-3 text-sm text-slate-500">Loading equipment…</p>
+        <noscript><a href="/admin/network/detected-outages/connectivity" class="text-sky-600 underline">Open customer connectivity</a></noscript>
+    </section>
+
     {% if show_live %}
     {% include "admin/network/_detected_outages_live.html" %}
     {% else %}
