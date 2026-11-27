@@ -158,7 +158,7 @@ function renderDetectedOutagesChart() {
             themeColor('semantic-neutral-600')
         ]
     };
-    const chart = DotmacCharts.createDoughnutChart(ctx, chartData, { legendPosition: 'bottom' });
+    const chart = DotmacCharts.createDoughnutChart(ctx, chartData, { legend: { display: false }, cutout: '68%' });
     DotmacCharts.registerChart('node-health-chart', chart);
     ctx.dataset.chartRendered = 'true';
 }
