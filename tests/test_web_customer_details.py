@@ -1796,6 +1796,53 @@ def test_canonical_address_precedes_legacy_display(db_session, subscriber) -> No
     assert context["map_data"]["center"] == [6.5, 3.3]
 
 
+def test_admin_detail_shows_geolocated_service_address(
+    db_session, subscriber, monkeypatch
+) -> None:
+    import app.web.admin as admin_module
+
+    subscriber.user_type = UserType.customer
+    subscriber.address_line1 = None
+    db_session.add(
+        Address(
+            subscriber_id=subscriber.id,
+            address_line1="123 Portal Service Street",
+            city="Lagos",
+            is_primary=True,
+            latitude=6.5,
+            longitude=3.3,
+        )
+    )
+    db_session.commit()
+
+    monkeypatch.setattr(
+        customer_routes.web_notifications_service,
+        "customer_notification_picker_context",
+        lambda _db: {},
+    )
+    monkeypatch.setattr(
+        customer_routes.subscriber_party_binding_repair,
+        "resolve_repair_context",
+        lambda _db, *, subscriber_id: None,
+    )
+    monkeypatch.setattr(admin_module, "get_current_user", lambda request: None)
+    monkeypatch.setattr(admin_module, "get_sidebar_stats", lambda db: {})
+    response = customer_routes.person_detail(
+        request=_bare_request(f"/admin/customers/person/{subscriber.id}"),
+        customer_id=str(subscriber.id),
+        panel=None,
+        usage_period="current",
+        usage_page=1,
+        usage_per_page=25,
+        usage_view="chart",
+        db=db_session,
+    )
+    rendered = response.body.decode("utf-8")
+    assert re.search(r"Address</p>\s*<p[^>]*>123 Portal Service Street</p>", rendered)
+    assert "No address on file" not in rendered
+    assert 'id="customer-overview-map"' in rendered
+
+
 @pytest.mark.parametrize("has_coordinates", [False, True])
 def test_legacy_detail_route_renders_manual_location_gate(
     db_session,
