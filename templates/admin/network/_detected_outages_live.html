@@ -5,7 +5,7 @@
             <h2 class="font-semibold text-slate-900 dark:text-white">Node health</h2>
             <p class="text-xs text-slate-500 dark:text-slate-400">{{ summary.total_nodes }} pingable infra nodes classified</p>
         </div>
-        <div class="grid gap-6 lg:grid-cols-[280px_minmax(0,1fr)] lg:items-center">
+        <div>
             <div class="relative mx-auto h-64 w-64 max-w-full" aria-hidden="true">
                 <canvas id="node-health-chart" data-counts='{{ summary.counts | tojson }}'></canvas>
                 <div class="pointer-events-none absolute inset-0 flex flex-col items-center justify-center">
@@ -13,9 +13,9 @@
                     <span class="text-xs text-slate-500 dark:text-slate-400">nodes checked</span>
                 </div>
             </div>
-            <div class="min-w-0">
-                <h3 class="mb-2 text-sm font-semibold text-slate-700 dark:text-slate-200">Classifier states</h3>
-                <dl class="divide-y divide-slate-100 rounded-lg border border-slate-200 px-4 dark:divide-slate-700 dark:border-slate-700">
+            <div class="mt-8">
+                <h3 class="mb-3 text-sm font-semibold text-slate-700 dark:text-slate-200">Classifier states</h3>
+                <dl class="grid gap-3 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5">
                     {% set cls_meta = [
                         ('healthy', 'Healthy', 'bg-emerald-500'),
                         ('node_outage', 'Node outage', 'bg-red-500'),
@@ -25,7 +25,7 @@
                     ] %}
                     {% for key, label, color in cls_meta %}
                     {% set count = summary.counts.get(key, 0) %}
-                    <div class="flex items-center justify-between gap-4 py-2.5 dark:border-slate-700">
+                    <div class="flex items-center justify-between gap-4 rounded-lg border border-slate-200 px-3 py-3 dark:border-slate-700">
                         <dt class="flex min-w-0 items-center gap-2.5 text-sm text-slate-700 dark:text-slate-200">
                             <span class="h-2.5 w-2.5 shrink-0 rounded-full {{ color }}" aria-hidden="true"></span>
                             <span>{{ label }}</span>
