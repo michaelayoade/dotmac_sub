@@ -63,6 +63,11 @@ def _render_context(db, monkeypatch, *, live=False, node_id=None, incident_page=
         node_id=node_id,
         live=live,
         incident_page=incident_page,
+        scope="basestation",
+        q="",
+        scope_id=None,
+        status_filter="all",
+        customer_page=1,
         db=db,
     )
     return resp["context"]
@@ -93,7 +98,7 @@ def test_console_defers_selected_domain_diagnosis(db_session, monkeypatch):
     selected_id = uuid.uuid4()
     context = _render_context(db_session, monkeypatch, node_id=selected_id)
     assert context["selected_node_id"] == selected_id
-    assert "detail" not in context
+    assert context["detail"] is None
 
 
 def test_console_paginates_incident_list(db_session, monkeypatch):
@@ -185,6 +190,36 @@ def test_detail_fragment_only_loads_selected_domain(db_session, monkeypatch):
             },
         )
     ]
+
+
+def test_connectivity_context_does_not_read_tickets_without_permission(
+    db_session, monkeypatch
+):
+    from app.services.topology import outage_console as projection
+    from app.web.admin import network_monitoring
+
+    selected_id = uuid.uuid4()
+    calls = []
+    monkeypatch.setattr(network_monitoring, "can", lambda *args: False)
+    monkeypatch.setattr(projection, "search_scopes", lambda *args, **kwargs: ())
+
+    def detail(db, **kwargs):
+        calls.append(kwargs)
+        return None
+
+    monkeypatch.setattr(projection, "customer_connectivity", detail)
+    context = network_monitoring._detected_outages_connectivity_context(
+        request=_request(),
+        db=db_session,
+        scope="node",
+        q="",
+        scope_id=selected_id,
+        status_filter="no_ticket",
+        customer_page=1,
+    )
+    assert context["can_view_tickets"] is False
+    assert calls[0]["include_tickets"] is False
+    assert calls[0]["status_filter"] == projection.ConnectivityFilter.all
 
 
 def test_branch_fragment_loads_one_pon_page(db_session, monkeypatch):

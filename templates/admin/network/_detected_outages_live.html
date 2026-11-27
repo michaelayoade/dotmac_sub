@@ -5,24 +5,35 @@
             <h2 class="font-semibold text-slate-900 dark:text-white">Node health</h2>
             <p class="text-xs text-slate-500 dark:text-slate-400">{{ summary.total_nodes }} pingable infra nodes classified</p>
         </div>
-        <div class="grid gap-6 lg:grid-cols-[280px_1fr] lg:items-center">
-            <div class="chart-container h-64 min-h-64">
+        <div>
+            <div class="relative mx-auto h-64 w-64 max-w-full" aria-hidden="true">
                 <canvas id="node-health-chart" data-counts='{{ summary.counts | tojson }}'></canvas>
+                <div class="pointer-events-none absolute inset-0 flex flex-col items-center justify-center">
+                    <span class="text-3xl font-semibold tabular-nums text-slate-900 dark:text-white">{{ summary.total_nodes }}</span>
+                    <span class="text-xs text-slate-500 dark:text-slate-400">nodes checked</span>
+                </div>
             </div>
-            <div>
+            <div class="mt-8">
                 <h3 class="mb-3 text-sm font-semibold text-slate-700 dark:text-slate-200">Classifier states</h3>
-                <dl class="grid grid-cols-2 gap-3 sm:grid-cols-3">
-                    {% set cls_meta = {
-                        'healthy': ('Healthy', 'emerald'),
-                        'node_outage': ('Node outage', 'red'),
-                        'service_fault': ('Service fault', 'amber'),
-                        'monitoring_fault': ('Monitoring fault', 'violet'),
-                        'unknown': ('Unknown', 'slate')
-                    } %}
-                    {% for key, meta in cls_meta.items() %}
-                    <div class="rounded-lg border border-slate-100 p-3 dark:border-slate-700">
-                        <dt class="text-xs font-medium uppercase tracking-wide text-{{ meta[1] }}-600 dark:text-{{ meta[1] }}-400">{{ meta[0] }}</dt>
-                        <dd class="mt-1 text-2xl font-bold text-slate-900 dark:text-white">{{ summary.counts.get(key, 0) }}</dd>
+                <dl class="grid gap-3 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5">
+                    {% set cls_meta = [
+                        ('healthy', 'Healthy', 'bg-emerald-500'),
+                        ('node_outage', 'Node outage', 'bg-red-500'),
+                        ('service_fault', 'Service fault', 'bg-amber-500'),
+                        ('monitoring_fault', 'Monitoring fault', 'bg-blue-500'),
+                        ('unknown', 'Unknown', 'bg-slate-500')
+                    ] %}
+                    {% for key, label, color in cls_meta %}
+                    {% set count = summary.counts.get(key, 0) %}
+                    <div class="flex items-center justify-between gap-4 rounded-lg border border-slate-200 px-3 py-3 dark:border-slate-700">
+                        <dt class="flex min-w-0 items-center gap-2.5 text-sm text-slate-700 dark:text-slate-200">
+                            <span class="h-2.5 w-2.5 shrink-0 rounded-full {{ color }}" aria-hidden="true"></span>
+                            <span>{{ label }}</span>
+                        </dt>
+                        <dd class="flex shrink-0 items-baseline gap-3 tabular-nums">
+                            <span class="font-semibold text-slate-900 dark:text-white">{{ count }}</span>
+                            <span class="w-12 text-right text-xs text-slate-500 dark:text-slate-400">{{ ((count / summary.total_nodes * 100) if summary.total_nodes else 0) | round(1) }}%</span>
+                        </dd>
                     </div>
                     {% endfor %}
                 </dl>

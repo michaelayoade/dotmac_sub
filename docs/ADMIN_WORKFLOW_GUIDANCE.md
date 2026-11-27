@@ -116,6 +116,18 @@ verdicts page 50 at a time; OLT branch inference is requested separately, one
 PON per request. A monitoring fault calls for checking the monitoring path,
 while Notify remains an authorized preview before a confirmed send.
 
+Customer Connectivity is an independent, read-only view on the same page. Search
+for any active BTS, cabinet, or node, including healthy equipment, then filter
+its mapped customers to all, those without a fresh live session, or those
+without an open service-down ticket. The customer list pages 50 at a time and
+shows medium, available signal, and a linked ticket when the operator has
+`support:ticket:read`. A missing live session is an investigation signal, not
+confirmed provider downtime. The downtime start and duration use an open
+confirmed customer outage interval when available. Otherwise the last recorded
+RADIUS disconnect supplies an explicitly estimated start and duration; if no
+such observation exists they remain unknown. Customers without a session stay
+visible after their equipment recovers.
+
 ## Network monitoring
 
 Use `/admin/network/monitoring` for a current exception snapshot. Open NOC or

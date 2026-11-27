@@ -71,6 +71,94 @@
         {% endif %}
     </div>
 
+    <section id="detected-outages-connectivity" aria-label="Customer Connectivity"
+             class="rounded-xl border border-slate-200 bg-white p-5 shadow-sm dark:border-slate-700 dark:bg-slate-800">
+        <div class="flex flex-wrap items-start justify-between gap-3">
+            <div>
+                <h2 class="font-semibold text-slate-900 dark:text-white">Customer Connectivity</h2>
+                <p class="mt-1 text-sm text-slate-500 dark:text-slate-400">Find every mapped customer under a BTS, cabinet, or node, regardless of equipment health.</p>
+            </div>
+            {% if detail %}<span class="text-xs text-slate-500 dark:text-slate-400">Equipment: {{ detail.equipment_status or 'status unavailable' }}</span>{% endif %}
+        </div>
+
+        <form method="get" action="/admin/network/detected-outages"
+              class="mt-4 flex flex-wrap items-end gap-3">
+            <label class="text-xs font-medium text-slate-600 dark:text-slate-300">Equipment type
+                <select name="scope" class="mt-1 block rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-900">
+                    <option value="basestation" {% if scope.value == 'basestation' %}selected{% endif %}>BTS</option>
+                    <option value="cabinet" {% if scope.value == 'cabinet' %}selected{% endif %}>Cabinet</option>
+                    <option value="node" {% if scope.value == 'node' %}selected{% endif %}>Node</option>
+                </select>
+            </label>
+            <label class="text-xs font-medium text-slate-600 dark:text-slate-300">Search equipment
+                <input name="q" value="{{ q }}" placeholder="Name" class="mt-1 block rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm dark:border-slate-600 dark:bg-slate-900">
+            </label>
+            <button type="submit" class="rounded-lg bg-sky-600 px-4 py-2 text-sm font-medium text-white hover:bg-sky-700">Find</button>
+        </form>
+
+        <div class="mt-3 flex flex-wrap gap-2" aria-label="Matching equipment">
+            {% for choice in choices %}
+            <a href="/admin/network/detected-outages?scope={{ scope.value }}&scope_id={{ choice.id }}&q={{ q | urlencode }}#detected-outages-connectivity"
+               class="rounded-full border px-3 py-1 text-xs {% if scope_id == choice.id %}border-sky-500 bg-sky-50 text-sky-800 dark:bg-sky-950 dark:text-sky-200{% else %}border-slate-200 text-slate-600 hover:border-sky-400 dark:border-slate-700 dark:text-slate-300{% endif %}">{{ choice.name }}</a>
+            {% else %}
+            <span class="text-sm text-slate-500">No matching equipment.</span>
+            {% endfor %}
+        </div>
+        {% if choices | length == 25 %}<p class="mt-2 text-xs text-slate-500">Showing the first 25 matches. Search by name to narrow the list.</p>{% endif %}
+
+        {% if scope_id and not detail %}<p role="status" class="mt-4 text-sm text-amber-700 dark:text-amber-300">Equipment not found or inactive.</p>{% endif %}
+        {% if detail %}
+        <div class="mt-5 border-t border-slate-200 pt-4 dark:border-slate-700">
+            <h3 class="font-medium text-slate-900 dark:text-white">{{ detail.scope_name }} customers</h3>
+            <div class="mt-2 flex flex-wrap gap-4 text-sm text-slate-600 dark:text-slate-300">
+                <span><strong class="text-slate-900 dark:text-white">{{ detail.total_customers }}</strong> mapped</span>
+                <span><strong class="text-amber-700 dark:text-amber-300">{{ detail.without_session }}</strong> without a live session</span>
+                {% if can_view_tickets %}<span><strong class="text-slate-900 dark:text-white">{{ detail.open_service_tickets }}</strong> customers with open service tickets</span>{% endif %}
+            </div>
+            <p class="mt-2 text-xs text-slate-500 dark:text-slate-400">No live session requires investigation; it does not by itself prove an outage. A confirmed outage uses the outage ledger. Otherwise, time since the last recorded disconnect is an estimate and may lag. Signal is the latest available reading.</p>
+            <nav aria-label="Customer connectivity filters" class="mt-3 flex flex-wrap gap-3 text-sm">
+                {% for value, label in [('all', 'All customers'), ('no_session', 'No live session'), ('no_ticket', 'No service ticket')] %}
+                {% if value != 'no_ticket' or can_view_tickets %}
+                <a href="/admin/network/detected-outages?scope={{ scope.value }}&scope_id={{ detail.scope_id }}&status_filter={{ value }}&q={{ q | urlencode }}#detected-outages-connectivity"
+                   class="{% if status_filter.value == value %}font-semibold text-sky-700 underline dark:text-sky-300{% else %}text-slate-600 hover:underline dark:text-slate-300{% endif %}">{{ label }}</a>
+                {% endif %}
+                {% endfor %}
+            </nav>
+            <div class="mt-3 overflow-x-auto">
+                <table class="w-full text-left text-sm">
+                    <thead class="text-xs uppercase tracking-wide text-slate-500 dark:text-slate-400">
+                        <tr><th class="pb-2 pr-3">Customer</th><th class="pb-2 pr-3">Connection</th><th class="pb-2 pr-3">Downtime start</th><th class="pb-2 pr-3">Down for</th><th class="pb-2 pr-3">Medium</th><th class="pb-2 pr-3">Latest signal</th><th class="pb-2">Service ticket</th></tr>
+                    </thead>
+                    <tbody>
+                        {% for c in detail.rows %}
+                        <tr class="border-t border-slate-100 dark:border-slate-700">
+                            <td class="py-2 pr-3 font-medium text-slate-900 dark:text-white">
+                                {% if can(request, 'subscription:read') %}<a href="/admin/catalog/subscriptions/{{ c.subscription_id }}" class="text-sky-700 hover:underline dark:text-sky-300">{{ c.customer_name }}</a>{% else %}{{ c.customer_name }}{% endif %}
+                            </td>
+                            <td class="py-2 pr-3">{% if c.has_live_session %}<span class="text-emerald-700 dark:text-emerald-300">Online</span>{% else %}<span class="text-amber-700 dark:text-amber-300">No live session</span>{% endif %}</td>
+                            <td class="py-2 pr-3 text-slate-600 dark:text-slate-300">{{ c.downtime_started_at | app_datetime('%Y-%m-%d %H:%M', 'Unknown') }}{% if c.downtime_quality and c.downtime_quality != 'exact' %} <span class="text-xs text-amber-700 dark:text-amber-300">estimated</span>{% endif %}</td>
+                            <td class="py-2 pr-3 text-slate-600 dark:text-slate-300">{% if c.downtime_seconds is not none %}{{ c.downtime_seconds // 3600 }}h {{ (c.downtime_seconds % 3600) // 60 }}m{% else %}Unknown{% endif %}</td>
+                            <td class="py-2 pr-3 text-slate-600 dark:text-slate-300">{{ c.medium or 'Unknown' }}</td>
+                            <td class="py-2 pr-3 text-slate-600 dark:text-slate-300">{% if c.signal_dbm is not none %}{{ c.signal_dbm }} dBm{% else %}Unavailable{% endif %}</td>
+                            <td class="py-2">{% if not can_view_tickets %}<span class="text-slate-400">Restricted</span>{% elif c.ticket_id %}<a href="/admin/support/tickets/{{ c.ticket_id }}" class="text-sky-700 hover:underline dark:text-sky-300">#{{ c.ticket_number or c.ticket_id }} · {{ c.ticket_status }}</a>{% else %}<span class="text-slate-500">No open service ticket</span>{% endif %}</td>
+                        </tr>
+                        {% else %}
+                        <tr><td colspan="7" class="py-4 text-slate-500">No customers match this filter.</td></tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+            {% if detail.page > 1 or detail.has_next %}
+            <nav aria-label="Customer connectivity pages" class="mt-4 flex items-center justify-between text-sm">
+                {% if detail.page > 1 %}<a href="/admin/network/detected-outages?scope={{ scope.value }}&scope_id={{ detail.scope_id }}&status_filter={{ status_filter.value }}&customer_page={{ detail.page - 1 }}&q={{ q | urlencode }}#detected-outages-connectivity" class="text-sky-700 underline dark:text-sky-300">Previous</a>{% else %}<span></span>{% endif %}
+                <span class="text-slate-500">Page {{ detail.page }}</span>
+                {% if detail.has_next %}<a href="/admin/network/detected-outages?scope={{ scope.value }}&scope_id={{ detail.scope_id }}&status_filter={{ status_filter.value }}&customer_page={{ detail.page + 1 }}&q={{ q | urlencode }}#detected-outages-connectivity" class="text-sky-700 underline dark:text-sky-300">Next</a>{% else %}<span></span>{% endif %}
+            </nav>
+            {% endif %}
+        </div>
+        {% endif %}
+    </section>
+
     {% if show_live %}
     {% include "admin/network/_detected_outages_live.html" %}
     {% else %}
@@ -146,7 +234,7 @@ function renderDetectedOutagesChart() {
             themeColor('semantic-neutral-600')
         ]
     };
-    const chart = DotmacCharts.createDoughnutChart(ctx, chartData, { legendPosition: 'bottom' });
+    const chart = DotmacCharts.createDoughnutChart(ctx, chartData, { legend: { display: false }, cutout: '68%' });
     DotmacCharts.registerChart('node-health-chart', chart);
     ctx.dataset.chartRendered = 'true';
 }
