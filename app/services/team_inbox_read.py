@@ -4,10 +4,22 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from enum import StrEnum
+from typing import Literal
 from urllib.parse import urlencode
 from uuid import UUID
 
-from sqlalchemy import and_, case, exists, false, func, literal, or_, select
+from sqlalchemy import (
+    JSON,
+    and_,
+    bindparam,
+    case,
+    exists,
+    false,
+    func,
+    literal,
+    or_,
+    select,
+)
 from sqlalchemy.orm import Session, aliased
 from sqlalchemy.sql.elements import ColumnElement
 
@@ -41,6 +53,20 @@ from app.services import (
     team_inbox_read_state,
     team_inbox_reply_window,
 )
+
+
+def _indexed_message_metadata_text(
+    key: Literal["from_name", "contact_name", "sender_name", "profile_name"],
+) -> ColumnElement[str]:
+    """Inline a fixed JSON key so PostgreSQL can use its expression index."""
+    return InboxMessage.metadata_[
+        bindparam(
+            f"inbox_search_{key}",
+            key,
+            type_=JSON.JSONStrIndexType(),
+            literal_execute=True,
+        )
+    ].as_string()
 
 
 @dataclass(frozen=True)
@@ -1684,10 +1710,10 @@ def list_conversations(
                     InboxMessage.subject.ilike(like),
                     InboxMessage.body.ilike(like),
                     InboxMessage.from_address.ilike(like),
-                    InboxMessage.metadata_["from_name"].as_string().ilike(like),
-                    InboxMessage.metadata_["contact_name"].as_string().ilike(like),
-                    InboxMessage.metadata_["sender_name"].as_string().ilike(like),
-                    InboxMessage.metadata_["profile_name"].as_string().ilike(like),
+                    _indexed_message_metadata_text("from_name").ilike(like),
+                    _indexed_message_metadata_text("contact_name").ilike(like),
+                    _indexed_message_metadata_text("sender_name").ilike(like),
+                    _indexed_message_metadata_text("profile_name").ilike(like),
                 )
             )
             .distinct()
